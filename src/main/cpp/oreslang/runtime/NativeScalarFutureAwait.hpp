@@ -154,8 +154,12 @@ public:
         if (!resume) throw std::invalid_argument("missing scalar future resume");
         if (!valid(ticket) || !parent_ref.same_incarnation(owner_))
             return false;
-        if (parent_ref.delivery_closed()) {
-            (void)cancel_if_owner_detached(ticket, parent_ref);
+        if (parent_ref.delivery_closed()
+                || parent_ref.resource_admission_closed()) {
+            if (parent_ref.delivery_closed())
+                (void)cancel_if_owner_detached(ticket, parent_ref);
+            else
+                (void)cancel(ticket);
             return false;
         }
 
@@ -192,8 +196,10 @@ public:
                 });
         } catch (...) {
             expected = Phase::scheduled;
-            const Phase fallback = parent_ref.delivery_closed()
-                ? Phase::cancelled : Phase::ready;
+            const Phase fallback =
+                (parent_ref.delivery_closed()
+                 || parent_ref.resource_admission_closed())
+                    ? Phase::cancelled : Phase::ready;
             (void)phase_.compare_exchange_strong(
                 expected, fallback,
                 std::memory_order_acq_rel, std::memory_order_acquire);
@@ -204,8 +210,10 @@ public:
             expected = Phase::scheduled;
             // If close won during CONTROL admission, do not resurrect READY.
             // Otherwise preserve the resolved value for bounded retry.
-            const Phase fallback = parent_ref.delivery_closed()
-                ? Phase::cancelled : Phase::ready;
+            const Phase fallback =
+                (parent_ref.delivery_closed()
+                 || parent_ref.resource_admission_closed())
+                    ? Phase::cancelled : Phase::ready;
             (void)phase_.compare_exchange_strong(
                 expected, fallback,
                 std::memory_order_acq_rel, std::memory_order_acquire);
@@ -215,7 +223,8 @@ public:
         // Close may race immediately after successful enqueue. Convert the
         // generation-fenced barrier into cancellation while the callback is
         // still only scheduled; the queued CONTROL then drains as a no-op.
-        if (parent_ref.delivery_closed()) {
+        if (parent_ref.delivery_closed()
+                || parent_ref.resource_admission_closed()) {
             expected = Phase::scheduled;
             if (phase_.compare_exchange_strong(
                     expected, Phase::cancelled,

@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
+#include "oreslang/runtime/NativeScalarFutureAwait.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -10,6 +11,7 @@
 #include <thread>
 
 using oreslang::runtime::NativeActorGroup;
+using oreslang::runtime::NativeScalarFutureAwait;
 
 static std::atomic<long long> fail_after_allocations{-1};
 
@@ -148,6 +150,8 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         NativeActorGroup group(191004, 1);
         auto actor = group.adopt(191004, 201, 1, [] {});
         CHECK(group.mark_ready(actor));
+        auto future = NativeScalarFutureAwait::open(actor, 1);
+        CHECK(future->complete(future->id(), 41));
 
         std::string injected_failure(512, 'x');
         bool threw = false;
@@ -168,6 +172,20 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         catch (const std::logic_error&) { loan_rejected = true; }
         CHECK(loan_rejected);
         CHECK(actor.outstanding_resource_loans() == 0);
+        CHECK(actor.resource_admission_closed());
+        CHECK(!actor.delivery_closed());
+
+        // Terminal resource admission is authoritative even if DONE
+        // settlement failed before delivery_closed() could be published.
+        // A pre-existing READY Future must not enqueue fresh CONTROL work in
+        // this retry-only finalization window.
+        int resumed = 0;
+        CHECK(!future->try_schedule(
+            future->id(), group, actor,
+            [&](const auto&) { ++resumed; }));
+        CHECK(future->phase() == NativeScalarFutureAwait::Phase::cancelled);
+        CHECK(!group.has_pending_control(actor));
+        CHECK(resumed == 0);
 
         std::string retry_failure(512, 'y');
         CHECK(group.finalized(actor, std::move(retry_failure)));

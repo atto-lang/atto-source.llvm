@@ -42,11 +42,15 @@ linearization point against finalization. Thus a finalizer that sealed resource
 admission first makes the open fail closed, while an open that linearizes first
 is ordinary live work and must be reconciled if terminal lifecycle wins later.
 A close racing after successful frame creation is still handled by the existing
-detach reconciliation path. `try_schedule()` consumes an already-published
-barrier itself, so scheduling
-a detached PENDING or READY frame terminates it as CANCELLED instead of leaving
-a retryable Future behind. If close is observed during CONTROL admission, a
-still-SCHEDULED frame is likewise cancelled before scheduling reports success.
+detach reconciliation path. `try_schedule()` treats either
+`delivery_closed()` or the earlier terminal `resource_admission_closed()`
+seal as authoritative. This matters if finalization seals resource admission
+but terminal promise settlement throws: the actor is retry-only and a
+pre-existing READY Future must not enqueue fresh CONTROL work before
+`delivery_closed()` is eventually published. Scheduling a terminal owner
+therefore cancels the frame instead of leaving a retryable Future behind. If a
+terminal fence is observed during CONTROL admission, a still-SCHEDULED frame is
+likewise cancelled before scheduling reports success.
 The supervisor's `cancel_if_owner_detached()` hook remains required for a
 close that happens after a successful scheduling call has already returned,
 and it also covers the transient SETTLING race. `control_delivery_lost()`
