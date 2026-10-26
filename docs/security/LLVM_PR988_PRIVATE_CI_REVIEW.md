@@ -155,3 +155,10 @@ A harmless synthetic source tree was used to exercise the full carrier path with
 - guest evidence: `SYNTHETIC_SOURCE_BEARING_PASS`
 
 This is carrier-mechanics evidence only. It is not LLVM #988 source execution and does not authorize private-source transfer.
+
+### Authorization negative controls
+
+- Run `40265223443`: the `ci/oreslang-*` branch existed at its reviewed parent but no exact `ci/authorized-<GITHUB_SHA>` ref existed. Carrier identity passed, authorization failed in step 2, and checkout/provenance/source execution were skipped.
+- Run `40265492280`: exact authorization passed initial and pre-test checks, the sandboxed synthetic command completed successfully, then the authorization ref was deliberately moved while execution was in flight. The final recheck failed with `dispatcher authorization revoked or changed during tests`, so the overall workflow failed.
+
+These controls prove branch naming is insufficient authority and mid-run revocation prevents a green carrier result.
