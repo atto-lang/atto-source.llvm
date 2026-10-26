@@ -3,6 +3,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
+#include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
@@ -244,7 +245,7 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"->", "::", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        for (std::string_view op : {"->", "::", "==", "!=", "<=", ">=", "&&", "||", "^^", "|>"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -1539,6 +1540,7 @@ private:
                 extension_receiver_alias_, extension_method_name_);
         } else {
             value.exported = owner.empty() ? accept("pub") : visible;
+        value.async_ready = owner.empty() && accept("async");
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -1558,9 +1560,9 @@ private:
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
-        if (token_.text == "actor" || token_.text == "async" ||
+        if (token_.text == "actor" ||
             token_.text == "generator" || token_.text == "isoactor") {
-            fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
+            fail("native actor/generator declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (owner.empty() && !accept("fnc") && !accept("routine")) fail("expected fnc or routine");
         if (at_unsupported_critical_mode()) {
@@ -1739,6 +1741,8 @@ private:
         // one scalar terminal return; reject every other statement.
         // This is not an alternate arity or method ABI.
         if (token_.text == "::") {
+            if (value.async_ready)
+                fail("native first async Future<int> slice requires a braced scalar body");
             if (owner.empty()) fail("native '::' body requires a class method");
             if (!arrow_return_type)
                 fail("native '::' method requires '->' return syntax");
@@ -1767,13 +1771,17 @@ private:
         auto ready_future_local = [&]() {
             if (!((token_.text == "const" || token_.text == "val") &&
                     peek_next().text == "Future")) return false;
+            // Future<int> is handled by the ready-value slice below. Keep the
+            // actor lifecycle Future<void> grammar disjoint.
+            Lexer look = lexer_;
+            if (look.next().text != "Future" || look.next().text != "<" ||
+                    look.next().text != "void") return false;
             if (!value.ready_future_name.empty())
                 fail("native source supports only one Future<void> readiness token");
             advance();
             require("Future");
             require("<");
-            if (!accept("void"))
-                fail("Future<T> requires native continuation lowering");
+            require("void");
             require(">");
             value.ready_future_name = identifier();
             require("=");
@@ -1801,13 +1809,36 @@ private:
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+            if ((token_.text == "val" || token_.text == "const") &&
+                    sum_first.text == "Future") {
+                const bool mutable_value = accept("val");
+                if (!mutable_value) require("const");
+                binding.owner_mutable = mutable_value;
+                require("Future");
+                require("<");
+                if (!accept("int")) {
+                    if (token_.text == "Future")
+                        fail("native nested Future requires continuation flattening");
+                    fail("native first Future slice supports Future<int> only");
+                }
+                require(">");
+                binding.name = identifier();
+                require("=");
+                binding.initializer = expression();
+                binding.future_int = true;
+            } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
-                binding.name = identifier(); require("="); binding.initializer = expression();
+                binding.name = identifier(); require("=");
+                if (accept("await")) {
+                    binding.await_future = true;
+                    binding.initializer = expression();
+                } else {
+                    binding.initializer = expression();
+                }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
                 const auto mode = token_.text; advance(); binding.assignable = mode == "let"; binding.owner_mutable = mode == "val" || mode == "let"; if (mode == "let") accept("mut");
@@ -2579,10 +2610,53 @@ private:
             }
         }
         require("}");
+        if (value.async_ready) {
+            if (value.returns_void || value.return_type != ScalarType::I64 ||
+                    !value.return_class.empty() || !value.return_sum.empty() ||
+                    !value.pending_return_type_alias.empty())
+                fail("native first async Future slice supports int result only");
+            if (!value.generic_parameters.empty() || value.parameters.size() > 1)
+                fail("native first async Future slice supports zero or one int parameter");
+            for (const auto& parameter : value.parameters) {
+                if (parameter.mode != Parameter::Mode::Value ||
+                        parameter.scalar_type != ScalarType::I64 ||
+                        !parameter.class_name.empty() || !parameter.generic_type.empty() ||
+                        !parameter.pending_type_alias.empty() || !parameter.sum_type.empty())
+                    fail("native first async Future slice supports value int parameters only");
+            }
+            if (value.has_declared_effects || value.scalar_while ||
+                    !value.locals.empty() || !value.statements.empty() ||
+                    !value.early_returns.empty() || !value.actor_spawns.empty() ||
+                    !value.actor_sends.empty() || !value.actor_stops.empty() ||
+                    !value.actor_field_writes.empty() || value.caught_throw_value ||
+                    !value.caught_throw_defers.empty() || !value.result ||
+                    !native_pure_scalar_tree(*value.result))
+                fail("native first async Future slice requires one capture-free pure scalar return");
+        }
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return conditional(); }
+    std::unique_ptr<Expression> expression() { return value_pipe(); }
+
+    std::unique_ptr<Expression> value_pipe() {
+        auto left = conditional();
+        while (accept("|>")) {
+            const auto offset = token_.offset;
+            auto stage = primary();
+            if (stage->kind != Expression::Kind::Call ||
+                    !stage->arguments.empty() || stage->type_arguments_present)
+                fail("native value pipeline stage requires a direct zero-argument call");
+            stage->arguments.insert(stage->arguments.begin(), std::move(left));
+            stage->argument_names.insert(stage->argument_names.begin(), std::string{});
+            stage->value_pipe_stage = true;
+            stage->value_pipe_stage_count =
+                stage->arguments.front()->value_pipe_stage_count + 1;
+            if (stage->value_pipe_stage_count > 128)
+                fail("native Future pipeline exceeds 128 stages");
+            left = std::move(stage);
+        }
+        return left;
+    }
 
     std::unique_ptr<Expression> conditional() {
         if (++conditional_depth_ > kMaxNativeExpressionDepth) {
@@ -4723,6 +4797,235 @@ private:
     std::size_t conditional_depth_ = 0;
 };
 
+
+struct ReadyFutureInfo {
+    bool future = false;
+    bool complete_static = false;
+};
+
+using ReadyFunctionMap = std::unordered_map<std::string, const Function*>;
+
+const Function& ready_call_target(const Expression& call,
+                                  const ReadyFunctionMap& functions) {
+    const auto found = functions.find(
+        native_function_slot(call.name, call.arguments.size()));
+    if (found == functions.end())
+        throw std::runtime_error(
+            "native Future pipeline references unresolved callable at byte " +
+            std::to_string(call.offset));
+    return *found->second;
+}
+
+void require_ready_stage(const Function& target, const Expression& stage) {
+    if (target.parameters.size() != 1 || target.returns_void ||
+            target.return_type != ScalarType::I64 ||
+            !target.return_class.empty() || !target.return_sum.empty() ||
+            !target.generic_parameters.empty() || target.has_declared_effects)
+        throw std::runtime_error(
+            "native first Future pipeline stage requires a pure unary int callable at byte " +
+            std::to_string(stage.offset));
+    const auto& parameter = target.parameters.front();
+    if (parameter.mode != Parameter::Mode::Value ||
+            parameter.scalar_type != ScalarType::I64 ||
+            !parameter.class_name.empty() || !parameter.generic_type.empty() ||
+            !parameter.pending_type_alias.empty() || !parameter.sum_type.empty())
+        throw std::runtime_error(
+            "native first Future pipeline stage requires value int input at byte " +
+            std::to_string(stage.offset));
+    if (!target.async_ready &&
+            (target.scalar_while || !target.locals.empty() ||
+             !target.statements.empty() || !target.early_returns.empty() ||
+             !target.actor_spawns.empty() || !target.actor_sends.empty() ||
+             !target.actor_stops.empty() || !target.actor_field_writes.empty() ||
+             target.caught_throw_value || !target.caught_throw_defers.empty() ||
+             !target.result || !native_pure_scalar_tree(*target.result)))
+        throw std::runtime_error(
+            "native first Future pipeline stage requires one pure scalar return at byte " +
+            std::to_string(stage.offset));
+}
+
+ReadyFutureInfo validate_ready_future_expression(
+        const Expression& expr,
+        const std::unordered_set<std::string>& future_locals,
+        const ReadyFunctionMap& functions,
+        std::vector<types::FuturePipelinePlan>* plans = nullptr) {
+    using K = Expression::Kind;
+
+    if (expr.kind == K::Variable)
+        return {future_locals.count(expr.name) != 0, false};
+
+    if (expr.kind == K::Take) {
+        if (!expr.left)
+            throw std::runtime_error("native rt take requires a Future operand");
+        if (expr.left->value_pipe_stage)
+            throw std::runtime_error(
+                "native rt take of an already-lifted Future pipeline is not supported");
+        auto inner = validate_ready_future_expression(
+            *expr.left, future_locals, functions, plans);
+        if (!inner.future)
+            return {};
+        return inner;
+    }
+
+    if (expr.kind == K::Copy || expr.kind == K::Share ||
+            expr.kind == K::Borrow || expr.kind == K::BorrowMut) {
+        if (expr.left) {
+            auto inner = validate_ready_future_expression(
+                *expr.left, future_locals, functions, nullptr);
+            if (inner.future)
+                throw std::runtime_error(
+                    "native Future<int> ownership supports only rt take; copy/share/borrow remain fail-closed");
+        }
+        return {};
+    }
+
+    if (expr.kind == K::Call) {
+        const Function& target = ready_call_target(expr, functions);
+
+        if (!expr.value_pipe_stage) {
+            for (const auto& argument : expr.arguments) {
+                auto info = validate_ready_future_expression(
+                    *argument, future_locals, functions, nullptr);
+                if (info.future)
+                    throw std::runtime_error(
+                        "native Future<int> cannot be passed as an ordinary scalar argument; use |> or await");
+            }
+            return {target.async_ready, target.async_ready};
+        }
+
+        if (expr.arguments.empty())
+            throw std::runtime_error("native value pipeline lost its upstream operand");
+        auto upstream = validate_ready_future_expression(
+            *expr.arguments.front(), future_locals, functions, plans);
+
+        // Scalar |> async is an eager transition that creates the ready
+        // Future. Deferred pipeline proof begins at the next stage.
+        if (!upstream.future) {
+            require_ready_stage(target, expr);
+            return {target.async_ready, target.async_ready};
+        }
+
+        require_ready_stage(target, expr);
+        if (plans) {
+            types::FuturePipelinePlan plan;
+            plan.declaration_identity =
+                static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&target));
+            plan.pipeline_node_identity =
+                static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&expr));
+            types::AutoType scalar_type;
+            scalar_type.kind = types::AutoTypeKind::Scalar;
+            plan.input_type = scalar_type;
+            plan.output_type = scalar_type;
+            plan.prior_effects = {};
+            plan.stage_effects = target.declared_effects;
+            plan.cumulative_effects =
+                plan.prior_effects.united(plan.stage_effects);
+            plan.effect_provenance = upstream.complete_static
+                ? types::PipelineEffectProvenance::CompleteStatic
+                : types::PipelineEffectProvenance::UpstreamFutureUnknown;
+            plan.root_stage = plans->empty();
+            const bool consumed_root = plan.root_stage
+                && expr.arguments.front()->kind == K::Take;
+            plan.input_ownership = plan.root_stage
+                ? types::pipeline_root_ownership(consumed_root)
+                : types::pipeline_internal_ownership();
+            if (target.async_ready) {
+                plan.flattens_future = true;
+                plan.produced_future_ownership =
+                    types::PipelineStageFutureOwnership::OwnedStageResult;
+                plan.produced_future_provenance =
+                    types::PipelineStageFutureProvenance::FreshCheckedProducer;
+            }
+            plans->push_back(plan);
+        }
+        return {true, upstream.complete_static};
+    }
+
+    auto reject_future_child = [&](const std::unique_ptr<Expression>& child) {
+        if (!child) return;
+        if (validate_ready_future_expression(
+                *child, future_locals, functions, nullptr).future)
+            throw std::runtime_error(
+                "native Future<int> requires await or Future-aware |>");
+    };
+
+    reject_future_child(expr.left);
+    reject_future_child(expr.right);
+    reject_future_child(expr.condition);
+    reject_future_child(expr.condition_lhs);
+    reject_future_child(expr.condition_rhs);
+    reject_future_child(expr.when_true);
+    reject_future_child(expr.when_false);
+    for (const auto& argument : expr.arguments)
+        reject_future_child(argument);
+    return {};
+}
+
+void validate_ready_future_pipeline_contract(Program& program) {
+    ReadyFunctionMap functions;
+    for (const auto& function : program.functions) {
+        const std::string slot =
+            native_function_slot(function.name, function.parameters.size());
+        if (!functions.emplace(slot, &function).second)
+            throw std::runtime_error(
+                "native Future pipeline requires unique function name/arity identity");
+    }
+
+    for (const auto& function : program.functions) {
+        std::unordered_set<std::string> future_locals;
+        for (const auto& binding : function.locals) {
+            std::vector<types::FuturePipelinePlan> plans;
+            const auto info = binding.initializer
+                ? validate_ready_future_expression(
+                    *binding.initializer, future_locals, functions, &plans)
+                : ReadyFutureInfo{};
+
+            if (binding.future_int) {
+                if (!info.future)
+                    throw std::runtime_error(
+                        "native Future<int> initializer must be a checked async producer or Future-aware pipeline");
+                future_locals.insert(binding.name);
+            } else if (binding.await_future) {
+                if (!info.future)
+                    throw std::runtime_error(
+                        "native await requires Future<int> in the first executable Future slice");
+            } else if (info.future) {
+                throw std::runtime_error(
+                    "native Future<int> value requires an explicit Future<int> binding or await");
+            }
+
+            if (!plans.empty()) {
+                // Ownership has already admitted this exact program before
+                // this proof is minted. Bind every plan to the same exact AST,
+                // declaration and ownership mode and publish atomically.
+                std::vector<types::FuturePipelineOwnershipAdmission> admissions;
+                admissions.reserve(plans.size());
+                for (const auto& plan : plans) {
+                    types::FuturePipelineOwnershipAdmission admission;
+                    admission.declaration_identity = plan.declaration_identity;
+                    admission.pipeline_node_identity = plan.pipeline_node_identity;
+                    admission.input_ownership = plan.input_ownership;
+                    admission.admitted = true;
+                    admissions.push_back(admission);
+                }
+                if (!types::publish_future_pipeline_chain(plans, admissions))
+                    throw std::runtime_error(
+                        "native Future pipeline ownership admission was not published");
+            }
+        }
+
+        if (function.result) {
+            const auto result = validate_ready_future_expression(
+                *function.result, future_locals, functions, nullptr);
+            if (result.future)
+                throw std::runtime_error(
+                    "native function cannot return a Future<int> through the scalar ABI");
+        }
+    }
+}
+
 } // namespace
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
@@ -4743,7 +5046,11 @@ void resolve_and_validate_program(Program& program) {
     resolve_native_methods(program);
     resolve_native_sums(program);
     Parser::validate_complete(program);
+    // Canonical move/loan validation runs before Future-pipeline authority is
+    // minted. In particular rt take of a named Future<int> uses the existing
+    // move checker and later use/await is rejected as use-after-move.
     validate_i64_ownership(program);
+    validate_ready_future_pipeline_contract(program);
     validate_native_scalar_types(program);
 }
 
