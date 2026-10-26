@@ -4031,6 +4031,13 @@ private:
                         "Future<void> send_async requires one source actor without suspended locals");
                 validate_expression(*fn.send_future_payload, params, functions);
             }
+            const bool direct_send_await = std::any_of(
+                fn.actor_sends.begin(), fn.actor_sends.end(),
+                [](const ActorSend& send) { return send.await_admission; });
+            if (direct_send_await
+                    && (fn.actor_spawns.size() != 1 || !fn.locals.empty()))
+                throw std::runtime_error(
+                    "direct send_async await requires one source actor without suspended locals");
             if (!fn.ready_await_actor.empty()) {
                 /*
                  * First executable suspension is deliberately tiny: one actor
