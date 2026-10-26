@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include "oreslang/runtime/NativeSelectToken.h"
 
 /*
  * One bounded, one-shot heterogeneous select arbitration cell.
@@ -45,13 +46,6 @@ typedef struct OresNativeSelectArbiter {
         atomic_uint state;
     } arms[ORES_NATIVE_SELECT_MAX_ARMS];
 } OresNativeSelectArbiter;
-
-typedef struct {
-    OresNativeSelectArbiter* arbiter;
-    uint64_t selection_generation;
-    uint64_t arm_generation;
-    uint64_t arm;
-} OresNativeSelectToken;
 
 static inline int ores_native_select_arbiter_init(
         OresNativeSelectArbiter* arbiter,
