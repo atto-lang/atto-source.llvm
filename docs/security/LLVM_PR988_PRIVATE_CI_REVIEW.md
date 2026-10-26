@@ -9,9 +9,9 @@ proposed carrier as part of this proposal.
 
 - Source: `ores-truffle-oreslang/oreslang-source.llvm`, **PR #988 only**
 - Exact source commit for first qualification:
-  `07913b5a7cf64afff5d8aa7801fb2d3c96882699`
+  `104863ddfc166854b9e44986a1a71d5fb4ed60f6`
 - Exact source Git tree:
-  `ba3f106c00fcba13b68ee39fc58b202c802d04a1`
+  `0c228624bc55d1b076e2c54bec938bdab5b76625`
 - Proposed destination: **private** `sonus-auris/sonus-auris.infra`
 - Destination immutable GitHub repository ID: `1271706990`
 - Source-free proof: Actions run
@@ -59,7 +59,7 @@ boundaries. The requester of the tests must not self-approve a new carrier.
 ## Freshness and reconciliation
 
 This proposal tracks LLVM #988's current-main two-parent reconciliation at
-`07913b5a7cf64afff5d8aa7801fb2d3c96882699`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
+`104863ddfc166854b9e44986a1a71d5fb4ed60f6`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
 `tests/contract.py` and `tests/test_contract_harness.py` fail-closed
 infrastructure diagnostic checks, two byte-identical canonical parameter
 fixtures, and two new opaque return-position fixtures.
@@ -71,6 +71,18 @@ regressions under Python `-O` and `-OO`. These tests have **not** been executed
 with a native LLVM compiler or via hosted CI, and changing the pinned source
 head/tree requires renewed independent security review. A standalone local
 matching-predicate check is not a native or committed-harness test pass.
+
+A follow-up hardening round now binds all four opaque-type CTests to the
+reviewed fixture Git blob SHA with `--fixture-git-blob`, rejects malformed
+blob identifiers, and redacts raw operating-system exceptions so missing
+compiler/fixture paths cannot leak into CI logs. Focused local adversarial
+execution of these new predicates passed 14/14 cases across Python `-O` and
+`-OO` (exact identity, mutation rejection, strict blob syntax, compiler and
+fixture path redaction, wrapper-prefix spoof rejection, and infrastructure
+spoof rejection). This focused proof is not the complete committed Python
+harness and not a native compiler/CTest pass. Source-hosted exact-head runs at
+`104863ddfc166854b9e44986a1a71d5fb4ed60f6` again completed with zero
+executed steps; treat them as infrastructure-only failures.
 
 Native LLVM include/link and wake-test repairs were already present on newer
 `main` and were deliberately not rolled back. Any subsequent PR-head/tree
