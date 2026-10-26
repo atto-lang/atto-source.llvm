@@ -3968,3 +3968,15 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
 endif()
 
+if(BUILD_TESTING)
+    add_executable(oreslang-native-select-continuation-fence-test
+        tests/native_select_continuation_fence_test.cpp)
+    target_include_directories(oreslang-native-select-continuation-fence-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-select-continuation-fence-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-select-continuation-fence-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_select_continuation_generation_fence
+        COMMAND oreslang-native-select-continuation-fence-test)
+endif()
+
