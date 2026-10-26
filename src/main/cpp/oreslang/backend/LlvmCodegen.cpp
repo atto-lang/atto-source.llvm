@@ -871,7 +871,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceSendAsyncAwait,
-        sourceSendAsyncStartChecked,
+        sourceSendAsyncStartChecked, sourceDiscardSendFuture,
         sourceDetachSendFutureState, sourceWaitDetachedSendResult,
         sourceStop, sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
@@ -904,6 +904,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(
                 llvm::Type::getInt32Ty(context),
                 {native_ptr, i64, native_ptr}, false));
+        sourceDiscardSendFuture = module.getOrInsertFunction(
+            "oreslang_source_actor_discard_send_future_checked",
+            llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(context), {native_ptr}, false));
         sourceDetachSendFutureState = module.getOrInsertFunction(
             "oreslang_source_actor_detach_send_future_state_checked",
             llvm::FunctionType::get(
@@ -1134,6 +1138,41 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.SetInsertPoint(accepted);
             return builder.CreateLoad(
                 native_ptr, future_slot, prefix + ".future.ref");
+        };
+
+        auto finish_detach_checked = [&](
+                llvm::Value* future_ref,
+                llvm::Value* actor_ref,
+                llvm::Value* status,
+                const std::string& prefix) -> llvm::Value* {
+            auto* accepted = llvm::BasicBlock::Create(
+                context, prefix + ".accepted", function);
+            auto* failed = llvm::BasicBlock::Create(
+                context, prefix + ".failed", function);
+            builder.CreateCondBr(
+                builder.CreateICmpEQ(
+                    status,
+                    llvm::ConstantInt::get(
+                        llvm::Type::getInt32Ty(context), 0)),
+                accepted,
+                failed);
+
+            builder.SetInsertPoint(failed);
+            /* Detach rejected before runtime frame ownership. The Future has
+             * already been submitted, so consume it first: cancel if pending,
+             * otherwise observe terminal settlement. Only then may synchronous
+             * host teardown wait for the actor without a live-wrapper fence. */
+            (void)builder.CreateCall(
+                sourceDiscardSendFuture,
+                {future_ref},
+                prefix + ".discard.status");
+            builder.CreateCall(sourceStop, {actor_ref});
+            builder.CreateRet(builder.CreateZExt(
+                status, i64, prefix + ".failure.i64"));
+
+            builder.SetInsertPoint(accepted);
+            return builder.CreateZExt(
+                status, i64, prefix + ".accepted.i64");
         };
 
         llvm::Value* send_future_ref = nullptr;
@@ -1965,8 +2004,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     llvm::ConstantInt::get(i64, detached_words)
                 },
                 "future.detach.send.status");
-            awaited_result = builder.CreateZExt(
-                detach_status, i64, "future.detach.send.status.i64");
+            awaited_result = finish_detach_checked(
+                send_future_ref,
+                actorRefs.at(fn.send_future_actor),
+                detach_status,
+                "future.detach.send");
         } else if (direct_send_await_action_index != fn.actor_actions.size()) {
             const auto& awaited_action =
                 fn.actor_actions.at(direct_send_await_action_index);
@@ -2132,8 +2174,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     llvm::ConstantInt::get(i64, detached_words)
                 },
                 "future.detach.direct.send.status");
-            awaited_result = builder.CreateZExt(
-                detach_status, i64, "future.detach.direct.send.status.i64");
+            awaited_result = finish_detach_checked(
+                direct_future,
+                actorRefs.at(awaited_send.reference),
+                detach_status,
+                "future.detach.direct.send");
         } else if (!fn.ready_await_actor.empty()) {
             auto* continuation_type =
                 llvm::FunctionType::get(i64, {native_ptr}, false);
