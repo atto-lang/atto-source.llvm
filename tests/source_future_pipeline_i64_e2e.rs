@@ -95,6 +95,7 @@ fn main() {
         "oreslang_source_task_await_i64",
         "oreslang_source_task_runtime_shutdown",
         ".future.pending.consumed.producer",
+        "pending.plus_one.value",
         "pending.twice.value",
     ] {
         assert!(ir.contains(needle), "missing Future pipeline IR marker {needle}");
