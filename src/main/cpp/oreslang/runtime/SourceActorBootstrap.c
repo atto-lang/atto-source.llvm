@@ -166,6 +166,30 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
         &test_readiness_publication_entered, memory_order_acquire);
 }
 
+/* Test-only lock-protected observation of a Future's one-shot owner.
+ * Compare wrapper addresses before dereferencing, so stale test pointers
+ * cannot alias a different live Future. Never enabled in production builds. */
+int oreslang_source_actor_test_future_consuming(void* opaque_future) {
+    if (!opaque_future) return 0;
+    group_lock();
+    int result = 0;
+    for (size_t slot = 0; slot < group.next_slot; ++slot) {
+        SourceActor* actor = group.actors[slot];
+        if (!actor || actor->magic != SOURCE_ACTOR_MAGIC) continue;
+        for (size_t index = 0; index < ORES_SOURCE_SEND_ASYNC_MAX_WAITERS;
+                ++index) {
+            SourceSendFuture* future = &actor->send_futures[index];
+            if ((void*)future == opaque_future) {
+                result = future->live && future->consuming;
+                goto finished;
+            }
+        }
+    }
+finished:
+    group_unlock();
+    return result;
+}
+
 int oreslang_source_actor_test_set_async_waiters(
         void* opaque, size_t waiters) {
     SourceActor* instance = (SourceActor*)opaque;
