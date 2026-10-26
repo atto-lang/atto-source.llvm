@@ -19,6 +19,8 @@
  *   arm + 1    => committed winner
  */
 enum { ORES_NATIVE_SELECT_MAX_ARMS = 64 };
+#define ORES_NATIVE_SELECT_WINNER_SEALED UINT64_MAX
+#define ORES_NATIVE_SELECT_WINNER_REARMING (UINT64_MAX - UINT64_C(1))
 
 typedef enum {
     ORES_NATIVE_SELECT_INVALID = 0,
@@ -76,16 +78,48 @@ static inline int ores_native_select_arbiter_rearm(
             || atomic_load_explicit(
                 &arbiter->generation, memory_order_acquire) == generation)
         return 0;
+
+    /*
+     * A new generation may start only after the previous operation is
+     * terminal. Claim a private REARMING sentinel before touching arm state;
+     * registration first observes winner and therefore cannot enter while
+     * reset is in progress.
+     *
+     * Rearm is still owner/finalizer authority: the owner calls it only after
+     * the prior commit/seal routine itself has returned.
+     */
+    uint_fast64_t terminal = atomic_load_explicit(
+        &arbiter->winner, memory_order_acquire);
+    if (terminal == 0
+            || terminal == ORES_NATIVE_SELECT_WINNER_REARMING)
+        return 0;
+    if (!atomic_compare_exchange_strong_explicit(
+            &arbiter->winner,
+            &terminal,
+            (uint_fast64_t)ORES_NATIVE_SELECT_WINNER_REARMING,
+            memory_order_acq_rel,
+            memory_order_acquire))
+        return 0;
+    if (atomic_load_explicit(
+            &arbiter->active_tokens, memory_order_acquire) != 0) {
+        atomic_store_explicit(
+            &arbiter->winner, terminal, memory_order_release);
+        return 0;
+    }
+
     arbiter->arm_count = arm_count;
     atomic_store_explicit(
-        &arbiter->generation, generation, memory_order_release);
-    atomic_store_explicit(
-        &arbiter->winner, UINT64_C(0), memory_order_release);
+        &arbiter->generation, generation, memory_order_relaxed);
     for (size_t i = 0; i < ORES_NATIVE_SELECT_MAX_ARMS; ++i)
         atomic_store_explicit(
             &arbiter->arms[i].state,
             ORES_NATIVE_SELECT_ARM_EMPTY,
-            memory_order_release);
+            memory_order_relaxed);
+
+    /* Release publication of OPEN makes the reset generation/arm metadata
+     * visible to the next registering thread. */
+    atomic_store_explicit(
+        &arbiter->winner, UINT64_C(0), memory_order_release);
     return 1;
 }
 
@@ -94,9 +128,10 @@ static inline int ores_native_select_register(
         uint64_t arm,
         OresNativeSelectToken* out) {
     if (out) *out = (OresNativeSelectToken){0};
-    if (!arbiter || !out || arm >= arbiter->arm_count
+    if (!arbiter || !out
             || atomic_load_explicit(
-                &arbiter->winner, memory_order_acquire) != 0)
+                &arbiter->winner, memory_order_acquire) != 0
+            || arm >= arbiter->arm_count)
         return 0;
 
     unsigned expected = ORES_NATIVE_SELECT_ARM_EMPTY;
@@ -161,10 +196,10 @@ static inline int ores_native_select_token_registered(
         OresNativeSelectToken token) {
     if (!token.arbiter || !token.selection_generation
             || !token.arm_generation
-            || token.arm >= token.arbiter->arm_count
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
+            || token.arm >= token.arbiter->arm_count
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation
@@ -180,10 +215,10 @@ static inline OresNativeSelectCommitResult ores_native_select_try_commit(
         OresNativeSelectToken token) {
     if (!token.arbiter || !token.selection_generation
             || !token.arm_generation
-            || token.arm >= token.arbiter->arm_count
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
+            || token.arm >= token.arbiter->arm_count
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation)
@@ -221,7 +256,8 @@ static inline OresNativeSelectCommitResult ores_native_select_try_commit(
         memory_order_release);
     atomic_fetch_sub_explicit(
         &token.arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
-    return winner == UINT64_MAX
+    return winner == ORES_NATIVE_SELECT_WINNER_SEALED
+            || winner == ORES_NATIVE_SELECT_WINNER_REARMING
         ? ORES_NATIVE_SELECT_SEALED
         : ORES_NATIVE_SELECT_LOST;
 }
@@ -229,10 +265,10 @@ static inline OresNativeSelectCommitResult ores_native_select_try_commit(
 static inline int ores_native_select_detach(OresNativeSelectToken token) {
     if (!token.arbiter || !token.selection_generation
             || !token.arm_generation
-            || token.arm >= token.arbiter->arm_count
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
+            || token.arm >= token.arbiter->arm_count
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation)
@@ -256,7 +292,7 @@ static inline int ores_native_select_seal(OresNativeSelectArbiter* arbiter) {
     const int sealed_before_winner = atomic_compare_exchange_strong_explicit(
         &arbiter->winner,
         &expected,
-        UINT64_MAX,
+        (uint_fast64_t)ORES_NATIVE_SELECT_WINNER_SEALED,
         memory_order_acq_rel,
         memory_order_acquire);
     for (size_t i = 0; i < arbiter->arm_count; ++i) {
@@ -279,7 +315,10 @@ static inline int ores_native_select_winner(
     if (!arbiter || !arm_out) return 0;
     const uint64_t winner = atomic_load_explicit(
         &arbiter->winner, memory_order_acquire);
-    if (!winner || winner == UINT64_MAX) return 0;
+    if (!winner
+            || winner == ORES_NATIVE_SELECT_WINNER_SEALED
+            || winner == ORES_NATIVE_SELECT_WINNER_REARMING)
+        return 0;
     *arm_out = winner - UINT64_C(1);
     return 1;
 }
