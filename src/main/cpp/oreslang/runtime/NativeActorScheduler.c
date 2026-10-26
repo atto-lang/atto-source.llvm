@@ -459,13 +459,16 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     size_t initialized = 0;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
-    if (wake_callback) s->wake_slots = (WakeCredit*)calloc(
+    /* Wake escrow is fixed-capacity runtime metadata. Preallocate it even for
+     * legacy VM opens so a trusted host may activate cooperative continuation
+     * wakes before admitting any work, without allocating on the async path. */
+    s->wake_slots = (WakeCredit*)calloc(
         actors * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR, sizeof(WakeCredit));
     s->async_send_slots = (AsyncSendCredit*)calloc(
         actors * ORES_NATIVE_ASYNC_SENDS_PER_ACTOR, sizeof(AsyncSendCredit));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
-    if (!s->actors || !s->slots || !s->async_send_slots
-            || (wake_callback && !s->wake_slots) || !s->threads)
+    if (!s->actors || !s->slots || !s->wake_slots
+            || !s->async_send_slots || !s->threads)
         goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
@@ -480,8 +483,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i) {
         s->actors[i].messages = s->slots + i * capacity;
-        s->actors[i].wakes = wake_callback
-            ? s->wake_slots + i * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR : NULL;
+        s->actors[i].wakes =
+            s->wake_slots + i * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR;
         s->actors[i].async_sends = s->async_send_slots
             + i * ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
         s->actors[i].next_async_sequence = 1;
@@ -517,6 +520,21 @@ allocation_failed:
     free(s);
     return NULL;
 }
+int ores_native_actor_scheduler_configure_wake_callback(
+        OresNativeActorScheduler* s, OresNativeActorWakeFn wake_callback) {
+    if (!s || !wake_callback) return 0;
+    lock(s);
+    const int ok = !s->retired
+        && s->wake_callback == NULL
+        && s->started_workers == 0
+        && s->accepted == 0
+        && s->outstanding == 0
+        && s->reserved_wakes == 0;
+    if (ok) s->wake_callback = wake_callback;
+    unlock(s);
+    return ok;
+}
+
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actors, size_t capacity, size_t workers,
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
