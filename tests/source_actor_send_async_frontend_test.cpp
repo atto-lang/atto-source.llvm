@@ -30,13 +30,13 @@ static void rejects(const std::string& source, const std::string& diagnostic) {
 
 int main() {
     auto admitted = oreslang::parse_program(program(
-        "await worker.send_async(1); await worker.send_async(2); "
+        "await worker.send_async(1); worker.send(2); "
         "worker.send(3); stop worker; return 43;"));
     CHECK(admitted.functions.size() == 1);
     const auto& main = admitted.functions.front();
     CHECK(main.actor_sends.size() == 3 && main.actor_actions.size() == 4);
     CHECK(main.actor_sends[0].await_admission);
-    CHECK(main.actor_sends[1].await_admission);
+    CHECK(!main.actor_sends[1].await_admission);
     CHECK(!main.actor_sends[2].await_admission);
     for (std::size_t i = 0; i != 3; ++i) {
         CHECK(main.actor_actions[i].kind == oreslang::ActorAction::Kind::Send);
@@ -82,13 +82,19 @@ int main() {
             "native send_async Future<void> declaration must precede actor effects");
     rejects(program("await worker.get_ready(); await worker.send_async(1); "
                     "stop worker; return 43;"),
-            "native source supports only one direct ActorRef lifecycle await");
+            "native source supports only one async await boundary");
     rejects(program("await worker; await worker.send_async(1); "
                     "stop worker; return 43;"),
-            "native source supports only one direct ActorRef lifecycle await");
+            "native source supports only one async await boundary");
     rejects(program("stop worker; await worker.get_done(); "
                     "await worker.send_async(1); return 43;"),
-            "native source supports only one direct ActorRef lifecycle await");
+            "native source supports only one async await boundary");
+    rejects(program("await worker.send_async(1); await worker.send_async(2); "
+                    "stop worker; return 43;"),
+            "native source supports only one async await boundary");
+    rejects(program("await worker.send_async(1); await worker.get_done(); "
+                    "return 43;"),
+            "native source supports only one async await boundary");
     rejects(R"(define actor Worker as {
       let total: int = 0;
       pub fnc on_message(int n): int { await self.send_async(n); return n; }
@@ -104,5 +110,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=16\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=17\n";
 }
