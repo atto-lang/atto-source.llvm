@@ -376,6 +376,26 @@ int ores_native_vm_async_send_status(
             vm->schedulers[domain], ticket, state_out, outcome_out);
 }
 
+int ores_native_vm_configure_wake_callback(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorWakeFn wake_callback) {
+    return vm && valid_domain(domain) && wake_callback
+        && ores_native_actor_scheduler_configure_wake_callback(
+            vm->schedulers[domain], wake_callback);
+}
+
+int ores_native_vm_bind_async_send_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeAsyncSendTicket ticket, OresNativeActorRef producer,
+        uint64_t continuation_slot, uint64_t continuation_generation,
+        uint64_t code_generation, OresNativeWakeTicket* out) {
+    return vm && valid_domain(domain) && out
+        && ores_native_actor_scheduler_bind_async_send_wake(
+            vm->schedulers[domain], ticket, producer,
+            continuation_slot, continuation_generation,
+            code_generation, out);
+}
+
 int ores_native_vm_await_async_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out) {
@@ -489,6 +509,14 @@ int ores_native_vm_current_execution_context(
     return vm && valid_domain(domain) && out
         && ores_native_actor_scheduler_current_execution_context(
             vm->schedulers[domain], out);
+}
+
+int ores_native_vm_is_current_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_is_current_wake(
+            vm->schedulers[domain], ticket);
 }
 
 static void control_lock(OresNativeVM* vm) {
