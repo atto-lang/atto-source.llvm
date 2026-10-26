@@ -871,7 +871,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceSendAsyncAwait,
-        sourceSendAsyncStart, sourceAwaitSendFuture,
+        sourceSendAsyncStartChecked, sourceAwaitSendFuture,
         sourceDetachSendFuture, sourceWaitDetachedSendResult,
         sourceStop, sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
@@ -899,9 +899,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         sourceSendAsyncAwait = module.getOrInsertFunction(
             "oreslang_source_actor_await_send_async",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
-        sourceSendAsyncStart = module.getOrInsertFunction(
-            "oreslang_source_actor_send_async_start",
-            llvm::FunctionType::get(native_ptr, {native_ptr, i64}, false));
+        sourceSendAsyncStartChecked = module.getOrInsertFunction(
+            "oreslang_source_actor_send_async_start_checked",
+            llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(context),
+                {native_ptr, i64, native_ptr}, false));
         sourceAwaitSendFuture = module.getOrInsertFunction(
             "oreslang_source_actor_await_send_future",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
@@ -1098,6 +1100,46 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             actorRefs.emplace(spawn.name, ref);
         }
 
+        auto start_send_future_checked = [&](
+                llvm::Value* actor_ref,
+                llvm::Value* payload,
+                const std::string& prefix) -> llvm::Value* {
+            if (fn.returns_void)
+                throw std::runtime_error(
+                    "native send_async checked start requires int main");
+            llvm::Value* future_slot = builder.CreateAlloca(
+                native_ptr, nullptr, prefix + ".future.slot");
+            llvm::Value* status = builder.CreateCall(
+                sourceSendAsyncStartChecked,
+                {actor_ref, payload, future_slot},
+                prefix + ".start.status");
+            auto* accepted = llvm::BasicBlock::Create(
+                context, prefix + ".start.accepted", function);
+            auto* failed = llvm::BasicBlock::Create(
+                context, prefix + ".start.failed", function);
+            builder.CreateCondBr(
+                builder.CreateICmpEQ(
+                    status,
+                    llvm::ConstantInt::get(
+                        llvm::Type::getInt32Ty(context),
+                        ORES_NATIVE_SEND_ACCEPTED)),
+                accepted,
+                failed);
+
+            builder.SetInsertPoint(failed);
+            /* Immediate INVALID_REF/TERMINATED/RESOURCE_EXHAUSTED never mint
+             * a Future. This is still the trusted outer guest-main stack, so
+             * synchronously seal/join the one live actor before propagating a
+             * nonzero start status to the OS-entry wrapper. */
+            builder.CreateCall(sourceStop, {actor_ref});
+            builder.CreateRet(builder.CreateZExt(
+                status, i64, prefix + ".start.failure.i64"));
+
+            builder.SetInsertPoint(accepted);
+            return builder.CreateLoad(
+                native_ptr, future_slot, prefix + ".future.ref");
+        };
+
         llvm::Value* send_future_ref = nullptr;
         if (!fn.send_future_name.empty()) {
             if (!fn.send_future_payload)
@@ -1112,10 +1154,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 no_fields,
                 declarations,
                 nullptr);
-            send_future_ref = builder.CreateCall(
-                sourceSendAsyncStart,
-                {actorRefs.at(fn.send_future_actor), payload},
-                fn.send_future_name + ".future.ref");
+            send_future_ref = start_send_future_checked(
+                actorRefs.at(fn.send_future_actor),
+                payload,
+                fn.send_future_name);
         }
 
         // An explicitly "owned int" lives in a bounded native C region;
@@ -1891,10 +1933,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 field_storage,
                 declarations,
                 &region_moves);
-            llvm::Value* direct_future = builder.CreateCall(
-                sourceSendAsyncStart,
-                {actorRefs.at(awaited_send.reference), awaited_payload},
-                "direct.send_async.future.ref");
+            llvm::Value* direct_future = start_send_future_checked(
+                actorRefs.at(awaited_send.reference),
+                awaited_payload,
+                "direct.send_async");
 
             auto* continuation_type =
                 llvm::FunctionType::get(i64, {native_ptr}, false);
