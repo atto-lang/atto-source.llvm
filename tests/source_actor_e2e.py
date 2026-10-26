@@ -98,6 +98,7 @@ def main():
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-send-async.ores", 1, 1, None),
         ("source-actor-send-async-local.ores", 1, 1, None),
+        ("source-actor-send-async-bool-local.ores", 1, 1, None),
         ("source-actor-send-async-future.ores", 1, 2, None),
         ("source-actor-send-async-future-local.ores", 1, 2, None),
         ("source-actor-typed-ref.ores", 1, 2, 3),
@@ -203,13 +204,15 @@ def main():
                 "source-actor-await-done.ores",
                 "source-actor-send-async.ores",
                 "source-actor-send-async-local.ores",
+                "source-actor-send-async-bool-local.ores",
                 "source-actor-send-async-future.ores",
                 "source-actor-send-async-future-local.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name in {
                     "source-actor-send-async.ores",
-                    "source-actor-send-async-local.ores"}:
+                    "source-actor-send-async-local.ores",
+                    "source-actor-send-async-bool-local.ores"}:
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call i32 @oreslang_source_actor_send_async_start_checked(" in line]
                 detach_calls = [line for line in guest.stdout.splitlines()
@@ -253,11 +256,17 @@ def main():
                     continuation)
                 assert "detached.state.count.valid" in continuation, (
                     name, "detached continuation must validate runtime state word count")
-                if name == "source-actor-send-async-local.ores":
+                if name in {
+                        "source-actor-send-async-local.ores",
+                        "source-actor-send-async-bool-local.ores"}:
                     assert "retained.detached.slot" in continuation, (
                         name, "captured local must resolve from runtime-owned detached frame")
                     assert "retained.detached.capture" in guest.stdout, (
                         name, "guest pre-await path must copy captured scalar before detaching")
+                if name == "source-actor-send-async-bool-local.ores":
+                    assert "retained.detached.bool.i1" in guest.stdout
+                    assert "retained.detached.bool" in guest.stdout, (
+                        name, "captured bool must be canonicalized to a 0/1 detached word")
             if name in {
                     "source-actor-send-async-future.ores",
                     "source-actor-send-async-future-local.ores"}:
