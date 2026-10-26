@@ -88,6 +88,7 @@ typedef struct {
     SourceActor* actor;
     OresNativeSuspensionLink link;
     uint64_t source_token;
+    uint32_t pc;
     int suspend_recorded;
     int detached;
     int finalizer_claimed;
@@ -95,6 +96,20 @@ typedef struct {
     int done;
     int outcome;
     int64_t result;
+
+    /* One next-PC staging lane. It is populated only by the currently resumed
+     * root carrier and promoted by that wake's epilogue after the current
+     * continuation has been finished. This avoids exposing a half-promoted
+     * frame to a later scheduler wake. */
+    int rearm_requested;
+    int rearm_terminal;
+    int rearm_outcome;
+    SourceSendFuture* next_send_future;
+    OresSourceActorStateContinuation next_state_continuation;
+    uint64_t next_source_token;
+    uint64_t next_state_count;
+    int64_t next_state[ORES_SOURCE_DETACHED_SCALAR_WORDS];
+    OresNativeSuspensionLink next_link;
 } SendAwaitFrame;
 
 typedef struct {
