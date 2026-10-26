@@ -1232,6 +1232,147 @@ int64_t oreslang_source_actor_await_send_future(
     return result;
 }
 
+int oreslang_source_actor_detach_send_future_checked(
+        void* opaque_future,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    SourceSendFuture* future = (SourceSendFuture*)opaque_future;
+    if (!future || !continuation)
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (ores_native_actor_scheduler_is_carrier_thread())
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
+
+    group_lock();
+    if (!source_send_future_valid_locked(future) || future->consuming) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    if (!group.root_ref.scheduler_domain
+            || group.pending_ready != NULL
+            || group.pending_done != NULL
+            || group.pending_send != NULL) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
+
+    SendAwaitFrame* frame = &group.detached_send;
+    *frame = (SendAwaitFrame){
+        .continuation = continuation,
+        .send_future = future,
+        .actor = future->actor,
+        .source_token = source_token,
+        .detached = 1,
+        .outcome = ORES_SOURCE_SEND_ASYNC_INVALID_REF
+    };
+    ensure(pthread_cond_init(&frame->completed, NULL) == 0);
+
+    future->consuming = 1;
+    group.pending_send = frame;
+
+    /*
+     * Detachment is established before publishing root CONTROL. If CONTROL
+     * admission itself is unavailable, keep the detached frame terminal so
+     * the process entry can still reclaim the Future/actor without reviving
+     * this guest stack. Returning ACCEPTED here means "runtime owns the
+     * detached frame", not "mailbox admission has succeeded".
+     */
+    if (!ores_native_vm_publish_control(
+            group.vm,
+            ORES_NATIVE_VM_MAIN,
+            group.root_ref,
+            SOURCE_ROOT_CONTROL_SEND_SUSPEND)) {
+        frame->outcome = ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+        frame->done = 1;
+        ensure(pthread_cond_signal(&frame->completed) == 0);
+    }
+    group_unlock();
+    return ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+}
+
+int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
+    if (result_out) *result_out = 0;
+    if (!result_out) return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (ores_native_actor_scheduler_is_carrier_thread())
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
+
+    group_lock();
+    SendAwaitFrame* frame = &group.detached_send;
+    if (group.pending_send != frame || !frame->detached
+            || !frame->send_future || !frame->actor) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    while (!frame->done)
+        ensure(pthread_cond_wait(&frame->completed, &group.mutex) == 0);
+
+    SourceSendFuture* future = frame->send_future;
+    SourceActor* actor = frame->actor;
+    OresNativeVM* vm = group.vm;
+    const OresNativeAsyncSendTicket ticket = future->ticket;
+    const int outcome = frame->outcome;
+    const int64_t result = frame->result;
+    const int suspended = frame->suspend_recorded;
+    const int wake_bound = frame->wake_bound;
+
+    ensure(source_send_future_valid_locked(future)
+        && future->consuming && future->actor == actor);
+
+    /*
+     * A failed root CONTROL admission never minted a logical continuation.
+     * A later descriptor-bind failure did; retire that still-PENDING logical
+     * continuation explicitly. Successful/failed scheduler wakes already ran
+     * trace resume/finish before setting frame.done.
+     */
+    if (suspended) {
+        if (!wake_bound)
+            ensure(ores_native_continuation_store_cancel(
+                group.continuations, frame->link.continuation));
+        ensure(ores_native_continuation_store_release(
+            group.continuations, frame->link.continuation));
+    }
+    group.pending_send = NULL;
+    group_unlock();
+
+    if (!wake_bound)
+        (void)ores_native_vm_cancel_async_send(
+            vm, ORES_NATIVE_VM_MAIN, ticket);
+    ensure(ores_native_vm_release_async_send(
+        vm, ORES_NATIVE_VM_MAIN, ticket));
+
+    group_lock();
+    ensure(source_send_future_valid_locked(future)
+        && future->consuming && future->actor == actor
+        && actor->send_future_live > 0);
+    future->live = 0;
+    future->actor = NULL;
+    future->ticket = (OresNativeAsyncSendTicket){0};
+    --actor->send_future_live;
+    ensure(pthread_cond_broadcast(&group.async_waiters_changed) == 0);
+    group_unlock();
+
+    ensure(pthread_cond_destroy(&frame->completed) == 0);
+    *frame = (SendAwaitFrame){0};
+
+    /*
+     * Successful compiler continuations request STOP themselves after all
+     * post-await effects. Failure continuations deliberately skip guest code,
+     * so outer-host finalization supplies the nonblocking stop request before
+     * joining physical completion.
+     */
+    if (!atomic_load_explicit(
+            &actor->stop_requested, memory_order_acquire))
+        oreslang_source_actor_request_stop(actor);
+    oreslang_source_actor_join_done(actor);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_DETACHED_SEND_FUTURE_PASS outcome=%d guest_stack_released=1 host_settlement_observer=0 final_join=1\n",
+        outcome);
+#endif
+    *result_out = result;
+    return outcome;
+}
+
 int oreslang_source_actor_cancel_send_future(void* opaque_future) {
     SourceSendFuture* future = (SourceSendFuture*)opaque_future;
     group_lock();
