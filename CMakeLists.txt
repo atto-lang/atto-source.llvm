@@ -1711,6 +1711,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_selectable_send_winner_and_stop_linearization
         PROPERTIES TIMEOUT 90)
 
+    # One common producer wake per heterogeneous select generation. The send
+    # winner and non-send winner paths must converge on this same escrow credit.
+    add_executable(oreslang-native-select-common-wake-test
+        tests/native_select_common_wake_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-select-common-wake-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-select-common-wake-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-select-common-wake-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-select-common-wake-test PRIVATE Threads::Threads)
+    add_test(NAME native_select_common_generation_wake
+        COMMAND oreslang-native-select-common-wake-test)
+    set_tests_properties(native_select_common_generation_wake PROPERTIES TIMEOUT 90)
+
     # Frozen payload + exact target resource loan + transferred real envelope.
     # Host runtime only; source send_async lowering remains separately gated.
     add_executable(oreslang-native-async-envelope-ownership-test
