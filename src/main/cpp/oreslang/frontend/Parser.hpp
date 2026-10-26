@@ -266,6 +266,7 @@ struct Function {
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
+    bool source_routine = false; // preserve fnc vs routine for typed source exports
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
