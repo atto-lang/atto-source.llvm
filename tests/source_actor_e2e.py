@@ -99,6 +99,7 @@ def main():
         ("source-actor-send-async.ores", 1, 1, None),
         ("source-actor-send-async-local.ores", 1, 1, None),
         ("source-actor-send-async-bool-local.ores", 1, 1, None),
+        ("source-actor-send-async-two-pc.ores", 1, 2, None),
         ("source-actor-send-async-future.ores", 1, 2, None),
         ("source-actor-send-async-future-local.ores", 1, 2, None),
         ("source-actor-typed-ref.ores", 1, 2, 3),
@@ -207,6 +208,7 @@ def main():
                 "source-actor-send-async.ores",
                 "source-actor-send-async-local.ores",
                 "source-actor-send-async-bool-local.ores",
+                "source-actor-send-async-two-pc.ores",
                 "source-actor-send-async-future.ores",
                 "source-actor-send-async-future-local.ores",
             }:
@@ -271,6 +273,51 @@ def main():
                     assert "retained.detached.bool.i1" in guest.stdout
                     assert "retained.detached.bool" in guest.stdout, (
                         name, "captured bool must be canonicalized to a 0/1 detached word")
+            if name == "source-actor-send-async-two-pc.ores":
+                start_calls = [line for line in guest.stdout.splitlines()
+                               if "call i32 @oreslang_source_actor_send_async_start_checked(" in line]
+                detach_calls = [line for line in guest.stdout.splitlines()
+                                if "call i32 @oreslang_source_actor_detach_send_future_state_checked(" in line]
+                rearm_calls = [line for line in guest.stdout.splitlines()
+                               if "call i32 @oreslang_source_actor_rearm_detached_send_state_checked(" in line]
+                wait_calls = [line for line in guest.stdout.splitlines()
+                              if "call i32 @oreslang_source_actor_wait_detached_send_result(" in line]
+                assert len(start_calls) == 1, (
+                    name, "PC0 must own the only host-stack Future submission", start_calls)
+                assert len(detach_calls) == 1, (
+                    name, "PC0 must detach exactly once", detach_calls)
+                assert len(rearm_calls) == 1, (
+                    name, "PC1 must rearm exactly one scheduler-owned next PC", rearm_calls)
+                assert len(wait_calls) == 1, (
+                    name, "outer host must wait only for terminal detached completion", wait_calls)
+                assert ".send_async_continuation.pc1" in guest.stdout, (
+                    name, "missing compile-time PC1 continuation")
+                assert ".send_async_continuation.pc2" in guest.stdout, (
+                    name, "missing compile-time PC2 continuation")
+                pc1 = llvm_function_body(
+                    guest.stdout, ".send_async_continuation.pc1")
+                pc2 = llvm_function_body(
+                    guest.stdout, ".send_async_continuation.pc2")
+                assert "call i32 @oreslang_source_actor_rearm_detached_send_state_checked(" in pc1, (
+                    name, "PC1 must rearm rather than synchronously wait", pc1)
+                assert "call void @oreslang_source_actor_request_stop(" not in pc1, (
+                    name, "final STOP belongs to PC2", pc1)
+                assert "retained.detached.slot" in pc1, (
+                    name, "PC1 must read Copy state from runtime-owned frame")
+                assert "call i32 @oreslang_source_actor_rearm_detached_send_state_checked(" not in pc2, (
+                    name, "PC2 is terminal for this bounded lowering", pc2)
+                stop_pos = pc2.find(
+                    "call void @oreslang_source_actor_request_stop(")
+                return_pos = pc2.rfind("ret i64")
+                assert 0 <= stop_pos < return_pos, (
+                    name, "PC2 must admit STOP before returning final result", pc2)
+                assert "retained.detached.slot" in pc2, (
+                    name, "PC2 must preserve the same runtime-owned Copy state")
+                assert "retained.detached.capture" in guest.stdout, (
+                    name, "PC0 guest stack must copy state before first detach")
+                assert "call i64 @oreslang_source_actor_await_send_future(" not in guest.stdout, (
+                    name, "two-PC lowering must not revive synchronous host await")
+
             if name in {
                     "source-actor-send-async-future.ores",
                     "source-actor-send-async-future-local.ores"}:
@@ -412,6 +459,7 @@ def main():
             if name in {
                     "source-actor-send-async.ores",
                     "source-actor-send-async-local.ores",
+                    "source-actor-send-async-two-pc.ores",
                     "source-actor-send-async-future.ores",
                     "source-actor-send-async-future-local.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
