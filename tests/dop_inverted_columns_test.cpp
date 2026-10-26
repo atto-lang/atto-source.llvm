@@ -202,8 +202,8 @@ int main() {
     owners.insert(h0.owner());
     owners.insert(foreign.owner());
     for (int i = 0; i < 4096; ++i) {
-        auto extra = std::make_unique<oreslang::dop::InvertedColumns<std::uint32_t>>();
-        auto handle = extra->push(static_cast<std::uint32_t>(i));
+        auto extra = std::make_unique<oreslang::dop::InvertedColumns<std::int32_t>>();
+        auto handle = extra->push(static_cast<std::int32_t>(i));
         check(owners.insert(handle.owner()).second);
     }
     // Differential/property-style stress: arbitrary swap-delete order must not
