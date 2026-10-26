@@ -1949,6 +1949,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_nb_select_over unsupported-nb-select-over.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_do_nb_select_over unsupported-do-nb-select-over.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_do_select_channel_arm unsupported-do-select-read-over.ores --diagnostic "native do select currently supports only a single default arm")
+    oreslang_contract_test(reject_do_select_default_scope_escape native-do-select-default-scope-escape-reject.ores --diagnostic "unknown parameter 'hidden'")
     if(ORE_CLANG)
         oreslang_contract_test(native_do_select_default_over_exec
             native-do-select-default-over.ores --run 42 --clang "${ORE_CLANG}")
