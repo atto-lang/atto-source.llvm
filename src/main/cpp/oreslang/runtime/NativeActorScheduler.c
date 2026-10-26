@@ -1569,6 +1569,127 @@ static int reserve_wake_locked_impl(
     return 1;
 }
 
+static OresNativeWakePublishStatus publish_select_wake_locked(
+        OresNativeActorScheduler* s,
+        OresNativeSelectWakeTicket ticket,
+        OresNativeSelectToken winner) {
+    if (!s || !ticket.arbiter || !ticket.selection_generation
+            || winner.arbiter != ticket.arbiter
+            || winner.selection_generation != ticket.selection_generation
+            || !winner.arm_generation)
+        return ORES_NATIVE_WAKE_INVALID;
+
+    uint64_t winning_arm = UINT64_MAX;
+    if (!ores_native_select_winner(ticket.arbiter, &winning_arm)
+            || winning_arm != winner.arm)
+        return ORES_NATIVE_WAKE_INVALID;
+
+    WakeCredit* w = matching_wake_locked(s, ticket.wake);
+    if (!w || w->state != WAKE_RESERVED || !w->select_bound
+            || w->select_arbiter != ticket.arbiter
+            || w->select_generation != ticket.selection_generation)
+        return ORES_NATIVE_WAKE_INVALID;
+
+    ActorLane* producer = &s->actors[ticket.wake.producer.actor_slot];
+    if (s->retired || producer->retired) {
+        release_wake_locked(
+            s, (size_t)ticket.wake.producer.actor_slot, w);
+        return ORES_NATIVE_WAKE_PRODUCER_RETIRED;
+    }
+
+    if (!s->reserved_wakes || s->accepted == UINT64_MAX) abort();
+    const int new_lane = !producer->active && !lane_has_work(producer);
+    --s->reserved_wakes;
+    w->ticket.completion_code = winning_arm + UINT64_C(1);
+    w->outcome = ORES_NATIVE_WAKE_READY;
+    w->state = WAKE_READY;
+    ++producer->wake_ready;
+    if (new_lane) ++s->runnable_lanes;
+    ++s->reserved_executions;
+    ++s->accepted;
+    ++s->outstanding;
+    pthread_cond_signal(&s->ready);
+    return ORES_NATIVE_WAKE_PUBLISHED;
+}
+
+int ores_native_actor_scheduler_reserve_select_wake(
+        OresNativeActorScheduler* s,
+        OresNativeActorRef producer,
+        OresNativeSelectArbiter* arbiter,
+        uint64_t selection_generation,
+        uint64_t continuation_slot,
+        uint64_t continuation_generation,
+        uint64_t code_generation,
+        OresNativeSelectWakeTicket* out) {
+    if (out) *out = (OresNativeSelectWakeTicket){0};
+    if (!s || !out || !arbiter || !selection_generation
+            || !continuation_slot || !continuation_generation
+            || !code_generation)
+        return 0;
+
+    if (!ores_native_select_retain_physical_loan(
+            arbiter, selection_generation))
+        return 0;
+
+    OresNativeWakeTicket wake = {0};
+    lock(s);
+    const int ok = reserve_wake_locked_impl(
+        s, producer, producer,
+        continuation_slot, continuation_generation, code_generation,
+        UINT64_MAX, selection_generation, 0, &wake);
+    if (ok) {
+        WakeCredit* w = matching_wake_locked(s, wake);
+        if (!w || w->state != WAKE_RESERVED || w->select_bound)
+            abort();
+        w->select_arbiter = arbiter;
+        w->select_generation = selection_generation;
+        w->select_bound = 1;
+        *out = (OresNativeSelectWakeTicket){
+            .wake = wake,
+            .arbiter = arbiter,
+            .selection_generation = selection_generation
+        };
+    }
+    unlock(s);
+
+    if (!ok) {
+        if (!ores_native_select_release_physical_loan(
+                arbiter, selection_generation))
+            abort();
+        return 0;
+    }
+    return 1;
+}
+
+OresNativeWakePublishStatus ores_native_actor_scheduler_publish_select_wake(
+        OresNativeActorScheduler* s,
+        OresNativeSelectWakeTicket ticket,
+        OresNativeSelectToken winner) {
+    if (!s) return ORES_NATIVE_WAKE_INVALID;
+    lock(s);
+    const OresNativeWakePublishStatus result =
+        publish_select_wake_locked(s, ticket, winner);
+    unlock(s);
+    return result;
+}
+
+int ores_native_actor_scheduler_cancel_select_wake(
+        OresNativeActorScheduler* s,
+        OresNativeSelectWakeTicket ticket) {
+    if (!s || !ticket.arbiter || !ticket.selection_generation)
+        return 0;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket.wake);
+    const int ok = w && w->state == WAKE_RESERVED && w->select_bound
+        && w->select_arbiter == ticket.arbiter
+        && w->select_generation == ticket.selection_generation;
+    if (ok)
+        release_wake_locked(
+            s, (size_t)ticket.wake.producer.actor_slot, w);
+    unlock(s);
+    return ok;
+}
+
 int ores_native_actor_scheduler_reserve_wake(
         OresNativeActorScheduler* s, OresNativeActorRef producer,
         OresNativeActorRef target, uint64_t continuation_slot,
