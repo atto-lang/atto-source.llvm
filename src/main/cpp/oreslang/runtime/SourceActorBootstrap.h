@@ -16,8 +16,14 @@ typedef void (*OresSourceActorInit)(OresActorI64Heap*, uint64_t, uint64_t);
 typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
+/* Detached send continuation with runtime-owned Copy-scalar state. The state
+ * pointer is valid only for the authenticated resume callback and must not
+ * escape or be retained by guest code. */
+typedef int64_t (*OresSourceActorStateContinuation)(
+    void* actor, const int64_t* state, uint64_t state_count);
 
 enum {
+    ORES_SOURCE_DETACHED_SCALAR_WORDS = 16,
     ORES_SOURCE_ACTOR_STARTUP_PENDING = 0,
     ORES_SOURCE_ACTOR_STARTUP_INITIALIZING = 1,
     ORES_SOURCE_ACTOR_STARTUP_READY = 2,
@@ -143,6 +149,14 @@ int oreslang_source_actor_detach_send_future_checked(
     void* future,
     OresSourceActorContinuation continuation,
     uint64_t source_token);
+/* State-bearing compiler entry. Copies at most 16 int/bool words into the
+ * runtime-owned detached frame before returning to the guest caller. */
+int oreslang_source_actor_detach_send_future_state_checked(
+    void* future,
+    OresSourceActorStateContinuation continuation,
+    uint64_t source_token,
+    const int64_t* state,
+    uint64_t state_count);
 int oreslang_source_actor_wait_detached_send_result(int64_t* result_out);
 
 int oreslang_source_actor_cancel_send_future(void* future);
