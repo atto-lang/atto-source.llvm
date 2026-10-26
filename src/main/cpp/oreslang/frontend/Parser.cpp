@@ -691,9 +691,12 @@ private:
                 fail("[EXPORT_KIND_MISMATCH] Symbol literal does not match typed export kind");
         } else {
             if (kind == SourceExportKind::Symbol) {
-                if (token_.kind == Kind::Identifier &&
-                        peek_next().text == "as" && peek_second().text == "#")
-                    fail("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] a Symbol identity target requires a #symbol source");
+                if (token_.kind == Kind::Identifier && peek_next().text == "as") {
+                    if (peek_second().text == "#")
+                        fail("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] a Symbol identity target requires a #symbol source");
+                    if (peek_second().kind == Kind::String)
+                        fail("[EXPORT_LITERAL_ALIAS_UNSUPPORTED] runtime literals are not export binding names");
+                }
                 fail("[EXPORT_SYMBOL_LITERAL_REQUIRED] Symbol exports name nominal #symbol identities");
             }
             item.local_name = identifier();
