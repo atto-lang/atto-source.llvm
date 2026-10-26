@@ -105,8 +105,25 @@ int oreslang_source_task_start_i64_checked(
         ores_native_actor_scheduler_try_send(
             runtime.scheduler, runtime.actor, UINT64_C(1));
     if (admitted != ORES_NATIVE_SEND_ACCEPTED) {
+        OresNativeActorScheduler* failed_scheduler = runtime.scheduler;
+        OresNativeActorRef failed_actor = runtime.actor;
         runtime.task = NULL;
+        runtime.scheduler = NULL;
+        runtime.actor = (OresNativeActorRef){0, 0, 0};
         if (pthread_mutex_unlock(&runtime.mutex) != 0) abort();
+
+        /*
+         * Admission failure must not strand a scheduler/carrier resource.
+         * No DATA was accepted, so sealing and draining the empty actor is a
+         * trusted host cleanup path, never a guest callback.
+         */
+        (void)ores_native_actor_scheduler_stop(failed_scheduler, failed_actor);
+        (void)ores_native_actor_scheduler_wait_done(
+            failed_scheduler, failed_actor);
+        ores_native_actor_scheduler_retire(failed_scheduler);
+        (void)ores_native_actor_scheduler_drain(failed_scheduler);
+        (void)ores_native_actor_scheduler_try_destroy(failed_scheduler);
+
         (void)pthread_cond_destroy(&task->completed);
         (void)pthread_mutex_destroy(&task->mutex);
         free(task);
