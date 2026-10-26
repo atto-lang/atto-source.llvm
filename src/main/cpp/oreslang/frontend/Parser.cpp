@@ -5163,11 +5163,18 @@ void resolve_and_validate_program(Program& program) {
     resolve_native_sums(program);
     resolve_future_pipeline_contracts(program);
     Parser::validate_complete(program);
-    validate_native_scalar_types(program);
-    // Ownership is deliberately last: successful completion publishes the
-    // lowering authority consumed by Future-pipeline codegen. No later
-    // compiler validation may fail while leaving that authority live.
     validate_i64_ownership(program);
+    try {
+        validate_native_scalar_types(program);
+    } catch (...) {
+        // Preserve the established diagnostic/check ordering for the native
+        // compiler while ensuring a later scalar-type failure revokes every
+        // lowering authorization published by the ownership pass.
+        for (auto& function : program.functions)
+            for (auto& pipeline : function.future_pipelines)
+                pipeline.ownership_admitted = false;
+        throw;
+    }
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
