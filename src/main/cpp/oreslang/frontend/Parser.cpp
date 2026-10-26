@@ -405,6 +405,8 @@ bool entry_builtin_name(std::string_view name) {
         " at byte " + std::to_string(offset));
 }
 
+void resolve_source_exports(Program& program);
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -611,6 +613,10 @@ group_done:;
         if (accept("namespace")) {
             program.namespace_name = identifier();
             require(";");
+        }
+        while (token_.text == "import" || token_.text == "export") {
+            if (token_.text == "import") module_import(program);
+            else program.export_declarations.push_back(source_export_declaration());
         }
         bool wrapped_module = false;
         if (token_.text == "import")
