@@ -125,6 +125,17 @@ int ores_native_vm_async_send_status(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket,
     OresNativeAsyncSendState* state_out, OresNativeSendStatus* outcome_out);
+/* Trusted runtime wake bridge for scheduler-owned async-send settlement.
+ * The callback executes on the selected domain's actor carrier and receives
+ * only generation-fenced scheduler wake receipts. */
+int ores_native_vm_configure_wake_callback(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorWakeFn wake_callback);
+int ores_native_vm_bind_async_send_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket, OresNativeActorRef producer,
+    uint64_t continuation_slot, uint64_t continuation_generation,
+    uint64_t code_generation, OresNativeWakeTicket* out);
 int ores_native_vm_await_async_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out);
@@ -177,6 +188,11 @@ OresNativeActorFuture* ores_native_vm_actor_future_open(
 int ores_native_vm_current_execution_context(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeExecutionContext* out);
+/* True only while executing the exact generation-fenced scheduler wake on
+ * the selected domain carrier. Never treats a stale wake ticket as current. */
+int ores_native_vm_is_current_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
 
 /* Metadata-only VM master CONTROL coordinator. Coalesces one host wake bit
  * per domain. The host event loop explicitly pumps it; no master pthread or
