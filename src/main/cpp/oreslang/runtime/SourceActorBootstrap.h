@@ -52,6 +52,9 @@ size_t oreslang_source_actor_test_pending_async_sends(void* actor);
 int oreslang_source_actor_test_future_consuming(void* future);
 /* True after exactly one outer host has claimed detached frame finalization. */
 int oreslang_source_actor_test_detached_finalizer_claimed(void);
+/* True only after detached finalization has cleared callback/Future identity,
+ * state count and every bounded scalar word before the embedded frame is reused. */
+int oreslang_source_actor_test_detached_state_cleared(void);
 /* True only while join_done has reached the actor reclamation fence and is
  * waiting specifically for live async waiters/Future wrappers to retire. */
 int oreslang_source_actor_test_join_waiting_on_futures(void* actor);
