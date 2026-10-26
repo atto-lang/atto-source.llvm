@@ -169,9 +169,9 @@ runtime contract only:
 - `TaskCancellation` can own the arbiter through a lifetime-safe cancellation
   handle.
 
-This is **not** source-level select support. `Channel<T>`/Future registration,
-typed arm bindings, ownership/borrow checking, blocking suspension,
-continuation scheduling, channel-close semantics, policy lowering
+This is **not** source-level select support. Generic `Channel<T>`/Future
+registration, typed arm bindings, ownership/borrow checking, blocking
+suspension, continuation scheduling, policy lowering
 (`first`/`fair`/`random`), and actor generation fencing are still required.
 Until those layers are wired and tested, source `select`, including both
 `{ ... }` and `over ... end`, must continue to fail closed at the native
