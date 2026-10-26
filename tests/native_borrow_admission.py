@@ -28,12 +28,12 @@ CASES = {
     # A borrow passed to an owned i64 slot must never be lowered by-value.
     "borrow-to-owned-parameter": (
         "fnc consume(int x): int { return x; }\npub fnc main(int v): int { return consume(rt borrow v); }\n",
-        "borrow",
+        "borrowed reference may only be passed to a borrowed parameter",
     ),
     # Constructor by-value field initialization is an ownership transfer.
     "borrow-to-owned-constructor": (
         "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(int v): int { let Box box = new Box(rt borrow v); return box.read(); }\n",
-        "borrow",
+        "native scalar constructor argument requires pure integer expression",
     ),
     # The native generator frontend does not implement lexical loans yet.
     "generator-yield-loan-unsupported": (
@@ -53,24 +53,38 @@ def main():
                                     text=True, check=False, timeout=20)
             if result.returncode == 0 or result.stdout.strip() or expected not in result.stderr:
                 raise AssertionError(f"{title}: must reject without emitted IR: {result.stderr}")
-    # A passing negative matrix is meaningless if compiler failures are
-    # unconditional. Require one supported shared borrow to emit actual IR.
-    with tempfile.TemporaryDirectory() as folder:
-        path = pathlib.Path(folder) / "valid-shared-borrow.ores"
-        path.write_text(
+    # A broken parser or unconditional rejection must never satisfy the
+    # negative suite. Require three accepted source shapes to emit LLVM IR.
+    valid_cases = {
+        "valid-shared-borrow": (
             "fnc read(borrow int x): int { return x; }\n"
-            "pub fnc main(int v): int { return read(rt borrow v); }\n",
-            encoding="utf-8",
-        )
-        result = subprocess.run([sys.argv[1], str(path)], capture_output=True,
-                                text=True, check=False, timeout=20)
-        if result.returncode != 0 or "define" not in result.stdout:
-            raise AssertionError(
-                "valid shared borrowing must produce LLVM IR: "
-                + result.stderr
-            )
+            "pub fnc main(int v): int { return read(rt borrow v); }\n"
+        ),
+        "valid-owned-scalar-call": (
+            "fnc consume(int x): int { return x; }\n"
+            "pub fnc main(int v): int { return consume(v); }\n"
+        ),
+        "valid-owned-constructor": (
+            "pub define class Box as let int value=start;\n"
+            "  pub constructor(int start){return;}\n"
+            "  pub read()->int{return self.value;}\n"
+            "end\n"
+            "pub fnc main(int v): int { let Box box = new Box(v); return box.read(); }\n"
+        ),
+    }
+    with tempfile.TemporaryDirectory() as folder:
+        for title, source in valid_cases.items():
+            path = pathlib.Path(folder) / (title + ".ores")
+            path.write_text(source, encoding="utf-8")
+            result = subprocess.run([sys.argv[1], str(path)], capture_output=True,
+                                    text=True, check=False, timeout=20)
+            if result.returncode != 0 or "define" not in result.stdout:
+                raise AssertionError(
+                    f"{title}: expected LLVM IR, got exit {result.returncode}: "
+                    + result.stderr
+                )
     print(f"native borrow admission: {len(CASES)} invalid programs rejected "
-          "without IR; one valid shared borrow emitted IR")
+          f"without IR; {len(valid_cases)} valid controls emitted IR")
 
 if __name__ == "__main__":
     try:

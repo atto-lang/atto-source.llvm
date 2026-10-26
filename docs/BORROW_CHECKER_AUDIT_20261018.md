@@ -40,9 +40,11 @@ only to their recorded source commits, not automatically to this head.
 `native_compile_time_borrow_escape_admission` registers the existing native
 source harness in CTest, adds by-value call/constructor loan rejection cases,
 and adds a negative generator feature gate. It requires each rejected source
-file to produce nonzero compiler status, no stdout/LLVM IR, and a diagnostic.
-It also requires a valid synchronous shared scalar loan to emit LLVM IR,
-preventing an unconditional-rejection mock compiler from passing.
+file to produce nonzero compiler status, no stdout/LLVM IR, and a
+**specific ownership or unsupported-generator diagnostic**.
+It also requires three supported positive controls (shared borrowed parameter,
+owned scalar call and owned class constructor) to produce LLVM IR, preventing
+broken-parser or unconditional-rejection false positives.
 
 This is **not** evidence that native generator lifetime checking is
 implemented: generators are deliberately unsupported by the native
