@@ -712,6 +712,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         for (const auto& s : fn.caught_throw_defers) scan_statement(s);
         for (const auto& s : fn.actor_sends) scan_string(s.payload.get());
+        if (fn.try_select) {
+            scan_string(fn.try_select->payload.get());
+            for (const auto& statement : fn.try_select->send_branch)
+                scan_statement(statement);
+            for (const auto& statement : fn.try_select->default_branch)
+                scan_statement(statement);
+        }
         scan_string(fn.send_future_payload.get());
         for (const auto& w : fn.actor_field_writes) scan_string(w.expression.get());
         scan_string(fn.caught_throw_value.get());
@@ -871,6 +878,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceSendAsyncAwait,
+        sourceTrySelectSendDefault,
         sourceSendAsyncStartChecked, sourceDiscardSendFuture,
         sourceDetachSendFutureState, sourceRearmDetachedSendState,
         sourceWaitDetachedSendResult,
@@ -897,6 +905,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
+        sourceTrySelectSendDefault = module.getOrInsertFunction(
+            "oreslang_source_actor_try_select_send_default_checked",
+            llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(context),
+                {native_ptr, i64, native_ptr}, false));
         sourceSendAsyncAwait = module.getOrInsertFunction(
             "oreslang_source_actor_await_send_async",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
@@ -1827,6 +1840,89 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 lower_control(stmt); continue;
             }
             lower_effect(stmt);
+        }
+
+        if (fn.try_select) {
+            if (!fn.await_sites.empty())
+                throw std::runtime_error(
+                    "native try-select cannot share a suspension frame");
+            llvm::Value* payload = lower(
+                *fn.try_select->payload,
+                builder,
+                i64,
+                storage,
+                field_storage,
+                declarations,
+                &region_moves);
+            llvm::Value* selected = builder.CreateAlloca(
+                llvm::Type::getInt32Ty(context),
+                nullptr,
+                "try.select.selected.arm");
+            builder.CreateStore(
+                llvm::ConstantInt::getSigned(
+                    llvm::Type::getInt32Ty(context), -1),
+                selected);
+            llvm::Value* status = builder.CreateCall(
+                sourceTrySelectSendDefault,
+                {
+                    actorRefs.at(fn.try_select->actor),
+                    payload,
+                    selected
+                },
+                "try.select.status");
+
+            auto* selected_ok = llvm::BasicBlock::Create(
+                context, "try.select.accepted", function);
+            auto* selected_error = llvm::BasicBlock::Create(
+                context, "try.select.failed", function);
+            builder.CreateCondBr(
+                builder.CreateICmpEQ(
+                    status,
+                    llvm::ConstantInt::get(
+                        llvm::Type::getInt32Ty(context), 0)),
+                selected_ok,
+                selected_error);
+
+            builder.SetInsertPoint(selected_error);
+            /* The checked source ABI can fail before choosing an arm only for
+             * a terminal/resource condition. Preserve linear ActorRef cleanup
+             * before surfacing the exact nonzero status to the process wrapper. */
+            builder.CreateCall(
+                sourceStop,
+                {actorRefs.at(fn.try_select->actor)});
+            builder.CreateRet(builder.CreateZExt(
+                status, i64, "try.select.failure.i64"));
+
+            builder.SetInsertPoint(selected_ok);
+            llvm::Value* selected_arm = builder.CreateLoad(
+                llvm::Type::getInt32Ty(context),
+                selected,
+                "try.select.selected");
+            auto* send_branch = llvm::BasicBlock::Create(
+                context, "try.select.send", function);
+            auto* default_branch = llvm::BasicBlock::Create(
+                context, "try.select.default", function);
+            auto* select_join = llvm::BasicBlock::Create(
+                context, "try.select.join", function);
+            builder.CreateCondBr(
+                builder.CreateICmpEQ(
+                    selected_arm,
+                    llvm::ConstantInt::get(
+                        llvm::Type::getInt32Ty(context), 0)),
+                send_branch,
+                default_branch);
+
+            builder.SetInsertPoint(send_branch);
+            lower_arm(fn.try_select->send_branch);
+            if (!builder.GetInsertBlock()->getTerminator())
+                builder.CreateBr(select_join);
+
+            builder.SetInsertPoint(default_branch);
+            lower_arm(fn.try_select->default_branch);
+            if (!builder.GetInsertBlock()->getTerminator())
+                builder.CreateBr(select_join);
+
+            builder.SetInsertPoint(select_join);
         }
 
         /*
