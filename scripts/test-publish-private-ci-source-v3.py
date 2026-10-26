@@ -1239,5 +1239,76 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         v3.checked_carrier_main("trusted/ci", carrier_contract())
 
 
+    def test_protected_source_rejects_missing_review_bypass_policy(self):
+        reviews = {
+            "require_code_owner_reviews": True,
+            "dismiss_stale_reviews": True,
+            "required_approving_review_count": 1,
+        }
+        protection = {
+            "required_pull_request_reviews": reviews,
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+        }
+
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}":
+                return {
+                    "id": v3.SOURCE_REPO_ID,
+                    "full_name": v3.SOURCE_REPO,
+                    "private": True,
+                }
+            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                return {
+                    "name": v3.SOURCE_BRANCH,
+                    "protected": True,
+                    "commit": {"sha": PROTECTED},
+                }
+            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}/protection":
+                return protection
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            for value in (None, [], {"users": [], "teams": []}):
+                with self.subTest(value=value):
+                    if value is None:
+                        reviews.pop("bypass_pull_request_allowances", None)
+                    else:
+                        reviews["bypass_pull_request_allowances"] = value
+                    with self.assertRaisesRegex(v3.Denied, "bypass policy"):
+                        v3.source_protection()
+
+    def test_protected_carrier_rejects_missing_review_bypass_policy(self):
+        reviews = {
+            "require_code_owner_reviews": True,
+            "dismiss_stale_reviews": True,
+            "required_approving_review_count": 1,
+        }
+        protection = {
+            "required_pull_request_reviews": reviews,
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+        }
+
+        def api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {"name": "main", "protected": True, "commit": {"sha": BASE}}
+            if route == "repos/trusted/ci/branches/main/protection":
+                return protection
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            for value in (None, [], {"users": [], "apps": []}):
+                with self.subTest(value=value):
+                    if value is None:
+                        reviews.pop("bypass_pull_request_allowances", None)
+                    else:
+                        reviews["bypass_pull_request_allowances"] = value
+                    with self.assertRaisesRegex(v3.Denied, "bypass policy"):
+                        v3.checked_carrier_main("trusted/ci", carrier_contract())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
