@@ -375,6 +375,18 @@ OresNativeSendStatus ores_native_vm_submit_async(
         : ORES_NATIVE_SEND_INVALID_REF;
 }
 
+OresNativeSendStatus ores_native_vm_submit_selectable_async(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref, uint64_t payload,
+    OresNativeSelectToken select_token,
+    OresNativeAsyncSendTicket* out) {
+    if (out) *out = (OresNativeAsyncSendTicket){0};
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_submit_selectable_async(
+            vm->schedulers[domain], ref, payload, select_token, out)
+        : ORES_NATIVE_SEND_INVALID_REF;
+}
+
 int ores_native_vm_async_send_status(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket,
