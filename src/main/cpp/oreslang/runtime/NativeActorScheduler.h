@@ -286,6 +286,45 @@ int ores_native_actor_scheduler_reserve_wake(
     OresNativeActorRef target, uint64_t continuation_slot,
     uint64_t continuation_generation, uint64_t code_generation,
     uint64_t descriptor_generation, OresNativeWakeTicket* out);
+/*
+ * Common heterogeneous-select continuation.
+ *
+ * Reserve mints a scheduler-scoped, nonzero selection generation, initializes
+ * a fresh fixed-capacity arbiter, and reserves exactly one producer wake loan.
+ * Rearm performs the same operation for an already-terminal arbiter generation.
+ * The generic wake uses descriptor_slot=UINT64_MAX and binds
+ * descriptor_generation to the select generation.
+ *
+ * All arm tokens MUST be registered first, then attached to this same wake,
+ * before any source-specific operation is submitted. A winning source publishes
+ * this wake exactly once; losing arms never publish guest work.
+ */
+int ores_native_actor_scheduler_reserve_select_wake(
+    OresNativeActorScheduler* scheduler,
+    OresNativeSelectArbiter* arbiter,
+    size_t arm_count,
+    OresNativeActorRef producer,
+    uint64_t continuation_slot,
+    uint64_t continuation_generation,
+    uint64_t code_generation,
+    OresNativeWakeTicket* out);
+int ores_native_actor_scheduler_rearm_select_wake(
+    OresNativeActorScheduler* scheduler,
+    OresNativeSelectArbiter* arbiter,
+    size_t arm_count,
+    OresNativeActorRef producer,
+    uint64_t continuation_slot,
+    uint64_t continuation_generation,
+    uint64_t code_generation,
+    OresNativeWakeTicket* out);
+int ores_native_actor_scheduler_attach_select_wake(
+    OresNativeActorScheduler* scheduler,
+    OresNativeSelectToken* token,
+    OresNativeWakeTicket wake);
+OresNativeWakePublishStatus ores_native_actor_scheduler_publish_select_wake(
+    OresNativeActorScheduler* scheduler,
+    OresNativeSelectToken token,
+    OresNativeWakeOutcome outcome);
 int ores_native_actor_scheduler_transfer_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 /* Cancellation succeeds only while still RESERVED (not transferred). */
