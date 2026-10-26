@@ -110,22 +110,40 @@ same/older generations and terminal generation exhaustion fail closed. Stale
 selection/arm generations fail closed. The select arbiter is fixed-capacity and
 performs no allocation or guest callback during commit.
 
+A source registration may also transfer its arm into a source-owned **BOUND**
+state. For selectable send this happens at scheduler submission: after the
+handoff, a copied generic token no longer has authority to call the generic
+commit/detach APIs. Only the scheduler may commit that BOUND arm at the real
+mailbox-credit boundary, or detach it during cancellation/setup failure. This
+prevents a coordinator or stale helper from naming the send arm as winner before
+the destination can actually accept the message.
+
+The runtime now also has one common, pre-reserved continuation wake per select
+generation. It is separate from every source descriptor and retains a
+generation-scoped physical loan on the arbiter. A winning source publishes this
+wake only after its winner commit; losing sources leave it untouched for the
+actual winner. The wake carries winner-arm identity as result metadata and runs
+on the selecting actor's authenticated continuation lane. Arbiter rearm requires
+both zero active arm tokens **and zero physical select loans**. Wake identity is
+cleared before the physical-loan count reaches zero, so a later generation
+cannot alias a RESERVED/READY/EXECUTING callback from the previous generation.
+
 This is intentionally **not** implemented by wrapping a normal READY
 `send_async` Future after the fact. Ordinary READY already means irrevocable
 mailbox admission, which is too late for a losing select arm to roll back.
 
 Current non-claims remain important:
 - the source parser/type checker still rejects native static/dynamic select;
-- there is not yet a common source continuation wake bound to a select
-  generation;
+- the common wake is runtime substrate only; compiler-generated select
+  continuation capture/result storage is not yet lowered from `.ores`;
 - Channel/Future/stream arms are not yet integrated with this arbiter;
 - FAIR/priority/random source policies are not yet implemented;
 - object mailbox payloads remain outside the current scalar source slice.
 
-The next vertical step is a common generation-fenced select continuation that
-all registered sources can notify after arbitration, followed by one static
-compiled `.ores` fixture. Until then, existing fail-closed source fixtures
-must remain unchanged.
+The next vertical step is compiler-owned select continuation/result storage
+using this common generation wake, followed by one static two-arm compiled
+`.ores` fixture. Until that source lowering is complete, existing fail-closed
+select fixtures must remain unchanged.
 
 ## Native implementation acceptance requirements
 
