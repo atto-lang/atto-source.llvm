@@ -152,9 +152,16 @@ inline const ClassField* constructor_field(const ClassDecl& cls, std::size_t par
 // Native source value categories. Future<T> remains a no-IR boundary
 // until the compiler can lower nonblocking pinned continuations.
 struct SourceType {
-    enum class Kind { I64, ActorRef, Future };
+    enum class Kind { I64, ActorRef, Future, Channel };
     Kind kind = Kind::I64;
     std::string argument;
+};
+
+struct ChannelBinding {
+    std::string name;
+    SourceType declared_type;
+    std::size_t capacity = 1;
+    std::size_t offset = 0;
 };
 
 struct ActorSpawnBinding {
@@ -183,7 +190,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, SelectDefault, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, SelectDefault, SelectChannelDefault, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -207,6 +214,16 @@ struct Statement {
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
+
+    // First native typed channel-select slice: exactly one Channel<int>
+    // readiness arm followed by mandatory default. The default makes the
+    // selection immediately decidable, so no continuation/suspension is
+    // implied by this node.
+    enum class ChannelOp { Read, Write };
+    ChannelOp channel_op = ChannelOp::Read;
+    std::string channel_name;
+    std::unique_ptr<Expression> channel_write_value;
+    std::unique_ptr<LocalBinding> channel_read_binding;
 };
 
 // Side-effect-free equality guard with return-only taken branch.
@@ -235,6 +252,7 @@ struct Function {
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
+    std::vector<ChannelBinding> channels;
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
