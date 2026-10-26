@@ -44,12 +44,17 @@ done
   tests/native_task_continuation_gate_test.cpp "${objects[@]}" \
   -o "$build_dir/task-continuation"
 
+"$CXX" -std=c++17 "${common[@]}" "${include[@]}" \
+  tests/native_structured_task_scope_gate_test.cpp \
+  -o "$build_dir/structured-task-scope"
+
 "$CC" -std=c11 "${common[@]}" "${include[@]}" \
   tests/native_continuation_ready_resume_test.c "${objects[@]}" \
   -o "$build_dir/continuation-ready"
 
 "$build_dir/task-cancellation"
 "$build_dir/task-continuation"
+"$build_dir/structured-task-scope"
 "$build_dir/continuation-ready"
 
 printf 'NATIVE_TASK_GATE_TESTS_PASS mode=%s CC=%s CXX=%s\n' "$mode" "$CC" "$CXX"
