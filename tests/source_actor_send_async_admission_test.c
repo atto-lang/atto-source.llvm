@@ -410,6 +410,26 @@ static int64_t passthrough_message(
     return payload;
 }
 
+static void rejected_ready_cancel_releases_ownership_claim(void) {
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 921, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    /* READY admissions cannot be cancelled, but a rejected cancellation
+     * must surrender its transient ownership so the later await succeeds. */
+    CHECK(!oreslang_source_actor_cancel_send_future(future));
+    CHECK(!oreslang_source_actor_test_future_consuming(future));
+    CHECK(oreslang_source_actor_await_send_future_checked(future)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_READY_CANCEL_PASS claim_released=1 await=1\n");
+}
+
 static void bounded_waiter_cohort_rejects_before_pin(void) {
     void* actor = oreslang_source_actor_spawn(
         init_actor, passthrough_message, 1);
@@ -539,6 +559,7 @@ int main(void) {
     failed_stored_future_resumes_only_for_trace_cleanup();
     stored_future_cancel_wins_only_while_pending();
     stop_wakes_full_waiter_as_terminated();
+    rejected_ready_cancel_releases_ownership_claim();
     bounded_waiter_cohort_rejects_before_pin();
     carrier_call_fails_would_deadlock();
     foreign_scheduler_carrier_fails_would_deadlock();
