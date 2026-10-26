@@ -67,6 +67,37 @@ static int round_trip(void) {
     return 0;
 }
 
+/* Encode a reference whose second byte is nonzero. Testing only slot 1
+ * (word 9) misses byte-order regressions outside its low byte. */
+static int multi_byte_compact_ref_wire_format(void) {
+    OresActorArena* a = ores_actor_arena_open(704, 1, 40, 64, 64);
+    OresArenaTurn t = ores_actor_arena_enter(a, 704, 1);
+    OresArenaHandle owner = ores_actor_arena_alloc(a, t, 16);
+    const uint32_t source_bits = ores_actor_arena_compact_publish_i32(
+        a, t.domain, t.epoch, owner.index, owner.generation);
+    uint32_t target_bits = 0;
+    for (unsigned i = 0; i < 32; ++i) {
+        OresArenaHandle h = ores_actor_arena_alloc(a, t, 16);
+        if (i == 31) {
+            target_bits = ores_actor_arena_compact_publish_i32(
+                a, t.domain, t.epoch, h.index, h.generation);
+        }
+    }
+    CHECK(source_bits == 1);
+    CHECK(target_bits == 257); /* slot index 32, stride 64, shift 3 */
+    ores_actor_arena_compact_store_ref_i32(
+        a, t.domain, t.epoch, source_bits, 4, target_bits);
+    unsigned char wire[4] = {0, 0, 0, 0};
+    ores_actor_arena_read(a, t, owner, 4, wire, sizeof(wire));
+    CHECK(wire[0] == 1 && wire[1] == 1 && wire[2] == 0 && wire[3] == 0);
+    CHECK(ores_actor_arena_compact_load_ref_i32(
+        a, t.domain, t.epoch, source_bits, 4) == target_bits);
+    ores_actor_arena_leave(a, t);
+    ores_actor_arena_retire(a);
+    CHECK(ores_actor_arena_try_destroy(a) == 1);
+    return 0;
+}
+
 enum violation {
     FORGED_INTERIOR, UNPUBLISHED_TARGET, DANGLING_EDGE,
     BORROWED_SOURCE, MISALIGNED_FIELD, FIELD_OVERFLOW,
@@ -139,6 +170,7 @@ static int must_abort(enum violation reason) {
 #endif
 int main(void) {
     CHECK(round_trip() == 0);
+    CHECK(multi_byte_compact_ref_wire_format() == 0);
 #if defined(__unix__) || defined(__APPLE__)
     for (int n = FORGED_INTERIOR; n <= INVALID_TARGET_ON_STORE; ++n)
         CHECK(must_abort((enum violation)n));
