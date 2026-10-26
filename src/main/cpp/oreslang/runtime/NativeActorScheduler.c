@@ -1150,6 +1150,106 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
     return ORES_NATIVE_SEND_ACCEPTED;
 }
 
+OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
+        OresNativeActorScheduler* s, OresNativeActorRef target,
+        uint64_t payload, OresNativeSelectToken select_token,
+        OresNativeAsyncSendTicket* out) {
+    if (!out) return ORES_NATIVE_SEND_INVALID_REF;
+    *out = (OresNativeAsyncSendTicket){0};
+    if (!s || !select_token.arbiter
+            || !ores_native_select_token_registered(select_token))
+        return ORES_NATIVE_SEND_INVALID_REF;
+
+    lock(s);
+
+    /*
+     * The common winner may have committed after the caller's precheck but
+     * before this scheduler acquired its target-credit lock. Detach this arm
+     * without minting any async descriptor in that case.
+     */
+    if (!ores_native_select_token_registered(select_token)) {
+        (void)ores_native_select_detach(select_token);
+        unlock(s);
+        return ORES_NATIVE_SEND_CANCELLED;
+    }
+
+    OresNativeSendStatus immediate_failure = ORES_NATIVE_SEND_ACCEPTED;
+    if (!matching(s, target))
+        immediate_failure = ORES_NATIVE_SEND_INVALID_REF;
+    else {
+        ActorLane* target_lane = &s->actors[target.actor_slot];
+        if (s->retired || target_lane->retired)
+            immediate_failure = ORES_NATIVE_SEND_TERMINATED;
+        else if (target_lane->async_live >= ORES_NATIVE_ASYNC_SENDS_PER_ACTOR
+                || target_lane->next_async_sequence == 0)
+            immediate_failure = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+    }
+
+    if (immediate_failure != ORES_NATIVE_SEND_ACCEPTED) {
+        const OresNativeSelectCommitResult selected =
+            ores_native_select_try_commit(select_token);
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        unlock(s);
+        return selected == ORES_NATIVE_SELECT_WON
+            ? immediate_failure
+            : ORES_NATIVE_SEND_CANCELLED;
+    }
+
+    ActorLane* lane = &s->actors[target.actor_slot];
+    size_t slot = ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
+    for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
+        AsyncSendCredit* candidate = &lane->async_sends[i];
+        if (candidate->state == ORES_NATIVE_ASYNC_SEND_INVALID
+                && candidate->generation != UINT64_MAX) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == ORES_NATIVE_ASYNC_SENDS_PER_ACTOR) {
+        const OresNativeSelectCommitResult selected =
+            ores_native_select_try_commit(select_token);
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        unlock(s);
+        return selected == ORES_NATIVE_SELECT_WON
+            ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
+            : ORES_NATIVE_SEND_CANCELLED;
+    }
+
+    AsyncSendCredit* credit = &lane->async_sends[slot];
+    ++credit->generation;
+    if (!credit->generation) abort();
+    credit->payload = payload;
+    credit->sequence = lane->next_async_sequence;
+    lane->next_async_sequence = lane->next_async_sequence == UINT64_MAX
+        ? 0 : lane->next_async_sequence + 1;
+    credit->wake = (OresNativeWakeTicket){0};
+    credit->wake_bound = 0;
+    credit->select_token = select_token;
+    credit->select_bound = 1;
+    credit->release_pending = 0;
+    credit->state = ORES_NATIVE_ASYNC_SEND_PENDING;
+    credit->outcome = ORES_NATIVE_SEND_MAILBOX_FULL;
+    ++lane->async_live;
+    ++lane->async_pending;
+
+    *out = (OresNativeAsyncSendTicket){
+        .target = target,
+        .slot = slot,
+        .generation = credit->generation
+    };
+
+    /*
+     * If target credit is already free this call may settle immediately, but
+     * only service_async_sends_locked may attempt the select CAS and enqueue.
+     * Thus winner commit and message publication share this scheduler critical
+     * section and no losing arm can publish a payload.
+     */
+    service_async_sends_locked(s, (size_t)target.actor_slot);
+    if (pthread_cond_broadcast(&s->credit) != 0) abort();
+    unlock(s);
+    return ORES_NATIVE_SEND_ACCEPTED;
+}
+
 int ores_native_actor_scheduler_async_send_status(
         OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket,
         OresNativeAsyncSendState* state_out,
