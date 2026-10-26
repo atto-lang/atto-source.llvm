@@ -184,6 +184,73 @@ fnc api(Hidden value): int { return value; }
         check(program.source_export_bindings.size() == 2);
     }
 
+    // v1 must not grow backend-local export declaration kinds.
+    denied("export model Graph;\nfnc keep(): int { return 1; }\n",
+           "EXPORT_UNKNOWN_DECLARATION_KIND");
+
+    // Private class storage is not part of an exported source API signature.
+    {
+        auto program = parse_unresolved_program(R"(
+define class Hidden as
+end
+export class Api;
+define class Api as
+  private val Hidden hidden;
+end
+)");
+        check(program.source_export_bindings.size() == 1);
+        check(program.source_export_bindings.front().local_kind ==
+              SourceExportKind::Class);
+        check(program.source_export_bindings.front().local_name == "Api");
+    }
+
+    // Public API cannot expose a package-only local type.
+    denied(R"(
+export[pkg] type Hidden;
+define type Hidden = int;
+export fnc api;
+fnc api(Hidden value): int { return value; }
+)", "EXPORT_API_LEAK");
+
+    // Matching package visibility on both sides is admissible.
+    {
+        auto program = parse_unresolved_program(R"(
+export[pkg] type Hidden;
+define type Hidden = int;
+export[pkg] fnc api;
+fnc api(Hidden value): int { return value; }
+)");
+        check(program.source_export_bindings.size() == 2);
+    }
+
+    // Exact duplicate explicit exports are idempotent.
+    {
+        auto program = parse_unresolved_program(R"(
+export fnc api;
+export fnc api;
+fnc api(): int { return 1; }
+)");
+        check(program.source_export_bindings.size() == 1);
+    }
+
+    // Inline public plus alias exposes both names.
+    {
+        auto program = parse_unresolved_program(R"(
+pub fnc api(): int { return 1; }
+export fnc api as PublicApi;
+)");
+        check(program.source_export_bindings.size() == 2);
+    }
+
+    // Same local spelling in distinct logical namespaces cannot converge on
+    // one external alias.
+    denied(R"(
+define type Thing = int;
+fnc Thing(): int { return 1; }
+export type Thing as Shared;
+export fnc Thing as Shared;
+)", "EXPORT_ALIAS_COLLISION");
+
     denied("export X\nfnc keep(): int { return 1; }\n", "EXPORT_SEMICOLON_REQUIRED");
     denied("export {};\nfnc keep(): int { return 1; }\n", "EXPORT_EMPTY_GROUP");
     denied("export class {};\nfnc keep(): int { return 1; }\n", "EXPORT_EMPTY_GROUP");
