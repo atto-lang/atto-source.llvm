@@ -130,6 +130,9 @@ int main() {
     overbound += "await worker.send_async(1); stop worker; return 43;";
     rejects(program(overbound),
             "direct send_async await captures only up to 16 Copy int/bool locals");
+    rejects(program("const String retained = \"not-copy\"; "
+                    "await worker.send_async(1); stop worker; return 43;"),
+            "direct send_async await captures only up to 16 Copy int/bool locals");
     rejects(R"(define actor Worker as {
       let total: int = 0;
       pub fnc on_message(int n): int { await self.send_async(n); return n; }
@@ -145,5 +148,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=4 negative=20 detached_scalar_capture=1 stored_scalar_capture=1 frame_words=16\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=4 negative=21 detached_scalar_capture=1 stored_scalar_capture=1 frame_words=16 ownership_handles_rejected=1\n";
 }
