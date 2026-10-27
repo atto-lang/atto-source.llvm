@@ -4170,3 +4170,7 @@ if(BUILD_TESTING)
     set_tests_properties(native_select_exactly_one_winner_and_cleanup
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Stacked on the native select arbiter: bounded i64 channel readiness
+
+# Stacked on the arbiter/channel runtime: immutable, non-consuming Future
