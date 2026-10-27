@@ -122,7 +122,7 @@ def main():
         # provider-bearing closure.
         bundle_source = root / "bundle.ores"
         bundle_source.write_text(
-            'import module bundle from "alloc/int_buffer_bundle"; '
+            'import module int_buffer_bundle as bundle from "alloc/int_buffer_bundle"; '
             "pub fnc main():int{return bundle.marker();}\n",
             encoding="utf-8",
         )
