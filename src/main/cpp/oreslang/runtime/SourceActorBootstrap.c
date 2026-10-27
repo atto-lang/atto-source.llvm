@@ -1110,7 +1110,17 @@ OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
         ensure(pthread_cond_destroy(&frame.completed) == 0);
         return ORES_SOURCE_READABLE_AWAIT_FAILED;
     }
+    /*
+     * Test/control cancellation observes admitted while holding group.mutex.
+     * Publish the completed registration under that same mutex so TSan and the
+     * C memory model see a real happens-before edge. The outer-host thread is
+     * the only code that can dispatch this watch into source_root_wake(), so
+     * no guest carrier is blocked by this short publication critical section.
+     */
+    group_lock();
+    ensure(group.pending_readable == &frame && !frame.done && !frame.admitted);
     frame.admitted = 1;
+    group_unlock();
 
     const int completion_fd = ores_native_vm_nio_completion_fd(
         vm, (size_t)frame.awaiting.watch.watch.reactor);
