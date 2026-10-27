@@ -279,17 +279,19 @@ def gh_api(route, method="GET", payload=None):
     return result
 
 
-def dispatch_carrier(repository, carrier_commit, source_tree):
-    """Dispatch the protected-main carrier workflow with exact immutable inputs."""
+def dispatch_carrier(repository, carrier_commit, source_tree, base_sha):
+    """Dispatch the exact reviewed protected-main carrier workflow."""
     if not isinstance(repository, str) or not NAME.fullmatch(repository):
         raise Denied("carrier dispatch repository invalid")
     carrier_commit = valid_sha(carrier_commit, "carrier dispatch commit SHA")
     source_tree = valid_sha(source_tree, "carrier dispatch source tree SHA")
+    base_sha = valid_sha(base_sha, "carrier dispatch base SHA")
     payload = {
         "event_type": CARRIER_DISPATCH_EVENT,
         "client_payload": {
             "carrier_sha": carrier_commit,
             "source_tree": source_tree,
+            "base_sha": base_sha,
         },
     }
     argv = [
@@ -1535,7 +1537,9 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
 
         # Execute only through the workflow definition on carrier default main.
         # The source-bearing ref is an immutable payload, never workflow authority.
-        dispatch_carrier(repository, carrier_commit, source_tree)
+        dispatch_carrier(
+            repository, carrier_commit, source_tree, contract["base_sha"]
+        )
     except BaseException:
         rollback_error = None
         if authorization_attempted:
