@@ -395,13 +395,18 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Remainder: {
-            // The native frontend admits only positive literal divisors:
-            // no divide-by-zero or signed MIN / -1 poison can reach LLVM.
-            // Recheck at emission so hand-constructed ASTs cannot bypass it.
-            if (!expr.right || expr.right->kind != Expression::Kind::Integer ||
-                    expr.right->integer <= 0)
-                throw std::runtime_error("native remainder lacks proved positive literal divisor");
+            // The frontend normalizes syntactically signed literal divisors.
+            // Never trust an externally supplied AST to skip this proof gate.
+            if (!expr.left || !expr.right ||
+                    expr.right->kind != Expression::Kind::Integer ||
+                    expr.right->integer == 0)
+                throw std::runtime_error("native remainder lacks proved nonzero signed literal divisor");
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            // Java's signed remainder is zero for every dividend modulo -1,
+            // including INT64_MIN. LLVM srem INT64_MIN, -1 is poison, so
+            // preserve evaluation of the dividend but emit no srem here.
+            if (expr.right->integer == -1)
+                return llvm::ConstantInt::get(i64, 0);
             llvm::Value* right = llvm::ConstantInt::get(i64,
                 static_cast<std::uint64_t>(expr.right->integer));
             return builder.CreateSRem(left, right, "srem");
