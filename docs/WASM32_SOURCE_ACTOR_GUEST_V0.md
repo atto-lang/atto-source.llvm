@@ -19,10 +19,19 @@ The lifecycle transitions NEW -> ACTIVE -> STOPPED, never backward.
 Out-of-state direct guest ABI calls trap using Wasm `unreachable`.
 Teardown overwrites every actor-owned field with zero and seals the instance.
 No automatic initialization or source-defined `tear_down()` hook is implied.
-A host must instantiate one module per actor, initialize once, serialize
-each message on that instance's dedicated Worker, and call teardown once.
-One Worker/instance ownership is a **host obligation**, not yet a formally
-verified runtime scheduler property.
+A host must instantiate **one private module instance per actor**, initialize
+once, serialize every mailbox turn under that actor's exclusive physical
+execution lease and call teardown once. **A single Worker may host many such
+instances** in a bounded carrier pool; the instance-to-actor relationship,
+not the Worker-to-actor relationship, is one-to-one.
+
+Current handlers are synchronous. A CPU-bound or trapping handler may poison
+its shared carrier, requiring termination and restart of every colocated actor;
+this profile is trusted-only and cannot suspend and resume an interrupted
+WebAssembly stack. Full OresVM needs compiler-generated cooperation/continuations,
+independently fenced retirement and a process isolation profile for untrusted
+actors. The bounded host pool and source compiler are not yet independently
+verified together against exact-head toolchain evidence.
 
 The generated guest has no host imports or native OresVM heap ABI. The
 initial implementation intentionally supports one synchronous actor per
