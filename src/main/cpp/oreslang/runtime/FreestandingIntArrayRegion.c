@@ -353,11 +353,16 @@ oreslang_int_array_try_prepare_filled_many(
         OresNativeIntArrayStatus status =
             oreslang_int_array_try_new(
                 region, &staged[prepared]);
+        const int acquired_current =
+            status == ORES_NATIVE_ARRAY_OK;
         if (status == ORES_NATIVE_ARRAY_OK &&
                 lengths[prepared] != 0)
             status = oreslang_int_array_try_reserve(
                 region, staged[prepared], lengths[prepared]);
         if (status != ORES_NATIVE_ARRAY_OK) {
+            if (acquired_current)
+                oreslang_int_array_drop(
+                    region, staged[prepared]);
             while (prepared != 0) {
                 --prepared;
                 oreslang_int_array_drop(
@@ -445,7 +450,9 @@ OresNativeIntArrayStatus oreslang_int_array_try_transfer_many(
         for (uint64_t j = 0; j < i; ++j)
             if (from[i] == from[j] ||
                     destinations[i] == destinations[j] ||
-                    sources[i] == sources[j])
+                    sources[i] == sources[j] ||
+                    destinations[i] == sources[j] ||
+                    sources[i] == destinations[j])
                 fail_closed();
     }
     if (n > MAX_ARRAY_SLOTS -
