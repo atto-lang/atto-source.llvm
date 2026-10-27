@@ -98,6 +98,8 @@ int main() {
     check(lowered_write == 9.5f && a.read_index<0>(0) == 9.5f);
     check(value_evals == 1 && receiver_evals == 2 && index_evals == 2);
     check(lowering_order == std::vector<int>({3, 1, 2}));
+    // Restore the pre-existing fixture value so later legacy assertions remain independent.
+    a.write_index<0>(0, 1.5f);
     a.reserve(16);
     // Deterministic oversized reservation must fail without changing any
     // live row/handle identity or the lengths of individual columns.
