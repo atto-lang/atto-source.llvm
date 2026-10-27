@@ -150,7 +150,7 @@ bool reserved(std::string_view name) {
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
-        "cb", "shared", "untrusted", "type", "types", "typeof",
+        "cb", "shared", "untrusted", "inverted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
@@ -610,6 +610,10 @@ public:
                 }
                 if (token_.text == "model")
                     fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
+                if (accept("inverted")) {
+                    require("class");
+                    fail("native inverted class requires checked SoA ownership, columnar lowering and borrow-lifetime integration");
+                }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
