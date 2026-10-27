@@ -1530,6 +1530,31 @@ private:
         return value;
     }
 
+    std::int64_t signed_integer_literal() {
+        const bool negative = accept("-");
+        if (!negative) return integer_literal();
+        if (token_.kind != Kind::Integer) fail("expected integer literal");
+
+        std::string digits(token_.text);
+        if (digits.front() == '_' || digits.back() == '_' ||
+                digits.find("__") != std::string::npos) fail("malformed integer separator");
+        digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+
+        std::uint64_t magnitude = 0;
+        const auto parsed = std::from_chars(
+            digits.data(), digits.data() + digits.size(), magnitude);
+        const std::uint64_t negative_limit = (std::uint64_t{1} << 63);
+        if (parsed.ec != std::errc{} ||
+                parsed.ptr != digits.data() + digits.size() ||
+                magnitude > negative_limit)
+            fail("integer literal overflows signed 64-bit result");
+        advance();
+
+        if (magnitude == negative_limit)
+            return std::numeric_limits<std::int64_t>::min();
+        return -static_cast<std::int64_t>(magnitude);
+    }
+
     ScalarGenerator scalar_generator() {
         ScalarGenerator generator;
         generator.offset = token_.offset;
@@ -1558,9 +1583,7 @@ private:
             if (accept("yield")) {
                 if (accept("*"))
                     fail("native generator yield* requires delegated iterator ownership and close lowering");
-                const bool negative = accept("-");
-                const std::int64_t value = integer_literal();
-                generator.yields.push_back(negative ? -value : value);
+                generator.yields.push_back(signed_integer_literal());
                 if (generator.yields.size() > 4096)
                     fail("native generator v1 exceeds 4096 yielded elements");
                 require(";");
