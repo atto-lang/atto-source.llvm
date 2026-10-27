@@ -773,25 +773,53 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "not protected"):
                 v3.checked_carrier_main("trusted/ci", contract)
 
-    def test_recheck_destination_identity_rejects_carrier_main_movement(self):
+    def test_recheck_destination_identity_rejects_carrier_state_or_main_movement(self):
         contract = carrier_contract()
         eligible = {
             "id": contract["repository_id"],
             "full_name": "trusted/ci",
             "private": True,
             "visibility": "private",
+            "default_branch": "main",
+            "archived": False,
+            "disabled": False,
+            "fork": False,
+        }
+        protected_main = {
+            "name": "main",
+            "protected": True,
+            "commit": {"sha": contract["base_sha"]},
         }
         with patch.object(v3, "gh_api", side_effect=[
             eligible,
-            {"name": "main", "commit": {"sha": contract["base_sha"]}},
+            protected_main,
         ]):
             v3.recheck_destination_identity("trusted/ci", contract)
-        with patch.object(v3, "gh_api", side_effect=[
-            eligible,
-            {"name": "main", "commit": {"sha": "9" * 40}},
-        ]):
-            with self.assertRaisesRegex(v3.Denied, "main changed"):
-                v3.recheck_destination_identity("trusted/ci", contract)
+
+        repo_variants = [
+            {**eligible, "visibility": "public"},
+            {**eligible, "default_branch": "develop"},
+            {**eligible, "archived": True},
+            {**eligible, "disabled": True},
+            {**eligible, "fork": True},
+        ]
+        for repo_state in repo_variants:
+            with self.subTest(repo_state=repo_state), patch.object(
+                v3, "gh_api", side_effect=[repo_state, protected_main]
+            ):
+                with self.assertRaisesRegex(v3.Denied, "identity/state changed"):
+                    v3.recheck_destination_identity("trusted/ci", contract)
+
+        branch_variants = [
+            {**protected_main, "protected": False},
+            {**protected_main, "commit": {"sha": "9" * 40}},
+        ]
+        for branch_state in branch_variants:
+            with self.subTest(branch_state=branch_state), patch.object(
+                v3, "gh_api", side_effect=[eligible, branch_state]
+            ):
+                with self.assertRaisesRegex(v3.Denied, "protected main changed"):
+                    v3.recheck_destination_identity("trusted/ci", contract)
 
     def test_carrier_main_requires_protection_and_codeowner_review(self):
         good_protection = {
