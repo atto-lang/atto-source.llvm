@@ -143,7 +143,7 @@ bool reserved(std::string_view name) {
     static constexpr std::string_view words[] = {
         "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
-        "throw", "raise", "panic", "recover",
+        "throw", "raise", "panic", "recover", "unsafe",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine", "gen",
@@ -204,6 +204,14 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // G0: do not parse an unsupported unsafe operation as a normal
+            // identifier, callable or arithmetic expression. Templates are
+            // lexed recursively only for their interpolated expressions.
+            if (first == "unsafe") {
+                throw std::runtime_error(
+                    "native unsafe boundary unsupported: checked effects, grants "
+                    "and backend lowering required at byte " + std::to_string(start));
+            }
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 const auto end = at_ + 7;
                 if (end == source_.size() ||
