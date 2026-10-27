@@ -2362,7 +2362,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             state_switch->addCase(active_state, active);
             state_switch->addCase(done_state, done);
             b.SetInsertPoint(done);
+            auto* done_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* done_index = b.CreateLoad(i64, done_index_addr, "done.index");
+            auto* done_valid = llvm::BasicBlock::Create(context, "done.valid", next);
+            auto* done_invalid = llvm::BasicBlock::Create(context, "done.invalid", next);
+            b.CreateCondBr(b.CreateICmpEQ(done_index, zero), done_valid, done_invalid);
+            b.SetInsertPoint(done_valid);
             return_i32(b, 0);
+            b.SetInsertPoint(done_invalid);
+            return_i32(b, -1);
             b.SetInsertPoint(invalid);
             return_i32(b, -1);
             b.SetInsertPoint(active);
@@ -2428,7 +2437,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 llvm::ConstantInt::get(i64, 1)));
             return_i32(b, 1);
             b.SetInsertPoint(done);
+            auto* done_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* done_index = b.CreateLoad(i64, done_index_addr, "done.index");
+            auto* done_valid = llvm::BasicBlock::Create(context, "done.valid", close);
+            auto* done_invalid = llvm::BasicBlock::Create(context, "done.invalid", close);
+            b.CreateCondBr(b.CreateICmpEQ(done_index, zero), done_valid, done_invalid);
+            b.SetInsertPoint(done_valid);
             return_i32(b, 0);
+            b.SetInsertPoint(done_invalid);
+            return_i32(b, -1);
             b.SetInsertPoint(invalid);
             return_i32(b, -1);
         }
