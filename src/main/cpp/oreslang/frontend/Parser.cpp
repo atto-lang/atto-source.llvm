@@ -163,7 +163,8 @@ bool reserved(std::string_view name) {
 
 class Lexer {
 public:
-    explicit Lexer(std::string_view source) : source_(source) {}
+    explicit Lexer(std::string_view source, std::size_t unsafe_base_offset = 0)
+        : source_(source), unsafe_base_offset_(unsafe_base_offset) {}
 
     Token next() {
         for (;;) {
@@ -210,7 +211,8 @@ public:
             if (first == "unsafe") {
                 throw std::runtime_error(
                     "native unsafe boundary unsupported: checked effects, grants "
-                    "and backend lowering required at byte " + std::to_string(start));
+                    "and backend lowering required at byte " +
+                    std::to_string(unsafe_base_offset_ + start));
             }
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 const auto end = at_ + 7;
@@ -276,6 +278,9 @@ public:
 
 private:
     std::string_view source_;
+    // Only unsafe G0 lexical diagnostics need the absolute interpolation offset.
+    // All normal token/AST offsets remain relative to the parsed source slice.
+    std::size_t unsafe_base_offset_ = 0;
     std::size_t at_ = 0;
 };
 
@@ -488,8 +493,10 @@ bool entry_builtin_name(std::string_view name) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
-                    bool experimental_rt_scalar_loop)
-        : source_(source), lexer_(source), token_(lexer_.next()),
+                    bool experimental_rt_scalar_loop,
+                    std::size_t unsafe_base_offset = 0)
+        : source_(source), lexer_(source, unsafe_base_offset), token_(lexer_.next()),
+          unsafe_base_offset_(unsafe_base_offset),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
@@ -3471,7 +3478,8 @@ private:
 
     std::unique_ptr<Expression> template_expression(std::string_view source,
                                                     std::size_t base_offset) {
-        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_);
+        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_,
+                      unsafe_base_offset_ + base_offset);
         auto expr = nested.expression();
         if (nested.token_.kind != Kind::End)
             nested.fail("expected end of template interpolation expression");
@@ -5093,6 +5101,7 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::size_t unsafe_base_offset_ = 0;
     std::unordered_set<std::string> module_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
