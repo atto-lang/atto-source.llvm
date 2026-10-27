@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Java-to-LLVM local aggregate stage-1 parser and fail-closed admission contract.
+"""Java-to-LLVM local aggregate staged executable and fail-closed contract.
 
-Positive cases mean syntax survives the parser until the explicit ABI gate;
-they DO NOT indicate executable guest source. The compiler must never produce
-even partial LLVM IR for an unverified local aggregate.
+Parser-only cases must reach the explicit ABI gate and emit no LLVM IR.
+Admitted stack-struct cases must generate native IR and run through Clang
+when available. Never confuse IR generation with native execution evidence.
 """
 import argparse
 from pathlib import Path
@@ -39,8 +39,27 @@ def main():
         ("stack single scalar", "pub fnc main(): int { struct T { int foo } val T point = T{5}; return point.foo; }", 5),
         ("stack ordered fields", "pub fnc main(): int { struct T { int x, int y } val T point = T{3, 9}; return point.y; }", 9),
         ("stack named reordered", "pub fnc main(): int { struct T { int x, int y } val T point = T{y: 9, x: 3}; return point.y; }", 9),
+        ("different local nominal identities",
+         "fnc first(): int { struct T { int a } val T p = T{4}; return p.a; } "
+         "fnc second(): int { struct T { int b } val T p = T{10}; return p.b; } "
+         "pub fnc main(): int { return first() + second(); }", 14),
     ]
     errors = [
+        ("named expression order must remain explicit",
+         "pub fnc main(): int { struct T { int x, int y } val T p = T{y: first(), x: 3}; return p.y; }",
+         "LOCAL_CONSTRUCT_EVAL_ORDER_UNSUPPORTED"),
+        ("named noninteger order must remain explicit",
+         "pub fnc main(): int { struct T { int x } val T p = T{x: true}; return p.x; }",
+         "LOCAL_CONSTRUCT_EVAL_ORDER_UNSUPPORTED"),
+        ("unsupported local bool field",
+         "pub fnc main(): int { struct T { bool x } val T p = T{true}; return 7; }",
+         "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
+        ("unsupported local array-like field",
+         "pub fnc main(): int { struct T { Array x } return 7; }",
+         "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
+        ("unsupported local struct escape",
+         "pub fnc main(): int { struct T { int x } val T p = T{7}; return p; }",
+         "native scalar type mismatch"),
         ("missing stack field", "pub fnc main(): int { struct T { int x, int y } val T p = T{5}; return p.x; }",
          "LOCAL_CONSTRUCT_ARITY"),
         ("unknown stack field", "pub fnc main(): int { struct T { int x } val T p = T{y: 5}; return p.x; }",
