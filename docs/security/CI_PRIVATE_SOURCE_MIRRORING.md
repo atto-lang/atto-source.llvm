@@ -132,8 +132,10 @@ review-bypass policy. There is no review/tree-attestation substitute for an
 unprotected carrier. Protection is also not retrospective: enabling protection
 after an unreviewed merge does not authorize that tip. The contract therefore
 pins a carrier review PR, and the publisher requires an `ORESoftware` approval
-on that PR's exact head submitted before merge, then requires the reviewed head
-tree to equal the pinned carrier `main` base tree. The contract still pins the
+on that PR's exact head submitted before merge. The pinned carrier `base_sha`
+must be the PR's exact GitHub `merge_commit_sha` and its tree must equal the
+independently reviewed head tree. A later unreviewed commit is rejected even if
+it recreates the same tree. The contract still pins the
 exact carrier-main commit SHA, workflow blob, executable trusted-control blobs,
 plan blob, and allowed source PR.
 Carrier `main` SHA and live protection are rechecked before every
