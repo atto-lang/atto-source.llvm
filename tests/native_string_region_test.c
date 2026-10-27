@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 int main(void) {
@@ -70,6 +71,31 @@ int main(void) {
     assert(ores_string_region_begin(1) == 0);
     assert(ores_string_print(ores_string_literal("closed", 6), 0) == 0);
     assert(ores_string_region_end() == 1);
+    assert(dup2(saved, STDOUT_FILENO) == STDOUT_FILENO);
+
+    /* Backpressure is bounded and nonblocking on the guest publication path.
+     * A large record fills the undrained pipe quickly; once the 1024-slot
+     * publication ring is full, ores_string_print must reject rather than wait. */
+    assert(pipe(output) == 0);
+    assert(dup2(output[1], STDOUT_FILENO) == STDOUT_FILENO);
+    close(output[1]);
+    assert(ores_string_region_begin(1) == 0);
+    char *payload = malloc(65536);
+    assert(payload != NULL);
+    memset(payload, 'q', 65536);
+    int64_t flood = ores_string_literal(payload, 65536);
+    assert(flood > 0);
+    int bounded_rejection = 0;
+    for (unsigned i = 0; i != 4096; ++i) {
+        if (ores_string_print(flood, 0) != 0) {
+            bounded_rejection = 1;
+            break;
+        }
+    }
+    assert(bounded_rejection);
+    close(output[0]);
+    assert(ores_string_region_end() == 1);
+    free(payload);
     assert(dup2(saved, STDOUT_FILENO) == STDOUT_FILENO);
 
     char path[] = "native-string-regular-output.XXXXXX";
