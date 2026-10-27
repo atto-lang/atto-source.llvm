@@ -9,21 +9,18 @@ not to a blocking host operation or an occupied scheduler carrier.
 
 | Source operation | Result | Lowering |
 | --- | --- | --- |
-| `fs.read_text_async(path)` | `Future<String>` | Admit async request, return future immediately |
-| `await fs.read_text_async(path)` | `String` | Suspend caller and schedule continuation on completion |
-| `fs.read_text_blocking(path)` | `String` | Admit the **same async request**, implicitly suspend caller |
-| `suspends fnc f(): T` | `T` | May suspend; effect propagates through typed calls |
+| `fs.read_text(path)` | `Future<String>` | Admit async request, return future immediately |
+| `await fs.read_text(path)` | `String` | Suspend caller and schedule continuation on completion |
+| `suspends fnc f(): T` | `T` | May suspend for non-I/O language effects; does not create a blocking I/O API |
 | `async fnc f(): T` | `Future<T>` | Returns immediately and may suspend within its task |
 
-A transport is classified by typed effect/ABI metadata, not arbitrary
-identifier suffixes. User-defined pure functions may happen to end in
-`_blocking` and must not be mistaken for native I/O. No `async suspends` pair.
-A native I/O `_blocking` operation *always* carries a suspension effect,
-including method and imported-alias calls. It cannot be smuggled through an
-untyped callback, first-class function pointer or FFI declaration. The checker
-must either preserve its effect or reject the call.
+Guest I/O has one public spelling: the plain operation name. There is no
+guest-visible `*_blocking`, `*_sync`, or parallel `*_async` I/O family.
+Those spellings are rejected by the native compiler. A transport is classified
+by typed effect/ABI metadata, not identifier suffixes, and imported aliases or
+first-class call paths may not erase its async effect.
 
-Both API styles must share permission/capability enforcement **before**
+Every I/O operation must enforce permission/capability checks **before**
 submission, bounded admission, ownership/borrow safety across suspension,
 deadlines, cancellation, error typing, ordering, actor isolation and wakeup.
 No guest callback may execute on an I/O completion thread. Parent/actor
@@ -41,9 +38,9 @@ control-plane work must not be starved by I/O traffic.
    stale completions cannot access freed actor state or buffers.
 4. Wake the *owning scheduler* by enqueueing a continuation; never run guest
    code inline on a kernel-completion or external-library thread.
-5. `_blocking` lowers to that submission plus implicit continuation yield.
-   `_async` lowers to the same submission and exposes a `Future<T>`.
-   Neither lowers to `read`, `write`, `connect`, `recv`, `accept`,
+5. The plain source operation exposes a `Future<T>`; callers use `await`
+   when they need the result. No blocking or suffix-specific I/O lowering exists.
+   It never lowers to `read`, `write`, `connect`, `recv`, `accept`,
    `poll`, `sleep`, `pthread_cond_wait`, `future.get` or equivalent
    blocking waits on an actor/ROOT carrier.
 
@@ -76,9 +73,10 @@ It is not evidence of native async I/O support.
 Native LLVM on `main` has no imported standard-library I/O registry,
 nonblocking transport implementation, async/await/suspends lowering, or task
 continuation frames. The present compiler must reject all unsupported I/O
-operations **without producing LLVM IR**. Existing
-`tests/fixtures/unsupported-native-io-{bare,blocking}.ores` already guard
-two cases; the async-only boundary matrix widens the future regression gate.
+operations **without producing LLVM IR**. Existing `tests/fixtures/unsupported-native-io-{bare,blocking}.ores` and the
+Rust async-only boundary matrix keep the current unsupported surface fail-closed.
+The matrix also rejects legacy `*_async` spellings so a second API family
+cannot appear accidentally.
 
 Complete migration requires:
 - Versioned shared typed I/O ABI/registry, with async-only backends and
@@ -88,14 +86,14 @@ Complete migration requires:
 - Zero-carrier-blocking tests with one carrier and at least two actors; race
   tests for cancel-before-submit, timeout-vs-success, EOF, resource closure and
   port/FD reuse; quota and backpressure tests.
-- Differential Java/LLVM fixtures proving the **same** results, errors and
-  suspension behavior for `await *_async` and `*_blocking`.
+- Differential Java/LLVM fixtures proving the **same** results, errors,
+  cancellation and suspension behavior for awaited plain I/O operations.
 - Exact-head Clang/LLVM, CMake/CTest and Java/GraalVM test evidence, not
   documentation-only or tests from an earlier commit.
 
-Related Java work: [suffix/continuation PR #522](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/522)
-and [HTTP sendAsync migration PR #584](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/584).
-Neither proves LLVM feature parity or that all Java host I/O is nonblocking.
+Java parity work now treats plain core/std I/O names as asynchronous by default.
+That does not prove LLVM feature parity or that every host primitive is
+kernel-nonblocking; each backend still needs exact-head behavioral evidence.
 
 
 ## Linux socket/readiness implementation slice (2026-10-12 draft)
