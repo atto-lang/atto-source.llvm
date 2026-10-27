@@ -50,10 +50,20 @@ def main():
         for title, (source, expected) in CASES.items():
             path = pathlib.Path(folder) / (title + ".ores")
             path.write_text(source, encoding="utf-8")
-            result = subprocess.run([sys.argv[1], str(path)], capture_output=True,
-                                    text=True, check=False, timeout=20)
-            if result.returncode == 0 or result.stdout.strip() or expected not in result.stderr:
-                raise AssertionError(f"{title}: must reject without emitted IR: {result.stderr}")
+            before_entries = {entry.name for entry in pathlib.Path(folder).iterdir()}
+            original_source = path.read_bytes()
+            # Run in the temporary directory so relative compiler artifacts
+            # cannot silently escape the rejected-source admission check.
+            result = subprocess.run([sys.argv[1], str(path)], cwd=folder,
+                                    capture_output=True, text=True, check=False, timeout=20)
+            unexpected = {entry.name for entry in pathlib.Path(folder).iterdir()} - before_entries
+            if (result.returncode == 0 or result.stdout.strip()
+                    or expected not in result.stderr
+                    or unexpected or path.read_bytes() != original_source):
+                raise AssertionError(
+                    f"{title}: reject without IR/artifacts/source mutation; "
+                    f"exit={result.returncode} unexpected={sorted(unexpected)} "
+                    f"stderr={result.stderr}")
     # A broken parser or unconditional rejection must never satisfy the
     # negative suite. Require three accepted source shapes to emit LLVM IR.
     valid_cases = {
@@ -77,8 +87,8 @@ def main():
         for title, source in valid_cases.items():
             path = pathlib.Path(folder) / (title + ".ores")
             path.write_text(source, encoding="utf-8")
-            result = subprocess.run([sys.argv[1], str(path)], capture_output=True,
-                                    text=True, check=False, timeout=20)
+            result = subprocess.run([sys.argv[1], str(path)], cwd=folder,
+                                    capture_output=True, text=True, check=False, timeout=20)
             # Match an actual LLVM definition line, not a casual mention
             # of 'define' in diagnostics, banners, or comments.
             has_definition = re.search(r"(?m)^\s*define\s+", result.stdout) is not None

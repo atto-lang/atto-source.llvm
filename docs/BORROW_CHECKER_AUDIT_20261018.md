@@ -74,3 +74,13 @@ compiler stdout. The three valid scalar controls prevent a parser-only
 rejection path from being mistaken for ownership verification. This
 strengthens the *test harness*; it is not a substitute for running it
 against the production compiler on the pinned source tree.
+
+### Rejected-source artifact isolation
+
+Negative compiler admissions now run with their current working directory set
+inside the disposable fixture root, compare the directory contents before
+and after compilation, and verify the input source bytes were not changed.
+A rejected program only passes when its compiler status is nonzero, stdout
+contains no IR, the ownership-specific diagnostic appears, and the compiler
+has not written extra files or modified the fixture. These checks are
+harness hardening, not evidence of native compiler execution.
