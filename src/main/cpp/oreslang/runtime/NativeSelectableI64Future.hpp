@@ -94,12 +94,18 @@ public:
                 throw std::overflow_error("future waiter capacity exhausted");
             if (state_->next_id == std::numeric_limits<std::uint64_t>::max())
                 throw std::overflow_error("future waiter identity exhausted");
-            const auto id = state_->next_id++;
-            sub = Subscription(state_, index, id);
+            const auto id = state_->next_id;
             auto& w = state_->waiters[index];
+
+            // std::function copy may allocate and throw. Publish waiter
+            // identity/activeness only after the callback copy succeeds so
+            // subscription admission is failure-atomic and cannot consume an
+            // unusable slot.
+            w.notify = fn;
             w.id = id;
             w.active = true;
-            w.notify = fn;
+            ++state_->next_id;
+            sub = Subscription(state_, index, id);
             immediate = state_->status != Status::Pending;
         }
         if (immediate) {
