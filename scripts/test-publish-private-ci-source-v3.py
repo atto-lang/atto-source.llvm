@@ -1172,6 +1172,96 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 with self.assertRaisesRegex(v3.Denied, "protected main changed"):
                     v3.recheck_destination_identity("trusted/ci", contract)
 
+    def test_carrier_export_authorization_is_exact_tree_and_short_lived(self):
+        contract = carrier_contract()
+        now = dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc)
+
+        def marker(*, tree=SOURCE_TREE, expires="2026-10-21T00:00:00Z",
+                   schema="ores-private-ci-export-authorization-v2"):
+            raw = (
+                json.dumps(
+                    {
+                        "schema": schema,
+                        "enabled": True,
+                        "repository": "trusted/ci",
+                        "repository_id": contract["repository_id"],
+                        "source_root_tree_sha": tree,
+                        "expires_at": expires,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+            return {
+                "path": v3.EXPORT_AUTH_PATH,
+                "type": "file",
+                "encoding": "base64",
+                "content": base64.b64encode(raw).decode(),
+                "sha": v3.git_blob_sha(raw),
+            }
+
+        with patch.object(v3, "gh_api", return_value=marker()):
+            expiry = v3.require_carrier_export_authorization(
+                "trusted/ci", contract, SOURCE_TREE, now=now
+            )
+        self.assertEqual(
+            expiry, dt.datetime(2026, 10, 21, tzinfo=dt.timezone.utc)
+        )
+
+        cases = (
+            (marker(tree="9" * 40), "different source tree"),
+            (marker(expires="2026-10-19T23:59:59Z"), "expired"),
+            (marker(expires="2026-10-28T00:00:01Z"), "7-day window"),
+            (
+                marker(schema="ores-private-ci-export-authorization-v1"),
+                "not eligible",
+            ),
+        )
+        for payload, message in cases:
+            with self.subTest(message=message), patch.object(
+                v3, "gh_api", return_value=payload
+            ), self.assertRaisesRegex(v3.Denied, message):
+                v3.require_carrier_export_authorization(
+                    "trusted/ci", contract, SOURCE_TREE, now=now
+                )
+
+    def test_publish_requires_export_authorization_before_first_carrier_write(self):
+        contract = carrier_contract()
+        rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
+        manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+        with (
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, contract)),
+            patch.object(v3, "checked_destination",
+                         return_value=(BASE_TREE, PLAN)),
+            patch.object(
+                v3, "exact_source_tree",
+                return_value=(
+                    SOURCE_TREE,
+                    [("src/synthetic.cpp", "100644", BLOB, DATA)],
+                    rows,
+                    manifest,
+                ),
+            ),
+            patch.object(
+                v3, "require_carrier_export_authorization",
+                side_effect=v3.Denied("missing export authorization"),
+            ) as authorize,
+            patch.object(v3, "gh_api") as api,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "missing export authorization"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                    now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
+                )
+        authorize.assert_called_once_with(
+            "trusted/ci", contract, SOURCE_TREE,
+            now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
+        )
+        api.assert_not_called()
+
     def test_carrier_main_requires_protection_and_codeowner_review(self):
         good_protection = {
             "required_pull_request_reviews": {
@@ -1498,6 +1588,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patch.object(v3, "verify_published_root_and_commit"),
             patch.object(v3, "require_handoff_refs_absent"),
             patch.object(v3, "require_exact_ref"),
+            patch.object(v3, "require_carrier_export_authorization") as export_auth,
             patch.object(v3, "dispatch_carrier") as dispatch,
             patch.object(v3, "gh_api", side_effect=api),
         ):
@@ -1517,6 +1608,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         dispatch.assert_called_once_with(
             "trusted/ci", CARRIER_COMMIT, SOURCE_TREE, contract["base_sha"]
         )
+        self.assertEqual(export_auth.call_count, 3)
+        for call in export_auth.call_args_list:
+            self.assertEqual(call.args[:3], ("trusted/ci", contract, SOURCE_TREE))
         receipt_raw = next(
             data for data in blob_bytes
             if b'"schema":"ores-private-ci-receipt-v3"' in data
@@ -1701,6 +1795,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patches.append(patch.object(v3, "require_exact_ref"))
         if delete_exact_ref is not None:
             patches.append(patch.object(v3, "delete_exact_ref", side_effect=delete_exact_ref))
+        patches.append(patch.object(v3, "require_carrier_export_authorization"))
         return contract, patches
 
     def test_publish_rechecks_full_destination_after_authorization_and_rolls_back(self):
@@ -1737,7 +1832,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         with (
             patches[0], patches[1], patches[2], patches[3], patches[4],
             patches[5], patches[6], patches[7], patches[8], patches[9],
-            patch.object(v3, "dispatch_carrier") as dispatch,
+            patches[10], patch.object(v3, "dispatch_carrier") as dispatch,
         ):
             with self.assertRaisesRegex(
                 v3.Denied, "carrier protection weakened before dispatch"
@@ -1787,7 +1882,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             ],
             delete_exact_ref=lambda *args: deleted.append(args) or True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
             with self.assertRaisesRegex(v3.Denied, "PR head moved"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
@@ -1820,7 +1915,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             api,
             delete_exact_ref=lambda *args: deleted.append(args) or False,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
             with self.assertRaisesRegex(v3.Denied, "ambiguous ref transport failure"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
@@ -1855,7 +1950,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             api,
             delete_exact_ref=lambda *args: deleted.append(args) or True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
             with self.assertRaisesRegex(v3.Denied, "authorization ref"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
