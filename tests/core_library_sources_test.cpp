@@ -20,6 +20,12 @@ int main() {
     assert(is_reserved_core_import("ores.core/numeric"));
     assert(!is_reserved_core_import("ores.std/numeric"));
     assert(!is_reserved_core_import("./ores.core/numeric"));
+    assert(is_reserved_std_import("ores.std"));
+    assert(is_reserved_std_import("ores.std/testing"));
+    assert(is_reserved_std_import("std"));
+    assert(is_reserved_std_import("std/testing"));
+    assert(!is_reserved_std_import("./std/testing"));
+    assert(!is_reserved_std_import("ores.core/numeric"));
 
     const auto* numeric = find_core_library_source("ores.core/numeric");
     assert(numeric != nullptr);
