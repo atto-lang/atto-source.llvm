@@ -1,7 +1,8 @@
 # Java ↔ LLVM local aggregates — explicit stage-1 parity gate
 
-**Status (27 October 2026):** LLVM parser/AST recognition and rejection gate only.
-This is a compatibility foundation, **not** executable source parity. Java
+**Status (27 October 2026):** LLVM parser/AST recognition plus a gated,
+unverified compiler lowering slice for scalar callable-local nominal structs.
+**There is no successful exact-head compiler/OS execution evidence yet.** Java
 [PR #2179](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/2179)
 likewise stages the parser/AST without approving execution.
 
@@ -67,8 +68,11 @@ native subset, reusing already-established class layout and ownership lowering:
   type through the existing checked immutable-leaf record region ABI.
   Exporting this hidden return type remains forbidden.
 * Named arguments are checked against the declaration and reordered into
-  native layout order. Missing/extra/duplicate fields, non-int field
-  definitions and mutable/fallible representations remain gated.
+  native layout order. **Named initializer values must be integer literals**
+  until source-order-preserving ANF staging exists: reordering side-effecting
+  argument expressions would be a semantic bug. Positional constructor
+  expressions preserve source order. Missing/extra/duplicate fields, non-int
+  field definitions and mutable/fallible representations remain gated.
 
 This does **not** prove that the generated IR compiles and runs; only a
 successful exact-head compiler run followed by Clang/OS execution can establish
@@ -98,6 +102,10 @@ narrow-slice changes do **not** imply Java/LLVM feature or semantic parity.
    Separate infrastructure failures/zero-step Actions from executed tests.
 
 Test entrypoint: `tests/native_local_aggregate_parity_stage1.py` registered as
-`native_local_aggregate_types_stage1` in CTest. Its success demonstrates
-only parser recognition, deterministic rejection and preservation of existing
-scalar compilation.
+`native_local_aggregate_types_stage1` in CTest. It checks explicit rejection,
+strict stack aggregate compilation, separate callable nominal identities and
+private record-return LLVM IR. **An actual Clang link+execute pass** is required
+to claim execution evidence; IR-only success is insufficient. The source
+organization's previously observed zero-step Actions failures do not constitute
+compiler or sanitizer results. Keep the PR draft until exact-head execution
+and a sanitizer audit succeed.
