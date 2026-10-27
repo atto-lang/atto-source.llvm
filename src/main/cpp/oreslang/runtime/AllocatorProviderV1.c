@@ -13,6 +13,22 @@ static int power_of_two(size_t value) {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
+static int backing_overlaps_provider(
+        const OresAllocatorProviderV1* provider,
+        const void* memory,
+        size_t capacity) {
+    const uintptr_t provider_begin = (uintptr_t)provider;
+    const uintptr_t memory_begin = (uintptr_t)memory;
+    if (provider_begin > UINTPTR_MAX - sizeof(*provider) ||
+            capacity > UINTPTR_MAX - memory_begin)
+        return 1;
+    const uintptr_t provider_end =
+        provider_begin + sizeof(*provider);
+    const uintptr_t memory_end = memory_begin + capacity;
+    return memory_begin < provider_end &&
+        provider_begin < memory_end;
+}
+
 static int provider_state_valid(
         const OresAllocatorProviderV1* provider) {
     return provider &&
@@ -22,28 +38,16 @@ static int provider_state_valid(
         provider->generation != 0 &&
         provider->used <= provider->capacity &&
         provider->high_water <= provider->capacity &&
-        provider->used <= provider->high_water;
-}
-
-static int backing_overlaps_provider(
-        const OresAllocatorProviderV1* provider,
-        const void* memory,
-        size_t capacity) {
-    const uintptr_t provider_begin = (uintptr_t)provider;
-    const uintptr_t memory_begin = (uintptr_t)memory;
-    if (capacity > UINTPTR_MAX - memory_begin)
-        return 1;
-    const uintptr_t provider_end =
-        provider_begin + sizeof(*provider);
-    const uintptr_t memory_end = memory_begin + capacity;
-    return memory_begin < provider_end &&
-        provider_begin < memory_end;
+        provider->used <= provider->high_water &&
+        !backing_overlaps_provider(
+            provider, provider->base, provider->capacity);
 }
 
 OresAllocatorProviderV1Status ores_allocator_provider_v1_init(
         OresAllocatorProviderV1* provider, void* memory, size_t capacity) {
     if (!provider || !memory || capacity == 0 ||
             current_provider == provider ||
+            provider->initialized == UINT32_C(0x4f524531) ||
             backing_overlaps_provider(provider, memory, capacity))
         return ORES_ALLOCATOR_PROVIDER_V1_INVALID;
     provider->base = (uint8_t*)memory;
