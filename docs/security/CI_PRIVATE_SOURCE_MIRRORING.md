@@ -126,8 +126,8 @@ closed until the source contract is independently reviewed again.
 Carrier `main` is also a live authorization boundary. It must be protected
 and enforce CODEOWNER review, stale-review dismissal, last-push-independent
 approval, at least one approval, conversation resolution, strict required CI
-with the `verifier-tests` check bound to GitHub Actions App ID `15368`,
-administrator enforcement, force-push/deletion disabled, and an exact empty
+with both `verifier-tests` and `main-integrity` bound to GitHub Actions App
+ID `15368`, administrator enforcement, force-push/deletion disabled, and an exact empty
 review-bypass policy. There is no review/tree-attestation substitute for an
 unprotected carrier. Protection is also not retrospective: enabling protection
 after an unreviewed merge does not authorize that tip. The contract therefore
