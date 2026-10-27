@@ -40,15 +40,83 @@ inline bool ores_source_stat_stable(const struct stat& before, const struct stat
 #endif
 
 struct SourceIdentity {
-  std::uint64_t device = 0, inode = 0;
+  std::uint64_t device = 0, inode = 0, size = 0;
+  std::int64_t mtime_sec = 0, mtime_nsec = 0;
+  std::int64_t ctime_sec = 0, ctime_nsec = 0;
   bool valid = false;
 };
+
+#if defined(__unix__) || defined(__APPLE__)
+inline SourceIdentity ores_source_identity(const struct stat& info) {
+  SourceIdentity identity;
+  identity.device = static_cast<std::uint64_t>(info.st_dev);
+  identity.inode = static_cast<std::uint64_t>(info.st_ino);
+  identity.size = static_cast<std::uint64_t>(info.st_size);
+#if defined(__APPLE__)
+  identity.mtime_sec = static_cast<std::int64_t>(info.st_mtimespec.tv_sec);
+  identity.mtime_nsec = static_cast<std::int64_t>(info.st_mtimespec.tv_nsec);
+  identity.ctime_sec = static_cast<std::int64_t>(info.st_ctimespec.tv_sec);
+  identity.ctime_nsec = static_cast<std::int64_t>(info.st_ctimespec.tv_nsec);
+#else
+  identity.mtime_sec = static_cast<std::int64_t>(info.st_mtim.tv_sec);
+  identity.mtime_nsec = static_cast<std::int64_t>(info.st_mtim.tv_nsec);
+  identity.ctime_sec = static_cast<std::int64_t>(info.st_ctim.tv_sec);
+  identity.ctime_nsec = static_cast<std::int64_t>(info.st_ctim.tv_nsec);
+#endif
+  identity.valid = true;
+  return identity;
+}
+
+inline bool ores_source_identity_equal(
+    const SourceIdentity& expected, const SourceIdentity& observed) {
+  return expected.valid && observed.valid &&
+      expected.device == observed.device &&
+      expected.inode == observed.inode &&
+      expected.size == observed.size &&
+      expected.mtime_sec == observed.mtime_sec &&
+      expected.mtime_nsec == observed.mtime_nsec &&
+      expected.ctime_sec == observed.ctime_sec &&
+      expected.ctime_nsec == observed.ctime_nsec;
+}
+
+inline SourceIdentity capture_source_identity(
+    const char* path, std::size_t limit, const char* overflow) {
+  const int fd = ::open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+  if (fd < 0) throw std::runtime_error(std::string("cannot open source: ") + path);
+  struct Close { int fd; ~Close() { ::close(fd); } } close{fd};
+  struct stat info{};
+  if (::fstat(fd, &info) != 0) throw std::runtime_error("cannot inspect source file");
+  if (!S_ISREG(info.st_mode)) throw std::runtime_error("source must be a regular file");
+  if (info.st_size < 0 || static_cast<std::uintmax_t>(info.st_size) > limit)
+    throw std::runtime_error(overflow);
+  const SourceIdentity opened_identity = ores_source_identity(info);
+  if (expected_identity != nullptr &&
+      (!expected_identity->valid ||
+       !ores_source_identity_equal(*expected_identity, opened_identity))) {
+    throw std::runtime_error("source identity changed between resolution and read");
+  }
+  return ores_source_identity(info);
+}
+#else
+inline bool ores_source_identity_equal(
+    const SourceIdentity& expected, const SourceIdentity& observed) {
+  return expected.valid && observed.valid &&
+      expected.device == observed.device && expected.inode == observed.inode &&
+      expected.size == observed.size;
+}
+inline SourceIdentity capture_source_identity(
+    const char*, std::size_t, const char*) {
+  return {};
+}
+#endif
 
 // Check the opened descriptor, so a path replacement cannot turn a regular
 // source into a blocking FIFO between admission and reading. Regular symlinks
 // remain supported. The byte budget also applies if a file grows during reads.
-inline std::string read_regular_source(const char* path, std::size_t limit,
-                                       const char* overflow, SourceIdentity* identity = nullptr) {
+inline std::string read_regular_source(
+    const char* path, std::size_t limit, const char* overflow,
+    SourceIdentity* identity = nullptr,
+    const SourceIdentity* expected_identity = nullptr) {
   std::array<char, 8192> buffer{};
   std::string text;
 #if defined(__unix__) || defined(__APPLE__)
@@ -75,10 +143,11 @@ inline std::string read_regular_source(const char* path, std::size_t limit,
   if (::fstat(fd, &after) != 0 || !ores_source_stat_stable(info, after) ||
       static_cast<std::uintmax_t>(after.st_size) != text.size())
     throw std::runtime_error("source changed during read");
-  if (identity) *identity = {static_cast<std::uint64_t>(info.st_dev),
-                             static_cast<std::uint64_t>(info.st_ino), true};
+  if (identity) *identity = opened_identity;
 #else
   if (identity) *identity = {};
+  if (expected_identity != nullptr && expected_identity->valid)
+    throw std::runtime_error("source identity binding unsupported on this host");
   // Portable admission; the descriptor-level nonblocking guarantee is POSIX.
   if (!std::filesystem::is_regular_file(path))
     throw std::runtime_error("source must be a regular file");
