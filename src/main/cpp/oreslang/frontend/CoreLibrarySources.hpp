@@ -70,6 +70,13 @@ inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
     return is_reserved_core_import(raw) || is_reserved_alloc_import(raw);
 }
 
+inline bool compiler_library_dependency_allowed(
+        CompilerLibraryTier importer,
+        CompilerLibraryTier dependency) noexcept {
+    return importer == CompilerLibraryTier::Alloc ||
+        dependency == CompilerLibraryTier::Core;
+}
+
 inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
     // Keep aliases identity-stable: the optional .ores suffix selects the same
     // compiler-owned unit and can never create a duplicate module instance.
