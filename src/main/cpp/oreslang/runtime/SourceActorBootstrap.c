@@ -171,7 +171,7 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
         &test_readiness_publication_entered, memory_order_acquire);
 }
 #ifdef ORESLANG_SOURCE_ACTOR_NIO
-int oreslang_source_actor_test_cancel_readable_await(void) {
+int oreslang_source_actor_test_cancel_io_await(void) {
     group_lock();
     ReadableAwaitFrame* frame = group.pending_readable;
     if (!frame || !frame->admitted || frame->done) {
@@ -184,12 +184,22 @@ int oreslang_source_actor_test_cancel_readable_await(void) {
     return ores_native_vm_nio_try_cancel_actor(vm, watch);
 }
 
-int oreslang_source_actor_test_readable_await_admitted(void) {
+int oreslang_source_actor_test_cancel_readable_await(void) {
+    return oreslang_source_actor_test_cancel_io_await();
+}
+
+}
+
+int oreslang_source_actor_test_io_await_admitted(void) {
     group_lock();
     ReadableAwaitFrame* frame = group.pending_readable;
     const int admitted = frame && frame->admitted && !frame->done;
     group_unlock();
     return admitted;
+}
+
+int oreslang_source_actor_test_readable_await_admitted(void) {
+    return oreslang_source_actor_test_io_await_admitted();
 }
 
 int oreslang_source_actor_test_stop_readable_root(void) {
@@ -1201,8 +1211,8 @@ static OresSourceReadableAwaitOutcome source_actor_await_io_checked(
         "SOURCE_AWAIT_%s_TRACE_PASS outcome=%d fd=%d events=%u continuation_slot=%u continuation_generation=%u wake_slot=%llu wake_generation=%llu root_slot=%u source_token=%llu\n",
         trace_label,
         outcome,
-        (unsigned)events,
         (int)fd,
+        (unsigned)events,
         frame.link.continuation.slot,
         frame.link.continuation.generation,
         (unsigned long long)frame.awaiting.wake.slot,
