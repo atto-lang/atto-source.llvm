@@ -148,6 +148,22 @@ int main(void) {
     assert!(String::from_utf8_lossy(&run.stdout)
         .contains("NATIVE_SYNC_GENERATOR_FRAME_PASS"));
 
+    let alias_source = r#"pub generator* alias_values(): Iterator<int> {
+  yield 7;
+  return;
+}
+"#;
+    let alias = compile(&compiler, &dir.0, "generator-star-alias.ores", alias_source);
+    assert!(alias.status.success(),
+        "generator* compatibility alias compile failed: {}",
+        String::from_utf8_lossy(&alias.stderr));
+    assert!(String::from_utf8_lossy(&alias.stdout)
+        .contains("define i32 @oreslang_rt_gen_alias_values_init("));
+
+    rejected(&compiler, &dir.0, "starless-generator.ores",
+        "pub generator values(): Iterator<int> { yield 1; return; }\n",
+        "bare native generator declaration requires 'generator*'");
+
     rejected(&compiler, &dir.0, "async.ores",
         "async gen* values(): AsyncIterator<int> { yield 1; return; }\n",
         "async gen* requires scheduler-owned async iterator continuation lowering");
