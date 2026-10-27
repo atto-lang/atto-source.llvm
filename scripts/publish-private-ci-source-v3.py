@@ -70,6 +70,7 @@ MAX_GH_API_RESPONSE_BYTES = 24 * 1024 * 1024
 GITHUB_ACTIONS_APP_ID = 15368
 SOURCE_POLICY_CHECK = "private-ci-governance"
 CARRIER_POLICY_CHECK = "verifier-tests"
+CARRIER_INTEGRITY_CHECK = "main-integrity"
 CARRIER_CONTROL_PATHS = (
     "scripts/verify-oreslang-private-carrier.py",
     "scripts/run-oreslang-test-plan.py",
@@ -1084,6 +1085,9 @@ def checked_carrier_main(repository, contract):
         )
     require_issuer_bound_actions_checks(
         checks, "carrier main", CARRIER_POLICY_CHECK
+    )
+    require_issuer_bound_actions_checks(
+        checks, "carrier main", CARRIER_INTEGRITY_CHECK
     )
     admins = protection.get("enforce_admins")
     force = protection.get("allow_force_pushes")
