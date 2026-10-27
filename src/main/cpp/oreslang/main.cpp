@@ -4,6 +4,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/LibraryProfile.hpp"
+#include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
@@ -187,6 +188,8 @@ int main(int argc, char** argv) {
     bool profile_seen = false;
     std::optional<oreslang::frontend::LibraryProfile> library_profile;
     bool library_profile_seen = false;
+    bool allocator_provider_seen = false;
+    bool bounded_allocator_provider = false;
     bool rt_check_only = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
@@ -201,7 +204,21 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg.rfind("--library-profile=", 0) == 0) {
+        if (arg.rfind("--allocator-provider=", 0) == 0) {
+            if (allocator_provider_seen) {
+                std::cerr << "duplicate allocator-provider option\n";
+                return 2;
+            }
+            allocator_provider_seen = true;
+            const std::string provider =
+                arg.substr(std::string_view("--allocator-provider=").size());
+            if (provider != "bounded-arena") {
+                std::cerr << "unsupported allocator provider: " << provider
+                          << " (expected bounded-arena)\n";
+                return 2;
+            }
+            bounded_allocator_provider = true;
+        } else if (arg.rfind("--library-profile=", 0) == 0) {
             if (library_profile_seen) {
                 std::cerr << "duplicate library-profile option\n";
                 return 2;
@@ -309,12 +326,26 @@ int main(int argc, char** argv) {
         std::cerr << "\n";
         return 2;
     }
+    if (bounded_allocator_provider && !freestanding_library_target) {
+        std::cerr << "bounded-arena allocator provider is certified only for freestanding targets\n";
+        return 2;
+    }
+    if (bounded_allocator_provider &&
+            *library_profile != oreslang::frontend::LibraryProfile::Core) {
+        std::cerr << "allocator provider requires library-profile=core\n";
+        return 2;
+    }
+    const std::uint32_t admitted_provider_bits =
+        bounded_allocator_provider
+            ? oreslang::frontend::core_provider_bit(
+                oreslang::frontend::CoreProviderRequirement::Allocator)
+            : 0u;
 
     if (constraint_descriptors_only &&
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
              experimental_owned_int || experimental_rt_scalar_loop ||
-             target_seen)) {
+             target_seen || allocator_provider_seen)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
     }
@@ -337,7 +368,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -364,8 +395,10 @@ int main(int argc, char** argv) {
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
-        auto ast = oreslang::load_native_program(path, text, source_identity, experimental_owned_int,
-                                                 experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target);
+        auto ast = oreslang::load_native_program(
+            path, text, source_identity, experimental_owned_int,
+            experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
+            admitted_provider_bits);
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
@@ -613,7 +646,9 @@ int main(int argc, char** argv) {
             // Tree shaking is an optimization, not conditional compilation.
             // Validate/codegen the complete admitted source once before pruning
             // so unsupported target features cannot hide in unreachable code.
-            (void)oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+            (void)oreslang::emit_verified_llvm_ir(
+                ast, wasm32_target, cortex_m_target,
+                bounded_allocator_provider);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -623,7 +658,9 @@ int main(int argc, char** argv) {
             require_function_only_tree_shake_surface(ast);
             tree_shake_functions(ast, tree_shake_roots);
         }
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout << oreslang::emit_verified_llvm_ir(
+                ast, wasm32_target, cortex_m_target,
+                bounded_allocator_provider);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
