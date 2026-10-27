@@ -172,7 +172,9 @@ public:
             const unsigned char ch = static_cast<unsigned char>(source_[at_]);
             if (std::isspace(ch)) { ++at_; continue; }
             if (source_.substr(at_, 2) == "//") {
-                const auto end = source_.find('\n', at_ + 2);
+                // A CR-only source file must not hide the next line's
+                // reserved unsafe token inside a line comment.
+                const auto end = source_.find_first_of("\r\n", at_ + 2);
                 at_ = end == std::string_view::npos ? source_.size() : end;
                 continue;
             }
