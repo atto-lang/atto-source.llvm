@@ -96,11 +96,28 @@ inline bool ores_source_identity_equal(
     const SourceIdentity& expected, const SourceIdentity& observed) {
   return expected.valid && observed.valid &&
       expected.device == observed.device && expected.inode == observed.inode &&
-      expected.size == observed.size;
+      expected.size == observed.size &&
+      expected.mtime_sec == observed.mtime_sec &&
+      expected.mtime_nsec == observed.mtime_nsec;
 }
 inline SourceIdentity capture_source_identity(
-    const char*, std::size_t, const char*) {
-  return {};
+    const char* path, std::size_t limit, const char* overflow) {
+  std::error_code error;
+  const auto status = std::filesystem::status(path, error);
+  if (error) throw std::runtime_error(std::string("cannot inspect source: ") + path);
+  if (!std::filesystem::is_regular_file(status))
+    throw std::runtime_error("source must be a regular file");
+  const auto size = std::filesystem::file_size(path, error);
+  if (error) throw std::runtime_error("cannot inspect source file size");
+  if (size > limit) throw std::runtime_error(overflow);
+  const auto modified = std::filesystem::last_write_time(path, error);
+  if (error) throw std::runtime_error("cannot inspect source modification time");
+  SourceIdentity identity;
+  identity.size = static_cast<std::uint64_t>(size);
+  const auto ticks = modified.time_since_epoch().count();
+  identity.mtime_sec = static_cast<std::int64_t>(ticks);
+  identity.valid = true;
+  return identity;
 }
 #endif
 
@@ -145,12 +162,17 @@ inline std::string read_regular_source(
     throw std::runtime_error("source changed during read");
   if (identity) *identity = opened_identity;
 #else
-  if (identity) *identity = {};
-  if (expected_identity != nullptr && expected_identity->valid)
-    throw std::runtime_error("source identity binding unsupported on this host");
-  // Portable admission; the descriptor-level nonblocking guarantee is POSIX.
-  if (!std::filesystem::is_regular_file(path))
-    throw std::runtime_error("source must be a regular file");
+  // Portable best-effort identity binding. POSIX additionally binds the
+  // opened descriptor's device/inode; portable hosts bind size + mtime before
+  // and after the stream read so replacement/mutation is still fail-closed
+  // for ordinary filesystem changes.
+  const SourceIdentity opened_identity =
+      capture_source_identity(path, limit, overflow);
+  if (expected_identity != nullptr &&
+      (!expected_identity->valid ||
+       !ores_source_identity_equal(*expected_identity, opened_identity))) {
+    throw std::runtime_error("source identity changed between resolution and read");
+  }
   std::ifstream source(path, std::ios::binary);
   if (!source) throw std::runtime_error(std::string("cannot open source: ") + path);
   while (source) {
@@ -163,6 +185,13 @@ inline std::string read_regular_source(
   }
   if (source.bad() || (source.fail() && !source.eof()))
     throw std::runtime_error("failed reading source file");
+  const SourceIdentity after_identity =
+      capture_source_identity(path, limit, overflow);
+  if (!ores_source_identity_equal(opened_identity, after_identity) ||
+      text.size() != opened_identity.size) {
+    throw std::runtime_error("source changed during read");
+  }
+  if (identity) *identity = opened_identity;
 #endif
   return text;
 }
