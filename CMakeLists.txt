@@ -3466,6 +3466,13 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_core_library_import_resolution
         PROPERTIES TIMEOUT 120)
+    add_test(NAME native_alloc_library_import_resolution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/alloc_library_imports.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_RT_AOT_CLANG}")
+    set_tests_properties(native_alloc_library_import_resolution
+        PROPERTIES TIMEOUT 120)
     add_test(NAME cortexm_source_actor_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_source_actor_admission.py"
