@@ -3576,6 +3576,22 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(native_nonblocking_connect_contract PROPERTIES TIMEOUT 15)
 endif()
 
+# Fixed-size native TCP ownership: one read + one write lease may coexist,
+# stale generations fail closed, and physical close waits for both directions.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(oreslang-native-tcp-connection-owner-test
+        tests/native_tcp_connection_owner_test.cpp)
+    target_include_directories(oreslang-native-tcp-connection-owner-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-tcp-connection-owner-test PRIVATE
+        cxx_std_17)
+    target_compile_options(oreslang-native-tcp-connection-owner-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_tcp_connection_owner
+        COMMAND oreslang-native-tcp-connection-owner-test)
+    set_tests_properties(native_tcp_connection_owner PROPERTIES TIMEOUT 15)
+endif()
+
 # Host VM ↔ epoll integration. C-only actor/scheduler paths remain linkable
 # without NIO C++ objects; only this opt-in Linux target links the bridge.
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
