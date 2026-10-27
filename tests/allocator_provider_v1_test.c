@@ -50,6 +50,9 @@ int main(void) {
         ORES_ALLOCATOR_PROVIDER_V1_OK);
     assert(ores_allocator_provider_v1_used(&provider) == 0);
     assert(ores_allocator_provider_v1_high_water(&provider) == high);
+    assert(ores_allocator_provider_v1_init(
+        &provider, storage.bytes, sizeof(storage.bytes)) ==
+        ORES_ALLOCATOR_PROVIDER_V1_INVALID);
     assert(ores_allocator_provider_v1_alloc(
         &provider, sizeof(storage.bytes) + 1, 8) == 0);
     assert(ores_allocator_provider_v1_alloc(&provider, 8, 3) == 0);
