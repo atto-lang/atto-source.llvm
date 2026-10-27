@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source-free offline tests of LLVM CI governance preflight."""
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -299,12 +300,80 @@ class PolicyAuditTest(unittest.TestCase):
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
                 audit.check_live_metadata(r, b, p)
 
+    def test_approved_destination_requires_exact_reviewed_contract(self):
+        approved = ("private-org/ci-test",)
+        valid = {
+            "schema": 1,
+            "carriers": {
+                "private-org/ci-test": {
+                    "repository_id": 42,
+                    "base_sha": "a" * 40,
+                    "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
+                    "workflow_blob_sha": "b" * 40,
+                    "review_pr": 17,
+                    "test_plans": {
+                        "ci/test-plans/llvm-pr970.json": {
+                            "blob_sha": "c" * 40,
+                            "allowed_prs": [970],
+                        }
+                    },
+                }
+            },
+        }
+        audit.check_contracts_for_approved(json.dumps(valid), approved)
+
+        invalids = []
+        missing = json.loads(json.dumps(valid))
+        del missing["carriers"]["private-org/ci-test"]["review_pr"]
+        invalids.append(missing)
+        zero_review = json.loads(json.dumps(valid))
+        zero_review["carriers"]["private-org/ci-test"]["review_pr"] = 0
+        invalids.append(zero_review)
+        bool_review = json.loads(json.dumps(valid))
+        bool_review["carriers"]["private-org/ci-test"]["review_pr"] = True
+        invalids.append(bool_review)
+        bad_sha = json.loads(json.dumps(valid))
+        bad_sha["carriers"]["private-org/ci-test"]["base_sha"] = "not-a-sha"
+        invalids.append(bad_sha)
+        bad_path = json.loads(json.dumps(valid))
+        bad_path["carriers"]["private-org/ci-test"]["workflow_path"] = "../workflow.yml"
+        invalids.append(bad_path)
+        duplicate_pr = json.loads(json.dumps(valid))
+        duplicate_pr["carriers"]["private-org/ci-test"]["test_plans"][
+            "ci/test-plans/llvm-pr970.json"
+        ]["allowed_prs"] = [970, 970]
+        invalids.append(duplicate_pr)
+        absent = {"schema": 1, "carriers": {}}
+        invalids.append(absent)
+
+        for doc in invalids:
+            with self.subTest(doc=doc), self.assertRaises(audit.GovernanceError):
+                audit.check_contracts_for_approved(json.dumps(doc), approved)
+
+    def test_carrier_contract_json_rejects_duplicate_keys_and_nonfinite(self):
+        with self.assertRaisesRegex(audit.GovernanceError, "duplicate"):
+            audit.check_contracts_for_approved(
+                '{"schema":1,"schema":1,"carriers":{}}',
+                (),
+            )
+        with self.assertRaisesRegex(audit.GovernanceError, "nonfinite"):
+            audit.check_contracts_for_approved(
+                '{"schema":1,"carriers":{},"x":NaN}',
+                (),
+            )
+
     def test_missing_codeowner_rule_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for relative in (audit.APPROVAL_PATH, audit.OWNERS_PATH, audit.DOC_PATH):
+            for relative in (
+                audit.APPROVAL_PATH,
+                audit.CONTRACT_PATH,
+                audit.OWNERS_PATH,
+                audit.DOC_PATH,
+            ):
                 (root / relative).parent.mkdir(parents=True, exist_ok=True)
             (root / audit.APPROVAL_PATH).write_text("# empty\n")
+            (root / audit.CONTRACT_PATH).write_text('{"schema":1,"carriers":{}}\n')
             (root / audit.OWNERS_PATH).write_text("/.github/CODEOWNERS @ORESoftware\n")
             (root / audit.DOC_PATH).write_text("protected private tree canary Direct GitHub connector review-attested")
             with self.assertRaises(audit.GovernanceError):
