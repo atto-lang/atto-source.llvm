@@ -104,7 +104,7 @@ def main():
         ('project-root-missing-manifest', 'import module Lib from "+/lib"; pub fnc main():int{return 0;}', library, 'nearest .ores.pkg.toml'),
         ('directory', 'import module Lib from "./nested"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
         ('unterminated-path', 'import module Lib from "./lib; pub fnc main():int{return 0;}', library, 'unterminated native string'),
-        ('unsupported-dependency', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', 'define module Lib as pub async fnc answer():int{return 42;} end', 'native actor/async'),
+        ('unsupported-dependency', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', 'define module Lib as pub async fnc answer():int{return 42;} end', 'native async Future<int> v1 callable must be private'),
         ('duplicate-local-arity', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', 'define module Lib as pub fnc answer():int{return 42;} pub fnc answer():int{return 41;} end', 'already has arity'),
         ('foreign-invalid-utf8', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', b'\xff', 'valid UTF-8'),
         ('foreign-null', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', b'//\x00\n'+library.encode(), 'NUL byte'),
