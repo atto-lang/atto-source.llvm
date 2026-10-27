@@ -4055,3 +4055,22 @@ if(BUILD_TESTING)
     COMMAND oreslang-native-cstring-host-test)
   set_tests_properties(native_string_cstring_explicit_length_contract PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Host reactor operation lifecycle: logical Future settlement is separate from
+# physical registration/callback retirement. Actor teardown may reclaim only
+# after ready_to_reclaim() becomes true.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-async-io-operation-lifecycle-test
+        tests/async_io_operation_lifecycle_test.cpp)
+    target_include_directories(oreslang-async-io-operation-lifecycle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-async-io-operation-lifecycle-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-async-io-operation-lifecycle-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-async-io-operation-lifecycle-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME async_io_operation_lifecycle_races
+        COMMAND oreslang-async-io-operation-lifecycle-test)
+    set_tests_properties(async_io_operation_lifecycle_races PROPERTIES TIMEOUT 30)
+endif()
