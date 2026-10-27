@@ -12,6 +12,8 @@ extern "C" {
  *
  * The embedding target owns the backing memory and must initialize/bind the
  * provider explicitly before entering guest code that requires Allocator.
+ * Provider storage MUST be zero-initialized before its first init call; after
+ * successful init, reuse is only through unbind + reset and init is one-shot.
  * No malloc/calloc/realloc/free, OS handle, TLS, thread, or hidden fallback is
  * part of this ABI. v1 is deliberately single-owner/single-carrier.
  */
@@ -29,6 +31,8 @@ typedef struct {
     uint32_t generation;
     uint32_t initialized;
 } OresAllocatorProviderV1;
+
+#define ORES_ALLOCATOR_PROVIDER_V1_ZERO_INIT {0}
 
 OresAllocatorProviderV1Status ores_allocator_provider_v1_init(
     OresAllocatorProviderV1* provider, void* memory, size_t capacity);
