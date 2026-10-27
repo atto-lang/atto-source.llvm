@@ -229,7 +229,7 @@ def main():
         # Every unsupported target fails before emitting even a module header.
         for target in ('wasm32', 'thumbv7m-none-eabi'):
             result=run([a.compiler,'--target='+target,str(root/'private-helper/main.ores')])
-            if not result.returncode or result.stdout or 'ordinary host target' not in result.stderr:
+            if not result.returncode or result.stdout or 'freestanding native imports require compiler-owned ores.core/* modules' not in result.stderr:
                 raise AssertionError((target,result.stderr))
             passed+=1
     print(f'PASS native module imports: {passed} graph/ownership/execution cases, java_differential_cases={compared}, native_named_and_explicit_qualified_generic_arguments_not_claimed_as_Java_parity')
