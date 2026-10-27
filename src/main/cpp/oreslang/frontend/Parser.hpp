@@ -44,7 +44,7 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, LocalAggregateConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
@@ -322,8 +322,25 @@ struct ScalarWhileLoop {
     std::int64_t upper_bound = 0;
 };
 
+/** Compile-time local aggregate declaration. It never creates an object or
+ *  introduces a runtime type during invocation. Nominal struct identity and
+ *  public ABI lowering are deliberately not admitted in stage 1.
+ */
+struct LocalAggregateType {
+    enum class Kind { NominalStruct, StructAlias, RecordAlias };
+    struct Field {
+        std::string name;
+        std::string type_name;
+    };
+    Kind kind = Kind::StructAlias;
+    std::string name;
+    std::vector<Field> fields;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
+    std::vector<LocalAggregateType> local_aggregates;
     std::vector<GenericParameter> generic_parameters;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
