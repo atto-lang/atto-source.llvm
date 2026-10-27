@@ -418,8 +418,13 @@ std::string native_dispatch_constant_key(const Expression& expr) {
     if (expr.kind == Expression::Kind::String)
         return "string:" + expr.name;
     if (expr.kind == Expression::Kind::Negate && expr.left &&
-            expr.left->kind == Expression::Kind::Integer)
+            expr.left->kind == Expression::Kind::Integer &&
+            expr.left->integer >= 0) {
+        // Only a directly negated nonnegative literal is a scalar pattern.
+        // Negating INT64_MIN would overflow signed i64 in the compiler host;
+        // nested -(-INT64_MIN) must fail closed instead of hitting C++ UB.
         return "int:" + std::to_string(-expr.left->integer);
+    }
     return {};
 }
 
