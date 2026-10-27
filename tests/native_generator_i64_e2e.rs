@@ -53,8 +53,8 @@ fn main() {
 
     let source = r#"pub gen* values(): Iterator<int> {
   yield 1;
-  yield 2;
-  yield 3;
+  yield -9223372036854775808;
+  yield 9223372036854775807;
   return;
 }
 "#;
@@ -110,10 +110,11 @@ int main(void) {
     check(forged_done[0]==2 && forged_done[1]==1, "forged terminal rejection mutated frame");
     check(oreslang_rt_gen_values_init(frame)==1, "init failed");
     check(oreslang_rt_gen_values_init(frame)==0, "double init accepted");
-    for (int64_t expected=1; expected<=3; ++expected) {
+    const int64_t expected_values[3] = {1, INT64_MIN, INT64_MAX};
+    for (size_t i=0; i<3; ++i) {
         value = -1;
         check(oreslang_rt_gen_values_next(frame,&value)==1, "yield missing");
-        check(value==expected, "yield value/order mismatch");
+        check(value==expected_values[i], "yield value/order mismatch");
     }
     check(oreslang_rt_gen_values_next(frame,&value)==0, "missing DONE");
     check(frame[0]==2 && frame[1]==0, "DONE did not retire frame");
@@ -179,6 +180,13 @@ int main(void) {
     rejected(&compiler, &dir.0, "parameter.ores",
         "gen* values(int n): Iterator<int> { yield 1; return; }\n",
         "sync generator v1 is zero-argument");
+
+    rejected(&compiler, &dir.0, "positive-overflow.ores",
+        "gen* values(): Iterator<int> { yield 9223372036854775808; return; }\n",
+        "integer literal overflows signed 64-bit result");
+    rejected(&compiler, &dir.0, "negative-overflow.ores",
+        "gen* values(): Iterator<int> { yield -9223372036854775809; return; }\n",
+        "integer literal overflows signed 64-bit result");
 
     println!("PASS: native sync gen* source -> LLVM frame -> Clang execution; async/suspend/delegation fail closed");
 }
