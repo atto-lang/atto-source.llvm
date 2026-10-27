@@ -181,6 +181,14 @@ int oreslang_source_actor_test_cancel_readable_await(void) {
     return ores_native_vm_nio_try_cancel_actor(vm, watch);
 }
 
+int oreslang_source_actor_test_readable_await_admitted(void) {
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    const int admitted = frame && frame->admitted && !frame->done;
+    group_unlock();
+    return admitted;
+}
+
 int oreslang_source_actor_test_stop_readable_root(void) {
     group_lock();
     ReadableAwaitFrame* frame = group.pending_readable;
