@@ -102,6 +102,42 @@ static void run_cancelled(void) {
     close_pipe(pipefd); oreslang_source_actor_stop(actor);
 }
 
+static void run_cancel_admission_race_stress(void) {
+    /*
+     * Repeatedly race the trusted cancellation hook with watch admission.
+     * The hook reads frame.admitted under the source-group mutex, so this is
+     * also a TSan regression for publication of the admitted watch identity.
+     * Cancellation must never execute the compiled continuation or consume
+     * pipe data.
+     */
+    for (uint64_t i = 0; i < UINT64_C(64); ++i) {
+        int pipefd[2] = {-1, -1}; check(make_pipe(pipefd, 1));
+        void* actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
+        check(actor != NULL); reset_calls();
+        AwaitThread await = {
+            .actor = actor,
+            .fd = pipefd[0],
+            .token = UINT64_C(0x6200) + i
+        };
+        pthread_t thread; check(pthread_create(&thread, NULL, await_main, &await) == 0);
+        wait_for_cancel_success();
+        check(pthread_join(thread, NULL) == 0);
+        check(await.outcome == ORES_SOURCE_READABLE_AWAIT_CANCELLED);
+        check(await.result == 0);
+        check(atomic_load_explicit(&continuation_calls, memory_order_acquire) == 0);
+
+        /* The cancelled watch must not consume later input. */
+        const unsigned char byte = (unsigned char)(0x40u + (unsigned)i % 32u);
+        check(write(pipefd[1], &byte, 1) == 1);
+        unsigned char observed = 0;
+        check(read(pipefd[0], &observed, 1) == 1);
+        check(observed == byte);
+
+        close_pipe(pipefd);
+        oreslang_source_actor_stop(actor);
+    }
+}
+
 static void run_terminated(void) {
     int pipefd[2] = {-1, -1}; check(make_pipe(pipefd, 1));
     void* actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
@@ -134,6 +170,7 @@ static void run_failed_admission(void) {
 int main(void) {
     run_ready();
     run_cancelled();
+    run_cancel_admission_race_stress();
     run_terminated();
     run_failed_admission();
     puts("SOURCE_ACTOR_READABLE_TYPED_OUTCOME_PASS");
