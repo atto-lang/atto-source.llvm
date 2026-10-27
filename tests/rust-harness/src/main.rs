@@ -474,7 +474,9 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
         ("HTTP POST plain", "http_post_text(1)"),
         ("HTTP POST blocking", "http_post_text_blocking(1)"),
         ("HTTP POST legacy async suffix", "http_post_text_async(1)"),
-        ("stdio plain", "println(1)"),
+        // Plain stdio.print/println is the one implemented native I/O slice:
+        // it publishes to a bounded nonblocking queue serviced by a dedicated
+        // readiness writer. Only blocking/suffix-specific spellings reject.
         ("stdio blocking", "println_blocking(1)"),
         ("stdio legacy async suffix", "println_async(1)"),
     ];
