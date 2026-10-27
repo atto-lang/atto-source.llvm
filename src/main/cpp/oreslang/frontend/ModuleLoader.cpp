@@ -201,9 +201,17 @@ private:
                         "compiler-owned library registry/module identity mismatch");
                 if (!current.compiler_owned_library && !host &&
                         !frontend::core_closure_admitted(
-                            target.core_closure, root_provider_bits))
+                            target.core_closure, root_provider_bits)) {
+                    const auto allocator =
+                        frontend::core_provider_bit(
+                            frontend::CoreProviderRequirement::Allocator);
+                    if ((target.core_closure.provider_bits & allocator) != 0u &&
+                            (root_provider_bits & allocator) == 0u)
+                        fail(current,
+                            "freestanding alloc/* requires an explicit allocator provider");
                     fail(current,
                         "freestanding compiler-owned library closure requires unavailable provider");
+                }
                 if (current.compiler_owned_library) {
                     if (!target.compiler_owned_library ||
                             !target.core_closure_complete)
