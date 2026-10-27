@@ -1528,6 +1528,53 @@ private:
         return value;
     }
 
+    ScalarGenerator scalar_generator() {
+        ScalarGenerator generator;
+        generator.offset = token_.offset;
+        generator.exported = accept("pub");
+        if (accept("gen")) {
+            require("*");
+        } else if (accept("generator")) {
+            accept("*");
+        } else {
+            fail("expected gen* generator declaration");
+        }
+        generator.name = identifier();
+        require("(");
+        if (!accept(")"))
+            fail("native sync generator v1 is zero-argument");
+        require(":");
+        require("Iterator");
+        require("<");
+        require("int");
+        require(">");
+        require("{");
+        while (!accept("}")) {
+            if (token_.kind == Kind::End)
+                fail("unterminated native generator body");
+            if (accept("yield")) {
+                if (accept("*"))
+                    fail("native generator yield* requires delegated iterator ownership and close lowering");
+                const bool negative = accept("-");
+                const std::int64_t value = integer_literal();
+                generator.yields.push_back(negative ? -value : value);
+                if (generator.yields.size() > 4096)
+                    fail("native generator v1 exceeds 4096 yielded elements");
+                require(";");
+                continue;
+            }
+            if (accept("return")) {
+                if (!accept(";"))
+                    fail("native generator return cannot carry a value; use yield");
+                if (token_.text != "}")
+                    fail("unreachable source after generator return");
+                continue;
+            }
+            fail("native sync generator v1 admits only integer yield statements and bare return");
+        }
+        return generator;
+    }
+
     CooperativeScalarLoop cooperative_scalar_loop() {
         // Explicitly narrow syntax avoids accidentally accepting unpinned
         // loans, exception cleanup, arbitrary calls or nonresumable CFG.
