@@ -55,6 +55,7 @@ def carrier_contract():
     return {
         "repository_id": 1323598177,
         "base_sha": BASE,
+        "review_pr": 17,
         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
         "workflow_blob_sha": WORKFLOW,
         "test_plan_path": "ci/test-plans/llvm-pr669.json",
@@ -135,6 +136,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "trusted/ci": {
                         "repository_id": 42,
                         "base_sha": BASE,
+                        "review_pr": 17,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
                         "test_plans": {
@@ -153,7 +155,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(got["repository_id"], 42)
         self.assertEqual(got["base_sha"], BASE)
         self.assertEqual(got["workflow_blob_sha"], WORKFLOW)
-        self.assertNotIn("review_pr", got)
+        self.assertEqual(got["review_pr"], 17)
         with self.assertRaisesRegex(v3.Denied, "not authorized"):
             v3.parse_contract(
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
@@ -648,7 +650,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "base_sha": BASE,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
-                        "review_pr": 17,
+                        "review_pr": 0,
                         "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
                                 "blob_sha": PLAN_BLOB,
@@ -659,7 +661,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 },
             }
         ).encode()
-        with self.assertRaisesRegex(v3.Denied, "carrier contract fields"):
+        with self.assertRaisesRegex(v3.Denied, "carrier review PR invalid"):
             v3.parse_contract(
                 raw, "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
             )
@@ -697,6 +699,32 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         ):
             self.assertEqual(v3.authorized_source_main_sha(), "2" * 40)
         protected.assert_called_once_with()
+
+    def test_protected_carrier_authority_requires_premerge_review(self):
+        contract = carrier_contract()
+        with (
+            patch.object(v3, "checked_carrier_main", return_value=BASE) as protected,
+            patch.object(
+                v3, "review_attested_carrier_main", return_value=BASE
+            ) as reviewed,
+        ):
+            self.assertEqual(
+                v3.checked_carrier_authority("trusted/ci", contract), BASE
+            )
+        protected.assert_called_once_with("trusted/ci", contract)
+        reviewed.assert_called_once_with(
+            "trusted/ci", contract, {"commit": {"sha": BASE}}
+        )
+
+        with (
+            patch.object(v3, "checked_carrier_main", return_value=BASE),
+            patch.object(
+                v3, "review_attested_carrier_main",
+                side_effect=v3.Denied("independent carrier review is missing"),
+            ),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "independent carrier review"):
+                v3.checked_carrier_authority("trusted/ci", contract)
 
     def test_unprotected_carrier_is_always_denied(self):
         contract = carrier_contract()
