@@ -645,18 +645,20 @@ public:
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
-                 !program.cooperative_loops.empty())) {
+                 !program.cooperative_loops.empty() || !program.generators.empty())) {
             fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
         }
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
         resolve_alias_uses(program);
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
-                program.cooperative_loops.empty() && program.type_only_declarations.empty())
-            fail("expected at least one function, actor or type-only declaration");
+                program.cooperative_loops.empty() && program.generators.empty() &&
+                program.type_only_declarations.empty())
+            fail("expected at least one function, generator, actor or type-only declaration");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+                 !program.generators.empty() || !program.actors.empty() ||
+                 !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         program.sum_types = std::move(sum_types_);
@@ -1581,6 +1583,8 @@ private:
         CooperativeScalarLoop loop;
         loop.offset = token_.offset;
         require("suspend");
+        if (token_.text == "gen" || token_.text == "generator")
+            fail("native suspend gen* requires scheduler-owned async iterator continuation lowering");
         if (token_.text != "fnc") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
@@ -1690,6 +1694,8 @@ private:
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (source_async) {
+            if (token_.text == "gen" || token_.text == "generator")
+                fail("native async gen* requires scheduler-owned async iterator continuation lowering");
             if (!accept("fnc"))
                 fail("native first async Future<int> producer requires async fnc");
         } else if (owner.empty() && !accept("fnc") && !accept("routine")) {
