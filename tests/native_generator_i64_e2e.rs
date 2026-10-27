@@ -165,6 +165,19 @@ int main(void) {
         "pub generator values(): Iterator<int> { yield 1; return; }\n",
         "bare native generator declaration requires 'generator*'");
 
+    rejected(&compiler, &dir.0, "duplicate-generator.ores",
+        "gen* values(): Iterator<int> { yield 1; return; }\n\
+gen* values(): Iterator<int> { yield 2; return; }\n",
+        "duplicate native generator name/arity");
+
+    let mut too_many = String::new();
+    for i in 0..513 {
+        too_many.push_str(&format!(
+            "gen* g{i}(): Iterator<int> {{ yield {i}; return; }}\n"));
+    }
+    rejected(&compiler, &dir.0, "too-many-generators.ores", &too_many,
+        "native generator declaration limit exceeded (512)");
+
     rejected(&compiler, &dir.0, "async.ores",
         "async gen* values(): AsyncIterator<int> { yield 1; return; }\n",
         "async gen* requires scheduler-owned async iterator continuation lowering");
