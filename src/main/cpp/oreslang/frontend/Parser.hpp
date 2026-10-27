@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/NativeHasFutureContract.hpp"
 
 namespace oreslang {
@@ -103,6 +104,12 @@ struct LocalBinding {
     std::string pending_type_alias; // transparent compile-time alias identity
     std::size_t offset = 0;
     std::string sum_type;
+    // Nonempty only for the first capture-free source Task<int> slice.
+    // The binding receives the result of exactly one scheduler-owned Task await.
+    std::string task_await_name;
+    // Nonempty only for the first checked Future<int> pipeline slice. The
+    // binding receives the result of exactly one scheduler-owned Future await.
+    std::string future_await_name;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
 };
 
@@ -163,6 +170,92 @@ struct ActorSpawnBinding {
     SourceType declared_type;
     std::size_t offset = 0;
 };
+
+struct SourceTaskI64Binding {
+    std::string name;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+    bool awaited = false;
+};
+
+struct SourceFuturePipelineI64Binding {
+    std::string name;
+    std::string producer_function;
+    std::vector<std::string> stages;
+    std::vector<types::FuturePipelinePlan> plans;
+    std::size_t offset = 0;
+    bool root_consumed = false;
+    bool awaited = false;
+    // Set only after the complete ownership pass succeeds for the compilation
+    // unit. Codegen must never consume a merely type-staged plan.
+    bool ownership_admitted = false;
+    // Deterministic compiler-only snapshot of the exact producer/stage/plan
+    // shape authorized by ownership. Any post-admission rewrite must change
+    // this value and therefore lose lowering authority.
+    std::uint64_t ownership_authority_fingerprint = 0;
+};
+
+inline std::uint64_t future_pipeline_authority_fingerprint(
+        const SourceFuturePipelineI64Binding& pipeline) noexcept {
+    // FNV-1a is used only as a compact stale-proof detector inside one
+    // compilation. This is not a cryptographic capability or persisted ABI.
+    std::uint64_t hash = UINT64_C(1469598103934665603);
+    const auto byte = [&](std::uint8_t value) {
+        hash ^= value;
+        hash *= UINT64_C(1099511628211);
+    };
+    const auto u64 = [&](std::uint64_t value) {
+        for (unsigned shift = 0; shift < 64; shift += 8)
+            byte(static_cast<std::uint8_t>(value >> shift));
+    };
+    const auto text = [&](std::string_view value) {
+        u64(static_cast<std::uint64_t>(value.size()));
+        for (unsigned char ch : value) byte(ch);
+    };
+
+    const auto auto_type = [&](const auto& self,
+                               const types::AutoType& type) -> void {
+        byte(static_cast<std::uint8_t>(type.kind));
+        byte(type.shareable_domain ? 1u : 0u);
+        byte(type.complete_nominal_layout ? 1u : 0u);
+        u64(static_cast<std::uint64_t>(type.parameters.size()));
+        for (const auto& parameter : type.parameters)
+            self(self, parameter);
+        u64(static_cast<std::uint64_t>(type.dyn_bounds.size()));
+        for (const auto trait : type.dyn_bounds)
+            byte(static_cast<std::uint8_t>(trait));
+        u64(static_cast<std::uint64_t>(type.negative.size()));
+        for (const auto trait : type.negative)
+            byte(static_cast<std::uint8_t>(trait));
+    };
+
+    text(pipeline.name);
+    text(pipeline.producer_function);
+    u64(static_cast<std::uint64_t>(pipeline.offset));
+    byte(pipeline.root_consumed ? 1u : 0u);
+    byte(pipeline.awaited ? 1u : 0u);
+    u64(static_cast<std::uint64_t>(pipeline.stages.size()));
+    for (const auto& stage : pipeline.stages) text(stage);
+    u64(static_cast<std::uint64_t>(pipeline.plans.size()));
+    for (const auto& plan : pipeline.plans) {
+        u64(plan.declaration_identity);
+        u64(plan.pipeline_node_identity);
+        auto_type(auto_type, plan.input_type);
+        auto_type(auto_type, plan.output_type);
+        u64(static_cast<std::uint64_t>(plan.prior_effects.bits));
+        u64(static_cast<std::uint64_t>(plan.stage_effects.bits));
+        u64(static_cast<std::uint64_t>(plan.cumulative_effects.bits));
+        byte(static_cast<std::uint8_t>(plan.effect_provenance));
+        byte(static_cast<std::uint8_t>(plan.input_ownership));
+        byte(static_cast<std::uint8_t>(plan.produced_future_ownership));
+        byte(static_cast<std::uint8_t>(plan.produced_future_provenance));
+        byte(plan.flattens_future ? 1u : 0u);
+        byte(plan.root_stage ? 1u : 0u);
+    }
+    // Reserve zero for "never authorized".
+    return hash == 0 ? UINT64_C(1) : hash;
+}
+
 struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
@@ -238,6 +331,13 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
+    // First executable source Task slice: one capture-free Task<int> in trusted
+    // zero-argument main, submitted before ordinary locals and awaited once.
+    std::vector<SourceTaskI64Binding> source_tasks;
+    // First executable Future-aware value-pipeline slice. Async producers are
+    // compiled as scheduler work; sync unary stages execute on that carrier.
+    std::vector<SourceFuturePipelineI64Binding> future_pipelines;
+    bool async_source_i64 = false;
     /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;

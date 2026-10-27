@@ -1,0 +1,1 @@
+pub suspend gen* values(): AsyncIterator<int> { yield 1; return; }

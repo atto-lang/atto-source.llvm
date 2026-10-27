@@ -50,3 +50,18 @@ This is **not** evidence that native generator lifetime checking is
 implemented: generators are deliberately unsupported by the native
 frontend. Nor does this gate prove Java/Graal parity or runtime zero overhead.
 Exact-head CMake/CTest execution and sanitizer runs are required before merge.
+
+### Mainline Task/Future pipeline reconciliation
+
+The source admission gate is registered on the latest `main` CMake
+configuration without replacing its Task/Future compiler, runtime, or test
+entries. The current native parser explicitly rejects `generator` source
+with the diagnostic `native generator v1 requires iterator-frame, ownership
+and LLVM continuation lowering`; the regression fixture matches that
+specific unsupported-feature admission rather than the earlier generic
+actor/async rejection. This documents **fail-closed native generator support**,
+not a proof that native generator lifetime tracking is implemented.
+
+New native Task/Future support must be separately tested for loan lifetime
+and ownership parity; these fixture checks do not certify that newer source
+subset. CI is required on the merged exact tree.

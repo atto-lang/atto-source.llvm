@@ -38,7 +38,7 @@ CASES = {
     # The native generator frontend does not implement lexical loans yet.
     "generator-yield-loan-unsupported": (
         "generator fnc values(): int { let int x = 1; yield rt borrow x; return; }\n",
-        "native actor/async declaration requires",
+        "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering",
     ),
 }
 
