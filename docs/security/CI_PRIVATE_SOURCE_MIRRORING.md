@@ -129,10 +129,19 @@ workflow blob, plan blob, and allowed source PR. Carrier `main` SHA and live
 protection are rechecked before every source-bearing
 write; movement during transfer fails closed.
 
-The carrier workflow keeps the source-test job at `contents: read`. Cleanup is
-performed by a separate no-checkout job with `contents: write` that validates
-both ephemeral refs still point at the exact carrier commit before deleting the
-`ci/authorized-<CARRIER_COMMIT_SHA>` and `ci/oreslang-<SOURCE_TREE_SHA>` refs.
+The source-bearing carrier workflow is triggered only by the fixed
+`oreslang-private-ci-exact-tree` `repository_dispatch` event. GitHub therefore
+loads the executable workflow definition from carrier default `main`, not from
+the ephemeral source-bearing ref. The dispatch payload contains only the exact
+carrier commit SHA and source root-tree SHA. Before checkout, the workflow
+requires `GITHUB_REF=refs/heads/main`, binds `GITHUB_WORKFLOW_REF` to the
+reviewed carrier workflow on `main`, re-reads live `main`, and verifies both
+`ci/oreslang-<SOURCE_TREE_SHA>` and
+`ci/authorized-<CARRIER_COMMIT_SHA>` point to the dispatched carrier commit.
+
+The carrier source-test job keeps `contents: read`. Cleanup is performed by a
+separate no-checkout job with `contents: write` that validates both ephemeral
+refs still point at the exact dispatched carrier commit before deleting them.
 Ref deletion limits accidental continued reachability; it does not claim to
 erase already-created Git objects, Actions logs, or provider-side retention.
 
@@ -155,9 +164,13 @@ The publisher then creates the carrier's exact dispatcher marker:
 ci/authorized-<CARRIER_COMMIT_SHA>
 ```
 
-The destination workflow refuses real source tests without that exact marker
-and revalidates live destination identity before checkout. No source repository
-credential is present in the carrier.
+After both exact refs are created and re-read, the publisher emits the fixed
+`oreslang-private-ci-exact-tree` repository dispatch with
+`carrier_sha=<CARRIER_COMMIT_SHA>` and
+`source_tree=<SOURCE_ROOT_TREE_SHA>`. The destination workflow refuses real
+source tests without both exact refs and revalidates live destination identity
+before checkout. The source-bearing ref never selects the workflow definition,
+and no source repository credential is present in the carrier.
 
 Supported invocation:
 
