@@ -164,6 +164,28 @@ source-level TCP connection object or stdlib connect implementation**; descripto
 ownership/address parsing/lifetime lowering remain to be integrated above this
 substrate.
 
+### Native TCP connection ownership
+
+`NativeTcpConnectionLinux` now owns one connected nonblocking socket with a
+descriptor generation and independent READ/WRITE lease generations. One read
+lease and one write lease may coexist. Duplicate same-direction leases fail
+closed; stale lease tokens cannot release a later directional generation or a
+different connection generation.
+
+Close is two-phase: `close()` marks the connection logically closed so no new
+lease can be admitted, but the descriptor remains physically open until every
+already-admitted read/write lease retires. The final releasing lease performs
+the one physical descriptor close.
+
+This ownership layer is intentionally below the source/std connection surface.
+The current raw `NativeEpollReactor` still represents one epoll ticket per FD
+and uses `EPOLL_CTL_ADD` for each ticket, while its manager rejects a second
+claim for the same FD. Therefore native full-duplex readiness is **not yet
+enabled** merely because the connection owner can represent two directional
+leases. The next reactor hardening must multiplex disjoint EPOLLIN/EPOLLOUT
+sub-watches under one physical epoll registration, matching the Java selector
+contract, before the VM claim table may admit both directions.
+
 ### Typed readable runtime outcome
 
 The trusted source runtime now exposes
