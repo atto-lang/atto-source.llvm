@@ -119,6 +119,9 @@ actual_git="$(command -v git)"
 cat > "$temp/mockgit/git" <<'MOCK_GIT'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1-}" == "-C" && "${3-}" == "status" && "${FAIL_LSFILES_KIND:-}" == "status" ]]; then
+  exit 75
+fi
 if [[ "${1-}" == "-C" && "${3-}" == "ls-files" ]]; then
   case "${FAIL_LSFILES_KIND:-}" in
     flags)
@@ -132,6 +135,8 @@ fi
 exec "$ACTUAL_GIT" "$@"
 MOCK_GIT
 chmod +x "$temp/mockgit/git"
+make_repos
+ACTUAL_GIT="$actual_git" FAIL_LSFILES_KIND=status PATH="$temp/mockgit:$PATH" expect_rejected "failed worktree status" 65 "Git worktree inventory failed" "$launcher"
 make_repos
 ACTUAL_GIT="$actual_git" FAIL_LSFILES_KIND=flags PATH="$temp/mockgit:$PATH" expect_rejected "failed index flag scan" 65 "Git index-flag inventory failed" "$launcher"
 make_repos
