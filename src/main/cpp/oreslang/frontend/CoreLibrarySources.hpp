@@ -35,6 +35,11 @@ inline bool is_reserved_core_import(std::string_view raw) noexcept {
     return raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
 }
 
+inline bool is_reserved_std_import(std::string_view raw) noexcept {
+    return raw == "ores.std" || raw.rfind("ores.std/", 0) == 0 ||
+        raw == "std" || raw.rfind("std/", 0) == 0;
+}
+
 inline const CoreLibrarySource* find_core_library_source(std::string_view raw) noexcept {
     // Keep aliases identity-stable: the optional .ores suffix selects the same
     // compiler-owned unit and can never create a duplicate module instance.
