@@ -1,9 +1,11 @@
 #include "oreslang/runtime/NativeSelectArbiter.hpp"
 #include "oreslang/runtime/NativeSelectableI64Channel.hpp"
 
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <stdexcept>
+#include <thread>
 
 using oreslang::runtime::NativeSelectArbiter;
 using oreslang::runtime::NativeSelectableI64Channel;
@@ -364,6 +366,61 @@ static void asynchronous_notification_failure_is_recorded_after_commit() {
     assert(!wait.close());
 }
 
+
+static void close_and_plain_write_share_one_channel_linearization_point() {
+    using Channel = NativeSelectableI64Channel<1, 2>;
+    for (int round = 0; round < 1024; ++round) {
+        Channel channel;
+        std::atomic<bool> start{false};
+        bool wrote = false;
+        bool closed = false;
+
+        std::thread writer([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            wrote = channel.try_write(91);
+        });
+        std::thread closer([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            closed = channel.close();
+        });
+
+        start.store(true, std::memory_order_release);
+        writer.join();
+        closer.join();
+
+        assert(closed);
+        assert(channel.closed());
+        auto result = channel.try_read_result();
+        if (wrote) {
+            assert(result.status == Channel::ReadStatus::Value);
+            assert(result.value == 91);
+            assert(channel.try_read_result().status == Channel::ReadStatus::Eof);
+        } else {
+            assert(result.status == Channel::ReadStatus::Eof);
+        }
+    }
+}
+
+static void readiness_callback_may_reenter_channel_after_unlock() {
+    using Channel = NativeSelectableI64Channel<1, 2>;
+    Channel channel;
+    int callbacks = 0;
+    auto wait = channel.subscribe_readable(
+        [&](const Channel::Subscription& subscription) {
+            ++callbacks;
+            assert(channel.size() == 1);
+            assert(!channel.closed());
+            assert(subscription.active());
+        });
+
+    assert(channel.try_write(12));
+    assert(callbacks == 1);
+    assert(wait.close());
+    assert(channel.pending_readers() == 0);
+}
+
 int main() {
     first_ready_read_wins_and_loser_does_not_consume();
     losing_write_never_publishes();
@@ -376,5 +433,7 @@ int main() {
     close_wakes_pending_write_as_closed_without_publication();
     immediate_callback_failure_does_not_leak_waiter();
     asynchronous_notification_failure_is_recorded_after_commit();
+    close_and_plain_write_share_one_channel_linearization_point();
+    readiness_callback_may_reenter_channel_after_unlock();
     return 0;
 }
