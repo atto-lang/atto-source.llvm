@@ -1012,6 +1012,14 @@ def review_attested_carrier_main(repository, contract, branch):
     reviewed_head = valid_sha(
         head.get("sha"), "carrier review PR head SHA invalid"
     )
+    merge_commit = valid_sha(
+        pr.get("merge_commit_sha"), "carrier review PR merge commit SHA invalid"
+    )
+    if merge_commit != base_sha:
+        raise Denied(
+            "carrier main is not the exact independently reviewed PR merge commit"
+        )
+
     review = _latest_review(
         repository, review_pr,
         CARRIER_REVIEW_USER_ID, CARRIER_REVIEW_LOGIN,
