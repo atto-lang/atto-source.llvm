@@ -310,6 +310,10 @@ class PolicyAuditTest(unittest.TestCase):
                     "base_sha": "a" * 40,
                     "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                     "workflow_blob_sha": "b" * 40,
+                    "control_blobs": {
+                        "scripts/verify-oreslang-private-carrier.py": "d" * 40,
+                        "scripts/run-oreslang-test-plan.py": "e" * 40,
+                    },
                     "review_pr": 17,
                     "test_plans": {
                         "ci/test-plans/llvm-pr970.json": {
@@ -332,6 +336,21 @@ class PolicyAuditTest(unittest.TestCase):
         bool_review = json.loads(json.dumps(valid))
         bool_review["carriers"]["private-org/ci-test"]["review_pr"] = True
         invalids.append(bool_review)
+        missing_control = json.loads(json.dumps(valid))
+        del missing_control["carriers"]["private-org/ci-test"]["control_blobs"][
+            "scripts/run-oreslang-test-plan.py"
+        ]
+        invalids.append(missing_control)
+        extra_control = json.loads(json.dumps(valid))
+        extra_control["carriers"]["private-org/ci-test"]["control_blobs"][
+            "scripts/unreviewed.py"
+        ] = "f" * 40
+        invalids.append(extra_control)
+        bad_control_sha = json.loads(json.dumps(valid))
+        bad_control_sha["carriers"]["private-org/ci-test"]["control_blobs"][
+            "scripts/verify-oreslang-private-carrier.py"
+        ] = "not-a-sha"
+        invalids.append(bad_control_sha)
         bad_sha = json.loads(json.dumps(valid))
         bad_sha["carriers"]["private-org/ci-test"]["base_sha"] = "not-a-sha"
         invalids.append(bad_sha)
@@ -349,6 +368,38 @@ class PolicyAuditTest(unittest.TestCase):
         for doc in invalids:
             with self.subTest(doc=doc), self.assertRaises(audit.GovernanceError):
                 audit.check_contracts_for_approved(json.dumps(doc), approved)
+
+    def test_contract_repository_set_must_exactly_match_allowlist(self):
+        empty = {"schema": 1, "carriers": {}}
+        audit.check_contracts_for_approved(json.dumps(empty), ())
+
+        stale = {
+            "schema": 1,
+            "carriers": {
+                "stale-org/stale-ci": {
+                    "repository_id": 42,
+                    "base_sha": "a" * 40,
+                    "workflow_path":
+                        ".github/workflows/oreslang-exact-tree-carrier.yml",
+                    "workflow_blob_sha": "b" * 40,
+                    "control_blobs": {
+                        "scripts/verify-oreslang-private-carrier.py": "d" * 40,
+                        "scripts/run-oreslang-test-plan.py": "e" * 40,
+                    },
+                    "review_pr": 17,
+                    "test_plans": {
+                        "ci/test-plans/llvm-pr970.json": {
+                            "blob_sha": "c" * 40,
+                            "allowed_prs": [970],
+                        }
+                    },
+                }
+            },
+        }
+        with self.assertRaisesRegex(
+            audit.GovernanceError, "exactly match approved"
+        ):
+            audit.check_contracts_for_approved(json.dumps(stale), ())
 
     def test_carrier_contract_json_rejects_duplicate_keys_and_nonfinite(self):
         with self.assertRaisesRegex(audit.GovernanceError, "duplicate"):
