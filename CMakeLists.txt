@@ -3395,6 +3395,16 @@ endif()
 # This is not Zephyr/QEMU firmware evidence; the embedded platform owns that.
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_executable(oreslang-library-profile-policy-test
+        tests/library_profile_policy_test.cpp)
+    target_include_directories(oreslang-library-profile-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-library-profile-policy-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-library-profile-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_core_std_library_profile_policy
+        COMMAND oreslang-library-profile-policy-test)
+    set_tests_properties(native_core_std_library_profile_policy PROPERTIES TIMEOUT 10)
     add_test(NAME cortexm_freestanding_source_object
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_freestanding_source_object.py"
