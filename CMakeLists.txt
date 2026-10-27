@@ -3969,6 +3969,7 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     add_executable(oreslang-native-select-continuation-fence-test
         tests/native_select_continuation_fence_test.cpp)
     target_include_directories(oreslang-native-select-continuation-fence-test PRIVATE
@@ -3976,7 +3977,9 @@ if(BUILD_TESTING)
     target_compile_features(oreslang-native-select-continuation-fence-test PRIVATE cxx_std_17)
     target_compile_options(oreslang-native-select-continuation-fence-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-select-continuation-fence-test PRIVATE Threads::Threads)
     add_test(NAME native_select_continuation_generation_fence
         COMMAND oreslang-native-select-continuation-fence-test)
+    set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
 endif()
 
