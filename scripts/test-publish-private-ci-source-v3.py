@@ -1631,6 +1631,54 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             "allow_deletions": {"enabled": False},
         }
 
+    def test_protected_source_rejects_inactive_or_redirected_repository_state(self):
+        protection = self._strict_protection(v3.SOURCE_POLICY_CHECK)
+
+        def api_for(repo_state):
+            def api(route, method="GET", payload=None):
+                if route == f"repos/{v3.SOURCE_REPO}":
+                    return repo_state
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                    return {
+                        "name": v3.SOURCE_BRANCH,
+                        "protected": True,
+                        "commit": {"sha": PROTECTED},
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}/protection":
+                    return protection
+                raise AssertionError(route)
+            return api
+
+        good = {
+            "id": v3.SOURCE_REPO_ID,
+            "full_name": v3.SOURCE_REPO,
+            "private": True,
+            "visibility": "private",
+            "default_branch": v3.SOURCE_BRANCH,
+            "archived": False,
+            "disabled": False,
+            "fork": False,
+        }
+        with patch.object(v3, "gh_api", side_effect=api_for(good)):
+            self.assertEqual(v3.source_protection(), PROTECTED)
+
+        variants = [
+            {**good, "visibility": "public"},
+            {**good, "default_branch": "develop"},
+            {**good, "archived": True},
+            {**good, "disabled": True},
+            {**good, "fork": True},
+            {**good, "full_name": "other/repo"},
+            {**good, "id": v3.SOURCE_REPO_ID + 1},
+        ]
+        for repo_state in variants:
+            with self.subTest(repo_state=repo_state), patch.object(
+                v3, "gh_api", side_effect=api_for(repo_state)
+            ):
+                with self.assertRaisesRegex(v3.Denied, "identity/state mismatch"):
+                    v3.source_protection()
+
+
     def test_protected_source_rejects_unknown_review_bypass_fields(self):
         def api_for(protection):
             def api(route, method="GET", payload=None):
