@@ -432,6 +432,16 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Native generator v1 deliberately starts with a value-only, zero-capture
+// Iterator<int> activation. Each activation is represented by a caller-owned,
+// pinned frame in LLVM IR; no native stack or tracing-GC object survives a pull.
+struct ScalarGenerator {
+    std::string name;
+    std::vector<std::int64_t> yields;
+    std::size_t offset = 0;
+    bool exported = false;
+};
+
 struct ModuleImport {
     bool selected_class = false;
     std::string selected_module;
@@ -452,6 +462,7 @@ struct TypeConstraintDescriptor {
 struct Program {
     std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
+    std::vector<ScalarGenerator> generators;
     std::string namespace_name;
     std::string module;
     std::vector<ClassDecl> classes;
