@@ -74,7 +74,7 @@ def main():
     ]
     positives.append(('project-root', {
         'main.ores': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
-        '.ores.pkg.toml': 'schema_version = "1"\\n',
+        '.ores.pkg.toml': 'schema_version = "1"\n',
         'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
     }, 42))
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
@@ -156,7 +156,7 @@ def main():
         directory=root/'project-root-duplicate-schema'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
         (directory/'lib.ores').write_text(library)
-        (directory/'.ores.pkg.toml').write_text('schema_version = "1"\\n"schema_version" = "1"\\n')
+        (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n"schema_version" = "1"\n')
         result=run([a.compiler,str(directory/'main.ores')])
         if not result.returncode or result.stdout or 'schema_version' not in result.stderr:
             raise AssertionError(('project-root duplicate schema',result.stderr))
@@ -164,7 +164,7 @@ def main():
         directory=root/'project-root-multiline'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
         (directory/'lib.ores').write_text(library)
-        (directory/'.ores.pkg.toml').write_text('note = """schema_version = "1" """\\nschema_version = "1"\\n')
+        (directory/'.ores.pkg.toml').write_text('note = """schema_version = "1" """\nschema_version = "1"\n')
         result=run([a.compiler,str(directory/'main.ores')])
         if not result.returncode or result.stdout or 'multiline TOML' not in result.stderr:
             raise AssertionError(('project-root multiline manifest',result.stderr))
