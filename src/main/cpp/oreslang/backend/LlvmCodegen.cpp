@@ -2286,6 +2286,119 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     }
 
 
+    // Native sync generator v1: caller-owned pinned frame [state,index].
+    // No guest/native stack survives a pull and no tracing-GC object is
+    // introduced. ABI status is 1=YIELD, 0=DONE, -1=invalid activation.
+    if (!source.generators.empty() && (wasm32_target || cortex_m_target))
+        throw std::runtime_error(
+            "native generator v1 is not yet admitted for wasm32/Cortex-M targets");
+    for (const auto& generator : source.generators) {
+        const auto linkage = generator.exported
+            ? llvm::Function::ExternalLinkage
+            : llvm::Function::InternalLinkage;
+        const std::string prefix = "oreslang_rt_gen_" + generator.name + "_";
+        auto* init = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {loan_ptr}, false),
+            linkage, prefix + "init", module);
+        auto* next = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {loan_ptr, loan_ptr}, false),
+            linkage, prefix + "next", module);
+        auto* close = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {loan_ptr}, false),
+            linkage, prefix + "close", module);
+        auto* zero = llvm::ConstantInt::get(i64, 0);
+        auto* active_state = llvm::ConstantInt::get(i64, 1);
+        auto* done_state = llvm::ConstantInt::get(i64, 2);
+        const auto return_i32 = [&](llvm::IRBuilder<>& b, int value) {
+            b.CreateRet(llvm::ConstantInt::getSigned(i32, value));
+        };
+
+        {
+            llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", init));
+            auto* frame = init->getArg(0);
+            auto* state = b.CreateLoad(i64, frame, "state");
+            auto* fresh = llvm::BasicBlock::Create(context, "fresh", init);
+            auto* denied = llvm::BasicBlock::Create(context, "denied", init);
+            b.CreateCondBr(b.CreateICmpEQ(state, zero), fresh, denied);
+            b.SetInsertPoint(fresh);
+            b.CreateStore(active_state, frame);
+            b.CreateStore(zero, b.CreateInBoundsGEP(i64, frame,
+                llvm::ConstantInt::get(i64, 1)));
+            return_i32(b, 1);
+            b.SetInsertPoint(denied);
+            return_i32(b, 0);
+        }
+
+        {
+            llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", next));
+            auto args = next->arg_begin();
+            auto* frame = &*args++;
+            auto* out = &*args;
+            auto* state = b.CreateLoad(i64, frame, "state");
+            auto* active = llvm::BasicBlock::Create(context, "active", next);
+            auto* done = llvm::BasicBlock::Create(context, "done", next);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", next);
+            auto* state_switch = b.CreateSwitch(state, invalid, 2);
+            state_switch->addCase(active_state, active);
+            state_switch->addCase(done_state, done);
+            b.SetInsertPoint(done);
+            return_i32(b, 0);
+            b.SetInsertPoint(invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(active);
+            auto* index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* index = b.CreateLoad(i64, index_addr, "yield.index");
+            auto* exhausted = llvm::BasicBlock::Create(context, "exhausted", next);
+            auto* yield_dispatch = llvm::BasicBlock::Create(context, "yield.dispatch", next);
+            b.CreateCondBr(
+                b.CreateICmpULT(index,
+                    llvm::ConstantInt::get(i64, generator.yields.size())),
+                yield_dispatch, exhausted);
+            b.SetInsertPoint(exhausted);
+            b.CreateStore(done_state, frame);
+            b.CreateStore(zero, index_addr);
+            return_i32(b, 0);
+            b.SetInsertPoint(yield_dispatch);
+            auto* bad_index = llvm::BasicBlock::Create(context, "bad.index", next);
+            auto* index_switch = b.CreateSwitch(index, bad_index,
+                static_cast<unsigned>(generator.yields.size()));
+            for (std::size_t i = 0; i < generator.yields.size(); ++i) {
+                auto* emit = llvm::BasicBlock::Create(
+                    context, "yield." + std::to_string(i), next);
+                index_switch->addCase(llvm::ConstantInt::get(i64, i), emit);
+                b.SetInsertPoint(emit);
+                b.CreateStore(
+                    llvm::ConstantInt::getSigned(i64, generator.yields[i]), out);
+                b.CreateStore(llvm::ConstantInt::get(i64, i + 1), index_addr);
+                return_i32(b, 1);
+            }
+            b.SetInsertPoint(bad_index);
+            return_i32(b, -1);
+        }
+
+        {
+            llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", close));
+            auto* frame = close->getArg(0);
+            auto* state = b.CreateLoad(i64, frame, "state");
+            auto* active = llvm::BasicBlock::Create(context, "active", close);
+            auto* done = llvm::BasicBlock::Create(context, "done", close);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", close);
+            auto* state_switch = b.CreateSwitch(state, invalid, 2);
+            state_switch->addCase(active_state, active);
+            state_switch->addCase(done_state, done);
+            b.SetInsertPoint(active);
+            b.CreateStore(done_state, frame);
+            b.CreateStore(zero, b.CreateInBoundsGEP(i64, frame,
+                llvm::ConstantInt::get(i64, 1)));
+            return_i32(b, 1);
+            b.SetInsertPoint(done);
+            return_i32(b, 0);
+            b.SetInsertPoint(invalid);
+            return_i32(b, -1);
+        }
+    }
+
     // First compiler-generated heap continuation: exactly one frame-owned
     // scalar updated at a committed loop backedge. There is no actor or
     // scheduler admission here. The host owns the frame and must dispatch
