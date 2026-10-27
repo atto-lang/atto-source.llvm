@@ -2316,6 +2316,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         {
             llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", init));
             auto* frame = init->getArg(0);
+            auto* nonnull = llvm::BasicBlock::Create(context, "nonnull", init);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", init);
+            b.CreateCondBr(
+                b.CreateICmpNE(frame, llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(loan_ptr))),
+                nonnull, invalid);
+            b.SetInsertPoint(invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(nonnull);
             auto* state = b.CreateLoad(i64, frame, "state");
             auto* fresh = llvm::BasicBlock::Create(context, "fresh", init);
             auto* denied = llvm::BasicBlock::Create(context, "denied", init);
@@ -2334,6 +2343,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             auto args = next->arg_begin();
             auto* frame = &*args++;
             auto* out = &*args;
+            auto* nonnull = llvm::BasicBlock::Create(context, "nonnull", next);
+            auto* null_invalid = llvm::BasicBlock::Create(context, "null.invalid", next);
+            auto* null_pointer = llvm::ConstantPointerNull::get(
+                llvm::cast<llvm::PointerType>(loan_ptr));
+            b.CreateCondBr(
+                b.CreateAnd(b.CreateICmpNE(frame, null_pointer),
+                            b.CreateICmpNE(out, null_pointer)),
+                nonnull, null_invalid);
+            b.SetInsertPoint(null_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(nonnull);
             auto* state = b.CreateLoad(i64, frame, "state");
             auto* active = llvm::BasicBlock::Create(context, "active", next);
             auto* done = llvm::BasicBlock::Create(context, "done", next);
@@ -2380,6 +2400,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         {
             llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", close));
             auto* frame = close->getArg(0);
+            auto* nonnull = llvm::BasicBlock::Create(context, "nonnull", close);
+            auto* null_invalid = llvm::BasicBlock::Create(context, "null.invalid", close);
+            b.CreateCondBr(
+                b.CreateICmpNE(frame, llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(loan_ptr))),
+                nonnull, null_invalid);
+            b.SetInsertPoint(null_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(nonnull);
             auto* state = b.CreateLoad(i64, frame, "state");
             auto* active = llvm::BasicBlock::Create(context, "active", close);
             auto* done = llvm::BasicBlock::Create(context, "done", close);
