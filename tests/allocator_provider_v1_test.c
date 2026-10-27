@@ -10,6 +10,23 @@ int main(void) {
     } storage = {0};
     OresAllocatorProviderV1 provider = {0};
     OresAllocatorProviderV1 other = {0};
+    union {
+        uint64_t align;
+        uint8_t bytes[512];
+    } other_storage = {0};
+
+    {
+        OresAllocatorProviderV1 dirty = {0};
+        dirty.used = 1;
+        assert(ores_allocator_provider_v1_init(
+            &dirty, other_storage.bytes, sizeof(other_storage.bytes)) ==
+            ORES_ALLOCATOR_PROVIDER_V1_INVALID);
+        dirty.used = 0;
+        dirty.generation = 1;
+        assert(ores_allocator_provider_v1_init(
+            &dirty, other_storage.bytes, sizeof(other_storage.bytes)) ==
+            ORES_ALLOCATOR_PROVIDER_V1_INVALID);
+    }
 
     assert(ores_allocator_provider_v1_init(
         &provider, storage.bytes, sizeof(storage.bytes)) ==
@@ -27,7 +44,7 @@ int main(void) {
         ores_allocator_provider_v1_used(&provider));
 
     assert(ores_allocator_provider_v1_init(
-        &other, storage.bytes, sizeof(storage.bytes)) ==
+        &other, other_storage.bytes, sizeof(other_storage.bytes)) ==
         ORES_ALLOCATOR_PROVIDER_V1_OK);
     assert(ores_allocator_provider_v1_bind(&provider) ==
         ORES_ALLOCATOR_PROVIDER_V1_OK);
