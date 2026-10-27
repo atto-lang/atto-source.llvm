@@ -633,6 +633,7 @@ public:
             }
         }
         for (auto& method : methods_) program.functions.push_back(std::move(method));
+        for (auto& shape : compiled_local_classes_) program.classes.push_back(std::move(shape));
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         validate_type_only_declarations(program);
@@ -1649,6 +1650,40 @@ private:
         }
         require("}");
         accept(";");
+        // Only private nominal struct returns with 1..16 int fields use
+        // the already-checked immutable native leaf-record ABI.
+        if (declaration.kind == LocalAggregateType::Kind::NominalStruct &&
+                !fn.exported && fn.method_owner.empty() &&
+                fn.return_class == declaration.name &&
+                declaration.fields.size() >= 1 && declaration.fields.size() <= 16 &&
+                !fn.async_source_i64 && !fn.has_declared_effects &&
+                fn.generic_parameters.empty() && fn.parameters.empty() &&
+                std::all_of(declaration.fields.begin(), declaration.fields.end(),
+                    [](const LocalAggregateType::Field& field) { return field.type_name == "int"; })) {
+            const std::string original_name = declaration.name;
+            declaration.native_layout_name = "$local$" +
+                std::to_string(fn.offset) + "$" + original_name;
+            ClassDecl native;
+            native.name = declaration.native_layout_name;
+            for (const auto& member : declaration.fields) {
+                ClassField field;
+                field.name = member.name;
+                field.public_member = true;
+                field.final_field = true;
+                field.constructor_argument = true;
+                field.scalar_type = ScalarType::I64;
+                field.initializer_expression = std::make_unique<Expression>();
+                field.initializer_expression->kind = Expression::Kind::Variable;
+                field.initializer_expression->name = field.name;
+                native.constructor_parameters.push_back(field.name);
+                native.constructor_parameter_types.push_back(ScalarType::I64);
+                native.fields.push_back(std::move(field));
+            }
+            compiled_local_classes_.push_back(std::move(native));
+            local_executable_layouts_.emplace(original_name, declaration.native_layout_name);
+            local_executable_fields_.emplace(original_name, declaration.fields);
+            fn.return_class = declaration.native_layout_name;
+        }
         fn.local_aggregates.push_back(std::move(declaration));
     }
 
@@ -1659,6 +1694,19 @@ private:
             ~RestoreLocalTypes() { target = std::move(prior); }
         } restore_local_types{local_aggregate_types_, std::move(local_aggregate_types_)};
         local_aggregate_types_.clear();
+        struct RestoreExecutableLayouts {
+            std::unordered_map<std::string, std::string>& layouts;
+            std::unordered_map<std::string, std::vector<LocalAggregateType::Field>>& fields;
+            std::unordered_map<std::string, std::string> prior_layouts;
+            std::unordered_map<std::string, std::vector<LocalAggregateType::Field>> prior_fields;
+            ~RestoreExecutableLayouts() {
+                layouts = std::move(prior_layouts);
+                fields = std::move(prior_fields);
+            }
+        } restore_executable_layouts{local_executable_layouts_, local_executable_fields_,
+            std::move(local_executable_layouts_), std::move(local_executable_fields_)};
+        local_executable_layouts_.clear();
+        local_executable_fields_.clear();
         struct Restore { std::string& target; std::string prior; ~Restore() { target = std::move(prior); } } restore{method_scope_, method_scope_};
         method_scope_ = owner;
         struct RestoreReceivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> prior; ~RestoreReceivers() { target = std::move(prior); } } restore_receivers{class_receivers_, std::move(class_receivers_)};
@@ -3289,6 +3337,30 @@ private:
                 } while (accept(","));
                 require("}");
             }
+            const auto layout = local_executable_layouts_.find(expr->name);
+            if (layout != local_executable_layouts_.end()) {
+                const auto& declared_fields = local_executable_fields_.at(expr->name);
+                if (expr->arguments.size() != declared_fields.size())
+                    fail("LOCAL_CONSTRUCT_ARITY: exact local struct field count required");
+                if (named) {
+                    std::vector<std::unique_ptr<Expression>> ordered(declared_fields.size());
+                    for (std::size_t i = 0; i < expr->arguments.size(); ++i) {
+                        auto field = std::find_if(declared_fields.begin(), declared_fields.end(),
+                            [&](const LocalAggregateType::Field& slot) {
+                                return slot.name == expr->argument_names[i];
+                            });
+                        if (field == declared_fields.end())
+                            fail("LOCAL_CONSTRUCT_UNKNOWN_FIELD: constructor field not declared");
+                        const auto slot = static_cast<std::size_t>(field - declared_fields.begin());
+                        if (ordered[slot])
+                            fail("LOCAL_CONSTRUCT_DUPLICATE: constructor field assigned twice");
+                        ordered[slot] = std::move(expr->arguments[i]);
+                    }
+                    expr->arguments = std::move(ordered);
+                    expr->argument_names.assign(declared_fields.size(), std::string{});
+                }
+                expr->name = layout->second;
+            }
             return expr;
         }
         if (generic_call_type_arguments_ahead()) {
@@ -4113,10 +4185,23 @@ private:
         }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
-            if (!fn.local_aggregates.empty())
-                throw std::runtime_error(
-                    "LOCAL_AGGREGATE_ABI_UNSUPPORTED: callable-local struct/record "
-                    "requires checked nominal identity, public return ABI, ownership and LLVM lowering");
+            for (const auto& decl : fn.local_aggregates) {
+                if (decl.native_layout_name.empty() ||
+                        decl.kind != LocalAggregateType::Kind::NominalStruct ||
+                        fn.exported || fn.return_class != decl.native_layout_name) {
+                    throw std::runtime_error(
+                        "LOCAL_AGGREGATE_ABI_UNSUPPORTED: callable-local struct/record "
+                        "requires checked nominal identity, public return ABI, ownership and LLVM lowering");
+                }
+                if (std::none_of(program.classes.begin(), program.classes.end(),
+                        [&](const ClassDecl& cls) {
+                            return cls.name == decl.native_layout_name &&
+                                   cls.fields.size() == decl.fields.size() &&
+                                   !cls.exported;
+                        }))
+                    throw std::runtime_error(
+                        "LOCAL_AGGREGATE_LAYOUT_MISSING: compiler-owned layout is absent");
+            }
             // Reject hand-constructed or incorrectly deserialized programs:
             // parser-only pending aliases never enter ownership or LLVM ABI.
             if (!fn.pending_return_type_alias.empty())
@@ -5206,6 +5291,9 @@ private:
     std::unordered_set<std::string> class_receivers_;
     // Scoped to one callable by RestoreLocalTypes. Never an ambient/global type.
     std::unordered_set<std::string> local_aggregate_types_;
+    std::unordered_map<std::string, std::string> local_executable_layouts_;
+    std::unordered_map<std::string, std::vector<LocalAggregateType::Field>> local_executable_fields_;
+    std::vector<ClassDecl> compiled_local_classes_;
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
