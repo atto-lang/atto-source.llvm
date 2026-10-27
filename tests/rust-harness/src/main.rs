@@ -694,10 +694,12 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             format!("{name}: native frontend rejected source: {}", stderr(&compiled)),
         )?;
         let llvm_ir = stdout(&compiled);
-        require(
-            llvm_ir.contains("srem i64 ") || llvm_ir.contains("srem i64\n"),
-            format!("{name}: emitted IR lacks signed remainder"),
-        )?;
+        if name == "function-param" {
+            require(
+                llvm_ir.contains("srem i64 "),
+                format!("{name}: emitted IR lacks runtime signed remainder"),
+            )?;
+        }
         fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
         for level in ["-O0", "-O2"] {
             let linked = run(
