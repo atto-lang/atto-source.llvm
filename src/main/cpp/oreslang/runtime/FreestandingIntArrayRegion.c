@@ -31,7 +31,8 @@ struct OresNativeIntArrayRegion {
     IntArraySlot arrays[MAX_ARRAY_SLOTS];
 };
 
-static uint64_t next_array_token = 1;
+/* Zero-initialized so freestanding startup needs no .data copy phase. */
+static uint64_t next_array_token;
 
 static void fail_closed(void) {
 #if defined(__GNUC__) || defined(__clang__)
@@ -68,9 +69,12 @@ static void erase_bytes(void* data, size_t count) {
 }
 
 static uint64_t allocate_token(void) {
-    if (next_array_token == 0 || next_array_token == UINT64_MAX)
+    if (next_array_token == UINT64_MAX)
         fail_closed();
-    return next_array_token++;
+    ++next_array_token;
+    if (next_array_token == 0)
+        fail_closed();
+    return next_array_token;
 }
 
 static void validate_region_accounting(
