@@ -384,9 +384,9 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
-    # First source-executable Java-style signed integer remainder subset.
-    # Only a positive literal divisor is admitted: no zero/error-channel
-    # or signed MIN/-1 LLVM poison until checked effect lowering exists.
+    # Source-executable Java-style signed integer remainder subset:
+    # nonzero positive/negative i64 literals only. MIN % -1 is lowered
+    # without LLVM srem poison; dynamic/zero divisors still fail closed.
     add_test(NAME native_java_signed_remainder_source_parity
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" native-remainder-parity
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
