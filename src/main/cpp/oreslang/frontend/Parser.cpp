@@ -4201,23 +4201,52 @@ private:
         }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
+            if (fn.local_aggregates.size() > 1)
+                throw std::runtime_error(
+                    "LOCAL_AGGREGATE_ABI_UNSUPPORTED: multiple local types require lexical identity analysis");
             for (const auto& decl : fn.local_aggregates) {
-                if (decl.native_layout_name.empty() ||
-                        decl.kind != LocalAggregateType::Kind::NominalStruct ||
+                const std::string expected_name = "$local$" +
+                    std::to_string(fn.offset) + "$" + decl.name;
+                if (decl.kind != LocalAggregateType::Kind::NominalStruct ||
+                        decl.native_layout_name != expected_name ||
+                        decl.fields.empty() || decl.fields.size() > 16 ||
+                        !fn.method_owner.empty() || fn.async_source_i64 ||
+                        fn.has_declared_effects || !fn.generic_parameters.empty() ||
+                        !fn.parameters.empty() ||
                         !(fn.return_class.empty() ||
                           (!fn.exported && fn.return_class == decl.native_layout_name))) {
                     throw std::runtime_error(
                         "LOCAL_AGGREGATE_ABI_UNSUPPORTED: callable-local struct/record "
                         "requires checked nominal identity, public return ABI, ownership and LLVM lowering");
                 }
-                if (std::none_of(program.classes.begin(), program.classes.end(),
-                        [&](const ClassDecl& cls) {
-                            return cls.name == decl.native_layout_name &&
-                                   cls.fields.size() == decl.fields.size() &&
-                                   !cls.exported;
-                        }))
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == expected_name; });
+                if (cls == program.classes.end() || cls->exported || cls->explicit_constructor ||
+                        cls->fields.size() != decl.fields.size() ||
+                        cls->constructor_parameters.size() != decl.fields.size() ||
+                        cls->constructor_parameter_types.size() != decl.fields.size())
                     throw std::runtime_error(
-                        "LOCAL_AGGREGATE_LAYOUT_MISSING: compiler-owned layout is absent");
+                        "LOCAL_AGGREGATE_LAYOUT_MISSING: compiler-owned layout is absent or inconsistent");
+                std::unordered_set<std::string> fields;
+                for (std::size_t i = 0; i < decl.fields.size(); ++i) {
+                    const auto& source_field = decl.fields[i];
+                    const auto& native_field = cls->fields[i];
+                    if (source_field.type_name != "int" ||
+                            !fields.insert(source_field.name).second ||
+                            native_field.name != source_field.name ||
+                            cls->constructor_parameters[i] != source_field.name ||
+                            cls->constructor_parameter_types[i] != ScalarType::I64 ||
+                            native_field.scalar_type != ScalarType::I64 ||
+                            !native_field.class_name.empty() || native_field.int_array ||
+                            !native_field.sum_type.empty() ||
+                            !native_field.public_member || !native_field.final_field ||
+                            !native_field.constructor_argument ||
+                            !native_field.initializer_expression ||
+                            native_field.initializer_expression->kind != Expression::Kind::Variable ||
+                            native_field.initializer_expression->name != source_field.name)
+                        throw std::runtime_error(
+                            "LOCAL_AGGREGATE_LAYOUT_MISMATCH: unverified native field identity or scalar layout");
+                }
             }
             // Reject hand-constructed or incorrectly deserialized programs:
             // parser-only pending aliases never enter ownership or LLVM ABI.
