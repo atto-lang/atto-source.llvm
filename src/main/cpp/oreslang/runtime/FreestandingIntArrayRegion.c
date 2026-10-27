@@ -286,7 +286,7 @@ OresNativeIntArrayStatus oreslang_int_array_try_prepare_many(
         OresNativeIntArrayHandle* out) {
     if (!region || (n && !out) || n > MAX_ARRAY_SLOTS)
         fail_closed();
-    OresNativeIntArrayHandle staged[MAX_ARRAY_SLOTS] = {0};
+    OresNativeIntArrayHandle staged[MAX_ARRAY_SLOTS];
     uint64_t prepared = 0;
     for (; prepared < n; ++prepared) {
         const OresNativeIntArrayStatus status =
@@ -325,7 +325,7 @@ oreslang_int_array_try_prepare_filled_many(
             return ORES_NATIVE_ARRAY_LIMIT;
     }
 
-    OresNativeIntArrayHandle staged[MAX_ARRAY_SLOTS] = {0};
+    OresNativeIntArrayHandle staged[MAX_ARRAY_SLOTS];
     uint64_t prepared = 0;
     for (; prepared < n; ++prepared) {
         OresNativeIntArrayStatus status =
@@ -362,8 +362,8 @@ void oreslang_int_array_commit_many(
             (n && (!destinations || !sources)))
         fail_closed();
     validate_region_accounting(region);
-    OresNativeIntArrayHandle old[MAX_ARRAY_SLOTS] = {0};
-    OresNativeIntArrayHandle next[MAX_ARRAY_SLOTS] = {0};
+    OresNativeIntArrayHandle old[MAX_ARRAY_SLOTS];
+    OresNativeIntArrayHandle next[MAX_ARRAY_SLOTS];
     for (uint64_t i = 0; i < n; ++i) {
         if (!destinations[i] || !sources[i] ||
                 destinations[i] == sources[i])
@@ -410,8 +410,8 @@ OresNativeIntArrayStatus oreslang_int_array_try_transfer_many(
     validate_region_accounting(source_region);
     validate_region_accounting(destination_region);
 
-    IntArraySlot* from[MAX_ARRAY_SLOTS] = {0};
-    IntArraySlot* into[MAX_ARRAY_SLOTS] = {0};
+    IntArraySlot* from[MAX_ARRAY_SLOTS];
+    IntArraySlot* into[MAX_ARRAY_SLOTS];
     uint64_t reserved = 0;
     for (uint64_t i = 0; i < n; ++i) {
         if (!destinations[i] || !sources[i] ||
