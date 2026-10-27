@@ -144,7 +144,9 @@ inline std::filesystem::path resolve_project_root_import(
             if (physical_manifest.parent_path() != cursor)
                 throw std::runtime_error(
                     "native package manifest must reside within package directory");
-            // Reopen the already-canonical path so a manifest symlink swap after\n            // the locality check cannot redirect the bytes we validate.\n            validate_manifest(read_manifest(physical_manifest));
+            // Reopen the already-canonical path so a manifest symlink swap after
+            // the locality check cannot redirect the bytes we validate.
+            validate_manifest(read_manifest(physical_manifest));
             package_root = cursor;
             break;
         }
