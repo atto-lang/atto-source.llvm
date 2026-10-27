@@ -95,6 +95,10 @@ int main(void) {
     check(oreslang_rt_gen_values_next(frame,&value)==-1, "uninitialized next accepted");
     check(value==99 && frame[0]==0 && frame[1]==0, "invalid next mutated state");
     check(oreslang_rt_gen_values_close(frame)==-1, "uninitialized close accepted");
+    int64_t forged[2] = {1, 99};
+    value = 77;
+    check(oreslang_rt_gen_values_next(forged,&value)==-1, "forged yield index accepted as DONE");
+    check(forged[0]==1 && forged[1]==99 && value==77, "forged index rejection mutated frame/output");
     check(oreslang_rt_gen_values_init(frame)==1, "init failed");
     check(oreslang_rt_gen_values_init(frame)==0, "double init accepted");
     for (int64_t expected=1; expected<=3; ++expected) {
