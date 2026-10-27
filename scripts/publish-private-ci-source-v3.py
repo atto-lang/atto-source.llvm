@@ -601,7 +601,7 @@ def parse_contract(raw, repository, source_pr, test_plan):
         raise Denied("destination absent from protected carrier contract")
     required_carrier_fields = {
         "repository_id", "base_sha", "workflow_path",
-        "workflow_blob_sha", "test_plans"
+        "workflow_blob_sha", "review_pr", "test_plans"
     }
     allowed_carrier_fields = required_carrier_fields
     if (not required_carrier_fields.issubset(carrier)
@@ -611,6 +611,10 @@ def parse_contract(raw, repository, source_pr, test_plan):
     if not isinstance(repo_id, int) or isinstance(repo_id, bool) or repo_id <= 0:
         raise Denied("carrier repository id")
     base_sha = valid_sha(carrier.get("base_sha"), "carrier base SHA")
+    review_pr = carrier.get("review_pr")
+    if (not isinstance(review_pr, int) or isinstance(review_pr, bool)
+            or review_pr <= 0):
+        raise Denied("carrier review PR invalid")
     workflow_path = safe_path(
         carrier.get("workflow_path"), ".github/workflows/", ".yml"
     )
@@ -633,6 +637,7 @@ def parse_contract(raw, repository, source_pr, test_plan):
     return {
         "repository_id": repo_id,
         "base_sha": base_sha,
+        "review_pr": review_pr,
         "workflow_path": workflow_path,
         "workflow_blob_sha": workflow_blob,
         "test_plan_path": plan_path,
@@ -1002,6 +1007,17 @@ def checked_carrier_main(repository, contract):
     require_carrier_security_codeowners(carrier_codeowners)
     return base_sha
 
+def checked_carrier_authority(repository, contract):
+    """Require current protected-main policy and pre-merge reviewed provenance."""
+    base_sha = checked_carrier_main(repository, contract)
+    reviewed = review_attested_carrier_main(
+        repository, contract, {"commit": {"sha": base_sha}}
+    )
+    if reviewed != base_sha:
+        raise Denied("carrier reviewed authority/base mismatch")
+    return base_sha
+
+
 def checked_destination(repository, contract):
     repo = gh_api(f"repos/{repository}")
     if (repo.get("id") != contract["repository_id"]
@@ -1013,7 +1029,7 @@ def checked_destination(repository, contract):
             or repo.get("disabled") is not False
             or repo.get("fork") is not False):
         raise Denied("carrier identity/state differs from protected contract")
-    base_sha = checked_carrier_main(repository, contract)
+    base_sha = checked_carrier_authority(repository, contract)
     commit = gh_api(f"repos/{repository}/git/commits/{base_sha}")
     base_tree = valid_sha(commit.get("tree", {}).get("sha"), "carrier base tree")
     listing = gh_api(f"repos/{repository}/git/trees/{base_tree}?recursive=1")
