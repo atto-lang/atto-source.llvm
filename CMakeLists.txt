@@ -341,6 +341,13 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_only_declarations.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_type_only_declaration_boundaries PROPERTIES TIMEOUT 90)
+    # Java/Graal local struct and record syntax parity, staged behind an exact
+    # LLVM ABI fail-closed gate (no LLVM IR is allowed for unlowered types).
+    add_test(NAME native_local_aggregate_types_stage1
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_local_aggregate_parity_stage1.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_local_aggregate_types_stage1 PROPERTIES TIMEOUT 90)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
