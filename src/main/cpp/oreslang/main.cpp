@@ -184,6 +184,9 @@ int main(int argc, char** argv) {
     bool target_seen = false;
     bool native_hard_rt_profile = false;
     bool profile_seen = false;
+    enum class LibraryProfile { Auto, Core, Std };
+    LibraryProfile library_profile = LibraryProfile::Auto;
+    bool library_profile_seen = false;
     bool rt_check_only = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
@@ -198,7 +201,24 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg.rfind("--profile=", 0) == 0) {
+        if (arg.rfind("--library-profile=", 0) == 0) {
+            if (library_profile_seen) {
+                std::cerr << "duplicate library-profile option\n";
+                return 2;
+            }
+            library_profile_seen = true;
+            const std::string profile =
+                arg.substr(std::string_view("--library-profile=").size());
+            if (profile == "core") {
+                library_profile = LibraryProfile::Core;
+            } else if (profile == "std") {
+                library_profile = LibraryProfile::Std;
+            } else {
+                std::cerr << "unsupported library profile: " << profile
+                          << " (expected core or std)\n";
+                return 2;
+            }
+        } else if (arg.rfind("--profile=", 0) == 0) {
             if (profile_seen) { std::cerr << "duplicate profile option\n"; return 2; }
             profile_seen = true;
             const std::string profile = arg.substr(std::string_view("--profile=").size());
@@ -271,6 +291,27 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    // Public library architecture has exactly two layers. For now the native
+    // backend only certifies the freestanding core profile on targets whose ABI
+    // is explicitly no-OS, and the std profile on the ordinary hosted target.
+    // This is intentionally fail-closed until effect/capability closure can
+    // prove additional combinations.
+    if (library_profile == LibraryProfile::Auto) {
+        library_profile = (wasm32_target || cortex_m_target)
+            ? LibraryProfile::Core
+            : LibraryProfile::Std;
+    }
+    if (library_profile == LibraryProfile::Std && (wasm32_target || cortex_m_target)) {
+        std::cerr << "ores.std requires a certified hosted target; "
+                     "freestanding targets use ores.core\n";
+        return 2;
+    }
+    if (library_profile == LibraryProfile::Core && !wasm32_target && !cortex_m_target) {
+        std::cerr << "ores.core native execution currently requires a certified "
+                     "freestanding target (wasm32-unknown-unknown or thumbv7m-none-eabi)\n";
+        return 2;
+    }
+
     if (constraint_descriptors_only &&
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
@@ -298,7 +339,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
