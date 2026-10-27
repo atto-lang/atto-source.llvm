@@ -2042,7 +2042,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         }
 
     def _strict_carrier_protection(self):
-        protection = self._strict_carrier_protection()
+        protection = self._strict_protection(v3.CARRIER_POLICY_CHECK)
         checks = protection["required_status_checks"]
         checks["contexts"].append(v3.CARRIER_INTEGRITY_CHECK)
         checks["checks"].append({
