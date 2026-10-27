@@ -32,6 +32,14 @@ int main() {
     assert(is_reserved_compiler_library_import("alloc/int_buffer"));
     assert(!is_reserved_alloc_import("./alloc/int_buffer"));
     assert(!is_reserved_compiler_library_import("ores.std/testing"));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Core, CompilerLibraryTier::Core));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Core, CompilerLibraryTier::Alloc));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Alloc, CompilerLibraryTier::Core));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Alloc, CompilerLibraryTier::Alloc));
 
     const auto* numeric = find_core_library_source("ores.core/numeric");
     assert(numeric != nullptr);
