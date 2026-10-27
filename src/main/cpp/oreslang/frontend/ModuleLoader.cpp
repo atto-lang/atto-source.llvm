@@ -188,9 +188,14 @@ private:
                         dependency = resolve_project_root_import(
                             current.path, raw,
                             [](const fs::path& manifest) {
-                                auto bytes = read_regular_source(
-                                    manifest.string().c_str(), 64u * 1024u,
+                                const auto manifest_path = manifest.string();
+                                const auto expected_manifest = capture_source_identity(
+                                    manifest_path.c_str(), 64u * 1024u,
                                     "native package manifest exceeds 64 KiB");
+                                auto bytes = read_regular_source(
+                                    manifest_path.c_str(), 64u * 1024u,
+                                    "native package manifest exceeds 64 KiB",
+                                    nullptr, &expected_manifest);
                                 require_valid_source_utf8(bytes);
                                 return bytes;
                             });
@@ -214,11 +219,15 @@ private:
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
                 if (selected == units.size()) {
+                    const auto dependency_path = dependency.string();
+                    const auto expected_child_identity = capture_source_identity(
+                        dependency_path.c_str(), max_bytes - read_bytes,
+                        "native import graph exceeds 8 MiB source read budget");
                     SourceIdentity child_identity;
                     auto child_text = read_regular_source(
-                        dependency.string().c_str(), max_bytes - read_bytes,
+                        dependency_path.c_str(), max_bytes - read_bytes,
                         "native import graph exceeds 8 MiB source read budget",
-                        &child_identity);
+                        &child_identity, &expected_child_identity);
                     read_bytes += child_text.size();
                     // Compare descriptor identities too: hard-link aliases must
                     // not bypass self-edge rejection or duplicate unit identity.
