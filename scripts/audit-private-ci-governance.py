@@ -4,8 +4,7 @@
 Only the V3 publisher may authorize export. Source export always requires
 enforced protected-main governance. This preflight checks local policy
 structure; --live diagnoses that mandatory source gate. V3 may separately use
-exact review attestation for an unprotected private carrier. No writes or
-transfers.
+live protected carrier governance. No writes or transfers.
 """
 import argparse
 import json
@@ -38,6 +37,8 @@ REQUIRED_OWNERS = {
 }
 DESTINATION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z", re.ASCII)
 SHA40 = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+GITHUB_ACTIONS_APP_ID = 15368
+SOURCE_POLICY_CHECK = "private-ci-governance"
 
 
 class GovernanceError(ValueError):
@@ -110,12 +111,16 @@ def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dic
         raise GovernanceError("protected main commit SHA is missing or invalid")
 
     reviews = protection_data.get("required_pull_request_reviews")
+    checks = protection_data.get("required_status_checks")
+    conversations = protection_data.get("required_conversation_resolution")
     if not isinstance(reviews, dict):
         raise GovernanceError("pull-request review protection missing")
     if reviews.get("require_code_owner_reviews") is not True:
         raise GovernanceError("required CODEOWNER reviews not enforced")
     if reviews.get("dismiss_stale_reviews") is not True:
         raise GovernanceError("stale reviews are not dismissed")
+    if reviews.get("require_last_push_approval") is not True:
+        raise GovernanceError("last-push-independent approval not enforced")
 
     approval_count = reviews.get("required_approving_review_count")
     if type(approval_count) is not int or approval_count < 1:
@@ -123,12 +128,45 @@ def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dic
 
     bypass = reviews.get("bypass_pull_request_allowances")
     if (not isinstance(bypass, dict)
-            or set(bypass) - {"users", "teams", "apps"}
-            or any(not isinstance(bypass.get(kind, []), list)
+            or set(bypass) != {"users", "teams", "apps"}
+            or any(not isinstance(bypass.get(kind), list)
                    or bypass.get(kind) for kind in ("users", "teams", "apps"))):
         raise GovernanceError("review bypass policy is missing, malformed or allows bypass")
 
-    if (protection_data.get("enforce_admins") or {}).get("enabled") is not True:
+    if (not isinstance(checks, dict)
+            or checks.get("strict") is not True):
+        raise GovernanceError("strict required status checks not enforced")
+    contexts = checks.get("contexts", [])
+    named = checks.get("checks")
+    if (not isinstance(contexts, list)
+            or any(not isinstance(name, str) or not name.strip()
+                   for name in contexts)
+            or len(contexts) != len(set(contexts))
+            or not isinstance(named, list)
+            or not named):
+        raise GovernanceError("required CI issuer binding missing or malformed")
+    seen = set()
+    for item in named:
+        if not isinstance(item, dict):
+            raise GovernanceError("required CI check metadata malformed")
+        name = item.get("context")
+        app_id = item.get("app_id")
+        if (not isinstance(name, str) or not name.strip() or name in seen):
+            raise GovernanceError("required CI check identity ambiguous")
+        if type(app_id) is not int or app_id != GITHUB_ACTIONS_APP_ID:
+            raise GovernanceError("required CI check issuer is not GitHub Actions")
+        seen.add(name)
+    if any(name not in seen for name in contexts):
+        raise GovernanceError("legacy required CI context lacks issuer binding")
+    if SOURCE_POLICY_CHECK not in seen:
+        raise GovernanceError("required private-CI governance check missing")
+
+    if (not isinstance(conversations, dict)
+            or conversations.get("enabled") is not True):
+        raise GovernanceError("conversation resolution not enforced")
+
+    admins = protection_data.get("enforce_admins")
+    if not isinstance(admins, dict) or admins.get("enabled") is not True:
         raise GovernanceError("administrator protection not enforced")
 
     force_pushes = protection_data.get("allow_force_pushes")
@@ -138,7 +176,6 @@ def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dic
     deletions = protection_data.get("allow_deletions")
     if not isinstance(deletions, dict) or deletions.get("enabled") is not False:
         raise GovernanceError("branch deletion is not explicitly forbidden")
-
 
 def _github_get(path: str, token: str) -> dict:
     req = urllib.request.Request(
@@ -157,7 +194,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--live", action="store_true",
-                        help="diagnose mandatory source protected-main mode; V3 separately verifies carrier review attestation")
+                        help="diagnose mandatory source protected-main mode; V3 separately requires protected carrier main")
     args = parser.parse_args()
     try:
         approved = check_policy_files(args.root)
@@ -171,7 +208,7 @@ def main() -> int:
                 _github_get("branches/main", token),
                 _github_get("branches/main/protection", token),
             )
-            print("Mandatory source protected-main mode verified; carrier review attestation, if used, is validated separately by V3.")
+            print("Mandatory source protected-main mode verified; protected carrier governance is validated separately by V3.")
         return 0
     except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
         print(f"DENIED: {exc}", file=sys.stderr)
