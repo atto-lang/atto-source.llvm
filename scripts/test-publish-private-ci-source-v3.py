@@ -65,7 +65,14 @@ def carrier_contract():
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
     def test_incident_gate_requires_exact_completed_identity(self):
-        def issue(number, issue_id, state="closed", reason="completed", url=None):
+        closed_at = "2026-10-27T04:30:00Z"
+        reviewer = {
+            "id": v3.INCIDENT_REVIEW_USER_ID,
+            "login": v3.INCIDENT_REVIEW_LOGIN,
+        }
+
+        def issue(number, issue_id, state="closed", reason="completed", url=None,
+                  closer=None, comments=1, closed=closed_at):
             return {
                 "id": issue_id,
                 "number": number,
@@ -75,6 +82,18 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 ),
                 "state": state,
                 "state_reason": reason,
+                "closed_by": reviewer if closer is None else closer,
+                "comments": comments,
+                "closed_at": closed,
+            }
+
+        def attestation(number, comment_id=None, user=None, body=None,
+                        created_at="2026-10-27T04:29:00Z"):
+            return {
+                "id": comment_id or (1000 + number),
+                "user": reviewer if user is None else user,
+                "body": body or v3.incident_completion_marker(number),
+                "created_at": created_at,
             }
 
         good = {
@@ -82,40 +101,128 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             77: issue(77, 5904679716),
             127: issue(127, 5935338521),
         }
+        comments = {
+            22: [attestation(22)],
+            77: [attestation(77)],
+            127: [attestation(127)],
+        }
 
         def api_for(values):
             def api(route, method="GET", payload=None):
                 prefix = f"repos/{v3.INCIDENT_REPO}/issues/"
                 if method == "GET" and route.startswith(prefix):
-                    return values[int(route[len(prefix):])]
+                    tail = route[len(prefix):]
+                    if "/" not in tail and "?" not in tail:
+                        return values[int(tail)]
                 raise AssertionError((method, route))
             return api
 
-        with patch.object(v3, "gh_api", side_effect=api_for(good)):
+        def list_for(values):
+            def api(route):
+                prefix = f"repos/{v3.INCIDENT_REPO}/issues/"
+                if route.startswith(prefix) and "/comments?" in route:
+                    number = int(route[len(prefix):].split("/", 1)[0])
+                    return values[number]
+                raise AssertionError(route)
+            return api
+
+        with (
+            patch.object(v3, "gh_api", side_effect=api_for(good)),
+            patch.object(v3, "gh_api_list", side_effect=list_for(comments)),
+        ):
             self.assertTrue(v3.require_incident_closure())
 
-        cases = []
+        bad_issues = []
         opened = dict(good)
         opened[22] = issue(22, 5832921751, state="open", reason=None)
-        cases.append(opened)
+        bad_issues.append(opened)
         wrong_reason = dict(good)
         wrong_reason[77] = issue(77, 5904679716, reason="not_planned")
-        cases.append(wrong_reason)
+        bad_issues.append(wrong_reason)
         wrong_id = dict(good)
         wrong_id[127] = issue(127, 1)
-        cases.append(wrong_id)
+        bad_issues.append(wrong_id)
         wrong_url = dict(good)
-        wrong_url[22] = issue(22, 5832921751, url="https://github.com/other/repo/issues/22")
-        cases.append(wrong_url)
+        wrong_url[22] = issue(
+            22, 5832921751, url="https://github.com/other/repo/issues/22"
+        )
+        bad_issues.append(wrong_url)
         pr_object = dict(good)
         pr_object[77] = {**issue(77, 5904679716), "pull_request": {}}
-        cases.append(pr_object)
+        bad_issues.append(pr_object)
+        wrong_closer = dict(good)
+        wrong_closer[127] = issue(
+            127, 5935338521, closer={"id": 2148448, "login": "the1mills"}
+        )
+        bad_issues.append(wrong_closer)
+        zero_comments = dict(good)
+        zero_comments[22] = issue(22, 5832921751, comments=0)
+        bad_issues.append(zero_comments)
 
-        for values in cases:
+        for values in bad_issues:
             with self.subTest(values=values):
-                with patch.object(v3, "gh_api", side_effect=api_for(values)):
-                    with self.assertRaisesRegex(v3.Denied, "not independently completed"):
-                        v3.require_incident_closure()
+                with (
+                    patch.object(v3, "gh_api", side_effect=api_for(values)),
+                    patch.object(v3, "gh_api_list", side_effect=list_for(comments)),
+                    self.assertRaisesRegex(v3.Denied, "not independently completed"),
+                ):
+                    v3.require_incident_closure()
+
+        bad_comment_sets = []
+        missing = dict(comments)
+        missing[22] = [attestation(22, body="no completion marker")]
+        bad_comment_sets.append(missing)
+        wrong_author = dict(comments)
+        wrong_author[77] = [
+            attestation(
+                77,
+                user={"id": 2148448, "login": "the1mills"},
+            )
+        ]
+        bad_comment_sets.append(wrong_author)
+        late = dict(comments)
+        late[127] = [
+            attestation(127, created_at="2026-10-27T04:31:00Z")
+        ]
+        bad_comment_sets.append(late)
+
+        for values in bad_comment_sets:
+            with self.subTest(values=values):
+                with (
+                    patch.object(v3, "gh_api", side_effect=api_for(good)),
+                    patch.object(v3, "gh_api_list", side_effect=list_for(values)),
+                    self.assertRaisesRegex(
+                        v3.Denied, "lacks independent completion attestation"
+                    ),
+                ):
+                    v3.require_incident_closure()
+
+        many = dict(good)
+        many[22] = issue(22, 5832921751, comments=101)
+        paged_comments = dict(comments)
+        paged_comments[22] = [attestation(22)] + [
+            {
+                "id": 2000 + index,
+                "user": {"id": 1, "login": "other"},
+                "body": "forensic note",
+                "created_at": "2026-10-27T04:00:00Z",
+            }
+            for index in range(100)
+        ]
+
+        def paged_list(route):
+            prefix = f"repos/{v3.INCIDENT_REPO}/issues/"
+            number = int(route[len(prefix):].split("/", 1)[0])
+            if number != 22:
+                return comments[number]
+            page = int(route.rsplit("page=", 1)[1])
+            return paged_comments[22][:100] if page == 1 else paged_comments[22][100:]
+
+        with (
+            patch.object(v3, "gh_api", side_effect=api_for(many)),
+            patch.object(v3, "gh_api_list", side_effect=paged_list),
+        ):
+            self.assertTrue(v3.require_incident_closure())
 
     def test_allowlist_is_exact_and_fail_closed(self):
         v3.parse_allowlist(b"# x\ntrusted/ci\n", "trusted/ci")
