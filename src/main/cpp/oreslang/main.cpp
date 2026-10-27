@@ -344,10 +344,15 @@ int main(int argc, char** argv) {
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
-        SourceIdentity source_identity;
-        const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
+        const char* source_overflow = cortex_m_target
             ? "cortex-m source exceeds 128 KiB limit"
-            : "native source exceeds 8 MiB admission limit", &source_identity);
+            : "native source exceeds 8 MiB admission limit";
+        const SourceIdentity expected_source_identity =
+            capture_source_identity(path, kMaxSourceBytes, source_overflow);
+        SourceIdentity source_identity;
+        const auto text = read_regular_source(
+            path, kMaxSourceBytes, source_overflow,
+            &source_identity, &expected_source_identity);
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
