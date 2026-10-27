@@ -1038,16 +1038,21 @@ int64_t oreslang_source_actor_await_done(
 }
 
 #ifdef ORESLANG_SOURCE_ACTOR_NIO
-OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
+static OresSourceReadableAwaitOutcome source_actor_await_io_checked(
         void* opaque,
         int64_t fd,
         OresSourceActorContinuation continuation,
         uint64_t source_token,
-        int64_t* result_out) {
+        int64_t* result_out,
+        uint32_t events,
+        uint64_t code_generation,
+        const char* trace_label) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     ensure(continuation != NULL && fd >= 0 && fd <= INT32_MAX);
     ensure(source_token != UINT64_MAX && result_out != NULL);
+    ensure(events == EPOLLIN || events == EPOLLOUT);
+    ensure(code_generation != 0 && trace_label != NULL);
     *result_out = 0;
 
     /* Trusted top-level glue may block on the reactor completion signal. */
@@ -1059,6 +1064,8 @@ OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
         .continuation = continuation,
         .actor = instance,
         .source_token = source_token,
+        .code_generation = code_generation,
+        .events = events,
         .fd = (int)fd
     };
     ensure(pthread_cond_init(&frame.completed, NULL) == 0);
@@ -1102,10 +1109,10 @@ OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
         ORES_NATIVE_VM_MAIN,
         root,
         (int)fd,
-        EPOLLIN,
+        events,
         continuation_slot,
         continuation_generation,
-        SOURCE_READABLE_CODE_GENERATION,
+        code_generation,
         descriptor_generation,
         &frame.awaiting);
 
@@ -1191,8 +1198,10 @@ OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
     ensure(pthread_cond_destroy(&frame.completed) == 0);
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_AWAIT_READABLE_TRACE_PASS outcome=%d fd=%d continuation_slot=%u continuation_generation=%u wake_slot=%llu wake_generation=%llu root_slot=%u source_token=%llu\n",
+        "SOURCE_AWAIT_%s_TRACE_PASS outcome=%d fd=%d events=%u continuation_slot=%u continuation_generation=%u wake_slot=%llu wake_generation=%llu root_slot=%u source_token=%llu\n",
+        trace_label,
         outcome,
+        (unsigned)events,
         (int)fd,
         frame.link.continuation.slot,
         frame.link.continuation.generation,
@@ -1211,6 +1220,28 @@ OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
     return ORES_SOURCE_READABLE_AWAIT_FAILED;
 }
 
+OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
+        void* opaque,
+        int64_t fd,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token,
+        int64_t* result_out) {
+    return source_actor_await_io_checked(
+        opaque, fd, continuation, source_token, result_out,
+        EPOLLIN, SOURCE_READABLE_CODE_GENERATION, "READABLE");
+}
+
+OresSourceWritableAwaitOutcome oreslang_source_actor_await_writable_checked(
+        void* opaque,
+        int64_t fd,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token,
+        int64_t* result_out) {
+    return (OresSourceWritableAwaitOutcome)source_actor_await_io_checked(
+        opaque, fd, continuation, source_token, result_out,
+        EPOLLOUT, SOURCE_WRITABLE_CODE_GENERATION, "WRITABLE");
+}
+
 int64_t oreslang_source_actor_await_readable(
         void* opaque,
         int64_t fd,
@@ -1223,6 +1254,18 @@ int64_t oreslang_source_actor_await_readable(
     /* Existing compiler lowering remains fail-closed until a source Result
      * binding is admitted. Non-READY never executes the continuation. */
     ensure(outcome == ORES_SOURCE_READABLE_AWAIT_READY);
+    return result;
+}
+int64_t oreslang_source_actor_await_writable(
+        void* opaque,
+        int64_t fd,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    int64_t result = 0;
+    const OresSourceWritableAwaitOutcome outcome =
+        oreslang_source_actor_await_writable_checked(
+            opaque, fd, continuation, source_token, &result);
+    ensure(outcome == ORES_SOURCE_WRITABLE_AWAIT_READY);
     return result;
 }
 #endif
