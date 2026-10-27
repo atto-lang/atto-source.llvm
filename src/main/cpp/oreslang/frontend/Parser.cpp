@@ -146,7 +146,7 @@ bool reserved(std::string_view name) {
         "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
-        "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
+        "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine", "gen",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
@@ -1626,6 +1626,10 @@ private:
             fail("native execution domain lowering unsupported");
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
+            Lexer look = lexer_;
+            const auto next = look.next().text;
+            if (next == "gen" || next == "generator")
+                fail("native generator v1 requires iterator-frame, ownership and LLVM continuation lowering");
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         // Check compound READ/WRITE modes before handling legacy critical,
@@ -1636,8 +1640,11 @@ private:
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
+        if (token_.text == "gen" || token_.text == "generator") {
+            fail("native generator v1 requires iterator-frame, ownership and LLVM continuation lowering");
+        }
         if (token_.text == "actor" || token_.text == "async" ||
-            token_.text == "generator" || token_.text == "isoactor") {
+            token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (source_async) {
