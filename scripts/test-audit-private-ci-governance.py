@@ -46,6 +46,7 @@ class PolicyAuditTest(unittest.TestCase):
             "required_pull_request_reviews": {
                 "require_code_owner_reviews": True,
                 "dismiss_stale_reviews": True,
+                "require_last_push_approval": True,
                 "required_approving_review_count": 1,
                 "bypass_pull_request_allowances": {
                     "users": [],
@@ -53,6 +54,15 @@ class PolicyAuditTest(unittest.TestCase):
                     "apps": [],
                 },
             },
+            "required_status_checks": {
+                "strict": True,
+                "contexts": [audit.SOURCE_POLICY_CHECK],
+                "checks": [{
+                    "context": audit.SOURCE_POLICY_CHECK,
+                    "app_id": audit.GITHUB_ACTIONS_APP_ID,
+                }],
+            },
+            "required_conversation_resolution": {"enabled": True},
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
@@ -199,6 +209,82 @@ class PolicyAuditTest(unittest.TestCase):
                 },
             }),
         ])
+        invalids.extend([
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "require_last_push_approval": False,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_conversation_resolution": {"enabled": False},
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_status_checks": {
+                        **protection["required_status_checks"],
+                        "strict": False,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_status_checks": {
+                        "strict": True,
+                        "contexts": [audit.SOURCE_POLICY_CHECK],
+                        "checks": [{
+                            "context": audit.SOURCE_POLICY_CHECK,
+                            "app_id": 999999,
+                        }],
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_status_checks": {
+                        "strict": True,
+                        "contexts": [],
+                        "checks": [{
+                            "context": "unrelated-check",
+                            "app_id": audit.GITHUB_ACTIONS_APP_ID,
+                        }],
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "bypass_pull_request_allowances": {
+                            "users": [], "teams": [],
+                        },
+                    },
+                },
+            ),
+        ])
+
         for r, b, p in invalids:
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
                 audit.check_live_metadata(r, b, p)
