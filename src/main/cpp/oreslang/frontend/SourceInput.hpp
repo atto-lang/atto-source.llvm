@@ -89,12 +89,6 @@ inline SourceIdentity capture_source_identity(
   if (!S_ISREG(info.st_mode)) throw std::runtime_error("source must be a regular file");
   if (info.st_size < 0 || static_cast<std::uintmax_t>(info.st_size) > limit)
     throw std::runtime_error(overflow);
-  const SourceIdentity opened_identity = ores_source_identity(info);
-  if (expected_identity != nullptr &&
-      (!expected_identity->valid ||
-       !ores_source_identity_equal(*expected_identity, opened_identity))) {
-    throw std::runtime_error("source identity changed between resolution and read");
-  }
   return ores_source_identity(info);
 }
 #else
@@ -128,6 +122,12 @@ inline std::string read_regular_source(
   if (!S_ISREG(info.st_mode)) throw std::runtime_error("source must be a regular file");
   if (info.st_size < 0 || static_cast<std::uintmax_t>(info.st_size) > limit)
     throw std::runtime_error(overflow);
+  const SourceIdentity opened_identity = ores_source_identity(info);
+  if (expected_identity != nullptr &&
+      (!expected_identity->valid ||
+       !ores_source_identity_equal(*expected_identity, opened_identity))) {
+    throw std::runtime_error("source identity changed between resolution and read");
+  }
   for (;;) {
     const auto count = ::read(fd, buffer.data(), buffer.size());
     if (count < 0) {
