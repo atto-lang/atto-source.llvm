@@ -346,7 +346,8 @@ if(BUILD_TESTING)
     add_test(NAME native_local_aggregate_types_stage1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_local_aggregate_parity_stage1.py"
-            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_local_aggregate_types_stage1 PROPERTIES TIMEOUT 90)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
