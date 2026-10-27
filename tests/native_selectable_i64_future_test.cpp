@@ -274,6 +274,43 @@ static void resolve_and_cancel_share_one_terminal_linearization_point() {
     }
 }
 
+
+struct ThrowOnSecondCopy final {
+    explicit ThrowOnSecondCopy(int* copies) : copies(copies) {}
+    ThrowOnSecondCopy(const ThrowOnSecondCopy& other) : copies(other.copies) {
+        ++*copies;
+        if (*copies >= 2)
+            throw std::runtime_error("callback copy failed");
+    }
+    ThrowOnSecondCopy(ThrowOnSecondCopy&&) noexcept = default;
+    void operator()(const NativeSelectableI64Future<2>::Subscription&) const {}
+    int* copies;
+};
+
+static void callback_copy_failure_is_admission_atomic() {
+    using Future = NativeSelectableI64Future<2>;
+    Future future;
+    int copies = 0;
+    ThrowOnSecondCopy callback(&copies);
+
+    bool observed = false;
+    try {
+        (void)future.subscribe_ready(callback);
+    } catch (const std::runtime_error&) {
+        observed = true;
+    }
+
+    assert(observed);
+    assert(future.pending_waiters() == 0);
+
+    // Capacity and identity publication remain usable after the failed copy.
+    auto wait = future.subscribe_ready(
+        [](const Future::Subscription&) {});
+    assert(future.pending_waiters() == 1);
+    assert(wait.close());
+    assert(future.pending_waiters() == 0);
+}
+
 int main() {
     pending_resolution_wins_with_value();
     completion_is_immutable_and_non_consuming();
@@ -284,5 +321,6 @@ int main() {
     foreign_subscription_fails_closed();
     terminal_observer_is_one_shot_without_commit();
     resolve_and_cancel_share_one_terminal_linearization_point();
+    callback_copy_failure_is_admission_atomic();
     return 0;
 }
