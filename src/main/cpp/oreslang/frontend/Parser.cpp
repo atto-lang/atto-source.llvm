@@ -4080,7 +4080,8 @@ private:
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_task_", 0) == 0 ||
                     fn.name.rfind("oreslang_actor_", 0) == 0 ||
-                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0;
+                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_rt_gen_", 0) == 0;
                 if (runtime_symbol)
                     throw std::runtime_error("reserved native runtime ABI symbol '" +
                         fn.name + "'");
@@ -4117,6 +4118,23 @@ private:
                 }
             }
         }
+        if (!program.generators.empty() &&
+                (!program.module.empty() || !program.classes.empty() || !program.actors.empty()))
+            throw std::runtime_error(
+                "native generator v1 cannot mix with module/class/actor lowering yet");
+        std::unordered_set<std::string> generator_names;
+        for (const auto& generator : program.generators) {
+            if (generator.name == "main" || functions.count(generator.name) ||
+                    classes.count(generator.name) ||
+                    !generator_names.insert(generator.name).second)
+                throw std::runtime_error(
+                    "duplicate generator/function/class symbol '" + generator.name + "'");
+            if (generator.yields.size() > 4096)
+                throw std::runtime_error("native generator v1 exceeds 4096 yielded elements");
+            if (generator.name.rfind("oreslang_rt_gen_", 0) == 0)
+                throw std::runtime_error("reserved native generator ABI symbol");
+        }
+
         std::unordered_map<std::string, const ActorDecl*> actor_types;
         for (const auto& actor : program.actors) {
             if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
