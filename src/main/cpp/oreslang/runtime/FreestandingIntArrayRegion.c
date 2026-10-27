@@ -34,6 +34,9 @@ struct OresNativeIntArrayRegion {
 /* Zero-initialized so freestanding startup needs no .data copy phase. */
 static uint64_t next_array_token;
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noreturn))
+#endif
 static void fail_closed(void) {
 #if defined(__GNUC__) || defined(__clang__)
     __builtin_trap();
