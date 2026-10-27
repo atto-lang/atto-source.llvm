@@ -76,6 +76,8 @@ CARRIER_CONTROL_PATHS = (
     "scripts/run-oreslang-test-plan.py",
 )
 CARRIER_DISPATCH_EVENT = "oreslang-private-ci-exact-tree"
+EXPORT_AUTH_PATH = "ci/private-ci-export-authorization.json"
+EXPORT_AUTH_MAX_LIFETIME = dt.timedelta(days=7)
 TTL = dt.timedelta(hours=24)
 
 
@@ -1219,6 +1221,53 @@ def checked_destination(repository, contract):
     return base_tree, plan_bytes
 
 
+def require_carrier_export_authorization(
+        repository, contract, source_tree, now=None):
+    """Require a reviewed, exact-tree, short-lived carrier export marker."""
+    source_tree = valid_sha(source_tree, "source root tree for export authorization")
+    base_sha = valid_sha(contract.get("base_sha"), "carrier base SHA")
+
+    marker = gh_api(
+        f"repos/{repository}/contents/{EXPORT_AUTH_PATH}?ref={base_sha}"
+    )
+    raw = decode_contents(marker, EXPORT_AUTH_PATH, MAX_POLICY)
+    try:
+        doc = strict_json_loads(
+            raw.decode("utf-8"), "invalid carrier export authorization"
+        )
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise Denied("invalid carrier export authorization") from exc
+
+    if (not isinstance(doc, dict)
+            or set(doc) != {
+                "schema", "enabled", "repository", "repository_id",
+                "source_root_tree_sha", "expires_at",
+            }
+            or doc.get("schema") != "ores-private-ci-export-authorization-v2"
+            or doc.get("enabled") is not True
+            or doc.get("repository") != repository
+            or doc.get("repository_id") != contract["repository_id"]):
+        raise Denied("carrier export authorization marker is not eligible")
+
+    marker_tree = valid_sha(
+        doc.get("source_root_tree_sha"),
+        "carrier export authorization source tree invalid",
+    )
+    if marker_tree != source_tree:
+        raise Denied("carrier export authorization is bound to a different source tree")
+
+    expiry = github_timestamp(
+        doc.get("expires_at"), "carrier export authorization expiry invalid"
+    )
+    moment = now or dt.datetime.now(dt.timezone.utc)
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise Denied("export authorization clock must be timezone-aware")
+    moment = moment.astimezone(dt.timezone.utc)
+    if expiry <= moment or expiry > moment + EXPORT_AUTH_MAX_LIFETIME:
+        raise Denied("carrier export authorization expired or exceeds 7-day window")
+    return expiry
+
+
 def verify_source_pr(source_pr, source_commit):
     pr = gh_api(f"repos/{SOURCE_REPO}/pulls/{source_pr}")
     head = pr.get("head")
@@ -1517,6 +1566,9 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     )
     verify_required_source_snapshot(plan_meta, source_commit, source_tree)
     verify_required_source_blobs(files, plan_meta["required_source_blobs"])
+    require_carrier_export_authorization(
+        repository, contract, source_tree, now=now
+    )
     branch = "ci/oreslang-" + source_tree
     plan_sha256 = plan_meta["sha256"]
 
@@ -1675,6 +1727,9 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         if again_sha != protected_sha or again_contract != contract:
             raise Denied("protected source authority changed before authorization")
         checked_destination(repository, contract)
+        require_carrier_export_authorization(
+            repository, contract, source_tree, now=now
+        )
 
         # The exact open PR head is the last source-side fact checked before
         # the carrier becomes executable.
@@ -1706,6 +1761,9 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         # immediately before dispatch. This closes the remaining window where
         # protection/review policy could weaken after authorization creation.
         checked_destination(repository, contract)
+        require_carrier_export_authorization(
+            repository, contract, source_tree, now=now
+        )
         verify_source_pr(source_pr, source_commit)
 
         # Execute only through the workflow definition on carrier default main.
