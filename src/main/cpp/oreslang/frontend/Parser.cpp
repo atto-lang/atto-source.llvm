@@ -3359,6 +3359,12 @@ private:
                 if (expr->arguments.size() != declared_fields.size())
                     fail("LOCAL_CONSTRUCT_ARITY: exact local struct field count required");
                 if (named) {
+                    // Named fields are rearranged into native layout order below.
+                    // Only side-effect-free literal arguments may be rearranged.
+                    // Calls/reads/arithmetic require ANF source-order staging.
+                    for (const auto& arg : expr->arguments)
+                        if (arg->kind != Expression::Kind::Integer)
+                            fail("LOCAL_CONSTRUCT_EVAL_ORDER_UNSUPPORTED: named fields require integer literals until source-order staging");
                     std::vector<std::unique_ptr<Expression>> ordered(declared_fields.size());
                     for (std::size_t i = 0; i < expr->arguments.size(); ++i) {
                         auto field = std::find_if(declared_fields.begin(), declared_fields.end(),
