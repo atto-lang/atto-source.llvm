@@ -36,7 +36,12 @@ def reject(result, text):
 
 def find_tool(explicit, *names):
     if explicit:
-        return str(Path(explicit).resolve())
+        path = Path(explicit)
+        require(path.is_file(), f"missing explicit tool: {path}")
+        # Preserve argv[0] for multi-call linker binaries such as lld.
+        # Resolving wasm-ld/ld.lld symlinks to generic lld loses target
+        # personality selection and makes an otherwise valid proof fail.
+        return str(path)
     for name in names:
         found = shutil.which(name)
         if found:
