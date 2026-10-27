@@ -100,7 +100,7 @@ def main():
         ('runtime-collision', 'import module Lib from "./lib"; fnc abort():int{return 1;} pub fnc main():int{return 0;}', library, 'reserved native runtime ABI'),
         ('init-hook', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}', 'define module Lib as fnc init():void{return;} pub fnc answer():int{return 42;} end', 'init hook'),
         ('missing-file', 'import module Lib from "./missing"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
-        ('std-not-faked', 'import module Lib from "std/net"; pub fnc main():int{return 0;}', library, 'package/std/host resolution unsupported'),
+        ('std-not-faked', 'import module Lib from "std/net"; pub fnc main():int{return 0;}', library, 'ores.std native module resolution is not implemented'),
         ('project-root-missing-manifest', 'import module Lib from "+/lib"; pub fnc main():int{return 0;}', library, 'nearest .ores.pkg.toml'),
         ('directory', 'import module Lib from "./nested"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
         ('unterminated-path', 'import module Lib from "./lib; pub fnc main():int{return 0;}', library, 'unterminated native string'),
