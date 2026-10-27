@@ -678,7 +678,7 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
 
     let positives = [
         ("positive", "pub fnc main(): int { return 17 % 5; }\n", 2),
-        ("negative-dividend", "pub fnc main(): int { return (-17 % 5) + 10; }\n", 7),
+        ("negative-dividend", "pub fnc main(): int { return (-17 % 5) + 10; }\n", 8),
         ("precedence", "pub fnc main(): int { return 4 + 17 % 5 * 3; }\n", 10),
         ("associativity", "pub fnc main(): int { return 20 % 6 % 4; }\n", 2),
         ("function-param", "fnc rem(int n): int { return n % 7; }\n\
