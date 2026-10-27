@@ -103,8 +103,16 @@ public:
             immediate = state_->status != Status::Pending;
         }
         if (immediate) {
-            try { fn(sub); }
-            catch (...) { (void)sub.close(); throw; }
+            try {
+                fn(sub);
+                // A terminal Future has no later readiness transition. If the
+                // callback observed readiness without consuming the waiter,
+                // retire it now rather than leaving a permanently inert slot.
+                (void)sub.close();
+            } catch (...) {
+                (void)sub.close();
+                throw;
+            }
         }
         return sub;
     }
@@ -185,10 +193,15 @@ private:
         for (std::size_t i = 0; i < count; ++i) {
             try {
                 fns[i](subs[i]);
+                // Completion is immutable. A callback may consume its waiter
+                // via try_commit(), lose a select and be revoked by the
+                // arbiter, or merely observe readiness. In the observation
+                // case there can never be another readiness edge, so retire
+                // the exact waiter after this one notification.
+                (void)subs[i].close();
             } catch (...) {
-                // Completion is immutable and no second readiness edge exists.
-                // A failed callback therefore cannot be left registered:
-                // revoke the exact waiter before retaining its diagnostic.
+                // A failed terminal callback is also one-shot and must not
+                // strand an inert waiter.
                 (void)subs[i].close();
                 if (!first) first = std::current_exception();
             }
