@@ -951,8 +951,8 @@ if(BUILD_TESTING)
         dispatch-value-match-run.ores --ir "cmp.eq.i1")
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
-    oreslang_contract_test(native_dispatch_signed_min_literal_runtime
-        dispatch-signed-min-pattern-run.ores --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_dispatch_signed_min_literal_ir
+        dispatch-signed-min-pattern-run.ores --ir "cmp.eq.i1")
     oreslang_contract_test(native_dispatch_nested_min_match_failclosed
         dispatch-nested-signed-min-match-reject.ores
         --diagnostic "native scalar value match supports literal patterns or '_'")
@@ -973,6 +973,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_do_match_wildcard_only
         dispatch-do-match-wildcard-only-run.ores --ir "return.snapshot.slot")
     if(ORE_CLANG)
+        oreslang_contract_test(native_dispatch_signed_min_literal_runtime
+            dispatch-signed-min-pattern-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_value_match_arm_result_runtime
             dispatch-value-match-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_value_switch_arm_result_runtime
