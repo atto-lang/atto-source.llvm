@@ -3400,6 +3400,11 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_freestanding_source_object.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(cortexm_freestanding_source_object PROPERTIES TIMEOUT 90)
+    add_test(NAME native_core_std_library_profile_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/library_profile_boundary.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_core_std_library_profile_admission PROPERTIES TIMEOUT 60)
     add_test(NAME cortexm_source_actor_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_source_actor_admission.py"
