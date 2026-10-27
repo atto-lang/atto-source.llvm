@@ -384,6 +384,14 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Source-executable Java-style signed integer remainder subset:
+    # nonzero positive/negative i64 literals only. MIN % -1 is lowered
+    # without LLVM srem poison; dynamic/zero divisors still fail closed.
+    add_test(NAME native_java_signed_remainder_source_parity
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" native-remainder-parity
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_java_signed_remainder_source_parity
+        PROPERTIES TIMEOUT 120)
     # Exact source alias-extension proof: compiler-owned static receiver dispatch,
     # LLVM IR emission, Clang link and native process execution.
     add_test(NAME native_alias_extension_method_aot
