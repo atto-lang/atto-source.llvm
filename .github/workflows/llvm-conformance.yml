@@ -29,6 +29,9 @@ jobs:
             exit 65
           fi
           printf 'source_commit=%s\nsource_tree=%s\n' "$actual" "$(git rev-parse 'HEAD^{tree}')"
+          # github.sha may be a synthetic merge SHA on pull_request events.
+          # Downstream source receipts must identify the actual checked-out head.
+          printf 'ORESLANG_SOURCE_SHA=%s\n' "$actual" >> "$GITHUB_ENV"
       - name: Verify Java/LLVM strict parity gate fail-closed shell admissions
         run: bash tests/java_llvm_parity_gate_admission.sh
       - name: Reject forged Java/LLVM parity receipts without a real compiler
@@ -45,7 +48,7 @@ jobs:
         run: |
           python3 contracts/v1/test_runner.py -v
           python3 contracts/v1/semantics/test_runner.py -v
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pinned v4
         with:
           node-version: '22'
       - name: Verify TypeSpec models
@@ -77,10 +80,10 @@ jobs:
             --backend llvm \
             --compiler "$(realpath build/oreslang-llvmc)" \
             --clang "$(command -v clang)" \
-            --source-sha "${{ github.sha }}" \
+            --source-sha "$ORESLANG_SOURCE_SHA" \
             --report build/ai-conformance-llvm.json
       - name: Check compiled native results and diagnostic semantics
-        run: python3 contracts/v1/semantics/run.py --backend llvm --command './build/oreslang-llvmc {source}' --clang clang --revision "${{ github.sha }}" --report build/semantics-llvm.json
+        run: python3 contracts/v1/semantics/run.py --backend llvm --command './build/oreslang-llvmc {source}' --clang clang --revision "$ORESLANG_SOURCE_SHA" --report build/semantics-llvm.json
       - name: Verify seeded native metamorphic arithmetic
         run: |
           python3 contracts/v1/semantics/metamorphic.py --command './build/oreslang-llvmc {source}' --clang clang --count 32 --seed 20261008 --report build/metamorphic-llvm.json
@@ -88,7 +91,7 @@ jobs:
         run: |
           python3 contracts/v1/semantics/metamorphic.py --command './build/oreslang-llvmc {source}' --clang clang --count 64 --seed 20261009 --report build/metamorphic-llvm-seed-20261009.json
           python3 contracts/v1/semantics/metamorphic.py --command './build/oreslang-llvmc {source}' --clang clang --count 64 --seed 314159 --report build/metamorphic-llvm-seed-314159.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # pinned v4
         if: always()
         with:
           name: llvm-conformance-report
