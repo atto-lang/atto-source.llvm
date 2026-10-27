@@ -18,7 +18,16 @@ SOURCE_TREE = "a" * 40
 BASE_TREE = "b" * 40
 CARRIER_COMMIT = "c" * 40
 BASE = "d" * 40
-WORKFLOW = "e" * 40
+WORKFLOW_BYTES = b"name: synthetic carrier workflow\n"
+WORKFLOW = v3.git_blob_sha(WORKFLOW_BYTES)
+VERIFIER_CONTROL = b"print('synthetic verifier')\n"
+RUNNER_CONTROL = b"print('synthetic runner')\n"
+VERIFIER_BLOB = v3.git_blob_sha(VERIFIER_CONTROL)
+RUNNER_BLOB = v3.git_blob_sha(RUNNER_CONTROL)
+CONTROL_BLOBS = {
+    "scripts/verify-oreslang-private-carrier.py": VERIFIER_BLOB,
+    "scripts/run-oreslang-test-plan.py": RUNNER_BLOB,
+}
 PLAN_BLOB = None
 PROTECTED = "1" * 40
 DATA = b"synthetic llvm source\n"
@@ -58,6 +67,7 @@ def carrier_contract():
         "review_pr": 17,
         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
         "workflow_blob_sha": WORKFLOW,
+        "control_blobs": CONTROL_BLOBS,
         "test_plan_path": "ci/test-plans/llvm-pr669.json",
         "test_plan_blob_sha": PLAN_BLOB,
     }
@@ -246,6 +256,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "review_pr": 17,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
+        "control_blobs": CONTROL_BLOBS,
                         "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
                                 "blob_sha": PLAN_BLOB,
@@ -262,11 +273,165 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(got["repository_id"], 42)
         self.assertEqual(got["base_sha"], BASE)
         self.assertEqual(got["workflow_blob_sha"], WORKFLOW)
+        self.assertEqual(got["control_blobs"], CONTROL_BLOBS)
         self.assertEqual(got["review_pr"], 17)
         with self.assertRaisesRegex(v3.Denied, "not authorized"):
             v3.parse_contract(
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
             )
+
+    def test_contract_requires_exact_executable_control_blob_set(self):
+        base = {
+            "schema": 1,
+            "carriers": {
+                "trusted/ci": {
+                    "repository_id": 42,
+                    "base_sha": BASE,
+                    "review_pr": 17,
+                    "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
+                    "workflow_blob_sha": WORKFLOW,
+                    "control_blobs": dict(CONTROL_BLOBS),
+                    "test_plans": {
+                        "ci/test-plans/llvm-pr669.json": {
+                            "blob_sha": PLAN_BLOB,
+                            "allowed_prs": [669],
+                        }
+                    },
+                }
+            },
+        }
+
+        for mutate in ("missing", "extra", "bad-sha"):
+            doc = json.loads(json.dumps(base))
+            controls = doc["carriers"]["trusted/ci"]["control_blobs"]
+            if mutate == "missing":
+                controls.pop("scripts/run-oreslang-test-plan.py")
+            elif mutate == "extra":
+                controls["scripts/unreviewed.py"] = "f" * 40
+            else:
+                controls["scripts/verify-oreslang-private-carrier.py"] = "not-a-sha"
+            with self.subTest(mutate=mutate), self.assertRaises(v3.Denied):
+                v3.parse_contract(
+                    json.dumps(doc).encode(),
+                    "trusted/ci",
+                    669,
+                    "ci/test-plans/llvm-pr669.json",
+                )
+
+    def test_checked_destination_pins_regular_control_tree_and_bytes(self):
+        contract = carrier_contract()
+        tree_entries = [
+            {
+                "path": contract["workflow_path"],
+                "type": "blob",
+                "mode": "100644",
+                "sha": WORKFLOW,
+            },
+            {
+                "path": "scripts/verify-oreslang-private-carrier.py",
+                "type": "blob",
+                "mode": "100644",
+                "sha": VERIFIER_BLOB,
+            },
+            {
+                "path": "scripts/run-oreslang-test-plan.py",
+                "type": "blob",
+                "mode": "100644",
+                "sha": RUNNER_BLOB,
+            },
+            {
+                "path": contract["test_plan_path"],
+                "type": "blob",
+                "mode": "100644",
+                "sha": PLAN_BLOB,
+            },
+        ]
+
+        payloads = {
+            contract["workflow_path"]: WORKFLOW_BYTES,
+            "scripts/verify-oreslang-private-carrier.py": VERIFIER_CONTROL,
+            "scripts/run-oreslang-test-plan.py": RUNNER_CONTROL,
+            contract["test_plan_path"]: PLAN,
+        }
+
+        def api_for(entries, overrides=None):
+            overrides = overrides or {}
+            def api(route, method="GET", payload=None):
+                if route == "repos/trusted/ci":
+                    return {
+                        "id": contract["repository_id"],
+                        "full_name": "trusted/ci",
+                        "private": True,
+                        "visibility": "private",
+                        "default_branch": "main",
+                        "archived": False,
+                        "disabled": False,
+                        "fork": False,
+                    }
+                if route == "repos/trusted/ci/git/commits/" + BASE:
+                    return {"sha": BASE, "tree": {"sha": BASE_TREE}}
+                if route == "repos/trusted/ci/git/trees/" + BASE_TREE + "?recursive=1":
+                    return {
+                        "sha": BASE_TREE,
+                        "truncated": False,
+                        "tree": entries,
+                    }
+                prefix = "repos/trusted/ci/contents/"
+                suffix = "?ref=" + BASE
+                if route.startswith(prefix) and route.endswith(suffix):
+                    path = route[len(prefix):-len(suffix)]
+                    data = overrides.get(path, payloads[path])
+                    expected = contract["control_blobs"].get(
+                        path,
+                        contract["workflow_blob_sha"]
+                        if path == contract["workflow_path"]
+                        else contract["test_plan_blob_sha"],
+                    )
+                    return {
+                        "path": path,
+                        "type": "file",
+                        "encoding": "base64",
+                        "content": base64.b64encode(data).decode(),
+                        "sha": expected,
+                    }
+                raise AssertionError((method, route))
+            return api
+
+        with (
+            patch.object(v3, "checked_carrier_authority", return_value=BASE),
+            patch.object(v3, "gh_api", side_effect=api_for(tree_entries)),
+        ):
+            base_tree, plan = v3.checked_destination("trusted/ci", contract)
+        self.assertEqual(base_tree, BASE_TREE)
+        self.assertEqual(plan, PLAN)
+
+        symlink_entries = json.loads(json.dumps(tree_entries))
+        for entry in symlink_entries:
+            if entry["path"] == "scripts/verify-oreslang-private-carrier.py":
+                entry["mode"] = "120000"
+        with (
+            patch.object(v3, "checked_carrier_authority", return_value=BASE),
+            patch.object(v3, "gh_api", side_effect=api_for(symlink_entries)),
+            self.assertRaisesRegex(v3.Denied, "non-regular"),
+        ):
+            v3.checked_destination("trusted/ci", contract)
+
+        with (
+            patch.object(v3, "checked_carrier_authority", return_value=BASE),
+            patch.object(
+                v3,
+                "gh_api",
+                side_effect=api_for(
+                    tree_entries,
+                    {
+                        "scripts/run-oreslang-test-plan.py":
+                            b"tampered trusted runner\n"
+                    },
+                ),
+            ),
+            self.assertRaisesRegex(v3.Denied, "blob digest"),
+        ):
+            v3.checked_destination("trusted/ci", contract)
 
     def test_strict_json_rejects_duplicate_and_nonfinite_values(self):
         with self.assertRaisesRegex(v3.Denied, "duplicate JSON key"):
@@ -757,6 +922,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "base_sha": BASE,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
+        "control_blobs": CONTROL_BLOBS,
                         "review_pr": 0,
                         "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
@@ -1285,6 +1451,10 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(receipt["source"]["root_tree_sha"], SOURCE_TREE)
         self.assertEqual(receipt["source"]["manifest_sha256"], manifest)
         self.assertEqual(receipt["destination"]["repo_id"], 1323598177)
+        self.assertEqual(
+            receipt["carrier"]["control_blobs"],
+            dict(sorted(CONTROL_BLOBS.items())),
+        )
         self.assertEqual(receipt["test_plan"]["path"], contract["test_plan_path"])
         self.assertEqual(
             receipt["test_plan"]["sha256"], hashlib.sha256(PLAN).hexdigest()
