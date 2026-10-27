@@ -6,6 +6,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 using oreslang::formal::NativeScalarSmt;
@@ -30,6 +31,42 @@ static std::string replace_once(std::string s, const std::string& from,
     s.replace(at, from.size(), to);
     return s;
 }
+// The native exporter writes precisely two named function definitions and two
+// or three scalar argument declarations. A valid Z3 transcript is not proof
+// if a preceding injected reset/set-option changes solver state.
+static void validate_scalar_prelude(const std::string& prelude) {
+    if (prelude.find_first_of(";\"\r|") != std::string::npos)
+        throw std::runtime_error("unsupported native SMT prelude token");
+    std::vector<std::string> forms;
+    std::size_t cursor=0;
+    while (cursor < prelude.size()) {
+        if (prelude[cursor]!='(')
+            throw std::runtime_error("unexpected native SMT prelude text");
+        const auto start=cursor;
+        int depth=0;
+        do {
+            const auto ch=prelude[cursor++];
+            if (ch=='(') ++depth;
+            else if (ch==')') --depth;
+            if (depth<0) throw std::runtime_error("unbalanced native prelude");
+        } while (depth>0 && cursor<prelude.size());
+        if (depth!=0 || cursor>=prelude.size() || prelude[cursor++]!='\n')
+            throw std::runtime_error("unterminated native prelude command");
+        forms.emplace_back(prelude.substr(start,cursor-start-1));
+    }
+    if ((forms.size()!=5 && forms.size()!=6)
+            || forms[0]!="(set-logic QF_BV)"
+            || forms[1].rfind("(define-fun implementation (",0)!=0
+            || forms[2].rfind("(define-fun contract (",0)!=0)
+        throw std::runtime_error("unsupported native SMT prelude commands");
+    const std::array<const char*,3> vars={"x","y","z"};
+    for (std::size_t i=3; i<forms.size(); ++i) {
+        const auto expected=std::string("(declare-const ")+vars[i-3]+" (_ BitVec 64))";
+        if (forms[i]!=expected)
+            throw std::runtime_error("unexpected native scalar variable declaration");
+    }
+}
+
 // Restrictive query splitting for the *real* Parser/OwnershipChecker-derived
 // scalar SMT adapter. This is not a source-to-machine refinement proof.
 static std::array<std::string, 2> separate_scalar_queries(const std::string& combined) {
@@ -47,11 +84,7 @@ static std::array<std::string, 2> separate_scalar_queries(const std::string& com
             || combined.find(marker, second + std::string(marker).size()) != std::string::npos)
         throw std::runtime_error("scalar proof must have exactly two queries");
     const std::string prefix = combined.substr(0, first);
-    if (prefix.find("(define-fun implementation ") == std::string::npos
-            || prefix.find("(define-fun contract ") == std::string::npos
-            || prefix.find("(check-sat)") != std::string::npos
-            || prefix.find("(assert ") != std::string::npos)
-        throw std::runtime_error("SMT prelude contains unsupported clauses");
+    validate_scalar_prelude(prefix);
     const std::string proof = combined.substr(first + std::string(marker).size(),
         second - first - std::string(marker).size());
     const std::string mutant = combined.substr(second + std::string(marker).size());
@@ -128,6 +161,26 @@ int main(int argc, char** argv) {
         });
         must_reject([&] {
             (void)separate_scalar_queries(checked_min + "(echo \"unsat\")\n");
+        });
+        must_reject([&] {
+            auto injected=checked_min;
+            const auto first=injected.find("(set-logic QF_BV)\n");
+            injected.insert(first+std::string("(set-logic QF_BV)\n").size(),"(reset)\n");
+            (void)separate_scalar_queries(injected);
+        });
+        must_reject([&] {
+            auto injected=checked_min;
+            const auto first=injected.find("(set-logic QF_BV)\n");
+            injected.insert(first+std::string("(set-logic QF_BV)\n").size(),
+                "(set-option :produce-models true)\n");
+            (void)separate_scalar_queries(injected);
+        });
+        must_reject([&] {
+            auto injected=checked_min;
+            const auto first=injected.find("(declare-const x (_ BitVec 64))\n");
+            injected.insert(first+std::string("(declare-const x (_ BitVec 64))\n").size(),
+                "(declare-const evil (_ BitVec 64))\n");
+            (void)separate_scalar_queries(injected);
         });
         const auto check_at=checked_min.find("(check-sat)");
         if (check_at==std::string::npos)
