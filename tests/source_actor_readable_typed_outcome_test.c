@@ -1,5 +1,6 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -36,10 +37,26 @@ typedef struct {
     int64_t result;
 } AwaitThread;
 
+typedef struct {
+    void* actor;
+    int fd;
+    uint64_t token;
+    OresSourceWritableAwaitOutcome outcome;
+    int64_t result;
+} WritableAwaitThread;
+
 static void* await_main(void* opaque) {
     AwaitThread* await = (AwaitThread*)opaque;
     await->result = INT64_C(-999);
     await->outcome = oreslang_source_actor_await_readable_checked(
+        await->actor, await->fd, resumed, await->token, &await->result);
+    return NULL;
+}
+
+static void* writable_await_main(void* opaque) {
+    WritableAwaitThread* await = (WritableAwaitThread*)opaque;
+    await->result = INT64_C(-999);
+    await->outcome = oreslang_source_actor_await_writable_checked(
         await->actor, await->fd, resumed, await->token, &await->result);
     return NULL;
 }
@@ -53,6 +70,42 @@ static int make_pipe(int pipefd[2], int nonblocking_read) {
         }
     }
     return 1;
+}
+static int make_write_nonblocking(int pipefd[2]) {
+    const int flags = fcntl(pipefd[1], F_GETFL);
+    return flags >= 0
+        && fcntl(pipefd[1], F_SETFL, flags | O_NONBLOCK) == 0;
+}
+static size_t fill_pipe_until_would_block(int fd) {
+    unsigned char bytes[4096];
+    for (size_t i = 0; i < sizeof(bytes); ++i) bytes[i] = (unsigned char)(i & 0xffu);
+    size_t total = 0;
+    for (;;) {
+        const ssize_t count = write(fd, bytes, sizeof(bytes));
+        if (count > 0) {
+            total += (size_t)count;
+            continue;
+        }
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+        abort();
+    }
+    check(total > 0);
+    return total;
+}
+static void drain_exact(int fd, size_t bytes) {
+    unsigned char buffer[4096];
+    size_t remaining = bytes;
+    while (remaining > 0) {
+        const size_t wanted = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+        const ssize_t count = read(fd, buffer, wanted);
+        if (count > 0) {
+            remaining -= (size_t)count;
+            continue;
+        }
+        if (count < 0 && errno == EINTR) continue;
+        abort();
+    }
 }
 static void close_pipe(int pipefd[2]) { close(pipefd[0]); close(pipefd[1]); }
 static void reset_calls(void) {
@@ -199,6 +252,96 @@ static void run_cancel_admission_race_stress(void) {
     }
 }
 
+static void run_writable_ready(void) {
+    int pipefd[2] = {-1, -1};
+    check(make_pipe(pipefd, 0));
+    check(make_write_nonblocking(pipefd));
+    void* actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
+    check(actor != NULL);
+    reset_calls();
+
+    int64_t result = INT64_C(-999);
+    const OresSourceWritableAwaitOutcome outcome =
+        oreslang_source_actor_await_writable_checked(
+            actor, pipefd[1], resumed, UINT64_C(0x6301), &result);
+    check(outcome == ORES_SOURCE_WRITABLE_AWAIT_READY);
+    check(result == 43);
+    check(atomic_load_explicit(&continuation_calls, memory_order_acquire) == 1);
+
+    close_pipe(pipefd);
+    oreslang_source_actor_stop(actor);
+}
+
+static void run_stalled_writable_allows_progress_cancel_and_rearm(void) {
+    int pipefd[2] = {-1, -1};
+    check(make_pipe(pipefd, 0));
+    check(make_write_nonblocking(pipefd));
+    const size_t filled = fill_pipe_until_would_block(pipefd[1]);
+
+    void* waiting_actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
+    void* progress_actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
+    check(waiting_actor != NULL && progress_actor != NULL);
+    reset_calls();
+    atomic_store_explicit(&message_calls, 0, memory_order_release);
+
+    WritableAwaitThread await = {
+        .actor = waiting_actor,
+        .fd = pipefd[1],
+        .token = UINT64_C(0x6302)
+    };
+    pthread_t thread;
+    check(pthread_create(&thread, NULL, writable_await_main, &await) == 0);
+
+    const struct timespec pause = { .tv_sec = 0, .tv_nsec = 1000000 };
+    int admitted = 0;
+    for (int i = 0; i < 3000; ++i) {
+        if (oreslang_source_actor_test_io_await_admitted()) {
+            admitted = 1;
+            break;
+        }
+        check(nanosleep(&pause, NULL) == 0);
+    }
+    check(admitted);
+
+    oreslang_source_actor_send(progress_actor, INT64_C(88));
+    int progressed = 0;
+    for (int i = 0; i < 3000; ++i) {
+        if (atomic_load_explicit(&message_calls, memory_order_acquire) != 0) {
+            progressed = 1;
+            break;
+        }
+        check(nanosleep(&pause, NULL) == 0);
+    }
+    check(progressed);
+    check(atomic_load_explicit(&continuation_calls, memory_order_acquire) == 0);
+
+    check(oreslang_source_actor_test_cancel_io_await());
+    check(pthread_join(thread, NULL) == 0);
+    check(await.outcome == ORES_SOURCE_WRITABLE_AWAIT_CANCELLED);
+    check(await.result == 0);
+    check(atomic_load_explicit(&continuation_calls, memory_order_acquire) == 0);
+
+    /*
+     * Physically restore pipe capacity and reuse the exact write descriptor.
+     * The cancelled one-shot EPOLLOUT watch must have retired, otherwise this
+     * fresh generation cannot own and settle the same fd.
+     */
+    drain_exact(pipefd[0], filled);
+    reset_calls();
+    int64_t rearmed_result = INT64_C(-999);
+    const OresSourceWritableAwaitOutcome rearmed =
+        oreslang_source_actor_await_writable_checked(
+            waiting_actor, pipefd[1], resumed, UINT64_C(0x6303),
+            &rearmed_result);
+    check(rearmed == ORES_SOURCE_WRITABLE_AWAIT_READY);
+    check(rearmed_result == 43);
+    check(atomic_load_explicit(&continuation_calls, memory_order_acquire) == 1);
+
+    close_pipe(pipefd);
+    oreslang_source_actor_stop(progress_actor);
+    oreslang_source_actor_stop(waiting_actor);
+}
+
 static void run_terminated(void) {
     int pipefd[2] = {-1, -1}; check(make_pipe(pipefd, 1));
     void* actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
@@ -233,6 +376,8 @@ int main(void) {
     run_cancelled();
     run_stalled_read_allows_unrelated_actor_progress();
     run_cancel_admission_race_stress();
+    run_writable_ready();
+    run_stalled_writable_allows_progress_cancel_and_rearm();
     run_terminated();
     run_failed_admission();
     puts("SOURCE_ACTOR_READABLE_TYPED_OUTCOME_PASS");
