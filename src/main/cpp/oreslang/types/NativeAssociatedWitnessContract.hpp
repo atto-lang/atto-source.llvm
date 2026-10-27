@@ -60,7 +60,10 @@ class NativeAssociatedWitnessRegistry final {
 
     static std::string key(const std::string& module, const std::string& name) {
         if (module.empty() || name.empty()) throw std::invalid_argument("missing protocol identity");
-        return module + "::" + name;
+        // Injective canonical identity: display concatenation (module::name)
+        // aliases ("a::b", "c") and ("a", "b::c"). The length guards
+        // prevent importing a foreign witness for the wrong protocol.
+        return std::to_string(module.size()) + ":" + module + name;
     }
     static void validate_term(const AssociatedTypeTerm& term, std::size_t& nodes) {
         if (++nodes > kMaxNodes) throw std::invalid_argument("associated type graph budget exceeded");
