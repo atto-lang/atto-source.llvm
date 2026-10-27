@@ -9,7 +9,7 @@ live protected carrier governance. No writes or transfers.
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sys
 import urllib.error
@@ -18,6 +18,7 @@ import urllib.request
 SOURCE = "ores-truffle-oreslang/oreslang-source.llvm"
 SOURCE_ID = 1410897874
 APPROVAL_PATH = Path(".github/private-ci-approved-repositories.txt")
+CONTRACT_PATH = Path(".github/private-ci-carrier-contracts.json")
 OWNERS_PATH = Path(".github/CODEOWNERS")
 DOC_PATH = Path("docs/security/CI_PRIVATE_SOURCE_MIRRORING.md")
 REQUIRED_OWNERS = {
@@ -62,9 +63,103 @@ def parse_allowlist(content: str) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _strict_json(content: str):
+    def unique(pairs):
+        out = {}
+        for key, value in pairs:
+            if key in out:
+                raise GovernanceError("duplicate carrier contract key")
+            out[key] = value
+        return out
+
+    def reject_constant(value):
+        raise GovernanceError("nonfinite carrier contract number: " + value)
+
+    try:
+        return json.loads(
+            content,
+            object_pairs_hook=unique,
+            parse_constant=reject_constant,
+        )
+    except (json.JSONDecodeError, UnicodeError, RecursionError) as exc:
+        raise GovernanceError("invalid carrier contract JSON") from exc
+
+
+def _safe_contract_path(value: object, prefix: str, suffix: str) -> str:
+    if not isinstance(value, str):
+        raise GovernanceError("carrier contract path is not a string")
+    path = PurePosixPath(value)
+    parts = path.parts
+    if (
+        not value.startswith(prefix)
+        or not value.endswith(suffix)
+        or value.startswith("/")
+        or path.as_posix() != value
+        or not parts
+        or any(part in (".", "..") for part in parts)
+        or any(part.casefold() == ".git" for part in parts)
+    ):
+        raise GovernanceError("carrier contract path is unsafe")
+    return value
+
+
+def check_contracts_for_approved(content: str, approved: tuple[str, ...]) -> None:
+    doc = _strict_json(content)
+    if not isinstance(doc, dict) or set(doc) != {"schema", "carriers"}:
+        raise GovernanceError("carrier contract document shape invalid")
+    if doc.get("schema") != 1 or not isinstance(doc.get("carriers"), dict):
+        raise GovernanceError("carrier contract schema invalid")
+    carriers = doc["carriers"]
+
+    for repository in approved:
+        carrier = carriers.get(repository)
+        required = {
+            "repository_id", "base_sha", "workflow_path",
+            "workflow_blob_sha", "review_pr", "test_plans",
+        }
+        if not isinstance(carrier, dict) or set(carrier) != required:
+            raise GovernanceError(
+                "approved destination lacks exact reviewed carrier contract: "
+                + repository
+            )
+        repo_id = carrier.get("repository_id")
+        review_pr = carrier.get("review_pr")
+        if type(repo_id) is not int or repo_id <= 0:
+            raise GovernanceError("carrier repository id invalid")
+        if type(review_pr) is not int or review_pr <= 0:
+            raise GovernanceError("carrier review PR invalid")
+        for key in ("base_sha", "workflow_blob_sha"):
+            value = carrier.get(key)
+            if not isinstance(value, str) or not SHA40.fullmatch(value):
+                raise GovernanceError("carrier immutable SHA pin invalid: " + key)
+        _safe_contract_path(
+            carrier.get("workflow_path"), ".github/workflows/", ".yml"
+        )
+        plans = carrier.get("test_plans")
+        if not isinstance(plans, dict) or not plans:
+            raise GovernanceError("carrier reviewed test plans missing")
+        for path, plan in plans.items():
+            _safe_contract_path(path, "ci/test-plans/", ".json")
+            if not isinstance(plan, dict) or set(plan) != {"blob_sha", "allowed_prs"}:
+                raise GovernanceError("carrier reviewed test plan shape invalid")
+            blob = plan.get("blob_sha")
+            allowed = plan.get("allowed_prs")
+            if not isinstance(blob, str) or not SHA40.fullmatch(blob):
+                raise GovernanceError("carrier reviewed test plan blob invalid")
+            if (
+                not isinstance(allowed, list)
+                or not allowed
+                or any(type(number) is not int or number <= 0 for number in allowed)
+                or len(allowed) != len(set(allowed))
+            ):
+                raise GovernanceError("carrier reviewed test plan PR set invalid")
+
+
 def check_policy_files(root: Path) -> tuple[str, ...]:
     root = root.resolve(strict=True)
     approved = parse_allowlist((root / APPROVAL_PATH).read_text(encoding="utf-8"))
+    contract_text = (root / CONTRACT_PATH).read_text(encoding="utf-8")
+    check_contracts_for_approved(contract_text, approved)
     owners_text = (root / OWNERS_PATH).read_text(encoding="utf-8")
     rules = {}
     for line in owners_text.splitlines():
