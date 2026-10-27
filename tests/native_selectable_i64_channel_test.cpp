@@ -403,6 +403,78 @@ static void close_and_plain_write_share_one_channel_linearization_point() {
     }
 }
 
+struct ThrowOnCopyWhenArmed final {
+    explicit ThrowOnCopyWhenArmed(bool* armed) : armed(armed) {}
+    ThrowOnCopyWhenArmed(const ThrowOnCopyWhenArmed& other)
+        : armed(other.armed) {
+        if (*armed)
+            throw std::runtime_error("notification callback copy failed");
+    }
+    ThrowOnCopyWhenArmed(ThrowOnCopyWhenArmed&&) noexcept = default;
+    void operator()(
+        const NativeSelectableI64Channel<1, 2>::Subscription&) const {}
+    bool* armed;
+};
+
+static void notification_copy_failure_is_commit_atomic() {
+    using Channel = NativeSelectableI64Channel<1, 2>;
+    Channel channel;
+    bool throw_on_copy = false;
+    ThrowOnCopyWhenArmed callback(&throw_on_copy);
+    auto wait = channel.subscribe_readable(callback);
+
+    assert(channel.pending_readers() == 1);
+    assert(channel.size() == 0);
+
+    throw_on_copy = true;
+    bool observed = false;
+    try {
+        (void)channel.try_write(44);
+    } catch (const std::runtime_error&) {
+        observed = true;
+    }
+
+    assert(observed);
+    assert(channel.size() == 0);
+    assert(channel.pending_readers() == 1);
+    assert(wait.active());
+    assert(!channel.has_notification_failure());
+
+    throw_on_copy = false;
+    assert(channel.try_write(44));
+    assert(channel.size() == 1);
+    assert(wait.close());
+}
+
+static void close_notification_copy_failure_does_not_close_channel() {
+    using Channel = NativeSelectableI64Channel<1, 2>;
+    Channel channel;
+    bool throw_on_copy = false;
+    ThrowOnCopyWhenArmed callback(&throw_on_copy);
+    auto read_wait = channel.subscribe_readable(callback);
+
+    assert(!channel.closed());
+    assert(channel.pending_readers() == 1);
+
+    throw_on_copy = true;
+    bool observed = false;
+    try {
+        (void)channel.close();
+    } catch (const std::runtime_error&) {
+        observed = true;
+    }
+
+    assert(observed);
+    assert(!channel.closed());
+    assert(channel.pending_readers() == 1);
+    assert(read_wait.active());
+
+    throw_on_copy = false;
+    assert(channel.close());
+    assert(channel.closed());
+    assert(read_wait.close());
+}
+
 static void readiness_callback_may_reenter_channel_after_unlock() {
     using Channel = NativeSelectableI64Channel<1, 2>;
     Channel channel;
@@ -434,6 +506,8 @@ int main() {
     immediate_callback_failure_does_not_leak_waiter();
     asynchronous_notification_failure_is_recorded_after_commit();
     close_and_plain_write_share_one_channel_linearization_point();
+    notification_copy_failure_is_commit_atomic();
+    close_notification_copy_failure_does_not_close_channel();
     readiness_callback_may_reenter_channel_after_unlock();
     return 0;
 }
