@@ -3444,6 +3444,33 @@ if(BUILD_TESTING)
             --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_alloc_library_import_resolution
         PROPERTIES TIMEOUT 120)
+    add_executable(oreslang-allocator-provider-v1-test
+        tests/allocator_provider_v1_test.c
+        src/main/cpp/oreslang/runtime/AllocatorProviderV1.c)
+    target_include_directories(oreslang-allocator-provider-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    add_test(NAME native_allocator_provider_v1
+        COMMAND oreslang-allocator-provider-v1-test)
+    set_tests_properties(native_allocator_provider_v1 PROPERTIES TIMEOUT 10)
+
+    add_executable(oreslang-freestanding-int-array-region-test
+        tests/freestanding_int_array_region_test.c
+        src/main/cpp/oreslang/runtime/AllocatorProviderV1.c
+        src/main/cpp/oreslang/runtime/FreestandingIntArrayRegion.c)
+    target_include_directories(oreslang-freestanding-int-array-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    add_test(NAME native_freestanding_int_array_region
+        COMMAND oreslang-freestanding-int-array-region-test)
+    set_tests_properties(native_freestanding_int_array_region PROPERTIES TIMEOUT 10)
+
+    add_test(NAME native_freestanding_allocator_provider
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/freestanding_allocator_provider.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+            --clang "${ORE_RT_AOT_CLANG}")
+    set_tests_properties(native_freestanding_allocator_provider
+        PROPERTIES TIMEOUT 240)
     add_test(NAME cortexm_source_actor_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_source_actor_admission.py"
