@@ -15,6 +15,9 @@ namespace oreslang::runtime {
  * Completion producers enqueue Ticket values. The actor lane calls
  * try_consume() immediately before executing a continuation. advance()
  * invalidates all outstanding tickets from the previous actor generation.
+ * close() permanently rejects registration. The scheduler must serialize
+ * consume-and-invoke with lifecycle changes on the actor lane; neither close
+ * nor advance joins callbacks or physically running native workers.
  */
 template <std::size_t MaxTickets = 64>
 class NativeSelectContinuationFence final {
@@ -31,6 +34,7 @@ private:
         std::array<Slot, MaxTickets> slots{};
         std::uint64_t generation = 1;
         std::uint64_t next_id = 1;
+        bool closed = false;
     };
 
 public:
@@ -96,6 +100,20 @@ public:
     NativeSelectContinuationFence& operator=(
         const NativeSelectContinuationFence&) = delete;
 
+    bool closed() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->closed;
+    }
+
+    // Terminal close cancels pending delivery, but does not join workers.
+    bool close() {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        if (state_->closed) return false;
+        state_->closed = true;
+        for (auto& slot : state_->slots) Ticket::clear(slot);
+        return true;
+    }
+
     std::uint64_t generation() const {
         std::lock_guard<std::mutex> guard(state_->mutex);
         return state_->generation;
@@ -111,6 +129,8 @@ public:
 
     Ticket register_continuation(std::uint64_t expected_generation) {
         std::lock_guard<std::mutex> guard(state_->mutex);
+        if (state_->closed)
+            throw std::logic_error("continuation fence is closed");
         if (expected_generation != state_->generation)
             throw std::logic_error("stale actor generation");
 
@@ -158,7 +178,7 @@ public:
 
     bool advance(std::uint64_t expected_generation) {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (expected_generation != state_->generation)
+        if (state_->closed || expected_generation != state_->generation)
             return false;
         if (state_->generation ==
             std::numeric_limits<std::uint64_t>::max())
