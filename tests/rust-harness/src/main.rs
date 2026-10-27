@@ -686,15 +686,18 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
         ("exact-divisor", "pub fnc main(): int { return 64 % 8; }\n", 0),
         ("divisor-one", "pub fnc main(): int { return (-14 % 1) + 6; }\n", 6),
         ("signed-min-divisor-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % 1) + 11; }\n", 11),
-        ("negative-divisor", "pub fnc main(): int { return (17 % -5) + 10; }\n", 12),
+        ("negative-divisor", "pub fnc main(): int { return 17 % -5; }\n", 2),
         ("both-negative", "pub fnc main(): int { return (-17 % -5) + 10; }\n", 8),
-        ("negative-divisor-param", "fnc rem(int n): int { return n % -7; }\n\
+        ("negative-precedence", "pub fnc main(): int { return 4 + 17 % -5 * 3; }\n", 10),
+        ("negative-associativity", "pub fnc main(): int { return 20 % 6 % -4; }\n", 2),
+        ("negative-function-param", "fnc rem(int n): int { return n % -7; }\n\
             pub fnc main(): int { return rem(52); }\n", 3),
-        ("signed-min-negative-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -1) + 11; }\n", 11),
-        ("signed-min-as-divisor", "pub fnc main(): int { return 17 % -9223372036854775808; }\n", 17),
-        ("signed-min-signed-min", "pub fnc main(): int { return (-9223372036854775808) % -9223372036854775808; }\n", 0),
-        // Exact 64-bit comparisons produce 0/1, rather than silently truncating
-        // a nonzero 64-bit mismatch to an 8-bit POSIX exit code.
+        ("negative-minus-one", "pub fnc main(): int { return 5 % -1; }\n", 0),
+        ("min-dividend-minus-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -1) + 13; }\n", 13),
+        ("signed-min-divisor", "pub fnc main(): int { return 5 % -9223372036854775808; }\n", 5),
+        ("min-both-sides", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -9223372036854775808) + 17; }\n", 17),
+        // Full signed-i64 equality returns 0/1; POSIX process exit status
+        // otherwise truncates an incorrect large result modulo 256.
         ("full-width-min-negative-seven", "pub fnc main(): int { return (((-9223372036854775807 - 1) % -7) == -1) ? 0 : 1; }\n", 0),
         ("full-width-max-negative-seven", "pub fnc main(): int { return ((9223372036854775807 % -7) == 0) ? 0 : 1; }\n", 0),
     ];
@@ -706,16 +709,16 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             format!("{name}: native frontend rejected source: {}", stderr(&compiled)),
         )?;
         let llvm_ir = stdout(&compiled);
-        if name == "function-param" || name == "negative-divisor-param" {
+        if name == "function-param" || name == "negative-function-param" {
             require(
                 llvm_ir.contains("srem i64 "),
                 format!("{name}: emitted IR lacks runtime signed remainder"),
             )?;
         }
-        if name == "signed-min-negative-one" {
+        if name == "min-dividend-minus-one" {
             require(
                 !llvm_ir.contains("srem i64 "),
-                format!("{name}: unsafe signed MIN % -1 was emitted as LLVM srem"),
+                format!("{name}: emitted unsafe signed-min / -1 srem"),
             )?;
         }
         fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
@@ -750,10 +753,12 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             "nonzero signed integer literal divisor"),
         ("computed-divisor", "pub fnc main(): int { return 5 % (3 - 1); }\n",
             "nonzero signed integer literal divisor"),
-        ("nested-negative", "pub fnc main(): int { return 5 % -(-2); }\n",
-            "nonzero signed integer literal divisor"),
         ("runtime-divisor", "fnc rem(int n): int { return 5 % n; }\n\
             pub fnc main(): int { return rem(2); }\n",
+            "nonzero signed integer literal divisor"),
+        ("nonliteral-unary", "pub fnc main(): int { return 5 % -(1 + 2); }\n",
+            "nonzero signed integer literal divisor"),
+        ("double-negative", "pub fnc main(): int { return 5 % -(-2); }\n",
             "nonzero signed integer literal divisor"),
         ("wrong-type", "pub fnc main(): int { return true % 2; }\n",
             "arithmetic requires int"),

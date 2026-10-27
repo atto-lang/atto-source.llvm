@@ -395,26 +395,20 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Remainder: {
-            // Revalidate even compiler-created/modified ASTs at the IR boundary.
-            // A nonzero signed i64 literal has no zero-divisor failure path.
-            // Java defines INT64_MIN % -1 as zero; LLVM srem would be poison.
-            if (!expr.right || !expr.left)
-                throw std::runtime_error("native remainder lacks proved signed literal divisor");
-            std::int64_t divisor = 0;
-            if (expr.right->kind == Expression::Kind::Integer) {
-                divisor = expr.right->integer;
-            } else if (expr.right->kind == Expression::Kind::Negate &&
-                       expr.right->left &&
-                       expr.right->left->kind == Expression::Kind::Integer &&
-                       expr.right->left->integer > 0) {
-                divisor = -expr.right->left->integer;
-            }
-            if (divisor == 0)
+            // The frontend normalizes syntactically signed literal divisors.
+            // Never trust an externally supplied AST to skip this proof gate.
+            if (!expr.left || !expr.right ||
+                    expr.right->kind != Expression::Kind::Integer ||
+                    expr.right->integer == 0)
                 throw std::runtime_error("native remainder lacks proved nonzero signed literal divisor");
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            if (divisor == -1)
-                return llvm::ConstantInt::get(i64, 0); // left was evaluated
-            llvm::Value* right = llvm::ConstantInt::getSigned(i64, divisor);
+            // Java's signed remainder is zero for every dividend modulo -1,
+            // including INT64_MIN. LLVM srem INT64_MIN, -1 is poison, so
+            // preserve evaluation of the dividend but emit no srem here.
+            if (expr.right->integer == -1)
+                return llvm::ConstantInt::get(i64, 0);
+            llvm::Value* right = llvm::ConstantInt::get(i64,
+                static_cast<std::uint64_t>(expr.right->integer));
             return builder.CreateSRem(left, right, "srem");
         }
         case Expression::Kind::LogicalNot: {
