@@ -44,7 +44,7 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, LocalAggregateConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
@@ -68,6 +68,10 @@ struct Expression {
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
+    // Distinct AST marker for T{...}. Stays on the existing constructor
+    // expression carrier to avoid widening every executable IR enum switch
+    // before the nominal ABI is admitted by the typed validation gate.
+    bool local_aggregate_constructor = false;
     mutable std::string sum_type;
 };
 
