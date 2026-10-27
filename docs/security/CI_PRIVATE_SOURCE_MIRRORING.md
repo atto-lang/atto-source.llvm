@@ -110,6 +110,8 @@ An allowlist entry is necessary but not sufficient. The protected
 
 - the destination repository ID;
 - the exact reviewed, source-free carrier `main` commit;
+- the exact merged carrier review PR whose approved head tree equals that
+  carrier `main` commit tree;
 - the immutable carrier workflow blob; and
 - exact reviewed test-plan blobs and allowed PR numbers.
 
@@ -124,10 +126,14 @@ approval, at least one approval, conversation resolution, strict required CI
 with the `verifier-tests` check bound to GitHub Actions App ID `15368`,
 administrator enforcement, force-push/deletion disabled, and an exact empty
 review-bypass policy. There is no review/tree-attestation substitute for an
-unprotected carrier. The contract still pins the exact carrier-main commit SHA,
-workflow blob, plan blob, and allowed source PR. Carrier `main` SHA and live
-protection are rechecked before every source-bearing
-write; movement during transfer fails closed.
+unprotected carrier. Protection is also not retrospective: enabling protection
+after an unreviewed merge does not authorize that tip. The contract therefore
+pins a carrier review PR, and the publisher requires an `ORESoftware` approval
+on that PR's exact head submitted before merge, then requires the reviewed head
+tree to equal the pinned carrier `main` base tree. The contract still pins the
+exact carrier-main commit SHA, workflow blob, plan blob, and allowed source PR.
+Carrier `main` SHA and live protection are rechecked before every
+source-bearing write; movement during transfer fails closed.
 
 The source-bearing carrier workflow is triggered only by the fixed
 `oreslang-private-ci-exact-tree` `repository_dispatch` event. GitHub therefore
