@@ -371,7 +371,16 @@ private:
             token = Subscription(state_, kind, index, id);
             std::function<void()> wrapped(
                 [consumer = std::move(consumer), token]() mutable {
-                    consumer(token);
+                    try {
+                        consumer(token);
+                    } catch (...) {
+                        // A readiness notification is advisory, but a callback
+                        // failure must not strand an inert waiter forever.
+                        // Retire this exact generation-checked subscription
+                        // before surfacing the diagnostic to the batch.
+                        (void)token.close();
+                        throw;
+                    }
                 });
 
             const bool ready = kind == WaitKind::Read
