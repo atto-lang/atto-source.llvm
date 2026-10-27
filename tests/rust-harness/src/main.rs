@@ -667,6 +667,93 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
     Ok(())
 }
 
+// Compiler -> LLVM IR -> Clang -> actual process. This deliberately closes
+// only the safe int % positive-literal subset; dynamic and zero divisors must
+// remain rejected until Oreslang's checked failure/effects ABI is available.
+fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> {
+    let temp = TempDir::new("ores-remainder-parity-").map_err(|e| e.to_string())?;
+    let source = temp.path.join("remainder.ores");
+    let ir = temp.path.join("remainder.ll");
+    let executable = temp.path.join("remainder-native");
+
+    let positives = [
+        ("positive", "pub fnc main(): int { return 17 % 5; }\n", 2),
+        ("negative-dividend", "pub fnc main(): int { return (-17 % 5) + 10; }\n", 7),
+        ("precedence", "pub fnc main(): int { return 4 + 17 % 5 * 3; }\n", 10),
+        ("associativity", "pub fnc main(): int { return 20 % 6 % 4; }\n", 2),
+        ("function-param", "fnc rem(int n): int { return n % 7; }\n\
+            pub fnc main(): int { return rem(52); }\n", 3),
+        ("exact-divisor", "pub fnc main(): int { return 64 % 8; }\n", 0),
+        ("divisor-one", "pub fnc main(): int { return (-14 % 1) + 6; }\n", 6),
+    ];
+    for (name, program, expected) in positives {
+        fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
+        let compiled = run(compiler, [source.as_os_str()])?;
+        require(
+            compiled.status.success() && stdout(&compiled).starts_with("; ModuleID"),
+            format!("{name}: native frontend rejected source: {}", stderr(&compiled)),
+        )?;
+        let llvm_ir = stdout(&compiled);
+        require(
+            llvm_ir.contains("srem i64 ") || llvm_ir.contains("srem i64\n"),
+            format!("{name}: emitted IR lacks signed remainder"),
+        )?;
+        fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
+        for level in ["-O0", "-O2"] {
+            let linked = run(
+                clang,
+                [
+                    OsStr::new(level),
+                    ir.as_os_str(),
+                    OsStr::new("-o"),
+                    executable.as_os_str(),
+                ],
+            )?;
+            require(
+                linked.status.success(),
+                format!("{name} {level}: Clang failed: {}", stderr(&linked)),
+            )?;
+            let executed = run(&executable, std::iter::empty::<&str>())?;
+            require(
+                executed.status.code() == Some(expected)
+                    && executed.stdout.is_empty()
+                    && executed.stderr.is_empty(),
+                format!("{name} {level}: observed {:?}, expected {expected}",
+                    executed.status.code()),
+            )?;
+        }
+    }
+    let negatives = [
+        ("zero-divisor", "pub fnc main(): int { return 5 % 0; }\n",
+            "positive nonzero literal divisor"),
+        ("negative-divisor", "pub fnc main(): int { return 5 % -1; }\n",
+            "positive nonzero literal divisor"),
+        ("computed-divisor", "pub fnc main(): int { return 5 % (3 - 1); }\n",
+            "positive nonzero literal divisor"),
+        ("runtime-divisor", "fnc rem(int n): int { return 5 % n; }\n\
+            pub fnc main(): int { return rem(2); }\n",
+            "positive nonzero literal divisor"),
+        ("wrong-type", "pub fnc main(): int { return true % 2; }\n",
+            "arithmetic requires int"),
+    ];
+    for (name, program, diagnostic) in negatives {
+        fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
+        let rejected = run(compiler, [source.as_os_str()])?;
+        require(
+            !rejected.status.success()
+                && rejected.stdout.is_empty()
+                && stderr(&rejected).contains(diagnostic),
+            format!("{name}: missing fail-closed diagnostic {diagnostic:?}: {}",
+                stderr(&rejected)),
+        )?;
+    }
+    println!(
+        "Native Java-compatible signed remainder: {} compiled cases at -O0/-O2, {} fail-closed negatives",
+        positives.len(), negatives.len()
+    );
+    Ok(())
+}
+
 fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, String> {
     args.get(index)
         .map(PathBuf::from)
@@ -697,6 +784,11 @@ fn real_main() -> Result<(), String> {
             let compiler = path_arg(&args, 2, "usage: native-async-io-boundary <compiler>")?;
             native_async_io_boundary(&compiler)
         }
+        Some("native-remainder-parity") => {
+            let compiler = path_arg(&args, 2, "usage: native-remainder-parity <compiler> <clang>")?;
+            let clang = path_arg(&args, 3, "usage: native-remainder-parity <compiler> <clang>")?;
+            native_remainder_parity(&compiler, &clang)
+        }
         Some("named-call-order") => {
             let compiler = path_arg(&args, 2, "usage: named-call-order <compiler> <fixture>")?;
             let fixture = path_arg(&args, 3, "usage: named-call-order <compiler> <fixture>")?;
@@ -720,7 +812,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }
