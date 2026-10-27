@@ -1249,13 +1249,18 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 )
 
     def _publish_fixture(self, api, verify_source_pr=None, require_exact_ref=None,
-                         delete_exact_ref=None):
+                         delete_exact_ref=None, checked_destination=None):
         contract = carrier_contract()
         rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
         manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+        destination_patch = (
+            patch.object(v3, "checked_destination", side_effect=checked_destination)
+            if checked_destination is not None
+            else patch.object(v3, "checked_destination", return_value=(BASE_TREE, PLAN))
+        )
         patches = [
             patch.object(v3, "protected_authority", return_value=(PROTECTED, contract)),
-            patch.object(v3, "checked_destination", return_value=(BASE_TREE, PLAN)),
+            destination_patch,
             patch.object(
                 v3, "exact_source_tree",
                 return_value=(
@@ -1283,6 +1288,66 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         if delete_exact_ref is not None:
             patches.append(patch.object(v3, "delete_exact_ref", side_effect=delete_exact_ref))
         return contract, patches
+
+    def test_publish_rechecks_full_destination_after_authorization_and_rolls_back(self):
+        def api(route, method="GET", payload=None):
+            if method == "POST" and route.endswith("/git/blobs"):
+                data = base64.b64decode(payload["content"], validate=True)
+                return {"sha": v3.git_blob_sha(data)}
+            if method == "POST" and route.endswith("/git/trees"):
+                return {
+                    "sha": SOURCE_TREE
+                    if payload.get("base_tree") is None
+                    else "3" * 40
+                }
+            if method == "POST" and route.endswith("/git/commits"):
+                return {"sha": CARRIER_COMMIT}
+            if method == "POST" and route.endswith("/git/refs"):
+                return {
+                    "ref": payload["ref"],
+                    "object": {"sha": payload["sha"]},
+                }
+            raise AssertionError((method, route))
+
+        deleted = []
+        contract, patches = self._publish_fixture(
+            api,
+            checked_destination=[
+                (BASE_TREE, PLAN),
+                (BASE_TREE, PLAN),
+                (BASE_TREE, PLAN),
+                v3.Denied("carrier protection weakened before dispatch"),
+            ],
+            delete_exact_ref=lambda *args: deleted.append(args) or True,
+        )
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patches[5], patches[6], patches[7], patches[8], patches[9],
+            patch.object(v3, "dispatch_carrier") as dispatch,
+        ):
+            with self.assertRaisesRegex(
+                v3.Denied, "carrier protection weakened before dispatch"
+            ):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                    now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
+                )
+        dispatch.assert_not_called()
+        self.assertEqual(
+            deleted,
+            [
+                (
+                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT,
+                    CARRIER_COMMIT, contract["repository_id"],
+                ),
+                (
+                    "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                    CARRIER_COMMIT, contract["repository_id"],
+                ),
+            ],
+        )
+
 
     def test_publish_rolls_back_payload_if_pr_head_moves_before_authorization(self):
         writes = []
