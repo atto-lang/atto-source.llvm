@@ -99,6 +99,10 @@ int main(void) {
     value = 77;
     check(oreslang_rt_gen_values_next(forged,&value)==-1, "forged yield index accepted as DONE");
     check(forged[0]==1 && forged[1]==99 && value==77, "forged index rejection mutated frame/output");
+    int64_t forged_done[2] = {2, 1};
+    check(oreslang_rt_gen_values_next(forged_done,&value)==-1, "forged terminal index accepted as DONE");
+    check(oreslang_rt_gen_values_close(forged_done)==-1, "forged terminal index accepted by close");
+    check(forged_done[0]==2 && forged_done[1]==1, "forged terminal rejection mutated frame");
     check(oreslang_rt_gen_values_init(frame)==1, "init failed");
     check(oreslang_rt_gen_values_init(frame)==0, "double init accepted");
     for (int64_t expected=1; expected<=3; ++expected) {
