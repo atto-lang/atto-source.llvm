@@ -1004,6 +1004,84 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             self.assertEqual(v3.authorized_source_main_sha(), "2" * 40)
         protected.assert_called_once_with()
 
+    def test_review_attestation_binds_exact_merge_commit_not_same_tree_successor(self):
+        contract = carrier_contract()
+        reviewed_head = "f" * 40
+        review = {
+            "state": "APPROVED",
+            "commit_id": reviewed_head,
+            "submitted_at": "2026-10-27T03:00:00Z",
+        }
+        pr = {
+            "number": contract["review_pr"],
+            "state": "closed",
+            "merged_at": "2026-10-27T03:05:00Z",
+            "merge_commit_sha": BASE,
+            "user": {
+                "id": v3.CARRIER_REVIEW_USER_ID + 1,
+                "login": "independent-author",
+            },
+            "head": {
+                "sha": reviewed_head,
+                "repo": {
+                    "full_name": "trusted/ci",
+                    "id": contract["repository_id"],
+                },
+            },
+            "base": {
+                "ref": "main",
+                "repo": {
+                    "full_name": "trusted/ci",
+                    "id": contract["repository_id"],
+                },
+            },
+        }
+
+        def api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/pulls/17":
+                return pr
+            if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
+                return {
+                    "path": ".github/CODEOWNERS",
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
+                    "sha": CARRIER_CODEOWNERS_BLOB,
+                }
+            raise AssertionError(route)
+
+        branch = {"commit": {"sha": BASE}}
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "_latest_review", return_value=review),
+            patch.object(
+                v3, "carrier_commit_tree",
+                side_effect=["1" * 40, "1" * 40],
+            ),
+        ):
+            self.assertEqual(
+                v3.review_attested_carrier_main(
+                    "trusted/ci", contract, branch
+                ),
+                BASE,
+            )
+
+        successor = dict(pr)
+        successor["merge_commit_sha"] = "e" * 40
+
+        def successor_api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/pulls/17":
+                return successor
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=successor_api):
+            with self.assertRaisesRegex(
+                v3.Denied, "exact independently reviewed PR merge commit"
+            ):
+                v3.review_attested_carrier_main(
+                    "trusted/ci", contract, branch
+                )
+
     def test_protected_carrier_authority_requires_premerge_review(self):
         contract = carrier_contract()
         with (
