@@ -311,6 +311,7 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     if (expr.kind == Expression::Kind::Add ||
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply ||
+            expr.kind == Expression::Kind::Remainder ||
             expr.kind == Expression::Kind::Equal ||
             expr.kind == Expression::Kind::NotEqual ||
             expr.kind == Expression::Kind::Less ||
@@ -437,7 +438,8 @@ bool native_constructor_scalar_tree(const Expression& expr,
     if (expr.kind == Kind::Negate || expr.kind == Kind::LogicalNot)
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
-            expr.kind == Kind::Multiply || expr.kind == Kind::Equal ||
+            expr.kind == Kind::Multiply || expr.kind == Kind::Remainder ||
+            expr.kind == Kind::Equal ||
             expr.kind == Kind::NotEqual || expr.kind == Kind::Less ||
             expr.kind == Kind::LessEqual || expr.kind == Kind::Greater ||
             expr.kind == Kind::GreaterEqual || expr.kind == Kind::LogicalAnd ||
@@ -2934,14 +2936,22 @@ private:
             if (token_.text == "/")
                 fail("native floating division unsupported: int/int yields float in Java; "
                      "LLVM float typing and zero-divisor semantics are not implemented");
-            if (token_.text == "%")
-                fail("native integer remainder unsupported: zero-divisor and overflow contracts "
-                     "are not implemented");
+            const bool remainder = token_.text == "%";
             const auto offset = token_.offset;
             advance();
-            auto expr = make_expression(Expression::Kind::Multiply, offset);
+            auto right = unary();
+            // Java signed integer remainder has a zero-divisor failure
+            // channel. Native typed panic/unwind admission is not available
+            // yet: admit only a statically positive, nonzero literal divisor.
+            // This is a deliberately strict executable parity subset.
+            if (remainder && (right->kind != Expression::Kind::Integer ||
+                              right->integer == 0))
+                fail("native remainder requires a positive nonzero literal divisor "
+                     "until typed zero-divisor effects are implemented");
+            auto expr = make_expression(remainder ? Expression::Kind::Remainder
+                                                 : Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
-            expr->right = unary();
+            expr->right = std::move(right);
             left = std::move(expr);
         }
         return left;
@@ -3670,6 +3680,7 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Remainder:
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual:
             case Expression::Kind::Less:
@@ -3848,7 +3859,8 @@ private:
                 return expr.resolved_type = left;
             }
             case Expression::Kind::Subtract:
-            case Expression::Kind::Multiply: {
+            case Expression::Kind::Multiply:
+            case Expression::Kind::Remainder: {
                 ScalarType left = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
