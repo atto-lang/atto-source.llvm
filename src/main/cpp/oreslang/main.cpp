@@ -27,6 +27,20 @@
 #include <string_view>
 
 
+// Compiler failures can include guest-controlled tokens and filenames.
+// Never emit terminal control bytes, unbounded exception text or the exact
+// source filesystem path in a native compiler diagnostic.
+static void print_safe_diagnostic(std::ostream& stream, std::string_view message,
+                                  std::size_t limit) {
+    const auto count = std::min(message.size(), limit);
+    for (std::size_t i = 0; i < count; ++i) {
+        const unsigned char byte = static_cast<unsigned char>(message[i]);
+        stream.put(byte >= 32 && byte < 127 ? static_cast<char>(byte) : '?');
+    }
+    if (message.size() > limit) stream << "...[truncated]";
+}
+
+
 static bool paths_alias(const char* source_path, const std::string& report_path) {
     std::error_code source_error;
     std::error_code report_error;
@@ -372,6 +386,8 @@ int main(int argc, char** argv) {
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
+    std::string source_module;
+    std::string source_namespace;
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
@@ -404,6 +420,8 @@ int main(int argc, char** argv) {
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
             admitted_provider_bits);
+        source_module = ast.module;
+        source_namespace = ast.namespace_name;
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
@@ -740,7 +758,38 @@ int main(int argc, char** argv) {
         if (coreLog)
             coreLog->record(oreslang::CoreLog::Level::Error,
                             oreslang::CoreLog::EventId::CompileFailed, 1);
-        std::cerr << "oreslang-llvmc: " << error.what() << '\n';
+        std::cerr << "oreslang-llvmc: ";
+        std::string diagnostic = error.what();
+        if (path != nullptr && *path != '\0') {
+            const std::string source_path(path);
+            // Full host paths are private CI metadata, not error context.
+            // Replace exact input-path occurrences before rendering.
+            std::size_t found = 0;
+            while ((found = diagnostic.find(source_path, found)) != std::string::npos) {
+                diagnostic.replace(found, source_path.size(), "<source>");
+                found += sizeof("<source>") - 1;
+            }
+        }
+        print_safe_diagnostic(std::cerr, diagnostic, 2048);
+        if (path != nullptr) {
+            std::string_view source_name(path);
+            const auto slash = source_name.find_last_of("/\\");
+            if (slash != std::string_view::npos) source_name.remove_prefix(slash + 1);
+            std::cerr << " [file: ";
+            print_safe_diagnostic(std::cerr, source_name, 128);
+            std::cerr << "]";
+        }
+        if (!source_module.empty()) {
+            std::cerr << " [module: ";
+            print_safe_diagnostic(std::cerr, source_module, 128);
+            std::cerr << "]";
+        }
+        if (!source_namespace.empty()) {
+            std::cerr << " [namespace: ";
+            print_safe_diagnostic(std::cerr, source_namespace, 128);
+            std::cerr << "]";
+        }
+        std::cerr << '\n';
         if (coreLog) coreLog->dump(stderr);
         return 1;
     }
