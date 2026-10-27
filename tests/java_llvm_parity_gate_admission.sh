@@ -100,6 +100,18 @@ if [[ -n "$(git -C "$temp/java" status --porcelain --untracked-files=all)" ]]; t
 fi
 expect_rejected "hidden tracked Java fixture mutation" 65 "unverified Git index flags" "$launcher"
 
+# A skip-worktree bit can hide edited files from Git porcelain, much like
+# assume-unchanged. This is especially dangerous for compiler inputs and must
+# fail closed even if Git reports no modifications.
+make_repos
+git -C "$temp/llvm" update-index --skip-worktree tests/fixtures/native-class-string/main-1.ores
+printf 'tampered source via skip-worktree\n' > "$temp/llvm/tests/fixtures/native-class-string/main-1.ores"
+if [[ -n "$(git -C "$temp/llvm" status --porcelain --untracked-files=all)" ]]; then
+  echo "FAIL setup: skip-worktree mutation unexpectedly visible to git status" >&2
+  exit 1
+fi
+expect_rejected "skip-worktree LLVM fixture mutation" 65 "unverified Git index flags" "$launcher"
+
 # --untracked-files=all still omits Git-ignored sources; imported ignored
 # Oreslang code may not be credited to the pinned source revision.
 make_repos
