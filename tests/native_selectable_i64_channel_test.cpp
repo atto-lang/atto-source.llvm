@@ -472,7 +472,41 @@ static void close_notification_copy_failure_does_not_close_channel() {
     throw_on_copy = false;
     assert(channel.close());
     assert(channel.closed());
-    assert(read_wait.close());
+    assert(channel.pending_readers() == 0);
+    assert(!read_wait.close());
+}
+
+static void terminal_close_observer_is_one_shot() {
+    using Channel = NativeSelectableI64Channel<1, 2>;
+
+    {
+        Channel channel;
+        int callbacks = 0;
+        auto wait = channel.subscribe_readable(
+            [&](const Channel::Subscription&) {
+                ++callbacks;
+                assert(channel.closed());
+            });
+        assert(channel.pending_readers() == 1);
+        assert(channel.close());
+        assert(callbacks == 1);
+        assert(channel.pending_readers() == 0);
+        assert(!wait.close());
+    }
+
+    {
+        Channel channel;
+        assert(channel.close());
+        int callbacks = 0;
+        auto wait = channel.subscribe_writable(
+            [&](const Channel::Subscription&) {
+                ++callbacks;
+                assert(channel.closed());
+            });
+        assert(callbacks == 1);
+        assert(channel.pending_writers() == 0);
+        assert(!wait.close());
+    }
 }
 
 static void readiness_callback_may_reenter_channel_after_unlock() {
@@ -508,6 +542,7 @@ int main() {
     close_and_plain_write_share_one_channel_linearization_point();
     notification_copy_failure_is_commit_atomic();
     close_notification_copy_failure_does_not_close_channel();
+    terminal_close_observer_is_one_shot();
     readiness_callback_may_reenter_channel_after_unlock();
     return 0;
 }
