@@ -3,6 +3,7 @@
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
+#include "oreslang/frontend/LibraryProfile.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
@@ -184,8 +185,7 @@ int main(int argc, char** argv) {
     bool target_seen = false;
     bool native_hard_rt_profile = false;
     bool profile_seen = false;
-    enum class LibraryProfile { Auto, Core, Std };
-    LibraryProfile library_profile = LibraryProfile::Auto;
+    std::optional<oreslang::frontend::LibraryProfile> library_profile;
     bool library_profile_seen = false;
     bool rt_check_only = false;
     bool rt_entry_seen = false;
@@ -209,11 +209,8 @@ int main(int argc, char** argv) {
             library_profile_seen = true;
             const std::string profile =
                 arg.substr(std::string_view("--library-profile=").size());
-            if (profile == "core") {
-                library_profile = LibraryProfile::Core;
-            } else if (profile == "std") {
-                library_profile = LibraryProfile::Std;
-            } else {
+            library_profile = oreslang::frontend::parse_library_profile(profile);
+            if (!library_profile.has_value()) {
                 std::cerr << "unsupported library profile: " << profile
                           << " (expected core or std)\n";
                 return 2;
@@ -296,19 +293,20 @@ int main(int argc, char** argv) {
     // is explicitly no-OS, and the std profile on the ordinary hosted target.
     // This is intentionally fail-closed until effect/capability closure can
     // prove additional combinations.
-    if (library_profile == LibraryProfile::Auto) {
-        library_profile = (wasm32_target || cortex_m_target)
-            ? LibraryProfile::Core
-            : LibraryProfile::Std;
+    const bool freestanding_library_target = wasm32_target || cortex_m_target;
+    if (!library_profile.has_value()) {
+        library_profile =
+            oreslang::frontend::default_library_profile(freestanding_library_target);
     }
-    if (library_profile == LibraryProfile::Std && (wasm32_target || cortex_m_target)) {
-        std::cerr << "ores.std requires a certified hosted target; "
-                     "freestanding targets use ores.core\n";
-        return 2;
-    }
-    if (library_profile == LibraryProfile::Core && !wasm32_target && !cortex_m_target) {
-        std::cerr << "ores.core native execution currently requires a certified "
-                     "freestanding target (wasm32-unknown-unknown or thumbv7m-none-eabi)\n";
+    const std::string_view library_profile_error =
+        oreslang::frontend::library_profile_admission_error(
+            *library_profile, freestanding_library_target);
+    if (!library_profile_error.empty()) {
+        std::cerr << library_profile_error;
+        if (*library_profile == oreslang::frontend::LibraryProfile::Core) {
+            std::cerr << " (wasm32-unknown-unknown or thumbv7m-none-eabi)";
+        }
+        std::cerr << "\n";
         return 2;
     }
 
