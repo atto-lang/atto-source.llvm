@@ -39,9 +39,9 @@ lexical scope ownership, capture and escape rules are implemented.
 
 ## Fail-closed compiler boundary
 
-All functions containing local aggregates currently fail
-`LOCAL_AGGREGATE_ABI_UNSUPPORTED` in `Parser::validate`, before ownership
-and LLVM lowering. This is intentional. In particular, the locally declared
+All local aggregate forms outside the explicitly gated native scalar
+subset below fail `LOCAL_AGGREGATE_ABI_UNSUPPORTED` in `Parser::validate`,
+before ownership and LLVM lowering. This is intentional. In particular, the locally declared
 `T` in the public return signature is not interchangeable with a class
 or `i64`. A syntax-only parse is *not* proof of valid code, stack allocation,
 zero-copy transport, stable identity, or an exported ABI.
@@ -49,6 +49,34 @@ zero-copy transport, stable identity, or an exported ABI.
 Diagnostics also reject `const type`, local classes, duplicate declarations,
 invalid field names, and mixed positional/named `T{...}` arguments. Unsupported
 syntax must not emit LLVM IR or silently coerce records into structs.
+
+## Stage-2 native scalar subset (draft, unverified)
+
+The follow-on commits add *implementation paths* for a deliberately small
+native subset, reusing already-established class layout and ownership lowering:
+
+* A **nominal** callable-local `struct T` with 1–16 `int` fields, a single
+  declaration per function, zero explicit parameters/generics, no declared
+  effects and no source suspension. It receives a compiler-owned, unspellable
+  layout identity derived from its source position and local type name.
+* A public ordinary `main(): int` (or other scalar-return function) may
+  construct that type through `val T p = T{...}`, use its fixed fields,
+  and return scalar results. This constructs an actual native stack class
+  value, not a pseudo-i64 struct.
+* An unexported private function may return the same locally named nominal
+  type through the existing checked immutable-leaf record region ABI.
+  Exporting this hidden return type remains forbidden.
+* Named arguments are checked against the declaration and reordered into
+  native layout order. Missing/extra/duplicate fields, non-int field
+  definitions and mutable/fallible representations remain gated.
+
+This does **not** prove that the generated IR compiles and runs; only a
+successful exact-head compiler run followed by Clang/OS execution can establish
+that evidence. The CTest matrix requests three runnable field-read cases
+when Clang is available; it otherwise reports IR-only coverage.
+
+Java PR #2179 remains syntax-stage only. These LLVM-specific compiler
+narrow-slice changes do **not** imply Java/LLVM feature or semantic parity.
 
 ## Follow-up gates (in order)
 
