@@ -39,6 +39,9 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
 /* Deterministic test-only cancellation of the one currently admitted readable
  * await. Returns 1 only if the exact actor-owned one-shot watch was cancelled. */
 int oreslang_source_actor_test_cancel_readable_await(void);
+/* Read-only proof hook: true only after the exact one-shot watch identity has
+ * been published under the source-group mutex and before terminal settlement. */
+int oreslang_source_actor_test_readable_await_admitted(void);
 /* Seal the compiler-owned source-root actor for deterministic
  * PRODUCER_RETIRED projection. Test-only; ordinary source cannot target root. */
 int oreslang_source_actor_test_stop_readable_root(void);
