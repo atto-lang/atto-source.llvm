@@ -65,3 +65,12 @@ not a proof that native generator lifetime tracking is implemented.
 New native Task/Future support must be separately tested for loan lifetime
 and ownership parity; these fixture checks do not certify that newer source
 subset. CI is required on the merged exact tree.
+
+### Native positive-control anti-vacuity check
+
+Positive admission fixtures require a line beginning with the LLVM IR
+`define` instruction, not merely the substring `define` somewhere in
+compiler stdout. The three valid scalar controls prevent a parser-only
+rejection path from being mistaken for ownership verification. This
+strengthens the *test harness*; it is not a substitute for running it
+against the production compiler on the pinned source tree.

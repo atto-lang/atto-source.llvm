@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression: LLVM native borrow admission must reject invalid ownership."""
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -78,10 +79,13 @@ def main():
             path.write_text(source, encoding="utf-8")
             result = subprocess.run([sys.argv[1], str(path)], capture_output=True,
                                     text=True, check=False, timeout=20)
-            if result.returncode != 0 or "define" not in result.stdout:
+            # Match an actual LLVM definition line, not a casual mention
+            # of 'define' in diagnostics, banners, or comments.
+            has_definition = re.search(r"(?m)^\s*define\s+", result.stdout) is not None
+            if result.returncode != 0 or not has_definition:
                 raise AssertionError(
-                    f"{title}: expected LLVM IR, got exit {result.returncode}: "
-                    + result.stderr
+                    f"{title}: expected LLVM function definition, "
+                    f"got exit {result.returncode}: " + result.stderr
                 )
     print(f"native borrow admission: {len(CASES)} invalid programs rejected "
           f"without IR; {len(valid_cases)} valid controls emitted IR")
