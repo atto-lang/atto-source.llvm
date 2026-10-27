@@ -67,6 +67,7 @@ MAX_GH_API_RESPONSE_BYTES = 24 * 1024 * 1024
 GITHUB_ACTIONS_APP_ID = 15368
 SOURCE_POLICY_CHECK = "private-ci-governance"
 CARRIER_POLICY_CHECK = "verifier-tests"
+CARRIER_DISPATCH_EVENT = "oreslang-private-ci-exact-tree"
 TTL = dt.timedelta(hours=24)
 
 
@@ -276,6 +277,38 @@ def gh_api(route, method="GET", payload=None):
     if not isinstance(result, dict):
         raise Denied("unexpected GitHub API response shape")
     return result
+
+
+def dispatch_carrier(repository, carrier_commit, source_tree):
+    """Dispatch the protected-main carrier workflow with exact immutable inputs."""
+    if not isinstance(repository, str) or not NAME.fullmatch(repository):
+        raise Denied("carrier dispatch repository invalid")
+    carrier_commit = valid_sha(carrier_commit, "carrier dispatch commit SHA")
+    source_tree = valid_sha(source_tree, "carrier dispatch source tree SHA")
+    payload = {
+        "event_type": CARRIER_DISPATCH_EVENT,
+        "client_payload": {
+            "carrier_sha": carrier_commit,
+            "source_tree": source_tree,
+        },
+    }
+    argv = [
+        trusted_github_cli(), "api", "--method", "POST",
+        f"repos/{repository}/dispatches",
+        "--header", "Accept: application/vnd.github+json",
+        "--input", "-",
+    ]
+    proc = run_bounded_gh(
+        argv,
+        input=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        env=github_api_environment(),
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        raise Denied("carrier repository_dispatch failed")
+    if proc.stdout.strip():
+        raise Denied("carrier repository_dispatch returned unexpected body")
+    return payload
 
 
 def decode_contents(item, path, max_bytes):
@@ -1499,6 +1532,10 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         require_exact_ref(
             repository, authorization, carrier_commit, contract["repository_id"]
         )
+
+        # Execute only through the workflow definition on carrier default main.
+        # The source-bearing ref is an immutable payload, never workflow authority.
+        dispatch_carrier(repository, carrier_commit, source_tree)
     except BaseException:
         rollback_error = None
         if authorization_attempted:
@@ -1527,6 +1564,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         "commit": carrier_commit,
         "branch": branch,
         "authorization_ref": authorization,
+        "dispatch_event": CARRIER_DISPATCH_EVENT,
         "source_tree": source_tree,
         "manifest_sha256": manifest_sha256,
         "receipt_sha256": receipt_digest,
