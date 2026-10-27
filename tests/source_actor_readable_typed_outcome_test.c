@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 static atomic_int continuation_calls;
+static atomic_int message_calls;
 static void check(int ok) { if (!ok) abort(); }
 
 static void actor_init(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
@@ -17,7 +18,9 @@ static void actor_init(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) 
 }
 static int64_t actor_message(
         OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
-    (void)heap; check(domain != 0 && epoch != 0); return payload;
+    (void)heap; check(domain != 0 && epoch != 0);
+    atomic_fetch_add_explicit(&message_calls, 1, memory_order_acq_rel);
+    return payload;
 }
 static int64_t resumed(void* actor) {
     (void)actor;
@@ -102,6 +105,50 @@ static void run_cancelled(void) {
     close_pipe(pipefd); oreslang_source_actor_stop(actor);
 }
 
+static void run_stalled_read_allows_unrelated_actor_progress(void) {
+    int pipefd[2] = {-1, -1}; check(make_pipe(pipefd, 1));
+    void* waiting_actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
+    void* progress_actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
+    check(waiting_actor != NULL && progress_actor != NULL);
+    reset_calls();
+    atomic_store_explicit(&message_calls, 0, memory_order_release);
+
+    AwaitThread await = {
+        .actor = waiting_actor,
+        .fd = pipefd[0],
+        .token = UINT64_C(0x6180)
+    };
+    pthread_t thread; check(pthread_create(&thread, NULL, await_main, &await) == 0);
+
+    /*
+     * The await thread is trusted outer-host glue and may park on the reactor
+     * completion fd. That wait must consume no source-actor carrier: unrelated
+     * DATA must still run before this silent readable wait settles.
+     */
+    oreslang_source_actor_send(progress_actor, INT64_C(77));
+    const struct timespec pause = { .tv_sec = 0, .tv_nsec = 1000000 };
+    int progressed = 0;
+    for (int i = 0; i < 3000; ++i) {
+        if (atomic_load_explicit(&message_calls, memory_order_acquire) != 0) {
+            progressed = 1;
+            break;
+        }
+        check(nanosleep(&pause, NULL) == 0);
+    }
+    check(progressed);
+    check(atomic_load_explicit(&continuation_calls, memory_order_acquire) == 0);
+
+    wait_for_cancel_success();
+    check(pthread_join(thread, NULL) == 0);
+    check(await.outcome == ORES_SOURCE_READABLE_AWAIT_CANCELLED);
+    check(await.result == 0);
+    check(atomic_load_explicit(&continuation_calls, memory_order_acquire) == 0);
+
+    close_pipe(pipefd);
+    oreslang_source_actor_stop(progress_actor);
+    oreslang_source_actor_stop(waiting_actor);
+}
+
 static void run_cancel_admission_race_stress(void) {
     /*
      * Repeatedly race the trusted cancellation hook with watch admission.
@@ -170,6 +217,7 @@ static void run_failed_admission(void) {
 int main(void) {
     run_ready();
     run_cancelled();
+    run_stalled_read_allows_unrelated_actor_progress();
     run_cancel_admission_race_stress();
     run_terminated();
     run_failed_admission();
