@@ -128,6 +128,19 @@ def main():
                 if executed.returncode != expected:
                     raise AssertionError((label, "wrong native field result", expected,
                                           executed.returncode, executed.stderr[:1000]))
+        # A private opaque local struct return may lower to the existing
+        # checked record handle; this is IR admission, not an externally
+        # callable/public local-type ABI or proof of native runtime execution.
+        private_return = compile_guest(args.compiler,
+            "fnc make_point(): Point { struct Point { int x } return Point{5}; } "
+            "pub fnc main(): int { return 0; }", source)
+        if private_return.returncode or not private_return.stdout.startswith("; ModuleID"):
+            raise AssertionError(("private local return IR admission",
+                                  private_return.returncode,
+                                  private_return.stderr[:1000]))
+        if "ores_record_new" not in private_return.stdout:
+            raise AssertionError(("private local return missing checked record region ABI",
+                                  private_return.stdout[:1000]))
         for label, program, diagnostic in errors:
             result = compile_guest(args.compiler, program, source)
             if result.returncode == 0 or result.stdout.strip():
@@ -148,7 +161,7 @@ def main():
     print(f"PASS {len(executable)} native scalar stack programs"
           + (" (LLVM+Clang+OS)" if args.clang else " (IR-only; OS execution unavailable)")
           + f", {len(accepted_syntax)} gated syntax, {len(errors)} fail-closed negatives, "
-            "1 baseline and 1 scope-isolation case")
+            "1 private return IR, 1 baseline and 1 scope-isolation case")
 
 
 if __name__ == "__main__":
