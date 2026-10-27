@@ -52,8 +52,6 @@ inline void validate_manifest(const std::string& manifest_bytes) {
 
     const std::regex version(
         R"ores(^[ \t]*schema_version[ \t]*=[ \t]*"1"[ \t]*(?:#.*)?$)ores");
-    const std::regex version_key(
-        R"ores(^[ \t]*(?:schema_version|"schema_version"|'schema_version')[ \t]*=.*$)ores");
     const std::regex project_section(
         R"ores(^[ \t]*\[[ \t]*(?:project|"project"|'project')[ \t]*\][ \t]*(?:#.*)?$)ores");
     const std::regex project_assignment(
@@ -77,11 +75,28 @@ inline void validate_manifest(const std::string& manifest_bytes) {
             in_root_section = false;
             in_project_section = std::regex_match(line, project_section);
         }
-        if (in_root_section && std::regex_match(line, version_key)) {
-            if (!std::regex_match(line, version))
-                throw std::runtime_error(
-                    "native project-root import requires schema_version = \"1\"");
-            ++version_count;
+        if (in_root_section) {
+            const auto equals = line.find('=');
+            if (equals != std::string::npos) {
+                auto key = line.substr(0, equals);
+                const auto begin = key.find_first_not_of(" \t");
+                const auto end = key.find_last_not_of(" \t");
+                if (begin != std::string::npos)
+                    key = key.substr(begin, end - begin + 1);
+                else
+                    key.clear();
+                const bool schema_key =
+                    key == "schema_version" ||
+                    key == "\"schema_version\"" ||
+                    key == "'schema_version'";
+                if (schema_key) {
+                    if (key != "schema_version" ||
+                            !std::regex_match(line, version))
+                        throw std::runtime_error(
+                            "native project-root import requires canonical schema_version = \"1\"");
+                    ++version_count;
+                }
+            }
         }
     }
     if (version_count != 1)
