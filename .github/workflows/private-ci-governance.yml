@@ -1,17 +1,8 @@
 name: Private CI governance
 on:
+  # Required on protected main, so this context must exist for every PR.
+  # Path-filtering a required context can deadlock unrelated changes.
   pull_request:
-    paths:
-      - '.github/CODEOWNERS'
-      - '.github/private-ci-approved-repositories.txt'
-      - '.github/private-ci-carrier-contracts.json'
-      - '.github/workflows/private-ci-governance.yml'
-      - 'docs/security/CI_PRIVATE_SOURCE_MIRRORING.md'
-      - 'scripts/audit-private-ci-governance.py'
-      - 'scripts/test-audit-private-ci-governance.py'
-      - 'scripts/publish-private-ci-source-v3.py'
-      - 'scripts/test-publish-private-ci-source-v3.py'
-      - 'scripts/run-in-private-ci-destination.sh'
   push:
     branches: [main]
     paths:
