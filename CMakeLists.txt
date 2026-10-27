@@ -4132,3 +4132,22 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-async-io-epoll-continuation-test)
     set_tests_properties(async_io_epoll_continuation_retirement PROPERTIES TIMEOUT 60)
 endif()
+
+
+# Actor lifecycle integration: an admitted native I/O operation holds the exact
+# actor incarnation's resource loan until its kernel registration and callback
+# are physically retired. get_done() must remain pending before that point.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-async-io-actor-lifetime-pin-test
+        tests/async_io_actor_lifetime_pin_test.cpp)
+    target_include_directories(oreslang-async-io-actor-lifetime-pin-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-async-io-actor-lifetime-pin-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-async-io-actor-lifetime-pin-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-async-io-actor-lifetime-pin-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME async_io_actor_done_physical_retirement
+        COMMAND oreslang-async-io-actor-lifetime-pin-test)
+    set_tests_properties(async_io_actor_done_physical_retirement PROPERTIES TIMEOUT 60)
+endif()
