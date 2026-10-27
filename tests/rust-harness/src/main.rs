@@ -685,6 +685,7 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             pub fnc main(): int { return rem(52); }\n", 3),
         ("exact-divisor", "pub fnc main(): int { return 64 % 8; }\n", 0),
         ("divisor-one", "pub fnc main(): int { return (-14 % 1) + 6; }\n", 6),
+        ("signed-min-divisor-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % 1) + 11; }\n", 11),
     ];
     for (name, program, expected) in positives {
         fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
