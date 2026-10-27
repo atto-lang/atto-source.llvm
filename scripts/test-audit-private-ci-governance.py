@@ -33,7 +33,9 @@ class PolicyAuditTest(unittest.TestCase):
             "full_name": audit.SOURCE,
             "id": audit.SOURCE_ID,
             "private": True,
+            "visibility": "private",
             "default_branch": "main",
+            "fork": False,
             "archived": False,
             "disabled": False,
         }
@@ -78,8 +80,16 @@ class PolicyAuditTest(unittest.TestCase):
         invalids = [
             (dict(repo, id=audit.SOURCE_ID + 1), branch, protection),
             (dict(repo, private=False), branch, protection),
+            (dict(repo, visibility="public"), branch, protection),
+            ({k: v for k, v in repo.items() if k != "visibility"}, branch, protection),
+            (dict(repo, fork=True), branch, protection),
+            ({k: v for k, v in repo.items() if k != "fork"}, branch, protection),
             (dict(repo, archived=True), branch, protection),
+            (dict(repo, archived="false"), branch, protection),
+            ({k: v for k, v in repo.items() if k != "archived"}, branch, protection),
             (dict(repo, disabled=True), branch, protection),
+            (dict(repo, disabled=0), branch, protection),
+            ({k: v for k, v in repo.items() if k != "disabled"}, branch, protection),
             (repo, dict(branch, protected=False), protection),
             (repo, {**branch, "commit": {"sha": "not-a-sha"}}, protection),
             (
