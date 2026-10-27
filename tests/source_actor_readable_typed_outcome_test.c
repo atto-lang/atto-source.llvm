@@ -121,12 +121,26 @@ static void run_stalled_read_allows_unrelated_actor_progress(void) {
     pthread_t thread; check(pthread_create(&thread, NULL, await_main, &await) == 0);
 
     /*
-     * The await thread is trusted outer-host glue and may park on the reactor
-     * completion fd. That wait must consume no source-actor carrier: unrelated
-     * DATA must still run before this silent readable wait settles.
+     * Wait until the exact one-shot watch has been published. From this point
+     * the await thread has left the actor lane and is entering/already inside
+     * the trusted outer-host completion-fd wait.
+     */
+    const struct timespec pause = { .tv_sec = 0, .tv_nsec = 1000000 };
+    int watch_admitted = 0;
+    for (int i = 0; i < 3000; ++i) {
+        if (oreslang_source_actor_test_readable_await_admitted()) {
+            watch_admitted = 1;
+            break;
+        }
+        check(nanosleep(&pause, NULL) == 0);
+    }
+    check(watch_admitted);
+
+    /*
+     * The trusted host wait must consume no source-actor carrier: unrelated
+     * DATA must still run while this silent readable await remains pending.
      */
     oreslang_source_actor_send(progress_actor, INT64_C(77));
-    const struct timespec pause = { .tv_sec = 0, .tv_nsec = 1000000 };
     int progressed = 0;
     for (int i = 0; i < 3000; ++i) {
         if (atomic_load_explicit(&message_calls, memory_order_acquire) != 0) {
