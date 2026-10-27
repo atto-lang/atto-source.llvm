@@ -1060,6 +1060,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patch.object(v3, "verify_published_root_and_commit"),
             patch.object(v3, "require_handoff_refs_absent"),
             patch.object(v3, "require_exact_ref"),
+            patch.object(v3, "dispatch_carrier") as dispatch,
             patch.object(v3, "gh_api", side_effect=api),
         ):
             result = v3.publish(
@@ -1074,6 +1075,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(
             result["authorization_ref"], "ci/authorized-" + CARRIER_COMMIT
         )
+        self.assertEqual(result["dispatch_event"], v3.CARRIER_DISPATCH_EVENT)
+        dispatch.assert_called_once_with("trusted/ci", CARRIER_COMMIT, SOURCE_TREE)
         receipt_raw = next(
             data for data in blob_bytes
             if b'"schema":"ores-private-ci-receipt-v3"' in data
@@ -1107,6 +1110,48 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 "refs/heads/ci/authorized-" + CARRIER_COMMIT,
             ],
         )
+
+
+    def test_dispatch_carrier_uses_exact_repository_dispatch_payload(self):
+        response = type(
+            "Result", (), {"returncode": 0, "stderr": "", "stdout": ""}
+        )()
+        with (
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "github_api_environment", return_value={"GH_TOKEN": "x"}),
+            patch.object(v3, "run_bounded_gh", return_value=response) as run,
+        ):
+            payload = v3.dispatch_carrier("trusted/ci", CARRIER_COMMIT, SOURCE_TREE)
+
+        self.assertEqual(
+            payload,
+            {
+                "event_type": v3.CARRIER_DISPATCH_EVENT,
+                "client_payload": {
+                    "carrier_sha": CARRIER_COMMIT,
+                    "source_tree": SOURCE_TREE,
+                },
+            },
+        )
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[0], "/usr/bin/gh")
+        self.assertIn("repos/trusted/ci/dispatches", argv)
+        self.assertEqual(
+            json.loads(run.call_args.kwargs["input"]),
+            payload,
+        )
+        self.assertEqual(run.call_args.kwargs["env"], {"GH_TOKEN": "x"})
+
+        bad_response = type(
+            "Result", (), {"returncode": 0, "stderr": "", "stdout": "{}"}
+        )()
+        with (
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "github_api_environment", return_value={"GH_TOKEN": "x"}),
+            patch.object(v3, "run_bounded_gh", return_value=bad_response),
+            self.assertRaisesRegex(v3.Denied, "unexpected body"),
+        ):
+            v3.dispatch_carrier("trusted/ci", CARRIER_COMMIT, SOURCE_TREE)
 
 
     def test_ref_request_uses_narrow_handoff_routes(self):
