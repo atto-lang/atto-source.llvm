@@ -1769,6 +1769,10 @@ if(BUILD_TESTING)
     add_test(NAME dop_inverted_type_admission
         COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}"
                 bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/dop_inverted_negative_admission.sh")
+    oreslang_contract_test(reject_unlowered_inverted_class
+        unsupported-inverted-class.ores
+        --diagnostic "native inverted class requires checked SoA ownership")
+
 
     add_executable(oreslang-managed-ref-test tests/managed_ref_test.cpp)
     target_include_directories(oreslang-managed-ref-test PRIVATE
