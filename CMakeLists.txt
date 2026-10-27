@@ -933,6 +933,27 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_auto_traits_and_logical_dop
         COMMAND oreslang-ownership-auto-traits-dop-test)
+    # Java/Graal #2048 parity proof for per-edge Future-pipeline ownership.
+    # The consumed Future<int> source slice below is intentionally narrower;
+    # general Future payloads and borrowed roots remain fail-closed. Pure,
+    # capture-free async unary stages are flattened inside the scheduler-owned
+    # pipeline task; suspending/effectful async stages remain unavailable.
+    add_executable(oreslang-future-pipeline-ownership-contract-test
+        tests/future_pipeline_ownership_contract_test.cpp)
+    target_include_directories(oreslang-future-pipeline-ownership-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-future-pipeline-ownership-contract-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_future_pipeline_ownership_contract
+        COMMAND oreslang-future-pipeline-ownership-contract-test)
+    add_executable(oreslang-future-pipeline-authority-fingerprint-test
+        tests/future_pipeline_authority_fingerprint_test.cpp)
+    target_include_directories(oreslang-future-pipeline-authority-fingerprint-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-future-pipeline-authority-fingerprint-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_future_pipeline_post_ownership_rewrite_guard
+        COMMAND oreslang-future-pipeline-authority-fingerprint-test)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -2008,6 +2029,85 @@ if(BUILD_TESTING)
     set_tests_properties(native_task_capture_admission_host_only
         PROPERTIES TIMEOUT 20)
 
+    # First executable source Task<int> slice. Producer work is admitted to one
+    # shared NativeActorScheduler carrier and never invoked inline by submit.
+    # Await is trusted external-host glue only; the checked runtime API must
+    # reject a scheduler carrier rather than park it.
+    add_executable(oreslang-source-task-i64-runtime-test
+        tests/source_task_i64_runtime_test.c
+        src/main/cpp/oreslang/runtime/SourceTaskRuntime.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-source-task-i64-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-source-task-i64-runtime-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-task-i64-runtime-test PRIVATE
+        ORESLANG_SOURCE_TASK_TESTING=1)
+    target_compile_options(oreslang-source-task-i64-runtime-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-source-task-i64-runtime-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_source_task_i64_shared_scheduler_runtime
+        COMMAND oreslang-source-task-i64-runtime-test)
+    set_tests_properties(native_source_task_i64_shared_scheduler_runtime
+        PROPERTIES TIMEOUT 30)
+
+    set(ORE_SOURCE_TASK_E2E
+        "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-task-i64-e2e")
+    add_custom_command(
+        OUTPUT "${ORE_SOURCE_TASK_E2E}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -O -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_task_i64_e2e.rs"
+            -o "${ORE_SOURCE_TASK_E2E}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_task_i64_e2e.rs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-task-i64-await.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
+        VERBATIM)
+    add_custom_target(oreslang-source-task-i64-e2e-build ALL
+        DEPENDS "${ORE_SOURCE_TASK_E2E}")
+    if(ORE_CLANG)
+        add_test(NAME native_source_task_i64_compiled_execution
+            COMMAND "${ORE_SOURCE_TASK_E2E}"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        add_test(NAME native_source_task_i64_compiled_execution
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_source_task_i64_compiled_execution
+        PROPERTIES TIMEOUT 180)
+
+    set(ORE_SOURCE_FUTURE_PIPELINE_E2E
+        "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-future-pipeline-i64-e2e")
+    add_custom_command(
+        OUTPUT "${ORE_SOURCE_FUTURE_PIPELINE_E2E}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -O -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_future_pipeline_i64_e2e.rs"
+            -o "${ORE_SOURCE_FUTURE_PIPELINE_E2E}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_future_pipeline_i64_e2e.rs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-future-pipeline-i64.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-future-pipeline-async-stage-i64.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
+        VERBATIM)
+    add_custom_target(oreslang-source-future-pipeline-i64-e2e-build ALL
+        DEPENDS "${ORE_SOURCE_FUTURE_PIPELINE_E2E}")
+    if(ORE_CLANG)
+        add_test(NAME native_source_future_pipeline_i64_compiled_execution
+            COMMAND "${ORE_SOURCE_FUTURE_PIPELINE_E2E}"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        add_test(NAME native_source_future_pipeline_i64_compiled_execution
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_source_future_pipeline_i64_compiled_execution
+        PROPERTIES TIMEOUT 180)
+
     add_test(NAME native_reserved_java_keywords
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
@@ -2159,9 +2259,24 @@ if(BUILD_TESTING)
         add_test(NAME native_unary_plus_source_aot COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
     set_tests_properties(native_unary_plus_source_aot PROPERTIES TIMEOUT 180)
-    add_test(NAME native_strict_nonblocking_io_source_guard
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.py")
+    if(ORE_STRUCTURAL_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-strict-nonblocking-io-source-guard"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-strict-nonblocking-io-source-guard"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.rs"
+            VERBATIM)
+        add_custom_target(oreslang-strict-nonblocking-io-source-guard-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-strict-nonblocking-io-source-guard")
+        add_test(NAME native_strict_nonblocking_io_source_guard
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-strict-nonblocking-io-source-guard"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        add_test(NAME native_strict_nonblocking_io_source_guard
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_strict_nonblocking_io_source_guard PROPERTIES TIMEOUT 30)
     oreslang_contract_test(pure_user_blocking_suffix pure-user-blocking-suffix.ores --ir "call i64 @pure_math_blocking")
     # The terminal-state gate is a standalone native safety primitive, not
     # an async I/O reactor or source-level await implementation.
