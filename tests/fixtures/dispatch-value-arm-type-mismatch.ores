@@ -1,6 +1,0 @@
-pub fnc main(): int {
-    return match<int> true over
-        on true -> { 42; }
-        on false -> { "wrong"; }
-    end;
-}

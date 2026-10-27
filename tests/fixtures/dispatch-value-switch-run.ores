@@ -1,7 +1,0 @@
-pub fnc main(): int {
-    return switch 2
-        case 1 -> { 11; }
-        case 2 -> { 42; }
-        default -> { 99; }
-    end;
-}

@@ -1,5 +1,4 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
-#include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
 #include <filesystem>
 #include <functional>
@@ -19,12 +18,6 @@ struct Unit {
     SourceIdentity identity;
     Program program;
     std::string prefix;
-    bool compiler_owned_library = false;
-    frontend::CompilerLibraryTier compiler_library_tier =
-        frontend::CompilerLibraryTier::Core;
-    std::uint32_t admitted_core_provider_bits = 0;
-    frontend::CoreClosureRequirements core_closure{};
-    bool core_closure_complete = false;
     std::unordered_map<std::string, std::size_t> dependencies;
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
@@ -38,16 +31,11 @@ class Loader {
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
     bool owned, scalar_loop, host;
-    std::uint32_t root_provider_bits = 0;
 public:
-    Loader(bool owned, bool scalar_loop, bool host,
-           std::uint32_t admitted_provider_bits)
-        : owned(owned), scalar_loop(scalar_loop), host(host),
-          root_provider_bits(admitted_provider_bits) {}
+    Loader(bool owned, bool scalar_loop, bool host) : owned(owned), scalar_loop(scalar_loop), host(host) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
-        visit(fs::canonical(path), std::move(text), identity, 0, false,
-              frontend::CompilerLibraryTier::Core, root_provider_bits);
+        visit(fs::canonical(path), std::move(text), identity, 0);
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
@@ -115,10 +103,7 @@ private:
     static bool same_file(SourceIdentity left, SourceIdentity right) {
         return left.valid && right.valid && left.device == right.device && left.inode == right.inode;
     }
-    std::size_t visit(fs::path path, std::string text, SourceIdentity identity,
-                      std::size_t depth, bool compiler_owned_library,
-                      frontend::CompilerLibraryTier compiler_library_tier,
-                      std::uint32_t admitted_core_provider_bits) {
+    std::size_t visit(fs::path path, std::string text, SourceIdentity identity, std::size_t depth) {
         if (depth > max_depth) throw std::runtime_error("native import graph exceeds 32 edges of depth");
         if (units.size() >= max_units) throw std::runtime_error("native import graph exceeds 128 source files");
         if (text.size() > max_bytes - bytes) throw std::runtime_error("native import graph exceeds 8 MiB aggregate source limit");
@@ -130,22 +115,11 @@ private:
         auto unit = std::make_unique<Unit>();
         unit->path = std::move(path); unit->identity = identity;
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
-        unit->compiler_owned_library = compiler_owned_library;
-        unit->compiler_library_tier = compiler_library_tier;
-        unit->admitted_core_provider_bits = admitted_core_provider_bits;
         try { unit->program = parse_unresolved_program(text, owned, scalar_loop); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
             fail(*unit, error.what());
-        }
-        if (unit->compiler_owned_library) {
-            unit->core_closure =
-                frontend::infer_core_closure_requirements(unit->program);
-            if (!frontend::core_closure_admitted(
-                    unit->core_closure, unit->admitted_core_provider_bits))
-                fail(*unit,
-                    "compiler-owned library inferred undeclared provider or hosted effect");
         }
         for (const auto& fn : unit->program.functions) {
             auto& arities = unit->functions[fn.name];
@@ -158,149 +132,53 @@ private:
         paths.emplace(unit->path.string(), index);
         units.push_back(std::move(unit));
         auto& current = *units[index];
-        if (!current.program.imports.empty() && scalar_loop)
-            fail(current, "experimental scalar-loop compilation does not admit module imports");
+        if (!current.program.imports.empty() && (!host || scalar_loop))
+            fail(current, "native module imports currently require the ordinary host target");
         for (const auto& imported : current.program.imports) {
             if (++edges > 4096) fail(current, "native import graph exceeds 4096 edges");
             const auto& raw = imported.path;
-            std::size_t selected = units.size();
-
-            if (frontend::is_reserved_compiler_library_import(raw)) {
-                const auto* library =
-                    frontend::find_compiler_library_source(raw);
-                if (!library) {
-                    if (frontend::is_reserved_core_import(raw))
-                        fail(current,
-                            "unknown compiler-owned ores.core module '" + raw + "'");
-                    fail(current,
-                        "unknown compiler-owned alloc module '" + raw + "'");
-                }
-                if (current.compiler_owned_library &&
-                        !frontend::compiler_library_dependency_allowed(
-                            current.compiler_library_tier, library->tier))
-                    fail(current,
-                        "compiler-owned ores.core modules may not depend on alloc/*");
-                const std::string unit_id(library->unit_id);
-                const auto known = paths.find(unit_id);
-                selected = known == paths.end() ? units.size() : known->second;
-                if (selected == index)
-                    fail(current, "compiler-owned library module cannot import itself");
-                if (selected == units.size()) {
-                    if (library->source.size() > max_bytes - read_bytes)
-                        fail(current,
-                            "native import graph exceeds 8 MiB source read budget");
-                    read_bytes += library->source.size();
-                    selected = visit(
-                        fs::path(unit_id), std::string(library->source),
-                        SourceIdentity{}, depth + 1, true, library->tier,
-                        library->admitted_provider_bits);
-                }
-                auto& target = *units[selected];
-                if (target.program.module != library->module_name)
-                    fail(current,
-                        "compiler-owned library registry/module identity mismatch");
-                if (!current.compiler_owned_library && !host &&
-                        !frontend::core_closure_admitted(
-                            target.core_closure, root_provider_bits)) {
-                    const auto allocator =
-                        frontend::core_provider_bit(
-                            frontend::CoreProviderRequirement::Allocator);
-                    if ((target.core_closure.provider_bits & allocator) != 0u &&
-                            (root_provider_bits & allocator) == 0u)
-                        fail(current,
-                            "freestanding alloc/* requires an explicit allocator provider");
-                    fail(current,
-                        "freestanding compiler-owned library closure requires unavailable provider");
-                }
-                if (current.compiler_owned_library) {
-                    if (!target.compiler_owned_library ||
-                            !target.core_closure_complete)
-                        fail(current,
-                            "compiler-owned library import cycle or incomplete closure");
-                    current.core_closure =
-                        frontend::merge_core_closure_requirements(
-                            current.core_closure, target.core_closure);
-                    if (!frontend::core_closure_admitted(
-                            current.core_closure,
-                            current.admitted_core_provider_bits))
-                        fail(current,
-                            "compiler-owned library transitive provider requirement exceeds admitted providers");
+            fs::path dependency;
+            if (raw.rfind("+/", 0) == 0) {
+                try {
+                    dependency = resolve_project_root_import(
+                        current.path, raw,
+                        [](const fs::path& manifest) {
+                            auto bytes = read_regular_source(
+                                manifest.string().c_str(), 64u * 1024u,
+                                "native package manifest exceeds 64 KiB");
+                            require_valid_source_utf8(bytes);
+                            return bytes;
+                        });
+                } catch (const std::exception& error) {
+                    fail(current, error.what());
                 }
             } else {
-                if (current.compiler_owned_library)
-                    fail(current,
-                        "compiler-owned library modules may import only ores.core/* or alloc/*");
-                if (frontend::is_reserved_std_import(raw))
-                    fail(current, "native ores.std package resolution remains unsupported");
-                if (!host)
-                    fail(current,
-                        "freestanding native imports require compiler-owned ores.core/* modules");
-
-                fs::path dependency;
-                if (raw.rfind("+/", 0) == 0) {
-                    try {
-                        dependency = resolve_project_root_import(
-                            current.path, raw,
-                            [](const fs::path& manifest) {
-                                const auto manifest_path = manifest.string();
-                                const auto expected_manifest = capture_source_identity(
-                                    manifest_path.c_str(), 64u * 1024u,
-                                    "native package manifest exceeds 64 KiB");
-                                auto bytes = read_regular_source(
-                                    manifest_path.c_str(), 64u * 1024u,
-                                    "native package manifest exceeds 64 KiB",
-                                    nullptr, &expected_manifest);
-                                require_valid_source_utf8(bytes);
-                                return bytes;
-                            });
-                    } catch (const std::exception& error) {
-                        fail(current, error.what());
-                    }
-                } else {
-                    if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
-                        fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
-                    dependency = fs::path(raw);
-                    if (dependency.extension().empty()) dependency += ".ores";
-                    if (dependency.extension() != ".ores")
-                        fail(current, "native module source must use .ores extension");
-                    dependency = current.path.parent_path() / dependency;
-                    std::error_code error;
-                    dependency = fs::canonical(dependency, error);
-                    if (error) fail(current, "cannot resolve native import '" + raw + "'");
-                }
-
-                const auto known = paths.find(dependency.string());
-                selected = known == paths.end() ? units.size() : known->second;
-                if (selected == index) fail(current, "source file cannot import itself");
-                if (selected == units.size()) {
-                    const auto dependency_path = dependency.string();
-                    const auto expected_child_identity = capture_source_identity(
-                        dependency_path.c_str(), max_bytes - read_bytes,
-                        "native import graph exceeds 8 MiB source read budget");
-                    SourceIdentity child_identity;
-                    auto child_text = read_regular_source(
-                        dependency_path.c_str(), max_bytes - read_bytes,
-                        "native import graph exceeds 8 MiB source read budget",
-                        &child_identity, &expected_child_identity);
-                    read_bytes += child_text.size();
-                    // Compare descriptor identities too: hard-link aliases must
-                    // not bypass self-edge rejection or duplicate unit identity.
-                    for (std::size_t i = 0; i < units.size(); ++i) {
-                        if (same_file(units[i]->identity, child_identity)) {
-                            selected = i;
-                            break;
-                        }
-                    }
-                    if (selected == index)
-                        fail(current, "source file cannot import itself through a filesystem alias");
-                    if (selected == units.size())
-                        selected = visit(
-                            dependency, std::move(child_text), child_identity,
-                            depth + 1, false,
-                            frontend::CompilerLibraryTier::Core, 0u);
-                    else
-                        paths.emplace(dependency.string(), selected);
-                }
+                if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
+                    fail(current, "native imports require relative ./ or ../ or project-root +/ source paths; package/std/host resolution unsupported");
+                dependency = fs::path(raw);
+                if (dependency.extension().empty()) dependency += ".ores";
+                if (dependency.extension() != ".ores")
+                    fail(current, "native module source must use .ores extension");
+                dependency = current.path.parent_path() / dependency;
+                std::error_code error;
+                dependency = fs::canonical(dependency, error);
+                if (error) fail(current, "cannot resolve native import '" + raw + "'");
+            }
+            const auto known = paths.find(dependency.string());
+            std::size_t selected = known == paths.end() ? units.size() : known->second;
+            if (selected == index) fail(current, "source file cannot import itself");
+            if (selected == units.size()) {
+                SourceIdentity child_identity;
+                auto child_text = read_regular_source(dependency.string().c_str(), max_bytes - read_bytes,
+                    "native import graph exceeds 8 MiB source read budget", &child_identity);
+                read_bytes += child_text.size();
+                // Compare descriptor identities too: hard-link aliases must not
+                // bypass self-edge rejection or create duplicate module identity.
+                for (std::size_t i = 0; i < units.size(); ++i)
+                    if (same_file(units[i]->identity, child_identity)) { selected = i; break; }
+                if (selected == index) fail(current, "source file cannot import itself through a filesystem alias");
+                if (selected == units.size()) selected = visit(dependency, std::move(child_text), child_identity, depth + 1);
+                else paths.emplace(dependency.string(), selected);
             }
             if (imported.local_name == current.program.module)
                 fail(current, "native imported module binding conflicts with containing module");
@@ -312,16 +190,7 @@ private:
                 current.class_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
             } else if (target.program.module != imported.selected_module)
                 fail(current, "imported file does not declare selected module '" + imported.selected_module + "'");
-            if (!imported.selected_class)
-                current.dependencies.emplace(imported.local_name, selected);
-        }
-        if (current.compiler_owned_library) {
-            if (!frontend::core_closure_admitted(
-                    current.core_closure,
-                    current.admitted_core_provider_bits))
-                fail(current,
-                    "compiler-owned library closure exceeds admitted providers");
-            current.core_closure_complete = true;
+            if (!imported.selected_class) current.dependencies.emplace(imported.local_name, selected);
         }
         return index;
     }
@@ -417,9 +286,7 @@ private:
 };
 } // namespace
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
-                            bool owned, bool scalar_loop, bool host,
-                            std::uint32_t admitted_provider_bits) {
-    return Loader(owned, scalar_loop, host, admitted_provider_bits)
-        .run(path, std::move(source), identity);
+                            bool owned, bool scalar_loop, bool host) {
+    return Loader(owned, scalar_loop, host).run(path, std::move(source), identity);
 }
 } // namespace oreslang

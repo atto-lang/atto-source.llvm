@@ -1,8 +1,0 @@
-pub fnc main(): int {
-    do match 2 over
-        on 1 -> { return 11; }
-        on 2 -> { return 42; }
-        on _ -> { return 99; }
-    end
-    return 0;
-}

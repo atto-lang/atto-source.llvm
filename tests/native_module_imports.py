@@ -74,7 +74,7 @@ def main():
     ]
     positives.append(('project-root', {
         'main.ores': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
-        '.ores.pkg.toml': 'schema_version = "1"\n',
+        '.ores.pkg.toml': 'schema_version = "1"\\n',
         'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
     }, 42))
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
@@ -100,11 +100,11 @@ def main():
         ('runtime-collision', 'import module Lib from "./lib"; fnc abort():int{return 1;} pub fnc main():int{return 0;}', library, 'reserved native runtime ABI'),
         ('init-hook', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}', 'define module Lib as fnc init():void{return;} pub fnc answer():int{return 42;} end', 'init hook'),
         ('missing-file', 'import module Lib from "./missing"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
-        ('std-not-faked', 'import module Lib from "std/net"; pub fnc main():int{return 0;}', library, 'native ores.std package resolution remains unsupported'),
+        ('std-not-faked', 'import module Lib from "std/net"; pub fnc main():int{return 0;}', library, 'package/std/host resolution unsupported'),
         ('project-root-missing-manifest', 'import module Lib from "+/lib"; pub fnc main():int{return 0;}', library, 'nearest .ores.pkg.toml'),
         ('directory', 'import module Lib from "./nested"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
         ('unterminated-path', 'import module Lib from "./lib; pub fnc main():int{return 0;}', library, 'unterminated native string'),
-        ('unsupported-dependency', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', 'define module Lib as pub async fnc answer():int{return 42;} end', 'native async Future<int> v1 callable must be private'),
+        ('unsupported-dependency', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', 'define module Lib as pub async fnc answer():int{return 42;} end', 'native actor/async'),
         ('duplicate-local-arity', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', 'define module Lib as pub fnc answer():int{return 42;} pub fnc answer():int{return 41;} end', 'already has arity'),
         ('foreign-invalid-utf8', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', b'\xff', 'valid UTF-8'),
         ('foreign-null', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', b'//\x00\n'+library.encode(), 'NUL byte'),
@@ -156,7 +156,7 @@ def main():
         directory=root/'project-root-duplicate-schema'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
         (directory/'lib.ores').write_text(library)
-        (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n"schema_version" = "1"\n')
+        (directory/'.ores.pkg.toml').write_text('schema_version = "1"\\n"schema_version" = "1"\\n')
         result=run([a.compiler,str(directory/'main.ores')])
         if not result.returncode or result.stdout or 'schema_version' not in result.stderr:
             raise AssertionError(('project-root duplicate schema',result.stderr))
@@ -164,7 +164,7 @@ def main():
         directory=root/'project-root-multiline'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
         (directory/'lib.ores').write_text(library)
-        (directory/'.ores.pkg.toml').write_text('note = """schema_version = "1" """\nschema_version = "1"\n')
+        (directory/'.ores.pkg.toml').write_text('note = """schema_version = "1" """\\nschema_version = "1"\\n')
         result=run([a.compiler,str(directory/'main.ores')])
         if not result.returncode or result.stdout or 'multiline TOML' not in result.stderr:
             raise AssertionError(('project-root multiline manifest',result.stderr))
@@ -229,7 +229,7 @@ def main():
         # Every unsupported target fails before emitting even a module header.
         for target in ('wasm32', 'thumbv7m-none-eabi'):
             result=run([a.compiler,'--target='+target,str(root/'private-helper/main.ores')])
-            if not result.returncode or result.stdout or 'freestanding native imports require compiler-owned ores.core/* modules' not in result.stderr:
+            if not result.returncode or result.stdout or 'ordinary host target' not in result.stderr:
                 raise AssertionError((target,result.stderr))
             passed+=1
     print(f'PASS native module imports: {passed} graph/ownership/execution cases, java_differential_cases={compared}, native_named_and_explicit_qualified_generic_arguments_not_claimed_as_Java_parity')

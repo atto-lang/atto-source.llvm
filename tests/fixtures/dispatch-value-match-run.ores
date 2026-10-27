@@ -1,7 +1,0 @@
-pub fnc main(): int {
-    return match<int> 2 over
-        on 1 -> { 11; }
-        on 2 -> { 42; }
-        on _ -> { 99; }
-    end;
-}

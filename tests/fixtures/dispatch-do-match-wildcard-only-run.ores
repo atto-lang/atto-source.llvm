@@ -1,6 +1,0 @@
-pub fnc main(): int {
-    do match 7 over
-        on _ -> { return 42; }
-    end
-    return 0;
-}

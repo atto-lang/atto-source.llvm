@@ -37,36 +37,10 @@ int main() {
         check(original.valid, "regular source omitted inode identity");
         rejects([&] { (void)read_regular_source(name.c_str(), 5, "source too large"); },
                 "source budget not enforced");
-        const auto bound = dir / "identity-bound.ores";
-        { std::ofstream output(bound, std::ios::binary); output << "approved"; }
-        const auto bound_name = bound.string();
-        const auto approved_identity =
-            capture_source_identity(bound_name.c_str(), 64, "source too large");
-        SourceIdentity bound_identity;
-        check(read_regular_source(
-                  bound_name.c_str(), 64, "source too large",
-                  &bound_identity, &approved_identity) == "approved",
-              "unchanged expected source identity rejected");
-        check(ores_source_identity_equal(approved_identity, bound_identity),
-              "expected source identity changed on stable read");
-
-        const auto replacement = dir / "identity-replacement.ores";
-        { std::ofstream output(replacement, std::ios::binary); output << "replacement"; }
-        fs::rename(replacement, bound);
-        rejects([&] {
-            (void)read_regular_source(
-                bound_name.c_str(), 64, "source too large",
-                nullptr, &approved_identity);
-        }, "same-path regular-file replacement escaped expected identity");
-
         const auto alias = dir / "regular-link.ores";
         fs::create_symlink("main.ores", alias);
-        const auto alias_expected =
-            capture_source_identity(alias.c_str(), 6, "source too large");
         SourceIdentity alias_id;
-        check(read_regular_source(
-                  alias.c_str(), 6, "source too large",
-                  &alias_id, &alias_expected) == "abcdef",
+        check(read_regular_source(alias.c_str(), 6, "source too large", &alias_id) == "abcdef",
               "regular file symlink rejected");
         check(alias_id.valid && alias_id.device == original.device &&
               alias_id.inode == original.inode, "symlink changed source identity");

@@ -394,23 +394,6 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
-        case Expression::Kind::Remainder: {
-            // The frontend normalizes syntactically signed literal divisors.
-            // Never trust an externally supplied AST to skip this proof gate.
-            if (!expr.left || !expr.right ||
-                    expr.right->kind != Expression::Kind::Integer ||
-                    expr.right->integer == 0)
-                throw std::runtime_error("native remainder lacks proved nonzero signed literal divisor");
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            // Java's signed remainder is zero for every dividend modulo -1,
-            // including INT64_MIN. LLVM srem INT64_MIN, -1 is poison, so
-            // preserve evaluation of the dividend but emit no srem here.
-            if (expr.right->integer == -1)
-                return llvm::ConstantInt::get(i64, 0);
-            llvm::Value* right = llvm::ConstantInt::get(i64,
-                static_cast<std::uint64_t>(expr.right->integer));
-            return builder.CreateSRem(left, right, "srem");
-        }
         case Expression::Kind::LogicalNot: {
             llvm::Value* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateZExt(
@@ -612,9 +595,7 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
-                                  bool cortex_m_target,
-                                  bool bounded_allocator_provider) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -670,9 +651,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 // of array-backed ownership rejection.
                 if (local.heap_owned)
                     throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
-                if (local.int_array && !bounded_allocator_provider)
-                    throw std::runtime_error(
-                        "wasm32 Array<int> requires an explicit allocator provider");
+                if (local.int_array)
+                    throw std::runtime_error("wasm32 native heap-owned/Array<int> regions are not implemented");
             }
         }
     }
@@ -706,8 +686,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (const auto& arg : e->arguments) scan_string(arg.get());
     };
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
-        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex)
-            iteration_runtime = true;
+        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex || s.kind == Statement::Kind::Return) iteration_runtime = true;
         scan_string(s.expression.get()); scan_string(s.condition.get());
         scan_string(s.loop_step.get());
         scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
@@ -891,10 +870,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, native_pointer_type(context, loan_ptr),
                  native_pointer_type(context, loan_ptr)}, false));
-        arrayAbort = module.getOrInsertFunction(
-            bounded_allocator_provider
-                ? "oreslang_freestanding_panic"
-                : "abort",
+        arrayAbort = module.getOrInsertFunction("abort",
             llvm::FunctionType::get(voidTy, {}, false));
         arrayUnhandled = module.getOrInsertFunction(
             "oreslang_int_array_unhandled_resource_failure",
