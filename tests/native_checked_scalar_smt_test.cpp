@@ -64,6 +64,19 @@ static std::array<std::string, 2> separate_scalar_queries(const std::string& com
                 || body.find("(push 1)") != std::string::npos
                 || body.find("(echo ") != std::string::npos)
             throw std::runtime_error("bad or incomplete scalar query block");
+        // Precisely one parenthesized top-level assertion; no extra commands
+        // such as (reset) or (assert true) may precede the SAT check.
+        const auto assertion=body.substr(0, body.size()-terminator.size());
+        if (assertion.find_first_of("\n\r;\"|") != std::string::npos)
+            throw std::runtime_error("unrecognized SMT assertion token");
+        int depth=0;
+        for (std::size_t i=0; i<assertion.size(); ++i) {
+            if (assertion[i]=='(') ++depth;
+            else if (assertion[i]==')') --depth;
+            if (depth<0 || (depth==0 && i+1!=assertion.size()))
+                throw std::runtime_error("extra top-level SMT command");
+        }
+        if (depth!=0) throw std::runtime_error("unbalanced SMT assertion");
     }
     return {prefix + marker + proof, prefix + marker + mutant};
 }
@@ -115,6 +128,19 @@ int main(int argc, char** argv) {
         });
         must_reject([&] {
             (void)separate_scalar_queries(checked_min + "(echo \"unsat\")\n");
+        });
+        const auto check_at=checked_min.find("(check-sat)");
+        if (check_at==std::string::npos)
+            throw std::runtime_error("missing native check-sat control");
+        must_reject([&] {
+            auto injected=checked_min;
+            injected.insert(check_at,"(reset)\n");
+            (void)separate_scalar_queries(injected);
+        });
+        must_reject([&] {
+            auto injected=checked_min;
+            injected.insert(check_at,"(assert true)\n");
+            (void)separate_scalar_queries(injected);
         });
         must_reject([&] {
             (void)separate_scalar_queries(checked_min.substr(
