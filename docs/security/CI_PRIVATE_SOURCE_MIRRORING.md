@@ -112,7 +112,10 @@ An allowlist entry is necessary but not sufficient. The protected
 - the exact reviewed, source-free carrier `main` commit;
 - the exact merged carrier review PR whose approved head tree equals that
   carrier `main` commit tree;
-- the immutable carrier workflow blob; and
+- the immutable carrier workflow blob;
+- the exact executable trusted-control blobs for
+  `scripts/verify-oreslang-private-carrier.py` and
+  `scripts/run-oreslang-test-plan.py`; and
 - exact reviewed test-plan blobs and allowed PR numbers.
 
 The reviewed carrier base must contain neither
@@ -131,9 +134,18 @@ after an unreviewed merge does not authorize that tip. The contract therefore
 pins a carrier review PR, and the publisher requires an `ORESoftware` approval
 on that PR's exact head submitted before merge, then requires the reviewed head
 tree to equal the pinned carrier `main` base tree. The contract still pins the
-exact carrier-main commit SHA, workflow blob, plan blob, and allowed source PR.
+exact carrier-main commit SHA, workflow blob, executable trusted-control blobs,
+plan blob, and allowed source PR.
 Carrier `main` SHA and live protection are rechecked before every
 source-bearing write; movement during transfer fails closed.
+
+Before any source tree is read or uploaded, the publisher also enumerates the
+reviewed carrier base Git tree and requires the workflow, verifier, plan runner,
+and selected test plan to be ordinary Git blobs at the exact contract SHAs.
+Symlinks, submodules, missing controls, unexpected control paths, tree/content
+digest drift, and Contents-API byte mismatches fail closed. The v3 receipt
+records the executable trusted-control blob pins together with the workflow
+blob so later evidence can identify the exact control program that executed.
 
 The source-bearing carrier workflow is triggered only by the fixed
 `oreslang-private-ci-exact-tree` `repository_dispatch` event. GitHub therefore
