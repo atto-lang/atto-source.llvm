@@ -124,11 +124,13 @@ def main():
     clang = find_tool(args.clang, "clang-18", "clang-19", "clang")
     wasm_ld = find_tool(args.wasm_ld, "wasm-ld-18", "wasm-ld-19", "wasm-ld")
     llvm_nm = find_tool(args.llvm_nm, "llvm-nm-18", "llvm-nm-19", "llvm-nm")
+    llvm_readelf = find_tool(None, "llvm-readelf-18", "llvm-readelf-19", "llvm-readelf")
     node = find_tool(args.node, "node")
     qemu = find_tool(args.qemu_system_arm, "qemu-system-arm")
     require(clang, "clang is required")
     require(wasm_ld, "wasm-ld is required")
     require(llvm_nm, "llvm-nm is required")
+    require(llvm_readelf, "llvm-readelf is required")
 
     with tempfile.TemporaryDirectory(prefix="ores-allocator-provider-v1-") as tmp:
         root = Path(tmp)
@@ -350,11 +352,24 @@ def main():
 
         lld = find_tool(None, "ld.lld-18", "ld.lld-19", "ld.lld")
         require(lld, "ld.lld is required")
+        cortex_linker = root / "freestanding-cortex.ld"
+        cortex_linker.write_text(
+            "SECTIONS {\n"
+            "  . = 0x00000000;\n"
+            "  .text : { *(.text*) *(.rodata*) }\n"
+            "  .data : { *(.data*) }\n"
+            "  .bss : { *(.bss*) *(COMMON) }\n"
+            "  /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) }\n"
+            "}\n",
+            encoding="utf-8",
+        )
         cortex_elf = root / "provider.elf"
         linked = run([
             lld,
             "-m",
             "armelf",
+            "-T",
+            str(cortex_linker),
             "-e",
             "allocator_probe",
             "-o",
@@ -368,6 +383,11 @@ def main():
         require(not undefined.stdout.strip(),
                 "Cortex provider artifact has undefined symbols:\n"
                 + undefined.stdout)
+        sections = run([llvm_readelf, "-S", str(cortex_elf)])
+        require(sections.returncode == 0, sections.stderr)
+        require(".ARM.exidx" not in sections.stdout and
+                ".ARM.extab" not in sections.stdout,
+                "Cortex freestanding artifact retained unwind sections")
 
         if qemu:
             startup = root / "startup.c"
@@ -403,6 +423,7 @@ def main():
                 " .text : { *(.text*) *(.rodata*) } > FLASH\n"
                 " .data : { *(.data*) } > RAM AT > FLASH\n"
                 " .bss : { *(.bss*) *(COMMON) } > RAM\n"
+                " /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) }\n"
                 "}\n",
                 encoding="utf-8",
             )
@@ -420,6 +441,16 @@ def main():
                 *map(str, cortex_parts),
             ])
             require(linked.returncode == 0, linked.stderr)
+            qemu_undefined = run([llvm_nm, "-u", str(qemu_elf)])
+            require(qemu_undefined.returncode == 0, qemu_undefined.stderr)
+            require(not qemu_undefined.stdout.strip(),
+                    "QEMU Cortex artifact has undefined symbols:\n"
+                    + qemu_undefined.stdout)
+            qemu_sections = run([llvm_readelf, "-S", str(qemu_elf)])
+            require(qemu_sections.returncode == 0, qemu_sections.stderr)
+            require(".ARM.exidx" not in qemu_sections.stdout and
+                    ".ARM.extab" not in qemu_sections.stdout,
+                    "QEMU Cortex artifact retained unwind sections")
             emulated = run([
                 qemu,
                 "-M",
