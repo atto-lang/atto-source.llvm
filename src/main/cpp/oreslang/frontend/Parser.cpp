@@ -2027,7 +2027,7 @@ private:
                 const std::size_t await_offset = token_.offset;
                 advance();
                 if (!value.ready_await_actor.empty() || !value.done_await_actor.empty()
-                        || value.readable_await)
+                        || value.readable_await || value.writable_await)
                     fail("native source supports only one trusted-main suspension");
                 const std::string awaited = identifier();
 
@@ -2054,6 +2054,25 @@ private:
                     value.readable_await = true;
                     value.readable_await_fd = fd;
                     value.readable_await_offset = await_offset;
+                    continue;
+                }
+
+                if (awaited == "writable" && token_.text == "(") {
+                    if (!value.ready_future_name.empty())
+                        fail("await writable cannot bypass a live Future<void> token");
+                    if (!value.actor_actions.empty() || !value.statements.empty())
+                        fail("await writable must precede post-await actor effects");
+                    require("(");
+                    if (token_.kind != Kind::Integer)
+                        fail("await writable requires an integer literal file descriptor");
+                    const std::int64_t fd = integer_literal();
+                    if (fd < 0 || fd > std::numeric_limits<int>::max())
+                        fail("await writable file descriptor is out of native int range");
+                    require(")");
+                    require(";");
+                    value.writable_await = true;
+                    value.writable_await_fd = fd;
+                    value.writable_await_offset = await_offset;
                     continue;
                 }
 
@@ -3673,18 +3692,24 @@ private:
                     throw std::runtime_error(
                         "await get_done requires side-effect-free scalar return");
             }
-            if (fn.readable_await) {
+            if (fn.readable_await || fn.writable_await) {
                 /*
                  * The initial I/O suspension reuses the trusted source-root
                  * actor continuation. No user local, borrowed owner, class,
                  * array or generic Future value may cross this frame.
                  */
+                const bool writable = fn.writable_await;
+                const char* await_name = writable ? "writable" : "readable";
+                const std::int64_t await_fd =
+                    writable ? fn.writable_await_fd : fn.readable_await_fd;
                 if (fn.name != "main" || !fn.exported || !fn.parameters.empty())
                     throw std::runtime_error(
-                        "await readable is restricted to exported zero-argument main");
+                        std::string("await ") + await_name
+                        + " is restricted to exported zero-argument main");
                 if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
                     throw std::runtime_error(
-                        "await readable requires one source actor without suspended locals");
+                        std::string("await ") + await_name
+                        + " requires one source actor without suspended locals");
                 /*
                  * Parser admission requires the await to occur before ordinary
                  * statements. Therefore any statement present here was parsed
@@ -3694,14 +3719,16 @@ private:
                  */
                 if (!fn.statements.empty())
                     throw std::runtime_error(
-                        "await readable does not yet lower post-await non-actor statements");
-                if (fn.readable_await_fd < 0 ||
-                        fn.readable_await_fd > std::numeric_limits<int>::max())
+                        std::string("await ") + await_name
+                        + " does not yet lower post-await non-actor statements");
+                if (await_fd < 0 || await_fd > std::numeric_limits<int>::max())
                     throw std::runtime_error(
-                        "await readable requires a native int file descriptor");
+                        std::string("await ") + await_name
+                        + " requires a native int file descriptor");
                 if (contains_callable_invocation(fn.result.get()))
                     throw std::runtime_error(
-                        "await readable requires side-effect-free scalar return");
+                        std::string("await ") + await_name
+                        + " requires side-effect-free scalar return");
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
