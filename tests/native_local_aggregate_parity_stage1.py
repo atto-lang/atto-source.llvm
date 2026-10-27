@@ -52,7 +52,7 @@ def main():
          "pub fnc main(): int { struct T { int x } val T p = T{x: true}; return p.x; }",
          "LOCAL_CONSTRUCT_EVAL_ORDER_UNSUPPORTED"),
         ("unsupported local bool field",
-         "pub fnc main(): int { struct T { bool x } val T p = T{true}; return 7; }",
+         "pub fnc main(): int { struct T { bool x } return 7; }",
          "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
         ("unsupported local array-like field",
          "pub fnc main(): int { struct T { Array x } return 7; }",
