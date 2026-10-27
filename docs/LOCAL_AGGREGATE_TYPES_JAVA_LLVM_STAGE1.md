@@ -76,8 +76,9 @@ native subset, reusing already-established class layout and ownership lowering:
 
 This does **not** prove that the generated IR compiles and runs; only a
 successful exact-head compiler run followed by Clang/OS execution can establish
-that evidence. The CTest matrix requests three runnable field-read cases
-when Clang is available; it otherwise reports IR-only coverage.
+that evidence. The CTest matrix requires native Clang/OS execution of its
+scalar field-read cases and **fails if Clang is missing**; it never reports a
+passing result for IR-only compilation.
 
 Java PR #2179 remains syntax-stage only. These LLVM-specific compiler
 narrow-slice changes do **not** imply Java/LLVM feature or semantic parity.
