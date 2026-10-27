@@ -44,6 +44,24 @@ void oreslang_freestanding_panic(void) {
     fail_closed();
 }
 
+/*
+ * ARM EHABI personality symbols are sometimes retained by Clang/LLD even
+ * when unwind tables are disabled/discarded. Freestanding Oreslang never
+ * unwinds: own these symbols locally and trap if control ever reaches them,
+ * rather than acquiring an ambient libunwind dependency.
+ */
+#if defined(__arm__) || defined(__thumb__)
+__attribute__((noreturn)) void __aeabi_unwind_cpp_pr0(void) {
+    fail_closed();
+}
+__attribute__((noreturn)) void __aeabi_unwind_cpp_pr1(void) {
+    fail_closed();
+}
+__attribute__((noreturn)) void __aeabi_unwind_cpp_pr2(void) {
+    fail_closed();
+}
+#endif
+
 static void erase_bytes(void* data, size_t count) {
     volatile uint8_t* bytes = (volatile uint8_t*)data;
     for (size_t i = 0; i < count; ++i) bytes[i] = 0;
