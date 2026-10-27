@@ -28,22 +28,145 @@ class PolicyAuditTest(unittest.TestCase):
             with self.subTest(case=case), self.assertRaises(audit.GovernanceError):
                 audit.parse_allowlist(case)
 
-    def test_reject_unprotected_and_missing_codeowner_review(self):
-        repo = {"full_name": audit.SOURCE, "private": True, "default_branch": "main"}
-        protected = {"name": "main", "protected": True}
+    def _valid_live_metadata(self):
+        repo = {
+            "full_name": audit.SOURCE,
+            "id": audit.SOURCE_ID,
+            "private": True,
+            "default_branch": "main",
+            "archived": False,
+            "disabled": False,
+        }
+        branch = {
+            "name": "main",
+            "protected": True,
+            "commit": {"sha": "a" * 40},
+        }
         protection = {
             "required_pull_request_reviews": {
-                "require_code_owner_reviews": True, "dismiss_stale_reviews": True
+                "require_code_owner_reviews": True,
+                "dismiss_stale_reviews": True,
+                "required_approving_review_count": 1,
+                "bypass_pull_request_allowances": {
+                    "users": [],
+                    "teams": [],
+                    "apps": [],
+                },
             },
-            "enforce_admins": {"enabled": True}
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
         }
-        audit.check_live_metadata(repo, protected, protection)
+        return repo, branch, protection
+
+    def test_accepts_strict_protected_main_metadata(self):
+        audit.check_live_metadata(*self._valid_live_metadata())
+
+    def test_rejects_weak_or_ambiguous_protection_metadata(self):
+        repo, branch, protection = self._valid_live_metadata()
+        reviews = protection["required_pull_request_reviews"]
         invalids = [
-            (dict(repo, private=False), protected, protection),
-            (repo, dict(protected, protected=False), protection),
-            (repo, protected, {**protection, "enforce_admins": {"enabled": False}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {"require_code_owner_reviews": False}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {"require_code_owner_reviews": True, "dismiss_stale_reviews": False}}),
+            (dict(repo, id=audit.SOURCE_ID + 1), branch, protection),
+            (dict(repo, private=False), branch, protection),
+            (dict(repo, archived=True), branch, protection),
+            (dict(repo, disabled=True), branch, protection),
+            (repo, dict(branch, protected=False), protection),
+            (repo, {**branch, "commit": {"sha": "not-a-sha"}}, protection),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "required_approving_review_count": 0,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "required_approving_review_count": True,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "bypass_pull_request_allowances": {
+                            "users": [{"login": "bypass"}],
+                            "teams": [],
+                            "apps": [],
+                        },
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "bypass_pull_request_allowances": None,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "enforce_admins": {"enabled": False}},
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "allow_force_pushes": {"enabled": True}},
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "allow_force_pushes": None},
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "allow_deletions": {"enabled": True}},
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "allow_deletions": None},
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "require_code_owner_reviews": False,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "dismiss_stale_reviews": False,
+                    },
+                },
+            ),
         ]
         for r, b, p in invalids:
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
@@ -56,7 +179,7 @@ class PolicyAuditTest(unittest.TestCase):
                 (root / relative).parent.mkdir(parents=True, exist_ok=True)
             (root / audit.APPROVAL_PATH).write_text("# empty\n")
             (root / audit.OWNERS_PATH).write_text("/.github/CODEOWNERS @ORESoftware\n")
-            (root / audit.DOC_PATH).write_text("protected private tree canary Direct GitHub connector")
+            (root / audit.DOC_PATH).write_text("protected private tree canary Direct GitHub connector review-attested")
             with self.assertRaises(audit.GovernanceError):
                 audit.check_policy_files(root)
 

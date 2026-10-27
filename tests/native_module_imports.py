@@ -72,6 +72,11 @@ def main():
             'b.ores': 'define module B as pub fnc answer(borrow int x):int{return rt copy x;} end',
         }, 42),
     ]
+    positives.append(('project-root', {
+        'main.ores': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+        '.ores.pkg.toml': 'schema_version = "1"\\n',
+        'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -90,12 +95,13 @@ def main():
         ('parameter-shadow', 'import module Lib from "./lib"; fnc read(int Lib):int{return Lib;} pub fnc main():int{return 0;}', library, 'cannot be shadowed'),
         ('local-shadow', 'import module Lib from "./lib"; pub fnc main():int{val Lib:int=1;return Lib;}', library, 'cannot be shadowed'),
         ('move-after-borrow-call', 'import module Lib from "./lib"; pub fnc main():int{val n:int=1;return Lib.answer(rt take n,rt borrow n);}', 'define module Lib as pub fnc answer(int x,borrow int y):int{return x+y;} end', 'moved'),
-        ('conflicting-borrows', 'import module Lib from "./lib"; pub fnc main():int{val n:int=1;return Lib.answer(rt borrow mut n,rt borrow n);}', 'define module Lib as pub fnc answer(borrow mut int x,borrow int y):int{return x+y;} end', 'borrow'),
+        ('conflicting-borrows', 'import module Lib from "./lib"; pub fnc main():int{val n:int=1;return Lib.answer(rt mut borrow n,rt borrow n);}', 'define module Lib as pub fnc answer(borrow mut int x,borrow int y):int{return x+y;} end', 'borrow'),
         ('private-overload', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer(1);}', 'define module Lib as pub fnc answer():int{return 42;} fnc answer(int n):int{return n;} end', 'private'),
         ('runtime-collision', 'import module Lib from "./lib"; fnc abort():int{return 1;} pub fnc main():int{return 0;}', library, 'reserved native runtime ABI'),
         ('init-hook', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}', 'define module Lib as fnc init():void{return;} pub fnc answer():int{return 42;} end', 'init hook'),
         ('missing-file', 'import module Lib from "./missing"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
         ('std-not-faked', 'import module Lib from "std/net"; pub fnc main():int{return 0;}', library, 'package/std/host resolution unsupported'),
+        ('project-root-missing-manifest', 'import module Lib from "+/lib"; pub fnc main():int{return 0;}', library, 'nearest .ores.pkg.toml'),
         ('directory', 'import module Lib from "./nested"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
         ('unterminated-path', 'import module Lib from "./lib; pub fnc main():int{return 0;}', library, 'unterminated native string'),
         ('unsupported-dependency', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', 'define module Lib as pub async fnc answer():int{return 42;} end', 'native actor/async'),
@@ -147,6 +153,22 @@ def main():
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
             passed += 1
+        directory=root/'project-root-duplicate-schema'; directory.mkdir()
+        (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
+        (directory/'lib.ores').write_text(library)
+        (directory/'.ores.pkg.toml').write_text('schema_version = "1"\\n"schema_version" = "1"\\n')
+        result=run([a.compiler,str(directory/'main.ores')])
+        if not result.returncode or result.stdout or 'schema_version' not in result.stderr:
+            raise AssertionError(('project-root duplicate schema',result.stderr))
+        passed+=1
+        directory=root/'project-root-multiline'; directory.mkdir()
+        (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
+        (directory/'lib.ores').write_text(library)
+        (directory/'.ores.pkg.toml').write_text('note = """schema_version = "1" """\\nschema_version = "1"\\n')
+        result=run([a.compiler,str(directory/'main.ores')])
+        if not result.returncode or result.stdout or 'multiline TOML' not in result.stderr:
+            raise AssertionError(('project-root multiline manifest',result.stderr))
+        passed+=1
         # Physical aliases are not new code-unit identities.
         for alias in ('symlink', 'hardlink'):
             directory=root/alias; directory.mkdir()

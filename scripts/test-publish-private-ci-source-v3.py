@@ -51,8 +51,8 @@ CARRIER_CODEOWNERS = (
 CARRIER_CODEOWNERS_BLOB = v3.git_blob_sha(CARRIER_CODEOWNERS)
 
 
-def carrier_contract():
-    return {
+def carrier_contract(review_pr=None):
+    value = {
         "repository_id": 1323598177,
         "base_sha": BASE,
         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
@@ -60,9 +60,65 @@ def carrier_contract():
         "test_plan_path": "ci/test-plans/llvm-pr669.json",
         "test_plan_blob_sha": PLAN_BLOB,
     }
+    if review_pr is not None:
+        value["review_pr"] = review_pr
+    return value
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def test_incident_gate_requires_exact_completed_identity(self):
+        def issue(number, issue_id, state="closed", reason="completed", url=None):
+            return {
+                "id": issue_id,
+                "number": number,
+                "html_url": url or (
+                    "https://github.com/ores-truffle-oreslang/"
+                    f"oreslang-platform-conformance/issues/{number}"
+                ),
+                "state": state,
+                "state_reason": reason,
+            }
+
+        good = {
+            22: issue(22, 5832921751),
+            77: issue(77, 5904679716),
+            127: issue(127, 5935338521),
+        }
+
+        def api_for(values):
+            def api(route, method="GET", payload=None):
+                prefix = f"repos/{v3.INCIDENT_REPO}/issues/"
+                if method == "GET" and route.startswith(prefix):
+                    return values[int(route[len(prefix):])]
+                raise AssertionError((method, route))
+            return api
+
+        with patch.object(v3, "gh_api", side_effect=api_for(good)):
+            self.assertTrue(v3.require_incident_closure())
+
+        cases = []
+        opened = dict(good)
+        opened[22] = issue(22, 5832921751, state="open", reason=None)
+        cases.append(opened)
+        wrong_reason = dict(good)
+        wrong_reason[77] = issue(77, 5904679716, reason="not_planned")
+        cases.append(wrong_reason)
+        wrong_id = dict(good)
+        wrong_id[127] = issue(127, 1)
+        cases.append(wrong_id)
+        wrong_url = dict(good)
+        wrong_url[22] = issue(22, 5832921751, url="https://github.com/other/repo/issues/22")
+        cases.append(wrong_url)
+        pr_object = dict(good)
+        pr_object[77] = {**issue(77, 5904679716), "pull_request": {}}
+        cases.append(pr_object)
+
+        for values in cases:
+            with self.subTest(values=values):
+                with patch.object(v3, "gh_api", side_effect=api_for(values)):
+                    with self.assertRaisesRegex(v3.Denied, "not independently completed"):
+                        v3.require_incident_closure()
+
     def test_allowlist_is_exact_and_fail_closed(self):
         v3.parse_allowlist(b"# x\ntrusted/ci\n", "trusted/ci")
         for raw in (
@@ -84,6 +140,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "base_sha": BASE,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
+                        "review_pr": 17,
                         "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
                                 "blob_sha": PLAN_BLOB,
@@ -100,6 +157,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(got["repository_id"], 42)
         self.assertEqual(got["base_sha"], BASE)
         self.assertEqual(got["workflow_blob_sha"], WORKFLOW)
+        self.assertEqual(got["review_pr"], 17)
         with self.assertRaisesRegex(v3.Denied, "not authorized"):
             v3.parse_contract(
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
@@ -112,6 +170,229 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             v3.strict_json_loads('{"x":NaN}', "fixture")
         with self.assertRaisesRegex(v3.Denied, "nonfinite"):
             v3.strict_json_loads('{"x":1e9999}', "fixture")
+
+    def test_reviewed_plan_is_validated_before_source_tree_read(self):
+        meta = v3.validate_test_plan(PLAN, 669)
+        self.assertEqual(meta["sha256"], hashlib.sha256(PLAN).hexdigest())
+        self.assertFalse(meta["uses_maven"])
+        self.assertEqual(meta["required_source_blobs"], {})
+        self.assertIsNone(meta["required_source_head_sha"])
+        self.assertIsNone(meta["required_source_root_tree_sha"])
+
+        malformed = json.loads(PLAN)
+        malformed["commands"][0]["argv"] = ["bash", "-lc", "cat /etc/passwd"]
+        raw = (json.dumps(malformed) + "\n").encode()
+        with self.assertRaisesRegex(v3.Denied, "command invalid"):
+            v3.validate_test_plan(raw, 669)
+
+    def test_reviewed_plan_snapshot_pins_are_paired_and_exact(self):
+        doc = json.loads(PLAN)
+        doc["required_source_head_sha"] = "9" * 40
+        doc["required_source_root_tree_sha"] = SOURCE_TREE
+        raw = (json.dumps(doc) + "\n").encode()
+        meta = v3.validate_test_plan(raw, 669)
+        self.assertEqual(meta["required_source_head_sha"], "9" * 40)
+        self.assertEqual(meta["required_source_root_tree_sha"], SOURCE_TREE)
+        v3.verify_required_source_snapshot(meta, "9" * 40)
+        v3.verify_required_source_snapshot(meta, "9" * 40, SOURCE_TREE)
+
+        with self.assertRaisesRegex(v3.Denied, "source head differs"):
+            v3.verify_required_source_snapshot(meta, "8" * 40)
+        with self.assertRaisesRegex(v3.Denied, "source root tree differs"):
+            v3.verify_required_source_snapshot(meta, "9" * 40, "8" * 40)
+
+        for missing in ("required_source_head_sha", "required_source_root_tree_sha"):
+            bad = json.loads(json.dumps(doc))
+            del bad[missing]
+            with self.subTest(missing=missing), self.assertRaisesRegex(
+                    v3.Denied, "snapshot pins must be paired"):
+                v3.validate_test_plan((json.dumps(bad) + "\n").encode(), 669)
+
+        for field in ("required_source_head_sha", "required_source_root_tree_sha"):
+            bad = json.loads(json.dumps(doc))
+            bad[field] = "not-a-git-sha"
+            with self.subTest(field=field), self.assertRaises(v3.Denied):
+                v3.validate_test_plan((json.dumps(bad) + "\n").encode(), 669)
+
+    def test_publish_rejects_reviewed_head_drift_before_source_tree_read(self):
+        doc = json.loads(PLAN)
+        doc["required_source_head_sha"] = "8" * 40
+        doc["required_source_root_tree_sha"] = SOURCE_TREE
+        raw = (json.dumps(doc) + "\n").encode()
+        with (
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, carrier_contract())),
+            patch.object(v3, "checked_destination",
+                         return_value=(BASE_TREE, raw)),
+            patch.object(v3, "exact_source_tree") as source_tree,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "source head differs"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                )
+            source_tree.assert_not_called()
+
+    def test_publish_rejects_reviewed_root_tree_drift_before_writes(self):
+        doc = json.loads(PLAN)
+        doc["required_source_head_sha"] = "9" * 40
+        doc["required_source_root_tree_sha"] = "8" * 40
+        raw = (json.dumps(doc) + "\n").encode()
+        rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
+        manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+        with (
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, carrier_contract())),
+            patch.object(v3, "checked_destination",
+                         return_value=(BASE_TREE, raw)),
+            patch.object(
+                v3, "exact_source_tree",
+                return_value=(
+                    SOURCE_TREE,
+                    [("src/synthetic.cpp", "100644", BLOB, DATA)],
+                    rows,
+                    manifest,
+                ),
+            ),
+            patch.object(v3, "gh_api") as api,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "source root tree differs"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                )
+            api.assert_not_called()
+
+    def test_reviewed_plan_allows_exact_cpp_compiler_executables(self):
+        for executable in ("g++", "clang++"):
+            with self.subTest(executable=executable):
+                doc = json.loads(PLAN)
+                doc["commands"][0]["argv"] = [executable, "--version"]
+                raw = (json.dumps(doc) + "\n").encode()
+                meta = v3.validate_test_plan(raw, 669)
+                self.assertEqual(meta["sha256"], hashlib.sha256(raw).hexdigest())
+
+        for executable in ("g+", "clang+", "g++-14", "/usr/bin/g++"):
+            with self.subTest(executable=executable):
+                doc = json.loads(PLAN)
+                doc["commands"][0]["argv"] = [executable, "--version"]
+                with self.assertRaisesRegex(v3.Denied, "command invalid"):
+                    v3.validate_test_plan(
+                        (json.dumps(doc) + "\n").encode(), 669
+                    )
+
+    def test_reviewed_plan_rejects_wrong_pr_unexpected_fields_and_unsafe_commands(self):
+        with self.assertRaisesRegex(v3.Denied, "authorize source PR"):
+            v3.validate_test_plan(PLAN, 670)
+
+        doc = json.loads(PLAN)
+        doc["network"] = "allow"
+        with self.assertRaisesRegex(v3.Denied, "unexpected fields"):
+            v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+
+        for argv in (
+            ["sh", "-c", "true"],
+            ["bash", "-lc", "true"],
+            ["git", "status"],
+            ["curl", "https://example.invalid"],
+        ):
+            with self.subTest(argv=argv):
+                doc = json.loads(PLAN)
+                doc["commands"][0]["argv"] = argv
+                with self.assertRaisesRegex(v3.Denied, "command invalid"):
+                    v3.validate_test_plan(
+                        (json.dumps(doc) + "\n").encode(), 669
+                    )
+
+        doc = json.loads(PLAN)
+        doc["commands"][0]["cwd"] = "../escape"
+        with self.assertRaisesRegex(v3.Denied, "command invalid"):
+            v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+
+    def test_reviewed_plan_required_source_blob_is_exact(self):
+        required_sha = v3.git_blob_sha(DATA)
+        doc = json.loads(PLAN)
+        doc["required_source_blobs"] = {"src/synthetic.cpp": required_sha}
+        meta = v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+        v3.verify_required_source_blobs(
+            [("src/synthetic.cpp", "100644", required_sha, DATA)],
+            meta["required_source_blobs"],
+        )
+        with self.assertRaisesRegex(v3.Denied, "required blob"):
+            v3.verify_required_source_blobs(
+                [("src/synthetic.cpp", "100644", "0" * 40, DATA)],
+                meta["required_source_blobs"],
+            )
+
+    def test_reviewed_plan_maven_fields_are_fail_closed_and_bounded(self):
+        pom = v3.git_blob_sha(b"<project/>\n")
+        doc = json.loads(PLAN)
+        doc["commands"] = [{
+            "argv": ["mvn", "-o", "-C", "-B", "test"],
+            "cwd": ".",
+            "timeout_seconds": 300,
+        }]
+        with self.assertRaisesRegex(v3.Denied, "bind exact pom.xml"):
+            v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+
+        no_checksum = json.loads(json.dumps(doc))
+        no_checksum["commands"][0]["argv"] = ["mvn", "-o", "-B", "test"]
+        with self.assertRaisesRegex(v3.Denied, "strict checksums"):
+            v3.validate_test_plan(
+                (json.dumps(no_checksum) + "\n").encode(), 669
+            )
+
+        doc["maven_pom_blob_sha"] = pom
+        doc["maven_prefetch_artifacts"] = [
+            "org.apache.maven.surefire:surefire-junit-platform:3.5.2",
+        ]
+        meta = v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+        self.assertEqual(meta["maven_pom_blob_sha"], pom)
+
+        for arg in (
+            "-s/tmp/settings.xml",
+            "--settings=/tmp/settings.xml",
+            "-Dmaven.repo.local=/tmp/m2",
+            "-DskipTests",
+        ):
+            with self.subTest(arg=arg):
+                bad = json.loads(json.dumps(doc))
+                bad["commands"][0]["argv"].insert(2, arg)
+                with self.assertRaisesRegex(v3.Denied, "trusted build controls"):
+                    v3.validate_test_plan(
+                        (json.dumps(bad) + "\n").encode(), 669
+                    )
+
+        for extras in (
+            ["bad"],
+            ["g:a:v", "g:a:v"],
+            ["g:a:v"] * (v3.MAX_MAVEN_PREFETCH_ARTIFACTS + 1),
+        ):
+            with self.subTest(extras=extras):
+                bad = json.loads(json.dumps(doc))
+                bad["maven_prefetch_artifacts"] = extras
+                with self.assertRaisesRegex(v3.Denied, "prefetch artifacts"):
+                    v3.validate_test_plan(
+                        (json.dumps(bad) + "\n").encode(), 669
+                    )
+
+    def test_publish_rejects_bad_plan_before_exact_source_tree(self):
+        bad = json.loads(PLAN)
+        bad["commands"][0]["argv"] = ["bash", "-lc", "true"]
+        raw = (json.dumps(bad) + "\n").encode()
+        with (
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, carrier_contract())),
+            patch.object(v3, "checked_destination",
+                         return_value=(BASE_TREE, raw)),
+            patch.object(v3, "exact_source_tree") as source_tree,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "command invalid"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                )
+            source_tree.assert_not_called()
 
     def test_safe_path_requires_canonical_ascii_route(self):
         self.assertEqual(
@@ -277,6 +558,170 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "exceeds size limit"):
                 v3.run_bounded_gh(["/usr/bin/gh"], env={}, timeout=1)
 
+    def test_contract_rejects_invalid_carrier_review_pr(self):
+        raw = json.dumps(
+            {
+                "schema": 1,
+                "carriers": {
+                    "trusted/ci": {
+                        "repository_id": 42,
+                        "base_sha": BASE,
+                        "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
+                        "workflow_blob_sha": WORKFLOW,
+                        "review_pr": 0,
+                        "test_plans": {
+                            "ci/test-plans/llvm-pr669.json": {
+                                "blob_sha": PLAN_BLOB,
+                                "allowed_prs": [669],
+                            }
+                        },
+                    }
+                },
+            }
+        ).encode()
+        with self.assertRaisesRegex(v3.Denied, "review PR"):
+            v3.parse_contract(
+                raw, "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
+            )
+
+    def test_authorized_source_main_rejects_unprotected_main(self):
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                return {
+                    "name": v3.SOURCE_BRANCH,
+                    "protected": False,
+                    "commit": {"sha": "2" * 40},
+                }
+            raise AssertionError(route)
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "source_protection") as protected,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "not protected"):
+                v3.authorized_source_main_sha()
+        protected.assert_not_called()
+
+    def test_authorized_source_main_uses_protected_origin_only(self):
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                return {
+                    "name": v3.SOURCE_BRANCH,
+                    "protected": True,
+                    "commit": {"sha": "2" * 40},
+                }
+            raise AssertionError(route)
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "source_protection",
+                         return_value="2" * 40) as protected,
+        ):
+            self.assertEqual(v3.authorized_source_main_sha(), "2" * 40)
+        protected.assert_called_once_with()
+
+    def _carrier_review_fixture(self, *, author_id=424242,
+                                state="APPROVED", review_commit=None):
+        contract = carrier_contract(review_pr=17)
+        head_sha = "7" * 40
+        review_commit = head_sha if review_commit is None else review_commit
+        branch = {
+            "name": "main",
+            "protected": False,
+            "commit": {"sha": BASE},
+        }
+
+        def api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return branch
+            if route == "repos/trusted/ci/pulls/17":
+                return {
+                    "number": 17,
+                    "state": "closed",
+                    "merged_at": "2026-10-25T15:00:00Z",
+                    "user": {"id": author_id, "login": "carrier-author"},
+                    "head": {
+                        "sha": head_sha,
+                        "repo": {
+                            "full_name": "trusted/ci",
+                            "id": contract["repository_id"],
+                        },
+                    },
+                    "base": {
+                        "ref": "main",
+                        "repo": {
+                            "full_name": "trusted/ci",
+                            "id": contract["repository_id"],
+                        },
+                    },
+                }
+            if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
+                return {
+                    "path": ".github/CODEOWNERS",
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
+                    "sha": CARRIER_CODEOWNERS_BLOB,
+                }
+            raise AssertionError((method, route))
+
+        review = {
+            "id": 92,
+            "state": state,
+            "commit_id": review_commit,
+            "submitted_at": "2026-10-25T14:59:00Z",
+            "user": {
+                "id": v3.CARRIER_REVIEW_USER_ID,
+                "login": v3.CARRIER_REVIEW_LOGIN,
+            },
+        }
+        return contract, branch, api, review, head_sha
+
+    def test_unprotected_carrier_accepts_exact_tree_independent_review(self):
+        contract, _branch, api, review, _head = self._carrier_review_fixture()
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "_latest_review", return_value=review),
+            patch.object(v3, "carrier_commit_tree", side_effect=["8" * 40, "8" * 40]),
+        ):
+            self.assertEqual(v3.checked_carrier_main("trusted/ci", contract), BASE)
+
+    def test_unprotected_carrier_rejects_stale_author_or_tree_drift(self):
+        cases = (
+            ({"state": "CHANGES_REQUESTED"}, ["8" * 40, "8" * 40], "stale, late, or not approved"),
+            ({"author_id": v3.CARRIER_REVIEW_USER_ID}, ["8" * 40, "8" * 40], "independent merged"),
+            ({"author_id": 0}, ["8" * 40, "8" * 40], "independent merged"),
+            ({}, ["8" * 40, "9" * 40], "tree differs"),
+        )
+        for kwargs, trees, message in cases:
+            with self.subTest(kwargs=kwargs, trees=trees):
+                contract, _branch, api, review, _head = self._carrier_review_fixture(**kwargs)
+                with (
+                    patch.object(v3, "gh_api", side_effect=api),
+                    patch.object(v3, "_latest_review", return_value=review),
+                    patch.object(v3, "carrier_commit_tree", side_effect=trees),
+                ):
+                    with self.assertRaisesRegex(v3.Denied, message):
+                        v3.checked_carrier_main("trusted/ci", contract)
+
+    def test_recheck_destination_identity_rejects_carrier_main_movement(self):
+        contract = carrier_contract(review_pr=17)
+        eligible = {
+            "id": contract["repository_id"],
+            "full_name": "trusted/ci",
+            "private": True,
+            "visibility": "private",
+        }
+        with patch.object(v3, "gh_api", side_effect=[
+            eligible,
+            {"name": "main", "commit": {"sha": contract["base_sha"]}},
+        ]):
+            v3.recheck_destination_identity("trusted/ci", contract)
+        with patch.object(v3, "gh_api", side_effect=[
+            eligible,
+            {"name": "main", "commit": {"sha": "9" * 40}},
+        ]):
+            with self.assertRaisesRegex(v3.Denied, "main changed"):
+                v3.recheck_destination_identity("trusted/ci", contract)
+
     def test_carrier_main_requires_protection_and_codeowner_review(self):
         good_protection = {
             "required_pull_request_reviews": {
@@ -313,7 +758,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             raise AssertionError(route)
 
         with patch.object(v3, "gh_api", side_effect=good_api):
-            self.assertEqual(v3.checked_carrier_main("trusted/ci", BASE), BASE)
+            self.assertEqual(v3.checked_carrier_main("trusted/ci", carrier_contract()), BASE)
 
         def unprotected_api(route, method="GET", payload=None):
             if route == "repos/trusted/ci/branches/main":
@@ -325,8 +770,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             raise AssertionError(route)
 
         with patch.object(v3, "gh_api", side_effect=unprotected_api):
-            with self.assertRaisesRegex(v3.Denied, "carrier main is not protected"):
-                v3.checked_carrier_main("trusted/ci", BASE)
+            with self.assertRaisesRegex(v3.Denied, "requires reviewed carrier PR"):
+                v3.checked_carrier_main("trusted/ci", carrier_contract())
 
         weak = json.loads(json.dumps(good_protection))
         weak["required_pull_request_reviews"]["require_code_owner_reviews"] = False
@@ -344,7 +789,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
 
         with patch.object(v3, "gh_api", side_effect=weak_api):
             with self.assertRaisesRegex(v3.Denied, "CODEOWNER"):
-                v3.checked_carrier_main("trusted/ci", BASE)
+                v3.checked_carrier_main("trusted/ci", carrier_contract())
 
     def test_carrier_main_rejects_bypass_or_base_drift(self):
         def api(route, method="GET", payload=None):
@@ -374,7 +819,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
 
         with patch.object(v3, "gh_api", side_effect=api):
             with self.assertRaisesRegex(v3.Denied, "bypasses"):
-                v3.checked_carrier_main("trusted/ci", BASE)
+                v3.checked_carrier_main("trusted/ci", carrier_contract())
 
         def drift_api(route, method="GET", payload=None):
             if route == "repos/trusted/ci/branches/main":
@@ -387,7 +832,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
 
         with patch.object(v3, "gh_api", side_effect=drift_api):
             with self.assertRaisesRegex(v3.Denied, "advanced beyond reviewed base"):
-                v3.checked_carrier_main("trusted/ci", BASE)
+                v3.checked_carrier_main("trusted/ci", carrier_contract())
 
     def test_exact_source_tree_reads_only_pinned_git_blobs(self):
         def api(route, method="GET", payload=None):

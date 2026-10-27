@@ -77,6 +77,16 @@ static void require_function_only_tree_shake_surface(
             }))
         throw std::runtime_error(
             "tree shaking currently rejects scalar continuation functions until continuation ABI roots are modeled");
+    if (std::any_of(
+            program.functions.begin(),
+            program.functions.end(),
+            [](const oreslang::Function& fn) {
+                return fn.async_source_i64 ||
+                    !fn.source_tasks.empty() ||
+                    !fn.future_pipelines.empty();
+            }))
+        throw std::runtime_error(
+            "tree shaking currently rejects Task/Future pipeline metadata edges until they participate in the semantic reachability graph");
 }
 
 static void tree_shake_functions(oreslang::Program& program, const std::vector<std::string>& requested_roots) {
@@ -177,6 +187,7 @@ int main(int argc, char** argv) {
     bool rt_check_only = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
+    bool constraint_descriptors_only = false;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
@@ -210,6 +221,12 @@ int main(int argc, char** argv) {
             rt_report_seen = true;
             rt_report_path = arg.substr(std::string_view("--rt-report=").size());
             if (rt_report_path.empty()) { std::cerr << "rt-report path cannot be empty\n"; return 2; }
+        } else if (arg == "--constraint-descriptors") {
+            if (constraint_descriptors_only) {
+                std::cerr << "duplicate constraint-descriptors option\n";
+                return 2;
+            }
+            constraint_descriptors_only = true;
         } else if (arg.rfind("--core-log-level=", 0) == 0) {
             coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
         } else if (arg == "--no-core-log") {
@@ -254,6 +271,14 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    if (constraint_descriptors_only &&
+            (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
+             rt_check_only || rt_entry_seen || rt_report_seen ||
+             experimental_owned_int || experimental_rt_scalar_loop ||
+             target_seen)) {
+        std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -273,7 +298,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -302,6 +327,20 @@ int main(int argc, char** argv) {
 
         auto ast = oreslang::load_native_program(path, text, source_identity, experimental_owned_int,
                                                  experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target);
+
+        if (constraint_descriptors_only) {
+            for (const auto& descriptor : ast.type_constraint_descriptors) {
+                std::cout << "descriptor\t"
+                          << descriptor.schema_id << '\t'
+                          << descriptor.qualified_type_name << '\t'
+                          << descriptor.representation << '\t'
+                          << (descriptor.validation_required ? "true" : "false") << '\t'
+                          << descriptor.fingerprint << '\t'
+                          << descriptor.canonical << '\n';
+            }
+            std::cout.flush();
+            return 0;
+        }
 
         if (rt_report_seen && path != nullptr && paths_alias(path, rt_report_path))
             throw std::runtime_error("rt-report path must not overwrite source input");

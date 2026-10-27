@@ -24,6 +24,15 @@ import tempfile
 SOURCE_REPO = "ores-truffle-oreslang/oreslang-source.llvm"
 SOURCE_REPO_ID = 1410897874
 SOURCE_BRANCH = "main"
+INCIDENT_REPO = "ores-truffle-oreslang/oreslang-platform-conformance"
+INCIDENT_GATES = (
+    (22, 5832921751,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22"),
+    (77, 5904679716,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/77"),
+    (127, 5935338521,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/127"),
+)
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
@@ -36,6 +45,17 @@ HANDOFF_REF = re.compile(
     r"^ci/(?:oreslang-[0-9a-f]{40}|authorized-[0-9a-f]{40})$"
 )
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+MAVEN_ARTIFACT = re.compile(
+    r"^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"
+    r"(?::[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?)?$"
+)
+SAFE_EXECUTABLE = re.compile(
+    r"^(?:python3|mvn|cmake|ctest|g\+\+|clang\+\+|/tmp/ores-[A-Za-z0-9_.-]+)$"
+)
+MAX_MAVEN_PREFETCH_ARTIFACTS = 16
+CARRIER_REVIEW_LOGIN = "ORESoftware"
+CARRIER_REVIEW_USER_ID = 11139560
+MAX_GOVERNANCE_FILE = 1024 * 1024
 MAX_FILES = 1024
 MAX_TREE_ENTRIES = 4096
 MAX_TOTAL = 40 * 1024 * 1024
@@ -336,6 +356,81 @@ def read_local_regular(path, max_bytes):
     return data
 
 
+def gh_api_list(route):
+    """Bounded authenticated GET for GitHub list endpoints."""
+    argv = [
+        trusted_github_cli(), "api", "--method", "GET", route,
+        "--header", "Accept: application/vnd.github+json",
+    ]
+    completed = run_bounded_gh(
+        argv, env=github_api_environment(), timeout=45
+    )
+    if completed.returncode != 0:
+        raise Denied("authenticated GitHub list request failed")
+    data = strict_json_loads(
+        completed.stdout, "invalid GitHub list JSON response"
+    )
+    if not isinstance(data, list):
+        raise Denied("unexpected GitHub list response shape")
+    return data
+
+
+def github_timestamp(value, label):
+    if not isinstance(value, str):
+        raise Denied(label)
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise Denied(label) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise Denied(label)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _latest_review(repository, review_pr, reviewer_id, reviewer_login, label):
+    reviews = gh_api_list(
+        f"repos/{repository}/pulls/{review_pr}/reviews?per_page=100"
+    )
+    if len(reviews) >= 100:
+        raise Denied(label + " review history exceeds bounded page")
+    matching = []
+    seen_ids = set()
+    for review in reviews:
+        if not isinstance(review, dict):
+            raise Denied(label + " review history is malformed")
+        review_id = review.get("id")
+        if (not isinstance(review_id, int) or isinstance(review_id, bool)
+                or review_id <= 0 or review_id in seen_ids):
+            raise Denied(label + " review history has invalid IDs")
+        seen_ids.add(review_id)
+        user = review.get("user")
+        if (isinstance(user, dict)
+                and user.get("id") == reviewer_id
+                and isinstance(user.get("login"), str)
+                and user["login"].casefold() == reviewer_login.casefold()):
+            valid_sha(review.get("commit_id"), label + " review commit SHA invalid")
+            submitted = github_timestamp(
+                review.get("submitted_at"), label + " review timestamp invalid"
+            )
+            if not isinstance(review.get("state"), str):
+                raise Denied(label + " review state invalid")
+            matching.append((submitted, review_id, review))
+    if not matching:
+        raise Denied("independent " + label + " review is missing")
+    matching.sort(key=lambda item: (item[0], item[1]))
+    return matching[-1][2]
+
+
+def authorized_source_main_sha():
+    """Require enforced protected source main for every private-source export."""
+    branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
+    if branch.get("name") != SOURCE_BRANCH:
+        raise Denied("source main branch identity changed")
+    if branch.get("protected") is not True:
+        raise Denied("source main is not protected; private export denied")
+    return source_protection()
+
+
 def source_protection():
     repo = gh_api(f"repos/{SOURCE_REPO}")
     if (repo.get("id") != SOURCE_REPO_ID
@@ -419,15 +514,23 @@ def parse_contract(raw, repository, source_pr, test_plan):
     carrier = carriers.get(repository) if isinstance(carriers, dict) else None
     if not isinstance(carrier, dict):
         raise Denied("destination absent from protected carrier contract")
-    if set(carrier) != {
+    required_carrier_fields = {
         "repository_id", "base_sha", "workflow_path",
         "workflow_blob_sha", "test_plans"
-    }:
+    }
+    allowed_carrier_fields = required_carrier_fields | {"review_pr"}
+    if (not required_carrier_fields.issubset(carrier)
+            or not set(carrier).issubset(allowed_carrier_fields)):
         raise Denied("carrier contract fields")
     repo_id = carrier.get("repository_id")
     if not isinstance(repo_id, int) or isinstance(repo_id, bool) or repo_id <= 0:
         raise Denied("carrier repository id")
     base_sha = valid_sha(carrier.get("base_sha"), "carrier base SHA")
+    review_pr = carrier.get("review_pr")
+    if (review_pr is not None
+            and (not isinstance(review_pr, int) or isinstance(review_pr, bool)
+                 or review_pr <= 0)):
+        raise Denied("carrier review PR invalid")
     workflow_path = safe_path(
         carrier.get("workflow_path"), ".github/workflows/", ".yml"
     )
@@ -454,12 +557,206 @@ def parse_contract(raw, repository, source_pr, test_plan):
         "workflow_blob_sha": workflow_blob,
         "test_plan_path": plan_path,
         "test_plan_blob_sha": blob_sha,
+        "review_pr": review_pr,
     }
 
 
+def _validate_maven_prefetch_artifacts(plan, uses_maven):
+    extras = plan.get("maven_prefetch_artifacts", [])
+    if extras is None:
+        extras = []
+    if (not isinstance(extras, list)
+            or len(extras) > MAX_MAVEN_PREFETCH_ARTIFACTS
+            or any(not isinstance(value, str)
+                   or len(value) > 256
+                   or not MAVEN_ARTIFACT.fullmatch(value)
+                   for value in extras)
+            or len(set(extras)) != len(extras)):
+        raise Denied("reviewed test plan Maven prefetch artifacts invalid")
+    if not uses_maven and extras:
+        raise Denied("non-Maven test plan cannot prefetch Maven artifacts")
+    return list(extras)
+
+
+def _validate_maven_argv(argv):
+    if "-o" not in argv and "--offline" not in argv:
+        raise Denied("Maven carrier commands must run offline")
+    if "-C" not in argv and "--strict-checksums" not in argv:
+        raise Denied("Maven carrier commands must require strict checksums")
+    short_with_values = ("-s", "-gs", "-f")
+    long_with_values = ("--settings", "--global-settings", "--file")
+    dangerous_props = (
+        "-Dmaven.repo.local", "-DskipTests", "-Dmaven.test.skip", "-DskipITs",
+    )
+    for arg in argv[1:]:
+        if (any(arg == flag or (arg.startswith(flag) and arg != flag)
+                for flag in short_with_values)
+                or any(arg == flag or arg.startswith(flag + "=")
+                       for flag in long_with_values)
+                or any(arg == prop or arg.startswith(prop + "=")
+                       for prop in dangerous_props)):
+            raise Denied("Maven carrier command overrides trusted build controls")
+
+
+def validate_test_plan(plan_bytes, source_pr):
+    try:
+        plan = strict_json_loads(
+            plan_bytes.decode("utf-8"), "invalid reviewed carrier test plan"
+        )
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise Denied("invalid reviewed carrier test plan") from exc
+    if (not isinstance(plan, dict)
+            or plan.get("schema") != "ores-private-ci-test-plan-v1"
+            or plan.get("source_repo") != SOURCE_REPO):
+        raise Denied("reviewed test plan source/schema mismatch")
+
+    allowed_fields = {
+        "schema", "source_repo", "allowed_prs", "commands",
+        "required_source_blobs", "required_source_head_sha",
+        "required_source_root_tree_sha", "maven_pom_blob_sha",
+        "maven_prefetch_artifacts",
+    }
+    if not set(plan).issubset(allowed_fields):
+        raise Denied("reviewed test plan has unexpected fields")
+
+    allowed = plan.get("allowed_prs")
+    if (not isinstance(allowed, list) or not allowed
+            or source_pr not in allowed
+            or any(not isinstance(value, int) or isinstance(value, bool)
+                   or value <= 0 for value in allowed)
+            or len(set(allowed)) != len(allowed)):
+        raise Denied("reviewed test plan does not authorize source PR")
+
+    required_head = plan.get("required_source_head_sha")
+    required_tree = plan.get("required_source_root_tree_sha")
+    if (required_head is None) != (required_tree is None):
+        raise Denied("reviewed test plan source snapshot pins must be paired")
+    if required_head is not None:
+        required_head = valid_sha(
+            required_head, "reviewed test plan source head pin invalid"
+        )
+        required_tree = valid_sha(
+            required_tree, "reviewed test plan source root tree pin invalid"
+        )
+
+    required = plan.get("required_source_blobs", {})
+    if not isinstance(required, dict):
+        raise Denied("reviewed test plan required source blobs invalid")
+    checked_required = {}
+    for path, sha in required.items():
+        if (not isinstance(path, str) or not path
+                or path.startswith("/") or "\\" in path
+                or ".." in PurePosixPath(path).parts
+                or ".git" in PurePosixPath(path).parts):
+            raise Denied("reviewed test plan has unsafe required source path")
+        checked_required[path] = valid_sha(
+            sha, "reviewed test plan required source blob invalid"
+        )
+
+    commands = plan.get("commands")
+    if not isinstance(commands, list) or not 1 <= len(commands) <= 16:
+        raise Denied("reviewed test plan commands missing or excessive")
+    uses_maven = False
+    for command in commands:
+        if not isinstance(command, dict):
+            raise Denied("reviewed test plan command shape invalid")
+        if (not {"argv", "cwd", "timeout_seconds"}.issubset(command)
+                or not set(command).issubset({
+                    "argv", "cwd", "timeout_seconds", "stdout_contains",
+                })):
+            raise Denied("reviewed test plan command shape invalid")
+        argv = command.get("argv")
+        cwd = command.get("cwd")
+        timeout = command.get("timeout_seconds")
+        expected = command.get("stdout_contains")
+        if (not isinstance(argv, list) or not argv or len(argv) > 64
+                or any(not isinstance(arg, str) or not arg or len(arg) > 4096
+                       or "\x00" in arg for arg in argv)
+                or not SAFE_EXECUTABLE.fullmatch(argv[0])
+                or not isinstance(cwd, str) or not cwd
+                or cwd.startswith("/") or "\\" in cwd
+                or ".." in PurePosixPath(cwd).parts
+                or ".git" in PurePosixPath(cwd).parts
+                or not isinstance(timeout, int) or isinstance(timeout, bool)
+                or not 1 <= timeout <= 1800
+                or (expected is not None
+                    and (not isinstance(expected, str)
+                         or not expected or len(expected) > 4096))):
+            raise Denied("reviewed test plan command invalid")
+        if argv[0] == "mvn":
+            uses_maven = True
+            _validate_maven_argv(argv)
+
+    pom_pin = plan.get("maven_pom_blob_sha")
+    if pom_pin is not None:
+        pom_pin = valid_sha(pom_pin, "reviewed Maven pom blob invalid")
+        old_pin = checked_required.get("pom.xml")
+        if old_pin is not None and old_pin != pom_pin:
+            raise Denied("reviewed Maven pom pins disagree")
+        checked_required["pom.xml"] = pom_pin
+
+    extras = _validate_maven_prefetch_artifacts(plan, uses_maven)
+    if uses_maven and "pom.xml" not in checked_required:
+        raise Denied("Maven test plan must bind exact pom.xml blob")
+    if not uses_maven and pom_pin is not None:
+        raise Denied("non-Maven test plan cannot bind Maven pom")
+
+    return {
+        "sha256": hashlib.sha256(plan_bytes).hexdigest(),
+        "required_source_blobs": checked_required,
+        "required_source_head_sha": required_head,
+        "required_source_root_tree_sha": required_tree,
+        "uses_maven": uses_maven,
+        "maven_pom_blob_sha": checked_required.get("pom.xml"),
+        "maven_prefetch_artifacts": extras,
+    }
+
+
+def verify_required_source_snapshot(plan_meta, source_commit, source_tree=None):
+    required_head = plan_meta.get("required_source_head_sha")
+    required_tree = plan_meta.get("required_source_root_tree_sha")
+    if required_head is None and required_tree is None:
+        return
+    if required_head is None or required_tree is None:
+        raise Denied("reviewed test plan source snapshot pins are incomplete")
+    if source_commit != required_head:
+        raise Denied("source head differs from reviewed test plan")
+    if source_tree is not None and source_tree != required_tree:
+        raise Denied("source root tree differs from reviewed test plan")
+
+
+def verify_required_source_blobs(files, required):
+    if not isinstance(required, dict):
+        raise Denied("required source blob contract invalid")
+    actual = {path: sha for path, _mode, sha, _data in files}
+    for path, expected in required.items():
+        if actual.get(path) != expected:
+            raise Denied(
+                "exact source tree differs from reviewed required blob: " + path
+            )
+
+
+def require_incident_closure():
+    """Require independent completion of every pinned private-CI P0 incident."""
+    for number, issue_id, html_url in INCIDENT_GATES:
+        issue = gh_api(f"repos/{INCIDENT_REPO}/issues/{number}")
+        if (not isinstance(issue, dict)
+                or issue.get("id") != issue_id
+                or issue.get("number") != number
+                or issue.get("html_url") != html_url
+                or issue.get("state") != "closed"
+                or issue.get("state_reason") != "completed"
+                or "pull_request" in issue):
+            raise Denied(
+                f"platform-conformance incident #{number} is not independently completed"
+            )
+    return True
+
+
 def protected_authority(repository, source_pr, test_plan):
-    """Attest this exact script plus local policies to protected source main."""
-    main_sha = source_protection()
+    """Attest incidents, this exact script, and local policies to enforced protected source main."""
+    require_incident_closure()
+    main_sha = authorized_source_main_sha()
     remote_self, remote_self_sha = remote_source_file(
         SELF_PATH, main_sha, 512 * 1024
     )
@@ -491,16 +788,97 @@ def protected_authority(repository, source_pr, test_plan):
     return main_sha, contract
 
 
-def checked_carrier_main(repository, expected_sha):
-    branch = gh_api(f"repos/{repository}/branches/main")
-    if (branch.get("name") != "main"
-            or branch.get("protected") is not True):
-        raise Denied("carrier main is not protected")
+def carrier_commit_tree(repository, commit_sha):
+    commit_sha = valid_sha(commit_sha, "carrier commit SHA invalid")
+    commit = gh_api(f"repos/{repository}/git/commits/{commit_sha}")
+    if commit.get("sha") != commit_sha:
+        raise Denied("carrier commit identity mismatch")
+    return valid_sha(
+        commit.get("tree", {}).get("sha"), "carrier root tree SHA invalid"
+    )
+
+
+def review_attested_carrier_main(repository, contract, branch):
+    review_pr = contract.get("review_pr")
+    if not isinstance(review_pr, int) or isinstance(review_pr, bool) or review_pr <= 0:
+        raise Denied("unprotected carrier requires reviewed carrier PR")
     base_sha = valid_sha(
         branch.get("commit", {}).get("sha"), "carrier main SHA"
     )
-    if base_sha != expected_sha:
+    if base_sha != contract["base_sha"]:
         raise Denied("carrier main advanced beyond reviewed base")
+
+    pr = gh_api(f"repos/{repository}/pulls/{review_pr}")
+    head = pr.get("head")
+    base = pr.get("base")
+    author = pr.get("user")
+    if (pr.get("number") != review_pr
+            or pr.get("state") != "closed"
+            or pr.get("merged_at") is None
+            or not isinstance(author, dict)
+            or not isinstance(author.get("id"), int)
+            or isinstance(author.get("id"), bool)
+            or author.get("id") <= 0
+            or author.get("id") == CARRIER_REVIEW_USER_ID
+            or not isinstance(head, dict)
+            or not isinstance(head.get("repo"), dict)
+            or head["repo"].get("full_name") != repository
+            or head["repo"].get("id") != contract["repository_id"]
+            or not isinstance(base, dict)
+            or base.get("ref") != "main"
+            or not isinstance(base.get("repo"), dict)
+            or base["repo"].get("full_name") != repository
+            or base["repo"].get("id") != contract["repository_id"]):
+        raise Denied(
+            "carrier review PR is not an independent merged same-repo main review"
+        )
+
+    reviewed_head = valid_sha(
+        head.get("sha"), "carrier review PR head SHA invalid"
+    )
+    review = _latest_review(
+        repository, review_pr,
+        CARRIER_REVIEW_USER_ID, CARRIER_REVIEW_LOGIN,
+        "carrier",
+    )
+    submitted_at = github_timestamp(
+        review.get("submitted_at"), "carrier review timestamp invalid"
+    )
+    merged_at = github_timestamp(
+        pr.get("merged_at"), "carrier merge timestamp invalid"
+    )
+    if (review.get("state") != "APPROVED"
+            or review.get("commit_id") != reviewed_head
+            or submitted_at > merged_at):
+        raise Denied("independent carrier review is stale, late, or not approved")
+
+    reviewed_tree = carrier_commit_tree(repository, reviewed_head)
+    main_tree = carrier_commit_tree(repository, base_sha)
+    if reviewed_tree != main_tree:
+        raise Denied("carrier main tree differs from independently reviewed PR head")
+
+    codeowners = gh_api(
+        f"repos/{repository}/contents/{CODEOWNERS_PATH}?ref={base_sha}"
+    )
+    carrier_codeowners = decode_contents(
+        codeowners, CODEOWNERS_PATH, MAX_GOVERNANCE_FILE
+    )
+    require_carrier_security_codeowners(carrier_codeowners)
+    return base_sha
+
+
+def checked_carrier_main(repository, contract):
+    branch = gh_api(f"repos/{repository}/branches/main")
+    if branch.get("name") != "main":
+        raise Denied("carrier main branch identity changed")
+    base_sha = valid_sha(
+        branch.get("commit", {}).get("sha"), "carrier main SHA"
+    )
+    if base_sha != contract["base_sha"]:
+        raise Denied("carrier main advanced beyond reviewed base")
+
+    if branch.get("protected") is not True:
+        return review_attested_carrier_main(repository, contract, branch)
 
     protection = gh_api(f"repos/{repository}/branches/main/protection")
     reviews = protection.get("required_pull_request_reviews")
@@ -528,10 +906,9 @@ def checked_carrier_main(repository, expected_sha):
         f"repos/{repository}/contents/{CODEOWNERS_PATH}?ref={base_sha}"
     )
     carrier_codeowners = decode_contents(
-        codeowners, CODEOWNERS_PATH, MAX_CODEOWNERS
+        codeowners, CODEOWNERS_PATH, MAX_GOVERNANCE_FILE
     )
     require_carrier_security_codeowners(carrier_codeowners)
-
     return base_sha
 
 
@@ -546,7 +923,7 @@ def checked_destination(repository, contract):
             or repo.get("disabled") is not False
             or repo.get("fork") is not False):
         raise Denied("carrier identity/state differs from protected contract")
-    base_sha = checked_carrier_main(repository, contract["base_sha"])
+    base_sha = checked_carrier_main(repository, contract)
     commit = gh_api(f"repos/{repository}/git/commits/{base_sha}")
     base_tree = valid_sha(commit.get("tree", {}).get("sha"), "carrier base tree")
     listing = gh_api(f"repos/{repository}/git/trees/{base_tree}?recursive=1")
@@ -739,6 +1116,10 @@ def recheck_destination_identity(repository, contract):
             or repo.get("private") is not True
             or repo.get("visibility") != "private"):
         raise Denied("carrier identity/privacy changed during transfer")
+    branch = gh_api(f"repos/{repository}/branches/main")
+    if (branch.get("name") != "main"
+            or branch.get("commit", {}).get("sha") != contract["base_sha"]):
+        raise Denied("carrier main changed during transfer")
 
 
 def _gh_ref_request(repository, ref_name, method):
@@ -831,11 +1212,15 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         repository, source_pr, test_plan
     )
     base_tree, plan_bytes = checked_destination(repository, contract)
+    plan_meta = validate_test_plan(plan_bytes, source_pr)
+    verify_required_source_snapshot(plan_meta, source_commit)
     source_tree, files, rows, manifest_sha256 = exact_source_tree(
         source_pr, source_commit
     )
+    verify_required_source_snapshot(plan_meta, source_commit, source_tree)
+    verify_required_source_blobs(files, plan_meta["required_source_blobs"])
     branch = "ci/oreslang-" + source_tree
-    plan_sha256 = hashlib.sha256(plan_bytes).hexdigest()
+    plan_sha256 = plan_meta["sha256"]
 
     elements = []
     for path, mode, sha, data in files:

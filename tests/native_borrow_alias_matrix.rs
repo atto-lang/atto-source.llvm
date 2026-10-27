@@ -91,7 +91,7 @@ fn source(kind: &str, owners: &[usize], modes: usize) -> String {
         .enumerate()
         .map(|(i, owner)| {
             format!(
-                "rt borrow {}v{owner}",
+                "rt {}borrow v{owner}",
                 if (modes >> i) & 1 != 0 { "mut " } else { "" }
             )
         })
