@@ -1,4 +1,5 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
+#include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
 #include <filesystem>
 #include <functional>
@@ -132,13 +133,25 @@ private:
         paths.emplace(unit->path.string(), index);
         units.push_back(std::move(unit));
         auto& current = *units[index];
-        if (!current.program.imports.empty() && (!host || scalar_loop))
-            fail(current, "native module imports currently require the ordinary host target");
         for (const auto& imported : current.program.imports) {
             if (++edges > 4096) fail(current, "native import graph exceeds 4096 edges");
             const auto& raw = imported.path;
+            const bool core_import = frontend::is_reserved_core_import(raw);
+            if (frontend::is_reserved_std_import(raw))
+                fail(current, "ores.std native module resolution is not implemented");
+            if (!core_import && (!host || scalar_loop))
+                fail(current, "non-core native module imports currently require the ordinary host target");
+
             fs::path dependency;
-            if (raw.rfind("+/", 0) == 0) {
+            std::optional<frontend::CoreLibrarySource> bundled_core;
+            if (core_import) {
+                bundled_core = frontend::core_library_source(raw);
+                if (!bundled_core.has_value())
+                    fail(current, "unknown compiler-owned ores.core module '" + raw + "'");
+                if (imported.selected_class)
+                    fail(current, "ores.core registry currently exposes module imports only");
+                dependency = fs::path("@" + std::string(bundled_core->canonical_import));
+            } else if (raw.rfind("+/", 0) == 0) {
                 try {
                     dependency = resolve_project_root_import(
                         current.path, raw,
@@ -154,7 +167,7 @@ private:
                 }
             } else {
                 if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
-                    fail(current, "native imports require relative ./ or ../ or project-root +/ source paths; package/std/host resolution unsupported");
+                    fail(current, "native imports require ores.core/*, relative ./ or ../, or project-root +/ source paths; other package/host resolution unsupported");
                 dependency = fs::path(raw);
                 if (dependency.extension().empty()) dependency += ".ores";
                 if (dependency.extension() != ".ores")
@@ -169,16 +182,29 @@ private:
             if (selected == index) fail(current, "source file cannot import itself");
             if (selected == units.size()) {
                 SourceIdentity child_identity;
-                auto child_text = read_regular_source(dependency.string().c_str(), max_bytes - read_bytes,
-                    "native import graph exceeds 8 MiB source read budget", &child_identity);
-                read_bytes += child_text.size();
-                // Compare descriptor identities too: hard-link aliases must not
-                // bypass self-edge rejection or create duplicate module identity.
-                for (std::size_t i = 0; i < units.size(); ++i)
-                    if (same_file(units[i]->identity, child_identity)) { selected = i; break; }
-                if (selected == index) fail(current, "source file cannot import itself through a filesystem alias");
-                if (selected == units.size()) selected = visit(dependency, std::move(child_text), child_identity, depth + 1);
-                else paths.emplace(dependency.string(), selected);
+                std::string child_text;
+                if (bundled_core.has_value()) {
+                    child_text = std::string(bundled_core->source);
+                } else {
+                    child_text = read_regular_source(
+                        dependency.string().c_str(), max_bytes - read_bytes,
+                        "native import graph exceeds 8 MiB source read budget",
+                        &child_identity);
+                    read_bytes += child_text.size();
+                    // Compare descriptor identities too: hard-link aliases must not
+                    // bypass self-edge rejection or create duplicate module identity.
+                    for (std::size_t i = 0; i < units.size(); ++i)
+                        if (same_file(units[i]->identity, child_identity)) {
+                            selected = i;
+                            break;
+                        }
+                    if (selected == index)
+                        fail(current, "source file cannot import itself through a filesystem alias");
+                }
+                if (selected == units.size())
+                    selected = visit(dependency, std::move(child_text), child_identity, depth + 1);
+                else
+                    paths.emplace(dependency.string(), selected);
             }
             if (imported.local_name == current.program.module)
                 fail(current, "native imported module binding conflicts with containing module");
