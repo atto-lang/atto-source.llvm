@@ -28,6 +28,7 @@
 #ifdef ORESLANG_SOURCE_ACTOR_NIO
 #define SOURCE_ROOT_CONTROL_READABLE_SUSPEND UINT64_C(5)
 #define SOURCE_READABLE_CODE_GENERATION UINT64_C(1)
+#define SOURCE_WRITABLE_CODE_GENERATION UINT64_C(2)
 #endif
 
 typedef struct {
@@ -79,6 +80,8 @@ typedef struct {
     OresNativeSuspensionLink link;
     OresNativeActorNioAwait awaiting;
     uint64_t source_token;
+    uint64_t code_generation;
+    uint32_t events;
     int fd;
     int suspend_recorded;
     int admitted;
@@ -500,7 +503,7 @@ static void root_readable_suspend_turn(void) {
         origin,
         no_parent,
         ORES_CONTINUATION_BOUNDARY_AWAIT,
-        SOURCE_READABLE_CODE_GENERATION,
+        frame->code_generation,
         frame->source_token,
         &frame->link));
     ensure(ores_native_execution_context_store_release(
