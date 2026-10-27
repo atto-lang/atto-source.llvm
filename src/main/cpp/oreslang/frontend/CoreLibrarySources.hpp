@@ -48,17 +48,15 @@ define module numeric as
   pub fnc min_int(int left, int right): int {
     if left < right; do
       return left;
-    else
-      return right;
     fi
+    return right;
   }
 
   pub fnc max_int(int left, int right): int {
     if left > right; do
       return left;
-    else
-      return right;
     fi
+    return right;
   }
 
   pub fnc clamp_int(int value, int lower, int upper): int {
@@ -67,13 +65,11 @@ define module numeric as
     fi
     if value < lower; do
       return lower;
-    else
-      if value > upper; do
-        return upper;
-      else
-        return value;
-      fi
     fi
+    if value > upper; do
+      return upper;
+    fi
+    return value;
   }
 
 end
