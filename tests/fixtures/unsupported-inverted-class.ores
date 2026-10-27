@@ -1,0 +1,7 @@
+define inverted class Particle as
+  x: f64;
+end
+
+pub fnc main(): int {
+  return 0;
+}
