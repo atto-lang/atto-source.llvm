@@ -60,6 +60,24 @@ jobs:
             timeout 30s z3 -smt2 "mutated-${fn}.smt2" > "mutated-${fn}.z3.out"
             test "$(cat "mutated-${fn}.z3.out")" = $'sat\nsat'
           done
+      - name: Independently replay every split native AST proof and mutant query
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/native-scalar-evidence
+          for fn in min_int max_int clamp_int; do
+            test -s "${fn}-implementation.smt2"
+            test -s "${fn}-negative-control.smt2"
+            test "$(timeout 30s z3 -smt2 "${fn}-implementation.smt2")" = "unsat"
+            test "$(timeout 30s z3 -smt2 "${fn}-negative-control.smt2")" = "sat"
+            sha256sum "${fn}-implementation.smt2" "${fn}-negative-control.smt2"
+          done
+          for fn in min_int clamp_int; do
+            test -s "mutated-${fn}-implementation.smt2"
+            test "$(timeout 30s z3 -smt2 "mutated-${fn}-implementation.smt2")" = "sat"
+            test "$(timeout 30s z3 -smt2 "mutated-${fn}-negative-control.smt2")" = "sat"
+            sha256sum "mutated-${fn}-implementation.smt2"
+          done
       - name: Record proof toolchain and source identity
         if: always()
         shell: bash
