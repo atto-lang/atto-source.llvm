@@ -112,6 +112,33 @@ if [[ -n "$(git -C "$temp/llvm" status --porcelain --untracked-files=all)" ]]; t
 fi
 expect_rejected "skip-worktree LLVM fixture mutation" 65 "unverified Git index flags" "$launcher"
 
+# Process substitution discards the producing Git process's exit status.
+# The strict gate must reject inventory command failures even on a clean tree.
+mkdir -p "$temp/mockgit"
+actual_git="$(command -v git)"
+cat > "$temp/mockgit/git" <<'MOCK_GIT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1-}" == "-C" && "${3-}" == "ls-files" ]]; then
+  case "${FAIL_LSFILES_KIND:-}" in
+    flags)
+      if [[ "${4-}" == "-v" && "${5-}" == "-z" ]]; then exit 72; fi ;;
+    blobs)
+      if [[ "${4-}" == "--stage" && "${5-}" == "-z" ]]; then exit 73; fi ;;
+    ignored)
+      if [[ "${4-}" == "--others" && "${5-}" == "--ignored" ]]; then exit 74; fi ;;
+  esac
+fi
+exec "$ACTUAL_GIT" "$@"
+MOCK_GIT
+chmod +x "$temp/mockgit/git"
+make_repos
+ACTUAL_GIT="$actual_git" FAIL_LSFILES_KIND=flags PATH="$temp/mockgit:$PATH" expect_rejected "failed index flag scan" 65 "Git index-flag inventory failed" "$launcher"
+make_repos
+ACTUAL_GIT="$actual_git" FAIL_LSFILES_KIND=blobs PATH="$temp/mockgit:$PATH" expect_rejected "failed tracked blob scan" 65 "Git tracked-blob inventory failed" "$launcher"
+make_repos
+ACTUAL_GIT="$actual_git" FAIL_LSFILES_KIND=ignored PATH="$temp/mockgit:$PATH" expect_rejected "failed ignored input scan" 65 "Git ignored-input inventory failed" "$launcher"
+
 # --untracked-files=all still omits Git-ignored sources; imported ignored
 # Oreslang code may not be credited to the pinned source revision.
 make_repos
