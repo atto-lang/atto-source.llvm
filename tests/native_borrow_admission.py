@@ -11,11 +11,11 @@ import tempfile
 # of generator lifetime analysis.
 CASES = {
     "implicit-borrow": (
-        "fnc get(borrow int x): int { return x; }\npub fnc main(int v): int { return get(v); }\n",
+        "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n",
         "borrowed argument requires explicit rt borrow",
     ),
     "wrong-borrow-mutability": (
-        "fnc get(borrow mut int x): int { return x; }\npub fnc main(int v): int { return get(rt borrow v); }\n",
+        "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n",
         "borrow mode does not match borrowed parameter",
     ),
     "temporary-borrow": (
@@ -23,17 +23,17 @@ CASES = {
         "native borrow requires an addressable named int",
     ),
     "shared-to-mutable": (
-        "fnc edit(borrow mut int x): int { return x; }\nfnc inner(borrow int x): int { return edit(rt mut borrow x); }\npub fnc main(int v): int { return inner(rt borrow v); }\n",
+        "fnc edit(borrow mut int x): int { return x; }\nfnc inner(borrow int x): int { return edit(rt mut borrow x); }\npub fnc main(): int { let int v = 42; return inner(rt borrow v); }\n",
         "cannot mutably reborrow shared parameter",
     ),
     # A borrow passed to an owned i64 slot must never be lowered by-value.
     "borrow-to-owned-parameter": (
-        "fnc consume(int x): int { return x; }\npub fnc main(int v): int { return consume(rt borrow v); }\n",
+        "fnc consume(int x): int { return x; }\npub fnc main(): int { let int v = 42; return consume(rt borrow v); }\n",
         "borrowed reference may only be passed to a borrowed parameter",
     ),
     # Constructor by-value field initialization is an ownership transfer.
     "borrow-to-owned-constructor": (
-        "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(int v): int { let Box box = new Box(rt borrow v); return box.read(); }\n",
+        "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Box box = new Box(rt borrow v); return box.read(); }\n",
         "native scalar constructor argument requires pure integer expression",
     ),
     # The native generator frontend does not implement lexical loans yet.
@@ -69,18 +69,18 @@ def main():
     valid_cases = {
         "valid-shared-borrow": (
             "fnc read(borrow int x): int { return x; }\n"
-            "pub fnc main(int v): int { return read(rt borrow v); }\n"
+            "pub fnc main(): int { let int v = 42; return read(rt borrow v); }\n"
         ),
         "valid-owned-scalar-call": (
             "fnc consume(int x): int { return x; }\n"
-            "pub fnc main(int v): int { return consume(v); }\n"
+            "pub fnc main(): int { return consume(42); }\n"
         ),
         "valid-owned-constructor": (
             "pub define class Box as let int value=start;\n"
             "  pub constructor(int start){return;}\n"
             "  pub read()->int{return self.value;}\n"
             "end\n"
-            "pub fnc main(int v): int { let Box box = new Box(v); return box.read(); }\n"
+            "pub fnc main(): int { let Box box = new Box(42); return box.read(); }\n"
         ),
     }
     with tempfile.TemporaryDirectory() as folder:
