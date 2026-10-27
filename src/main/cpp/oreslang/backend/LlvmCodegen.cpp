@@ -874,7 +874,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, native_pointer_type(context, loan_ptr),
                  native_pointer_type(context, loan_ptr)}, false));
-        arrayAbort = module.getOrInsertFunction("abort",
+        arrayAbort = module.getOrInsertFunction(
+            bounded_allocator_provider
+                ? "oreslang_freestanding_panic"
+                : "abort",
             llvm::FunctionType::get(voidTy, {}, false));
         arrayUnhandled = module.getOrInsertFunction(
             "oreslang_int_array_unhandled_resource_failure",
