@@ -1594,7 +1594,71 @@ private:
         return value;
     }
 
+    // Preserve type identity in the source AST without granting executable ABI
+    // authority. Exact layout, escape rules and ownership checks are stage 2.
+    void parse_local_aggregate(Function& fn) {
+        LocalAggregateType declaration;
+        declaration.offset = token_.offset;
+        if (accept("struct")) {
+            declaration.kind = LocalAggregateType::Kind::NominalStruct;
+            declaration.name = identifier();
+        } else if (accept("record")) {
+            declaration.kind = LocalAggregateType::Kind::RecordAlias;
+            declaration.name = identifier();
+        } else {
+            require("type");
+            declaration.name = identifier();
+            require("=");
+            if (accept("struct"))
+                declaration.kind = LocalAggregateType::Kind::StructAlias;
+            else if (accept("record"))
+                declaration.kind = LocalAggregateType::Kind::RecordAlias;
+            else
+                fail("LOCAL_TYPE_TARGET_UNSUPPORTED: local type alias requires struct or record shape");
+        }
+        if (!local_aggregate_types_.insert(declaration.name).second)
+            fail("LOCAL_TYPE_DUPLICATE: duplicate callable-local type '" + declaration.name + "'");
+        require("{");
+        std::unordered_set<std::string> fields;
+        while (token_.text != "}") {
+            if (token_.kind == Kind::End)
+                fail("LOCAL_TYPE_INVALID: unterminated aggregate type fields");
+            if (declaration.fields.size() == 64)
+                fail("LOCAL_TYPE_BUDGET: maximum 64 fields per local aggregate");
+            if (token_.kind != Kind::Identifier)
+                fail("LOCAL_TYPE_INVALID: expected statically named field");
+            const std::string first(token_.text);
+            advance();
+            LocalAggregateType::Field field;
+            if (accept(":")) {
+                field.name = first;
+                if (token_.kind != Kind::Identifier)
+                    fail("LOCAL_TYPE_INVALID: expected field type");
+                field.type_name = std::string(token_.text);
+                advance();
+            } else {
+                field.type_name = first;
+                field.name = identifier();
+            }
+            if (field.name == "_" || reserved(field.name) ||
+                !fields.insert(field.name).second)
+                fail("LOCAL_TYPE_FIELD_INVALID: duplicate or reserved aggregate field '" + field.name + "'");
+            declaration.fields.push_back(std::move(field));
+            if (token_.text != "}" && !accept(",") && !accept(";"))
+                fail("LOCAL_TYPE_INVALID: expected ',' or '}' between aggregate fields");
+        }
+        require("}");
+        accept(";");
+        fn.local_aggregates.push_back(std::move(declaration));
+    }
+
     Function function(std::string owner = {}, bool visible = false) {
+        struct RestoreLocalTypes {
+            std::unordered_set<std::string>& target;
+            std::unordered_set<std::string> prior;
+            ~RestoreLocalTypes() { target = std::move(prior); }
+        } restore_local_types{local_aggregate_types_, std::move(local_aggregate_types_)};
+        local_aggregate_types_.clear();
         struct Restore { std::string& target; std::string prior; ~Restore() { target = std::move(prior); } } restore{method_scope_, method_scope_};
         method_scope_ = owner;
         struct RestoreReceivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> prior; ~RestoreReceivers() { target = std::move(prior); } } restore_receivers{class_receivers_, std::move(class_receivers_)};
@@ -2319,6 +2383,10 @@ private:
                 ~Receivers() { target = std::move(saved); } } receivers{class_receivers_, class_receivers_};
             std::vector<Statement> actions;
             while (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif"))) {
+                if (token_.text == "struct" || token_.text == "type" ||
+                    (token_.text == "record" && peek_next().kind == Kind::Identifier)) {
+                    fail("LOCAL_TYPE_NESTED_UNSUPPORTED: native local aggregates require callable-root scope until lexical escape checking is verified");
+                }
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
                 if (token_.text == "for" && !finally_scope) {
@@ -2397,6 +2465,15 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "const" && peek_next().text == "type")
+                fail("LOCAL_TYPE_CONST_REDUNDANT: type declarations are compile-time immutable; omit const");
+            if (token_.text == "class" || (token_.text == "define" && peek_next().text == "class"))
+                fail("LOCAL_CLASS_FORBIDDEN: classes are module-level declarations, not callable-local types");
+            if (token_.text == "struct" || token_.text == "type" ||
+                (token_.text == "record" && peek_next().kind == Kind::Identifier)) {
+                parse_local_aggregate(value);
+                continue;
+            }
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -3184,6 +3261,35 @@ private:
         else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
+        if (local_aggregate_types_.count(expr->name) && accept("{")) {
+            expr->kind = Expression::Kind::LocalAggregateConstruct;
+            bool named = false, positional = false;
+            std::unordered_set<std::string> fields;
+            if (!accept("}")) {
+                do {
+                    if (expr->arguments.size() == 64)
+                        fail("LOCAL_CONSTRUCT_BUDGET: maximum 64 local aggregate arguments");
+                    if (named_argument_ahead()) {
+                        if (positional)
+                            fail("LOCAL_CONSTRUCT_MIXED: positional and named fields cannot be mixed");
+                        named = true;
+                        std::string field = identifier();
+                        require(":");
+                        if (!fields.insert(field).second)
+                            fail("LOCAL_CONSTRUCT_DUPLICATE: duplicate constructor field '" + field + "'");
+                        expr->argument_names.push_back(std::move(field));
+                    } else {
+                        if (named)
+                            fail("LOCAL_CONSTRUCT_MIXED: positional and named fields cannot be mixed");
+                        positional = true;
+                        expr->argument_names.emplace_back();
+                    }
+                    expr->arguments.push_back(expression());
+                } while (accept(","));
+                require("}");
+            }
+            return expr;
+        }
         if (generic_call_type_arguments_ahead()) {
             require("<");
             expr->type_arguments_present = true;
@@ -4006,6 +4112,10 @@ private:
         }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
+            if (!fn.local_aggregates.empty())
+                throw std::runtime_error(
+                    "LOCAL_AGGREGATE_ABI_UNSUPPORTED: callable-local struct/record "
+                    "requires checked nominal identity, public return ABI, ownership and LLVM lowering");
             // Reject hand-constructed or incorrectly deserialized programs:
             // parser-only pending aliases never enter ownership or LLVM ABI.
             if (!fn.pending_return_type_alias.empty())
@@ -5093,6 +5203,8 @@ private:
     std::unordered_set<std::string> module_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
+    // Scoped to one callable by RestoreLocalTypes. Never an ambient/global type.
+    std::unordered_set<std::string> local_aggregate_types_;
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
