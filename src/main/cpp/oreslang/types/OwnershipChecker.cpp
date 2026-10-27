@@ -351,6 +351,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -436,6 +437,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -507,6 +509,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:

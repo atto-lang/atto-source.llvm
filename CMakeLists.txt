@@ -384,6 +384,14 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Source-executable Java-style signed integer remainder subset:
+    # nonzero positive/negative i64 literals only. MIN % -1 is lowered
+    # without LLVM srem poison; dynamic/zero divisors still fail closed.
+    add_test(NAME native_java_signed_remainder_source_parity
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" native-remainder-parity
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_java_signed_remainder_source_parity
+        PROPERTIES TIMEOUT 120)
     # Exact source alias-extension proof: compiler-owned static receiver dispatch,
     # LLVM IR emission, Clang link and native process execution.
     add_test(NAME native_alias_extension_method_aot
@@ -984,6 +992,73 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-gpu-fence-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
+
+    # Scalar match/switch parity. Value forms lower to lazy conditional
+    # expressions (ARM_RESULT); do forms lower to structured statement CFG
+    # where arm returns retain FUNCTION_RETURN semantics. Async suspension,
+    # replay-unsafe subjects, duplicate cases, and nb dispatch stay fail-closed.
+    oreslang_contract_test(native_value_match_arm_result
+        dispatch-value-match-run.ores --ir "cmp.eq.i1")
+    # Direct signed-minimum literal remains valid; nested unary negation
+    # would overflow host i64 and must reject before any LLVM IR.
+    oreslang_contract_test(native_dispatch_signed_min_literal_ir
+        dispatch-signed-min-pattern-run.ores --ir "cmp.eq.i1")
+    oreslang_contract_test(native_dispatch_nested_min_match_failclosed
+        dispatch-nested-signed-min-match-reject.ores
+        --diagnostic "native scalar value match supports literal patterns or '_'")
+    oreslang_contract_test(native_dispatch_nested_min_do_switch_failclosed
+        dispatch-nested-signed-min-do-switch-reject.ores
+        --diagnostic "native do switch case must be a scalar compile-time constant")
+    oreslang_contract_test(native_dispatch_negative_zero_duplicate
+        dispatch-negative-zero-duplicate-reject.ores
+        --diagnostic "duplicate native value switch case")
+    oreslang_contract_test(native_value_switch_arm_result
+        dispatch-value-switch-run.ores --ir "cmp.eq.i1")
+    oreslang_contract_test(native_do_match_function_return
+        dispatch-do-match-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_do_switch_function_return
+        dispatch-do-switch-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_do_switch_default_only
+        dispatch-do-switch-default-only-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_do_match_wildcard_only
+        dispatch-do-match-wildcard-only-run.ores --ir "return.snapshot.slot")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_dispatch_signed_min_literal_runtime
+            dispatch-signed-min-pattern-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_match_arm_result_runtime
+            dispatch-value-match-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_switch_arm_result_runtime
+            dispatch-value-switch-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_function_return_runtime
+            dispatch-do-match-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_switch_function_return_runtime
+            dispatch-do-switch-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_switch_default_only_runtime
+            dispatch-do-switch-default-only-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_wildcard_only_runtime
+            dispatch-do-match-wildcard-only-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_value_switch_requires_default
+        dispatch-value-switch-nonexhaustive.ores
+        --diagnostic "native value switch requires a default arm")
+    oreslang_contract_test(native_value_switch_duplicate_case_rejected
+        dispatch-value-switch-duplicate.ores
+        --diagnostic "duplicate native value switch case")
+    oreslang_contract_test(native_value_dispatch_type_mismatch_rejected
+        dispatch-value-arm-type-mismatch.ores
+        --diagnostic "ternary arms require a common scalar type")
+    oreslang_contract_test(native_dispatch_replay_unsafe_subject_rejected
+        dispatch-replay-unsafe-subject.ores
+        --diagnostic "native value switch subject must be a replay-safe scalar expression")
+    oreslang_contract_test(native_dispatch_async_arm_not_yet_lowered
+        dispatch-async-arm-unsupported.ores
+        --diagnostic "native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering")
+    oreslang_contract_test(native_nb_match_rejected
+        dispatch-invalid-nb-match.ores
+        --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
+    oreslang_contract_test(native_nb_switch_rejected
+        dispatch-invalid-nb-switch.ores
+        --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
 
     # Java '/' produces a float even for int/int. Until native float lowering
     # exists, reject '/' and '%' before IR rather than silently emitting i64.
@@ -3415,6 +3490,16 @@ if(BUILD_TESTING)
     add_test(NAME native_core_std_library_profile_policy
         COMMAND oreslang-library-profile-policy-test)
     set_tests_properties(native_core_std_library_profile_policy PROPERTIES TIMEOUT 10)
+    add_executable(oreslang-core-library-sources-test
+        tests/core_library_sources_test.cpp)
+    target_include_directories(oreslang-core-library-sources-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-core-library-sources-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-core-library-sources-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_core_library_registry_provider_policy
+        COMMAND oreslang-core-library-sources-test)
+    set_tests_properties(native_core_library_registry_provider_policy PROPERTIES TIMEOUT 10)
     add_test(NAME cortexm_freestanding_source_object
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_freestanding_source_object.py"
@@ -3431,6 +3516,46 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_core_library_profile_artifact_boundary
         PROPERTIES TIMEOUT 120)
+    add_test(NAME native_core_library_import_resolution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/core_library_imports.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_core_library_import_resolution
+        PROPERTIES TIMEOUT 120)
+    add_test(NAME native_alloc_library_import_resolution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/alloc_library_imports.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_RT_AOT_CLANG}")
+    set_tests_properties(native_alloc_library_import_resolution
+        PROPERTIES TIMEOUT 120)
+    add_executable(oreslang-allocator-provider-v1-test
+        tests/allocator_provider_v1_test.c
+        src/main/cpp/oreslang/runtime/AllocatorProviderV1.c)
+    target_include_directories(oreslang-allocator-provider-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    add_test(NAME native_allocator_provider_v1
+        COMMAND oreslang-allocator-provider-v1-test)
+    set_tests_properties(native_allocator_provider_v1 PROPERTIES TIMEOUT 10)
+
+    add_executable(oreslang-freestanding-int-array-region-test
+        tests/freestanding_int_array_region_test.c
+        src/main/cpp/oreslang/runtime/AllocatorProviderV1.c
+        src/main/cpp/oreslang/runtime/FreestandingIntArrayRegion.c)
+    target_include_directories(oreslang-freestanding-int-array-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    add_test(NAME native_freestanding_int_array_region
+        COMMAND oreslang-freestanding-int-array-region-test)
+    set_tests_properties(native_freestanding_int_array_region PROPERTIES TIMEOUT 10)
+
+    add_test(NAME native_freestanding_allocator_provider
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/freestanding_allocator_provider.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+            --clang "${ORE_RT_AOT_CLANG}")
+    set_tests_properties(native_freestanding_allocator_provider
+        PROPERTIES TIMEOUT 240)
     add_test(NAME cortexm_source_actor_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_source_actor_admission.py"
