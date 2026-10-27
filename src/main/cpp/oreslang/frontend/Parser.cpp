@@ -1796,6 +1796,13 @@ private:
         } else if (owner.empty() && !accept("fnc") && !accept("routine")) {
             fail("expected fnc or routine");
         }
+        // Compatibility spellings such as "fnc gen*" and "routine generator*"
+        // must hit the same compiler-owned generator gate as canonical prefix
+        // forms. Do not let the unsupported feature degrade into an incidental
+        // identifier/operator parse error after the callable keyword.
+        if (token_.text == "gen" || token_.text == "generator") {
+            fail("native generator v1 requires iterator-frame, ownership and LLVM continuation lowering");
+        }
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
