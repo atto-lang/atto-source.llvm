@@ -485,6 +485,19 @@ int main(int argc, char** argv) {
                         for (const auto& arg : expr.arguments)
                             if (!arg || !scalar(*arg, depth + 1, calls)) return false;
                         return true;
+                    case Kind::ArrayCall:
+                        if (!bounded_allocator_provider || !expr.left ||
+                                expr.left->kind != Kind::Variable ||
+                                expr.name != "get" ||
+                                expr.arguments.size() != 1 ||
+                                !expr.arguments.front())
+                            return false;
+                        return scalar(
+                            *expr.arguments.front(), depth + 1, calls);
+                    case Kind::Field:
+                        return bounded_allocator_provider && expr.left &&
+                            expr.left->kind == Kind::Variable &&
+                            expr.name == "size";
                     default: return false;
                 }
             };
@@ -592,18 +605,65 @@ int main(int argc, char** argv) {
                 }
                 return true;
             };
+            auto bounded_allocator_function =
+                [&](const oreslang::Function& fn) {
+                    if (!bounded_allocator_provider ||
+                            fn.locals.empty() || fn.locals.size() > 4 ||
+                            fn.statements.size() > 16)
+                        return false;
+                    std::unordered_set<std::string> arrays;
+                    for (const auto& local : fn.locals) {
+                        if (!local.int_array || !local.owner_mutable ||
+                                local.heap_owned || local.new_class ||
+                                !local.class_name.empty())
+                            return false;
+                        arrays.insert(local.name);
+                    }
+                    for (const auto& statement : fn.statements) {
+                        if (statement.kind != oreslang::Statement::Kind::Call ||
+                                !statement.expression ||
+                                statement.expression->kind !=
+                                    oreslang::Expression::Kind::ArrayCall ||
+                                !statement.expression->left ||
+                                statement.expression->left->kind !=
+                                    oreslang::Expression::Kind::Variable ||
+                                !arrays.count(
+                                    statement.expression->left->name))
+                            return false;
+                        const auto& call = *statement.expression;
+                        const std::size_t expected =
+                            call.name == "add" ? 1 :
+                            (call.name == "set" ? 2 : 0);
+                        if (expected == 0 ||
+                                call.arguments.size() != expected)
+                            return false;
+                        for (const auto& argument : call.arguments) {
+                            std::vector<std::string> calls;
+                            if (!argument ||
+                                    !scalar(*argument, 0, calls) ||
+                                    !calls.empty())
+                                return false;
+                        }
+                    }
+                    return true;
+                };
             for (const auto& fn : ast.functions) {
+                const bool scalar_function =
+                    fn.locals.empty() && guarded_scalar_returns(fn);
+                const bool allocator_function =
+                    bounded_allocator_function(fn);
                 if ((!ast.actors.empty() && fn.name != "main") ||
                     (ast.actors.empty() && fn.name == "main") ||
                     fn.returns_void || !fn.result ||
-                    !fn.locals.empty() || !guarded_scalar_returns(fn) ||
+                    (!scalar_function && !allocator_function) ||
                     !fn.early_returns.empty() ||
                     (ast.actors.empty() && (!fn.actor_spawns.empty() ||
                         !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
                         !fn.actor_actions.empty() || !fn.actor_field_writes.empty())) ||
                     fn.scalar_while || fn.caught_throw_value ||
                     !fn.caught_throw_defers.empty() || fn.has_declared_effects)
-                    throw std::runtime_error("cortex-m target rejects main, effects or non-scalar functions");
+                    throw std::runtime_error(
+                        "cortex-m target rejects main, effects or unbounded functions");
                 if (fn.parameters.size() > max_parameters)
                     throw std::runtime_error("cortex-m parameter budget exceeded");
                 for (const auto& param : fn.parameters)
