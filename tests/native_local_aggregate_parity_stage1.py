@@ -20,6 +20,7 @@ def compile_guest(compiler, source, filename):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
+    ap.add_argument("--clang", default="")
     args = ap.parse_args()
 
     accepted_syntax = [
@@ -34,7 +35,26 @@ def main():
         ("ordered fields", "pub fnc foo(): T { struct T { int x, int y } return T{3, 4}; }"),
         ("explicit semicolon", "pub fnc foo(): T { struct T { int foo }; return T{5}; }"),
     ]
+    executable = [
+        ("stack single scalar", "pub fnc main(): int { struct T { int foo } val T point = T{5}; return point.foo; }", 5),
+        ("stack ordered fields", "pub fnc main(): int { struct T { int x, int y } val T point = T{3, 9}; return point.y; }", 9),
+        ("stack named reordered", "pub fnc main(): int { struct T { int x, int y } val T point = T{y: 9, x: 3}; return point.y; }", 9),
+    ]
     errors = [
+        ("missing stack field", "pub fnc main(): int { struct T { int x, int y } val T p = T{5}; return p.x; }",
+         "LOCAL_CONSTRUCT_ARITY"),
+        ("unknown stack field", "pub fnc main(): int { struct T { int x } val T p = T{y: 5}; return p.x; }",
+         "LOCAL_CONSTRUCT_UNKNOWN_FIELD"),
+        ("type mismatch", "pub fnc main(): int { struct T { int x } val T p = T{true}; return p.x; }",
+         "constructor parameter type mismatch"),
+        ("cannot write immutable field", "pub fnc main(): int { struct T { int x } val T p = T{5}; p.x = 6; return p.x; }",
+         "cannot reassign final class field"),
+        ("public local return still gated", "pub fnc foo(): T { struct T { int foo } return T{5}; }",
+         "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
+        ("transparent alias still gated", "fnc foo(): T { type T = struct { int foo } return T{5}; }",
+         "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
+        ("record alias still gated", "fnc foo(): T { record T { int foo } return T{5}; }",
+         "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
         ("redundant const", "pub fnc foo(): T { const type T = struct { int foo } return T{5}; }",
          "LOCAL_TYPE_CONST_REDUNDANT"),
         ("duplicate name", "pub fnc foo(): T { struct T { int foo } record T { int foo } return T{5}; }",
@@ -70,6 +90,25 @@ def main():
             if "LOCAL_AGGREGATE_ABI_UNSUPPORTED" not in result.stderr:
                 raise AssertionError((label, "parser/validator did not reach exact ABI gate",
                                       result.returncode, result.stderr[:1000]))
+        for label, program, expected in executable:
+            result = compile_guest(args.compiler, program, source)
+            if result.returncode or not result.stdout.startswith("; ModuleID"):
+                raise AssertionError((label, "native IR emission failed", result.returncode,
+                                      result.stderr[:1000], result.stdout[:300]))
+            if args.clang:
+                ir = Path(temp) / "program.ll"
+                exe = Path(temp) / "program"
+                ir.write_text(result.stdout, encoding="utf-8")
+                linked = subprocess.run([args.clang, str(ir), "-o", str(exe)],
+                                        capture_output=True, text=True, timeout=50)
+                if linked.returncode:
+                    raise AssertionError((label, "Clang could not link native IR",
+                                          linked.stderr[:1000]))
+                executed = subprocess.run([str(exe)], capture_output=True, text=True,
+                                          timeout=30)
+                if executed.returncode != expected:
+                    raise AssertionError((label, "wrong native field result", expected,
+                                          executed.returncode, executed.stderr[:1000]))
         for label, program, diagnostic in errors:
             result = compile_guest(args.compiler, program, source)
             if result.returncode == 0 or result.stdout.strip():
@@ -87,8 +126,10 @@ def main():
                             "pub fnc main(): int { return T{5}; }", source)
         if leak.returncode == 0 or leak.stdout.strip():
             raise AssertionError(("callable local type leaked or unverified IR emitted", leak.stdout[:500]))
-    print(f"PASS {len(accepted_syntax)} gated syntax, {len(errors)} fail-closed negatives, "
-          "1 baseline and 1 scope-isolation case")
+    print(f"PASS {len(executable)} native scalar stack programs"
+          + (" (LLVM+Clang+OS)" if args.clang else " (IR-only; OS execution unavailable)")
+          + f", {len(accepted_syntax)} gated syntax, {len(errors)} fail-closed negatives, "
+            "1 baseline and 1 scope-isolation case")
 
 
 if __name__ == "__main__":
