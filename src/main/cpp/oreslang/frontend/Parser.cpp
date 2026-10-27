@@ -3262,7 +3262,8 @@ private:
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
         if (local_aggregate_types_.count(expr->name) && accept("{")) {
-            expr->kind = Expression::Kind::LocalAggregateConstruct;
+            expr->kind = Expression::Kind::RecordConstruct;
+            expr->local_aggregate_constructor = true;
             bool named = false, positional = false;
             std::unordered_set<std::string> fields;
             if (!accept("}")) {
