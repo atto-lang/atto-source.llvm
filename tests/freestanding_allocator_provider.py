@@ -416,8 +416,10 @@ def main():
             linker_script = root / "cortex.ld"
             linker_script.write_text(
                 "ENTRY(Reset_Handler)\n"
-                "MEMORY { FLASH(rx): ORIGIN=0x00000000,LENGTH=256K; "
-                "RAM(rwx): ORIGIN=0x20000000,LENGTH=64K }\n"
+                "MEMORY {\n"
+                "  FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 256K\n"
+                "  RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 64K\n"
+                "}\n"
                 "SECTIONS {\n"
                 " .isr_vector : { KEEP(*(.isr_vector)) } > FLASH\n"
                 " .text : { *(.text*) *(.rodata*) } > FLASH\n"
