@@ -195,10 +195,29 @@ CASES = {
     ),
 }
 
+# Bound native lexical admission consistently with Java/.NET/Forge.
+# The template lexer has a separate block-comment scanner.
+CASES.update({
+    "native-block-comment-overdepth": (
+        "pub fnc main(): int { " + "/*" * 129 + "unsafe" + "*/" * 129 +
+        " return 42; }",
+        "native block comment nesting exceeds 128",
+    ),
+    "native-template-comment-overdepth": (
+        "pub fnc main(): int { return `test ${42 " +
+        "/*" * 129 + "unsafe" + "*/" * 129 + "}`; }",
+        "native template block comment nesting exceeds 128",
+    ),
+})
+
 # Safe ordinary program text and longer identifiers must not be rejected as
 # unsafe. These fixtures require actual compilation and emitted LLVM IR.
 SAFE_CASES = {
     "unsafe-comment": "pub fnc main(): int { /* unsafe */ return 42; }",
+    "unsafe-nested-comment-boundary": (
+        "pub fnc main(): int { " + "/*" * 128 + "unsafe" +
+        "*/" * 128 + " return 42; }"
+    ),
     "unsafe-identifier-prefix": (
         "fnc unsafe_helper(): int { return 42; } "
         "pub fnc main(): int { return unsafe_helper(); }"
