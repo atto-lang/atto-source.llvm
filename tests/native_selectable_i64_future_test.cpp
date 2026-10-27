@@ -177,8 +177,8 @@ static void notification_failure_is_recorded() {
 
     assert(future.resolve(1));
     assert(future.has_notification_failure());
-    assert(wait.close());
     assert(future.pending_waiters() == 0);
+    assert(!wait.close());
 }
 
 static void foreign_subscription_fails_closed() {
