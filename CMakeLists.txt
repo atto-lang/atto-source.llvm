@@ -4073,4 +4073,18 @@ if(BUILD_TESTING)
     add_test(NAME async_io_operation_lifecycle_races
         COMMAND oreslang-async-io-operation-lifecycle-test)
     set_tests_properties(async_io_operation_lifecycle_races PROPERTIES TIMEOUT 30)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-async-io-epoll-operation-test
+            tests/async_io_epoll_operation_test.cpp)
+        target_include_directories(oreslang-async-io-epoll-operation-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-async-io-epoll-operation-test PRIVATE cxx_std_17)
+        target_link_libraries(oreslang-async-io-epoll-operation-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-async-io-epoll-operation-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME async_io_epoll_operation_readiness
+            COMMAND oreslang-async-io-epoll-operation-test)
+        set_tests_properties(async_io_epoll_operation_readiness PROPERTIES TIMEOUT 30)
+    endif()
 endif()
