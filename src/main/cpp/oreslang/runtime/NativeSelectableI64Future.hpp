@@ -183,8 +183,15 @@ private:
 
         std::exception_ptr first;
         for (std::size_t i = 0; i < count; ++i) {
-            try { fns[i](subs[i]); }
-            catch (...) { if (!first) first = std::current_exception(); }
+            try {
+                fns[i](subs[i]);
+            } catch (...) {
+                // Completion is immutable and no second readiness edge exists.
+                // A failed callback therefore cannot be left registered:
+                // revoke the exact waiter before retaining its diagnostic.
+                (void)subs[i].close();
+                if (!first) first = std::current_exception();
+            }
         }
         if (first) {
             std::lock_guard<std::mutex> guard(state_->mutex);
