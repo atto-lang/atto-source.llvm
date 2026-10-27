@@ -595,7 +595,9 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+                                  bool cortex_m_target,
+                                  bool bounded_allocator_provider) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -651,8 +653,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 // of array-backed ownership rejection.
                 if (local.heap_owned)
                     throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
-                if (local.int_array)
-                    throw std::runtime_error("wasm32 native heap-owned/Array<int> regions are not implemented");
+                if (local.int_array && !bounded_allocator_provider)
+                    throw std::runtime_error(
+                        "wasm32 Array<int> requires an explicit allocator provider");
             }
         }
     }
