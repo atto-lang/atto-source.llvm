@@ -40,6 +40,10 @@ static void fail_closed(void) {
     for (;;) {}
 }
 
+void oreslang_freestanding_panic(void) {
+    fail_closed();
+}
+
 static void erase_bytes(void* data, size_t count) {
     volatile uint8_t* bytes = (volatile uint8_t*)data;
     for (size_t i = 0; i < count; ++i) bytes[i] = 0;
