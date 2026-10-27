@@ -55,6 +55,9 @@ SAFE_EXECUTABLE = re.compile(
 MAX_MAVEN_PREFETCH_ARTIFACTS = 16
 CARRIER_REVIEW_LOGIN = "ORESoftware"
 CARRIER_REVIEW_USER_ID = 11139560
+INCIDENT_REVIEW_LOGIN = "ORESoftware"
+INCIDENT_REVIEW_USER_ID = 11139560
+MAX_INCIDENT_COMMENTS = 2000
 MAX_GOVERNANCE_FILE = 1024 * 1024
 MAX_FILES = 1024
 MAX_TREE_ENTRIES = 4096
@@ -825,19 +828,87 @@ def verify_required_source_blobs(files, required):
             )
 
 
+def incident_completion_marker(number):
+    return (
+        "PRIVATE_CI_INCIDENT_DISPOSITION_V1 "
+        f"incident={number} decision=completed"
+    )
+
+
 def require_incident_closure():
-    """Require independent completion of every pinned private-CI P0 incident."""
+    """Require independently attested completion of every pinned private-CI P0 incident."""
     for number, issue_id, html_url in INCIDENT_GATES:
         issue = gh_api(f"repos/{INCIDENT_REPO}/issues/{number}")
+        closed_by = issue.get("closed_by") if isinstance(issue, dict) else None
+        comment_count = issue.get("comments") if isinstance(issue, dict) else None
         if (not isinstance(issue, dict)
                 or issue.get("id") != issue_id
                 or issue.get("number") != number
                 or issue.get("html_url") != html_url
                 or issue.get("state") != "closed"
                 or issue.get("state_reason") != "completed"
-                or "pull_request" in issue):
+                or "pull_request" in issue
+                or not isinstance(closed_by, dict)
+                or closed_by.get("id") != INCIDENT_REVIEW_USER_ID
+                or not isinstance(closed_by.get("login"), str)
+                or closed_by["login"].casefold() != INCIDENT_REVIEW_LOGIN.casefold()
+                or not isinstance(comment_count, int)
+                or isinstance(comment_count, bool)
+                or comment_count < 1
+                or comment_count > MAX_INCIDENT_COMMENTS):
             raise Denied(
                 f"platform-conformance incident #{number} is not independently completed"
+            )
+
+        closed_at = github_timestamp(
+            issue.get("closed_at"),
+            f"platform-conformance incident #{number} closure timestamp invalid",
+        )
+        page_count = (comment_count + 99) // 100
+        marker = incident_completion_marker(number)
+        seen_ids = set()
+        seen_count = 0
+        attested = False
+        for page in range(1, page_count + 1):
+            comments = gh_api_list(
+                f"repos/{INCIDENT_REPO}/issues/{number}/comments"
+                f"?per_page=100&page={page}"
+            )
+            if len(comments) > 100:
+                raise Denied(
+                    f"platform-conformance incident #{number} comment page exceeds bound"
+                )
+            for comment in comments:
+                if not isinstance(comment, dict):
+                    raise Denied(
+                        f"platform-conformance incident #{number} comment history malformed"
+                    )
+                comment_id = comment.get("id")
+                if (not isinstance(comment_id, int)
+                        or isinstance(comment_id, bool)
+                        or comment_id <= 0
+                        or comment_id in seen_ids):
+                    raise Denied(
+                        f"platform-conformance incident #{number} comment identity invalid"
+                    )
+                seen_ids.add(comment_id)
+                seen_count += 1
+                user = comment.get("user")
+                body = comment.get("body")
+                if (isinstance(user, dict)
+                        and user.get("id") == INCIDENT_REVIEW_USER_ID
+                        and isinstance(user.get("login"), str)
+                        and user["login"].casefold() == INCIDENT_REVIEW_LOGIN.casefold()
+                        and isinstance(body, str)
+                        and marker in body.splitlines()
+                        and github_timestamp(
+                            comment.get("created_at"),
+                            f"platform-conformance incident #{number} attestation timestamp invalid",
+                        ) <= closed_at):
+                    attested = True
+        if seen_count != comment_count or not attested:
+            raise Denied(
+                f"platform-conformance incident #{number} lacks independent completion attestation"
             )
     return True
 
