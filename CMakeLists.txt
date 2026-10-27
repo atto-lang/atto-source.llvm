@@ -4151,3 +4151,22 @@ if(BUILD_TESTING)
         COMMAND oreslang-async-io-actor-lifetime-pin-test)
     set_tests_properties(async_io_actor_done_physical_retirement PROPERTIES TIMEOUT 60)
 endif()
+
+# Host/runtime select linearization substrate. This proves exactly-one winner,
+# late-arm loser revocation and Task cancellation integration only; source
+# select syntax remains fail-closed until Channel/Future lowering is wired.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-select-arbiter-test
+        tests/native_select_arbiter_test.cpp)
+    target_include_directories(oreslang-native-select-arbiter-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-select-arbiter-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-select-arbiter-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-select-arbiter-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_select_exactly_one_winner_and_cleanup
+        COMMAND oreslang-native-select-arbiter-test)
+    set_tests_properties(native_select_exactly_one_winner_and_cleanup
+        PROPERTIES TIMEOUT 30)
+endif()
