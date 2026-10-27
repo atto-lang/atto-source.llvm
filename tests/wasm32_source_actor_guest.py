@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix="oreslang-real-source-wasm-actor-") as d
     invoke([args.clang, "--target=wasm32", "-x", "ir", "-Oz", "-nostdlib",
             "-Wl,--no-entry",
             "-Wl,--initial-memory=131072", "-Wl,--max-memory=131072",
-            "-Wl,--export=main", "-Wl,--export=oreslang_wasm_actor_init",
+            "-Wl,--export=main", "-Wl,--export-memory", "-Wl,--export=oreslang_wasm_actor_init",
             "-Wl,--export=oreslang_wasm_actor_on_message",
             "-Wl,--export=oreslang_wasm_actor_teardown",
             "-o", str(wasm), "-"], input=ir)
@@ -49,12 +49,16 @@ assert.deepEqual(WebAssembly.Module.imports(module),[]);
 const mk=()=>new WebAssembly.Instance(module).exports;
 const x=mk();
 assert.equal(x.main(),42n);
+assert.equal(x.memory.buffer.byteLength,131072);
+assert.throws(()=>x.memory.grow(1),RangeError);
 assert.throws(()=>x.oreslang_wasm_actor_on_message(1n),WebAssembly.RuntimeError);
 x.oreslang_wasm_actor_init();
 assert.throws(()=>x.oreslang_wasm_actor_init(),WebAssembly.RuntimeError);
 for(let i=1;i<=100;i++)
  assert.equal(x.oreslang_wasm_actor_on_message(1n),BigInt(i));
 const y=mk();
+assert.notStrictEqual(x.memory.buffer,y.memory.buffer);
+assert.equal(y.memory.buffer.byteLength,131072);
 y.oreslang_wasm_actor_init();
 assert.equal(y.oreslang_wasm_actor_on_message(7n),7n);
 assert.equal(x.oreslang_wasm_actor_on_message(2n),102n);
