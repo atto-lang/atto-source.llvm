@@ -3528,6 +3528,22 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(native_epoll_reactor_c_abi PROPERTIES TIMEOUT 25)
 endif()
 
+# Low-level outbound TCP contract: numeric-address nonblocking connect must
+# complete only through EPOLLOUT + SO_ERROR, never DNS or a blocking retry loop.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(oreslang-native-nonblocking-connect-contract-test
+        tests/native_nonblocking_connect_contract_test.cpp)
+    target_include_directories(oreslang-native-nonblocking-connect-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-nonblocking-connect-contract-test PRIVATE
+        cxx_std_17)
+    target_compile_options(oreslang-native-nonblocking-connect-contract-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_nonblocking_connect_contract
+        COMMAND oreslang-native-nonblocking-connect-contract-test)
+    set_tests_properties(native_nonblocking_connect_contract PROPERTIES TIMEOUT 15)
+endif()
+
 # Host VM ↔ epoll integration. C-only actor/scheduler paths remain linkable
 # without NIO C++ objects; only this opt-in Linux target links the bridge.
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
