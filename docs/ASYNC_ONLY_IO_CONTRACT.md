@@ -70,13 +70,21 @@ It is not evidence of native async I/O support.
 
 ## Current status and gates
 
-Native LLVM on `main` has no imported standard-library I/O registry,
-nonblocking transport implementation, async/await/suspends lowering, or task
-continuation frames. The present compiler must reject all unsupported I/O
-operations **without producing LLVM IR**. Existing `tests/fixtures/unsupported-native-io-{bare,blocking}.ores` and the
-Rust async-only boundary matrix keep the current unsupported surface fail-closed.
-The matrix also rejects legacy `*_async` spellings so a second API family
-cannot appear accidentally.
+Native LLVM currently has one source-visible I/O slice: plain
+`stdio.print/println`. It is carrier-nonblocking: the guest call publishes into
+a bounded 1,024-slot queue and wakes a dedicated writer through nonblocking
+descriptors; readiness waits and OS writes occur only on that writer. Regular
+files are rejected by the console setup rather than receiving a blocking
+fallback, and lifecycle teardown joins the physical writer only after guest
+execution.
+
+Filesystem, TCP source APIs, HTTP client/server I/O, stdin, and general
+async/await continuation lowering are not yet implemented. The compiler must
+reject those unsupported operations **without producing LLVM IR**. Existing
+`tests/fixtures/unsupported-native-io-{bare,blocking}.ores` and the Rust
+async-only boundary matrix keep this surface fail-closed. The matrix also
+rejects `*_blocking` and legacy `*_async` spellings so parallel public I/O
+families cannot appear accidentally.
 
 Complete migration requires:
 - Versioned shared typed I/O ABI/registry, with async-only backends and
