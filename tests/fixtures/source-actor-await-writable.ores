@@ -1,0 +1,15 @@
+// Native writable-readiness suspension. fd 1 is a literal capability boundary.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  await writable(1);
+  worker.send(1);
+  stop worker;
+  return 43;
+}
