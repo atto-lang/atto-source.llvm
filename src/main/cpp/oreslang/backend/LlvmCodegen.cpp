@@ -2371,10 +2371,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             auto* index = b.CreateLoad(i64, index_addr, "yield.index");
             auto* exhausted = llvm::BasicBlock::Create(context, "exhausted", next);
             auto* yield_dispatch = llvm::BasicBlock::Create(context, "yield.dispatch", next);
-            b.CreateCondBr(
-                b.CreateICmpULT(index,
-                    llvm::ConstantInt::get(i64, generator.yields.size())),
-                yield_dispatch, exhausted);
+            auto* invalid_index = llvm::BasicBlock::Create(context, "invalid.index.range", next);
+            auto* yield_count = llvm::ConstantInt::get(i64, generator.yields.size());
+            auto* in_range = b.CreateICmpULT(index, yield_count);
+            auto* at_end = b.CreateICmpEQ(index, yield_count);
+            auto* non_yield = llvm::BasicBlock::Create(context, "non.yield", next);
+            b.CreateCondBr(in_range, yield_dispatch, non_yield);
+            b.SetInsertPoint(non_yield);
+            b.CreateCondBr(at_end, exhausted, invalid_index);
+            b.SetInsertPoint(invalid_index);
+            return_i32(b, -1);
             b.SetInsertPoint(exhausted);
             b.CreateStore(done_state, frame);
             b.CreateStore(zero, index_addr);
