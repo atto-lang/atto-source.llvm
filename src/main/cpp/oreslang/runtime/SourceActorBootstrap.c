@@ -188,8 +188,6 @@ int oreslang_source_actor_test_cancel_readable_await(void) {
     return oreslang_source_actor_test_cancel_io_await();
 }
 
-}
-
 int oreslang_source_actor_test_io_await_admitted(void) {
     group_lock();
     ReadableAwaitFrame* frame = group.pending_readable;
