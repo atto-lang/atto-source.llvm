@@ -2,9 +2,14 @@
 
 This is a narrowly scoped first step toward a compiler-generated, isolated
 browser actor. A module instance owns **one** synchronous source actor.
-The host creates exactly one Wasm instance per actor and serializes invocations
-on a dedicated Worker. This restriction is essential: a Wasm global is not
-isolated between actors sharing the same module instance.
+The host creates exactly one **private Wasm instance per actor** and serializes
+all invocations under that actor's execution lease. Different actors may share
+a bounded OS Worker pool, but must never share the same mutable Wasm instance:
+instance-local globals and linear memory are the isolation boundary here.
+
+The experimental synchronous source-actor ABI does not support resumable
+preemption: a noncooperating guest can stall its entire carrier. Such carriers
+are trusted-only; hostile guest isolation requires a separate process boundary.
 
 For `define actor Counter ...`, the compiler now emits the following exports:
 
