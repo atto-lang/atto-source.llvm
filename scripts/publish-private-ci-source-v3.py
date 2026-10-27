@@ -70,6 +70,10 @@ MAX_GH_API_RESPONSE_BYTES = 24 * 1024 * 1024
 GITHUB_ACTIONS_APP_ID = 15368
 SOURCE_POLICY_CHECK = "private-ci-governance"
 CARRIER_POLICY_CHECK = "verifier-tests"
+CARRIER_CONTROL_PATHS = (
+    "scripts/verify-oreslang-private-carrier.py",
+    "scripts/run-oreslang-test-plan.py",
+)
 CARRIER_DISPATCH_EVENT = "oreslang-private-ci-exact-tree"
 TTL = dt.timedelta(hours=24)
 
@@ -609,7 +613,7 @@ def parse_contract(raw, repository, source_pr, test_plan):
         raise Denied("destination absent from protected carrier contract")
     required_carrier_fields = {
         "repository_id", "base_sha", "workflow_path",
-        "workflow_blob_sha", "review_pr", "test_plans"
+        "workflow_blob_sha", "control_blobs", "review_pr", "test_plans"
     }
     allowed_carrier_fields = required_carrier_fields
     if (not required_carrier_fields.issubset(carrier)
@@ -629,6 +633,17 @@ def parse_contract(raw, repository, source_pr, test_plan):
     workflow_blob = valid_sha(
         carrier.get("workflow_blob_sha"), "carrier workflow blob"
     )
+    control_blobs = carrier.get("control_blobs")
+    if (not isinstance(control_blobs, dict)
+            or set(control_blobs) != set(CARRIER_CONTROL_PATHS)):
+        raise Denied("carrier executable control blob contract invalid")
+    pinned_controls = {
+        path: valid_sha(
+            control_blobs.get(path),
+            "carrier executable control blob invalid",
+        )
+        for path in CARRIER_CONTROL_PATHS
+    }
     plans = carrier.get("test_plans")
     plan_path = safe_path(test_plan, "ci/test-plans/", ".json")
     plan = plans.get(plan_path) if isinstance(plans, dict) else None
@@ -648,6 +663,7 @@ def parse_contract(raw, repository, source_pr, test_plan):
         "review_pr": review_pr,
         "workflow_path": workflow_path,
         "workflow_blob_sha": workflow_blob,
+        "control_blobs": pinned_controls,
         "test_plan_path": plan_path,
         "test_plan_blob_sha": blob_sha,
     }
@@ -1113,20 +1129,59 @@ def checked_destination(repository, contract):
             or listing.get("truncated") is not False
             or not isinstance(listing.get("tree"), list)):
         raise Denied("carrier base tree listing incomplete")
+    tree_entries = {}
     for entry in listing["tree"]:
-        path = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            raise Denied("carrier base tree contains malformed entry")
+        path = entry.get("path")
+        if not isinstance(path, str) or not path or path in tree_entries:
+            raise Denied("carrier base tree path identity is malformed")
+        tree_entries[path] = entry
         if (path == PREFIX
-                or isinstance(path, str) and path.startswith(PREFIX + "/")
+                or path.startswith(PREFIX + "/")
                 or path == RECEIPT_PATH):
             raise Denied("reviewed carrier base is not source-free")
+
+    pinned_files = {
+        contract["workflow_path"]: contract["workflow_blob_sha"],
+        **contract["control_blobs"],
+        contract["test_plan_path"]: contract["test_plan_blob_sha"],
+    }
+    for path, expected_sha in pinned_files.items():
+        entry = tree_entries.get(path)
+        if (not isinstance(entry, dict)
+                or entry.get("type") != "blob"
+                or entry.get("mode") not in ("100644", "100755")
+                or entry.get("sha") != expected_sha):
+            raise Denied(
+                "carrier pinned control is absent, non-regular, or has unexpected blob: "
+                + path
+            )
 
     workflow = gh_api(
         f"repos/{repository}/contents/{contract['workflow_path']}?ref={base_sha}"
     )
     if (workflow.get("path") != contract["workflow_path"]
             or workflow.get("type") != "file"
+            or workflow.get("encoding") != "base64"
             or workflow.get("sha") != contract["workflow_blob_sha"]):
         raise Denied("carrier workflow differs from protected contract")
+    workflow_bytes = decode_contents(
+        workflow, contract["workflow_path"], MAX_GOVERNANCE_FILE
+    )
+    if git_blob_sha(workflow_bytes) != contract["workflow_blob_sha"]:
+        raise Denied("carrier workflow blob digest mismatch")
+
+    for path, expected_sha in contract["control_blobs"].items():
+        control = gh_api(f"repos/{repository}/contents/{path}?ref={base_sha}")
+        if (control.get("path") != path
+                or control.get("type") != "file"
+                or control.get("encoding") != "base64"
+                or control.get("sha") != expected_sha):
+            raise Denied("carrier executable control differs from protected contract")
+        control_bytes = decode_contents(control, path, MAX_GOVERNANCE_FILE)
+        if git_blob_sha(control_bytes) != expected_sha:
+            raise Denied("carrier executable control blob digest mismatch")
 
     plan = gh_api(
         f"repos/{repository}/contents/{contract['test_plan_path']}?ref={base_sha}"
@@ -1488,7 +1543,10 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     receipt = {
         "schema": "ores-private-ci-receipt-v3",
         "expires_at": expires.isoformat().replace("+00:00", "Z"),
-        "carrier": {"workflow_blob_sha": contract["workflow_blob_sha"]},
+        "carrier": {
+            "workflow_blob_sha": contract["workflow_blob_sha"],
+            "control_blobs": dict(sorted(contract["control_blobs"].items())),
+        },
         "destination": {
             "repo": repository,
             "repo_id": contract["repository_id"],
