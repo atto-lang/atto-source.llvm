@@ -32,6 +32,10 @@ int main(void) {
     assert(ores_allocator_provider_v1_bind(&provider) ==
         ORES_ALLOCATOR_PROVIDER_V1_OK);
     assert(ores_allocator_provider_v1_current() == &provider);
+    assert(ores_allocator_provider_v1_init(
+        &provider, storage.bytes, sizeof(storage.bytes)) ==
+        ORES_ALLOCATOR_PROVIDER_V1_INVALID);
+    assert(ores_allocator_provider_v1_current() == &provider);
     assert(ores_allocator_provider_v1_bind(&other) ==
         ORES_ALLOCATOR_PROVIDER_V1_INVALID);
     assert(ores_allocator_provider_v1_reset(&provider) ==
@@ -49,5 +53,28 @@ int main(void) {
     assert(ores_allocator_provider_v1_alloc(
         &provider, sizeof(storage.bytes) + 1, 8) == 0);
     assert(ores_allocator_provider_v1_alloc(&provider, 8, 3) == 0);
+
+    {
+        union {
+            uint64_t align;
+            uint8_t bytes[sizeof(OresAllocatorProviderV1) + 64];
+        } overlap = {0};
+        OresAllocatorProviderV1* embedded =
+            (OresAllocatorProviderV1*)overlap.bytes;
+        assert(ores_allocator_provider_v1_init(
+            embedded, overlap.bytes, sizeof(overlap.bytes)) ==
+            ORES_ALLOCATOR_PROVIDER_V1_INVALID);
+    }
+
+    provider.used = provider.capacity + 1;
+    assert(ores_allocator_provider_v1_bind(&provider) ==
+        ORES_ALLOCATOR_PROVIDER_V1_INVALID);
+    assert(ores_allocator_provider_v1_used(&provider) == 0);
+    provider.used = 0;
+    provider.high_water = provider.capacity + 1;
+    assert(ores_allocator_provider_v1_bind(&provider) ==
+        ORES_ALLOCATOR_PROVIDER_V1_INVALID);
+    assert(ores_allocator_provider_v1_high_water(&provider) == 0);
+
     return 0;
 }
