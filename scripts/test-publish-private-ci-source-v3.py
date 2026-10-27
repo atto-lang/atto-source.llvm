@@ -1076,7 +1076,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             result["authorization_ref"], "ci/authorized-" + CARRIER_COMMIT
         )
         self.assertEqual(result["dispatch_event"], v3.CARRIER_DISPATCH_EVENT)
-        dispatch.assert_called_once_with("trusted/ci", CARRIER_COMMIT, SOURCE_TREE)
+        dispatch.assert_called_once_with(
+            "trusted/ci", CARRIER_COMMIT, SOURCE_TREE, contract["base_sha"]
+        )
         receipt_raw = next(
             data for data in blob_bytes
             if b'"schema":"ores-private-ci-receipt-v3"' in data
@@ -1121,7 +1123,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patch.object(v3, "github_api_environment", return_value={"GH_TOKEN": "x"}),
             patch.object(v3, "run_bounded_gh", return_value=response) as run,
         ):
-            payload = v3.dispatch_carrier("trusted/ci", CARRIER_COMMIT, SOURCE_TREE)
+            payload = v3.dispatch_carrier(
+                "trusted/ci", CARRIER_COMMIT, SOURCE_TREE, BASE
+            )
 
         self.assertEqual(
             payload,
@@ -1130,6 +1134,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 "client_payload": {
                     "carrier_sha": CARRIER_COMMIT,
                     "source_tree": SOURCE_TREE,
+                    "base_sha": BASE,
                 },
             },
         )
@@ -1151,7 +1156,16 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patch.object(v3, "run_bounded_gh", return_value=bad_response),
             self.assertRaisesRegex(v3.Denied, "unexpected body"),
         ):
-            v3.dispatch_carrier("trusted/ci", CARRIER_COMMIT, SOURCE_TREE)
+            v3.dispatch_carrier(
+                "trusted/ci", CARRIER_COMMIT, SOURCE_TREE, BASE
+            )
+
+
+    def test_dispatch_carrier_rejects_invalid_reviewed_base_sha(self):
+        with self.assertRaises(v3.Denied):
+            v3.dispatch_carrier(
+                "trusted/ci", CARRIER_COMMIT, SOURCE_TREE, "not-a-sha"
+            )
 
 
     def test_ref_request_uses_narrow_handoff_routes(self):
