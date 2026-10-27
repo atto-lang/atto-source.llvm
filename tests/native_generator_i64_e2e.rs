@@ -170,6 +170,11 @@ int main(void) {
 gen* values(): Iterator<int> { yield 2; return; }\n",
         "duplicate native generator name/arity");
 
+    rejected(&compiler, &dir.0, "generator-function-collision.ores",
+        "fnc values(): int { return 0; }\n\
+gen* values(): Iterator<int> { yield 1; return; }\n",
+        "duplicate generator/function/class symbol 'values'");
+
     let mut too_many = String::new();
     for i in 0..513 {
         too_many.push_str(&format!(
