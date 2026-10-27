@@ -97,9 +97,14 @@ int main(void) {
     check(oreslang_rt_gen_values_close(frame)==-1, "uninitialized close accepted");
     int64_t forged[2] = {1, 99};
     value = 77;
+    check(oreslang_rt_gen_values_init(forged)==-1, "forged active yield index accepted by init");
     check(oreslang_rt_gen_values_next(forged,&value)==-1, "forged yield index accepted as DONE");
     check(forged[0]==1 && forged[1]==99 && value==77, "forged index rejection mutated frame/output");
+    int64_t forged_state[2] = {99, 0};
+    check(oreslang_rt_gen_values_init(forged_state)==-1, "unknown generator state accepted by init");
+    check(forged_state[0]==99 && forged_state[1]==0, "unknown-state rejection mutated frame");
     int64_t forged_done[2] = {2, 1};
+    check(oreslang_rt_gen_values_init(forged_done)==-1, "forged terminal index accepted by init");
     check(oreslang_rt_gen_values_next(forged_done,&value)==-1, "forged terminal index accepted as DONE");
     check(oreslang_rt_gen_values_close(forged_done)==-1, "forged terminal index accepted by close");
     check(forged_done[0]==2 && forged_done[1]==1, "forged terminal rejection mutated frame");
