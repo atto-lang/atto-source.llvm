@@ -96,12 +96,14 @@ def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dic
         repo_data.get("full_name") != SOURCE
         or repo_data.get("id") != SOURCE_ID
         or repo_data.get("private") is not True
+        or repo_data.get("visibility") != "private"
+        or repo_data.get("fork") is not False
+        or repo_data.get("archived") is not False
+        or repo_data.get("disabled") is not False
     ):
-        raise GovernanceError("source identity or visibility is not private and exact")
+        raise GovernanceError("source identity/state is not private, exact, and active")
     if repo_data.get("default_branch") != "main":
         raise GovernanceError("unexpected default branch")
-    if repo_data.get("archived") is True or repo_data.get("disabled") is True:
-        raise GovernanceError("source repository is not active")
 
     if branch_data.get("name") != "main" or branch_data.get("protected") is not True:
         raise GovernanceError("protected main is not enforced")
