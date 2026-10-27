@@ -1551,6 +1551,12 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
             repository, authorization, carrier_commit, contract["repository_id"]
         )
 
+        # Re-read the complete destination authority after both refs exist and
+        # immediately before dispatch. This closes the remaining window where
+        # protection/review policy could weaken after authorization creation.
+        checked_destination(repository, contract)
+        verify_source_pr(source_pr, source_commit)
+
         # Execute only through the workflow definition on carrier default main.
         # The source-bearing ref is an immutable payload, never workflow authority.
         dispatch_carrier(
