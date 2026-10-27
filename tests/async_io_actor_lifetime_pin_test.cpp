@@ -70,6 +70,7 @@ int main() {
     NativeActorGroup stale_group(612, 1);
     auto stale = stale_group.adopt(
         612, actor_id, generation + 1, [] {});
+    auto stale_finalizer = stale_group.runtime_finalizer(stale);
     bool rejected = false;
     try {
         AsyncIoActorLifetimePin wrong(stale, lifecycle);
@@ -80,6 +81,9 @@ int main() {
     stale_group.close();
     // No lifetime pin was admitted on the mismatched generation.
     assert(stale.outstanding_resource_loans() == 0);
+    assert(stale_finalizer.ready_for_resource_reclamation());
+    assert(stale_finalizer.finalized());
+    stale.get_done().get();
 
     return 0;
 }
