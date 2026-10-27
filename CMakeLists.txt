@@ -4088,3 +4088,25 @@ if(BUILD_TESTING)
         set_tests_properties(async_io_epoll_operation_readiness PROPERTIES TIMEOUT 30)
     endif()
 endif()
+
+
+# Async I/O continuation bridge: scheduler-visible READY is published only
+# after the native operation's registration/callback has physically retired.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-async-io-continuation-gate-test
+        tests/async_io_continuation_gate_test.cpp
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    target_include_directories(oreslang-async-io-continuation-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-async-io-continuation-gate-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-async-io-continuation-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-async-io-continuation-gate-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    add_test(NAME async_io_continuation_retirement_gate
+        COMMAND oreslang-async-io-continuation-gate-test)
+    set_tests_properties(async_io_continuation_retirement_gate PROPERTIES TIMEOUT 60)
+endif()
