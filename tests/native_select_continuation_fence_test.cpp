@@ -264,6 +264,26 @@ static void register_and_advance_race_never_leaves_stale_delivery() {
     }
 }
 
+
+static void execution_raii_retirement_is_exactly_once() {
+    NativeSelectContinuationFence<1> fence;
+    auto ticket = fence.register_continuation(1);
+    {
+        auto first = fence.try_claim(ticket);
+        assert(first.valid());
+        assert(fence.executing() == 1);
+
+        auto moved = std::move(first);
+        assert(!first.valid());
+        assert(moved.valid());
+        assert(fence.executing() == 1);
+    }
+
+    assert(fence.executing() == 0);
+    assert(fence.advance(1));
+    assert(fence.generation() == 2);
+}
+
 int main() {
     claim_holds_generation_until_physical_retirement();
     stale_and_foreign_tickets_fail_closed();
@@ -275,5 +295,6 @@ int main() {
     advance_cannot_pass_claim_completion_race();
     close_and_claim_race_preserves_physical_retirement();
     register_and_advance_race_never_leaves_stale_delivery();
+    execution_raii_retirement_is_exactly_once();
     return 0;
 }
