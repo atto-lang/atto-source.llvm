@@ -814,8 +814,13 @@ if(BUILD_TESTING)
         native-rt-nested-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
 
+    oreslang_contract_test(native_generator_v1_async_failclosed
+        generator-v1-async-reject.ores
+        --diagnostic "native async gen* requires scheduler-owned async iterator continuation lowering")
+    oreslang_contract_test(native_generator_v1_suspend_failclosed
+        generator-v1-suspend-reject.ores
+        --diagnostic "native suspend gen* requires scheduler-owned async iterator continuation lowering")
     foreach(generator_case IN ITEMS
-            sync async suspend
             legacy-fnc legacy-routine legacy-async-fnc)
         add_test(NAME native_generator_v1_${generator_case}_failclosed
             COMMAND "$<TARGET_FILE:oreslang-llvmc>"
