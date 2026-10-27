@@ -182,6 +182,88 @@ static void advance_cannot_pass_claim_completion_race() {
     }
 }
 
+
+static void close_and_claim_race_preserves_physical_retirement() {
+    for (int round = 0; round < 512; ++round) {
+        NativeSelectContinuationFence<1> fence;
+        auto ticket = fence.register_continuation(1);
+        std::atomic<bool> start{false};
+        std::atomic<bool> claimed{false};
+        std::atomic<bool> allow_retire{false};
+        bool closed = false;
+
+        std::thread consumer([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            auto execution = fence.try_claim(ticket);
+            if (!execution.valid()) return;
+            claimed.store(true, std::memory_order_release);
+            while (!allow_retire.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            assert(execution.close());
+        });
+
+        std::thread shutdown([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            closed = fence.close();
+        });
+
+        start.store(true, std::memory_order_release);
+        shutdown.join();
+        assert(closed);
+        if (claimed.load(std::memory_order_acquire))
+            assert(!fence.retirement_ready());
+
+        allow_retire.store(true, std::memory_order_release);
+        consumer.join();
+
+        assert(fence.closed());
+        assert(fence.pending_tickets() == 0);
+        assert(fence.executing() == 0);
+        assert(fence.retirement_ready());
+    }
+}
+
+static void register_and_advance_race_never_leaves_stale_delivery() {
+    for (int round = 0; round < 512; ++round) {
+        NativeSelectContinuationFence<1> fence;
+        NativeSelectContinuationFence<1>::Ticket ticket;
+        std::atomic<bool> start{false};
+        bool registered = false;
+        bool rejected = false;
+        bool advanced = false;
+
+        std::thread producer([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            try {
+                ticket = fence.register_continuation(1);
+                registered = true;
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+        });
+
+        std::thread rollover([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            advanced = fence.advance(1);
+        });
+
+        start.store(true, std::memory_order_release);
+        producer.join();
+        rollover.join();
+
+        assert(advanced);
+        assert(registered != rejected);
+        assert(fence.generation() == 2);
+        assert(fence.pending_tickets() == 0);
+        assert(!ticket.active());
+        assert(!fence.try_claim(ticket).valid());
+    }
+}
+
 int main() {
     claim_holds_generation_until_physical_retirement();
     stale_and_foreign_tickets_fail_closed();
@@ -191,5 +273,7 @@ int main() {
     exhaustion_is_failure_atomic();
     cancellation_and_claim_share_one_linearization_point();
     advance_cannot_pass_claim_completion_race();
+    close_and_claim_race_preserves_physical_retirement();
+    register_and_advance_race_never_leaves_stale_delivery();
     return 0;
 }
