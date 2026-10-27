@@ -360,8 +360,8 @@ static void asynchronous_notification_failure_is_recorded_after_commit() {
         observed = true;
     }
     assert(observed);
-    assert(wait.close());
     assert(channel.pending_readers() == 0);
+    assert(!wait.close());
 }
 
 int main() {
