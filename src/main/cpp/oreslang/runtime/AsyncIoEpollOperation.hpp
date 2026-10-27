@@ -36,6 +36,8 @@ public:
             throw std::invalid_argument("invalid async I/O ticket");
     }
 
+    ~AsyncIoEpollOperation() noexcept { disarm(); }
+
     AsyncIoEpollOperation(const AsyncIoEpollOperation&) = delete;
     AsyncIoEpollOperation& operator=(const AsyncIoEpollOperation&) = delete;
 
@@ -69,8 +71,14 @@ public:
         if (!armed_ || lifecycle_.terminal() != AsyncIoTerminal::pending)
             return false;
         if (!lifecycle_.end_callback(ticket_)) return false;
-        readiness_.rearm(fd_, events_, registration_token_);
-        return true;
+        try {
+            readiness_.rearm(fd_, events_, registration_token_);
+            return true;
+        } catch (...) {
+            (void) lifecycle_.finish(ticket_, AsyncIoTerminal::failure);
+            disarm();
+            throw;
+        }
     }
 
     // Terminal callback completion. If cancellation/timeout already won, this
