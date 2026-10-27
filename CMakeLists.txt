@@ -345,6 +345,9 @@ if(BUILD_TESTING)
     # Probe here explicitly so available native link/execute evidence is not
     # silently downgraded to IR-only assertions by an empty CMake variable.
     find_program(ORE_LOCAL_AGGREGATE_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    if(NOT ORE_LOCAL_AGGREGATE_CLANG)
+        set(ORE_LOCAL_AGGREGATE_CLANG "")
+    endif()
     # Java/Graal local struct and record syntax parity; unsupported forms
     # remain fail-closed while the scalar-only stack subset is executed.
     add_test(NAME native_local_aggregate_types_stage1
