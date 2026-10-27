@@ -865,7 +865,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
-        sourceAwaitReady, sourceAwaitDone, sourceAwaitReadable;
+        sourceAwaitReady, sourceAwaitDone, sourceAwaitReadable, sourceAwaitWritable;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -901,6 +901,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
         sourceAwaitReadable = module.getOrInsertFunction(
             "oreslang_source_actor_await_readable",
+            llvm::FunctionType::get(
+                i64, {native_ptr, i64, native_ptr, i64}, false));
+        sourceAwaitWritable = module.getOrInsertFunction(
+            "oreslang_source_actor_await_writable",
             llvm::FunctionType::get(
                 i64, {native_ptr, i64, native_ptr, i64}, false));
         for (const auto& actor : source.actors) {
@@ -1759,16 +1763,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
             }
-        } else if (fn.readable_await) {
+        } else if (fn.readable_await || fn.writable_await) {
             /*
-             * First compiled source I/O suspension. The only source value
-             * crossing the boundary is the one live ActorRef capability; the
-             * fd is a compiler-validated literal and the continuation has no
-             * lexical scalar/class/array frame.
+             * Compiled source I/O suspension. The only source value crossing
+             * the boundary is the one live ActorRef capability; the fd is a
+             * compiler-validated literal and the continuation has no lexical
+             * scalar/class/array frame.
              */
+            const bool writable = fn.writable_await;
+            const char* await_name = writable ? "writable" : "readable";
+            const std::int64_t await_fd =
+                writable ? fn.writable_await_fd : fn.readable_await_fd;
+            const std::size_t await_offset =
+                writable ? fn.writable_await_offset : fn.readable_await_offset;
             if (fn.actor_spawns.size() != 1)
                 throw std::runtime_error(
-                    "readable await lowering requires exactly one source actor");
+                    std::string(await_name)
+                    + " await lowering requires exactly one source actor");
             const std::string& awaited_actor = fn.actor_spawns.front().name;
 
             auto* continuation_type =
@@ -1776,7 +1787,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             auto* resume = llvm::Function::Create(
                 continuation_type,
                 llvm::Function::InternalLinkage,
-                function->getName().str() + ".readable_continuation",
+                function->getName().str()
+                    + (writable ? ".writable_continuation"
+                                : ".readable_continuation"),
                 module);
             auto* admitted =
                 llvm::BasicBlock::Create(context, "admitted", resume);
@@ -1791,7 +1804,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 const auto& send = fn.actor_sends.at(action.index);
                 if (send.reference != awaited_actor)
                     throw std::runtime_error(
-                        "readable continuation references unexpected ActorRef");
+                        std::string(await_name)
+                        + " continuation references unexpected ActorRef");
                 llvm::Value* payload = lower(
                     *send.payload,
                     resumed,
@@ -1814,19 +1828,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
 
             llvm::Value* continuation_ptr =
                 builder.CreatePointerCast(resume, native_ptr);
+            llvm::FunctionCallee readiness_await =
+                writable ? sourceAwaitWritable : sourceAwaitReadable;
             awaited_result = builder.CreateCall(
-                sourceAwaitReadable,
+                readiness_await,
                 {
                     actorRefs.at(awaited_actor),
                     llvm::ConstantInt::get(
                         llvm::cast<llvm::IntegerType>(i64),
-                        static_cast<std::uint64_t>(fn.readable_await_fd)),
+                        static_cast<std::uint64_t>(await_fd)),
                     continuation_ptr,
                     llvm::ConstantInt::get(
                         llvm::cast<llvm::IntegerType>(i64),
-                        static_cast<std::uint64_t>(fn.readable_await_offset))
+                        static_cast<std::uint64_t>(await_offset))
                 },
-                "io.await.readable.result");
+                writable ? "io.await.writable.result"
+                         : "io.await.readable.result");
 
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Stop)
