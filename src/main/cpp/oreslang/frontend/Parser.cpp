@@ -588,7 +588,15 @@ public:
             if (token_.text == "gen" || token_.text == "generator" ||
                     (token_.text == "pub" &&
                      (peek_next().text == "gen" || peek_next().text == "generator"))) {
-                program.generators.push_back(scalar_generator());
+                if (program.generators.size() >= 512)
+                    fail("native generator declaration limit exceeded (512)");
+                auto generator = scalar_generator();
+                for (const auto& prior : program.generators)
+                    if (prior.name == generator.name)
+                        throw std::runtime_error(
+                            "duplicate native generator name/arity '" + generator.name +
+                            "' at byte " + std::to_string(generator.offset));
+                program.generators.push_back(std::move(generator));
                 continue;
             }
             bool public_class = token_.text == "pub" && peek_next().text == "define";
