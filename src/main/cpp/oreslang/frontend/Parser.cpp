@@ -585,6 +585,12 @@ public:
                 type_only_declaration(program);
                 continue;
             }
+            if (token_.text == "gen" || token_.text == "generator" ||
+                    (token_.text == "pub" &&
+                     (peek_next().text == "gen" || peek_next().text == "generator"))) {
+                program.generators.push_back(scalar_generator());
+                continue;
+            }
             bool public_class = token_.text == "pub" && peek_next().text == "define";
             if (public_class) advance();
             if (accept("@")) {
