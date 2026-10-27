@@ -395,15 +395,26 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Remainder: {
-            // The native frontend admits only positive literal divisors:
-            // no divide-by-zero or signed MIN / -1 poison can reach LLVM.
-            // Recheck at emission so hand-constructed ASTs cannot bypass it.
-            if (!expr.right || expr.right->kind != Expression::Kind::Integer ||
-                    expr.right->integer <= 0)
-                throw std::runtime_error("native remainder lacks proved positive literal divisor");
+            // Revalidate even compiler-created/modified ASTs at the IR boundary.
+            // A nonzero signed i64 literal has no zero-divisor failure path.
+            // Java defines INT64_MIN % -1 as zero; LLVM srem would be poison.
+            if (!expr.right || !expr.left)
+                throw std::runtime_error("native remainder lacks proved signed literal divisor");
+            std::int64_t divisor = 0;
+            if (expr.right->kind == Expression::Kind::Integer) {
+                divisor = expr.right->integer;
+            } else if (expr.right->kind == Expression::Kind::Negate &&
+                       expr.right->left &&
+                       expr.right->left->kind == Expression::Kind::Integer &&
+                       expr.right->left->integer > 0) {
+                divisor = -expr.right->left->integer;
+            }
+            if (divisor == 0)
+                throw std::runtime_error("native remainder lacks proved nonzero signed literal divisor");
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            llvm::Value* right = llvm::ConstantInt::get(i64,
-                static_cast<std::uint64_t>(expr.right->integer));
+            if (divisor == -1)
+                return llvm::ConstantInt::get(i64, 0); // left was evaluated
+            llvm::Value* right = llvm::ConstantInt::getSigned(i64, divisor);
             return builder.CreateSRem(left, right, "srem");
         }
         case Expression::Kind::LogicalNot: {
