@@ -63,12 +63,12 @@ require_clean_checkout() {
     # Git status trusts assume-unchanged/skip-worktree index hints. Those
     # hints can hide tampered source bytes while status reports a clean tree.
     # Reject the hints rather than assigning HEAD's SHA to unchecked bytes.
-    while IFS= read -r -d '' indexed; do
+    git -C "$tree" ls-files -v -z | while IFS= read -r -d '' indexed; do
       if [[ "$indexed" != "H "* ]]; then
         echo "source checkout contains unverified Git index flags: $tree" >&2
         exit 65
       fi
-    done < <(git -C "$tree" ls-files -v -z)
+    done || { echo "Git index-flag inventory failed: $tree" >&2; exit 65; }
     # Stat-cache races can still hide worktree edits. Verify the SHA of
     # every tracked regular file, not just git status or selected fixtures.
     # Refuse unpinned symlinks and submodule gitlinks for this strict gate.
@@ -76,7 +76,7 @@ require_clean_checkout() {
       echo "source checkout Git index diverges from pinned HEAD: $tree" >&2
       exit 65
     fi
-    while IFS= read -r -d '' staged; do
+    git -C "$tree" ls-files --stage -z | while IFS= read -r -d '' staged; do
       local meta relative mode blob stage actual
       meta="${staged%%$'\t'*}"
       relative="${staged#*$'\t'}"
@@ -94,11 +94,11 @@ require_clean_checkout() {
         echo "tracked source bytes differ from pinned Git blob: $tree/$relative" >&2
         exit 65
       fi
-    done < <(git -C "$tree" ls-files --stage -z)
+    done || { echo "Git tracked-blob inventory failed: $tree" >&2; exit 65; }
     # status --untracked-files does not report ignored files. A local ignored
     # .ores import could affect the run without changing either commit SHA.
     # Permit only generated build output in the dedicated build directories.
-    while IFS= read -r -d '' ignored; do
+    git -C "$tree" ls-files --others --ignored --exclude-standard -z | while IFS= read -r -d '' ignored; do
       if [[ "$tree" == "$source_root" && "$tree/$ignored" == "$build_root"/* ]]; then
         continue
       fi
@@ -107,7 +107,7 @@ require_clean_checkout() {
       fi
       echo "source checkout contains ignored untracked input: $tree/$ignored" >&2
       exit 65
-    done < <(git -C "$tree" ls-files --others --ignored --exclude-standard -z)
+    done || { echo "Git ignored-input inventory failed: $tree" >&2; exit 65; }
   done
 }
 require_clean_checkout
