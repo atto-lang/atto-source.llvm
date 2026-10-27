@@ -169,7 +169,30 @@ CASES = {
         "pub fnc main(): int { return `value ${unsafe}`; }",
         "native unsafe boundary unsupported",
     ),
+    "unsafe-nested-template-interpolation": (
+        "pub fnc main(): int { return `outer ${`inner ${unsafe}`}`; }",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-after-valid-function": (
+        "pub fnc main(): int { return 42; } unsafe",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-qualified-member": (
+        "pub fnc main(): int { return std.unsafe.memory.read(); }",
+        "native unsafe boundary unsupported",
+    ),
 }
+
+# Safe ordinary program text and longer identifiers must not be rejected as
+# unsafe. These fixtures require actual compilation and emitted LLVM IR.
+SAFE_CASES = {
+    "unsafe-comment": "pub fnc main(): int { /* unsafe */ return 42; }",
+    "unsafe-identifier-prefix": (
+        "fnc unsafe_helper(): int { return 42; } "
+        "pub fnc main(): int { return unsafe_helper(); }"
+    ),
+}
+
 
 
 def main():
@@ -190,6 +213,27 @@ def main():
                     or diagnostic not in result.stderr):
                 raise AssertionError(
                     f"{name}: expected rejection without LLVM IR, "
+                    f"returncode={result.returncode}, "
+                    f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+                )
+            if name in ("unsafe-template-interpolation",
+                        "unsafe-nested-template-interpolation"):
+                expected_byte = source.index("unsafe", source.index("${"))
+                if f"at byte {expected_byte}" not in result.stderr:
+                    raise AssertionError(
+                        f"{name}: unsafe diagnostic must use absolute source byte "
+                        f"{expected_byte}; got {result.stderr!r}"
+                    )
+
+        for name, source in SAFE_CASES.items():
+            fixture = pathlib.Path(tmp) / ("valid-" + name + ".ores")
+            fixture.write_text(source + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.argv[1], str(fixture)],
+                capture_output=True, text=True, check=False, timeout=20)
+            if result.returncode != 0 or not result.stdout.strip():
+                raise AssertionError(
+                    f"{name}: valid safe program was rejected or emitted no IR, "
                     f"returncode={result.returncode}, "
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}"
                 )
