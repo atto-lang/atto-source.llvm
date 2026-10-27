@@ -668,7 +668,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
 }
 
 // Compiler -> LLVM IR -> Clang -> actual process. This deliberately closes
-// only the safe int % positive-literal subset; dynamic and zero divisors must
+// only the safe int % nonzero signed-literal subset; dynamic and zero divisors
 // remain rejected until Oreslang's checked failure/effects ABI is available.
 fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-remainder-parity-").map_err(|e| e.to_string())?;
@@ -686,6 +686,16 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
         ("exact-divisor", "pub fnc main(): int { return 64 % 8; }\n", 0),
         ("divisor-one", "pub fnc main(): int { return (-14 % 1) + 6; }\n", 6),
         ("signed-min-divisor-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % 1) + 11; }\n", 11),
+        ("negative-divisor", "pub fnc main(): int { return 17 % -5; }\n", 2),
+        ("both-negative", "pub fnc main(): int { return (-17 % -5) + 10; }\n", 8),
+        ("negative-precedence", "pub fnc main(): int { return 4 + 17 % -5 * 3; }\n", 10),
+        ("negative-associativity", "pub fnc main(): int { return 20 % 6 % -4; }\n", 2),
+        ("negative-function-param", "fnc rem(int n): int { return n % -7; }\n\
+            pub fnc main(): int { return rem(52); }\n", 3),
+        ("negative-minus-one", "pub fnc main(): int { return 5 % -1; }\n", 0),
+        ("min-dividend-minus-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -1) + 13; }\n", 13),
+        ("signed-min-divisor", "pub fnc main(): int { return 5 % -9223372036854775808; }\n", 5),
+        ("min-both-sides", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -9223372036854775808) + 17; }\n", 17),
     ];
     for (name, program, expected) in positives {
         fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
@@ -695,10 +705,16 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             format!("{name}: native frontend rejected source: {}", stderr(&compiled)),
         )?;
         let llvm_ir = stdout(&compiled);
-        if name == "function-param" {
+        if name == "function-param" || name == "negative-function-param" {
             require(
                 llvm_ir.contains("srem i64 "),
                 format!("{name}: emitted IR lacks runtime signed remainder"),
+            )?;
+        }
+        if name == "min-dividend-minus-one" {
+            require(
+                !llvm_ir.contains("srem i64 "),
+                format!("{name}: emitted unsafe signed-min / -1 srem"),
             )?;
         }
         fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
@@ -728,14 +744,16 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
     }
     let negatives = [
         ("zero-divisor", "pub fnc main(): int { return 5 % 0; }\n",
-            "positive nonzero literal divisor"),
-        ("negative-divisor", "pub fnc main(): int { return 5 % -1; }\n",
-            "positive nonzero literal divisor"),
+            "nonzero signed integer literal divisor"),
+        ("negative-zero", "pub fnc main(): int { return 5 % -0; }\n",
+            "nonzero signed integer literal divisor"),
         ("computed-divisor", "pub fnc main(): int { return 5 % (3 - 1); }\n",
-            "positive nonzero literal divisor"),
+            "nonzero signed integer literal divisor"),
         ("runtime-divisor", "fnc rem(int n): int { return 5 % n; }\n\
             pub fnc main(): int { return rem(2); }\n",
-            "positive nonzero literal divisor"),
+            "nonzero signed integer literal divisor"),
+        ("nonliteral-unary", "pub fnc main(): int { return 5 % -(1 + 2); }\n",
+            "nonzero signed integer literal divisor"),
         ("wrong-type", "pub fnc main(): int { return true % 2; }\n",
             "arithmetic requires int"),
     ];
