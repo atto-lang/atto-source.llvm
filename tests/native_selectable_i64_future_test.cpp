@@ -1,9 +1,11 @@
 #include "oreslang/runtime/NativeSelectArbiter.hpp"
 #include "oreslang/runtime/NativeSelectableI64Future.hpp"
 
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <stdexcept>
+#include <thread>
 
 using oreslang::runtime::NativeSelectArbiter;
 using oreslang::runtime::NativeSelectableI64Future;
@@ -192,6 +194,86 @@ static void foreign_subscription_fails_closed() {
     assert(foreign.close());
 }
 
+
+static void terminal_observer_is_one_shot_without_commit() {
+    using Future = NativeSelectableI64Future<2>;
+
+    {
+        Future future;
+        int callbacks = 0;
+        auto wait = future.subscribe_ready(
+            [&](const Future::Subscription&) {
+                ++callbacks;
+                assert(future.status() == Future::Status::Pending ||
+                       future.status() == Future::Status::Value);
+            });
+        assert(future.pending_waiters() == 1);
+        assert(future.resolve(17));
+        assert(callbacks == 1);
+        assert(future.pending_waiters() == 0);
+        assert(!wait.close());
+    }
+
+    {
+        Future future;
+        assert(future.resolve(23));
+        int callbacks = 0;
+        auto wait = future.subscribe_ready(
+            [&](const Future::Subscription&) {
+                ++callbacks;
+                assert(future.status() == Future::Status::Value);
+            });
+        assert(callbacks == 1);
+        assert(future.pending_waiters() == 0);
+        assert(!wait.close());
+    }
+}
+
+static void resolve_and_cancel_share_one_terminal_linearization_point() {
+    using Future = NativeSelectableI64Future<2>;
+    for (int round = 0; round < 1024; ++round) {
+        Future future;
+        std::atomic<int> callbacks{0};
+        Future::Result observed;
+        auto wait = future.subscribe_ready(
+            [&](const Future::Subscription& subscription) {
+                ++callbacks;
+                Future::Result candidate;
+                if (future.try_commit(subscription, candidate))
+                    observed = candidate;
+            });
+
+        std::atomic<bool> start{false};
+        bool resolved = false;
+        bool cancelled = false;
+        std::thread resolver([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            resolved = future.resolve(41);
+        });
+        std::thread canceller([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            cancelled = future.cancel();
+        });
+
+        start.store(true, std::memory_order_release);
+        resolver.join();
+        canceller.join();
+
+        assert(resolved != cancelled);
+        assert(callbacks.load(std::memory_order_acquire) == 1);
+        assert(future.pending_waiters() == 0);
+        assert(!wait.close());
+        if (resolved) {
+            assert(observed.status == Future::Status::Value);
+            assert(observed.value == 41);
+        } else {
+            assert(observed.status == Future::Status::Cancelled);
+        }
+    }
+}
+
 int main() {
     pending_resolution_wins_with_value();
     completion_is_immutable_and_non_consuming();
@@ -200,5 +282,7 @@ int main() {
     cancellation_and_failure_are_terminal_outcomes();
     notification_failure_is_recorded();
     foreign_subscription_fails_closed();
+    terminal_observer_is_one_shot_without_commit();
+    resolve_and_cancel_share_one_terminal_linearization_point();
     return 0;
 }
