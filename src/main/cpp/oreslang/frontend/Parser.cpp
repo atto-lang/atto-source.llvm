@@ -1537,7 +1537,8 @@ private:
         if (accept("gen")) {
             require("*");
         } else if (accept("generator")) {
-            accept("*");
+            if (!accept("*"))
+                fail("bare native generator declaration requires 'generator*'; legacy 'generator' callable-kind syntax is not admitted in native generator v1");
         } else {
             fail("expected gen* generator declaration");
         }
