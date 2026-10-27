@@ -56,7 +56,12 @@ require_clean_checkout() {
   for tree in "$source_root" "$java_root"; do
     # Includes untracked files: a new .ores import could otherwise change
     # execution without changing the pinned Git SHA or tracked diffs.
-    if [[ -n "$(git -C "$tree" status --porcelain --untracked-files=all)" ]]; then
+    local inventory_status
+    if ! inventory_status="$(git -C "$tree" status --porcelain --untracked-files=all)"; then
+      echo "Git worktree inventory failed: $tree" >&2
+      exit 65
+    fi
+    if [[ -n "$inventory_status" ]]; then
       echo "source checkout has tracked or untracked changes: $tree" >&2
       exit 65
     fi
