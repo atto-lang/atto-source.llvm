@@ -51,6 +51,55 @@ int main() {
     auto h1 = a.push(2.5f, 200, false);
     auto h2 = a.push(3.5f, 300, true);
     check(a.size() == 3 && a.get<0>(h2) == 3.5f && a.get<1>(h1) == 200);
+    expect<std::out_of_range>([&] { (void)a.index(-1); });
+    expect<std::out_of_range>([&] {
+        (void)a.index(static_cast<std::int64_t>(
+            std::numeric_limits<std::int32_t>::max()) + 1);
+    });
+    expect<std::out_of_range>([&] { (void)a.index(std::numeric_limits<std::int64_t>::min()); });
+    expect<std::out_of_range>([&] { (void)a.index(std::numeric_limits<std::int64_t>::max()); });
+    check(a.read_index<0>(0) == 1.5f);
+    check(a.read_index<1>(1) == 200);
+
+    std::vector<int> lowering_order;
+    int receiver_evals = 0, index_evals = 0, value_evals = 0;
+    const auto lowered_read = Store::lower_read<0>(
+        [&]() -> Store& {
+            ++receiver_evals;
+            lowering_order.push_back(1);
+            return a;
+        },
+        [&]() -> std::int64_t {
+            ++index_evals;
+            lowering_order.push_back(2);
+            return 1;
+        });
+    check(lowered_read == 2.5f);
+    check(receiver_evals == 1 && index_evals == 1);
+    check(lowering_order == std::vector<int>({1, 2}));
+
+    lowering_order.clear();
+    const auto lowered_write = Store::lower_write<0>(
+        [&]() -> float {
+            ++value_evals;
+            lowering_order.push_back(3);
+            return 9.5f;
+        },
+        [&]() -> Store& {
+            ++receiver_evals;
+            lowering_order.push_back(1);
+            return a;
+        },
+        [&]() -> std::int64_t {
+            ++index_evals;
+            lowering_order.push_back(2);
+            return 0;
+        });
+    check(lowered_write == 9.5f && a.read_index<0>(0) == 9.5f);
+    check(value_evals == 1 && receiver_evals == 2 && index_evals == 2);
+    check(lowering_order == std::vector<int>({3, 1, 2}));
+    // Restore the pre-existing fixture value so later legacy assertions remain independent.
+    a.write_index<0>(0, 1.5f);
     a.reserve(16);
     // Deterministic oversized reservation must fail without changing any
     // live row/handle identity or the lengths of individual columns.
@@ -85,6 +134,8 @@ int main() {
       check(bools.size() == 3 && bools.get(0) == 1 && bools.get(1) == 0); }
     a.erase_swap(h1);
     check(a.size() == 2 && a.get<0>(h2) == 3.5f && a.get<1>(h2) == 300);
+    check(a.read_index<0>(1) == 3.5f);
+    expect<std::out_of_range>([&] { (void)a.read_index<0>(2); });
     expect<std::out_of_range>([&] { (void)a.get<0>(h1); });
     auto reused = a.push(4.5f, 400, false);
     check(reused.slot() == h1.slot() && reused.generation() != h1.generation());
