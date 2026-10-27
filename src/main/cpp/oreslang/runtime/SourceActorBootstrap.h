@@ -39,9 +39,12 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
 /* Deterministic test-only cancellation of the one currently admitted readable
  * await. Returns 1 only if the exact actor-owned one-shot watch was cancelled. */
 int oreslang_source_actor_test_cancel_readable_await(void);
+/* Generic aliases used by writable/readable readiness regressions. */
+int oreslang_source_actor_test_cancel_io_await(void);
 /* Read-only proof hook: true only after the exact one-shot watch identity has
  * been published under the source-group mutex and before terminal settlement. */
 int oreslang_source_actor_test_readable_await_admitted(void);
+int oreslang_source_actor_test_io_await_admitted(void);
 /* Seal the compiler-owned source-root actor for deterministic
  * PRODUCER_RETIRED projection. Test-only; ordinary source cannot target root. */
 int oreslang_source_actor_test_stop_readable_root(void);
@@ -132,6 +135,13 @@ typedef enum {
     ORES_SOURCE_READABLE_AWAIT_FAILED = 4
 } OresSourceReadableAwaitOutcome;
 
+typedef enum {
+    ORES_SOURCE_WRITABLE_AWAIT_READY = 1,
+    ORES_SOURCE_WRITABLE_AWAIT_CANCELLED = 2,
+    ORES_SOURCE_WRITABLE_AWAIT_TERMINATED = 3,
+    ORES_SOURCE_WRITABLE_AWAIT_FAILED = 4
+} OresSourceWritableAwaitOutcome;
+
 /*
  * Typed host/runtime projection for the readable suspension. READY is the only
  * outcome that executes continuation. CANCELLED / TERMINATED / FAILED retire
@@ -147,6 +157,24 @@ OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
     int64_t* result);
 
 int64_t oreslang_source_actor_await_readable(
+    void* actor,
+    int64_t fd,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token);
+
+/*
+ * Runtime/compiler parity slice for writable readiness. It uses the same
+ * authenticated root-lane continuation transport with EPOLLOUT and an
+ * independent code generation. No socket write occurs on the reactor.
+ */
+OresSourceWritableAwaitOutcome oreslang_source_actor_await_writable_checked(
+    void* actor,
+    int64_t fd,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token,
+    int64_t* result);
+
+int64_t oreslang_source_actor_await_writable(
     void* actor,
     int64_t fd,
     OresSourceActorContinuation continuation,
