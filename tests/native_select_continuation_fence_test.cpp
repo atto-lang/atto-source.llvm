@@ -1,5 +1,7 @@
 #include "oreslang/runtime/NativeSelectContinuationFence.hpp"
 #include <cassert>
+#include <atomic>
+#include <thread>
 #include <stdexcept>
 
 using oreslang::runtime::NativeSelectContinuationFence;
@@ -147,6 +149,77 @@ int main() {
         assert(!first.close() && !copy.close());
         assert(!fence.try_consume(copy));
         assert(fence.try_consume(next));
+    }
+
+    {
+        NativeSelectContinuationFence<2> fence;
+        auto first = fence.register_continuation(1);
+        auto second = fence.register_continuation(1);
+        assert(!fence.closed());
+        assert(fence.close());
+        assert(fence.closed() && !fence.close());
+        assert(fence.pending_tickets() == 0 && fence.generation() == 1);
+        assert(!fence.advance(1));
+        assert(!first.active() && !second.active());
+        assert(!first.close() && !second.close());
+        assert(!fence.try_consume(first));
+        bool rejected = false;
+        try { (void)fence.register_continuation(1); }
+        catch (const std::logic_error&) { rejected = true; }
+        assert(rejected);
+        NativeSelectContinuationFence<2> sibling;
+        assert(sibling.try_consume(sibling.register_continuation(1)));
+    }
+    {
+        constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
+        NativeSelectContinuationFence<1> fence(limit);
+        auto ticket = fence.register_continuation(limit);
+        assert(fence.close());
+        assert(!fence.advance(limit));
+        assert(!fence.try_consume(ticket));
+    }
+    // Ticket cancellation and delivery share a single linearization point.
+    for (int round = 0; round < 256; ++round) {
+        NativeSelectContinuationFence<1> fence;
+        auto ticket = fence.register_continuation(1);
+        std::atomic<bool> start{false};
+        bool consumed = false;
+        bool cancelled = false;
+        std::thread delivery([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            consumed = fence.try_consume(ticket);
+        });
+        std::thread cancellation([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            cancelled = ticket.close();
+        });
+        start.store(true, std::memory_order_release);
+        delivery.join();
+        cancellation.join();
+        assert(consumed != cancelled);
+        assert(fence.pending_tickets() == 0);
+    }
+    // Registration may win before close, but cannot survive terminal close.
+    for (int round = 0; round < 256; ++round) {
+        NativeSelectContinuationFence<1> fence;
+        NativeSelectContinuationFence<1>::Ticket ticket;
+        std::atomic<bool> start{false};
+        bool rejected = false;
+        std::thread producer([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { ticket = fence.register_continuation(1); }
+            catch (const std::logic_error&) { rejected = true; }
+        });
+        std::thread shutdown([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            assert(fence.close());
+        });
+        start.store(true, std::memory_order_release);
+        producer.join();
+        shutdown.join();
+        assert(rejected || ticket.generation() == 1);
+        assert(fence.closed() && fence.pending_tickets() == 0);
+        assert(!ticket.active() && !fence.try_consume(ticket));
     }
     return 0;
 }
