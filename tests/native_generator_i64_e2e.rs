@@ -175,6 +175,20 @@ gen* values(): Iterator<int> { yield 2; return; }\n",
 gen* values(): Iterator<int> { yield 1; return; }\n",
         "duplicate generator/function/class symbol 'values'");
 
+    let arity_overload_source =
+        "fnc values(int x): int { return x; }\n\
+gen* values(): Iterator<int> { yield 1; return; }\n";
+    let arity_overload = compile(
+        &compiler, &dir.0, "generator-function-arity-overload.ores", arity_overload_source);
+    assert!(arity_overload.status.success(),
+        "different value arities must coexist: {}",
+        String::from_utf8_lossy(&arity_overload.stderr));
+    let arity_overload_ir = String::from_utf8_lossy(&arity_overload.stdout);
+    assert!(arity_overload_ir.contains("define i64 @values("),
+        "ordinary arity-1 function missing from mixed generator program");
+    assert!(arity_overload_ir.contains("define i32 @oreslang_rt_gen_values_init("),
+        "zero-arity generator ABI missing from mixed generator program");
+
     let mut too_many = String::new();
     for i in 0..513 {
         too_many.push_str(&format!(
