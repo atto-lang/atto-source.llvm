@@ -394,6 +394,18 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::Remainder: {
+            // The native frontend admits only positive literal divisors:
+            // no divide-by-zero or signed MIN / -1 poison can reach LLVM.
+            // Recheck at emission so hand-constructed ASTs cannot bypass it.
+            if (!expr.right || expr.right->kind != Expression::Kind::Integer ||
+                    expr.right->integer <= 0)
+                throw std::runtime_error("native remainder lacks proved positive literal divisor");
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = llvm::ConstantInt::get(i64,
+                static_cast<std::uint64_t>(expr.right->integer));
+            return builder.CreateSRem(left, right, "srem");
+        }
         case Expression::Kind::LogicalNot: {
             llvm::Value* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateZExt(
