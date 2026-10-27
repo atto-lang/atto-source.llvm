@@ -148,6 +148,27 @@ CASES = {
         "pub fnc main(): int { recover 42; return 0; }",
         "native exceptional-control boundary unsupported",
     ),
+    # G0: reserve unsafe without ever emitting source-level native IR.
+    "unsafe-callable": (
+        "pub unsafe fnc main(): int { return 42; }",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-block": (
+        "pub fnc main(): int { unsafe { return 42; } }",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-identifier": (
+        "pub fnc unsafe(): int { return 42; }",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-parameter": (
+        "pub fnc main(int unsafe): int { return 42; }",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-template-interpolation": (
+        "pub fnc main(): int { return `value ${unsafe}`; }",
+        "native unsafe boundary unsupported",
+    ),
 }
 
 
