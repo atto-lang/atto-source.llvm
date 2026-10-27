@@ -4165,7 +4165,10 @@ private:
                 "native generator v1 cannot mix with module/class/actor lowering yet");
         std::unordered_set<std::string> generator_names;
         for (const auto& generator : program.generators) {
-            if (generator.name == "main" || functions.count(generator.name) ||
+            const auto function_it = functions.find(generator.name);
+            const bool zero_arity_function =
+                function_it != functions.end() && function_it->second.count(0) != 0;
+            if (generator.name == "main" || zero_arity_function ||
                     classes.count(generator.name) ||
                     !generator_names.insert(generator.name).second)
                 throw std::runtime_error(
