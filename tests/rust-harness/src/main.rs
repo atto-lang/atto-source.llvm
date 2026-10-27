@@ -449,25 +449,36 @@ fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
 fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-async-io-boundary-").map_err(|e| e.to_string())?;
     let fixture = temp.path.join("probe.ores");
-    // These names must remain rejected until typed effects, native continuation
-    // lowering, and nonblocking transports are implemented together.
+    // Plain names remain rejected until typed effects, native continuation
+    // lowering, and nonblocking transports land together. Blocking/sync and
+    // legacy *_async spellings are permanently outside the public I/O API.
     let operations = [
+        ("read plain", "read_text(1)"),
         ("read blocking", "read_text_blocking(1)"),
-        ("read async", "read_text_async(1)"),
+        ("read legacy async suffix", "read_text_async(1)"),
+        ("write plain", "write_text(1)"),
         ("write blocking", "write_text_blocking(1)"),
-        ("write async", "write_text_async(1)"),
+        ("write legacy async suffix", "write_text_async(1)"),
+        ("TCP connect plain", "connect(1)"),
         ("TCP connect blocking", "connect_blocking(1)"),
-        ("TCP connect async", "connect_async(1)"),
+        ("TCP connect legacy async suffix", "connect_async(1)"),
+        ("TCP read plain", "read_line(1)"),
         ("TCP read blocking", "read_line_blocking(1)"),
-        ("TCP read async", "read_line_async(1)"),
+        ("TCP read legacy async suffix", "read_line_async(1)"),
+        ("TCP write plain", "socket_write_text(1)"),
         ("TCP write blocking", "socket_write_text_blocking(1)"),
-        ("TCP write async", "socket_write_text_async(1)"),
+        ("TCP write legacy async suffix", "socket_write_text_async(1)"),
+        ("HTTP GET plain", "http_get_text(1)"),
         ("HTTP GET blocking", "http_get_text_blocking(1)"),
-        ("HTTP GET async", "http_get_text_async(1)"),
+        ("HTTP GET legacy async suffix", "http_get_text_async(1)"),
+        ("HTTP POST plain", "http_post_text(1)"),
         ("HTTP POST blocking", "http_post_text_blocking(1)"),
-        ("HTTP POST async", "http_post_text_async(1)"),
+        ("HTTP POST legacy async suffix", "http_post_text_async(1)"),
+        // Plain stdio.print/println is the one implemented native I/O slice:
+        // it publishes to a bounded nonblocking queue serviced by a dedicated
+        // readiness writer. Only blocking/suffix-specific spellings reject.
         ("stdio blocking", "println_blocking(1)"),
-        ("stdio async", "println_async(1)"),
+        ("stdio legacy async suffix", "println_async(1)"),
     ];
     for (name, operation) in operations {
         fs::write(&fixture, format!("pub fnc main(): int {{ return {operation}; }}\n"))
