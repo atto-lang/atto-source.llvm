@@ -73,6 +73,48 @@ console.log("ACTUAL_ORES_SOURCE_WASM_ACTOR_PASS 100 messages, private state, ter
     r = invoke([args.node, "--input-type=module", "-e", script, str(wasm)])
     assert "ACTUAL_ORES_SOURCE_WASM_ACTOR_PASS" in r.stdout
 
+    # A second linker profile must match the current pooled host contract:
+    # EXACTLY three lifecycle exports + private fixed-memory, no guest main.
+    pooled = Path(d) / "actor-pooled.wasm"
+    invoke([args.clang, "--target=wasm32", "-x", "ir", "-Oz", "-nostdlib",
+            "-Wl,--no-entry", "-Wl,--export-memory",
+            "-Wl,--initial-memory=131072", "-Wl,--max-memory=131072",
+            "-Wl,--export=oreslang_wasm_actor_init",
+            "-Wl,--export=oreslang_wasm_actor_on_message",
+            "-Wl,--export=oreslang_wasm_actor_teardown",
+            "-o", str(pooled), "-"], input=ir)
+    pool_script = r"""
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+const bytes=readFileSync(process.argv[1]);
+assert.ok(WebAssembly.validate(bytes));
+const mod=new WebAssembly.Module(bytes);
+assert.deepEqual(WebAssembly.Module.imports(mod),[]);
+assert.deepEqual(WebAssembly.Module.exports(mod).map(e=>[e.name,e.kind]).sort(),
+  [["memory","memory"],["oreslang_wasm_actor_init","function"],
+   ["oreslang_wasm_actor_on_message","function"],
+   ["oreslang_wasm_actor_teardown","function"]].sort());
+const a=new WebAssembly.Instance(mod).exports;
+const b=new WebAssembly.Instance(mod).exports;
+assert.equal(a.memory.buffer.byteLength,131072);
+assert.equal(b.memory.buffer.byteLength,131072);
+assert.notStrictEqual(a.memory.buffer,b.memory.buffer);
+assert.throws(()=>a.memory.grow(1),RangeError);
+a.oreslang_wasm_actor_init();
+b.oreslang_wasm_actor_init();
+assert.equal(a.oreslang_wasm_actor_on_message(5n),5n);
+assert.equal(b.oreslang_wasm_actor_on_message(7n),7n);
+assert.equal(a.oreslang_wasm_actor_on_message(1n),6n);
+a.oreslang_wasm_actor_teardown();
+assert.throws(()=>a.oreslang_wasm_actor_on_message(1n),WebAssembly.RuntimeError);
+assert.equal(b.oreslang_wasm_actor_on_message(1n),8n);
+b.oreslang_wasm_actor_teardown();
+console.log("REAL_SOURCE_POOLED_ACTOR_EXPORT_ABI_PASS");
+"""
+    pooled_receipt = invoke([args.node, "--input-type=module", "-e",
+                             pool_script, str(pooled)])
+    assert "REAL_SOURCE_POOLED_ACTOR_EXPORT_ABI_PASS" in pooled_receipt.stdout
+
 # All unsupported native scheduler constructs must continue failing closed.
 for case in ("source-actor-spawn-stop.ores", "source-actor-send.ores"):
     r = subprocess.run([args.compiler, "--target=wasm32", str(fixtures / case)],
