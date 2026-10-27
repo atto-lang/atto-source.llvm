@@ -173,6 +173,18 @@ CASES = {
         "pub fnc main(): int { return `outer ${`inner ${unsafe}`}`; }",
         "native unsafe boundary unsupported",
     ),
+    "unsafe-after-cr-comment": (
+        "pub fnc main(): int { return 42; } // ordinary comment\runsafe",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-after-crlf-comment": (
+        "pub fnc main(): int { return 42; } // ordinary comment\r\nunsafe",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-in-template-after-cr-comment": (
+        "pub fnc main(): int { return `value ${42 // comment\runsafe}`; }",
+        "native unsafe boundary unsupported",
+    ),
     "unsafe-after-valid-function": (
         "pub fnc main(): int { return 42; } unsafe",
         "native unsafe boundary unsupported",
@@ -217,8 +229,10 @@ def main():
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}"
                 )
             if name in ("unsafe-template-interpolation",
-                        "unsafe-nested-template-interpolation"):
-                expected_byte = source.index("unsafe", source.index("${"))
+                        "unsafe-nested-template-interpolation",
+                        "unsafe-in-template-after-cr-comment",
+                        "unsafe-after-cr-comment", "unsafe-after-crlf-comment"):
+                expected_byte = source.index("unsafe", source.index("${")) if "template" in name else source.rindex("unsafe")
                 if f"at byte {expected_byte}" not in result.stderr:
                     raise AssertionError(
                         f"{name}: unsafe diagnostic must use absolute source byte "
