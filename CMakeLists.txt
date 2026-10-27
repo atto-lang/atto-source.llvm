@@ -2220,6 +2220,21 @@ if(BUILD_TESTING)
             COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
     set_tests_properties(native_strict_nonblocking_io_source_guard PROPERTIES TIMEOUT 30)
+
+    # Executable Linux readiness/data-plane contract. This complements the
+    # Rust source invariant guard with behavior over the actual native substrate.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-nonblocking-io-contract-test
+            tests/native_nonblocking_io_contract_test.cpp)
+        target_include_directories(oreslang-native-nonblocking-io-contract-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-nonblocking-io-contract-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_strict_nonblocking_io_contract
+            COMMAND oreslang-native-nonblocking-io-contract-test)
+        set_tests_properties(native_strict_nonblocking_io_contract PROPERTIES TIMEOUT 15)
+    endif()
+
     oreslang_contract_test(pure_user_blocking_suffix pure-user-blocking-suffix.ores --ir "call i64 @pure_math_blocking")
     # The terminal-state gate is a standalone native safety primitive, not
     # an async I/O reactor or source-level await implementation.
