@@ -1956,11 +1956,20 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         carrier_good = json.loads(json.dumps(source_protection))
         carrier_good["required_status_checks"] = {
             "strict": True,
-            "contexts": [v3.CARRIER_POLICY_CHECK],
-            "checks": [{
-                "context": v3.CARRIER_POLICY_CHECK,
-                "app_id": v3.GITHUB_ACTIONS_APP_ID,
-            }],
+            "contexts": [
+                v3.CARRIER_POLICY_CHECK,
+                v3.CARRIER_INTEGRITY_CHECK,
+            ],
+            "checks": [
+                {
+                    "context": v3.CARRIER_POLICY_CHECK,
+                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                },
+                {
+                    "context": v3.CARRIER_INTEGRITY_CHECK,
+                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                },
+            ],
         }
 
         def carrier_api(current):
@@ -1989,6 +1998,24 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "untrusted issuer"):
                 v3.checked_carrier_main("trusted/ci", carrier)
 
+        weak = json.loads(json.dumps(carrier_good))
+        weak["required_status_checks"]["contexts"].remove(
+            v3.CARRIER_INTEGRITY_CHECK
+        )
+        weak["required_status_checks"]["checks"] = [
+            item for item in weak["required_status_checks"]["checks"]
+            if item["context"] != v3.CARRIER_INTEGRITY_CHECK
+        ]
+        with patch.object(v3, "gh_api", side_effect=carrier_api(weak)):
+            with self.assertRaisesRegex(v3.Denied, "required security CI check missing"):
+                v3.checked_carrier_main("trusted/ci", carrier)
+
+        weak = json.loads(json.dumps(carrier_good))
+        weak["required_status_checks"]["checks"][1]["app_id"] = 999999
+        with patch.object(v3, "gh_api", side_effect=carrier_api(weak)):
+            with self.assertRaisesRegex(v3.Denied, "untrusted issuer"):
+                v3.checked_carrier_main("trusted/ci", carrier)
+
     def _strict_protection(self, context):
         return {
             "required_pull_request_reviews": {
@@ -2013,6 +2040,16 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
         }
+
+    def _strict_carrier_protection(self):
+        protection = self._strict_carrier_protection()
+        checks = protection["required_status_checks"]
+        checks["contexts"].append(v3.CARRIER_INTEGRITY_CHECK)
+        checks["checks"].append({
+            "context": v3.CARRIER_INTEGRITY_CHECK,
+            "app_id": v3.GITHUB_ACTIONS_APP_ID,
+        })
+        return protection
 
     def test_protected_source_rejects_inactive_or_redirected_repository_state(self):
         protection = self._strict_protection(v3.SOURCE_POLICY_CHECK)
@@ -2121,7 +2158,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raise AssertionError(route)
             return api
 
-        baseline = self._strict_protection(v3.CARRIER_POLICY_CHECK)
+        baseline = self._strict_carrier_protection()
         with patch.object(v3, "gh_api", side_effect=api_for(baseline)):
             self.assertEqual(v3.checked_carrier_main("trusted/ci", carrier_contract()), BASE)
 
@@ -2129,7 +2166,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             {"delegated_roles": ["security-admin"]},
             {"future_bypass_field": []},
         ):
-            protection = self._strict_protection(v3.CARRIER_POLICY_CHECK)
+            protection = self._strict_carrier_protection()
             protection["required_pull_request_reviews"]["bypass_pull_request_allowances"].update(extra)
             with self.subTest(extra=extra), patch.object(
                 v3, "gh_api", side_effect=api_for(protection)
@@ -2200,7 +2237,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             {"teams": [], "apps": []},
         )
         for value in values:
-            protection = self._strict_protection(v3.CARRIER_POLICY_CHECK)
+            protection = self._strict_carrier_protection()
             reviews = protection["required_pull_request_reviews"]
             if value is None:
                 del reviews["bypass_pull_request_allowances"]
