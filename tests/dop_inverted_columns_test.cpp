@@ -58,6 +58,8 @@ int main() {
     });
     expect<std::out_of_range>([&] { (void)a.index(std::numeric_limits<std::int64_t>::min()); });
     expect<std::out_of_range>([&] { (void)a.index(std::numeric_limits<std::int64_t>::max()); });
+    const auto saved_middle = a.index(1);
+    check(saved_middle.slot() == h1.slot() && saved_middle.generation() == h1.generation());
     check(a.read_index<0>(0) == 1.5f);
     check(a.read_index<1>(1) == 200);
 
@@ -137,8 +139,13 @@ int main() {
     check(a.read_index<0>(1) == 3.5f);
     expect<std::out_of_range>([&] { (void)a.read_index<0>(2); });
     expect<std::out_of_range>([&] { (void)a.get<0>(h1); });
+    check(a.index(1).slot() == h2.slot());
+    expect<std::out_of_range>([&] { (void)a.get<0>(saved_middle); });
     auto reused = a.push(4.5f, 400, false);
     check(reused.slot() == h1.slot() && reused.generation() != h1.generation());
+    check(a.index(2).slot() == reused.slot());
+    expect<std::out_of_range>([&] { (void)a.get<0>(saved_middle); });
+    expect<std::out_of_range>([&] { (void)a.index(3); });
     expect<std::out_of_range>([&] { a.set<0>(h1, 1.0f); });
     // Disjoint columns can be mutated concurrently without touching layout or identities.
     std::atomic<bool> start{false};
