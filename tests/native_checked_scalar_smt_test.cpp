@@ -1,4 +1,5 @@
 #include "oreslang/frontend/NativeScalarSmt.hpp"
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -29,6 +30,50 @@ static std::string replace_once(std::string s, const std::string& from,
     s.replace(at, from.size(), to);
     return s;
 }
+// Restrictive query splitting for the *real* Parser/OwnershipChecker-derived
+// scalar SMT adapter. This is not a source-to-machine refinement proof.
+static std::array<std::string, 2> separate_scalar_queries(const std::string& combined) {
+    constexpr const char* marker = "(push 1)\n";
+    constexpr const char* tail = "\n(check-sat)\n(pop 1)\n";
+    if (combined.size() > 65536
+            || combined.rfind("(set-logic QF_BV)\n", 0) != 0
+            || combined.find("(echo ") != std::string::npos
+            || combined.find("(exit)") != std::string::npos)
+        throw std::runtime_error("unsupported SMT document");
+    const auto first = combined.find(marker);
+    const auto second = first == std::string::npos ? first
+        : combined.find(marker, first + std::string(marker).size());
+    if (first == std::string::npos || second == std::string::npos
+            || combined.find(marker, second + std::string(marker).size()) != std::string::npos)
+        throw std::runtime_error("scalar proof must have exactly two queries");
+    const std::string prefix = combined.substr(0, first);
+    if (prefix.find("(define-fun implementation ") == std::string::npos
+            || prefix.find("(define-fun contract ") == std::string::npos
+            || prefix.find("(check-sat)") != std::string::npos
+            || prefix.find("(assert ") != std::string::npos)
+        throw std::runtime_error("SMT prelude contains unsupported clauses");
+    const std::string proof = combined.substr(first + std::string(marker).size(),
+        second - first - std::string(marker).size());
+    const std::string mutant = combined.substr(second + std::string(marker).size());
+    for (const auto& body : {proof, mutant}) {
+        const std::string terminator(tail);
+        if (body.rfind("(assert ", 0) != 0
+                || body.size() < terminator.size()
+                || body.compare(body.size()-terminator.size(),terminator.size(),terminator) != 0
+                || body.find("(check-sat)") != body.rfind("(check-sat)")
+                || body.find("(push 1)") != std::string::npos
+                || body.find("(echo ") != std::string::npos)
+            throw std::runtime_error("bad or incomplete scalar query block");
+    }
+    return {prefix + marker + proof, prefix + marker + mutant};
+}
+
+static void save_slices(const fs::path& dir, const std::string& label,
+                        const std::string& combined) {
+    const auto slices = separate_scalar_queries(combined);
+    save(dir / (label + "-implementation.smt2"), slices[0]);
+    save(dir / (label + "-negative-control.smt2"), slices[1]);
+}
 template<typename F> static void must_reject(F&& run) {
     try {
         run();
@@ -49,16 +94,32 @@ int main(int argc, char** argv) {
                     || smt.find("(define-fun implementation") == std::string::npos)
                 throw std::runtime_error("native exporter omitted proof obligations");
             save(dir / (std::string(name) + ".smt2"), smt);
+            save_slices(dir, name, smt);
         }
 
         const auto bad_min = replace_once(source,
             "if (left < right)", "if (left > right)");
         const auto bad_clamp = replace_once(source,
             "if (lower > upper)", "if (lower < upper)");
-        save(dir / "mutated-min_int.smt2",
-             NativeScalarSmt::from_source(bad_min, "min_int"));
-        save(dir / "mutated-clamp_int.smt2",
-             NativeScalarSmt::from_source(bad_clamp, "clamp_int"));
+        const auto bad_min_smt = NativeScalarSmt::from_source(bad_min, "min_int");
+        const auto bad_clamp_smt = NativeScalarSmt::from_source(bad_clamp, "clamp_int");
+        save(dir / "mutated-min_int.smt2", bad_min_smt);
+        save(dir / "mutated-clamp_int.smt2", bad_clamp_smt);
+        save_slices(dir, "mutated-min_int", bad_min_smt);
+        save_slices(dir, "mutated-clamp_int", bad_clamp_smt);
+        // Injected commands and truncated obligations cannot be relabelled
+        // as independently replayable checked AST proof queries.
+        const auto checked_min = NativeScalarSmt::from_source(source, "min_int");
+        must_reject([&] {
+            (void)separate_scalar_queries(checked_min + "(check-sat)\n");
+        });
+        must_reject([&] {
+            (void)separate_scalar_queries(checked_min + "(echo \"unsat\")\n");
+        });
+        must_reject([&] {
+            (void)separate_scalar_queries(checked_min.substr(
+                std::string("(push 1)\n").size()));
+        });
         // A parser/type-correct arithmetic return is outside the restricted
         // *pure parameter-return* SMT slice and must reject. No default values
         // or guessed effects are allowed into a proof.
