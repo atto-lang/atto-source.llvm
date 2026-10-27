@@ -100,5 +100,21 @@ int main() {
                     second.resolve("types", "Coll", {type}).equations);
         }
     }
+    {
+        NativeAssociatedWitnessRegistry collisionSafe;
+        // Ambiguous if protocol identity is concatenated with raw "::".
+        collisionSafe.define("a::b", "c", 1, {"item"});
+        collisionSafe.define("a", "b::c", 1, {"item"});
+        collisionSafe.register_witness({"a::b", "c", "a::b", "first",
+                {named("core", "int")}, {{"item", named("core", "int")}}});
+        collisionSafe.register_witness({"a", "b::c", "a", "second",
+                {named("core", "bool")}, {{"item", named("core", "bool")}}});
+        assert(collisionSafe.resolve("a::b", "c", {named("core", "int")})
+                .dictionary_symbol == "first");
+        assert(collisionSafe.resolve("a", "b::c", {named("core", "bool")})
+                .dictionary_symbol == "second");
+        rejected([&] { (void)collisionSafe.resolve("a::b", "c",
+                {named("core", "bool")}); });
+    }
     return 0;
 }
