@@ -824,7 +824,9 @@ if(BUILD_TESTING)
         native-rt-nested-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
 
-    foreach(generator_case IN ITEMS sync async suspend)
+    foreach(generator_case IN ITEMS
+            sync async suspend
+            legacy-fnc legacy-routine legacy-async-fnc)
         add_test(NAME native_generator_v1_${generator_case}_failclosed
             COMMAND "$<TARGET_FILE:oreslang-llvmc>"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generator-v1-${generator_case}-reject.ores")
