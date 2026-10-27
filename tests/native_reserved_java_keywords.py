@@ -203,6 +203,15 @@ CASES.update({
         " return 42; }",
         "native block comment nesting exceeds 128",
     ),
+    "unsafe-after-nested-comment": (
+        "pub fnc main(): int { return 42; } " +
+        "/*" * 128 + "unsafe" + "*/" * 128 + " unsafe",
+        "native unsafe boundary unsupported",
+    ),
+    "unsafe-after-lf-comment": (
+        "pub fnc main(): int { return 42; } // comment\nunsafe",
+        "native unsafe boundary unsupported",
+    ),
     "native-template-comment-overdepth": (
         "pub fnc main(): int { return `test ${42 " +
         "/*" * 129 + "unsafe" + "*/" * 129 + "}`; }",
@@ -250,7 +259,8 @@ def main():
             if name in ("unsafe-template-interpolation",
                         "unsafe-nested-template-interpolation",
                         "unsafe-in-template-after-cr-comment",
-                        "unsafe-after-cr-comment", "unsafe-after-crlf-comment"):
+                        "unsafe-after-cr-comment", "unsafe-after-crlf-comment",
+                        "unsafe-after-lf-comment", "unsafe-after-nested-comment"):
                 expected_byte = source.index("unsafe", source.index("${")) if "template" in name else source.rindex("unsafe")
                 if f"at byte {expected_byte}" not in result.stderr:
                     raise AssertionError(
