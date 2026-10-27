@@ -666,6 +666,37 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raw, "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
             )
 
+    def test_source_protection_rejects_ambiguous_repository_state(self):
+        good = {
+            "id": v3.SOURCE_REPO_ID,
+            "full_name": v3.SOURCE_REPO,
+            "private": True,
+            "visibility": "private",
+            "default_branch": v3.SOURCE_BRANCH,
+            "archived": False,
+            "disabled": False,
+            "fork": False,
+        }
+        variants = [
+            {**good, "visibility": "public"},
+            {k: v for k, v in good.items() if k != "visibility"},
+            {**good, "default_branch": "other"},
+            {**good, "archived": True},
+            {**good, "archived": "false"},
+            {k: v for k, v in good.items() if k != "archived"},
+            {**good, "disabled": True},
+            {**good, "disabled": 0},
+            {k: v for k, v in good.items() if k != "disabled"},
+            {**good, "fork": True},
+            {k: v for k, v in good.items() if k != "fork"},
+        ]
+        for current in variants:
+            with self.subTest(current=current), patch.object(
+                v3, "gh_api", return_value=current
+            ):
+                with self.assertRaisesRegex(v3.Denied, "identity/state"):
+                    v3.source_protection()
+
     def test_authorized_source_main_rejects_unprotected_main(self):
         def api(route, method="GET", payload=None):
             if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
@@ -1496,6 +1527,11 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "id": v3.SOURCE_REPO_ID,
                         "full_name": v3.SOURCE_REPO,
                         "private": True,
+                        "visibility": "private",
+                        "default_branch": v3.SOURCE_BRANCH,
+                        "archived": False,
+                        "disabled": False,
+                        "fork": False,
                     }
                 if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
                     return {
@@ -1603,6 +1639,11 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "id": v3.SOURCE_REPO_ID,
                         "full_name": v3.SOURCE_REPO,
                         "private": True,
+                        "visibility": "private",
+                        "default_branch": v3.SOURCE_BRANCH,
+                        "archived": False,
+                        "disabled": False,
+                        "fork": False,
                     }
                 if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
                     return {
@@ -1673,6 +1714,11 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "id": v3.SOURCE_REPO_ID,
                         "full_name": v3.SOURCE_REPO,
                         "private": True,
+                        "visibility": "private",
+                        "default_branch": v3.SOURCE_BRANCH,
+                        "archived": False,
+                        "disabled": False,
+                        "fork": False,
                     }
                 if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
                     return {
