@@ -949,6 +949,19 @@ if(BUILD_TESTING)
     # replay-unsafe subjects, duplicate cases, and nb dispatch stay fail-closed.
     oreslang_contract_test(native_value_match_arm_result
         dispatch-value-match-run.ores --ir "cmp.eq.i1")
+    # Direct signed-minimum literal remains valid; nested unary negation
+    # would overflow host i64 and must reject before any LLVM IR.
+    oreslang_contract_test(native_dispatch_signed_min_literal_runtime
+        dispatch-signed-min-pattern-run.ores --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_dispatch_nested_min_match_failclosed
+        dispatch-nested-signed-min-match-reject.ores
+        --diagnostic "native scalar value match supports literal patterns or '_'")
+    oreslang_contract_test(native_dispatch_nested_min_do_switch_failclosed
+        dispatch-nested-signed-min-do-switch-reject.ores
+        --diagnostic "native do switch case must be a scalar compile-time constant")
+    oreslang_contract_test(native_dispatch_negative_zero_duplicate
+        dispatch-negative-zero-duplicate-reject.ores
+        --diagnostic "duplicate native value switch case")
     oreslang_contract_test(native_value_switch_arm_result
         dispatch-value-switch-run.ores --ir "cmp.eq.i1")
     oreslang_contract_test(native_do_match_function_return
