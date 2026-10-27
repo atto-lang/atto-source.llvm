@@ -64,6 +64,9 @@ MAX_POLICY = 64 * 1024
 MAX_PLAN = 64 * 1024
 MAX_CODEOWNERS = 64 * 1024
 MAX_GH_API_RESPONSE_BYTES = 24 * 1024 * 1024
+GITHUB_ACTIONS_APP_ID = 15368
+SOURCE_POLICY_CHECK = "private-ci-governance"
+CARRIER_POLICY_CHECK = "verifier-tests"
 TTL = dt.timedelta(hours=24)
 
 
@@ -421,6 +424,41 @@ def _latest_review(repository, review_pr, reviewer_id, reviewer_login, label):
     return matching[-1][2]
 
 
+def require_issuer_bound_actions_checks(required_checks, label, expected_context):
+    """Require every mandatory CI context to be GitHub-Actions-bound."""
+    if (not isinstance(expected_context, str)
+            or not expected_context.strip()):
+        raise Denied(label + " expected required CI context invalid")
+    if not isinstance(required_checks, dict):
+        raise Denied(label + " required status-check policy missing")
+    contexts = required_checks.get("contexts", [])
+    named_checks = required_checks.get("checks")
+    if (not isinstance(contexts, list)
+            or any(not isinstance(name, str) or not name.strip()
+                   for name in contexts)
+            or len(contexts) != len(set(contexts))):
+        raise Denied(label + " legacy required status checks are malformed")
+    if not isinstance(named_checks, list) or not named_checks:
+        raise Denied(label + " required CI issuer binding missing")
+
+    seen = set()
+    for item in named_checks:
+        if not isinstance(item, dict):
+            raise Denied(label + " required CI check metadata malformed")
+        name = item.get("context")
+        app_id = item.get("app_id")
+        if (not isinstance(name, str) or not name.strip() or name in seen):
+            raise Denied(label + " required CI check identity is ambiguous")
+        if type(app_id) is not int or app_id != GITHUB_ACTIONS_APP_ID:
+            raise Denied(label + " required CI check has untrusted issuer")
+        seen.add(name)
+
+    if any(name not in seen for name in contexts):
+        raise Denied(label + " legacy required status check lacks issuer binding")
+    if expected_context not in seen:
+        raise Denied(label + " required security CI check missing")
+
+
 def authorized_source_main_sha():
     """Require enforced protected source main for every private-source export."""
     branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
@@ -443,13 +481,26 @@ def source_protection():
         raise Denied("source main is not protected")
     protection = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}/protection")
     reviews = protection.get("required_pull_request_reviews")
+    checks = protection.get("required_status_checks")
+    conversations = protection.get("required_conversation_resolution")
     if (not isinstance(reviews, dict)
             or reviews.get("require_code_owner_reviews") is not True
             or reviews.get("dismiss_stale_reviews") is not True
+            or reviews.get("require_last_push_approval") is not True
             or not isinstance(reviews.get("required_approving_review_count"), int)
             or isinstance(reviews.get("required_approving_review_count"), bool)
-            or reviews.get("required_approving_review_count", 0) < 1):
-        raise Denied("source main does not enforce independent CODEOWNER review")
+            or reviews.get("required_approving_review_count", 0) < 1
+            or not isinstance(checks, dict)
+            or checks.get("strict") is not True
+            or not isinstance(conversations, dict)
+            or conversations.get("enabled") is not True):
+        raise Denied(
+            "source main does not enforce CODEOWNER review, last-push approval, "
+            "conversation resolution and strict required CI"
+        )
+    require_issuer_bound_actions_checks(
+        checks, "source main", SOURCE_POLICY_CHECK
+    )
     admins = protection.get("enforce_admins")
     force = protection.get("allow_force_pushes")
     delete = protection.get("allow_deletions")
@@ -465,7 +516,6 @@ def source_protection():
         raise Denied("source main review bypass policy is missing, malformed, or nonempty")
     return valid_sha(branch.get("commit", {}).get("sha"),
                      "source protected-main SHA invalid")
-
 
 def remote_source_file(path, main_sha, max_bytes):
     item = gh_api(f"repos/{SOURCE_REPO}/contents/{path}?ref={main_sha}")
@@ -518,7 +568,7 @@ def parse_contract(raw, repository, source_pr, test_plan):
         "repository_id", "base_sha", "workflow_path",
         "workflow_blob_sha", "test_plans"
     }
-    allowed_carrier_fields = required_carrier_fields | {"review_pr"}
+    allowed_carrier_fields = required_carrier_fields
     if (not required_carrier_fields.issubset(carrier)
             or not set(carrier).issubset(allowed_carrier_fields)):
         raise Denied("carrier contract fields")
@@ -526,11 +576,6 @@ def parse_contract(raw, repository, source_pr, test_plan):
     if not isinstance(repo_id, int) or isinstance(repo_id, bool) or repo_id <= 0:
         raise Denied("carrier repository id")
     base_sha = valid_sha(carrier.get("base_sha"), "carrier base SHA")
-    review_pr = carrier.get("review_pr")
-    if (review_pr is not None
-            and (not isinstance(review_pr, int) or isinstance(review_pr, bool)
-                 or review_pr <= 0)):
-        raise Denied("carrier review PR invalid")
     workflow_path = safe_path(
         carrier.get("workflow_path"), ".github/workflows/", ".yml"
     )
@@ -557,7 +602,6 @@ def parse_contract(raw, repository, source_pr, test_plan):
         "workflow_blob_sha": workflow_blob,
         "test_plan_path": plan_path,
         "test_plan_blob_sha": blob_sha,
-        "review_pr": review_pr,
     }
 
 
@@ -876,19 +920,31 @@ def checked_carrier_main(repository, contract):
     )
     if base_sha != contract["base_sha"]:
         raise Denied("carrier main advanced beyond reviewed base")
-
     if branch.get("protected") is not True:
-        return review_attested_carrier_main(repository, contract, branch)
+        raise Denied("carrier main is not protected; private export denied")
 
     protection = gh_api(f"repos/{repository}/branches/main/protection")
     reviews = protection.get("required_pull_request_reviews")
+    checks = protection.get("required_status_checks")
+    conversations = protection.get("required_conversation_resolution")
     if (not isinstance(reviews, dict)
             or reviews.get("require_code_owner_reviews") is not True
             or reviews.get("dismiss_stale_reviews") is not True
+            or reviews.get("require_last_push_approval") is not True
             or not isinstance(reviews.get("required_approving_review_count"), int)
             or isinstance(reviews.get("required_approving_review_count"), bool)
-            or reviews.get("required_approving_review_count", 0) < 1):
-        raise Denied("carrier main does not enforce independent CODEOWNER review")
+            or reviews.get("required_approving_review_count", 0) < 1
+            or not isinstance(checks, dict)
+            or checks.get("strict") is not True
+            or not isinstance(conversations, dict)
+            or conversations.get("enabled") is not True):
+        raise Denied(
+            "carrier main does not enforce CODEOWNER review, last-push approval, "
+            "conversation resolution and strict required CI"
+        )
+    require_issuer_bound_actions_checks(
+        checks, "carrier main", CARRIER_POLICY_CHECK
+    )
     admins = protection.get("enforce_admins")
     force = protection.get("allow_force_pushes")
     delete = protection.get("allow_deletions")
@@ -910,7 +966,6 @@ def checked_carrier_main(repository, contract):
     )
     require_carrier_security_codeowners(carrier_codeowners)
     return base_sha
-
 
 def checked_destination(repository, contract):
     repo = gh_api(f"repos/{repository}")
