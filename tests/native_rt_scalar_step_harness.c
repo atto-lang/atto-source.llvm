@@ -167,6 +167,7 @@ int main(void) {
         require_guest_trap(scenario);
 #endif
     require_bounded_peer_progress();
+    puts("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS");
     puts("SCALAR_FRAME_AOT_TWO_TASKS_PASS");
     free(cancelled);
     free(b);
