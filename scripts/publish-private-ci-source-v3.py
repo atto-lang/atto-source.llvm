@@ -508,8 +508,13 @@ def source_protection():
     repo = gh_api(f"repos/{SOURCE_REPO}")
     if (repo.get("id") != SOURCE_REPO_ID
             or repo.get("full_name") != SOURCE_REPO
-            or repo.get("private") is not True):
-        raise Denied("source repository identity/privacy mismatch")
+            or repo.get("private") is not True
+            or repo.get("visibility") != "private"
+            or repo.get("default_branch") != SOURCE_BRANCH
+            or repo.get("archived") is not False
+            or repo.get("disabled") is not False
+            or repo.get("fork") is not False):
+        raise Denied("source repository identity/state mismatch")
     branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
     if (branch.get("name") != SOURCE_BRANCH
             or branch.get("protected") is not True):
