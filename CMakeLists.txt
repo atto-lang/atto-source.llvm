@@ -2195,9 +2195,24 @@ if(BUILD_TESTING)
         add_test(NAME native_unary_plus_source_aot COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
     set_tests_properties(native_unary_plus_source_aot PROPERTIES TIMEOUT 180)
-    add_test(NAME native_strict_nonblocking_io_source_guard
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.py")
+    if(ORE_STRUCTURAL_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-strict-nonblocking-io-source-guard"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-strict-nonblocking-io-source-guard"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.rs"
+            VERBATIM)
+        add_custom_target(oreslang-strict-nonblocking-io-source-guard-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-strict-nonblocking-io-source-guard")
+        add_test(NAME native_strict_nonblocking_io_source_guard
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-strict-nonblocking-io-source-guard"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        add_test(NAME native_strict_nonblocking_io_source_guard
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_strict_nonblocking_io_source_guard PROPERTIES TIMEOUT 30)
     oreslang_contract_test(pure_user_blocking_suffix pure-user-blocking-suffix.ores --ir "call i64 @pure_math_blocking")
     # The terminal-state gate is a standalone native safety primitive, not
     # an async I/O reactor or source-level await implementation.
