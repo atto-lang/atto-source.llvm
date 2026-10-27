@@ -608,29 +608,35 @@ int main(int argc, char** argv) {
             auto bounded_allocator_function =
                 [&](const oreslang::Function& fn) {
                     if (!bounded_allocator_provider ||
-                            fn.locals.empty() || fn.locals.size() > 4 ||
-                            fn.statements.size() > 16)
+                            fn.locals.empty() || fn.locals.size() > 20 ||
+                            !fn.statements.empty())
                         return false;
                     std::unordered_set<std::string> arrays;
+                    std::size_t owners = 0;
+                    std::size_t effects = 0;
                     for (const auto& local : fn.locals) {
-                        if (!local.int_array || !local.owner_mutable ||
-                                local.heap_owned || local.new_class ||
-                                !local.class_name.empty())
-                            return false;
-                        arrays.insert(local.name);
-                    }
-                    for (const auto& statement : fn.statements) {
-                        if (statement.kind != oreslang::Statement::Kind::Call ||
-                                !statement.expression ||
-                                statement.expression->kind !=
+                        if (local.int_array) {
+                            if (++owners > 4 || !local.owner_mutable ||
+                                    local.heap_owned || local.new_class ||
+                                    !local.class_name.empty() ||
+                                    local.initializer)
+                                return false;
+                            if (!arrays.insert(local.name).second)
+                                return false;
+                            continue;
+                        }
+                        if (local.name.rfind("$effect", 0) != 0 ||
+                                !local.initializer ||
+                                local.initializer->kind !=
                                     oreslang::Expression::Kind::ArrayCall ||
-                                !statement.expression->left ||
-                                statement.expression->left->kind !=
-                                    oreslang::Expression::Kind::Variable ||
-                                !arrays.count(
-                                    statement.expression->left->name))
+                                ++effects > 16)
                             return false;
-                        const auto& call = *statement.expression;
+                        const auto& call = *local.initializer;
+                        if (!call.left ||
+                                call.left->kind !=
+                                    oreslang::Expression::Kind::Variable ||
+                                !arrays.count(call.left->name))
+                            return false;
                         const std::size_t expected =
                             call.name == "add" ? 1 :
                             (call.name == "set" ? 2 : 0);
@@ -645,7 +651,7 @@ int main(int argc, char** argv) {
                                 return false;
                         }
                     }
-                    return true;
+                    return owners != 0;
                 };
             for (const auto& fn : ast.functions) {
                 const bool scalar_function =
