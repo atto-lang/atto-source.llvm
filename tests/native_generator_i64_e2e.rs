@@ -88,6 +88,10 @@ static void check(int ok, const char* message) {
 int main(void) {
     int64_t frame[2] = {0,0};
     int64_t value = 99;
+    check(oreslang_rt_gen_values_init(NULL)==-1, "null init accepted");
+    check(oreslang_rt_gen_values_next(NULL,&value)==-1, "null frame next accepted");
+    check(oreslang_rt_gen_values_next(frame,NULL)==-1, "null output next accepted");
+    check(oreslang_rt_gen_values_close(NULL)==-1, "null close accepted");
     check(oreslang_rt_gen_values_next(frame,&value)==-1, "uninitialized next accepted");
     check(value==99 && frame[0]==0 && frame[1]==0, "invalid next mutated state");
     check(oreslang_rt_gen_values_close(frame)==-1, "uninitialized close accepted");
