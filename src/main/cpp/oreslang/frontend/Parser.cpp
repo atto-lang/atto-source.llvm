@@ -2940,14 +2940,25 @@ private:
             const auto offset = token_.offset;
             advance();
             auto right = unary();
-            // Java signed integer remainder has a zero-divisor failure
-            // channel. Native typed panic/unwind admission is not available
-            // yet: admit only a statically positive, nonzero literal divisor.
-            // This is a deliberately strict executable parity subset.
-            if (remainder && (right->kind != Expression::Kind::Integer ||
-                              right->integer == 0))
-                fail("native remainder requires a positive nonzero literal divisor "
-                     "until typed zero-divisor effects are implemented");
+            // Admit exactly nonzero signed integer *literals*. Normalize
+            // unary-negative literal syntax into the already typed integer
+            // node; codegen independently checks the normalized invariant.
+            // Neither computed divisors nor unknown zero-divisor effects are
+            // silently admitted. The special MIN / -1 case is handled by
+            // codegen rather than emitting LLVM poison.
+            if (remainder) {
+                if (right->kind == Expression::Kind::Negate && right->left &&
+                        right->left->kind == Expression::Kind::Integer &&
+                        right->left->integer > 0) {
+                    const auto magnitude = right->left->integer;
+                    right->left.reset();
+                    right->kind = Expression::Kind::Integer;
+                    right->integer = -magnitude; // magnitude fits signed i64
+                }
+                if (right->kind != Expression::Kind::Integer || right->integer == 0)
+                    fail("native remainder requires a nonzero signed integer literal divisor "
+                         "until typed zero-divisor effects are implemented");
+            }
             auto expr = make_expression(remainder ? Expression::Kind::Remainder
                                                  : Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
