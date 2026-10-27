@@ -338,6 +338,9 @@ struct LocalAggregateType {
     };
     Kind kind = Kind::StructAlias;
     std::string name;
+    // Compiler-owned, callable-unique backend type ID. Empty until the
+    // private scalar-only ABI has passed its strict v1 preflight.
+    std::string native_layout_name;
     std::vector<Field> fields;
     std::size_t offset = 0;
 };
