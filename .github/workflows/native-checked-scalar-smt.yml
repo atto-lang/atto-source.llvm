@@ -82,6 +82,25 @@ jobs:
             test "$(cat "mutated-${fn}-negative-control.z3.out")" = "sat"
             sha256sum "mutated-${fn}-implementation.smt2"
           done
+      - name: Enforce byte-exact native Z3 proof and mutation transcripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/native-scalar-evidence
+          require_digest() {
+            test "$(sha256sum "$1" | cut -d' ' -f1)" = "$2"
+          }
+          # Hashes are for complete newline-terminated Z3 stdout bytes.
+          for fn in min_int max_int clamp_int; do
+            require_digest "${fn}.z3.out" c2af3da181f0cb683d48aba3b47c40b7f3814d13fa817ae57f7f098acb636fca
+            require_digest "${fn}-implementation.z3.out" 5c17dfcc2a8f1f30d9e96df6a9825a5030ade046d560332c19de74d93d591a18
+            require_digest "${fn}-negative-control.z3.out" d9dbf94b05b8314af9ca7f2034e92685c33447917605a7243b1099c693a12e5e
+          done
+          for fn in min_int clamp_int; do
+            require_digest "mutated-${fn}.z3.out" d2f733b85518b2ef01097ad8856647c19731ca558ee45faebb65260de667c989
+            require_digest "mutated-${fn}-implementation.z3.out" d9dbf94b05b8314af9ca7f2034e92685c33447917605a7243b1099c693a12e5e
+            require_digest "mutated-${fn}-negative-control.z3.out" d9dbf94b05b8314af9ca7f2034e92685c33447917605a7243b1099c693a12e5e
+          done
       - name: Record proof toolchain and source identity
         if: always()
         shell: bash
