@@ -1,4 +1,5 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
+#include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
 #include <filesystem>
 #include <functional>
@@ -18,6 +19,8 @@ struct Unit {
     SourceIdentity identity;
     Program program;
     std::string prefix;
+    bool compiler_owned_core = false;
+    std::uint32_t admitted_core_provider_bits = 0;
     std::unordered_map<std::string, std::size_t> dependencies;
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
@@ -35,7 +38,7 @@ public:
     Loader(bool owned, bool scalar_loop, bool host) : owned(owned), scalar_loop(scalar_loop), host(host) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
-        visit(fs::canonical(path), std::move(text), identity, 0);
+        visit(fs::canonical(path), std::move(text), identity, 0, false, 0u);
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
@@ -103,7 +106,9 @@ private:
     static bool same_file(SourceIdentity left, SourceIdentity right) {
         return left.valid && right.valid && left.device == right.device && left.inode == right.inode;
     }
-    std::size_t visit(fs::path path, std::string text, SourceIdentity identity, std::size_t depth) {
+    std::size_t visit(fs::path path, std::string text, SourceIdentity identity,
+                      std::size_t depth, bool compiler_owned_core,
+                      std::uint32_t admitted_core_provider_bits) {
         if (depth > max_depth) throw std::runtime_error("native import graph exceeds 32 edges of depth");
         if (units.size() >= max_units) throw std::runtime_error("native import graph exceeds 128 source files");
         if (text.size() > max_bytes - bytes) throw std::runtime_error("native import graph exceeds 8 MiB aggregate source limit");
@@ -115,11 +120,22 @@ private:
         auto unit = std::make_unique<Unit>();
         unit->path = std::move(path); unit->identity = identity;
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
+        unit->compiler_owned_core = compiler_owned_core;
+        unit->admitted_core_provider_bits = admitted_core_provider_bits;
         try { unit->program = parse_unresolved_program(text, owned, scalar_loop); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
             fail(*unit, error.what());
+        }
+        if (unit->compiler_owned_core) {
+            const auto requirements =
+                frontend::infer_core_closure_requirements(unit->program);
+            if (requirements.hosted_or_unknown_effect)
+                fail(*unit, "ores.core module inferred hosted or unknown effect");
+            if ((requirements.provider_bits &
+                    ~unit->admitted_core_provider_bits) != 0u)
+                fail(*unit, "ores.core module inferred undeclared provider requirement");
         }
         for (const auto& fn : unit->program.functions) {
             auto& arities = unit->functions[fn.name];
