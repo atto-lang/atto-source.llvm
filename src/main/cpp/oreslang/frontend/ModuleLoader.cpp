@@ -172,9 +172,8 @@ private:
                         "unknown compiler-owned alloc module '" + raw + "'");
                 }
                 if (current.compiler_owned_library &&
-                        current.compiler_library_tier ==
-                            frontend::CompilerLibraryTier::Core &&
-                        library->tier != frontend::CompilerLibraryTier::Core)
+                        !frontend::compiler_library_dependency_allowed(
+                            current.compiler_library_tier, library->tier))
                     fail(current,
                         "compiler-owned ores.core modules may not depend on alloc/*");
                 if (!current.compiler_owned_library &&
