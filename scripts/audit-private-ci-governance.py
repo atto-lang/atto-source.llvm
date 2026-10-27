@@ -80,7 +80,8 @@ def check_policy_files(root: Path) -> tuple[str, ...]:
     doc = (root / DOC_PATH).read_text(encoding="utf-8")
     for phrase in (
         "protected", "private", "tree", "canary",
-        "Direct GitHub connector", "review-attested",
+        "Direct GitHub connector", "last-push-independent",
+        "GitHub Actions App ID", "no review/tree-attestation substitute",
     ):
         if phrase not in doc:
             raise GovernanceError(f"missing documented security condition: {phrase}")
