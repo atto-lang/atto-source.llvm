@@ -1653,8 +1653,9 @@ private:
         // Only private nominal struct returns with 1..16 int fields use
         // the already-checked immutable native leaf-record ABI.
         if (declaration.kind == LocalAggregateType::Kind::NominalStruct &&
-                !fn.exported && fn.method_owner.empty() &&
-                fn.return_class == declaration.name &&
+                fn.method_owner.empty() &&
+                (fn.return_class.empty() || (!fn.exported && fn.return_class == declaration.name)) &&
+                fn.local_aggregates.empty() &&
                 declaration.fields.size() >= 1 && declaration.fields.size() <= 16 &&
                 !fn.async_source_i64 && !fn.has_declared_effects &&
                 fn.generic_parameters.empty() && fn.parameters.empty() &&
@@ -1682,7 +1683,8 @@ private:
             compiled_local_classes_.push_back(std::move(native));
             local_executable_layouts_.emplace(original_name, declaration.native_layout_name);
             local_executable_fields_.emplace(original_name, declaration.fields);
-            fn.return_class = declaration.native_layout_name;
+            if (fn.return_class == original_name)
+                fn.return_class = declaration.native_layout_name;
         }
         fn.local_aggregates.push_back(std::move(declaration));
     }
@@ -2188,6 +2190,19 @@ private:
                     binding.scalar_type = ScalarType::String;
                     binding.initializer = expression();
                 } else {
+                    const auto local_layout = local_executable_layouts_.find(type);
+                    if (local_layout != local_executable_layouts_.end()) {
+                        if (!mutable_value)
+                            fail("LOCAL_STRUCT_OWNER_UNSUPPORTED: stack local requires val owner");
+                        binding.class_name = local_layout->second;
+                        auto initializer = expression();
+                        if (initializer->kind != Expression::Kind::RecordConstruct ||
+                                !initializer->local_aggregate_constructor ||
+                                initializer->name != binding.class_name)
+                            fail("LOCAL_STRUCT_INITIALIZER_INVALID: exact T{...} constructor required");
+                        binding.constructor_arguments = std::move(initializer->arguments);
+                        binding.new_class = true;
+                    } else {
                     binding.class_name = type;
                     if (!accept("new")) {
                         binding.initializer = expression();
@@ -2204,6 +2219,7 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                    }
                     }
                 }
             } else if (accept("let")) {
@@ -4188,7 +4204,8 @@ private:
             for (const auto& decl : fn.local_aggregates) {
                 if (decl.native_layout_name.empty() ||
                         decl.kind != LocalAggregateType::Kind::NominalStruct ||
-                        fn.exported || fn.return_class != decl.native_layout_name) {
+                        !(fn.return_class.empty() ||
+                          (!fn.exported && fn.return_class == decl.native_layout_name))) {
                     throw std::runtime_error(
                         "LOCAL_AGGREGATE_ABI_UNSUPPORTED: callable-local struct/record "
                         "requires checked nominal identity, public return ABI, ownership and LLVM lowering");
