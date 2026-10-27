@@ -132,10 +132,12 @@ write; movement during transfer fails closed.
 The source-bearing carrier workflow is triggered only by the fixed
 `oreslang-private-ci-exact-tree` `repository_dispatch` event. GitHub therefore
 loads the executable workflow definition from carrier default `main`, not from
-the ephemeral source-bearing ref. The dispatch payload contains only the exact
-carrier commit SHA and source root-tree SHA. Before checkout, the workflow
-requires `GITHUB_REF=refs/heads/main`, binds `GITHUB_WORKFLOW_REF` to the
-reviewed carrier workflow on `main`, re-reads live `main`, and verifies both
+the ephemeral source-bearing ref. The dispatch payload contains only the exact carrier commit SHA, source
+root-tree SHA, and the reviewed carrier-base SHA pinned by the source contract.
+Before checkout, the workflow requires `GITHUB_REF=refs/heads/main`, binds
+`GITHUB_WORKFLOW_REF` to the reviewed carrier workflow on `main`, requires
+`GITHUB_SHA` to equal that reviewed base SHA, re-reads live `main`, requires
+the branch to report protected, and verifies both
 `ci/oreslang-<SOURCE_TREE_SHA>` and
 `ci/authorized-<CARRIER_COMMIT_SHA>` point to the dispatched carrier commit.
 
@@ -166,8 +168,9 @@ ci/authorized-<CARRIER_COMMIT_SHA>
 
 After both exact refs are created and re-read, the publisher emits the fixed
 `oreslang-private-ci-exact-tree` repository dispatch with
-`carrier_sha=<CARRIER_COMMIT_SHA>` and
-`source_tree=<SOURCE_ROOT_TREE_SHA>`. The destination workflow refuses real
+`carrier_sha=<CARRIER_COMMIT_SHA>`,
+`source_tree=<SOURCE_ROOT_TREE_SHA>`, and
+`base_sha=<REVIEWED_CARRIER_MAIN_SHA>`. The destination workflow refuses real
 source tests without both exact refs and revalidates live destination identity
 before checkout. The source-bearing ref never selects the workflow definition,
 and no source repository credential is present in the carrier.
