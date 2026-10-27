@@ -38,12 +38,16 @@ class Loader {
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
     bool owned, scalar_loop, host;
+    std::uint32_t root_provider_bits = 0;
 public:
-    Loader(bool owned, bool scalar_loop, bool host) : owned(owned), scalar_loop(scalar_loop), host(host) {}
+    Loader(bool owned, bool scalar_loop, bool host,
+           std::uint32_t admitted_provider_bits)
+        : owned(owned), scalar_loop(scalar_loop), host(host),
+          root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
-              frontend::CompilerLibraryTier::Core, 0u);
+              frontend::CompilerLibraryTier::Core, root_provider_bits);
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
@@ -176,12 +180,6 @@ private:
                             current.compiler_library_tier, library->tier))
                     fail(current,
                         "compiler-owned ores.core modules may not depend on alloc/*");
-                if (!current.compiler_owned_library &&
-                        library->tier == frontend::CompilerLibraryTier::Alloc &&
-                        !host)
-                    fail(current,
-                        "freestanding alloc/* requires an explicit allocator provider");
-
                 const std::string unit_id(library->unit_id);
                 const auto known = paths.find(unit_id);
                 selected = known == paths.end() ? units.size() : known->second;
@@ -201,6 +199,11 @@ private:
                 if (target.program.module != library->module_name)
                     fail(current,
                         "compiler-owned library registry/module identity mismatch");
+                if (!current.compiler_owned_library && !host &&
+                        !frontend::core_closure_admitted(
+                            target.core_closure, root_provider_bits))
+                    fail(current,
+                        "freestanding compiler-owned library closure requires unavailable provider");
                 if (current.compiler_owned_library) {
                     if (!target.compiler_owned_library ||
                             !target.core_closure_complete)
@@ -397,7 +400,9 @@ private:
 };
 } // namespace
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
-                            bool owned, bool scalar_loop, bool host) {
-    return Loader(owned, scalar_loop, host).run(path, std::move(source), identity);
+                            bool owned, bool scalar_loop, bool host,
+                            std::uint32_t admitted_provider_bits) {
+    return Loader(owned, scalar_loop, host, admitted_provider_bits)
+        .run(path, std::move(source), identity);
 }
 } // namespace oreslang
