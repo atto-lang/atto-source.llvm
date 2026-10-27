@@ -59,6 +59,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-hasfuture-contract-test)
     set_tests_properties(native_hasfuture_trait_projection_admission PROPERTIES TIMEOUT 15)
 
+    # Compile-time associated-type dictionary coherence and static projection.
+    # This verifies the checker helper, not .ores parsing or native guest codegen.
+    add_executable(oreslang-native-associated-witness-test
+        tests/native_associated_witness_contract_test.cpp)
+    target_include_directories(oreslang-native-associated-witness-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-associated-witness-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_associated_witness_static_coherence
+        COMMAND oreslang-native-associated-witness-test)
+    set_tests_properties(native_associated_witness_static_coherence PROPERTIES TIMEOUT 15)
+
     # Compiler-only Send/Sync parity model. LLVM guest lowering remains gated.
     add_executable(oreslang-native-send-sync-contract-test
         tests/native_send_sync_contract_test.cpp)
