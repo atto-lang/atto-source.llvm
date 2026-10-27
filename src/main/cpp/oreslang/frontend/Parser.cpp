@@ -2940,13 +2940,18 @@ private:
             const auto offset = token_.offset;
             advance();
             auto right = unary();
-            // Java signed integer remainder has a zero-divisor failure
-            // channel. Native typed panic/unwind admission is not available
-            // yet: admit only a statically positive, nonzero literal divisor.
-            // This is a deliberately strict executable parity subset.
-            if (remainder && (right->kind != Expression::Kind::Integer ||
-                              right->integer == 0))
-                fail("native remainder requires a positive nonzero literal divisor "
+            // Preserve Java signed remainder for any nonzero i64 literal.
+            // Negative spellings ordinarily parse as Negate(Integer), while
+            // directly spelled INT64_MIN is parsed as Integer(INT64_MIN).
+            // Runtime/computed divisors still need typed zero-divisor effects.
+            const bool signed_literal =
+                (right->kind == Expression::Kind::Integer &&
+                 right->integer != 0) ||
+                (right->kind == Expression::Kind::Negate && right->left &&
+                 right->left->kind == Expression::Kind::Integer &&
+                 right->left->integer > 0);
+            if (remainder && !signed_literal)
+                fail("native remainder requires a nonzero signed integer literal divisor "
                      "until typed zero-divisor effects are implemented");
             auto expr = make_expression(remainder ? Expression::Kind::Remainder
                                                  : Expression::Kind::Multiply, offset);
