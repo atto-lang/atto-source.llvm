@@ -117,6 +117,52 @@ static void require_bounded_peer_progress(void) {
     }
 }
 
+/*
+ * In a mixed scheduler cohort, retiring a cancelled source continuation
+ * must not mutate another frame or halt its bounded forward progress.
+ * This is deliberately executed through the compiled guest ABI.
+ */
+static void require_cancelled_peer_is_isolated(void) {
+    ScalarFrame *cancel = calloc(1, sizeof(ScalarFrame));
+    ScalarFrame *survive_a = calloc(1, sizeof(ScalarFrame));
+    ScalarFrame *survive_b = calloc(1, sizeof(ScalarFrame));
+    CHECK(cancel && survive_a && survive_b);
+    oreslang_rt_scalar_frame_init(cancel);
+    oreslang_rt_scalar_frame_init(survive_a);
+    oreslang_rt_scalar_frame_init(survive_b);
+    CHECK(oreslang_rt_scalar_frame_step(cancel, 64) == 1);
+    CHECK(cancel->counter == 64);
+    CHECK(oreslang_rt_scalar_frame_step(survive_a, 31) == 1);
+    CHECK(oreslang_rt_scalar_frame_step(survive_b, 29) == 1);
+    const uint64_t before_a = survive_a->counter;
+    const uint64_t before_b = survive_b->counter;
+    oreslang_rt_scalar_frame_cancel(cancel);
+    CHECK(oreslang_rt_scalar_frame_step(cancel, 7) == 2);
+    CHECK(oreslang_rt_scalar_frame_step(cancel, 512) == 2);
+    CHECK(cancel->counter == 64 && cancel->state == 3);
+    CHECK(survive_a->counter == before_a && survive_b->counter == before_b);
+    unsigned rounds = 0;
+    while (survive_a->state != 2 || survive_b->state != 2) {
+        const uint64_t a_before = survive_a->counter;
+        const uint64_t b_before = survive_b->counter;
+        const int sa = oreslang_rt_scalar_frame_step(survive_a, 31);
+        const int sb = oreslang_rt_scalar_frame_step(survive_b, 29);
+        CHECK(sa == 0 || sa == 1);
+        CHECK(sb == 0 || sb == 1);
+        CHECK(survive_a->counter >= a_before &&
+              survive_a->counter <= a_before + 31);
+        CHECK(survive_b->counter >= b_before &&
+              survive_b->counter <= b_before + 29);
+        CHECK(cancel->counter == 64 && cancel->state == 3);
+        CHECK(++rounds <= 36);
+    }
+    CHECK(oreslang_rt_scalar_frame_result(survive_a) == 1000);
+    CHECK(oreslang_rt_scalar_frame_result(survive_b) == 1000);
+    free(survive_b);
+    free(survive_a);
+    free(cancel);
+}
+
 int main(void) {
     // Test real, independent HEAP frame ownership; no C/LLVM stack frame
     // survives an explicit guest yield. Host owns dispatch serially.
@@ -167,6 +213,8 @@ int main(void) {
         require_guest_trap(scenario);
 #endif
     require_bounded_peer_progress();
+    require_cancelled_peer_is_isolated();
+    puts("SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS");
     puts("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS");
     puts("SCALAR_FRAME_AOT_TWO_TASKS_PASS");
     free(cancelled);
