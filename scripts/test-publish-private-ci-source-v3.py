@@ -1418,24 +1418,22 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "untrusted issuer"):
                 v3.checked_carrier_main("trusted/ci", carrier)
 
-    def test_protected_source_rejects_unknown_review_bypass_fields(self):
-        # A future GitHub bypass field must not silently authorize exporting
-        # private source even when the currently known lists are empty.
-        reviews = {
-            "require_code_owner_reviews": True,
-            "dismiss_stale_reviews": True,
-            "required_approving_review_count": 1,
-            "bypass_pull_request_allowances": {
-                "users": [], "teams": [], "apps": [],
+    def _strict_protection(self, context):
+        return {
+            "required_pull_request_reviews": {
+                "require_code_owner_reviews": True,
+                "dismiss_stale_reviews": True,
+                "require_last_push_approval": True,
+                "required_approving_review_count": 1,
+                "bypass_pull_request_allowances": {
+                    "users": [], "teams": [], "apps": [],
+                },
             },
-        }
-        protection = {
-            "required_pull_request_reviews": reviews,
             "required_status_checks": {
                 "strict": True,
-                "contexts": ["private-ci-governance"],
+                "contexts": [context],
                 "checks": [{
-                    "context": "private-ci-governance",
+                    "context": context,
                     "app_id": v3.GITHUB_ACTIONS_APP_ID,
                 }],
             },
@@ -1445,177 +1443,145 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             "allow_deletions": {"enabled": False},
         }
 
-        def api(route, method="GET", payload=None):
-            if route == f"repos/{v3.SOURCE_REPO}":
-                return {
-                    "id": v3.SOURCE_REPO_ID,
-                    "full_name": v3.SOURCE_REPO,
-                    "private": True,
-                }
-            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
-                return {
-                    "name": v3.SOURCE_BRANCH,
-                    "protected": True,
-                    "commit": {"sha": PROTECTED},
-                }
-            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}/protection":
-                return protection
-            raise AssertionError(route)
-
-        with patch.object(v3, "gh_api", side_effect=api):
-            self.assertEqual(v3.source_protection(), PROTECTED)
-            for extra in (
-                {"delegated_roles": ["security-admin"]},
-                {"future_bypass_field": []},
-            ):
-                with self.subTest(extra=extra):
-                    reviews["bypass_pull_request_allowances"] = {
-                        "users": [], "teams": [], "apps": [], **extra,
+    def test_protected_source_rejects_unknown_review_bypass_fields(self):
+        def api_for(protection):
+            def api(route, method="GET", payload=None):
+                if route == f"repos/{v3.SOURCE_REPO}":
+                    return {
+                        "id": v3.SOURCE_REPO_ID,
+                        "full_name": v3.SOURCE_REPO,
+                        "private": True,
                     }
-                    with self.assertRaisesRegex(v3.Denied, "bypass policy"):
-                        v3.source_protection()
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                    return {
+                        "name": v3.SOURCE_BRANCH,
+                        "protected": True,
+                        "commit": {"sha": PROTECTED},
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}/protection":
+                    return protection
+                raise AssertionError(route)
+            return api
+
+        baseline = self._strict_protection(v3.SOURCE_POLICY_CHECK)
+        with patch.object(v3, "gh_api", side_effect=api_for(baseline)):
+            self.assertEqual(v3.source_protection(), PROTECTED)
+
+        for extra in (
+            {"delegated_roles": ["security-admin"]},
+            {"future_bypass_field": []},
+        ):
+            protection = self._strict_protection(v3.SOURCE_POLICY_CHECK)
+            protection["required_pull_request_reviews"]["bypass_pull_request_allowances"].update(extra)
+            with self.subTest(extra=extra), patch.object(
+                v3, "gh_api", side_effect=api_for(protection)
+            ):
+                with self.assertRaisesRegex(v3.Denied, "bypass policy"):
+                    v3.source_protection()
 
     def test_protected_carrier_rejects_unknown_review_bypass_fields(self):
-        reviews = {
-            "require_code_owner_reviews": True,
-            "dismiss_stale_reviews": True,
-            "required_approving_review_count": 1,
-            "bypass_pull_request_allowances": {
-                "users": [], "teams": [], "apps": [],
-            },
-        }
-        protection = {
-            "required_pull_request_reviews": reviews,
-            "required_status_checks": {
-                "strict": True,
-                "contexts": ["verifier-tests"],
-                "checks": [{
-                    "context": "verifier-tests",
-                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
-                }],
-            },
-            "required_conversation_resolution": {"enabled": True},
-            "enforce_admins": {"enabled": True},
-            "allow_force_pushes": {"enabled": False},
-            "allow_deletions": {"enabled": False},
-        }
-
-        def api(route, method="GET", payload=None):
-            if route == "repos/trusted/ci/branches/main":
-                return {"name": "main", "protected": True, "commit": {"sha": BASE}}
-            if route == "repos/trusted/ci/branches/main/protection":
-                return protection
-            if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
-                return {
-                    "path": ".github/CODEOWNERS",
-                    "type": "file",
-                    "encoding": "base64",
-                    "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
-                    "sha": CARRIER_CODEOWNERS_BLOB,
-                }
-            raise AssertionError(route)
-
-        with patch.object(v3, "gh_api", side_effect=api):
-            self.assertEqual(v3.checked_carrier_main("trusted/ci", carrier_contract()), BASE)
-            for extra in (
-                {"delegated_roles": ["security-admin"]},
-                {"future_bypass_field": []},
-            ):
-                with self.subTest(extra=extra):
-                    reviews["bypass_pull_request_allowances"] = {
-                        "users": [], "teams": [], "apps": [], **extra,
+        def api_for(protection):
+            def api(route, method="GET", payload=None):
+                if route == "repos/trusted/ci/branches/main":
+                    return {"name": "main", "protected": True, "commit": {"sha": BASE}}
+                if route == "repos/trusted/ci/branches/main/protection":
+                    return protection
+                if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
+                    return {
+                        "path": ".github/CODEOWNERS",
+                        "type": "file",
+                        "encoding": "base64",
+                        "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
+                        "sha": CARRIER_CODEOWNERS_BLOB,
                     }
-                    with self.assertRaisesRegex(v3.Denied, "bypass policy"):
-                        v3.checked_carrier_main("trusted/ci", carrier_contract())
+                raise AssertionError(route)
+            return api
 
+        baseline = self._strict_protection(v3.CARRIER_POLICY_CHECK)
+        with patch.object(v3, "gh_api", side_effect=api_for(baseline)):
+            self.assertEqual(v3.checked_carrier_main("trusted/ci", carrier_contract()), BASE)
+
+        for extra in (
+            {"delegated_roles": ["security-admin"]},
+            {"future_bypass_field": []},
+        ):
+            protection = self._strict_protection(v3.CARRIER_POLICY_CHECK)
+            protection["required_pull_request_reviews"]["bypass_pull_request_allowances"].update(extra)
+            with self.subTest(extra=extra), patch.object(
+                v3, "gh_api", side_effect=api_for(protection)
+            ):
+                with self.assertRaisesRegex(v3.Denied, "bypass policy"):
+                    v3.checked_carrier_main("trusted/ci", carrier_contract())
 
     def test_protected_source_rejects_missing_review_bypass_policy(self):
-        reviews = {
-            "require_code_owner_reviews": True,
-            "dismiss_stale_reviews": True,
-            "required_approving_review_count": 1,
-        }
-        protection = {
-            "required_pull_request_reviews": reviews,
-            "required_status_checks": {
-                "strict": True,
-                "contexts": ["private-ci-governance"],
-                "checks": [{
-                    "context": "private-ci-governance",
-                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
-                }],
-            },
-            "required_conversation_resolution": {"enabled": True},
-            "enforce_admins": {"enabled": True},
-            "allow_force_pushes": {"enabled": False},
-            "allow_deletions": {"enabled": False},
-        }
+        def api_for(protection):
+            def api(route, method="GET", payload=None):
+                if route == f"repos/{v3.SOURCE_REPO}":
+                    return {
+                        "id": v3.SOURCE_REPO_ID,
+                        "full_name": v3.SOURCE_REPO,
+                        "private": True,
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                    return {
+                        "name": v3.SOURCE_BRANCH,
+                        "protected": True,
+                        "commit": {"sha": PROTECTED},
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}/protection":
+                    return protection
+                raise AssertionError(route)
+            return api
 
-        def api(route, method="GET", payload=None):
-            if route == f"repos/{v3.SOURCE_REPO}":
-                return {
-                    "id": v3.SOURCE_REPO_ID,
-                    "full_name": v3.SOURCE_REPO,
-                    "private": True,
-                }
-            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
-                return {
-                    "name": v3.SOURCE_BRANCH,
-                    "protected": True,
-                    "commit": {"sha": PROTECTED},
-                }
-            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}/protection":
-                return protection
-            raise AssertionError(route)
-
-        with patch.object(v3, "gh_api", side_effect=api):
-            for value in (None, [], {"users": [], "teams": []}, {"users": [], "apps": []}, {"teams": [], "apps": []}):
-                with self.subTest(value=value):
-                    if value is None:
-                        reviews.pop("bypass_pull_request_allowances", None)
-                    else:
-                        reviews["bypass_pull_request_allowances"] = value
-                    with self.assertRaisesRegex(v3.Denied, "bypass policy"):
-                        v3.source_protection()
+        values = (
+            None,
+            [],
+            {"users": [], "teams": []},
+            {"users": [], "apps": []},
+            {"teams": [], "apps": []},
+        )
+        for value in values:
+            protection = self._strict_protection(v3.SOURCE_POLICY_CHECK)
+            reviews = protection["required_pull_request_reviews"]
+            if value is None:
+                del reviews["bypass_pull_request_allowances"]
+            else:
+                reviews["bypass_pull_request_allowances"] = value
+            with self.subTest(value=value), patch.object(
+                v3, "gh_api", side_effect=api_for(protection)
+            ):
+                with self.assertRaisesRegex(v3.Denied, "bypass policy"):
+                    v3.source_protection()
 
     def test_protected_carrier_rejects_missing_review_bypass_policy(self):
-        reviews = {
-            "require_code_owner_reviews": True,
-            "dismiss_stale_reviews": True,
-            "required_approving_review_count": 1,
-        }
-        protection = {
-            "required_pull_request_reviews": reviews,
-            "required_status_checks": {
-                "strict": True,
-                "contexts": ["verifier-tests"],
-                "checks": [{
-                    "context": "verifier-tests",
-                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
-                }],
-            },
-            "required_conversation_resolution": {"enabled": True},
-            "enforce_admins": {"enabled": True},
-            "allow_force_pushes": {"enabled": False},
-            "allow_deletions": {"enabled": False},
-        }
+        def api_for(protection):
+            def api(route, method="GET", payload=None):
+                if route == "repos/trusted/ci/branches/main":
+                    return {"name": "main", "protected": True, "commit": {"sha": BASE}}
+                if route == "repos/trusted/ci/branches/main/protection":
+                    return protection
+                raise AssertionError(route)
+            return api
 
-        def api(route, method="GET", payload=None):
-            if route == "repos/trusted/ci/branches/main":
-                return {"name": "main", "protected": True, "commit": {"sha": BASE}}
-            if route == "repos/trusted/ci/branches/main/protection":
-                return protection
-            raise AssertionError(route)
-
-        with patch.object(v3, "gh_api", side_effect=api):
-            for value in (None, [], {"users": [], "teams": []}, {"users": [], "apps": []}, {"teams": [], "apps": []}):
-                with self.subTest(value=value):
-                    if value is None:
-                        reviews.pop("bypass_pull_request_allowances", None)
-                    else:
-                        reviews["bypass_pull_request_allowances"] = value
-                    with self.assertRaisesRegex(v3.Denied, "bypass policy"):
-                        v3.checked_carrier_main("trusted/ci", carrier_contract())
+        values = (
+            None,
+            [],
+            {"users": [], "teams": []},
+            {"users": [], "apps": []},
+            {"teams": [], "apps": []},
+        )
+        for value in values:
+            protection = self._strict_protection(v3.CARRIER_POLICY_CHECK)
+            reviews = protection["required_pull_request_reviews"]
+            if value is None:
+                del reviews["bypass_pull_request_allowances"]
+            else:
+                reviews["bypass_pull_request_allowances"] = value
+            with self.subTest(value=value), patch.object(
+                v3, "gh_api", side_effect=api_for(protection)
+            ):
+                with self.assertRaisesRegex(v3.Denied, "bypass policy"):
+                    v3.checked_carrier_main("trusted/ci", carrier_contract())
 
 
 if __name__ == "__main__":
