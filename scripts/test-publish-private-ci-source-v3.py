@@ -51,8 +51,8 @@ CARRIER_CODEOWNERS = (
 CARRIER_CODEOWNERS_BLOB = v3.git_blob_sha(CARRIER_CODEOWNERS)
 
 
-def carrier_contract(review_pr=None):
-    value = {
+def carrier_contract():
+    return {
         "repository_id": 1323598177,
         "base_sha": BASE,
         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
@@ -60,9 +60,6 @@ def carrier_contract(review_pr=None):
         "test_plan_path": "ci/test-plans/llvm-pr669.json",
         "test_plan_blob_sha": PLAN_BLOB,
     }
-    if review_pr is not None:
-        value["review_pr"] = review_pr
-    return value
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
@@ -140,7 +137,6 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "base_sha": BASE,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
-                        "review_pr": 17,
                         "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
                                 "blob_sha": PLAN_BLOB,
@@ -157,7 +153,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(got["repository_id"], 42)
         self.assertEqual(got["base_sha"], BASE)
         self.assertEqual(got["workflow_blob_sha"], WORKFLOW)
-        self.assertEqual(got["review_pr"], 17)
+        self.assertNotIn("review_pr", got)
         with self.assertRaisesRegex(v3.Denied, "not authorized"):
             v3.parse_contract(
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
@@ -652,7 +648,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "base_sha": BASE,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
-                        "review_pr": 0,
+                        "review_pr": 17,
                         "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
                                 "blob_sha": PLAN_BLOB,
@@ -663,7 +659,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 },
             }
         ).encode()
-        with self.assertRaisesRegex(v3.Denied, "review PR"):
+        with self.assertRaisesRegex(v3.Denied, "carrier contract fields"):
             v3.parse_contract(
                 raw, "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
             )
@@ -702,92 +698,24 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             self.assertEqual(v3.authorized_source_main_sha(), "2" * 40)
         protected.assert_called_once_with()
 
-    def _carrier_review_fixture(self, *, author_id=424242,
-                                state="APPROVED", review_commit=None):
-        contract = carrier_contract(review_pr=17)
-        head_sha = "7" * 40
-        review_commit = head_sha if review_commit is None else review_commit
-        branch = {
-            "name": "main",
-            "protected": False,
-            "commit": {"sha": BASE},
-        }
+    def test_unprotected_carrier_is_always_denied(self):
+        contract = carrier_contract()
 
         def api(route, method="GET", payload=None):
             if route == "repos/trusted/ci/branches/main":
-                return branch
-            if route == "repos/trusted/ci/pulls/17":
                 return {
-                    "number": 17,
-                    "state": "closed",
-                    "merged_at": "2026-10-25T15:00:00Z",
-                    "user": {"id": author_id, "login": "carrier-author"},
-                    "head": {
-                        "sha": head_sha,
-                        "repo": {
-                            "full_name": "trusted/ci",
-                            "id": contract["repository_id"],
-                        },
-                    },
-                    "base": {
-                        "ref": "main",
-                        "repo": {
-                            "full_name": "trusted/ci",
-                            "id": contract["repository_id"],
-                        },
-                    },
+                    "name": "main",
+                    "protected": False,
+                    "commit": {"sha": BASE},
                 }
-            if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
-                return {
-                    "path": ".github/CODEOWNERS",
-                    "type": "file",
-                    "encoding": "base64",
-                    "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
-                    "sha": CARRIER_CODEOWNERS_BLOB,
-                }
-            raise AssertionError((method, route))
+            raise AssertionError(route)
 
-        review = {
-            "id": 92,
-            "state": state,
-            "commit_id": review_commit,
-            "submitted_at": "2026-10-25T14:59:00Z",
-            "user": {
-                "id": v3.CARRIER_REVIEW_USER_ID,
-                "login": v3.CARRIER_REVIEW_LOGIN,
-            },
-        }
-        return contract, branch, api, review, head_sha
-
-    def test_unprotected_carrier_accepts_exact_tree_independent_review(self):
-        contract, _branch, api, review, _head = self._carrier_review_fixture()
-        with (
-            patch.object(v3, "gh_api", side_effect=api),
-            patch.object(v3, "_latest_review", return_value=review),
-            patch.object(v3, "carrier_commit_tree", side_effect=["8" * 40, "8" * 40]),
-        ):
-            self.assertEqual(v3.checked_carrier_main("trusted/ci", contract), BASE)
-
-    def test_unprotected_carrier_rejects_stale_author_or_tree_drift(self):
-        cases = (
-            ({"state": "CHANGES_REQUESTED"}, ["8" * 40, "8" * 40], "stale, late, or not approved"),
-            ({"author_id": v3.CARRIER_REVIEW_USER_ID}, ["8" * 40, "8" * 40], "independent merged"),
-            ({"author_id": 0}, ["8" * 40, "8" * 40], "independent merged"),
-            ({}, ["8" * 40, "9" * 40], "tree differs"),
-        )
-        for kwargs, trees, message in cases:
-            with self.subTest(kwargs=kwargs, trees=trees):
-                contract, _branch, api, review, _head = self._carrier_review_fixture(**kwargs)
-                with (
-                    patch.object(v3, "gh_api", side_effect=api),
-                    patch.object(v3, "_latest_review", return_value=review),
-                    patch.object(v3, "carrier_commit_tree", side_effect=trees),
-                ):
-                    with self.assertRaisesRegex(v3.Denied, message):
-                        v3.checked_carrier_main("trusted/ci", contract)
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "not protected"):
+                v3.checked_carrier_main("trusted/ci", contract)
 
     def test_recheck_destination_identity_rejects_carrier_main_movement(self):
-        contract = carrier_contract(review_pr=17)
+        contract = carrier_contract()
         eligible = {
             "id": contract["repository_id"],
             "full_name": "trusted/ci",
@@ -811,11 +739,21 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             "required_pull_request_reviews": {
                 "require_code_owner_reviews": True,
                 "dismiss_stale_reviews": True,
+                "require_last_push_approval": True,
                 "required_approving_review_count": 1,
                 "bypass_pull_request_allowances": {
                     "users": [], "teams": [], "apps": []
                 },
             },
+            "required_status_checks": {
+                "strict": True,
+                "contexts": ["verifier-tests"],
+                "checks": [{
+                    "context": "verifier-tests",
+                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                }],
+            },
+            "required_conversation_resolution": {"enabled": True},
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
@@ -854,7 +792,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             raise AssertionError(route)
 
         with patch.object(v3, "gh_api", side_effect=unprotected_api):
-            with self.assertRaisesRegex(v3.Denied, "requires reviewed carrier PR"):
+            with self.assertRaisesRegex(v3.Denied, "not protected"):
                 v3.checked_carrier_main("trusted/ci", carrier_contract())
 
         weak = json.loads(json.dumps(good_protection))
@@ -888,6 +826,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "required_pull_request_reviews": {
                         "require_code_owner_reviews": True,
                         "dismiss_stale_reviews": True,
+                        "require_last_push_approval": True,
                         "required_approving_review_count": 1,
                         "bypass_pull_request_allowances": {
                             "users": [{"login": "bypass"}],
@@ -895,6 +834,15 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                             "apps": [],
                         },
                     },
+                    "required_status_checks": {
+                        "strict": True,
+                        "contexts": ["verifier-tests"],
+                        "checks": [{
+                            "context": "verifier-tests",
+                            "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                        }],
+                    },
+                    "required_conversation_resolution": {"enabled": True},
                     "enforce_admins": {"enabled": True},
                     "allow_force_pushes": {"enabled": False},
                     "allow_deletions": {"enabled": False},
@@ -1363,6 +1311,113 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         )
 
 
+    def test_source_and_carrier_require_last_push_conversation_and_issuer_bound_ci(self):
+        source_reviews = {
+            "require_code_owner_reviews": True,
+            "dismiss_stale_reviews": True,
+            "require_last_push_approval": True,
+            "required_approving_review_count": 1,
+            "bypass_pull_request_allowances": {
+                "users": [], "teams": [], "apps": [],
+            },
+        }
+        source_protection = {
+            "required_pull_request_reviews": source_reviews,
+            "required_status_checks": {
+                "strict": True,
+                "contexts": [v3.SOURCE_POLICY_CHECK],
+                "checks": [{
+                    "context": v3.SOURCE_POLICY_CHECK,
+                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                }],
+            },
+            "required_conversation_resolution": {"enabled": True},
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+        }
+
+        def source_api(current):
+            def api(route, method="GET", payload=None):
+                if route == f"repos/{v3.SOURCE_REPO}":
+                    return {
+                        "id": v3.SOURCE_REPO_ID,
+                        "full_name": v3.SOURCE_REPO,
+                        "private": True,
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                    return {
+                        "name": v3.SOURCE_BRANCH,
+                        "protected": True,
+                        "commit": {"sha": PROTECTED},
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}/protection":
+                    return current
+                raise AssertionError(route)
+            return api
+
+        variants = []
+        weak = json.loads(json.dumps(source_protection))
+        weak["required_pull_request_reviews"]["require_last_push_approval"] = False
+        variants.append(weak)
+        weak = json.loads(json.dumps(source_protection))
+        weak["required_conversation_resolution"]["enabled"] = False
+        variants.append(weak)
+        weak = json.loads(json.dumps(source_protection))
+        weak["required_status_checks"]["strict"] = False
+        variants.append(weak)
+        weak = json.loads(json.dumps(source_protection))
+        weak["required_status_checks"]["checks"][0]["app_id"] = 999999
+        variants.append(weak)
+        weak = json.loads(json.dumps(source_protection))
+        weak["required_status_checks"]["checks"][0]["context"] = "unrelated"
+        weak["required_status_checks"]["contexts"] = []
+        variants.append(weak)
+
+        for current in variants:
+            with self.subTest(source=current), patch.object(
+                v3, "gh_api", side_effect=source_api(current)
+            ):
+                with self.assertRaises(v3.Denied):
+                    v3.source_protection()
+
+        carrier = carrier_contract()
+        carrier_good = json.loads(json.dumps(source_protection))
+        carrier_good["required_status_checks"] = {
+            "strict": True,
+            "contexts": [v3.CARRIER_POLICY_CHECK],
+            "checks": [{
+                "context": v3.CARRIER_POLICY_CHECK,
+                "app_id": v3.GITHUB_ACTIONS_APP_ID,
+            }],
+        }
+
+        def carrier_api(current):
+            def api(route, method="GET", payload=None):
+                if route == "repos/trusted/ci/branches/main":
+                    return {"name": "main", "protected": True, "commit": {"sha": BASE}}
+                if route == "repos/trusted/ci/branches/main/protection":
+                    return current
+                if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
+                    return {
+                        "path": ".github/CODEOWNERS",
+                        "type": "file",
+                        "encoding": "base64",
+                        "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
+                        "sha": CARRIER_CODEOWNERS_BLOB,
+                    }
+                raise AssertionError(route)
+            return api
+
+        with patch.object(v3, "gh_api", side_effect=carrier_api(carrier_good)):
+            self.assertEqual(v3.checked_carrier_main("trusted/ci", carrier), BASE)
+
+        weak = json.loads(json.dumps(carrier_good))
+        weak["required_status_checks"]["checks"][0]["app_id"] = 999999
+        with patch.object(v3, "gh_api", side_effect=carrier_api(weak)):
+            with self.assertRaisesRegex(v3.Denied, "untrusted issuer"):
+                v3.checked_carrier_main("trusted/ci", carrier)
+
     def test_protected_source_rejects_unknown_review_bypass_fields(self):
         # A future GitHub bypass field must not silently authorize exporting
         # private source even when the currently known lists are empty.
@@ -1376,6 +1431,15 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         }
         protection = {
             "required_pull_request_reviews": reviews,
+            "required_status_checks": {
+                "strict": True,
+                "contexts": ["private-ci-governance"],
+                "checks": [{
+                    "context": "private-ci-governance",
+                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                }],
+            },
+            "required_conversation_resolution": {"enabled": True},
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
@@ -1422,6 +1486,15 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         }
         protection = {
             "required_pull_request_reviews": reviews,
+            "required_status_checks": {
+                "strict": True,
+                "contexts": ["verifier-tests"],
+                "checks": [{
+                    "context": "verifier-tests",
+                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                }],
+            },
+            "required_conversation_resolution": {"enabled": True},
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
@@ -1464,6 +1537,15 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         }
         protection = {
             "required_pull_request_reviews": reviews,
+            "required_status_checks": {
+                "strict": True,
+                "contexts": ["private-ci-governance"],
+                "checks": [{
+                    "context": "private-ci-governance",
+                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                }],
+            },
+            "required_conversation_resolution": {"enabled": True},
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
@@ -1504,6 +1586,15 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         }
         protection = {
             "required_pull_request_reviews": reviews,
+            "required_status_checks": {
+                "strict": True,
+                "contexts": ["verifier-tests"],
+                "checks": [{
+                    "context": "verifier-tests",
+                    "app_id": v3.GITHUB_ACTIONS_APP_ID,
+                }],
+            },
+            "required_conversation_resolution": {"enabled": True},
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
