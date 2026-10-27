@@ -4123,3 +4123,118 @@ if(BUILD_TESTING)
     COMMAND oreslang-native-cstring-host-test)
   set_tests_properties(native_string_cstring_explicit_length_contract PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Host reactor operation lifecycle: logical Future settlement is separate from
+# physical registration/callback retirement. Actor teardown may reclaim only
+# after ready_to_reclaim() becomes true.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-async-io-operation-lifecycle-test
+        tests/async_io_operation_lifecycle_test.cpp)
+    target_include_directories(oreslang-async-io-operation-lifecycle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-async-io-operation-lifecycle-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-async-io-operation-lifecycle-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-async-io-operation-lifecycle-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME async_io_operation_lifecycle_races
+        COMMAND oreslang-async-io-operation-lifecycle-test)
+    set_tests_properties(async_io_operation_lifecycle_races PROPERTIES TIMEOUT 30)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-async-io-epoll-operation-test
+            tests/async_io_epoll_operation_test.cpp)
+        target_include_directories(oreslang-async-io-epoll-operation-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-async-io-epoll-operation-test PRIVATE cxx_std_17)
+        target_link_libraries(oreslang-async-io-epoll-operation-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-async-io-epoll-operation-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME async_io_epoll_operation_readiness
+            COMMAND oreslang-async-io-epoll-operation-test)
+        set_tests_properties(async_io_epoll_operation_readiness PROPERTIES TIMEOUT 30)
+    endif()
+endif()
+
+
+# Async I/O continuation bridge: scheduler-visible READY is published only
+# after the native operation's registration/callback has physically retired.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-async-io-continuation-gate-test
+        tests/async_io_continuation_gate_test.cpp
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    target_include_directories(oreslang-async-io-continuation-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-async-io-continuation-gate-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-async-io-continuation-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-async-io-continuation-gate-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    add_test(NAME async_io_continuation_retirement_gate
+        COMMAND oreslang-async-io-continuation-gate-test)
+    set_tests_properties(async_io_continuation_retirement_gate PROPERTIES TIMEOUT 60)
+endif()
+
+
+# Linux end-to-end host proof: socketpair -> epoll readiness -> physical
+# retirement -> continuation READY -> scheduler claim.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-async-io-epoll-continuation-test
+        tests/async_io_epoll_continuation_test.cpp
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    target_include_directories(oreslang-async-io-epoll-continuation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-async-io-epoll-continuation-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-async-io-epoll-continuation-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-async-io-epoll-continuation-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    add_test(NAME async_io_epoll_continuation_retirement
+        COMMAND oreslang-async-io-epoll-continuation-test)
+    set_tests_properties(async_io_epoll_continuation_retirement PROPERTIES TIMEOUT 60)
+endif()
+
+
+# Actor lifecycle integration: an admitted native I/O operation holds the exact
+# actor incarnation's resource loan until its kernel registration and callback
+# are physically retired. get_done() must remain pending before that point.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-async-io-actor-lifetime-pin-test
+        tests/async_io_actor_lifetime_pin_test.cpp)
+    target_include_directories(oreslang-async-io-actor-lifetime-pin-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-async-io-actor-lifetime-pin-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-async-io-actor-lifetime-pin-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-async-io-actor-lifetime-pin-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME async_io_actor_done_physical_retirement
+        COMMAND oreslang-async-io-actor-lifetime-pin-test)
+    set_tests_properties(async_io_actor_done_physical_retirement PROPERTIES TIMEOUT 60)
+endif()
+
+# Host/runtime select linearization substrate. This proves exactly-one winner,
+# late-arm loser revocation and Task cancellation integration only; source
+# select syntax remains fail-closed until Channel/Future lowering is wired.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-select-arbiter-test
+        tests/native_select_arbiter_test.cpp)
+    target_include_directories(oreslang-native-select-arbiter-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-select-arbiter-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-select-arbiter-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-select-arbiter-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_select_exactly_one_winner_and_cleanup
+        COMMAND oreslang-native-select-arbiter-test)
+    set_tests_properties(native_select_exactly_one_winner_and_cleanup
+        PROPERTIES TIMEOUT 30)
+endif()
