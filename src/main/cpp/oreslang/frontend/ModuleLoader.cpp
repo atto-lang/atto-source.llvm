@@ -177,10 +177,10 @@ private:
             } else {
                 if (current.compiler_owned_core)
                     fail(current, "compiler-owned ores.core modules may import only ores.core/*");
+                if (frontend::is_reserved_std_import(raw))
+                    fail(current, "native ores.std package resolution remains unsupported");
                 if (!host)
                     fail(current, "freestanding native imports require compiler-owned ores.core/* modules");
-                if (raw == "ores.std" || raw.rfind("ores.std/", 0) == 0)
-                    fail(current, "native ores.std package resolution remains unsupported");
 
                 fs::path dependency;
                 if (raw.rfind("+/", 0) == 0) {
