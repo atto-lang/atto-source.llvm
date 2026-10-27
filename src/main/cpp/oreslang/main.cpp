@@ -433,20 +433,49 @@ int main(int argc, char** argv) {
 
                 using Kind = oreslang::Expression::Kind;
                 switch (expr.kind) {
-                    case Kind::Integer: case Kind::Variable: return true;
+                    case Kind::Integer:
+                    case Kind::Boolean:
+                    case Kind::Variable:
+                        return true;
                     case Kind::Negate:
-                        return expr.left && scalar(*expr.left, depth + 1, calls);
-                    case Kind::Add: case Kind::Subtract: case Kind::Multiply:
+                    case Kind::LogicalNot:
+                        return expr.left &&
+                            scalar(*expr.left, depth + 1, calls);
+                    case Kind::Add:
+                    case Kind::Subtract:
+                    case Kind::Multiply:
+                    case Kind::Equal:
+                    case Kind::NotEqual:
+                    case Kind::Less:
+                    case Kind::LessEqual:
+                    case Kind::Greater:
+                    case Kind::GreaterEqual:
+                    case Kind::LogicalAnd:
+                    case Kind::LogicalOr:
+                    case Kind::LogicalXor:
                         return expr.left && expr.right &&
-                               scalar(*expr.left, depth + 1, calls) &&
-                               scalar(*expr.right, depth + 1, calls);
+                            scalar(*expr.left, depth + 1, calls) &&
+                            scalar(*expr.right, depth + 1, calls);
+                    case Kind::Conditional:
+                        return (expr.condition ||
+                                (expr.condition_lhs && expr.condition_rhs)) &&
+                            expr.when_true && expr.when_false &&
+                            (!expr.condition ||
+                                scalar(*expr.condition, depth + 1, calls)) &&
+                            (!expr.condition_lhs ||
+                                scalar(*expr.condition_lhs, depth + 1, calls)) &&
+                            (!expr.condition_rhs ||
+                                scalar(*expr.condition_rhs, depth + 1, calls)) &&
+                            scalar(*expr.when_true, depth + 1, calls) &&
+                            scalar(*expr.when_false, depth + 1, calls);
                     case Kind::Call:
                         if (expr.arguments.size() > max_parameters) return false;
                         calls.push_back(expr.name);
                         for (const auto& arg : expr.arguments)
                             if (!arg || !scalar(*arg, depth + 1, calls)) return false;
                         return true;
-                    default: return false;
+                    default:
+                        return false;
                 }
             };
             if (!ast.actors.empty()) {
