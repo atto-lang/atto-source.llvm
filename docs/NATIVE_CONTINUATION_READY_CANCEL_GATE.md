@@ -131,7 +131,7 @@ A direct Linux runtime gate also arms a real nonblocking pipe before a delayed
 writer makes it readable. That independently exercises VM-NIO wake escrow,
 logical trace resumption and actor cleanup without relying on compiler IR.
 
-The native E2E fixture uses nonblocking stdin fd 0 and supplies one byte from
+The readable native E2E fixture uses nonblocking stdin fd 0 and supplies one byte from
 the harness. It checks compiler IR, real mixed C/C++ runtime linkage, exact
 continuation/wake receipt metadata, actor-lane resume, post-await message
 delivery, physical actor stop/reclamation, and both release and ASan/UBSan
@@ -141,6 +141,28 @@ locals, a second suspension and missing actor ownership.
 This is still not a public portable I/O API. The literal-fd form exists to
 prove compiler → continuation → VM-NIO → scheduler → compiled-resume ownership
 end to end before typed nonblocking stream/socket abstractions are admitted.
+
+### Writable readiness parity
+
+The same source-root continuation transport now admits the equally restricted
+`await writable(<integer-literal-fd>);` form. It uses `EPOLLOUT`, a distinct
+source code generation, and the same generation-fenced wake/descriptor
+ownership. The compiler applies the same one-actor, zero-suspended-local,
+single-suspension and post-await effect restrictions as readable.
+
+The runtime exposes `oreslang_source_actor_await_writable_checked()` with
+READY/CANCELLED/TERMINATED/FAILED terminal outcomes. A Linux runtime regression
+fills a nonblocking pipe until `EAGAIN`, proves an unrelated actor can still
+make progress while EPOLLOUT is pending, cancels the exact one-shot watch, then
+drains capacity and re-arms the same write descriptor successfully.
+
+The Linux TCP substrate also has numeric-address nonblocking connect primitives:
+`try_connect_ipv4()` starts `connect(2)` on a `SOCK_NONBLOCK` descriptor;
+in-progress connects wait for EPOLLOUT and
+`finish_connect_after_writable()` reads `SO_ERROR`. This is **not yet a
+source-level TCP connection object or stdlib connect implementation**; descriptor
+ownership/address parsing/lifetime lowering remain to be integrated above this
+substrate.
 
 ### Typed readable runtime outcome
 
