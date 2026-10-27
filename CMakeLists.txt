@@ -3405,6 +3405,16 @@ if(BUILD_TESTING)
     add_test(NAME native_core_std_library_profile_policy
         COMMAND oreslang-library-profile-policy-test)
     set_tests_properties(native_core_std_library_profile_policy PROPERTIES TIMEOUT 10)
+    add_executable(oreslang-core-library-sources-test
+        tests/core_library_sources_test.cpp)
+    target_include_directories(oreslang-core-library-sources-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-core-library-sources-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-core-library-sources-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_core_library_registry_provider_policy
+        COMMAND oreslang-core-library-sources-test)
+    set_tests_properties(native_core_library_registry_provider_policy PROPERTIES TIMEOUT 10)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
@@ -6559,6 +6569,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/library_profile_artifact_boundary.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_core_library_profile_artifact_boundary
+        PROPERTIES TIMEOUT 120)
+    add_test(NAME native_core_library_import_resolution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/core_library_imports.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_core_library_import_resolution
         PROPERTIES TIMEOUT 120)
     add_test(NAME cortexm_source_actor_admission
         COMMAND "${Python3_EXECUTABLE}"

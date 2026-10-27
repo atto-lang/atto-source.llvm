@@ -433,10 +433,16 @@ int main(int argc, char** argv) {
 
                 using Kind = oreslang::Expression::Kind;
                 switch (expr.kind) {
-                    case Kind::Integer: case Kind::Variable: return true;
-                    case Kind::Negate:
+                    case Kind::Integer: case Kind::Boolean:
+                    case Kind::Variable: return true;
+                    case Kind::Negate: case Kind::LogicalNot:
                         return expr.left && scalar(*expr.left, depth + 1, calls);
                     case Kind::Add: case Kind::Subtract: case Kind::Multiply:
+                    case Kind::Equal: case Kind::NotEqual:
+                    case Kind::Less: case Kind::LessEqual:
+                    case Kind::Greater: case Kind::GreaterEqual:
+                    case Kind::LogicalAnd: case Kind::LogicalOr:
+                    case Kind::LogicalXor:
                         return expr.left && expr.right &&
                                scalar(*expr.left, depth + 1, calls) &&
                                scalar(*expr.right, depth + 1, calls);
@@ -526,11 +532,38 @@ int main(int argc, char** argv) {
                 // The trusted C runtime owns static actors, mailboxes, and
                 // orderly stop/drain; this does not admit guest awaits.
             }
+            auto guarded_scalar_returns = [&](const oreslang::Function& fn) {
+                if (fn.statements.size() > 8) return false;
+                for (const auto& statement : fn.statements) {
+                    if (statement.kind != oreslang::Statement::Kind::Conditional ||
+                            !statement.condition ||
+                            statement.condition_lhs || statement.condition_rhs ||
+                            !statement.else_statements.empty() ||
+                            statement.then_statements.size() != 1)
+                        return false;
+                    const auto& terminal = statement.then_statements.front();
+                    if (terminal.kind != oreslang::Statement::Kind::Return ||
+                            !terminal.expression ||
+                            terminal.condition || terminal.condition_lhs ||
+                            terminal.condition_rhs ||
+                            !terminal.then_statements.empty() ||
+                            !terminal.else_statements.empty())
+                        return false;
+                    std::vector<std::string> condition_calls;
+                    if (!scalar(*statement.condition, 0, condition_calls) ||
+                            !condition_calls.empty())
+                        return false;
+                    std::vector<std::string> return_calls;
+                    if (!scalar(*terminal.expression, 0, return_calls))
+                        return false;
+                }
+                return true;
+            };
             for (const auto& fn : ast.functions) {
                 if ((!ast.actors.empty() && fn.name != "main") ||
                     (ast.actors.empty() && fn.name == "main") ||
                     fn.returns_void || !fn.result ||
-                    !fn.locals.empty() || !fn.statements.empty() ||
+                    !fn.locals.empty() || !guarded_scalar_returns(fn) ||
                     !fn.early_returns.empty() ||
                     (ast.actors.empty() && (!fn.actor_spawns.empty() ||
                         !fn.actor_sends.empty() || !fn.actor_stops.empty() ||

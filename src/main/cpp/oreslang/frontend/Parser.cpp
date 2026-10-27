@@ -2490,7 +2490,8 @@ private:
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
                     if (accept(";")) {
-                        require("then"); statement.then_statements = branch_arm(false, true);
+                        if (!accept("then")) require("do");
+                        statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
@@ -2696,7 +2697,11 @@ private:
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
                 const bool then_form = accept(";");
-                if (then_form) require("then"); else require("{");
+                if (then_form) {
+                    if (!accept("then")) require("do");
+                } else {
+                    require("{");
+                }
                 if (accept("return")) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");

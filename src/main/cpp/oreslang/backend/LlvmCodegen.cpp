@@ -692,7 +692,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         for (const auto& arg : e->arguments) scan_string(arg.get());
     };
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
-        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex || s.kind == Statement::Kind::Return) iteration_runtime = true;
+        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex)
+            iteration_runtime = true;
         scan_string(s.expression.get()); scan_string(s.condition.get());
         scan_string(s.loop_step.get());
         scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
