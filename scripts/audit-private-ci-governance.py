@@ -40,6 +40,10 @@ DESTINATION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z", re.ASCII)
 SHA40 = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 GITHUB_ACTIONS_APP_ID = 15368
 SOURCE_POLICY_CHECK = "private-ci-governance"
+CARRIER_CONTROL_PATHS = (
+    "scripts/verify-oreslang-private-carrier.py",
+    "scripts/run-oreslang-test-plan.py",
+)
 
 
 class GovernanceError(ValueError):
@@ -111,11 +115,19 @@ def check_contracts_for_approved(content: str, approved: tuple[str, ...]) -> Non
         raise GovernanceError("carrier contract schema invalid")
     carriers = doc["carriers"]
 
+    approved_set = set(approved)
+    if len(approved_set) != len(approved):
+        raise GovernanceError("approved destination set is ambiguous")
+    if set(carriers) != approved_set:
+        raise GovernanceError(
+            "carrier contract repositories must exactly match approved destinations"
+        )
+
     for repository in approved:
         carrier = carriers.get(repository)
         required = {
             "repository_id", "base_sha", "workflow_path",
-            "workflow_blob_sha", "review_pr", "test_plans",
+            "workflow_blob_sha", "control_blobs", "review_pr", "test_plans",
         }
         if not isinstance(carrier, dict) or set(carrier) != required:
             raise GovernanceError(
@@ -135,6 +147,19 @@ def check_contracts_for_approved(content: str, approved: tuple[str, ...]) -> Non
         _safe_contract_path(
             carrier.get("workflow_path"), ".github/workflows/", ".yml"
         )
+
+        controls = carrier.get("control_blobs")
+        if (not isinstance(controls, dict)
+                or set(controls) != set(CARRIER_CONTROL_PATHS)):
+            raise GovernanceError("carrier executable control blob set invalid")
+        for path in CARRIER_CONTROL_PATHS:
+            _safe_contract_path(path, "scripts/", ".py")
+            value = controls.get(path)
+            if not isinstance(value, str) or not SHA40.fullmatch(value):
+                raise GovernanceError(
+                    "carrier executable control blob pin invalid: " + path
+                )
+
         plans = carrier.get("test_plans")
         if not isinstance(plans, dict) or not plans:
             raise GovernanceError("carrier reviewed test plans missing")
@@ -153,7 +178,6 @@ def check_contracts_for_approved(content: str, approved: tuple[str, ...]) -> Non
                 or len(allowed) != len(set(allowed))
             ):
                 raise GovernanceError("carrier reviewed test plan PR set invalid")
-
 
 def check_policy_files(root: Path) -> tuple[str, ...]:
     root = root.resolve(strict=True)
