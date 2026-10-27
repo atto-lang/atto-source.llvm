@@ -71,6 +71,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-associated-witness-test)
     set_tests_properties(native_associated_witness_static_coherence PROPERTIES TIMEOUT 15)
 
+    # Source-free compiler admission helper for actor session CFG joins and
+    # finite signed-i64 function refinement contracts (not guest source lowering).
+    add_executable(oreslang-native-p0-session-refinement-test
+        tests/native_p0_session_refinement_test.cpp)
+    target_include_directories(oreslang-native-p0-session-refinement-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-p0-session-refinement-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_p0_session_refinement_compiler_contract
+        COMMAND oreslang-native-p0-session-refinement-test)
+    set_tests_properties(native_p0_session_refinement_compiler_contract
+        PROPERTIES TIMEOUT 15)
+
     # Compiler-only Send/Sync parity model. LLVM guest lowering remains gated.
     add_executable(oreslang-native-send-sync-contract-test
         tests/native_send_sync_contract_test.cpp)
