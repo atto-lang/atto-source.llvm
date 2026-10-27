@@ -1292,6 +1292,27 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_await_readable_post_call_reordering
         source-actor-await-readable-post-call-reject.ores
         --diagnostic "await readable does not yet lower post-await non-actor statements")
+
+    # Writable readiness is the same authenticated continuation contract with
+    # an independent code generation and EPOLLOUT interest.
+    oreslang_contract_test(source_actor_await_writable_runtime_ir
+        source-actor-await-writable.ores
+        --ir "oreslang_source_actor_await_writable")
+    oreslang_contract_test(source_actor_await_writable_continuation_ir
+        source-actor-await-writable.ores
+        --ir "writable_continuation")
+    oreslang_contract_test(reject_source_actor_await_writable_nonliteral_fd
+        source-actor-await-writable-nonliteral-fd.ores
+        --diagnostic "await writable requires an integer literal file descriptor")
+    oreslang_contract_test(reject_source_actor_await_writable_local_crossing
+        source-actor-await-writable-local-crossing.ores
+        --diagnostic "await writable requires one source actor without suspended locals")
+    oreslang_contract_test(reject_source_actor_await_writable_twice
+        source-actor-await-writable-twice.ores
+        --diagnostic "native source supports only one trusted-main suspension")
+    oreslang_contract_test(reject_source_actor_await_writable_post_call_reordering
+        source-actor-await-writable-post-call-reject.ores
+        --diagnostic "await writable does not yet lower post-await non-actor statements")
     # ActorRef implements HasFuture: awaiting its capability directly
     # delegates to the same get_ready() root CONTROL continuation.
     oreslang_contract_test(source_actor_hasfuture_direct_await_ir
