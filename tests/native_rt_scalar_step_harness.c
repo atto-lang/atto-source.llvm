@@ -62,6 +62,61 @@ static void require_guest_trap(int scenario) {
 }
 #endif
 
+/*
+ * Run three separately initialized frames through the REAL generated step ABI.
+ * A 7/11/13 reduction quantum deliberately interleaves them without sharing
+ * stack frames, counters, or a mutable source continuation.  This is a host
+ * dispatch oracle: it proves the generated continuation *permits* fair
+ * scheduling, not that OresScheduler/native actors supply this policy yet.
+ */
+static void require_bounded_peer_progress(void) {
+    static const uint64_t fuel[3] = {7, 11, 13};
+    ScalarFrame *frames[3] = {0};
+    for (unsigned i = 0; i < 3; ++i) {
+        frames[i] = calloc(1, sizeof(*frames[i]));
+        CHECK(frames[i] != NULL);
+        oreslang_rt_scalar_frame_init(frames[i]);
+        CHECK(frames[i]->counter == 0 && frames[i]->state == 1);
+    }
+    uint64_t dispatches[3] = {0, 0, 0};
+    unsigned rounds = 0;
+    for (;;) {
+        unsigned retired = 0;
+        for (unsigned i = 0; i < 3; ++i) {
+            const uint64_t before = frames[i]->counter;
+            const uint64_t expected_advance =
+                before < 1000 && fuel[i] < 1000 - before
+                    ? fuel[i] : (before < 1000 ? 1000 - before : 0);
+            const int result = oreslang_rt_scalar_frame_step(frames[i], fuel[i]);
+            ++dispatches[i];
+            CHECK(result == 0 || result == 1);
+            CHECK(frames[i]->counter == before + expected_advance);
+            CHECK(frames[i]->counter <= 1000);
+            if (result == 0) {
+                CHECK(frames[i]->state == 2);
+                CHECK(oreslang_rt_scalar_frame_result(frames[i]) == 1000);
+                ++retired;
+            } else {
+                CHECK(frames[i]->state == 1);
+            }
+        }
+        // Each peer received one bounded dispatch before any is revisited;
+        // none can monopolize the host carrier with an infinite guest loop.
+        CHECK(dispatches[0] == dispatches[1]);
+        CHECK(dispatches[1] == dispatches[2]);
+        CHECK(++rounds <= 145);
+        if (retired == 3) break;
+    }
+    CHECK(dispatches[0] == 143); /* ceil(1000 / 7) */
+    CHECK(dispatches[1] == 143);
+    CHECK(dispatches[2] == 143);
+    for (unsigned i = 0; i < 3; ++i) {
+        CHECK(oreslang_rt_scalar_frame_step(frames[i], 0) == 0);
+        CHECK(oreslang_rt_scalar_frame_result(frames[i]) == 1000);
+        free(frames[i]); // after terminal guest dispatch has returned
+    }
+}
+
 int main(void) {
     // Test real, independent HEAP frame ownership; no C/LLVM stack frame
     // survives an explicit guest yield. Host owns dispatch serially.
@@ -111,6 +166,7 @@ int main(void) {
     for (int scenario = 0; scenario != 8; ++scenario)
         require_guest_trap(scenario);
 #endif
+    require_bounded_peer_progress();
     puts("SCALAR_FRAME_AOT_TWO_TASKS_PASS");
     free(cancelled);
     free(b);
