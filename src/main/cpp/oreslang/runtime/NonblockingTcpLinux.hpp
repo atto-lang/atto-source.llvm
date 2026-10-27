@@ -58,6 +58,45 @@ inline IoAttempt try_write(int fd, const void* bytes, std::size_t size) noexcept
     if (n == 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return {IoDisposition::would_block, 0, 0};
     return {IoDisposition::error, 0, errno};
 }
+enum class ConnectDisposition : std::uint8_t { connected, in_progress, error };
+struct ConnectAttempt { ConnectDisposition disposition; int error_number; };
+
+inline ConnectAttempt try_connect_ipv4(
+        int fd, std::uint32_t address_host_order, std::uint16_t port) noexcept {
+    if (fd < 0 || port == 0)
+        return {ConnectDisposition::error, EINVAL};
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = ::htonl(address_host_order);
+    address.sin_port = ::htons(port);
+    const int status = ::connect(
+        fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+    if (status == 0) return {ConnectDisposition::connected, 0};
+    if (errno == EISCONN) return {ConnectDisposition::connected, 0};
+    if (errno == EINPROGRESS || errno == EALREADY || errno == EINTR)
+        return {ConnectDisposition::in_progress, 0};
+    return {ConnectDisposition::error, errno};
+}
+
+/*
+ * Complete an already-started nonblocking connect after writable readiness.
+ * This deliberately uses SO_ERROR rather than a blocking/retrying connect.
+ */
+inline ConnectAttempt finish_connect_after_writable(int fd) noexcept {
+    if (fd < 0) return {ConnectDisposition::error, EINVAL};
+    int socket_error = 0;
+    socklen_t length = sizeof(socket_error);
+    if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &length) != 0)
+        return {ConnectDisposition::error, errno};
+    if (length != sizeof(socket_error))
+        return {ConnectDisposition::error, EIO};
+    if (socket_error == 0 || socket_error == EISCONN)
+        return {ConnectDisposition::connected, 0};
+    if (socket_error == EINPROGRESS || socket_error == EALREADY)
+        return {ConnectDisposition::in_progress, 0};
+    return {ConnectDisposition::error, socket_error};
+}
+
 struct TryAccept { OwnedSocketFd client; bool would_block; int error_number; };
 class NonblockingTcpListener final {
 public:
