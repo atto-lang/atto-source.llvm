@@ -312,6 +312,7 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply ||
             expr.kind == Expression::Kind::Remainder ||
+            expr.kind == Expression::Kind::NamedBitXor ||
             expr.kind == Expression::Kind::Equal ||
             expr.kind == Expression::Kind::NotEqual ||
             expr.kind == Expression::Kind::Less ||
@@ -3648,6 +3649,22 @@ private:
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
             }
         }
+        // Closed, typed int intrinsic: not a user-defined method dispatch or
+        // a Java interop assumption. Unknown Integer.* is rejected before IR.
+        if (token_.text == "Integer" && peek_next().text == ".") {
+            advance();
+            require(".");
+            const std::string method = identifier();
+            if (method != "bitXor")
+                fail("unsupported native Integer operation: " + method);
+            auto expr = make_expression(Expression::Kind::NamedBitXor, offset);
+            require("(");
+            expr->left = expression();
+            require(",");
+            expr->right = expression();
+            require(")");
+            return expr;
+        }
         // 'task' is contextual in Oreslang v2. Preserve ordinary identifiers
         // named task, but fail closed when it opens a task block.
         if (token_.text == "task") {
@@ -4167,6 +4184,7 @@ private:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
             case Expression::Kind::Remainder:
+            case Expression::Kind::NamedBitXor:
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual:
             case Expression::Kind::Less:
@@ -4346,7 +4364,8 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-            case Expression::Kind::Remainder: {
+            case Expression::Kind::Remainder:
+            case Expression::Kind::NamedBitXor: {
                 ScalarType left = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
