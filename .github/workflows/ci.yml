@@ -39,27 +39,19 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
-      - name: Record pinned LLVM source and compiler binary receipt
+      - name: Unit test compiler provenance receipt with adversarial mutations
+        run: python3 -m unittest discover -s tests -p test_verify_compiler_receipt.py -v
+      - name: Capture exact-source compiler receipt on trusted build runner
         shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          test -f build/oreslang-llvmc
-          test -x build/oreslang-llvmc
-          test ! -L build/oreslang-llvmc
-          head_sha="$(git rev-parse HEAD)"
-          root_tree="$(git rev-parse 'HEAD^{tree}')"
-          commit_tree="$(git show -s --format=%T HEAD)"
-          test "$root_tree" = "$commit_tree"
-          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$root_tree" =~ ^[0-9a-f]{40}$ ]]
-          test -z "$(git status --porcelain --untracked-files=no)"
-          binary_sha="$(sha256sum build/oreslang-llvmc | cut -d ' ' -f 1)"
-          [[ "$binary_sha" =~ ^[0-9a-f]{64}$ ]]
-          umask 077
-          printf '%s %s %s\n' "$head_sha" "$root_tree" "$binary_sha" > "$RUNNER_TEMP/oreslang-compiler-provenance.txt"
-          echo "ORESLANG_LLVM_SOURCE_SHA=$head_sha"
-          echo "ORESLANG_LLVM_SOURCE_TREE=$root_tree"
-          echo "ORESLANG_LLVM_COMPILER_SHA256=$binary_sha"
+          python3 tests/verify_compiler_receipt.py capture \
+            --source "$GITHUB_WORKSPACE" \
+            --compiler "$GITHUB_WORKSPACE/build/oreslang-llvmc" \
+            --expected-head "$EXPECTED_HEAD" \
+            --receipt "$RUNNER_TEMP/oreslang-compiler-provenance.json"
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
@@ -71,24 +63,17 @@ jobs:
           set -euo pipefail
           ctest --test-dir build -N | grep -F 'wasm32_source_actor_guest_lifecycle'
           ctest --test-dir build -R '^wasm32_source_actor_guest_lifecycle$' --output-on-failure --timeout 120
-      - name: Reverify original compiler binary and source before full CTest
+      - name: Reverify compiler/source after compiled guest actor execution
         shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          test -f "$RUNNER_TEMP/oreslang-compiler-provenance.txt"
-          read -r head_sha root_tree binary_sha < "$RUNNER_TEMP/oreslang-compiler-provenance.txt"
-          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$root_tree" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$binary_sha" =~ ^[0-9a-f]{64}$ ]]
-          test "$head_sha" = "$(git rev-parse HEAD)"
-          test "$root_tree" = "$(git rev-parse 'HEAD^{tree}')"
-          test "$root_tree" = "$(git show -s --format=%T HEAD)"
-          test -z "$(git status --porcelain --untracked-files=no)"
-          test -f build/oreslang-llvmc
-          test -x build/oreslang-llvmc
-          test ! -L build/oreslang-llvmc
-          test "$binary_sha" = "$(sha256sum build/oreslang-llvmc | cut -d ' ' -f 1)"
-          echo "LLVM_SOURCE_AND_COMPILER_DIGEST_RECHECK_PASS"
+          python3 tests/verify_compiler_receipt.py verify \
+            --source "$GITHUB_WORKSPACE" \
+            --compiler "$GITHUB_WORKSPACE/build/oreslang-llvmc" \
+            --expected-head "$EXPECTED_HEAD" \
+            --receipt "$RUNNER_TEMP/oreslang-compiler-provenance.json"
       - name: Repeat actor stress and cancellation races
         run: ctest --test-dir build -R hungry_carrier_async_bounded_cancel --repeat until-fail:12 --output-on-failure
       - name: Repeat per-payload send-stop exactly-once races
@@ -134,3 +119,15 @@ jobs:
             ./build/hungry-carrier-tsan
       - name: Verify parser, IR and native execution
         run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2
+      - name: Reverify compiler/source after complete CTest suite
+        if: ${{ always() }}
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 tests/verify_compiler_receipt.py verify \
+            --source "$GITHUB_WORKSPACE" \
+            --compiler "$GITHUB_WORKSPACE/build/oreslang-llvmc" \
+            --expected-head "$EXPECTED_HEAD" \
+            --receipt "$RUNNER_TEMP/oreslang-compiler-provenance.json"
