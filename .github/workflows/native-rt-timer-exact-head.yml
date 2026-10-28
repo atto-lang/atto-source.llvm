@@ -1,0 +1,67 @@
+name: Native RT timer exact-head
+on:
+  pull_request:
+    paths:
+      - src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp
+      - tests/native_realtime_timer_queue_test.cpp
+      - docs/HARD_REALTIME.md
+      - .github/workflows/native-rt-timer-exact-head.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixed-capacity-timer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable PR head (not synthetic merge ref)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Attest exact commit, root tree, and tested file blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "EXACT_HEAD=$head"
+          echo "EXACT_TREE=$tree"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            test "$head" = "${{ github.event.pull_request.head.sha }}"
+          fi
+          for file in \
+            src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp \
+            tests/native_realtime_timer_queue_test.cpp; do
+            expected="$(git rev-parse "HEAD:$file")"
+            actual="$(git hash-object "$file")"
+            test "$actual" = "$expected"
+            echo "EXACT_BLOB $file $actual"
+          done
+      - name: Compile and execute GCC and Clang strict C++17 regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/rt-timer-gate
+          for cxx in g++ clang++; do
+            "$cxx" --version | head -n 1
+            "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_realtime_timer_queue_test.cpp \
+              -o "build/rt-timer-gate/rt-timer-${cxx//+/p}"
+            "build/rt-timer-gate/rt-timer-${cxx//+/p}"
+          done
+      - name: Execute Clang ASan/UBSan regression
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+            -Isrc/main/cpp tests/native_realtime_timer_queue_test.cpp \
+            -o build/rt-timer-gate/rt-timer-sanitized
+          build/rt-timer-gate/rt-timer-sanitized
