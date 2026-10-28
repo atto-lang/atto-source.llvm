@@ -11,6 +11,12 @@ extern "C" {
  * contiguous SIMD/GPU allocation. Runtime must supply an authenticated
  * actor turn, and the compiler must keep descriptors/loans unforgeable.
  * No compiler lowering to this adapter is claimed by this change.
+ * Loan descriptors and their referenced tensor descriptor MUST reside in a
+ * pinned lifetime-stable runtime frame until every loan is released; an
+ * ordinary stack local may not outlive its owner when an actor suspends.
+ * Actor teardown must fence all callbacks before physical heap destruction.
+ * This ABI is not safe against arbitrary forged host pointers or memcpy
+ * of descriptors; source guests must never receive these raw C structs.
  */
 #define ORES_ACTOR_TENSOR_I64_MAX_ELEMENTS 32u
 typedef struct {
