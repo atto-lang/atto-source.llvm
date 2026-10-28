@@ -4,7 +4,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from native_aggregate_negative_receipt import verify_negative_case
+from native_aggregate_negative_receipt import (
+    verify_negative_case, verify_scalar_positive_control,
+)
 
 
 class NegativeReceiptTest(unittest.TestCase):
@@ -70,6 +72,55 @@ class NegativeReceiptTest(unittest.TestCase):
         self.source.symlink_to(original)
         with self.assertRaisesRegex(AssertionError, "mutated"):
             self.verify()
+
+
+class ScalarPositiveControlTest(unittest.TestCase):
+    """The negative suite must be unable to pass with a reject-all compiler."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.source = Path(self.tmp.name) / "scalar.ores"
+        self.original = b"pub fnc main(): int { return 42; }" + bytes([10])
+        self.source.write_bytes(self.original)
+
+    def verify(self, rc=0, stdout="; ModuleID = 'scalar'\\ndefine i64 @main() {\\n  ret i64 42\\n}\\n",
+               stderr=""):
+        result = subprocess.CompletedProcess(["compiler"], rc, stdout, stderr)
+        verify_scalar_positive_control("scalar", self.source, self.original, result)
+
+    def test_real_success_with_42_ir(self):
+        self.verify()
+
+    def test_reject_all_compiler_does_not_pass(self):
+        with self.assertRaisesRegex(AssertionError, "did not compile"):
+            self.verify(rc=1, stdout="", stderr="AGGREGATE_LOWERING_UNVERIFIED")
+
+    def test_no_ir_does_not_pass(self):
+        with self.assertRaisesRegex(AssertionError, "expected 42 IR"):
+            self.verify(stdout="")
+
+    def test_wrong_result_does_not_pass(self):
+        with self.assertRaisesRegex(AssertionError, "expected 42 IR"):
+            self.verify(stdout="; ModuleID = 'scalar'\\ndefine i64 @main() {\\n  ret i64 7\\n}\\n")
+
+    def test_stderr_does_not_pass(self):
+        with self.assertRaisesRegex(AssertionError, "emitted stderr"):
+            self.verify(stderr="warning")
+
+    def test_object_artifact_does_not_pass(self):
+        (self.source.parent / "bad.o").write_bytes(b"unexpected artifact")
+        with self.assertRaisesRegex(AssertionError, "left artifacts"):
+            self.verify()
+
+    def test_replaced_source_does_not_pass(self):
+        self.source.write_bytes(b"bad source")
+        with self.assertRaisesRegex(AssertionError, "mutated"):
+            self.verify()
+
+    def test_signal_killed_control_does_not_pass(self):
+        with self.assertRaisesRegex(AssertionError, "did not compile"):
+            self.verify(rc=-9)
 
 
 if __name__ == "__main__":
