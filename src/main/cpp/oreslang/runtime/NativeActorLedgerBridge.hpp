@@ -37,7 +37,8 @@ public:
                             OresNativeActorRef actor, Handler on_event,
                             void* handler_context) noexcept
         : scheduler_(scheduler), actor_(actor),
-          ledger_(actor.actor_slot + 1, actor.generation),
+          ledger_(actor.actor_slot + 1, actor.generation,
+                  actor.scheduler_domain),
           on_event_(on_event), handler_context_(handler_context) {}
     NativeActorLedgerBridge(const NativeActorLedgerBridge&) = delete;
     NativeActorLedgerBridge& operator=(const NativeActorLedgerBridge&) = delete;
@@ -132,7 +133,8 @@ public:
     // state, NEVER successful delivery. Caller must arrange retry_kick().
     Notify notify_ready(Id id) noexcept {
         if (!id.actor_id || id.actor_id != actor_.actor_slot + 1 ||
-            id.actor_generation != actor_.generation || !id.sequence)
+            id.actor_generation != actor_.generation ||
+            id.scheduler_domain != actor_.scheduler_domain || !id.sequence)
             return Notify::Invalid;
         if (closed_.load(std::memory_order_acquire)) return Notify::Closed;
         if (!notices_.try_push(id)) return Notify::Full;
@@ -164,7 +166,11 @@ public:
     std::uint64_t messages_arrived() const noexcept { return messages_arrived_.load(); }
     bool retry_needed() const noexcept { return retry_required_.load(); }
     std::size_t reserved() const noexcept { return credits_.load(); }
-    const Ledger& ledger_for_current_actor() const noexcept { return ledger_; }
+    bool ledger_snapshot_for_current_actor(typename Ledger::Snapshot& out) const noexcept {
+        if (!authorized()) return false;
+        out = ledger_.snapshot();
+        return true;
+    }
 private:
     struct Slot { Id id{}; Kind kind = Kind::Message; std::uint64_t payload = 0; bool live = false; bool charged = false; };
     bool authorized() const noexcept {
