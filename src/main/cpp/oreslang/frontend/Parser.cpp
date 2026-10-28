@@ -4803,6 +4803,106 @@ private:
             }
             const auto& method = actor.on_message;
             const std::string& parameter = method.parameters.at(0).name;
+            if (actor.sealed_state) {
+                if (!method.actor_state_loan || method.result ||
+                        !method.actor_field_writes.empty() ||
+                        !method.locals.empty() || !method.actor_sends.empty() ||
+                        !method.actor_stops.empty() || !method.actor_actions.empty() ||
+                        !method.statements.empty() || !method.early_returns.empty() ||
+                        !method.actor_spawns.empty())
+                    throw std::runtime_error(
+                        "sealed actor state requires exactly one scoped state callback");
+                if (!method.has_declared_effects)
+                    throw std::runtime_error(
+                        "actor state loan requires declared with effect bound");
+
+                const auto& loan = *method.actor_state_loan;
+                if (loan.binder.empty() || loan.binder == parameter)
+                    throw std::runtime_error("invalid actor state callback binding");
+                if (!loan.result)
+                    throw std::runtime_error("state callback requires scalar return");
+
+                if (loan.mode == ActorStateLoan::Mode::Read) {
+                    if (!method.declared_effects.has(FunctionEffect::StateRead))
+                        throw std::runtime_error(
+                            "actor state read loan requires state.read effect");
+                    if (!loan.writes.empty())
+                        throw std::runtime_error(
+                            "read-only actor state loan cannot mutate state");
+                } else if (!method.declared_effects.has(FunctionEffect::StateWrite)) {
+                    throw std::runtime_error(
+                        "actor state write loan requires state.write effect");
+                }
+
+                bool reads_state = false;
+                std::unordered_set<std::string> sealed_local_names;
+                std::function<void(const Expression&)> validate_state_expression;
+                validate_state_expression = [&](const Expression& expr) {
+                    switch (expr.kind) {
+                        case Expression::Kind::Integer:
+                            return;
+                        case Expression::Kind::Variable:
+                            if (expr.name != parameter &&
+                                    !sealed_local_names.count(expr.name))
+                                throw std::runtime_error(
+                                    "state callback rejects nonlocal or forward-owned capture");
+                            return;
+                        case Expression::Kind::Field:
+                            if (!expr.left ||
+                                    expr.left->kind != Expression::Kind::Variable ||
+                                    expr.left->name != loan.binder)
+                                throw std::runtime_error(
+                                    "actor state projection requires lexical callback binding");
+                            if (!fields.count(expr.name))
+                                throw std::runtime_error(
+                                    "unknown actor state field '" + expr.name + "'");
+                            reads_state = true;
+                            return;
+                        case Expression::Kind::Negate:
+                            if (!expr.left)
+                                throw std::runtime_error("malformed state unary expression");
+                            validate_state_expression(*expr.left);
+                            return;
+                        case Expression::Kind::Add:
+                        case Expression::Kind::Subtract:
+                        case Expression::Kind::Multiply:
+                            if (!expr.left || !expr.right)
+                                throw std::runtime_error("malformed state binary expression");
+                            validate_state_expression(*expr.left);
+                            validate_state_expression(*expr.right);
+                            return;
+                        default:
+                            throw std::runtime_error(
+                                "state callback forbids calls, ownership operations, arrays and escaping references");
+                    }
+                };
+
+                for (const auto& local : loan.locals) {
+                    if (!local.heap_owned || local.owner_mutable || !local.initializer ||
+                            local.name.empty() || local.name == parameter ||
+                            local.name == loan.binder || fields.count(local.name))
+                        throw std::runtime_error(
+                            "sealed state owned-local binding violates lexical ownership");
+                    validate_state_expression(*local.initializer);
+                    if (!sealed_local_names.insert(local.name).second)
+                        throw std::runtime_error("duplicate sealed actor local");
+                }
+                for (const auto& write : loan.writes) {
+                    if (!fields.count(write.field))
+                        throw std::runtime_error(
+                            "cannot assign unknown actor state field '" + write.field + "'");
+                    if (!write.expression)
+                        throw std::runtime_error("actor state write requires expression");
+                    validate_state_expression(*write.expression);
+                }
+                validate_state_expression(*loan.result);
+                if (reads_state &&
+                        !method.declared_effects.has(FunctionEffect::StateRead) &&
+                        !method.declared_effects.has(FunctionEffect::StateWrite))
+                    throw std::runtime_error(
+                        "state callback reads state but with bound omits state.read");
+            } else {
+
             if (!fields.insert(parameter).second)
                 throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
             // Validate in declaration order. An owned actor-handler local
@@ -4825,6 +4925,7 @@ private:
                 validate_expression(*write.expression, fields, functions);
             }
             validate_expression(*method.result, fields, functions);
+            }
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
                 throw std::runtime_error("conflicting generated actor symbol");
