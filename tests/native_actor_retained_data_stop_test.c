@@ -56,7 +56,7 @@ static void control(void* raw,size_t actor,uint64_t payload) {
 int main(void) {
     State state={0};
     state.scheduler=ores_native_actor_scheduler_open_control(
-        1,3,1,data,control,&state);
+        1,2,1,data,control,&state);
     CHECK(state.scheduler);
     state.actor=ores_native_actor_scheduler_spawn(state.scheduler,0);
     CHECK(state.actor.scheduler_domain);
@@ -64,8 +64,8 @@ int main(void) {
         state.scheduler,&state.ticket));
     CHECK(ores_native_actor_scheduler_send(state.scheduler,state.actor,11));
     until(&state.data_entered);
-    /* The retained A callback and active physical carrier reserve two
-     * credits; B gets the final credit, C must fail without admission. */
+    /* A's active callback and retained DATA receipt share exactly ONE
+     * mailbox credit; B consumes the second, so C must be rejected. */
     CHECK(ores_native_actor_scheduler_send(state.scheduler,state.actor,12));
     CHECK(ores_native_actor_scheduler_try_send(state.scheduler,state.actor,13)
         == ORES_NATIVE_SEND_MAILBOX_FULL);
