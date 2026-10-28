@@ -63,6 +63,9 @@ void oreslang_source_actor_stop(void* actor);
  * before the same physical done/join and native heap reclamation barrier.
  * This is a trusted compiler ABI; ordinary stop remains abortive. */
 void oreslang_source_actor_graceful_stop(void* actor);
+/* Trusted two-phase admission for deterministic lifecycle-race testing.
+ * The compiler emits the single graceful_stop call, never these primitives. */
+void oreslang_source_actor_request_graceful_stop(void* actor);
 
 /*
  * Restricted compiler-generated await slice:
