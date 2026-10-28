@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
+import hashlib
 import pathlib
 import re
 import subprocess
@@ -26,7 +27,8 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
-    if name == "source-actor-two-owned-heaps.ores":
+    if name in {"source-actor-two-owned-heaps.ores",
+                "source-actor-shared-heap-contract-v1.ores"}:
         value = 0
         start = 1 if actor_index == 0 else 5
         for n in range(start, start + processed):
@@ -75,6 +77,14 @@ def main():
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
+    # This is the one canonical cross-backend guest source from
+    # oreslang-platform-conformance#211, not a locally re-authored variant.
+    shared_file = fixtures / "source-actor-shared-heap-contract-v1.ores"
+    shared_bytes = shared_file.read_bytes()
+    shared_blob = hashlib.sha1(b"blob " + str(len(shared_bytes)).encode("ascii")
+                               + b"\\0" + shared_bytes).hexdigest()
+    assert shared_blob == "51519bdf9084d7d8457b1e5a39c92a5efe2b63ce", (
+        "canonical shared guest fixture bytes drifted", shared_blob)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
@@ -93,6 +103,9 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
+        # Exact shared .ores input. Full A/B handler delivery and physical
+        # loan ownership are NOT inferred from a launched native executable.
+        ("source-actor-shared-heap-contract-v1.ores", 2, None, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -168,6 +181,7 @@ def main():
             flags = ["--experimental-owned-int"] if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "source-actor-shared-heap-contract-v1.ores",
             } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
@@ -182,6 +196,7 @@ def main():
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "source-actor-shared-heap-contract-v1.ores",
             }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
@@ -208,7 +223,8 @@ def main():
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
-            if name == "source-actor-interleaved-stop.ores":
+            if name in {"source-actor-interleaved-stop.ores",
+                        "source-actor-shared-heap-contract-v1.ores"}:
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
                 first_stop = guest.stdout.find("call void @oreslang_source_actor_stop")
@@ -264,8 +280,8 @@ def main():
                 abandoned = receipt["abandoned"]
                 observed_last = receipt["last"]
                 expected_accepted = (
-                    [1, 2][i]
-                    if name == "source-actor-interleaved-stop.ores"
+                    [1, 2][i] if name == "source-actor-interleaved-stop.ores"
+                    else [4, 5][i] if name == "source-actor-shared-heap-contract-v1.ores"
                     else count)
                 assert accepted == expected_accepted, (
                     name, i, accepted, expected_accepted)
@@ -275,11 +291,20 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
-            if name == "source-actor-two-owned-heaps.ores":
+            if name in {"source-actor-two-owned-heaps.ores",
+                        "source-actor-shared-heap-contract-v1.ores"}:
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
+            if name == "source-actor-shared-heap-contract-v1.ores":
+                # STOP may abandon DATA; even with an exact native build,
+                # passing this test is ONLY compiler/launch/prefix accounting.
+                # The 23-event physically pinned loan trace is still pending.
+                print("SHARED_ACTOR_GUEST_PREFIX_ONLY "
+                      f"processed={[r[\'processed\'] for r in receipts]} "
+                      f"accepted={[r[\'accepted\'] for r in receipts]} "
+                      "NOT_PHYSICAL_LOAN_PARITY", flush=True)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
