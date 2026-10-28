@@ -1670,7 +1670,11 @@ private:
                 ClassField field;
                 field.name = member.name;
                 field.public_member = true;
-                field.final_field = true;
+                // Local scalar-return structs have writable value fields under
+                // the existing exclusive val-owner/borrow checker. Private
+                // local-struct returns still use immutable record handles:
+                // their native leaves MUST remain final.
+                field.final_field = !fn.return_class.empty();
                 field.constructor_argument = true;
                 field.scalar_type = ScalarType::I64;
                 field.initializer_expression = std::make_unique<Expression>();
