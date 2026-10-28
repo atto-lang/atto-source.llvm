@@ -1,0 +1,7 @@
+// The name "message" is not required. The receive signature has a typed
+// arbitrary formal, but body execution still requires actor-local lowering.
+define actor Worker as
+    receive(value: int) -> void ::
+        await time.sleep(10)
+    end
+end
