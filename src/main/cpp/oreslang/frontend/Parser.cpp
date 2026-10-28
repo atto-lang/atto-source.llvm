@@ -147,13 +147,13 @@ bool reserved(std::string_view name) {
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover", "unsafe",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
-        "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
-        "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine", "gen",
+        "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
+        "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
-        "interface", "trait", "struct", "impl", "abstract", "void",
+        "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
@@ -677,6 +677,20 @@ public:
                 type_only_declaration(program);
                 continue;
             }
+            if (token_.text == "gen" || token_.text == "generator" ||
+                    (token_.text == "pub" &&
+                     (peek_next().text == "gen" || peek_next().text == "generator"))) {
+                if (program.generators.size() >= 512)
+                    fail("native generator declaration limit exceeded (512)");
+                auto generator = scalar_generator();
+                for (const auto& prior : program.generators)
+                    if (prior.name == generator.name)
+                        throw std::runtime_error(
+                            "duplicate native generator name/arity '" + generator.name +
+                            "' at byte " + std::to_string(generator.offset));
+                program.generators.push_back(std::move(generator));
+                continue;
+            }
             bool public_class = token_.text == "pub" && peek_next().text == "define";
             if (public_class) advance();
             if (accept("@")) {
@@ -731,18 +745,20 @@ public:
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
-                 !program.cooperative_loops.empty())) {
+                 !program.cooperative_loops.empty() || !program.generators.empty())) {
             fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
         }
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
         resolve_alias_uses(program);
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
-                program.cooperative_loops.empty() && program.type_only_declarations.empty())
-            fail("expected at least one function, actor or type-only declaration");
+                program.cooperative_loops.empty() && program.generators.empty() &&
+                program.type_only_declarations.empty())
+            fail("expected at least one function, generator, actor or type-only declaration");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+                 !program.generators.empty() || !program.actors.empty() ||
+                 !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         program.sum_types = std::move(sum_types_);
@@ -1614,12 +1630,85 @@ private:
         return value;
     }
 
+    std::int64_t signed_integer_literal() {
+        const bool negative = accept("-");
+        if (!negative) return integer_literal();
+        if (token_.kind != Kind::Integer) fail("expected integer literal");
+
+        std::string digits(token_.text);
+        if (digits.front() == '_' || digits.back() == '_' ||
+                digits.find("__") != std::string::npos) fail("malformed integer separator");
+        digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+
+        std::uint64_t magnitude = 0;
+        const auto parsed = std::from_chars(
+            digits.data(), digits.data() + digits.size(), magnitude);
+        const std::uint64_t negative_limit = (std::uint64_t{1} << 63);
+        if (parsed.ec != std::errc{} ||
+                parsed.ptr != digits.data() + digits.size() ||
+                magnitude > negative_limit)
+            fail("integer literal overflows signed 64-bit result");
+        advance();
+
+        if (magnitude == negative_limit)
+            return std::numeric_limits<std::int64_t>::min();
+        return -static_cast<std::int64_t>(magnitude);
+    }
+
+    ScalarGenerator scalar_generator() {
+        ScalarGenerator generator;
+        generator.offset = token_.offset;
+        generator.exported = accept("pub");
+        if (accept("gen")) {
+            require("*");
+        } else if (accept("generator")) {
+            if (!accept("*"))
+                fail("bare native generator declaration requires 'generator*'; legacy 'generator' callable-kind syntax is not admitted in native generator v1");
+        } else {
+            fail("expected gen* generator declaration");
+        }
+        generator.name = identifier();
+        require("(");
+        if (!accept(")"))
+            fail("native sync generator v1 is zero-argument");
+        require(":");
+        require("Iterator");
+        require("<");
+        require("int");
+        require(">");
+        require("{");
+        while (!accept("}")) {
+            if (token_.kind == Kind::End)
+                fail("unterminated native generator body");
+            if (accept("yield")) {
+                if (accept("*"))
+                    fail("native generator yield* requires delegated iterator ownership and close lowering");
+                generator.yields.push_back(signed_integer_literal());
+                if (generator.yields.size() > 4096)
+                    fail("native generator v1 exceeds 4096 yielded elements");
+                require(";");
+                continue;
+            }
+            if (accept("return")) {
+                if (!accept(";"))
+                    fail("native generator return cannot carry a value; use yield");
+                if (token_.text != "}")
+                    fail("unreachable source after generator return");
+                continue;
+            }
+            fail("native sync generator v1 admits only integer yield statements and bare return");
+        }
+        return generator;
+    }
+
     CooperativeScalarLoop cooperative_scalar_loop() {
         // Explicitly narrow syntax avoids accidentally accepting unpinned
         // loans, exception cleanup, arbitrary calls or nonresumable CFG.
         CooperativeScalarLoop loop;
         loop.offset = token_.offset;
         require("suspend");
+        if (token_.text == "gen" || token_.text == "generator")
+            fail("native suspend gen* requires scheduler-owned async iterator continuation lowering");
         if (token_.text != "fnc") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
@@ -1714,10 +1803,6 @@ private:
             fail("native execution domain lowering unsupported");
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
-            Lexer look = lexer_;
-            const auto next = look.next().text;
-            if (next == "gen" || next == "generator")
-                fail("native generator v1 requires iterator-frame, ownership and LLVM continuation lowering");
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         // Check compound READ/WRITE modes before handling legacy critical,
@@ -1728,23 +1813,20 @@ private:
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
-        if (token_.text == "gen" || token_.text == "generator") {
-            fail("native generator v1 requires iterator-frame, ownership and LLVM continuation lowering");
-        }
         if (token_.text == "actor" || token_.text == "async" ||
-            token_.text == "isoactor") {
+            token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (source_async) {
+            if (token_.text == "gen" || token_.text == "generator")
+                fail("native async gen* requires scheduler-owned async iterator continuation lowering");
             if (!accept("fnc"))
                 fail("native first async Future<int> producer requires async fnc");
         } else if (owner.empty() && !accept("fnc") && !accept("routine")) {
             fail("expected fnc or routine");
         }
-        // Compatibility spellings such as "fnc gen*" and "routine generator*"
-        // must hit the same compiler-owned generator gate as canonical prefix
-        // forms. Do not let the unsupported feature degrade into an incidental
-        // identifier/operator parse error after the callable keyword.
+        // Compatibility spellings remain fail-closed in this first native
+        // slice. Canonical bare sync gen* is handled by scalar_generator().
         if (token_.text == "gen" || token_.text == "generator") {
             fail("native generator v1 requires iterator-frame, ownership and LLVM continuation lowering");
         }
@@ -2443,8 +2525,7 @@ private:
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
                     if (accept(";")) {
-                        if (!accept("then")) require("do");
-                        statement.then_statements = branch_arm(false, true);
+                        if (!accept("then")) require("do"); statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
@@ -4466,7 +4547,8 @@ private:
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_task_", 0) == 0 ||
                     fn.name.rfind("oreslang_actor_", 0) == 0 ||
-                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0;
+                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_rt_gen_", 0) == 0;
                 if (runtime_symbol)
                     throw std::runtime_error("reserved native runtime ABI symbol '" +
                         fn.name + "'");
@@ -4503,6 +4585,26 @@ private:
                 }
             }
         }
+        if (!program.generators.empty() &&
+                (!program.module.empty() || !program.classes.empty() || !program.actors.empty()))
+            throw std::runtime_error(
+                "native generator v1 cannot mix with module/class/actor lowering yet");
+        std::unordered_set<std::string> generator_names;
+        for (const auto& generator : program.generators) {
+            const auto function_it = functions.find(generator.name);
+            const bool zero_arity_function =
+                function_it != functions.end() && function_it->second.count(0) != 0;
+            if (generator.name == "main" || zero_arity_function ||
+                    classes.count(generator.name) ||
+                    !generator_names.insert(generator.name).second)
+                throw std::runtime_error(
+                    "duplicate generator/function/class symbol '" + generator.name + "'");
+            if (generator.yields.size() > 4096)
+                throw std::runtime_error("native generator v1 exceeds 4096 yielded elements");
+            if (generator.name.rfind("oreslang_rt_gen_", 0) == 0)
+                throw std::runtime_error("reserved native generator ABI symbol");
+        }
+
         std::unordered_map<std::string, const ActorDecl*> actor_types;
         for (const auto& actor : program.actors) {
             if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
