@@ -125,12 +125,17 @@ public:
             failures_.fetch_add(1); return false;
         }
         run_ready();
+        // The native scheduler has already removed the currently executing
+        // supervisor CONTROL slot before calling this actor-owned callback.
+        // Retained producer notices can now request a fresh CONTROL turn,
+        // without a polling thread or an external manual retry.
+        retry_after_control_completion();
         return true;
     }
 
     // An external timer/future producer stages opaque identity only. Full
-    // queue is a typed rejection; publish_control failure is a retry-needed
-    // state, NEVER successful delivery. Caller must arrange retry_kick().
+    // queue is a typed rejection. A supervisor CONTROL callback re-arms the
+    // coalesced notice after it leaves the reserved slot, not by busy-polling.
     Notify notify_ready(Id id) noexcept {
         if (!id.actor_id || id.actor_id != actor_.actor_slot + 1 ||
             id.actor_generation != actor_.generation ||
@@ -140,6 +145,9 @@ public:
         if (!notices_.try_push(id)) return Notify::Full;
         return kick();
     }
+    // Optional producer-triggered retry for admission failures other than
+    // an occupied supervisor CONTROL slot. This method is not needed for
+    // normal supervisor-CONTROL saturation after on_supervisor_control().
     Notify retry_kick() noexcept {
         if (closed_.load(std::memory_order_acquire)) return Notify::Closed;
         if (!notices_.has_ready()) return Notify::Coalesced;
@@ -223,6 +231,16 @@ private:
             }
             entry->live = false;
             if (entry->charged) credits_.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    }
+    void retry_after_control_completion() noexcept {
+        // Single bounded rearm attempt under the authenticated carrier.
+        // A failed native admission leaves all notice credits queued. Never
+        // busy-loop, block, or incorrectly claim guest work was delivered.
+        if (notices_.has_ready()) {
+            const auto status = kick();
+            if (status == Notify::RetryRequired)
+                retry_required_.store(true, std::memory_order_release);
         }
     }
     Notify kick() noexcept {
