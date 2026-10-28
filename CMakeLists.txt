@@ -1437,6 +1437,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unlowered_actor_receive_await_timer
         source-actor-receive-await-timer-guest.ores
         --diagnostic "native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics")
+    oreslang_contract_test(reject_unlowered_actor_receive_arbitrary_formal
+        source-actor-receive-arbitrary-formal-boundary.ores
+        --diagnostic "native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics")
     oreslang_contract_test(reject_actor_receive_wrong_return_type
         source-actor-receive-invalid-return-reject.ores
         --diagnostic "expected 'void'")
