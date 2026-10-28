@@ -189,6 +189,10 @@ def main():
         "source-actor-future-void-await-again.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
+        "source-actor-graceful-stop-send-after-reject.ores": "actor message sent after stop",
+        "source-actor-graceful-stop-double-reject.ores": "invalid or repeated actor stop",
+        "source-actor-graceful-stop-await-done-reject.ores":
+            "native graceful_stop with await get_done unsupported",
         "source-actor-spawn-unknown.ores": "unknown actor type",
         "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
         "source-actor-await-ready-impure-result.ores": "await get_ready requires side-effect-free scalar return",
