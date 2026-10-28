@@ -156,7 +156,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
-        "Some", "None", "Ok", "Err", "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
+        "Some", "None", "Ok", "Err", "using", "with", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -258,7 +258,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@?!|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -1256,29 +1256,63 @@ private:
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
         require("as");
         const bool braced = accept("{");
-        if (token_.text == "state") {
-            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
-        }
         std::unordered_set<std::string> names;
-        while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
-            if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
-            LocalBinding field;
-            field.offset = token_.offset;
-            field.field_mutable = token_.text == "let";
-            advance();
-            field.name = identifier();
-            if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
-            require(":");
-            require("int");
-            require("=");
-            field.initializer = expression();
-            require(";");
-            actor.fields.push_back(std::move(field));
+
+        // Canonical actor-owned persistence is one sealed state { } schema.
+        // Legacy scalar fields remain available only for actors that do not
+        // declare the sealed schema, so there is never a second state store.
+        if (accept("state")) {
+            actor.sealed_state = true;
+            require("{");
+            while (token_.text != "}") {
+                if (token_.kind == Kind::End)
+                    fail("unterminated native actor state schema");
+                if (actor.fields.size() == 16)
+                    fail("native actor state field limit exceeded (16)");
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.field_mutable = true; // mutation still requires a write loan
+                field.name = identifier();
+                if (field.name == "state")
+                    fail("actor state field cannot shadow sealed state capability");
+                if (!names.insert(field.name).second)
+                    fail("duplicate actor state field '" + field.name + "'");
+                require(":");
+                require("int");
+                require("=");
+                field.initializer = expression();
+                require(";");
+                actor.fields.push_back(std::move(field));
+            }
+            require("}");
+            if (token_.text == "state")
+                fail("actor may declare only one state schema");
+            if (token_.text == "let" || token_.text == "const" || token_.text == "val")
+                fail("sealed actor state is the only guest-owned persistent instance storage");
+        } else {
+            while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
+                if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.field_mutable = token_.text == "let";
+                advance();
+                field.name = identifier();
+                if (field.name == "state")
+                    fail("legacy actor field cannot shadow sealed state capability");
+                if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
+                require(":");
+                require("int");
+                require("=");
+                field.initializer = expression();
+                require(";");
+                actor.fields.push_back(std::move(field));
+            }
+            if (token_.text == "final") {
+                fail("native final actor fields require typed field initialization and ownership lowering");
+            }
+            if (actor.fields.empty()) fail("actor requires at least one scalar field");
         }
-        if (token_.text == "final") {
-            fail("native final actor fields require typed field initialization and ownership lowering");
-        }
-        if (actor.fields.empty()) fail("actor requires at least one scalar field");
+
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
@@ -1314,7 +1348,152 @@ private:
         require(")");
         require(":");
         require("int");
+        // Canonical actor state contract: `with` declares the callable
+        // effect upper bound; `using` is reserved for lexical capability
+        // acquisition inside the body. Keep this distinct even though older
+        // ordinary native functions still parse signature-level `using`.
+        // Canonical v2 spells the signature effect bound "using state.write".
+        // Existing sealed tests use "with state.write"; both are statically
+        // checked effects, not a first-class or transferable state loan.
+        if (token_.text == "using" || token_.text == "with") {
+            advance();
+            if (!actor.sealed_state)
+                fail("actor state effects require a sealed state schema");
+            method.has_declared_effects = true;
+            do {
+                std::string name = identifier();
+                if (accept(".")) name += "." + identifier();
+                FunctionEffect effect;
+                try { effect = FunctionEffects::parse(name); }
+                catch (const std::invalid_argument&) {
+                    fail("unknown actor function effect '" + name + "'");
+                }
+                const auto bit = static_cast<std::uint32_t>(effect);
+                if (method.declared_effects.bits & bit)
+                    fail("duplicate actor function effect '" + name + "'");
+                method.declared_effects.bits |= bit;
+            } while (accept(","));
+        }
+
         require("{");
+        if (actor.sealed_state) {
+            // First current-main slice: one synchronous terminal state callback.
+            // This keeps the state capability lexical and makes it impossible
+            // to route it through ordinary locals, calls, returns or actor sends.
+            if (!accept("return"))
+                fail("sealed actor state is accessible only through terminal handle_state callback");
+
+            auto loan = std::make_unique<ActorStateLoan>();
+            loan->offset = token_.offset;
+
+            if (accept("self")) {
+                require(".");
+                require("handle_state");
+                require("(");
+                loan->mode = ActorStateLoan::Mode::Read;
+                if (accept("critical-write")) {
+                    loan->mode = ActorStateLoan::Mode::Write;
+                } else if (accept("critical-read")) {
+                    loan->mode = ActorStateLoan::Mode::Read;
+                } else if (accept("critical")) {
+                    if (accept("read")) {
+                        loan->mode = ActorStateLoan::Mode::Read;
+                    } else {
+                        (void)accept("write");
+                        loan->mode = ActorStateLoan::Mode::Write;
+                    }
+                }
+            } else if (accept("using")) {
+                require("state");
+                require(".");
+                if (accept("read")) {
+                    loan->mode = ActorStateLoan::Mode::Read;
+                } else if (accept("write")) {
+                    loan->mode = ActorStateLoan::Mode::Write;
+                } else {
+                    fail("using state capability must be read or write");
+                }
+                require("(");
+                if (loan->mode == ActorStateLoan::Mode::Write) {
+                    require("critical");
+                    if (accept("read"))
+                        fail("using state.write requires critical write callback");
+                    (void)accept("write");
+                } else if (accept("critical")) {
+                    if (!accept("read")) {
+                        (void)accept("write");
+                        fail("using state.read cannot request a critical write loan");
+                    }
+                }
+            } else {
+                fail("sealed actor state return requires self.handle_state or using state.read/write");
+            }
+
+            require("|");
+            loan->binder = identifier();
+            if (loan->binder == method.parameters.front().name)
+                fail("state callback binding shadows actor message parameter");
+            require("|");
+            require("-");
+            require(">");
+
+            if (accept("{")) {
+                while (token_.text != "return") {
+                    if (token_.kind == Kind::End || token_.text == "}")
+                        fail("state callback requires return");
+                    if (accept("const")) {
+                        if (!experimental_owned_int_)
+                            fail("experimental owned int requires --experimental-owned-int");
+                        if (!loan->writes.empty())
+                            fail("sealed callback owned temporaries must precede writes");
+                        LocalBinding local;
+                        local.offset = token_.offset;
+                        local.name = identifier();
+                        if (local.name == loan->binder ||
+                                local.name == method.parameters.front().name ||
+                                names.count(local.name))
+                            fail("sealed owned temporary shadows a state field or binder");
+                        if (loan->locals.size() >= 8)
+                            fail("sealed callback owned temporary limit exceeded (8)");
+                        require(":");
+                        require("owned");
+                        require("int");
+                        require("=");
+                        local.initializer = expression();
+                        if (!native_constructor_scalar_tree(*local.initializer))
+                            fail("sealed callback owned temporary requires scalar initializer");
+                        require(";");
+                        for (const auto& prior : loan->locals)
+                            if (prior.name == local.name)
+                                fail("duplicate sealed callback owned local");
+                        local.heap_owned = true;
+                        loan->locals.push_back(std::move(local));
+                        continue;
+                    }
+                    ActorFieldWrite write;
+                    write.offset = token_.offset;
+                    const std::string receiver = identifier();
+                    if (receiver != loan->binder)
+                        fail("actor state mutation requires the lexical state callback binding");
+                    require(".");
+                    write.field = identifier();
+                    require("=");
+                    write.expression = expression();
+                    require(";");
+                    loan->writes.push_back(std::move(write));
+                }
+                require("return");
+                loan->result = expression();
+                require(";");
+                require("}");
+            } else {
+                loan->result = expression();
+            }
+            require(")");
+            require(";");
+            require("}");
+            method.actor_state_loan = std::move(loan);
+        } else {
         // The first compiler-lowered per-message owned value slice is
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
@@ -1370,6 +1549,8 @@ private:
         }
         require(";");
         require("}");
+
+        }
         actor.on_message = std::move(method);
         if (braced) require("}");
         else require("end");
