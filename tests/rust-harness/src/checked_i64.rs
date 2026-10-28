@@ -53,10 +53,12 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                 require(observed.status.code() == Some(expected),
                     format!("{name} {optimization}: expected {expected}, got {:?}", observed.status))?;
             } else {
-                // LLVM's x86 Linux trap is UD2/SIGILL. Any normal exit,
-                // wrapping result, compiler failure or unrelated signal fails.
-                require(observed.status.signal() == Some(4),
-                    format!("{name} {optimization}: overflow did not SIGILL: {:?}", observed.status))?;
+                // LLVM emits UD2/SIGILL on Linux x64 and BRK/SIGTRAP on
+                // Apple Silicon. Match the target's precise trap signal;
+                // normal exits and unrelated signals must still fail.
+                let signal = if cfg!(all(target_os = "macos", target_arch = "aarch64")) { 5 } else { 4 };
+                require(observed.status.signal() == Some(signal),
+                    format!("{name} {optimization}: expected trap signal {signal}, got {:?}", observed.status))?;
             }
             executions += 1;
         }

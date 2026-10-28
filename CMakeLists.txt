@@ -613,8 +613,10 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
-    if(ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+    if(ORE_CLANG AND ((CMAKE_SYSTEM_NAME STREQUAL "Linux"
             AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+            OR (CMAKE_SYSTEM_NAME STREQUAL "Darwin"
+            AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")))
         add_test(NAME native_checked_i64_arithmetic
             COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" checked-i64
                 "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
@@ -999,7 +1001,7 @@ if(BUILD_TESTING)
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir
-        dispatch-signed-min-pattern-run.ores --ir "cmp.eq.i1")
+        dispatch-signed-min-pattern-run.ores --ir "br i1 true")
     oreslang_contract_test(native_dispatch_nested_min_match_failclosed
         dispatch-nested-signed-min-match-reject.ores
         --diagnostic "native scalar value match supports literal patterns or '_'")
@@ -1049,7 +1051,7 @@ if(BUILD_TESTING)
         --diagnostic "native value switch subject must be a replay-safe scalar expression")
     oreslang_contract_test(native_dispatch_async_arm_not_yet_lowered
         dispatch-async-arm-unsupported.ores
-        --diagnostic "native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering")
+        --diagnostic "native async Future<int> v1 callable must be private, capture-free, pure")
     oreslang_contract_test(native_nb_match_rejected
         dispatch-invalid-nb-match.ores
         --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
@@ -1064,7 +1066,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
         --diagnostic "native floating division unsupported")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
-        --diagnostic "native integer remainder unsupported")
+        --diagnostic "native remainder requires a nonzero signed integer literal divisor")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
