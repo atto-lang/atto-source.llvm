@@ -1701,6 +1701,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_ledger_authenticated_scheduler_bridge
         PROPERTIES TIMEOUT 25)
 
+    # A retained unfinished logical DATA turn must prevent later DATA
+    # overtaking, while separately admitted WAKE and other actor lanes run.
+    add_executable(oreslang-native-retained-data-order-test
+        tests/native_actor_retained_data_ordering_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-data-order-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-data-order-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-data-order-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_retained_data_blocks_later_mail
+        COMMAND oreslang-native-retained-data-order-test)
+    set_tests_properties(native_actor_retained_data_blocks_later_mail
+        PROPERTIES TIMEOUT 25)
+
     # Retained DATA receipt survives native callback exit, stays charged to
     # mailbox capacity and prevents false STOP/terminal accounting.
     add_executable(oreslang-native-retained-data-stop-test
