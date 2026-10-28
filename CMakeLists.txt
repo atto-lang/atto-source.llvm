@@ -742,6 +742,26 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_bool_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    # Source-level compiler admission (not a host-only ownership model):
+    # rejected sources must fail before emitting LLVM IR, and three accepted
+    # controls must produce IR to prevent parser-only false positives.
+    find_program(ORE_BORROW_RUSTC rustc REQUIRED)
+    set(ORE_BORROW_ADMISSION_BIN "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-admission${CMAKE_EXECUTABLE_SUFFIX}")
+    set(ORE_BORROW_PREDICATES_BIN "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-predicates${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_command(OUTPUT "${ORE_BORROW_ADMISSION_BIN}" "${ORE_BORROW_PREDICATES_BIN}"
+        COMMAND "${ORE_BORROW_RUSTC}" --edition=2021 -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_borrow_admission.rs" -o "${ORE_BORROW_ADMISSION_BIN}"
+        COMMAND "${ORE_BORROW_RUSTC}" --edition=2021 -D warnings --test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_borrow_admission.rs" -o "${ORE_BORROW_PREDICATES_BIN}"
+        DEPENDS tests/native_borrow_admission.rs VERBATIM)
+    add_custom_target(oreslang-native-borrow-admission-build ALL
+        DEPENDS "${ORE_BORROW_ADMISSION_BIN}" "${ORE_BORROW_PREDICATES_BIN}")
+    add_test(NAME native_compile_time_borrow_escape_admission
+        COMMAND "${ORE_BORROW_ADMISSION_BIN}" "$<TARGET_FILE:oreslang-llvmc>")
+    add_test(NAME native_borrow_harness_predicates COMMAND "${ORE_BORROW_PREDICATES_BIN}")
+    set_tests_properties(native_compile_time_borrow_escape_admission
+        PROPERTIES TIMEOUT 90)
+
     add_test(NAME native_shared_borrow_contract
         COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix"
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
