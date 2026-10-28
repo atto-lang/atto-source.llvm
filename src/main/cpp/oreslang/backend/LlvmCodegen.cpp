@@ -954,8 +954,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
-    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
-        sourceAwaitReady, sourceAwaitDone;
+    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop,
+        sourceGracefulStop, sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -979,6 +979,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceGracefulStop = module.getOrInsertFunction(
+            "oreslang_source_actor_graceful_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceRequestStop = module.getOrInsertFunction(
             "oreslang_source_actor_request_stop",
@@ -1987,9 +1990,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 "future.await.result");
 
             for (const auto& action : fn.actor_actions) {
-                if (action.kind == ActorAction::Kind::Stop)
+                if (action.kind == ActorAction::Kind::Stop ||
+                        action.kind == ActorAction::Kind::GracefulStop)
                     builder.CreateCall(
-                        sourceStop,
+                        action.kind == ActorAction::Kind::GracefulStop
+                            ? sourceGracefulStop : sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
             }
         } else if (!fn.done_await_actor.empty()) {
@@ -2014,6 +2019,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         sourceSend,
                         {actorRefs.at(send.reference), payload});
                 } else {
+                    if (action.kind == ActorAction::Kind::GracefulStop)
+                        throw std::runtime_error(
+                            "native graceful_stop with await get_done unsupported");
                     const auto& stopped = fn.actor_stops.at(action.index);
                     if (stopped != fn.done_await_actor)
                         throw std::runtime_error(
@@ -2080,7 +2088,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         {actorRefs.at(send.reference), payload});
                 } else {
                     builder.CreateCall(
-                        sourceStop,
+                        action.kind == ActorAction::Kind::GracefulStop
+                            ? sourceGracefulStop : sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
                 }
             }
