@@ -2512,7 +2512,8 @@ private:
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
                     if (accept(";")) {
-                        if (!accept("then")) require("do"); statement.then_statements = branch_arm(false, true);
+                        if (!accept("then")) require("do");
+                        statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
