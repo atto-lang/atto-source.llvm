@@ -16,6 +16,7 @@ int main() {
     assert(actor.admit(Kind::Timer, timer) == Status::Ok);
     assert(actor.select(pick) == Status::Busy);
     assert(actor.suspend(a) == Status::Ok);
+    assert(actor.has_unbounded_suspension_blocker());
     assert(actor.select(pick) == Status::Blocked); // B does not overtake A
     assert(actor.notify_ready(timer) == Status::Ok);
     assert(actor.select(pick) == Status::Blocked);
@@ -26,6 +27,7 @@ int main() {
     assert(actor.finish(control) == Status::Ok);
     assert(actor.select(pick) == Status::Blocked);
     assert(actor.notify_ready(a) == Status::Ok);
+    assert(!actor.has_unbounded_suspension_blocker());
     assert(actor.notify_ready(a) == Status::AlreadyReady);
     assert(actor.select(pick) == Status::Ok && pick.sequence == a.sequence);
     assert(actor.claim(b, true) == Status::Blocked);
