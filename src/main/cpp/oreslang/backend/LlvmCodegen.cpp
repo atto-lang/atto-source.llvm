@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/SealedStateAdmission.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -644,6 +646,7 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider) {
+    verify_sealed_actor_state_shape(source.actors);
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -672,6 +675,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (source.actors.size() > 1)
             throw std::runtime_error("wasm32 actor guest supports one actor per instance");
         for (const auto& actor : source.actors) {
+            if (actor.sealed_state)
+                throw std::runtime_error(
+                    "wasm32 sealed actor state awaits scoped state-loan lowering");
             if (actor.fields.empty() || actor.fields.size() > 16)
                 throw std::runtime_error("wasm32 actor guest requires 1..16 scalar fields");
             if (actor.on_message.parameters.size() != 1 || !actor.on_message.result ||
@@ -1164,7 +1170,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
                 llvm::ConstantInt::get(i64,
-                    actor->fields.size() + actor->on_message.locals.size())},
+                    std::max<std::size_t>(1,
+                        actor->fields.size() + actor->on_message.locals.size()))},
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
@@ -2707,6 +2714,29 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Native source actors execute only on OresVM scheduler turns. The
     // portable guest below uses an independent, no-import single-actor ABI.
     if (!wasm32_target) for (const auto& actor : source.actors) {
+        // Revalidate the sealed-state AST before dereferencing any initializer
+        // or emitting actor IR. emit_verified_llvm_ir is a public compiler
+        // boundary and must remain safe even after parser-bypassing AST
+        // transforms performed by compiler passes or native test callers.
+        if (actor.sealed_state) {
+            if (actor.fields.size() > 16)
+                throw std::runtime_error("sealed actor state exceeds field bound");
+            for (const auto& field : actor.fields) {
+                if (!field.initializer || !field.field_mutable)
+                    throw std::runtime_error(
+                        "sealed actor state codegen rejected malformed state schema");
+            }
+            if (actor.on_message.parameters.size() != 1 ||
+                    !actor.on_message.actor_state_loan ||
+                    actor.on_message.result ||
+                    !actor.on_message.actor_field_writes.empty())
+                throw std::runtime_error(
+                    "sealed actor state reached codegen without one scoped loan");
+            if (!actor.on_message.has_declared_effects)
+                throw std::runtime_error(
+                    "sealed actor state codegen lacks declared effect bound");
+        }
+
         auto* ctor = actorInits.at(actor.name);
         llvm::BasicBlock* initial = llvm::BasicBlock::Create(context, "entry", ctor);
         llvm::IRBuilder<> init(initial);
@@ -2738,6 +2768,234 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
         builder.CreateStore(incoming, pslot);
         values.emplace(param, pslot);
+        if (actor.sealed_state) {
+            if (!actor.on_message.actor_state_loan || actor.on_message.result ||
+                    !actor.on_message.actor_field_writes.empty() ||
+                    !actor.on_message.locals.empty() ||
+                    !actor.on_message.actor_sends.empty() ||
+                    !actor.on_message.actor_stops.empty() ||
+                    !actor.on_message.actor_actions.empty() ||
+                    !actor.on_message.statements.empty() ||
+                    !actor.on_message.early_returns.empty() ||
+                    !actor.on_message.actor_spawns.empty())
+                throw std::runtime_error(
+                    "sealed actor state reached codegen without one scoped loan");
+            const auto& loan = *actor.on_message.actor_state_loan;
+            if (!loan.result || loan.binder.empty())
+                throw std::runtime_error("invalid sealed actor state loan");
+            if (!actor.on_message.has_declared_effects)
+                throw std::runtime_error(
+                    "sealed actor state codegen lacks declared effect bound");
+            if (actor.fields.size() > 16)
+                throw std::runtime_error("sealed actor state exceeds field bound");
+            for (const auto& field : actor.fields) {
+                if (!field.initializer || !field.field_mutable)
+                    throw std::runtime_error(
+                        "sealed actor state codegen rejected malformed state schema");
+            }
+            if (loan.mode != ActorStateLoan::Mode::Read &&
+                    loan.mode != ActorStateLoan::Mode::Write)
+                throw std::runtime_error("invalid sealed actor state loan mode");
+            if (loan.mode == ActorStateLoan::Mode::Read) {
+                if (!actor.on_message.declared_effects.has(FunctionEffect::StateRead) ||
+                        !loan.writes.empty())
+                    throw std::runtime_error(
+                        "sealed actor read codegen lacks immutable read authority");
+            } else if (!actor.on_message.declared_effects.has(FunctionEffect::StateWrite)) {
+                throw std::runtime_error(
+                    "sealed actor write codegen lacks state.write authority");
+            }
+
+            std::unordered_set<std::string> stateNames;
+            for (const auto& field : actor.fields) stateNames.insert(field.name);
+            const auto canonicalStateExpression =
+                [&](const auto& self, const Expression& expr) -> bool {
+                    if (expr.resolved_type != ScalarType::I64 ||
+                            !expr.resolved_class.empty() || !expr.sum_type.empty() ||
+                            expr.condition || expr.condition_lhs || expr.condition_rhs ||
+                            expr.when_true || expr.when_false ||
+                            !expr.arguments.empty() || !expr.argument_names.empty() ||
+                            !expr.type_arguments.empty() || expr.type_arguments_present)
+                        return false;
+                    const bool neutral = expr.integer == 0 && !expr.boolean;
+                    switch (expr.kind) {
+                        case Expression::Kind::Integer:
+                            return !expr.left && !expr.right && expr.name.empty() &&
+                                   !expr.boolean;
+                        case Expression::Kind::Variable:
+                            return !expr.left && !expr.right && !expr.name.empty() && neutral;
+                        case Expression::Kind::Field:
+                            return expr.left && !expr.right && !expr.name.empty() && neutral &&
+                                   expr.left->kind == Expression::Kind::Variable &&
+                                   self(self, *expr.left);
+                        case Expression::Kind::Negate:
+                            return expr.left && !expr.right && expr.name.empty() && neutral &&
+                                   self(self, *expr.left);
+                        case Expression::Kind::Add:
+                        case Expression::Kind::Subtract:
+                        case Expression::Kind::Multiply:
+                            return expr.left && expr.right && expr.name.empty() && neutral &&
+                                   self(self, *expr.left) && self(self, *expr.right);
+                        default:
+                            return false;
+                    }
+                };
+            bool readsState = false;
+            std::unordered_set<std::string> visibleOwnedLocals;
+            const auto verifyStateExpression =
+                [&](const auto& self, const Expression& expr) -> void {
+                    switch (expr.kind) {
+                        case Expression::Kind::Integer:
+                            return;
+                        case Expression::Kind::Variable:
+                            if (expr.name != param &&
+                                    !visibleOwnedLocals.count(expr.name))
+                                throw std::runtime_error(
+                                    "state codegen rejected foreign or forward-owned capture");
+                            return;
+                        case Expression::Kind::Field:
+                            if (!expr.left ||
+                                    expr.left->kind != Expression::Kind::Variable ||
+                                    expr.left->name != loan.binder ||
+                                    !stateNames.count(expr.name))
+                                throw std::runtime_error(
+                                    "state codegen rejected unverified projection");
+                            readsState = true;
+                            return;
+                        case Expression::Kind::Negate:
+                            if (!expr.left) throw std::runtime_error("malformed state unary");
+                            self(self, *expr.left);
+                            return;
+                        case Expression::Kind::Add:
+                        case Expression::Kind::Subtract:
+                        case Expression::Kind::Multiply:
+                            if (!expr.left || !expr.right)
+                                throw std::runtime_error("malformed state binary");
+                            self(self, *expr.left);
+                            self(self, *expr.right);
+                            return;
+                        default:
+                            throw std::runtime_error(
+                                "state codegen rejected call/ownership/escape expression");
+                    }
+                };
+            for (const auto& local : loan.locals) {
+                if (!local.heap_owned || local.owner_mutable ||
+                        local.name.empty() || !local.initializer ||
+                        local.name == param || local.name == loan.binder ||
+                        stateNames.count(local.name) ||
+                        visibleOwnedLocals.count(local.name))
+                    throw std::runtime_error(
+                        "sealed callback has invalid owned-local authority");
+                if (!canonicalStateExpression(
+                        canonicalStateExpression, *local.initializer))
+                    throw std::runtime_error(
+                        "noncanonical sealed owned-local initializer");
+                verifyStateExpression(verifyStateExpression, *local.initializer);
+                visibleOwnedLocals.insert(local.name);
+            }
+            for (const auto& write : loan.writes) {
+                if (!stateNames.count(write.field) || !write.expression)
+                    throw std::runtime_error("invalid sealed actor state write");
+                if (!canonicalStateExpression(canonicalStateExpression, *write.expression))
+                    throw std::runtime_error("noncanonical sealed actor state write expression");
+                verifyStateExpression(verifyStateExpression, *write.expression);
+            }
+            if (!canonicalStateExpression(canonicalStateExpression, *loan.result))
+                throw std::runtime_error("noncanonical sealed actor state result expression");
+            verifyStateExpression(verifyStateExpression, *loan.result);
+            if (readsState &&
+                    !actor.on_message.declared_effects.has(FunctionEffect::StateRead) &&
+                    !actor.on_message.declared_effects.has(FunctionEffect::StateWrite))
+                throw std::runtime_error(
+                    "state codegen read exceeds declared state.read authority");
+
+            // Snapshot only fields whose old value is needed before their
+            // first callback-local write. A write-only callback emits no
+            // hidden state-read effect.
+            std::set<std::string> initialReadKeys;
+            std::set<std::string> writtenKeys;
+            const auto collectInitialReads =
+                [&](const auto& self, const Expression& expr) -> void {
+                    if (expr.kind == Expression::Kind::Field && expr.left &&
+                            expr.left->kind == Expression::Kind::Variable &&
+                            expr.left->name == loan.binder) {
+                        const std::string key = field_key(loan.binder, expr.name);
+                        if (!writtenKeys.count(key)) initialReadKeys.insert(key);
+                        return;
+                    }
+                    if (expr.left) self(self, *expr.left);
+                    if (expr.right) self(self, *expr.right);
+                    for (const auto& argument : expr.arguments)
+                        self(self, *argument);
+                };
+            for (const auto& local : loan.locals)
+                collectInitialReads(collectInitialReads, *local.initializer);
+            for (const auto& write : loan.writes) {
+                collectInitialReads(collectInitialReads, *write.expression);
+                writtenKeys.insert(field_key(loan.binder, write.field));
+            }
+            collectInitialReads(collectInitialReads, *loan.result);
+
+            std::unordered_map<std::string, llvm::Value*> stateFields;
+            for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                const auto& field = actor.fields[i];
+                const std::string key = field_key(loan.binder, field.name);
+                llvm::Value* slot = builder.CreateAlloca(
+                    i64, nullptr, "state." + field.name + ".slot");
+                if (initialReadKeys.count(key)) {
+                    llvm::Value* snapshot = builder.CreateCall(fieldRead, {
+                        actorHeap, currentDomain, currentEpoch,
+                        llvm::ConstantInt::get(i64, i)},
+                        "state." + field.name + ".snapshot");
+                    builder.CreateStore(snapshot, slot);
+                }
+                stateFields.emplace(key, slot);
+            }
+
+            // Synchronous lexical owned values share the actor's real native
+            // heap, but are inaccessible outside this handler turn.
+            // Compute their values before the first state mutation and drop
+            // every scoped slot before relinquishing the scheduler carrier.
+            std::vector<llvm::Value*> sealedOwnedTokens;
+            for (const auto& local : loan.locals) {
+                llvm::Value* initial = lower(
+                    *local.initializer, builder, i64,
+                    values, stateFields, declarations);
+                llvm::Value* token = builder.CreateAlloca(
+                    llvm::ArrayType::get(i64, 3), nullptr,
+                    local.name + ".sealed.owned.token");
+                builder.CreateCall(actorScopedNew,
+                    {actorHeap, currentDomain, currentEpoch, initial, token});
+                llvm::Value* cached = builder.CreateAlloca(
+                    i64, nullptr, local.name + ".sealed.owned.cached");
+                builder.CreateStore(initial, cached);
+                values.emplace(local.name, cached);
+                sealedOwnedTokens.push_back(token);
+            }
+            for (const auto& write : loan.writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end() ||
+                        loan.mode != ActorStateLoan::Mode::Write)
+                    throw std::runtime_error("invalid sealed actor state write lowering");
+                llvm::Value* value = lower(*write.expression, builder, i64,
+                    values, stateFields, declarations);
+                const std::size_t index = std::distance(actor.fields.begin(), field);
+                builder.CreateCall(fieldWrite, {
+                    actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, index), value});
+                builder.CreateStore(value,
+                    stateFields.at(field_key(loan.binder, write.field)));
+            }
+            llvm::Value* result = lower(*loan.result, builder, i64,
+                values, stateFields, declarations);
+            for (auto it = sealedOwnedTokens.rbegin();
+                    it != sealedOwnedTokens.rend(); ++it)
+                builder.CreateCall(actorScopedDrop,
+                    {actorHeap, currentDomain, currentEpoch, *it});
+            builder.CreateRet(result);
+        } else {
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
             const auto& field = actor.fields[i];
             llvm::Value* value = builder.CreateCall(fieldRead, {
@@ -2787,6 +3045,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.CreateCall(actorScopedDrop,
                 {actorHeap, currentDomain, currentEpoch, *it});
         builder.CreateRet(result);
+        }
     }
 
     // Compiler-generated Wasm guest actor v0. One module instance belongs
