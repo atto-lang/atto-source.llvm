@@ -44,6 +44,12 @@ CASES = (
      "AGGREGATE_LOCAL_ALIAS_DUPLICATE"),
     ("generic-prologue-alias", "fnc value(): T { type T<U> = struct { foo: int }; return 1; }",
      "AGGREGATE_LOCAL_ALIAS_GENERIC_UNSUPPORTED"),
+    ("literal-bool-into-int", "fnc value(): T { type T = struct { foo: int }; return T{foo: true}; }",
+     "AGGREGATE_CONSTRUCTOR_LITERAL_TYPE_MISMATCH"),
+    ("literal-int-into-bool", "fnc value(): T { type T = struct { foo: bool }; return T{foo: 1}; }",
+     "AGGREGATE_CONSTRUCTOR_LITERAL_TYPE_MISMATCH"),
+    ("literal-string-into-int", "fnc value(): T { type T = struct { foo: int }; return T{foo: \"x\"}; }",
+     "AGGREGATE_CONSTRUCTOR_LITERAL_TYPE_MISMATCH"),
 )
 
 def main():
@@ -67,7 +73,7 @@ def main():
                 raise AssertionError(name + ": LLVM IR emitted on rejected aggregate")
             if list(directory.glob("*.ll")) or list(directory.glob("*.bc")):
                 raise AssertionError(name + ": LLVM artifact emitted on rejected aggregate")
-    print("native aggregate kind: 17 fail-closed compiler source checks passed")
+    print("native aggregate kind: 20 fail-closed compiler source checks passed")
 
 if __name__ == "__main__":
     main()

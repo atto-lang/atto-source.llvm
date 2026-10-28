@@ -3576,10 +3576,23 @@ private:
                 if (!known) fail("AGGREGATE_CONSTRUCTOR_UNKNOWN_FIELD: " + field);
                 if (!seen.insert(field).second)
                     fail("AGGREGATE_CONSTRUCTOR_DUPLICATE_FIELD: " + field);
+                // Obvious wrong literal types reject during parsing; dynamic
+                // expressions await the real aggregate typechecker and must
+                // never be admitted to the native scalar ABI meanwhile.
+                auto initializer = expression();
+                const auto declared = std::find_if(shape.fields.begin(), shape.fields.end(),
+                    [&](const types::NativeAggregateShape::Field& member) {
+                        return member.name == field;
+                    });
+                const auto kind = initializer->kind;
+                if ((kind == Expression::Kind::Integer && declared->type != "int") ||
+                        (kind == Expression::Kind::Boolean && declared->type != "bool") ||
+                        (kind == Expression::Kind::String && declared->type != "string"))
+                    fail("AGGREGATE_CONSTRUCTOR_LITERAL_TYPE_MISMATCH: " + field);
                 // Both vectors are in lexical source order, NOT canonical
                 // layout order. Later codegen must evaluate once in this order.
                 expr->argument_names.push_back(field);
-                expr->arguments.push_back(expression());
+                expr->arguments.push_back(std::move(initializer));
                 if (!named && token_.text == ",")
                     fail("AGGREGATE_CONSTRUCTOR_SINGLE_POSITIONAL: extra value");
             } while (accept(","));
