@@ -494,8 +494,19 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(
         &instance->last_result, result, memory_order_relaxed);
-    atomic_fetch_add_explicit(
-        &instance->processed, 1, memory_order_release);
+    const uint64_t sequence = atomic_fetch_add_explicit(
+        &instance->processed, 1, memory_order_release) + 1;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* Each value is returned from the compiler-generated guest handler.
+     * The slot and monotonic actor identity keep peer traces distinct. */
+    fprintf(stderr,
+        "SOURCE_ACTOR_GUEST_HANDLER actor=%llu slot=%zu seq=%llu payload=%lld result=%lld\n",
+        (unsigned long long)instance->id, slot,
+        (unsigned long long)sequence, (long long)(int64_t)payload,
+        (long long)result);
+#else
+    (void)sequence;
+#endif
 }
 
 static void open_group_locked(void) {
@@ -821,7 +832,7 @@ int oreslang_source_actor_snapshot_current_trace(
         out);
 }
 
-void oreslang_source_actor_request_stop(void* opaque) {
+static void request_stop_impl(void* opaque, int graceful) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
 
@@ -847,9 +858,15 @@ void oreslang_source_actor_request_stop(void* opaque) {
      * future DATA and abandon queued DATA, while an already-active turn is
      * allowed to cross its physical execution boundary.
      */
-    ensure(ores_native_vm_stop_sealed(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    ensure(graceful
+        ? ores_native_vm_stop(group.vm, ORES_NATIVE_VM_MAIN, instance->ref)
+        : ores_native_vm_stop_sealed(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
     group_unlock();
+}
+
+void oreslang_source_actor_request_stop(void* opaque) {
+    request_stop_impl(opaque, 0);
 }
 
 void oreslang_source_actor_join_done(void* opaque) {
@@ -954,5 +971,13 @@ void oreslang_source_actor_stop(void* opaque) {
      * get_done lowering instead emits request_stop followed by await_done.
      */
     oreslang_source_actor_request_stop(opaque);
+    oreslang_source_actor_join_done(opaque);
+}
+
+/* Distinct compiler ABI: preserves all accepted DATA until the worker turns
+ * drain, then waits for physical terminal acknowledgment before freeing heap.
+ * Does not weaken ordinary stop()'s intentional abandoned-DATA semantics. */
+void oreslang_source_actor_graceful_stop(void* opaque) {
+    request_stop_impl(opaque, 1);
     oreslang_source_actor_join_done(opaque);
 }
