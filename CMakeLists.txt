@@ -1569,6 +1569,11 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
+    add_test(NAME source_actor_guest_progress_hostile_receipts
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_actor_guest_progress.py")
+    set_tests_properties(source_actor_guest_progress_hostile_receipts PROPERTIES TIMEOUT 30)
+
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
