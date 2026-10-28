@@ -157,6 +157,8 @@ def main():
         # via the legacy i64 on_message or trusted-main await paths.
         "source-actor-receive-await-timer-guest.ores":
             "native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics",
+        "source-actor-receive-arbitrary-formal-boundary.ores":
+            "native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics",
         "source-actor-receive-invalid-return-reject.ores":
             "expected 'void'",
         "source-actor-receive-invalid-delimiter-reject.ores":
