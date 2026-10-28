@@ -92,6 +92,24 @@ miss, not silently execute or count as a successful RT turn. Logical callback
 cancellation still cannot preempt running guest code. READY messages must not
 be queued in a general-purpose FIFO behind unbounded ordinary actor work.
 
+**Admission-budget hardening:** `arm_after(now, delay, actor_id,
+actor_generation, maximum_lateness_ns, handle)` now permanently stores the
+accepted lateness budget in its timer slot. `claim_start` cannot supply or
+retroactively enlarge that budget. The claim returns the admitted bound,
+deadline, claim timestamp and observed lateness in a bounded result;
+`DeadlineMissed` retires the token without granting user-code execution.
+Invalid and stale-generation start attempts do not advance observed clock
+time, preventing a forged UINT64_MAX claim from poisoning the timer domain.
+
+The **claim timestamp is not independently the first instruction timestamp**:
+carrier preemption or work after the claim can add latency. Certified admission
+requires an instrumented compiler/actor-carrier entry seam that samples the
+same monotonic clock at the final executable boundary and either guarantees
+bounded claim-to-entry interference or reports a miss. Until then this is a
+trusted-host admission prototype, not a hard-RT guarantee. A budget fixed at
+registration is necessary but insufficient: the runtime still needs a proven
+bounded CONTROL queue, actor lease hold time, native timer wakeup, and WCET.
+
 A certified `native-hard-rt` timer additionally requires:
 
 1. A prestarted, isolated RT clock/CONTROL driver using monotonic absolute
