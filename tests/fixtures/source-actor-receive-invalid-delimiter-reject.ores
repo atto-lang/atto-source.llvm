@@ -1,0 +1,6 @@
+// Do not accept `:` as a replacement for the `::` receive-body delimiter.
+define actor Worker as
+    receive(message: int) -> void :
+        await time.sleep(10)
+    end
+end
