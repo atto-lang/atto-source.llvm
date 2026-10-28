@@ -307,6 +307,9 @@ def main():
                 assert guest.stdout.count(
                     "call void @oreslang_source_actor_graceful_stop(") == 2, (
                     name, "guest must invoke graceful drain and physical join")
+                assert all(r["ready"] == 1 and r["constructor_on_worker"] == 1
+                           for r in receipts), (
+                    name, "graceful stop raced uninitialized source actors", receipts)
                 assert all(r["processed"] == r["accepted"]
                            and r["abandoned"] == 0 for r in receipts), (
                     name, "graceful stop must not abandon DATA", receipts)

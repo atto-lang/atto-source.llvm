@@ -63,6 +63,7 @@ typedef struct {
 
 typedef struct {
     pthread_mutex_t mutex;
+    pthread_cond_t startup_changed;
     OresNativeVM* vm;
     OresNativeActorRef root_ref;
     OresNativeExecutionContextStore* executions;
@@ -79,7 +80,10 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .startup_changed = PTHREAD_COND_INITIALIZER
+};
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
@@ -422,6 +426,7 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         ReadyAwaitFrame* frame = group.pending_ready;
         if (frame && frame->actor == instance)
             settle_ready_if_admitted_locked(frame);
+        ensure(pthread_cond_broadcast(&group.startup_changed) == 0);
         group_unlock();
         return;
     }
@@ -478,6 +483,10 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
     ReadyAwaitFrame* frame = group.pending_ready;
     if (frame && frame->actor == instance)
         settle_ready_if_admitted_locked(frame);
+    /* Notify trusted main after the constructor has either published READY
+     * or terminal-before-ready. This is under the same mutex as graceful stop
+     * admission, so a wakeup cannot be missed. */
+    ensure(pthread_cond_broadcast(&group.startup_changed) == 0);
     group_unlock();
 }
 
@@ -971,13 +980,27 @@ void oreslang_source_actor_graceful_stop(void* opaque) {
     ensure(!ores_native_vm_current_execution_context(
         group.vm, ORES_NATIVE_VM_MAIN, &carrier));
     group_lock();
+    const size_t slot = (size_t)instance->ref.actor_slot;
+    ensure(group.vm && slot < group.next_slot
+        && group.actors[slot] == instance);
+    /* Graceful drain is not abortive stop. If the trusted root sends mail
+     * immediately after spawn, it must allow the constructor CONTROL turn
+     * to finish and publish READY before sealing the DATA lane. Waiting on
+     * the group condition releases group.mutex to the constructor carrier.
+     * This synchronous path is never a hard-real-time or carrier API. */
+    int startup = atomic_load_explicit(
+        &instance->startup_state, memory_order_acquire);
+    while (startup == ORES_SOURCE_ACTOR_STARTUP_PENDING
+            || startup == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING) {
+        ensure(pthread_cond_wait(&group.startup_changed, &group.mutex) == 0);
+        startup = atomic_load_explicit(
+            &instance->startup_state, memory_order_acquire);
+    }
+    ensure(startup == ORES_SOURCE_ACTOR_STARTUP_READY);
     int expected = 0;
     ensure(atomic_compare_exchange_strong_explicit(
         &instance->stop_requested, &expected, 1,
         memory_order_acq_rel, memory_order_acquire));
-    const size_t slot = (size_t)instance->ref.actor_slot;
-    ensure(group.vm && slot < group.next_slot
-        && group.actors[slot] == instance);
     /* Non-sealed stop closes admission while retaining all queued DATA. */
     ensure(ores_native_vm_stop(group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
     group_unlock();
