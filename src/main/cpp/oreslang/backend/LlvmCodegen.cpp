@@ -423,6 +423,16 @@ llvm::Value* lower(const Expression& expr,
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
         }
+        case Expression::Kind::NamedBitXor: {
+            // The native compiler typechecker and ownership checker already
+            // admitted two signed64 scalar operands. Evaluate both once in
+            // lexical order, with their checked arithmetic effects preserved.
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("invalid native Integer.bitXor operand tree");
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            return builder.CreateXor(left, right, "integer.bitxor.i64");
+        }
         case Expression::Kind::Remainder: {
             // The frontend normalizes syntactically signed literal divisors.
             // Never trust an externally supplied AST to skip this proof gate.
