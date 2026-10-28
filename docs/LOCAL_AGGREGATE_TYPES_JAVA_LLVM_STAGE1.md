@@ -92,6 +92,27 @@ passing result for IR-only compilation.
 Java PR #2179 remains syntax-stage only. These LLVM-specific compiler
 narrow-slice changes do **not** imply Java/LLVM feature or semantic parity.
 
+## Native sanitizer gate (still unverified)
+
+CTest now registers both `native_local_aggregate_types_stage1` and the separate
+`native_local_aggregate_types_asan_ubsan`. The latter compiles each admitted
+local-struct fixture with `-fsanitize=address,undefined`,
+`-fno-omit-frame-pointer` and `-fno-sanitize-recover=all`; it executes the
+resulting native binary with leak detection and fail-fast sanitizer settings.
+Missing Clang, unsupported sanitizer runtime, bad native exit code, sanitizer
+diagnostic, or a negative case emitting IR is a **hard test failure**. This
+gate exercises the emitted executable; sanitizing `oreslang-llvmc` itself
+requires a separately instrumented compiler build.
+
+These checks are *registered, not passed*. Source Actions jobs still fail
+before executing steps. A source-free private carrier was verified with 13
+completed steps on
+[`elenkos-systems-test/clients-rust-consumer` run 40583274205](https://github.com/elenkos-systems-test/clients-rust-consumer/actions/runs/40583274205),
+but that carrier's `main` and source `main` are unprotected, and the
+LLVM source allowlist is empty. Do not mirror private LLVM source until
+independent reviews and enforceable branch protections are complete; see
+LLVM issues #915, #475 and #159.
+
 ## Follow-up gates (in order)
 
 1. **Java + LLVM:** front-end lexical symbol table with predeclaration of
