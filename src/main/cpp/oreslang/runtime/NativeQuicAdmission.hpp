@@ -6,9 +6,10 @@
 
 namespace oreslang::native_quic {
 
-// Trusted-host descriptor only; NEVER a guest-constructible authorization.
-// The ingress policy must authorize the complete DNS answer set before
-// populating authorized_dns_set, and connect to the literal IP bytes only.
+// Preflight descriptor only: the boolean is NOT an authorization token.
+// Untrusted code can forge this struct. A future provider MUST consume a
+// separate, unforgeable, source-generation-bound policy capability instead.
+// string_view fields are borrowed and MUST NOT outlive this synchronous check.
 struct PinnedEndpoint {
     std::array<std::uint8_t, 16> ip{};
     std::uint8_t ip_length = 0; // 4 (IPv4) or 16 (IPv6)
@@ -20,7 +21,7 @@ struct PinnedEndpoint {
 };
 
 enum class Admission {
-    ValidHostOnlyDescriptor,
+    StructurallyValidNotAuthorized,
     DeniedEgress,
     InvalidIp,
     InvalidPort,
@@ -31,17 +32,24 @@ enum class Admission {
 
 constexpr bool valid_dns_sni(std::string_view host) noexcept {
     if (host.empty() || host.size() > 253 || host.front() == '.' ||
-        host.back() == '.' || host.front() == '-' || host.back() == '-') {
-        return false;
-    }
-    bool prev_dot = false;
+        host.back() == '.') return false;
+    std::size_t label_size = 0;
+    char previous = '.';
     for (char ch : host) {
-        const bool legal = (ch >= 'a' && ch <= 'z') ||
-            (ch >= '0' && ch <= '9') || ch == '-' || ch == '.';
-        if (!legal || (ch == '.' && prev_dot)) return false;
-        prev_dot = ch == '.';
+        const bool alpha = ch >= 'a' && ch <= 'z';
+        const bool digit = ch >= '0' && ch <= '9';
+        if (ch == '.') {
+            if (label_size == 0 || label_size > 63 || previous == '-') return false;
+            label_size = 0;
+        } else {
+            if (!alpha && !digit && ch != '-') return false;
+            if (label_size == 0 && ch == '-') return false;
+            ++label_size;
+            if (label_size > 63) return false;
+        }
+        previous = ch;
     }
-    return true;
+    return label_size > 0 && previous != '-';
 }
 
 constexpr Admission validate_http3_peer(const PinnedEndpoint& endpoint) noexcept {
@@ -54,9 +62,21 @@ constexpr Admission validate_http3_peer(const PinnedEndpoint& endpoint) noexcept
         any_byte = any_byte || endpoint.ip[i] != 0;
     }
     if (!any_byte) return Admission::InvalidIp;
+    if (endpoint.ip_length == 4) {
+        // Canonical v4: unused bytes must be zero, and multicast/broadcast
+        // ranges may not be minted into a remote QUIC peer descriptor.
+        for (std::size_t i = 4; i < endpoint.ip.size(); ++i) {
+            if (endpoint.ip[i] != 0) return Admission::InvalidIp;
+        }
+        if (endpoint.ip[0] == 0 || endpoint.ip[0] >= 224)
+            return Admission::InvalidIp;
+    } else if (endpoint.ip[0] == 0xff) {
+        return Admission::InvalidIp;
+    }
     if (!valid_dns_sni(endpoint.canonical_sni)) return Admission::InvalidSni;
     if (endpoint.alpn != "h3") return Admission::InvalidAlpn;
-    return Admission::ValidHostOnlyDescriptor;
+    // A successful preflight CANNOT serve as permission to connect.
+    return Admission::StructurallyValidNotAuthorized;
 }
 
 // Not a QUIC provider or a claim of working guest std/net/quic. A native

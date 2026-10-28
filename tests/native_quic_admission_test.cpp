@@ -14,7 +14,7 @@ int main() {
     valid.alpn = "h3";
     valid.egress_generation = 4;
     valid.authorized_dns_set = true;
-    assert(validate_http3_peer(valid) == Admission::ValidHostOnlyDescriptor);
+    assert(validate_http3_peer(valid) == Admission::StructurallyValidNotAuthorized);
     auto bad = valid;
     bad.authorized_dns_set = false;
     assert(validate_http3_peer(bad) == Admission::DeniedEgress);
@@ -39,6 +39,27 @@ int main() {
     bad = valid;
     bad.alpn = "h2";
     assert(validate_http3_peer(bad) == Admission::InvalidAlpn);
+    bad = valid;
+    bad.canonical_sni = "-bad.example";
+    assert(validate_http3_peer(bad) == Admission::InvalidSni);
+    bad = valid;
+    bad.canonical_sni = "bad-.example";
+    assert(validate_http3_peer(bad) == Admission::InvalidSni);
+    bad = valid;
+    bad.canonical_sni = "a................................................................";
+    assert(validate_http3_peer(bad) == Admission::InvalidSni);
+    bad = valid;
+    bad.ip[4] = 9;
+    assert(validate_http3_peer(bad) == Admission::InvalidIp);
+    bad = valid;
+    bad.ip[0] = 239;
+    assert(validate_http3_peer(bad) == Admission::InvalidIp);
+    bad = valid;
+    bad.ip_length = 16;
+    bad.ip.fill(0);
+    bad.ip[0] = 0xff;
+    bad.ip[15] = 1;
+    assert(validate_http3_peer(bad) == Admission::InvalidIp);
     static_assert(!guest_quic_available(), "QUIC backend is not yet wired");
     std::cout << "QUIC host-only admission checks passed (no guest or wire parity)\n";
 }
