@@ -339,12 +339,13 @@ def main():
             ]
             linked = run(command)
             assert linked.returncode == 0, (name, linked.stderr)
+            env = os.environ.copy()
+            # Do not permit inherited test settings to switch on bounded
+            # heap tracing for unrelated source actor fixtures.
+            env.pop("ORESLANG_TEST_TRACE_GUEST_FIELDS", None)
             if name == "source-actor-two-owned-heaps-graceful.ores":
-                env = os.environ.copy()
                 env["ORESLANG_TEST_TRACE_GUEST_FIELDS"] = "1"
-                executed = run([str(exe)], env=env)
-            else:
-                executed = run([str(exe)])
+            executed = run([str(exe)], env=env)
             assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
