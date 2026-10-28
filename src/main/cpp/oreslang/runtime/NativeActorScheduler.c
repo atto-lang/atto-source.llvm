@@ -52,6 +52,7 @@ typedef struct {
     size_t wake_live, wake_ready, wake_cursor;
     RetainedDataCredit* retained; /* preallocated DATA receipts */
     size_t retained_live;
+    unsigned retained_in_callback; /* active DATA already counted in retained_live */
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
@@ -95,6 +96,13 @@ struct OresNativeActorScheduler {
     void* context;
     OresNativePhysicalTurnGate* physical_turn_gate;
 };
+/* Avoid counting an active DATA callback twice during the handoff from
+ * physical execution to retained logical ownership. An active WAKE/CONTROL
+ * remains conservatively charged under legacy per-actor capacity policy. */
+static size_t actor_data_occupancy(const ActorLane* lane) {
+    return lane->queued + lane->retained_live
+        + (size_t)(lane->active && !lane->retained_in_callback);
+}
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
@@ -420,6 +428,8 @@ static void* carrier(void* raw) {
                     || credit->execution_id != retained_ticket.execution_id)
                 abort();
             credit->state = RETAINED_PENDING;
+            if (!lane->retained_in_callback) abort();
+            lane->retained_in_callback=0;
             /* DO NOT settle this DATA callback's completion or its mailbox
              * credit. The guest segment may still be suspended. */
         } else {
@@ -670,8 +680,7 @@ int ores_native_actor_scheduler_priority_inheritance_enabled(
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
-        || s->actors[i].queued + s->actors[i].active
-                + s->actors[i].retained_live >= s->per_actor_capacity
+        || actor_data_occupancy(&s->actors[i]) >= s->per_actor_capacity
         || s->accepted >= UINT64_MAX - s->reserved_wakes
         || !execution_slot_available_locked(s)) {
         if (s->rejected != UINT64_MAX) s->rejected++;
@@ -749,8 +758,7 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
-        } else if (lane->queued + lane->active + lane->retained_live
-                >= s->per_actor_capacity) {
+        } else if (actor_data_occupancy(lane) >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
         } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
                 || !execution_slot_available_locked(s)) {
@@ -1234,6 +1242,7 @@ int ores_native_actor_scheduler_retain_current_data(
         credit->execution_id=execution_id;
         credit->state=RETAINED_IN_CALLBACK;
         ++lane->retained_live;
+        lane->retained_in_callback=1;
         *out=(OresNativeRetainedDataTicket){
             .actor=actor, .slot=(uint64_t)slot,
             .slot_generation=credit->generation, .execution_id=execution_id
