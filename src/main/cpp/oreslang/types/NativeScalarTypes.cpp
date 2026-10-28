@@ -82,6 +82,8 @@ void validate_native_scalar_types(const Program& program) {
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
+            case E::AggregateConstruct:
+                throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source aggregate is not scalar");
             case E::SumConstruct: {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;

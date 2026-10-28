@@ -1697,6 +1697,13 @@ private:
     }
 
     Function function(std::string owner = {}, bool visible = false) {
+        struct RestoreAggregateAliases {
+            std::unordered_map<std::string, types::NativeAggregateShape>& slot;
+            std::unordered_map<std::string, types::NativeAggregateShape> old;
+            ~RestoreAggregateAliases() { slot = std::move(old); }
+        } restore_aggregate_aliases{
+            callable_aggregate_aliases_, std::move(callable_aggregate_aliases_)};
+        callable_aggregate_aliases_.clear();
         struct Restore { std::string& target; std::string prior; ~Restore() { target = std::move(prior); } } restore{method_scope_, method_scope_};
         method_scope_ = owner;
         struct RestoreReceivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> prior; ~RestoreReceivers() { target = std::move(prior); } } restore_receivers{class_receivers_, std::move(class_receivers_)};
@@ -1959,6 +1966,50 @@ private:
             return value;
         }
         require("{");
+        // Only a closed scalar-field alias at an ordinary callable prologue is
+        // admitted in this first frontend slice. It has no runtime lifetime.
+        // A name cannot escape the defining callable or become a nominal type.
+        while (token_.text == "type") {
+            if (!owner.empty() || alias_extension)
+                fail("AGGREGATE_LOCAL_ALIAS_SCOPE: local aliases require a plain fnc/routine");
+            advance();
+            if (token_.kind != Kind::Identifier)
+                fail("AGGREGATE_LOCAL_ALIAS_NAME_REQUIRED");
+            const std::string alias = identifier();
+            if (alias == "i64" || alias == "String" || alias == "string" ||
+                    alias == "uint" || alias == "float" ||
+                    entry_builtin_name(alias) || scalar_alias_targets_.count(alias) ||
+                    defined_type_aliases_.count(alias) || type_only_nominals_.count(alias))
+                fail("AGGREGATE_LOCAL_ALIAS_SHADOW: builtin or declared type name");
+            if (token_.text == "<")
+                fail("AGGREGATE_LOCAL_ALIAS_GENERIC_UNSUPPORTED");
+            require("=");
+            if (token_.text != "struct" && token_.text != "record")
+                fail("AGGREGATE_LOCAL_ALIAS_SHAPE_REQUIRED: only closed struct/record aliases");
+            types::NativeAggregateShape shape = native_aggregate_shape();
+            for (const auto& field : shape.fields)
+                if (field.type == alias)
+                    fail("AGGREGATE_LOCAL_ALIAS_RECURSIVE_UNSUPPORTED");
+            require(";");
+            if (!callable_aggregate_aliases_.emplace(alias, shape).second)
+                fail("AGGREGATE_LOCAL_ALIAS_DUPLICATE: " + alias);
+            value.local_aggregate_aliases.push_back({alias, std::move(shape)});
+        }
+        if (!value.return_class.empty()) {
+            const auto alias = callable_aggregate_aliases_.find(value.return_class);
+            if (alias != callable_aggregate_aliases_.end()) {
+                value.return_aggregate = alias->second;
+                value.return_class.clear();
+            }
+        }
+        for (auto& parameter : value.parameters) {
+            if (parameter.class_name.empty()) continue;
+            const auto alias = callable_aggregate_aliases_.find(parameter.class_name);
+            if (alias != callable_aggregate_aliases_.end()) {
+                parameter.aggregate_type = alias->second;
+                parameter.class_name.clear();
+            }
+        }
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
@@ -3487,8 +3538,63 @@ private:
         return result;
     }
 
+    std::unique_ptr<Expression> native_local_aggregate_constructor() {
+        const std::size_t offset = token_.offset;
+        const std::string alias = identifier();
+        const auto it = callable_aggregate_aliases_.find(alias);
+        if (it == callable_aggregate_aliases_.end())
+            fail("AGGREGATE_CONSTRUCTOR_UNKNOWN_LOCAL_ALIAS: " + alias);
+        const auto& shape = it->second;
+        if (shape.kind != types::NativeAggregateShape::Kind::ExactStruct)
+            fail("AGGREGATE_CONSTRUCTOR_REQUIRES_STRUCT_ALIAS");
+        auto expr = make_expression(Expression::Kind::AggregateConstruct, offset);
+        expr->name = alias;
+        expr->aggregate_type = shape;
+        require("{");
+        std::unordered_set<std::string> seen;
+        if (!accept("}")) {
+            const bool named =
+                (token_.kind == Kind::Identifier || token_.kind == Kind::String) &&
+                peek_next().text == ":";
+            if (!named && shape.fields.size() != 1)
+                fail("AGGREGATE_CONSTRUCTOR_POSITIONAL_MULTIFIELD: named fields required");
+            do {
+                std::string field;
+                if (named) {
+                    if (token_.kind != Kind::Identifier && token_.kind != Kind::String)
+                        fail("AGGREGATE_CONSTRUCTOR_NAMED_FIELD_REQUIRED");
+                    field = std::string(token_.text);
+                    advance();
+                    require(":");
+                } else {
+                    field = shape.fields.front().name;
+                }
+                const auto known = std::any_of(shape.fields.begin(), shape.fields.end(),
+                    [&](const types::NativeAggregateShape::Field& candidate) {
+                        return candidate.name == field;
+                    });
+                if (!known) fail("AGGREGATE_CONSTRUCTOR_UNKNOWN_FIELD: " + field);
+                if (!seen.insert(field).second)
+                    fail("AGGREGATE_CONSTRUCTOR_DUPLICATE_FIELD: " + field);
+                // Both vectors are in lexical source order, NOT canonical
+                // layout order. Later codegen must evaluate once in this order.
+                expr->argument_names.push_back(field);
+                expr->arguments.push_back(expression());
+                if (!named && token_.text == ",")
+                    fail("AGGREGATE_CONSTRUCTOR_SINGLE_POSITIONAL: extra value");
+            } while (accept(","));
+            require("}");
+        }
+        if (seen.size() != shape.fields.size())
+            fail("AGGREGATE_CONSTRUCTOR_MISSING_FIELD: exact closed shape");
+        return expr;
+    }
+
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (token_.kind == Kind::Identifier && peek_next().text == "{" &&
+                callable_aggregate_aliases_.count(std::string(token_.text)))
+            return native_local_aggregate_constructor();
 
         // nb is a nonblocking channel/select modifier. It is never permission
         // for suspension inside an otherwise synchronous match/switch.
@@ -3980,6 +4086,8 @@ private:
                                     std::size_t depth = 1) {
         require_expression_depth(depth, expr.offset);
         switch (expr.kind) {
+            case Expression::Kind::AggregateConstruct:
+                throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source aggregate constructor cannot enter scalar validation");
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
@@ -4156,6 +4264,8 @@ private:
                     " at byte " + std::to_string(expr.offset));
         };
         switch (expr.kind) {
+            case Expression::Kind::AggregateConstruct:
+                throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source aggregate constructor cannot enter scalar validation");
             case Expression::Kind::SumConstruct:
             case Expression::Kind::SumAccess:
                 if (expr.left) (void)validate_scalar_expression(*expr.left, variables, functions, depth + 1);
@@ -5525,6 +5635,8 @@ private:
     }
 
     std::unordered_map<std::string, ForwardType> forwards_;
+    // Scoped to the currently parsed callable, restored on every exit.
+    std::unordered_map<std::string, types::NativeAggregateShape> callable_aggregate_aliases_;
     std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
     std::string_view source_;
     Lexer lexer_;
@@ -5719,6 +5831,8 @@ void resolve_and_validate_program(Program& program) {
     // in signatures, but runtime/ownership ABI and executable literals are not
     // certified. Never turn a source aggregate into a default scalar i64 slot.
     for (const auto& fn : program.functions) {
+        if (!fn.local_aggregate_aliases.empty())
+            throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: callable-local aggregate aliases cannot enter native lowering");
         if (fn.return_aggregate)
             throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source return kind is preserved but native LLVM return ABI is not certified");
         for (const auto& parameter : fn.parameters)

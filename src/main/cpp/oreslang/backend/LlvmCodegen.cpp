@@ -129,6 +129,8 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
+        case Expression::Kind::AggregateConstruct:
+            throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: aggregate value reached LLVM codegen");
         case Expression::Kind::SumConstruct: {
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
             const bool option = type.kind == NativeSumType::Kind::Option;
@@ -436,6 +438,8 @@ llvm::Value* lower(const Expression& expr,
             }
             llvm::Value* compared = nullptr;
             switch (expr.kind) {
+        case Expression::Kind::AggregateConstruct:
+            throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: aggregate value reached LLVM codegen");
                 case Expression::Kind::Equal:
                     compared = builder.CreateICmpEQ(left, right, "cmp.eq.i1"); break;
                 case Expression::Kind::NotEqual:

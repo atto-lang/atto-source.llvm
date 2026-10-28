@@ -264,6 +264,9 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
 
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::AggregateConstruct:
+            reject(expr, "AGGREGATE_LOWERING_UNVERIFIED: aggregate ownership not certified");
+            return;
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
@@ -421,6 +424,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
 // the distinct fallthrough path. This is *not* general branch-lifetime proof.
 void check_pure_guard(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::AggregateConstruct:
+            reject(expr, "AGGREGATE_LOWERING_UNVERIFIED: aggregate ownership not certified");
+            return;
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
@@ -479,6 +485,9 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
 void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
                                    const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::AggregateConstruct:
+            reject(expr, "AGGREGATE_LOWERING_UNVERIFIED: aggregate ownership not certified");
+            return;
         case Expression::Kind::String:
         case Expression::Kind::Console:
             reject(expr, "native caught throw cannot own string region effects");

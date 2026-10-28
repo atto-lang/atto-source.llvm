@@ -46,7 +46,7 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, AggregateConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
@@ -71,6 +71,9 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    // Source kind belongs to this expression; aggregate construct is
+    // forbidden from native lowering until type/ownership/codegen are ready.
+    std::optional<types::NativeAggregateShape> aggregate_type;
 };
 
 struct Parameter {
@@ -326,8 +329,15 @@ struct ScalarWhileLoop {
     std::int64_t upper_bound = 0;
 };
 
+struct LocalAggregateAlias {
+    std::string name;
+    types::NativeAggregateShape shape;
+};
+
 struct Function {
     std::string name;
+    // Function-prologue-only transparent source aliases; never nominal types.
+    std::vector<LocalAggregateAlias> local_aggregate_aliases;
     std::vector<GenericParameter> generic_parameters;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;

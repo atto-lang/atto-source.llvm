@@ -24,6 +24,26 @@ CASES = (
      "AGGREGATE_SHAPE_UNSUPPORTED_FIELD_TYPE"),
     ("unsupported-nested", "fnc value(): struct { inner: record { foo: int } } { return 1; }",
      "AGGREGATE_SHAPE_UNSUPPORTED_FIELD_TYPE"),
+    ("prologue-exact-alias", "fnc value(): T { type T = struct { foo: int }; return T{5}; }",
+     "AGGREGATE_LOWERING_UNVERIFIED"),
+    ("prologue-readonly-record-alias", "fnc value(): T { type T = record { foo: int }; return 1; }",
+     "AGGREGATE_LOWERING_UNVERIFIED"),
+    ("named-constructor-order", "fnc value(): T { type T = struct { foo: int, bar: int }; return T{bar: 2, foo: 1}; }",
+     "AGGREGATE_LOWERING_UNVERIFIED"),
+    ("duplicate-constructor-field", "fnc value(): T { type T = struct { foo: int }; return T{foo: 1, foo: 2}; }",
+     "AGGREGATE_CONSTRUCTOR_DUPLICATE_FIELD"),
+    ("unknown-constructor-field", "fnc value(): T { type T = struct { foo: int }; return T{bar: 1}; }",
+     "AGGREGATE_CONSTRUCTOR_UNKNOWN_FIELD"),
+    ("missing-constructor-field", "fnc value(): T { type T = struct { foo: int, bar: int }; return T{foo: 1}; }",
+     "AGGREGATE_CONSTRUCTOR_MISSING_FIELD"),
+    ("multi-positional-constructor", "fnc value(): T { type T = struct { foo: int, bar: int }; return T{1, 2}; }",
+     "AGGREGATE_CONSTRUCTOR_POSITIONAL_MULTIFIELD"),
+    ("record-alias-constructor", "fnc value(): T { type T = record { foo: int }; return T{foo: 1}; }",
+     "AGGREGATE_CONSTRUCTOR_REQUIRES_STRUCT_ALIAS"),
+    ("duplicate-prologue-alias", "fnc value(): T { type T = struct { foo: int }; type T = record { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_DUPLICATE"),
+    ("generic-prologue-alias", "fnc value(): T { type T<U> = struct { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_GENERIC_UNSUPPORTED"),
 )
 
 def main():
@@ -47,7 +67,7 @@ def main():
                 raise AssertionError(name + ": LLVM IR emitted on rejected aggregate")
             if list(directory.glob("*.ll")) or list(directory.glob("*.bc")):
                 raise AssertionError(name + ": LLVM artifact emitted on rejected aggregate")
-    print("native aggregate kind: seven fail-closed compiler source checks passed")
+    print("native aggregate kind: 17 fail-closed compiler source checks passed")
 
 if __name__ == "__main__":
     main()
