@@ -1701,6 +1701,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_ledger_authenticated_scheduler_bridge
         PROPERTIES TIMEOUT 25)
 
+    # Retained DATA receipt survives native callback exit, stays charged to
+    # mailbox capacity and prevents false STOP/terminal accounting.
+    add_executable(oreslang-native-retained-data-stop-test
+        tests/native_actor_retained_data_stop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-data-stop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-data-stop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-data-stop-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_retained_data_stop_and_terminal
+        COMMAND oreslang-native-retained-data-stop-test)
+    set_tests_properties(native_actor_retained_data_stop_and_terminal
+        PROPERTIES TIMEOUT 25)
+
     # Host-only CONTROL timer queue: no guest callback, no source async lowering.
     # Expiry tickets are held until exactly-once claim/discard, including
     # accounting for polled-but-not-yet-dispatched timers.
