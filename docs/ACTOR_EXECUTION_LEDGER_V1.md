@@ -117,7 +117,13 @@ A successful STOP subsequently reaches a genuine terminal receipt;
 a concurrently running DATA callback must release its physical lease first.
 
 Normal Future completion cancels the unused cleanup reservation without
-incrementing `accepted` or falsely reporting that the cleanup ran.
+incrementing `accepted` or falsely reporting that the cleanup ran. Global
+acceptance accounting reserves numeric headroom for every possible cleanup
+callback, so unrelated DATA/CONTROL/WAKE admission cannot exhaust the
+`uint64_t` counter before a pre-admitted STOP cleanup turn runs. The
+`native_actor_retained_cleanup_unused_credit_return` regression proves
+that normal resumption releases this reservation, produces no cleanup
+callback, and reconciles accepted/completed/terminal counts.
 If a previously admitted supervisor CONTROL retires the frame, it can also
 cancel an unclaimed cleanup reservation under the actor lease.
 
