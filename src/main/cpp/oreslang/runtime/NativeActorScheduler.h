@@ -128,6 +128,39 @@ int ores_native_actor_scheduler_wait_done(
  * The actor index is a scheduler-local slot, not a cross-tenant capability.
  */
 typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t payload);
+/* Authenticated, bounded DATA completion ownership for guest handlers that
+ * suspend after the native DATA callback returns. The immutable ticket names
+ * the exact admitted message and retired actor incarnation. Keeping a ticket
+ * retains its mailbox credit AND global outstanding accounting. It does NOT
+ * hold an OS carrier or grant a right to enter actor guest state.
+ *
+ * Only the currently executing DATA callback may retain its own envelope.
+ * A later authenticated actor callback may settle an already-deferred ticket,
+ * after the guest handler has physically exited (complete) or proven cleanup
+ * has physically retired its frame (abandon). Neither API is callable from
+ * timer/Future completion threads. No callback/heap allocation on the path.
+ *
+ * These are opt-in host integration primitives; compiler-created .ores async
+ * frames and a complete actor-local dispatcher are separate requirements.
+ */
+typedef struct {
+    OresNativeActorRef actor;
+    uint64_t slot;
+    uint64_t slot_generation;
+    uint64_t execution_id;
+} OresNativeRetainedDataTicket;
+int ores_native_actor_scheduler_retain_current_data(
+    OresNativeActorScheduler* scheduler, OresNativeRetainedDataTicket* out);
+int ores_native_actor_scheduler_complete_retained_data(
+    OresNativeActorScheduler* scheduler, OresNativeRetainedDataTicket ticket);
+int ores_native_actor_scheduler_abandon_retained_data(
+    OresNativeActorScheduler* scheduler, OresNativeRetainedDataTicket ticket);
+/* Diagnostic only. Retained tokens block STOP/terminal/quiescence and may
+ * require a separate trusted cleanup turn. Never infer physical quiescence
+ * from STOP alone. */
+size_t ores_native_actor_scheduler_retained_data_count(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+
 typedef void (*OresNativeActorWakeFn)(
     void* ctx, size_t actor_index, OresNativeWakeTicket ticket,
     OresNativeWakeOutcome outcome);
