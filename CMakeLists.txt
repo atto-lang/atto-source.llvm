@@ -1669,6 +1669,20 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-actor-membership-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_multi_group_membership COMMAND oreslang-native-actor-membership-test)
     set_tests_properties(native_actor_multi_group_membership PROPERTIES TIMEOUT 20)
+    # Actor-local continuation accounting, under the scheduler actor lease.
+    # Host-only state-machine test: no claim of guest or hard-RT integration.
+    add_executable(oreslang-actor-execution-ledger-test
+        tests/native_actor_execution_ledger_test.cpp)
+    target_include_directories(oreslang-actor-execution-ledger-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-execution-ledger-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-execution-ledger-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_execution_ledger_serialization
+        COMMAND oreslang-actor-execution-ledger-test)
+    set_tests_properties(native_actor_execution_ledger_serialization
+        PROPERTIES TIMEOUT 20)
+
     # Host-only CONTROL timer queue: no guest callback, no source async lowering.
     # Expiry tickets are held until exactly-once claim/discard, including
     # accounting for polled-but-not-yet-dispatched timers.
