@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from native_aggregate_negative_receipt import verify_negative_case
+from native_aggregate_negative_receipt import (verify_negative_case, verify_scalar_positive_control)
 
 CASES = (
     # The diagnostic must prove a type rejection, not merely the generic
@@ -100,6 +100,18 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="ores-aggregate-kind-") as tmp:
         root = Path(tmp)
+        # A real working compiler must first admit one ordinary scalar program.
+        # Keep its published LLVM IR isolated from every negative case.
+        control_dir = root / "_positive_control"
+        control_dir.mkdir()
+        control = control_dir / "scalar-positive.ores"
+        control_bytes = b"pub fnc main(): int { return 42; }\\n".replace(b"\\\\n", b"\\n")
+        control.write_bytes(control_bytes)
+        control_result = subprocess.run([args.compiler, str(control)],
+                                        cwd=control_dir, capture_output=True,
+                                        text=True, timeout=30)
+        verify_scalar_positive_control("scalar-positive", control,
+                                       control_bytes, control_result)
         for name, source, expected in CASES:
             # Each fixture must start empty. No earlier fixture output may
             # influence this case's proof, including object/wasm/executable.
@@ -112,7 +124,7 @@ def main():
             result = subprocess.run([args.compiler, str(path)], cwd=directory,
                                     capture_output=True, text=True, timeout=30)
             verify_negative_case(name, path, original, expected, result)
-    print(f"native aggregate kind: {len(CASES)} fail-closed compiler source checks passed")
+    print(f"native aggregate kind: 1 positive scalar IR control and {len(CASES)} fail-closed compiler source checks passed")
 
 if __name__ == "__main__":
     main()
