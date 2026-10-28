@@ -84,3 +84,14 @@ A rejected program only passes when its compiler status is nonzero, stdout
 contains no IR, the ownership-specific diagnostic appears, and the compiler
 has not written extra files or modified the fixture. These checks are
 harness hardening, not evidence of native compiler execution.
+
+### Rust admission harness on current main
+
+`tests/native_borrow_admission.rs` replaces the earlier Python runner. It
+preserves the seven original fixtures and three positive controls, with
+per-process time/output bounds, rejected-source directory/file checks and
+input-byte integrity. An additional canonical `gen*` borrowed-yield fixture
+checks the current literal-yield profile's rejection; the legacy generator
+fixture now expects the current grammar diagnostic. Neither generator
+rejection proves general generator loan lifetime analysis. CTest builds both
+the real-compiler runner and predicate tests with Rust warnings denied.
