@@ -26,7 +26,8 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
-    if name == "source-actor-two-owned-heaps.ores":
+    if name in {"source-actor-two-owned-heaps.ores",
+                "source-actor-two-owned-heaps-graceful.ores"}:
         value = 0
         start = 1 if actor_index == 0 else 5
         for n in range(start, start + processed):
@@ -66,6 +67,64 @@ def parse_actor_receipt(line):
         assert fields["ready"] == fields["processed"] == fields["last"] == 0, fields
     return fields
 
+def parse_guest_handler(line):
+    """Parse a runtime observation emitted only after real on_message returns."""
+    parts = line.split()
+    assert parts and parts[0] == "SOURCE_ACTOR_GUEST_HANDLER", line
+    keys = {"actor", "slot", "seq", "payload", "result"}
+    fields = {}
+    for item in parts[1:]:
+        key, sep, value = item.partition("=")
+        assert sep and key in keys and key not in fields, item
+        signed = key in {"payload", "result"} and value.startswith("-")
+        digits = value[1:] if signed else value
+        assert digits and digits.isascii() and digits.isdecimal(), item
+        fields[key] = int(value)
+    assert set(fields) == keys and fields["actor"] > 0, fields
+    return fields
+
+
+def verify_two_actor_guest_progress(receipts, stderr_lines):
+    """A prefix, skipped turn, or constant exit 43 is insufficient."""
+    assert len(receipts) == 2
+    assert [r["accepted"] for r in receipts] == [4, 5], receipts
+    assert [r["processed"] for r in receipts] == [4, 5], receipts
+    assert [r["abandoned"] for r in receipts] == [0, 0], receipts
+    assert all(r["ready"] == r["constructor_on_worker"] == 1
+               and r["released"] == 1 for r in receipts), receipts
+    assert [r["last"] for r in receipts] == [52, 362], receipts
+
+    traces = [(index, parse_guest_handler(line))
+              for index, line in enumerate(stderr_lines)
+              if line.startswith("SOURCE_ACTOR_GUEST_HANDLER ")]
+    assert len(traces) == 9, traces
+    expected = {
+        0: [(1, 2), (2, 8), (3, 22), (4, 52)],
+        1: [(5, 10), (6, 32), (7, 78), (8, 172), (9, 362)],
+    }
+    actors = {}
+    for slot, values in expected.items():
+        rows = [(i, event) for i, event in traces if event["slot"] == slot]
+        assert len(rows) == len(values), (slot, rows)
+        assert [(e["seq"], e["payload"], e["result"]) for _, e in rows] == [
+            (i + 1, payload, result)
+            for i, (payload, result) in enumerate(values)
+        ], (slot, rows)
+        identities = {e["actor"] for _, e in rows}
+        assert len(identities) == 1, (slot, rows)
+        actors[slot] = next(iter(identities))
+    assert actors[0] != actors[1], actors
+
+    # The compiled A.graceful_stop() joins physical heap reclamation
+    # before the compiled guest may send B's fifth message.
+    stops = [i for i, line in enumerate(stderr_lines)
+             if line.startswith("SOURCE_ACTOR_SPAWN_STOP_VERIFIED ")]
+    assert len(stops) == 2, stops
+    last_b = next(i for i, e in traces if e["slot"] == 1 and e["seq"] == 5)
+    assert stops[0] < last_b < stops[1], (stops, last_b)
+    return actors
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
@@ -93,6 +152,7 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
+        ("source-actor-two-owned-heaps-graceful.ores", 2, None, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -168,6 +228,7 @@ def main():
             flags = ["--experimental-owned-int"] if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "source-actor-two-owned-heaps-graceful.ores",
             } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
@@ -182,6 +243,7 @@ def main():
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "source-actor-two-owned-heaps-graceful.ores",
             }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
@@ -208,6 +270,10 @@ def main():
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
+            if name == "source-actor-two-owned-heaps-graceful.ores":
+                assert guest.stdout.count(
+                    "call void @oreslang_source_actor_graceful_stop(") == 2, (
+                    name, "both source actor stops must be gracefully lowered")
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -264,7 +330,9 @@ def main():
                 abandoned = receipt["abandoned"]
                 observed_last = receipt["last"]
                 expected_accepted = (
-                    [1, 2][i]
+                    [4, 5][i]
+                    if name == "source-actor-two-owned-heaps-graceful.ores"
+                    else [1, 2][i]
                     if name == "source-actor-interleaved-stop.ores"
                     else count)
                 assert accepted == expected_accepted, (
@@ -280,6 +348,8 @@ def main():
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
+            if name == "source-actor-two-owned-heaps-graceful.ores":
+                verify_two_actor_guest_progress(receipts, executed.stderr.splitlines())
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
