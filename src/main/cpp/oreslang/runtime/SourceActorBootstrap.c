@@ -854,9 +854,9 @@ static void request_stop_impl(void* opaque, int graceful) {
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
     /*
-     * Source stop matches Java ActorRef.stop(), not gracefulStop(): reject
-     * future DATA and abandon queued DATA, while an already-active turn is
-     * allowed to cross its physical execution boundary.
+     * Ordinary stop is abortive; graceful_stop seals future DATA while
+     * preserving previously accepted DATA for full worker-lane draining.
+     * Both modes retain the physical completion and heap retirement barrier.
      */
     ensure(graceful
         ? ores_native_vm_stop(group.vm, ORES_NATIVE_VM_MAIN, instance->ref)
