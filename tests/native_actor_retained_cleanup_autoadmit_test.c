@@ -107,6 +107,7 @@ static void run_case(int cleanup_success) {
         CHECK(ores_native_actor_scheduler_retained_data_count(
             f.scheduler,f.actor)==1);
         CHECK(!ores_native_actor_scheduler_drain(f.scheduler));
+        ores_native_actor_scheduler_retire(f.scheduler);
         CHECK(!ores_native_actor_scheduler_try_destroy(f.scheduler));
         /* Failed physical cleanup remains quarantined and deliberately
          * cannot be destroyed; leak check is disabled for this subcase. */
