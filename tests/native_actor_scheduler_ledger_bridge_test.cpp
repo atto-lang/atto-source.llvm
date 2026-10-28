@@ -17,7 +17,7 @@ struct State {
     OresNativeActorRef a{}, b{};
     std::atomic<Bridge*> bridge{nullptr};
     std::atomic<std::uint64_t> suspended_seq{0}, timer_seq{0};
-    std::atomic<int> first_called{0}, b_progress{0};
+    std::atomic<int> first_called{0}, b_progress{0}, hold_first{1};
     std::atomic<int> trace_count{0}, errors{0}, supervisory{0};
     int trace[4]{}; // actor A's single-writer carrier owns writes
 };
@@ -47,6 +47,10 @@ static Bridge::Decision process(void* raw, Id id, Bridge::Kind kind,
                 s.errors.fetch_add(1);
             s.timer_seq.store(timer.sequence, std::memory_order_release);
             s.suspended_seq.store(id.sequence, std::memory_order_release);
+            // TEST ONLY: hold the physical actor lease to force a pending
+            // supervisor CONTROL slot and independently progress peer actor B.
+            while (s.hold_first.load(std::memory_order_acquire))
+                std::this_thread::yield();
             return Bridge::Decision::Suspend;
         }
         step(s, 0, 1);
@@ -100,16 +104,15 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     assert(s.suspended_seq.load(std::memory_order_acquire));
     assert(s.timer_seq.load(std::memory_order_acquire));
+    // An actor can be RUNNING while a separate peer makes progress; a pending
+    // supervisor CONTROL reservation blocks ordinary timer CONTROL admission.
     assert(bridge->send(200) == Bridge::Submit::Accepted);
-    for (int i = 0; bridge->messages_arrived() < 2 && i < 2000; ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    assert(bridge->messages_arrived() == 2);
-    assert(s.trace_count.load() == 0); // B can't overtake suspended A
     assert(ores_native_actor_scheduler_send(s.native, s.b, 501));
-    assert(until(s.b_progress, 1));  // another actor progresses on another carrier
+    assert(until(s.b_progress, 1));
+    assert(ores_native_actor_scheduler_publish_control(s.native, s.a, 777));
 
-    // Pre-reserved scheduler CLOCK records have no guest heap pointer.
-    // Main test thread stands in for a single-owner absolute clock driver.
+    // Main thread stands in for a single-owner CLOCK driver; it never runs
+    // the actor guest hook or dereferences an actor-private continuation.
     Pool pool;
     Pool::Handle h{};
     Pool::Expired due{};
@@ -118,15 +121,18 @@ int main() {
     assert(due.actor_id == 1 && due.actor_generation == s.a.generation);
     auto notify_timer = bridge->notify_ready(Id{1, s.a.generation,
         s.timer_seq.load(std::memory_order_acquire)});
-    assert(notify_timer == Bridge::Notify::Signaled ||
-           notify_timer == Bridge::Notify::Coalesced ||
-           notify_timer == Bridge::Notify::RetryRequired);
-    assert(s.trace_count.load() == 0);
+    assert(notify_timer == Bridge::Notify::RetryRequired);
     auto notify_future = bridge->notify_ready(Id{1, s.a.generation,
         s.suspended_seq.load(std::memory_order_acquire)});
-    assert(notify_future == Bridge::Notify::Signaled ||
-           notify_future == Bridge::Notify::Coalesced ||
-           notify_future == Bridge::Notify::RetryRequired);
+    assert(notify_future == Bridge::Notify::RetryRequired);
+    assert(bridge->retry_needed());
+    assert(s.trace_count.load() == 0);
+    s.hold_first.store(0, std::memory_order_release);
+    assert(until(s.supervisory, 1));  // reserved supervisor CONTROL wins
+    for (int i = 0; bridge->messages_arrived() < 2 && i < 2000; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    assert(bridge->messages_arrived() == 2);
+    assert(s.trace_count.load() == 0); // B can't overtake suspended A
     for (int i = 0; i < 2000 && s.trace_count.load(std::memory_order_acquire) < 3; ++i) {
         (void)bridge->retry_kick();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
