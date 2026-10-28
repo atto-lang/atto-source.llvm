@@ -9,6 +9,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from native_aggregate_negative_receipt import verify_negative_case
+
 CASES = (
     ("exact-struct-return", "fnc value(): struct { foo: int } { return 1; }",
      "AGGREGATE_LOWERING_UNVERIFIED"),
@@ -57,22 +59,19 @@ def main():
     parser.add_argument("--compiler", required=True)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="ores-aggregate-kind-") as tmp:
-        directory = Path(tmp)
+        root = Path(tmp)
         for name, source, expected in CASES:
+            # Each fixture must start empty. No earlier fixture output may
+            # influence this case's proof, including object/wasm/executable.
+            directory = root / name
+            directory.mkdir()
             path = directory / (name + ".ores")
-            path.write_text(source + "\npub fnc main(): int { return 0; }\n",
-                            encoding="utf-8")
+            original = (source + "\n" +
+                        "pub fnc main(): int { return 0; }\n").encode("utf-8")
+            path.write_bytes(original)
             result = subprocess.run([args.compiler, str(path)], cwd=directory,
                                     capture_output=True, text=True, timeout=30)
-            output = result.stdout + result.stderr
-            if result.returncode == 0 or expected not in output:
-                raise AssertionError(
-                    f"{name}: expected nonzero and {expected!r}: "
-                    f"rc={result.returncode} stderr={result.stderr!r}")
-            if "define " in result.stdout or "target triple" in result.stdout:
-                raise AssertionError(name + ": LLVM IR emitted on rejected aggregate")
-            if list(directory.glob("*.ll")) or list(directory.glob("*.bc")):
-                raise AssertionError(name + ": LLVM artifact emitted on rejected aggregate")
+            verify_negative_case(name, path, original, expected, result)
     print("native aggregate kind: 20 fail-closed compiler source checks passed")
 
 if __name__ == "__main__":

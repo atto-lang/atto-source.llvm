@@ -359,6 +359,17 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_aggregate_kind_failclosed.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_aggregate_shape_compiler_failclosed PROPERTIES TIMEOUT 90)
+    # Independent source-free adversarial proof of the compiler-negative
+    # evidence admission harness. Never substitute this for native compiler run.
+    add_test(NAME native_aggregate_negative_receipt_harness
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_aggregate_negative_receipt.py")
+    add_test(NAME native_aggregate_negative_receipt_harness_python_O
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_aggregate_negative_receipt.py")
+    set_tests_properties(native_aggregate_negative_receipt_harness
+        native_aggregate_negative_receipt_harness_python_O
+        PROPERTIES TIMEOUT 20)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
