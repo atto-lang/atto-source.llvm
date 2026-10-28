@@ -137,6 +137,9 @@ int main(void) {
     let build = Command::new(&clang)
         .arg("-O2").arg("-std=c11")
         .arg("-Wall").arg("-Wextra").arg("-Werror").arg("-pedantic")
+        // Source IR is target-neutral; Clang assigns the host triple when
+        // linking this native execution test, including on Apple Silicon.
+        .arg("-Wno-override-module")
         .arg(&harness).arg("-x").arg("ir").arg(&ll)
         .arg("-o").arg(&exe).current_dir(&dir.0)
         .output().expect("run clang");

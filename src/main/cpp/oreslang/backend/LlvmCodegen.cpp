@@ -827,7 +827,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 || actual.isLittleEndian() != (profile.endian() == "little"))
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
-    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    auto* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* i32 = llvm::Type::getInt32Ty(context);
     llvm::Type* loan_ptr = native_pointer_type(context, i64);
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
