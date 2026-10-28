@@ -82,7 +82,7 @@ def main():
     shared_file = fixtures / "source-actor-shared-heap-contract-v1.ores"
     shared_bytes = shared_file.read_bytes()
     shared_blob = hashlib.sha1(b"blob " + str(len(shared_bytes)).encode("ascii")
-                               + b"\\0" + shared_bytes).hexdigest()
+                               + b"\0" + shared_bytes).hexdigest()
     assert shared_blob == "51519bdf9084d7d8457b1e5a39c92a5efe2b63ce", (
         "canonical shared guest fixture bytes drifted", shared_blob)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
