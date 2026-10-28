@@ -1,0 +1,11 @@
+// Must fail before emitting LLVM IR. A moved class-owned array cannot be
+// accessed through its former owner, even while another owner remains live.
+define class TensorOwner as
+  pub let mut Array<int> values = new Array<int>();
+end
+pub fnc main(): int {
+  let mut TensorOwner original = new TensorOwner();
+  original.values.add(42);
+  let mut TensorOwner moved = rt take(original);
+  return original.values.get(0);
+}
