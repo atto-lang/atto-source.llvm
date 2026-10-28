@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from native_aggregate_negative_receipt import (
-    verify_negative_case, verify_scalar_positive_control,
+    verify_negative_case, verify_scalar_positive_control, verify_isolated_workspace,
 )
 
 
@@ -121,6 +121,55 @@ class ScalarPositiveControlTest(unittest.TestCase):
     def test_signal_killed_control_does_not_pass(self):
         with self.assertRaisesRegex(AssertionError, "did not compile"):
             self.verify(rc=-9)
+
+
+class IsolatedWorkspaceTest(unittest.TestCase):
+    """A sibling or parent-directory IR emission must fail the gate."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.case = self.root / "case"
+        self.case.mkdir()
+        self.source = self.case / "case.ores"
+        self.original = b"source" + bytes([10])
+        self.source.write_bytes(self.original)
+        self.expected = {"case": (self.source, self.original)}
+
+    def test_clean_workspace(self):
+        verify_isolated_workspace(self.root, self.expected)
+
+    def test_ir_escaped_into_workspace_root(self):
+        (self.root / "escaped.ll").write_bytes(b"define @bad")
+        with self.assertRaisesRegex(AssertionError, "unexpected entries"):
+            verify_isolated_workspace(self.root, self.expected)
+
+    def test_unknown_sibling_case(self):
+        (self.root / "other").mkdir()
+        with self.assertRaisesRegex(AssertionError, "unexpected entries"):
+            verify_isolated_workspace(self.root, self.expected)
+
+    def test_artifact_inside_prior_case(self):
+        (self.case / "object.o").write_bytes(b"object")
+        with self.assertRaisesRegex(AssertionError, "contains artifacts"):
+            verify_isolated_workspace(self.root, self.expected)
+
+    def test_prior_case_source_mutation(self):
+        self.source.write_bytes(b"mutated")
+        with self.assertRaisesRegex(AssertionError, "source changed"):
+            verify_isolated_workspace(self.root, self.expected)
+
+    def test_symlink_directory_replacement(self):
+        alternate = self.root / "alternate"
+        alternate.mkdir()
+        self.source.unlink()
+        self.case.rmdir()
+        self.case.symlink_to(alternate, target_is_directory=True)
+        self.expected = {"case": (self.source, self.original),
+                         "alternate": (alternate / "case.ores", self.original)}
+        with self.assertRaisesRegex(AssertionError, "source changed"):
+            verify_isolated_workspace(self.root, self.expected)
 
 
 if __name__ == "__main__":
