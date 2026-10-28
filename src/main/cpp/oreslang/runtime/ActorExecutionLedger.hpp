@@ -13,6 +13,7 @@ template<std::size_t N> class ActorExecutionLedger final {
 public:
     enum class Status : std::uint8_t { Ok, Full, Stale, Busy, NoEligible,
         NotRunning, NotSuspended, AwaitNotArmed, AlreadyReady, AlreadyCancelled, Cancelled,
+        Unauthorized,
         Closed, Invalid, Overflow };
     enum class Kind : std::uint8_t { Mail, Timer, Deferred };
     enum class Dispatch : std::uint8_t { Normal, CancelCleanup };
