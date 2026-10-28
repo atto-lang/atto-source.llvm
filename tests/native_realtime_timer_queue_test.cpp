@@ -48,5 +48,25 @@ int main() {
     assert(q.poll_due(UINT64_MAX, expiry) == Status::Closed);
     assert(q.arm_after(UINT64_MAX, 0, 7, 2, z) == Status::Closed);
     assert(q2.cancel(z) == Status::Ok);
+
+    // STOP of one actor generation retires READY and ARMED reservations,
+    // leaving the replacement generation intact. Tie order is stable.
+    Queue q3;
+    Queue::Handle old0{}, old1{}, replacement{};
+    std::uint64_t next_ns = 0;
+    std::size_t revoked = 99;
+    assert(q3.arm_after(1, 9, 44, 3, old0) == Status::Ok);
+    assert(q3.arm_after(1, 9, 44, 3, old1) == Status::Ok);
+    assert(q3.next_deadline_ns(next_ns) == Status::Ok && next_ns == 10);
+    assert(q3.poll_due(10, expiry) == Status::Ok);
+    assert(expiry.handle.slot == old0.slot);  // same deadline FIFO
+    assert(q3.revoke_actor(44, 3, revoked) == Status::Ok && revoked == 2);
+    assert(q3.claim_start(old0, 44, 3, 10, 0, start) == Status::Stale);
+    assert(q3.outstanding() == 0);
+    assert(q3.next_deadline_ns(next_ns) == Status::NotReady);
+    assert(q3.arm_after(10, 0, 44, 4, replacement) == Status::Ok);
+    assert(q3.revoke_actor(44, 3, revoked) == Status::Ok && revoked == 0);
+    assert(q3.poll_due(10, expiry) == Status::Ok);
+    assert(q3.claim_start(replacement, 44, 4, 10, 0, start) == Status::Ok);
     return 0;
 }
