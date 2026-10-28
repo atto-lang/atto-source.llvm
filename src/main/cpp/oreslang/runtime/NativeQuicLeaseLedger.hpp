@@ -82,6 +82,8 @@ public:
 
     std::optional<Stream> admit_stream(Connection connection,
                                        Direction direction) noexcept {
+        if (direction != Direction::Bidirectional &&
+            direction != Direction::Unidirectional) return std::nullopt;
         auto* conn = find(connection);
         if (retiring_ || !conn || conn->draining || next_ticket_ == 0)
             return std::nullopt;
