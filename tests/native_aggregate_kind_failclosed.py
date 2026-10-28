@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from native_aggregate_negative_receipt import (verify_negative_case, verify_scalar_positive_control)
+from native_aggregate_negative_receipt import (verify_negative_case, verify_scalar_positive_control, verify_isolated_workspace)
 
 CASES = (
     # The diagnostic must prove a type rejection, not merely the generic
@@ -112,6 +112,8 @@ def main():
                                         text=True, timeout=30)
         verify_scalar_positive_control("scalar-positive", control,
                                        control_bytes, control_result)
+        workspace_sources = {"_positive_control": (control, control_bytes)}
+        verify_isolated_workspace(root, workspace_sources)
         for name, source, expected in CASES:
             # Each fixture must start empty. No earlier fixture output may
             # influence this case's proof, including object/wasm/executable.
@@ -124,6 +126,8 @@ def main():
             result = subprocess.run([args.compiler, str(path)], cwd=directory,
                                     capture_output=True, text=True, timeout=30)
             verify_negative_case(name, path, original, expected, result)
+            workspace_sources[name] = (path, original)
+            verify_isolated_workspace(root, workspace_sources)
     print(f"native aggregate kind: 1 positive scalar IR control and {len(CASES)} fail-closed compiler source checks passed")
 
 if __name__ == "__main__":
