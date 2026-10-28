@@ -107,7 +107,7 @@ struct OresNativeActorScheduler {
  * No normal message or Future wake may consume this slot before STOP. */
 static int accepted_capacity_available(const OresNativeActorScheduler* s) {
     return s->reserved_cleanup_acceptances <= UINT64_MAX - s->reserved_wakes
-        && accepted_capacity_available(s)
+        && s->accepted < UINT64_MAX - s->reserved_wakes
                           - s->reserved_cleanup_acceptances;
 }
 static size_t actor_data_occupancy(const ActorLane* lane) {
