@@ -1391,12 +1391,19 @@ private:
                 require("handle_state");
                 require("(");
                 loan->mode = ActorStateLoan::Mode::Read;
-                if (accept("critical-write")) {
-                    loan->mode = ActorStateLoan::Mode::Write;
-                } else if (accept("critical-read")) {
-                    loan->mode = ActorStateLoan::Mode::Read;
-                } else if (accept("critical")) {
-                    if (accept("read")) {
+                if (accept("critical")) {
+                    // The native lexer correctly splits hyphenated operators
+                    // as IDENT '-' IDENT to preserve ordinary subtraction.
+                    // Accept canonical critical-write / critical-read as
+                    // explicit lexical loan modes, never as opaque tokens.
+                    if (accept("-")) {
+                        if (accept("write"))
+                            loan->mode = ActorStateLoan::Mode::Write;
+                        else if (accept("read"))
+                            loan->mode = ActorStateLoan::Mode::Read;
+                        else
+                            fail("expected critical-write or critical-read");
+                    } else if (accept("read")) {
                         loan->mode = ActorStateLoan::Mode::Read;
                     } else {
                         (void)accept("write");
@@ -1434,8 +1441,8 @@ private:
             if (loan->binder == method.parameters.front().name)
                 fail("state callback binding shadows actor message parameter");
             require("|");
-            require("-");
-            require(">");
+            // Lexer returns contiguous arrow as a single -> token.
+            require("->");
 
             if (accept("{")) {
                 while (token_.text != "return") {
