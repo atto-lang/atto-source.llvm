@@ -238,5 +238,87 @@ int main() {
                 "deep finite call graph diagnostic");
     }
 
+    {
+        Program program;
+        auto remainder = std::make_unique<Expression>();
+        remainder->kind = Expression::Kind::Remainder;
+        remainder->left = integer(10);
+        remainder->right = integer(3);
+        program.functions.push_back(pure("main", std::move(remainder)));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted,
+                "bounded pure signed remainder must be handled by RT switch");
+    }
+
+    // Async syntax is represented on dedicated Function members, not in
+    // the scalar expression tree. Every such member must poison the complete
+    // reachable hard-RT graph even when the function returns a constant.
+    for (int mode = 0; mode < 13; ++mode) {
+        Program program;
+        Function worker = pure("worker", integer(17));
+        switch (mode) {
+            case 0: worker.async_source_i64 = true; break;
+            case 1: worker.source_tasks.emplace_back(); break;
+            case 2: worker.future_pipelines.emplace_back(); break;
+            case 3: worker.ready_await_actor = "actor"; break;
+            case 4: worker.done_await_actor = "actor"; break;
+            case 5: worker.ready_future_name = "future"; break;
+            case 6: worker.ready_future_actor = "actor"; break;
+            case 7: worker.ready_await_form = NativeAwaitForm::DirectHasFuture; break;
+            case 8: worker.ready_await_form = NativeAwaitForm::ExplicitGetReady; break;
+            case 9: worker.ready_await_form = NativeAwaitForm::ExplicitGetDone; break;
+            case 10: worker.ready_await_form = NativeAwaitForm::FutureValue; break;
+            case 11: {
+                LocalBinding local;
+                local.name = "task_result";
+                local.task_await_name = "task";
+                worker.locals.push_back(std::move(local));
+                break;
+            }
+            case 12: {
+                LocalBinding local;
+                local.name = "future_result";
+                local.future_await_name = "future";
+                worker.locals.push_back(std::move(local));
+                break;
+            }
+        }
+        program.functions.push_back(std::move(worker));
+        program.functions.push_back(pure("main", call("worker")));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "hidden async field must reject through transitive calls");
+        require(report.diagnostic == "RT002_UNBOUNDED_BLOCKING",
+                "hidden async fields must report suspension (not pure)");
+        require(report.transitive_effects.has(FunctionEffect::Suspend),
+                "hidden async field must contribute a suspend effect");
+    }
+
+    {
+        Program program;
+        Function generic = pure("generic_worker", integer(7));
+        generic.generic_parameters.push_back({"T", ""});
+        program.functions.push_back(std::move(generic));
+        program.functions.push_back(pure("main", call("generic_worker")));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "unspecialized generic source cannot prove closed hard-RT code");
+        require(report.diagnostic == "RT005_DYNAMIC_CODE",
+                "unproven generic specialization must reject fail closed");
+    }
+
+    {
+        Program program;
+        Function unreachable = pure("unreachable_async", integer(1));
+        unreachable.source_tasks.emplace_back();
+        program.functions.push_back(std::move(unreachable));
+        program.functions.push_back(pure("main", integer(42)));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted,
+                "unreachable async helper must not poison closed reachable entry");
+        require(!report.transitive_effects.has(FunctionEffect::Suspend),
+                "unreachable effects must not pollute main");
+    }
+
     return 0;
 }

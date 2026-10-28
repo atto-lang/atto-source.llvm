@@ -174,6 +174,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             break;
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -193,6 +194,10 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
 
 inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
     if (facts.call_budget_exceeded) return;
+    // Await metadata lives on LocalBinding even if the producer fields were
+    // not populated. Reject this AST shape rather than assuming a pure local.
+    if (!binding.task_await_name.empty() || !binding.future_await_name.empty())
+        add_effect(facts, FunctionEffect::Suspend);
     scan_expression(binding.initializer.get(), facts);
     for (const auto& argument : binding.constructor_arguments) {
         scan_expression(argument.get(), facts);
@@ -250,6 +255,24 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
 inline DirectFacts direct_facts(const Function& function, std::size_t call_limit) {
     DirectFacts facts;
     facts.call_limit = call_limit;
+    // Async/task/pipeline and lifecycle-await syntax is represented in dedicated
+    // Function fields, not in locals/statements/result. Without this gate, a
+    // function containing only a constant result plus a scheduler operation
+    // incorrectly appears effect-free to the hard-RT transitive checker.
+    // Until bounded scheduler, continuation lifetime and allocation proofs are
+    // part of verified MIR, all of these forms must reject as suspending.
+    if (function.async_source_i64 ||
+        !function.source_tasks.empty() ||
+        !function.future_pipelines.empty() ||
+        !function.ready_await_actor.empty() ||
+        !function.done_await_actor.empty() ||
+        function.ready_await_form != NativeAwaitForm::None ||
+        !function.ready_future_name.empty() ||
+        !function.ready_future_actor.empty()) {
+        add_effect(facts, FunctionEffect::Suspend);
+    }
+    // Uninstantiated generic source declarations have no closed RT witness.
+    if (!function.generic_parameters.empty()) facts.bounded_calls = false;
     // Even a passthrough validates a region-backed descriptor at entry. The
     // scalar ABI does not make sum storage a certified hard-RT resource.
     if (!function.return_sum.empty() || std::any_of(function.parameters.begin(), function.parameters.end(),
