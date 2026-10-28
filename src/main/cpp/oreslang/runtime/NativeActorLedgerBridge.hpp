@@ -149,6 +149,11 @@ public:
     // an occupied supervisor CONTROL slot. This method is not needed for
     // normal supervisor-CONTROL saturation after on_supervisor_control().
     Notify retry_kick() noexcept {
+        // BoundedMpscQueue::has_ready() reads its single-consumer cursor,
+        // which is NOT atomic. Do not inspect it from a Future/clock producer.
+        // Normal backpressure recovery happens automatically from the actor's
+        // authenticated on_supervisor_control() completion.
+        if (!authorized()) return Notify::Invalid;
         if (closed_.load(std::memory_order_acquire)) return Notify::Closed;
         if (!notices_.has_ready()) return Notify::Coalesced;
         return kick();
