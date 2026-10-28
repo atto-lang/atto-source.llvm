@@ -109,6 +109,9 @@ struct LocalBinding {
     bool field_mutable = false; // actor-owned fields only
     ScalarType scalar_type = ScalarType::I64;
     std::string pending_type_alias; // transparent compile-time alias identity
+    // Typed closed aggregate local; this is a frontend-only value category,
+    // never a native i64/class slot before aggregate ownership/ABI admission.
+    std::optional<types::NativeAggregateShape> aggregate_type;
     std::size_t offset = 0;
     std::string sum_type;
     // Nonempty only for the first capture-free source Task<int> slice.
