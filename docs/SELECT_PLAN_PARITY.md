@@ -176,3 +176,35 @@ continuation scheduling, channel-close semantics, policy lowering
 Until those layers are wired and tested, source `select`, including both
 `{ ... }` and `over ... end`, must continue to fail closed at the native
 frontend boundary.
+
+
+## Main-stack runtime integration
+
+The native runtime prerequisites are now carried on a clean branch rooted at the
+live main tree rather than relying on feature branches whose parent PRs had
+already merged.
+
+The integrated runtime contract includes:
+
+- bounded selectable signed-i64 channel readiness;
+- channel close/EOF with buffered drain-before-EOF and terminal closed writes;
+- immutable/non-consuming signed-i64 Future readiness with value/failure/cancel;
+- exactly-one select arbitration with loser revocation;
+- actor-generation continuation tickets with ABA-safe identities;
+- a claimed continuation retains a physical execution lease through callback
+  completion;
+- actor generation advance fails while any claimed continuation is still
+  executing;
+- terminal close cancels pending delivery but physical retirement is not
+  reported complete until every claimed continuation has released its lease.
+
+This closes the gap where a scheduler could consume a logical continuation
+ticket and then advance the actor generation before the continuation physically
+returned.
+
+Source-level static select remains fail-closed. The next compiler slice must
+bind typed read/write/Future arms to these runtime transactions, store the
+winner result in compiler-owned continuation storage, revoke borrows before
+suspension, and reacquire/revalidate actor-local state on resume. Parser
+admission must not be enabled before those ownership and suspension checks are
+executable.
