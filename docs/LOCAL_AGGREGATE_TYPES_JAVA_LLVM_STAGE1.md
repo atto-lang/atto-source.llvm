@@ -59,7 +59,8 @@ native subset, reusing already-established class layout and ownership lowering:
 * A **nominal** callable-local `struct T` with 1–16 `int` fields, a single
   declaration per function, zero explicit parameters/generics, no declared
   effects and no source suspension. It receives a compiler-owned, unspellable
-  layout identity derived from its source position and local type name.
+  layout identity derived from its callable name, source position and local
+  type name (not an exported or cross-module-stable symbol).
 * A public ordinary `main(): int` (or other scalar-return function) may
   construct that type through `val T p = T{...}`, use its fixed fields,
   and return scalar results. This constructs an actual native stack class
@@ -108,5 +109,11 @@ strict stack aggregate compilation, separate callable nominal identities and
 private record-return LLVM IR. **An actual Clang link+execute pass** is required
 to claim execution evidence; IR-only success is insufficient. The source
 organization's previously observed zero-step Actions failures do not constitute
-compiler or sanitizer results. Keep the PR draft until exact-head execution
-and a sanitizer audit succeed.
+compiler or sanitizer results. A check of six proposed private alternate
+repositories also found recent zero-step job failures; runner capacity remains
+unverified. The source repo's
+`.github/private-ci-approved-repositories.txt` currently approves **no
+cross-organization destinations**. No private source may be mirrored without
+independent maintainer/security approvals and a reviewed protected-branch
+allowlist change. Keep the PR draft until exact-head execution and a sanitizer
+audit succeed. See source CI issue #159 and private transfer review issue #475.
