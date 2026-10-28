@@ -144,6 +144,29 @@ nonterminal behavior is retained. No ordinary guest-code reentrancy is
 introduced by this lifecycle mechanism.
 
 
+## Deterministic STOP-versus-wake linearization matrix
+
+`tests/native_actor_retained_stop_wake_race_test.c` adds 80 actual
+native-scheduler iterations divided among four synchronization modes:
+
+1. Both producer and STOP call race concurrently.
+2. STOP wins before transfer: the reserved wake is cancelled, and the
+   pre-reserved actor-owned cleanup retires A.
+3. Transfer and publication precede STOP: an already-admitted WAKE can
+   legitimately finish A; the unused cleanup reservation must be cancelled.
+4. Transfer precedes STOP, then publication occurs: the producer is retired,
+   no guest WAKE executes, and the retained frame is physically cleaned.
+
+Each mode asserts one and only one final retirement path (WAKE completion
+or certified cleanup), the DATA accepted = processed + abandoned terminal
+identity, stale duplicate ticket refusal, and no overlapping actor guest
+entry. It runs under strict GCC/Clang and Clang ASan/UBSan CI configurations.
+
+**Important:** These regressions are committed but remain **unexecuted on
+this latest native source head** until a runner executes real compile/test
+steps. Scheduling four forced interleavings is not a proof of all possible
+interleavings or a hard-real-time WCET bound. The implementation remains draft.
+
 ## Integration sequence
 
 - Connect an actor-owned ledger to the actual `NativeActorScheduler` lane/actor arena; authenticate every event/continuation token under the same physical actor claim; provide scheduler↔actor revision/slot accounting.
