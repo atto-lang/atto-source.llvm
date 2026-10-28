@@ -7,6 +7,7 @@ when available. Never confuse IR generation with native execution evidence.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,11 +19,48 @@ def compile_guest(compiler, source, filename):
                           text=True, timeout=40)
 
 
+def mark_native_ir_for_asan(source):
+    """Instrument generated LLVM definitions, not merely link ASan runtimes.
+
+    LLVM IR supplied to Clang has already passed a source-language frontend.
+    The -fsanitize flag alone does not attach sanitize_address to definitions.
+    Fail closed if a function definition is not a single-line LLVM header.
+    """
+    lines = source.splitlines(keepends=True)
+    instrumented = 0
+    for index, line in enumerate(lines):
+        if not line.startswith("define "):
+            continue
+        head, brace, tail = line.rpartition("{")
+        if not brace or tail.strip() or "sanitize_address" in head:
+            raise AssertionError("LOCAL_AGGREGATE_ASAN_ATTRIBUTE_GATE: unexpected LLVM definition header")
+        lines[index] = head.rstrip() + " sanitize_address {" + tail
+        instrumented += 1
+    if instrumented == 0:
+        raise AssertionError("LOCAL_AGGREGATE_ASAN_ATTRIBUTE_GATE: no functions to instrument")
+    return "".join(lines)
+
+
+def verify_native_ir_asan(clang, path, temp):
+    """Verify real memory-access instrumentation, not just a module ctor."""
+    inspected = temp / "asan-check.ll"
+    probe = subprocess.run(
+        [clang, "-x", "ir", "-O0", "-S", "-emit-llvm", "-fsanitize=address",
+         str(path), "-o", str(inspected)],
+        capture_output=True, text=True, timeout=50)
+    if probe.returncode:
+        raise AssertionError(("LOCAL_AGGREGATE_ASAN_INSTRUMENTATION_FAILED",
+                              probe.returncode, probe.stderr[:1200]))
+    instrumented = inspected.read_text(encoding="utf-8")
+    if not re.search(r"@__asan_(?:report_(?:load|store)|(?:load|store))[0-9N]+\\b", instrumented):
+        raise AssertionError("LOCAL_AGGREGATE_ASAN_INSTRUMENTATION_MISSING: no access checks in generated native IR")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
     ap.add_argument("--clang", default="")
-    ap.add_argument("--sanitize", action="store_true", help="require ASan + UBSan execution")
+    ap.add_argument("--sanitize", action="store_true", help="require checked ASan instrumentation of generated LLVM IR")
     args = ap.parse_args()
     if not args.clang:
         raise RuntimeError("LOCAL_AGGREGATE_NATIVE_EXECUTION_REQUIRED: Clang unavailable; IR-only is not a passing native parity gate")
@@ -142,7 +180,10 @@ def main():
                                       result.stderr[:1000], result.stdout[:300]))
             ir = Path(temp) / "program.ll"
             exe = Path(temp) / "program"
-            ir.write_text(result.stdout, encoding="utf-8")
+            ir.write_text(mark_native_ir_for_asan(result.stdout) if args.sanitize
+                          else result.stdout, encoding="utf-8")
+            if args.sanitize:
+                verify_native_ir_asan(args.clang, ir, Path(temp))
             clang_args = [args.clang, str(ir), "-o", str(exe)]
             if args.sanitize:
                 clang_args += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer",
@@ -192,7 +233,7 @@ def main():
             raise AssertionError(("callable local type leaked or rejection was not clean",
                                   leak.returncode, leak.stdout[:500]))
     print(f"PASS {len(executable)} native scalar stack programs (LLVM+Clang+OS"
-          + ("+ASan+UBSan)" if args.sanitize else ")")
+          + ("+instrumented-ASan)" if args.sanitize else ")")
           + f", {len(accepted_syntax)} gated syntax, {len(errors)} fail-closed negatives, "
             "1 private return IR, 1 baseline and 1 scope-isolation case")
 
