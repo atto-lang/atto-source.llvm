@@ -5,6 +5,9 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 using namespace oreslang::native_quic;
 int main() {
@@ -36,6 +39,37 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     assert(got.outcome == Sock::Outcome::Invalid);
+    // Boundary: the full 1350-byte datagram must survive untruncated.
+    std::array<std::uint8_t, Sock::MaxDatagram> full{};
+    full.fill(0xa5);
+    assert(first.send_to_loopback(second.port(), full.data(), full.size()) == Sock::Outcome::Ok);
+    for (int i=0; i<1000; ++i) {
+        got=second.receive(input.data(), input.size());
+        if (got.outcome != Sock::Outcome::WouldBlock) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(got.outcome == Sock::Outcome::Ok && got.size == full.size());
+    for (auto value : input) assert(value == 0xa5);
+
+    // Independent raw socket sends a datagram above the cap. Linux MSG_TRUNC
+    // must report invalid even when the supplied output buffer is smaller.
+    const int raw = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    assert(raw >= 0);
+    sockaddr_in dst{};
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons(second.port());
+    dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    std::array<std::uint8_t, Sock::MaxDatagram + 1> oversized{};
+    assert(::sendto(raw, oversized.data(), oversized.size(), 0,
+                    reinterpret_cast<sockaddr*>(&dst), sizeof(dst)) ==
+           static_cast<ssize_t>(oversized.size()));
+    for (int i=0; i<1000; ++i) {
+        got=second.receive(input.data(), input.size());
+        if (got.outcome != Sock::Outcome::WouldBlock) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(got.outcome == Sock::Outcome::Invalid);
+    assert(::close(raw) == 0);
     first.close();
     assert(first.send_to_loopback(second.port(), ping, sizeof ping) == Sock::Outcome::Closed);
     assert(first.receive(input.data(), input.size()).outcome == Sock::Outcome::Closed);
