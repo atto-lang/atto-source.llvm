@@ -5904,6 +5904,15 @@ void resolve_and_validate_program(Program& program) {
     };
     for (const auto& fn : program.functions) {
         if (fn.result) {
+            // Scalar literals cannot satisfy an aggregate return contract.
+            // Diagnose before the conservative no-IR ABI gate, so future
+            // executable aggregate lowering cannot accidentally admit them.
+            if (fn.return_aggregate &&
+                    (fn.result->kind == Expression::Kind::Integer ||
+                     fn.result->kind == Expression::Kind::Boolean ||
+                     fn.result->kind == Expression::Kind::String))
+                throw std::runtime_error(
+                    "AGGREGATE_RETURN_TYPE_MISMATCH: scalar literal returned as aggregate");
             const auto* actual = aggregate_result_type(fn, *fn.result);
             if (actual && fn.return_aggregate) {
                 if (fn.return_aggregate->kind != actual->kind)
