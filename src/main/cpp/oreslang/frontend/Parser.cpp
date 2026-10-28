@@ -1770,6 +1770,8 @@ private:
             value.exported = owner.empty() ? accept("pub") : visible;
         const bool source_async = owner.empty() && accept("async");
         value.async_source_i64 = source_async;
+        if (token_.text == "structural")
+            fail("native structural callable requires verified shape constraints and ABI lowering");
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -1886,6 +1888,8 @@ private:
                 if (token_.text == "@")
                     fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
+                if (token_.text == "structural")
+                    fail("native structural parameter requires verified structural shape and ABI lowering");
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
@@ -2587,6 +2591,8 @@ private:
 
                 if (is_match) {
                     require("on");
+                    if (token_.text == "structural" || token_.text == "struct")
+                        fail("native structural match expression requires verified shape-pattern lowering");
                     if (accept("_")) {
                         if (has_fallback)
                             fail("native do match can contain only one wildcard arm");
@@ -3488,6 +3494,8 @@ private:
             if (arms.size() >= 32)
                 fail("native value match arm limit exceeded (32)");
             require("on");
+            if (token_.text == "structural" || token_.text == "struct")
+                fail("native structural match expression requires verified shape-pattern lowering");
             if (accept("_")) {
                 if (fallback)
                     fail("native value match can contain only one wildcard arm");
