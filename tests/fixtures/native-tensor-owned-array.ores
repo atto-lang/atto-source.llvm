@@ -1,0 +1,50 @@
+// Actual source -> LLVM/Clang native owned Array<int> storage smoke.
+// Does not assert that class storage is an actor-owned heap or that a
+// metadata span holds any exclusive/async loan.
+define class TensorOwner as
+  pub let mut Array<int> values = new Array<int>();
+end
+
+// Signed-i64 metadata bounds, checked before all arithmetic.
+fnc valid_span(int capacity, int start, int count, int stride): int {
+  if (capacity < 0) { return 0; } fi
+  if (start < 0) { return 0; } fi
+  if (count < 0) { return 0; } fi
+  if (stride <= 0) { return 0; } fi
+  if (start > capacity) { return 0; } fi
+  if (count == 0) { return 1; } fi
+  if (start == capacity) { return 0; } fi
+  if (count - 1 > (capacity - 1 - start) / stride) { return 0; } fi
+  return 1;
+}
+
+pub fnc main(): int {
+  let mut TensorOwner first = new TensorOwner();
+  let mut TensorOwner independent = new TensorOwner();
+  first.values.add(3);
+  first.values.add(5);
+  first.values.add(7);
+  first.values.add(11);
+  first.values.add(13);
+  independent.values.add(17);
+  independent.values.add(19);
+
+  if (valid_span(first.values.size, 1, 2, 2) != 1) { return 1; } fi
+  if (first.values.get(1) != 5) { return 2; } fi
+  if (first.values.get(3) != 11) { return 3; } fi
+
+  let mut TensorOwner moved = rt take(first);
+  moved.values.set(1, 23);
+  moved.values.set(3, 29);
+  if (moved.values.get(1) != 23) { return 4; } fi
+  if (moved.values.get(3) != 29) { return 5; } fi
+  if (moved.values.get(0) != 3) { return 6; } fi
+  if (moved.values.get(2) != 7) { return 7; } fi
+  if (moved.values.get(4) != 13) { return 8; } fi
+  if (independent.values.size != 2) { return 9; } fi
+  if (independent.values.get(0) != 17) { return 10; } fi
+  if (independent.values.get(1) != 19) { return 11; } fi
+  if (valid_span(moved.values.size, 4, 2, 2) != 0) { return 12; } fi
+  return moved.values.get(1) + moved.values.get(3)
+       - independent.values.get(0) - independent.values.get(1) + 26;
+}
