@@ -1,3 +1,5 @@
+mod checked_i64;
+
 use std::{
     env,
     ffi::OsStr,
@@ -790,6 +792,11 @@ fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, Strin
 fn real_main() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("checked-i64") => {
+            let compiler = path_arg(&args, 2, "usage: checked-i64 <compiler> <clang>")?;
+            let clang = path_arg(&args, 3, "usage: checked-i64 <compiler> <clang>")?;
+            checked_i64::run_cases(&compiler, &clang)
+        }
         Some("realtime-profile") => {
             let compiler = path_arg(&args, 2, "usage: realtime-profile <compiler>")?;
             realtime_profile(&compiler)
@@ -851,3 +858,4 @@ fn main() {
         std::process::exit(1);
     }
 }
+
