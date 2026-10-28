@@ -48,3 +48,26 @@ def verify_scalar_positive_control(name: str, source: Path, original: bytes,
     leftovers = [p.name for p in source.parent.iterdir() if p != source]
     if leftovers:
         raise AssertionError(f"{name}: scalar control left artifacts: {leftovers}")
+
+
+def verify_isolated_workspace(root: Path, expected: dict) -> None:
+    """Reject artifacts that escaped a case directory into its test-root siblings.
+
+    The per-case checks alone are insufficient: a misbehaving compiler could
+    write ../output.ll and leave its own case directory clean.
+    """
+    if root.is_symlink() or not root.is_dir():
+        raise AssertionError("aggregate workspace root replaced")
+    actual = {entry.name for entry in root.iterdir()}
+    if actual != set(expected):
+        raise AssertionError(f"aggregate workspace contains unexpected entries: "
+                             f"{sorted(actual ^ set(expected))}")
+    for case_name, (source, original) in expected.items():
+        directory = root / case_name
+        if (directory.is_symlink() or not directory.is_dir() or
+                source.parent != directory or source.is_symlink() or
+                not source.is_file() or source.read_bytes() != original):
+            raise AssertionError(f"{case_name}: aggregate workspace source changed")
+        children = list(directory.iterdir())
+        if len(children) != 1 or children[0] != source:
+            raise AssertionError(f"{case_name}: aggregate workspace contains artifacts")
