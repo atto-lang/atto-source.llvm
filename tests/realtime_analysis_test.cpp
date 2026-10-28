@@ -373,6 +373,89 @@ int main() {
                 "constructor effects without class-table provenance fail closed");
     }
 
+    // A scoped/branch local is a LocalBinding too. Nested statements must
+    // preserve class-table provenance to discover implicit constructor effects.
+    {
+        auto scoped_report = [](bool allocating, bool nested, bool with_table = true) {
+            Program program;
+            if (with_table) {
+                ClassDecl cls;
+                cls.name = "ScopedBox";
+                ClassField field;
+                field.name = "value";
+                if (allocating) {
+                    field.scalar_type = ScalarType::String;
+                    field.initializer_expression = std::make_unique<Expression>();
+                    field.initializer_expression->kind = Expression::Kind::String;
+                } else {
+                    field.initializer_expression = integer(7);
+                }
+                cls.fields.push_back(std::move(field));
+                program.classes.push_back(std::move(cls));
+            }
+            Function main = pure("main", integer(42));
+            Statement scoped;
+            scoped.kind = Statement::Kind::ScopedLocal;
+            scoped.branch_local = std::make_unique<LocalBinding>();
+            scoped.branch_local->name = "scoped_box";
+            scoped.branch_local->new_class = true;
+            scoped.branch_local->class_name = "ScopedBox";
+            if (nested) {
+                Statement outer;
+                outer.kind = Statement::Kind::Conditional;
+                outer.condition = integer(1);
+                outer.then_statements.push_back(std::move(scoped));
+                main.statements.push_back(std::move(outer));
+            } else {
+                main.statements.push_back(std::move(scoped));
+            }
+            program.functions.push_back(std::move(main));
+            return analyze_native_hard_rt(program);
+        };
+
+        require(scoped_report(false, false).source_admitted,
+                "scalar scoped constructor remains RT admissible");
+        require(scoped_report(false, true).source_admitted,
+                "scalar nested scoped constructor remains RT admissible");
+        for (bool nested : {false, true}) {
+            const auto report = scoped_report(true, nested);
+            require(!report.source_admitted &&
+                        report.transitive_effects.has(FunctionEffect::Alloc),
+                    "scoped constructor String default must count allocation");
+            require(!scoped_report(false, nested, false).source_admitted,
+                    "scoped constructor without class provenance must fail closed");
+        }
+
+        Program program;
+        ClassDecl cls;
+        cls.name = "ScopedBox";
+        ClassField field;
+        field.name = "value";
+        field.initializer_expression = call("hidden_io");
+        cls.fields.push_back(std::move(field));
+        program.classes.push_back(std::move(cls));
+        Function io = pure("hidden_io", integer(1));
+        io.has_declared_effects = true;
+        io.declared_effects.bits = static_cast<std::uint32_t>(FunctionEffect::Io);
+        program.functions.push_back(std::move(io));
+        Function main = pure("main", integer(42));
+        Statement outer;
+        outer.kind = Statement::Kind::Conditional;
+        outer.condition = integer(1);
+        Statement scoped;
+        scoped.kind = Statement::Kind::ScopedLocal;
+        scoped.branch_local = std::make_unique<LocalBinding>();
+        scoped.branch_local->name = "scoped_box";
+        scoped.branch_local->new_class = true;
+        scoped.branch_local->class_name = "ScopedBox";
+        outer.then_statements.push_back(std::move(scoped));
+        main.statements.push_back(std::move(outer));
+        program.functions.push_back(std::move(main));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "nested scoped constructor default call must enter RT call graph");
+    }
+
     // Async syntax is represented on dedicated Function members, not in
     // the scalar expression tree. Every such member must poison the complete
     // reachable hard-RT graph even when the function returns a constant.

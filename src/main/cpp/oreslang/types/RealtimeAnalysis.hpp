@@ -255,7 +255,8 @@ inline void scan_constructor_fields(
     }
 }
 
-inline void scan_statement(const Statement& statement, DirectFacts& facts) {
+inline void scan_statement(const Statement& statement, DirectFacts& facts,
+                           const Program* program = nullptr) {
     if (facts.call_budget_exceeded) return;
     scan_expression(statement.expression.get(), facts);
     scan_expression(statement.condition.get(), facts);
@@ -267,8 +268,17 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
         scan_expression(value.get(), facts);
         if (facts.call_budget_exceeded) return;
     }
-    if (statement.branch_local)
+    if (statement.branch_local) {
         scan_binding(*statement.branch_local, facts);
+        if (facts.call_budget_exceeded) return;
+        // Scoped/branch locals use the same nominal constructor metadata as
+        // function locals. Without this pass, implicit field allocation and
+        // transitive initializer calls evade strict hard-RT admission.
+        if (statement.branch_local->new_class) {
+            if (!program) facts.unsupported_runtime = true;
+            else scan_constructor_fields(*statement.branch_local, *program, facts);
+        }
+    }
     if (facts.call_budget_exceeded) return;
 
     if (statement.kind == Statement::Kind::FieldWrite || statement.kind == Statement::Kind::ScalarWrite)
@@ -285,11 +295,11 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
     }
 
     for (const auto& nested : statement.then_statements) {
-        scan_statement(nested, facts);
+        scan_statement(nested, facts, program);
         if (facts.call_budget_exceeded) return;
     }
     for (const auto& nested : statement.else_statements) {
-        scan_statement(nested, facts);
+        scan_statement(nested, facts, program);
         if (facts.call_budget_exceeded) return;
     }
 }
@@ -336,7 +346,7 @@ inline DirectFacts direct_facts(const Function& function, std::size_t call_limit
         }
     }
     for (const auto& statement : function.statements) {
-        scan_statement(statement, facts);
+        scan_statement(statement, facts, program);
         if (facts.call_budget_exceeded) return facts;
     }
     for (const auto& guard : function.early_returns) {
@@ -365,7 +375,7 @@ inline DirectFacts direct_facts(const Function& function, std::size_t call_limit
     if (!function.caught_throw_defers.empty()) {
         facts.bounded_cleanup = false;
         for (const auto& statement : function.caught_throw_defers) {
-            scan_statement(statement, facts);
+            scan_statement(statement, facts, program);
             if (facts.call_budget_exceeded) return facts;
         }
     }
