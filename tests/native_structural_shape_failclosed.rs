@@ -43,6 +43,16 @@ fn main() {
     assert!(positive.status.success() && positive.stdout.starts_with(b"; ModuleID"),
         "real scalar control must emit LLVM ModuleID: status={:?}, stderr={}",
         positive.status, String::from_utf8_lossy(&positive.stderr));
+    // Real compiler positive control for bounded scalar value pipelines.
+    // The |> operator must lower to nested typed calls (not lexical erasure).
+    let pipe_source = "pub fnc main(): int { return 3 |> twice |> plus(1); }\nfnc twice(int n): int { return n * 2; }\nfnc plus(int n, int k): int { return n + k; }\n";
+    let piped = compile(&compiler, &tmp.0, pipe_source);
+    assert!(piped.status.success() && piped.stdout.starts_with(b"; ModuleID"),
+        "real scalar pipeline must lower: {}", String::from_utf8_lossy(&piped.stderr));
+    for symbol in [b"@twice(".as_slice(), b"@plus(".as_slice()] {
+        assert!(piped.stdout.windows(symbol.len()).any(|x| x == symbol),
+            "scalar pipeline must retain checked stage calls: {:?}", symbol);
+    }
     let probes = [
         ("interface parameter", "define interface HasId\n id:int;\nend\nfnc take(structural HasId v):int{return v.id;}\n"),
         ("inline record parameter", "fnc take(structural { id:int } v):int{return v.id;}\n"),
