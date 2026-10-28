@@ -121,6 +121,29 @@ llvm::AllocaInst* entry_alloca(llvm::IRBuilder<>& builder, llvm::Type* type, llv
     return slots.CreateAlloca(type, count, name);
 }
 
+llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
+                                      llvm::Intrinsic::ID operation,
+                                      llvm::Value* left, llvm::Value* right,
+                                      const std::string& name) {
+    // Source int follows the shared no-wrapping i64 contract. Use defined
+    // overflow intrinsics, never poison-producing nsw arithmetic. A target
+    // trap is the current failure ABI; typed actor errors remain separate.
+    auto* module = builder.GetInsertBlock()->getModule();
+    auto* parent = builder.GetInsertBlock()->getParent();
+    auto* intrinsic = llvm::Intrinsic::getDeclaration(module, operation, {left->getType()});
+    auto* pair = builder.CreateCall(intrinsic, {left, right}, name + ".checked");
+    auto* value = builder.CreateExtractValue(pair, {0}, name + ".value");
+    auto* overflow = builder.CreateExtractValue(pair, {1}, name + ".overflow");
+    auto* failed = llvm::BasicBlock::Create(builder.getContext(), name + ".trap", parent);
+    auto* proceed = llvm::BasicBlock::Create(builder.getContext(), name + ".ok", parent);
+    builder.CreateCondBr(overflow, failed, proceed);
+    builder.SetInsertPoint(failed);
+    builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+    builder.CreateUnreachable();
+    builder.SetInsertPoint(proceed);
+    return value;
+}
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -343,8 +366,11 @@ llvm::Value* lower(const Expression& expr,
             }
             return storage.at(expr.left->name);
         }
-        case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves), "neg");
+        case Expression::Kind::Negate: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
+                llvm::ConstantInt::get(i64, 0), value, "neg");
+        }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
@@ -382,17 +408,20 @@ llvm::Value* lower(const Expression& expr,
                     llvm::FunctionType::get(i64, {i64, i64}, false));
                 return builder.CreateCall(runtime, {left, right}, "string.concat");
             }
-            return builder.CreateAdd(left, right, "add");
+            return checked_signed_arithmetic(builder, llvm::Intrinsic::sadd_with_overflow,
+                left, right, "add");
         }
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-            return builder.CreateSub(left, right, "sub");
+            return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
+                left, right, "sub");
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-            return builder.CreateMul(left, right, "mul");
+            return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
+                left, right, "mul");
         }
         case Expression::Kind::Remainder: {
             // The frontend normalizes syntactically signed literal divisors.
@@ -2661,3 +2690,4 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 }
 
 } // namespace oreslang
+

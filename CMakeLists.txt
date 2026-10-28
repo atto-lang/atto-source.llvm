@@ -613,6 +613,13 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    if(ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+            AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+        add_test(NAME native_checked_i64_arithmetic
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" checked-i64
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+        set_tests_properties(native_checked_i64_arithmetic PROPERTIES TIMEOUT 120)
+    endif()
     # Executable Oreslang method fixtures, using Rust-only tooling.
     if(ORE_CLANG)
         add_test(NAME native_inline_self_receiver_arity_aot
@@ -4367,3 +4374,4 @@ if(BUILD_TESTING)
     set_tests_properties(native_select_exactly_one_winner_and_cleanup
         PROPERTIES TIMEOUT 30)
 endif()
+
