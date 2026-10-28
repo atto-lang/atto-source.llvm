@@ -19,10 +19,13 @@ struct State {
     OresNativeActorRef a{}, b{};
     std::atomic<Bridge*> bridge{nullptr};
     std::atomic<AwaitLink*> await_link{nullptr};
+    std::atomic<AwaitLink*> cancel_link{nullptr};
     OresNativeExecutionContextStore* executions = nullptr;
     OresNativeContinuationStore* continuations = nullptr;
     AwaitLink::Ticket await_ticket{};
-    std::atomic<int> ticket_published{0};
+    AwaitLink::Ticket cancel_ticket{};
+    std::atomic<int> ticket_published{0}, cancel_published{0}, cancel_completed{0};
+    std::atomic<int> canceled_resume_count{0};
     std::atomic<std::uint64_t> suspended_seq{0}, timer_seq{0};
     std::atomic<int> first_called{0}, b_progress{0}, hold_first{1};
     std::atomic<int> trace_count{0}, errors{0}, supervisory{0};
@@ -40,7 +43,14 @@ static Bridge::Decision process(void* raw, Id id, Bridge::Kind kind,
     auto* bridge = s.bridge.load(std::memory_order_acquire);
     if (!bridge || !bridge->actor_authorized()) { s.errors.fetch_add(1); return Bridge::Decision::Finish; }
     if (kind == Bridge::Kind::Control) {
-        s.supervisory.fetch_add(1);
+        if (payload == 778) {
+            auto* canceled = s.cancel_link.load(std::memory_order_acquire);
+            if (!canceled || !canceled->cancel_under_actor_lease())
+                s.errors.fetch_add(1);
+            s.cancel_completed.store(1, std::memory_order_release);
+        } else {
+            s.supervisory.fetch_add(1);
+        }
         return Bridge::Decision::Finish;
     }
     if (kind == Bridge::Kind::Timer) {
@@ -76,7 +86,18 @@ static Bridge::Decision process(void* raw, Id id, Bridge::Kind kind,
             s.errors.fetch_add(1);
         step(s, 0, 1);
     } else if (payload == 200) step(s, 2, 3);
-    else s.errors.fetch_add(1);
+    else if (payload == 300) {
+        auto* link = s.cancel_link.load(std::memory_order_acquire);
+        if (s.cancel_published.load(std::memory_order_acquire) ||
+            !link || !link->suspend(id, 10, 300) ||
+            !link->ticket_for_actor(s.cancel_ticket)) {
+            s.errors.fetch_add(1);
+            s.canceled_resume_count.fetch_add(1);
+            return Bridge::Decision::Finish;
+        }
+        s.cancel_published.store(1, std::memory_order_release);
+        return Bridge::Decision::Suspend;
+    } else s.errors.fetch_add(1);
     return Bridge::Decision::Finish;
 }
 static void on_mail(void* raw, std::size_t actor, std::uint64_t payload) {
@@ -132,6 +153,9 @@ int main() {
     auto await_owner = std::make_unique<AwaitLink>(
         *bridge, s.native, s.executions, s.continuations);
     s.await_link.store(await_owner.get(), std::memory_order_release);
+    auto cancel_owner = std::make_unique<AwaitLink>(
+        *bridge, s.native, s.executions, s.continuations);
+    s.cancel_link.store(cancel_owner.get(), std::memory_order_release);
 
     assert(bridge->send(100) == Bridge::Submit::Accepted);
     for (int i = 0; !s.suspended_seq.load(std::memory_order_acquire) && i < 2000; ++i)
@@ -190,6 +214,24 @@ int main() {
     (void)bridge->retry_kick();
     assert(ores_native_actor_scheduler_drain(s.native));
     assert(await_owner->state_for_actor() == AwaitLink::State::Finished);
+
+    // Cancellation is serialized under the REAL actor supervisor CONTROL
+    // carrier. Both the pinned continuation record and the actor ledger
+    // event must retire before a late producer can publish READY.
+    assert(bridge->send(300) == Bridge::Submit::Accepted);
+    assert(until(s.cancel_published, 1));
+    assert(ores_native_actor_scheduler_publish_control(s.native, s.a, 778));
+    assert(until(s.cancel_completed, 1));
+    assert(ores_native_actor_scheduler_drain(s.native));
+    assert(cancel_owner->state_for_actor() == AwaitLink::State::Cancelled);
+    assert(AwaitLink::publish_ready(
+        s.continuations, *bridge, s.cancel_ticket)
+        == AwaitLink::Wake::InvalidOrCancelled);
+    OresNativeContinuationRecord gone{};
+    assert(!ores_native_continuation_store_get(
+        s.continuations, s.cancel_ticket.link.continuation, &gone));
+    assert(s.canceled_resume_count.load() == 0);
+    assert(bridge->reserved() == 0);
     assert(ores_native_continuation_store_live(s.continuations) == 0);
     assert(ores_native_execution_context_store_live(s.executions) == 0);
     assert(s.first_called.load() == 2);
