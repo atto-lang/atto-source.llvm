@@ -12,10 +12,12 @@ import tempfile
 from native_aggregate_negative_receipt import verify_negative_case
 
 CASES = (
-    ("exact-struct-return", "fnc value(): struct { foo: int } { return 1; }",
-     "AGGREGATE_LOWERING_UNVERIFIED"),
-    ("readonly-record-return", "fnc value(): record { foo: int } { return 1; }",
-     "AGGREGATE_LOWERING_UNVERIFIED"),
+    # The diagnostic must prove a type rejection, not merely the generic
+    # native-ABI hold. Distinct directions share an identical field layout.
+    ("exact-struct-return", "fnc value(record { foo: int } item): struct { foo: int } { return item; }",
+     "AGGREGATE_RETURN_KIND_MISMATCH"),
+    ("readonly-record-return", "fnc value(struct { foo: int } item): record { foo: int } { return item; }",
+     "AGGREGATE_RETURN_KIND_MISMATCH"),
     ("exact-struct-argument", "fnc value(struct { foo: int } item): int { return 1; }",
      "AGGREGATE_LOWERING_UNVERIFIED"),
     ("readonly-record-argument", "fnc value(record { foo: int } item): int { return 1; }",
