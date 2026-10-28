@@ -2324,6 +2324,7 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/ordered-routing-locals.ores
                 tests/fixtures/native-class-string/ordered-array-locals.ores
                 tests/fixtures/native-class-string/mutable-scalar-record-view.ores
+                tests/fixtures/native-class-string/router-elif-chain.ores
                 tests/fixtures/native-class-string/routing-path-validation.ores
                 tests/fixtures/native-class-string/typed-array-iteration.ores
                 tests/fixtures/native-class-string/owned-aggregate-return.ores

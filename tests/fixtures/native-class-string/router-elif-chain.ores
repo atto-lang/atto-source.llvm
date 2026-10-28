@@ -1,0 +1,32 @@
+fnc check(String label,bool answer):bool{stdio.print(label);return answer;}
+fnc choose(int value):int{
+  if check("a",value==0);then return 10;
+  elif check("b",value==1);then
+    val Array<int> values=new Array<int>();values.add(20);return values.get(0);
+  elif check("c",value==2);do
+    val Array<int> values=new Array<int>();values.add(30);return values.get(0);
+  else return 40;
+  fi
+  return -1;
+}
+fnc describe(int value):String{
+  if value==0;then return ";";
+  elif value==1;then return "(";
+  else return ")";fi
+  return "unreachable";
+}
+pub routine main():int{
+  val int zero=choose(0);val int one=choose(1);
+  val int two=choose(2);val int three=choose(3);
+  let int total=0;
+  for(let int i=0;i<4;i=i+1){
+    if i==0;then total=total+1;
+    elif i==1;then total=total+2;
+    elif i==2;then
+      if total==3;then total=total+4;
+      elif total==0;then total=99;
+      else total=100;fi
+    else total=total+8;fi
+  }
+  return zero+one+two+three==100&&total==15&&describe(0)==";"&&describe(1)=="("?0:1;
+}

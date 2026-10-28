@@ -2391,6 +2391,7 @@ private:
         // They may change owned scalar state only when both predecessors
         // agree at the join; checked below by the ownership verifier.
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
+        std::function<void(Statement&)> then_tail;
         std::function<Statement()> dispatch_statement;
         std::function<Statement()> foreach_statement;
         auto scoped_local = [&]() {
@@ -2441,6 +2442,25 @@ private:
             statement.branch_local = std::move(local); return statement;
         };
         std::size_t statement_depth = 0;
+        then_tail = [&](Statement& head) {
+            Statement* tail = &head;
+            std::size_t alternatives = 0;
+            struct DepthRestore { std::size_t& target; std::size_t saved;
+                ~DepthRestore() { target = saved; } } restore{statement_depth, statement_depth};
+            while (token_.text == "elif") {
+                if (++alternatives + restore.saved >= 16)
+                    fail("native conditional chain depth exceeded (16)");
+                statement_depth = restore.saved + alternatives;
+                Statement next; next.kind = Statement::Kind::Conditional;
+                next.offset = token_.offset; advance();
+                next.condition = expression(); require(";");
+                if (!accept("then")) require("do");
+                next.then_statements = branch_arm(false, true);
+                tail->else_statements.push_back(std::move(next));
+                tail = &tail->else_statements.back();
+            }
+            if (accept("else")) tail->else_statements = branch_arm(false, true);
+        };
         foreach_statement = [&]() {
             Lexer look = lexer_;
             const auto open = look.next(), mode = look.next(), name = look.next(), of = look.next();
@@ -2514,7 +2534,7 @@ private:
                     if (accept(";")) {
                         if (!accept("then")) require("do");
                         statement.then_statements = branch_arm(false, true);
-                        if (accept("else")) statement.else_statements = branch_arm(false, true);
+                        then_tail(statement);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
                         if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
@@ -2846,7 +2866,30 @@ private:
                 } else {
                     require("{");
                 }
-                if (accept("return")) {
+                // Preserve the owning-return guard ABI for a single return,
+                // but route a scalar return with alternatives through the
+                // structured CFG so later conditions are evaluated lazily.
+                bool return_has_alternative = false;
+                if (then_form && token_.text == "return") {
+                    Lexer look = lexer_;
+                    std::size_t depth = 0;
+                    for (std::size_t scanned = 0; scanned < 4096; ++scanned) {
+                        const auto next = look.next();
+                        if (next.kind == Kind::End) break;
+                        if (next.kind != Kind::Symbol) continue;
+                        if (next.text == "(" || next.text == "[" || next.text == "{") ++depth;
+                        if (next.text == ")" || next.text == "]" || next.text == "}") {
+                            if (!depth) break;
+                            --depth;
+                        }
+                        if (next.text == ";" && depth == 0) {
+                            const auto after = look.next();
+                            return_has_alternative = after.text == "elif" || after.text == "else";
+                            break;
+                        }
+                    }
+                }
+                if (!return_has_alternative && accept("return")) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
                     if (value.early_returns.size() == 8)
@@ -2886,7 +2929,8 @@ private:
                     conditional.condition = std::move(condition);
                     conditional.then_statements = branch_arm(false, then_form);
                     if (!then_form) require("}");
-                    if (accept("else")) {
+                    if (then_form) then_tail(conditional);
+                    else if (accept("else")) {
                         if (!then_form) require("{");
                         conditional.else_statements = branch_arm(false, then_form);
                         if (!then_form) require("}");

@@ -140,3 +140,18 @@ ends (even if an array entry is replaced), under the existing bounded record
 quota. Actor suspension, actor-local arena lifetimes and HTTP capability transfer
 are not enabled by this path. In particular, the real router's BuildNode still
 owns arrays, so the complete Spin source server is not yet admitted.
+
+## Canonical elif chains
+
+Canonical `if ...; then ... elif ...; then ... else ... fi` chains lower to
+nested conditional CFG nodes. A later condition runs only if all preceding
+conditions are false; its arm's lexical locals and cleanup remain separate.
+The same path handles a root chain beginning with a return and nested chains
+inside loop bodies. Owning return transfer restrictions are unchanged.
+Synthetic else nesting counts toward the parser's existing depth budget.
+
+The shared-source fixture checks side-effect order, scoped arrays, nested
+branches, int/String returns, and punctuation inside string literals. Negative
+gates check boolean conditions, branch-local visibility, conditional moves and
+excessive chain depth. This admits the real router's elif syntax; subsequent
+owning-class return/declaration and node-view ABI boundaries remain unsupported.

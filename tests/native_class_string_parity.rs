@@ -128,6 +128,8 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("router-elif-short-circuit-cleanup-and-return", include_str!("fixtures/native-class-string/router-elif-chain.ores"), "aababcabc"),
+
         ("mutable-record-view-retains-identity-across-growth", include_str!("fixtures/native-class-string/mutable-scalar-record-view.ores"), ""),
         ("mutable-record-readonly-iteration", "define class Item as pub let int value=1;end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item());let int total=0;for(const n of a){total=total+n.value;}return total==1?0:1;}", ""),
 
@@ -705,6 +707,11 @@ fn main() {
         }
     }
     let negatives = [
+        ("elif-condition-requires-bool", "fnc touch():void{return;}pub fnc main():int{touch();let int value=0;if false;then value=1;elif 1;then value=2;fi return value;}".to_owned(), foo.to_owned()),
+        ("elif-arm-cannot-see-preceding-arm-local", "fnc touch():void{return;}pub fnc main():int{touch();if false;then val Array<int> values=new Array<int>();elif true;then values.add(1);fi return 0;}".to_owned(), foo.to_owned()),
+        ("elif-condition-cannot-conditionally-consume-owner", "fnc touch():void{return;}fnc positive(int value):bool{return value>0;}pub fnc main():int{let int value=1;touch();if true;then value=value+0;elif positive(rt take value);then value=1;fi return value;}".to_owned(), foo.to_owned()),
+        ("elif-depth-budget", format!("pub fnc main():int{{if false;then return 0;{}else return 1;fi return 2;}}", "elif false;then return 0;".repeat(18)), foo.to_owned()),
+
         ("mutable-view-cannot-amplify-read-permission-through-array-insertion", "define class Item as pub let int value=1;end fnc touch():void{return;}pub fnc main():int{val Array<Item> source=new Array<Item>();source.add(new Item());val Array<Item> destination=new Array<Item>();touch();destination.add(source.get(0));return 0;}".to_owned(), foo.to_owned()),
 
         ("mutable-view-cannot-borrow-with-raw-pointer-ABI", "define class Item as pub let int value=1;end fnc touch():void{return;}fnc read(borrow Item value):int{return value.value;}pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item());touch();let mut Item n=a.get(0);return read(rt borrow n);}".to_owned(), foo.to_owned()),
