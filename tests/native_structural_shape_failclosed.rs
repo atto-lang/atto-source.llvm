@@ -101,6 +101,31 @@ fn main() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("INVERTED_BACKEND_UNSUPPORTED"),
             "{name}: expected compiler-owned inverted-class diagnostic: {}", String::from_utf8_lossy(&output.stderr));
     }
-    println!("PASS: 1 scalar positive, {} fail-closed shapes, {} structural diagnostics, {} inverted boundaries",
-        probes.len(), specific.len(), inverted.len());
+    // Versioned opaque and tuple ABIs are not part of the native i64 subset.
+    // Check the *exact native diagnostic*, not merely a nonzero process exit.
+    let missing_abis = [
+        ("any parameter", "pub fnc normalize(any value): int { return 0; }\n",
+            "native opaque top type requires tagged value ABI"),
+        ("unknown parameter", "fnc normalize(unknown value): int { return 0; }\n",
+            "native opaque top type requires tagged value ABI"),
+        ("any result", "fnc get(): any { return 0; }\n",
+            "native opaque top type requires tagged value ABI"),
+        ("tuple explicit", "fnc take(tuple (int,int,string?) value): int { return 1; }\n",
+            "native positional tuple parameter requires verified readonly-slot and optional-tail lowering"),
+        ("tuple shorthand", "fnc take((int,int,string?) value): int { return 1; }\n",
+            "native positional tuple parameter requires verified readonly-slot and optional-tail lowering"),
+        ("tuple structural", "fnc take(structural (int,int,string?) value): int { return 1; }\n",
+            "native structural positional tuple requires verified readonly-width and nonescape lowering"),
+        ("tuple result", "fnc take(): tuple (int,int) { return 1; }\n",
+            "native positional tuple return requires verified tuple ABI lowering"),
+    ];
+    for (name, source, required) in missing_abis {
+        let output = compile(&compiler, &tmp.0, source);
+        assert_eq!(output.status.code(), Some(1), "{name}: must be rejected by compiler");
+        assert!(output.stdout.is_empty(), "{name}: must not emit IR");
+        assert!(String::from_utf8_lossy(&output.stderr).contains(required),
+            "{name}: missing owned ABI diagnostic: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    println!("PASS: 1 scalar positive, {} fail-closed shapes, {} structural diagnostics, {} inverted boundaries, {} missing ABIs",
+        probes.len(), specific.len(), inverted.len(), missing_abis.len());
 }
