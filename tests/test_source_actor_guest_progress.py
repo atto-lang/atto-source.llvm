@@ -63,7 +63,7 @@ class GuestProgressProofTests(unittest.TestCase):
         self.deny(lambda _, l: l.__setitem__(1, l[0]))
 
     def test_foreign_actor_identity_collides(self):
-        self.deny(lambda _, l: l.__setitem__(8, l[8].replace("actor=19", "actor=17")))
+        self.deny(lambda _, l: l.__setitem__(4, l[4].replace("actor=19", "actor=17")))
 
     def test_false_guest_result(self):
         self.deny(lambda _, l: l.__setitem__(9, l[9].replace("result=362", "result=363")))
