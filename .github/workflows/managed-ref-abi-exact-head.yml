@@ -1,0 +1,71 @@
+name: Managed reference exact-head native ABI
+on:
+  pull_request:
+    paths:
+      - .github/workflows/managed-ref-abi-exact-head.yml
+      - CMakeLists.txt
+      - tests/managed_ref_test.cpp
+      - src/main/cpp/oreslang/runtime/ManagedRef.hpp
+      - src/main/cpp/oreslang/runtime/DopLayout.hpp
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-reference-abi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout this source repository only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          submodules: false
+          # Avoid the synthetic refs/pull/N/merge commit: test the exact head.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact checked-out source commit
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: GCC and Clang compressed32/native64 Debug/Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            for mode in debug release; do
+              args=(-O0 -g)
+              if [[ "$mode" == release ]]; then args=(-O2 -DNDEBUG); fi
+              for ref in compressed32 native64; do
+                defines=()
+                if [[ "$ref" == native64 ]]; then
+                  defines=(-DORES_MANAGED_REF_DEFAULT_NATIVE64=1)
+                fi
+                binary="$RUNNER_TEMP/managed-ref-${compiler}-${mode}-${ref}"
+                "$compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror \
+                  "${args[@]}" "${defines[@]}" \
+                  -I src/main/cpp tests/managed_ref_test.cpp -o "$binary"
+                "$binary"
+              done
+            done
+          done
+      - name: Clang ASan and UBSan for both reference modes
+        shell: bash
+        env:
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          for ref in compressed32 native64; do
+            defines=()
+            if [[ "$ref" == native64 ]]; then
+              defines=(-DORES_MANAGED_REF_DEFAULT_NATIVE64=1)
+            fi
+            binary="$RUNNER_TEMP/managed-ref-sanitized-${ref}"
+            clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              "${defines[@]}" -I src/main/cpp \
+              tests/managed_ref_test.cpp -o "$binary"
+            "$binary"
+          done
