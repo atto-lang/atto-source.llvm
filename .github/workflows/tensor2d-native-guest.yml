@@ -90,6 +90,22 @@ jobs:
           fi
           test ! -s build/tensor2d-evidence/unsupported.ll
           test -s build/tensor2d-evidence/unsupported.stderr
+      - name: Reject raw int division until typed semantics exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'pub fnc main(): int { return 4 / 2; }' \
+            > build/tensor2d-evidence/unsupported-int-division.ores
+          if build/tensor2d-native/oreslang-llvmc \
+            build/tensor2d-evidence/unsupported-int-division.ores \
+            > build/tensor2d-evidence/division.ll \
+            2> build/tensor2d-evidence/division.stderr; then
+            echo 'untyped int/int division unexpectedly accepted' >&2
+            exit 1
+          fi
+          test ! -s build/tensor2d-evidence/division.ll
+          grep -q 'floating division unsupported' \
+            build/tensor2d-evidence/division.stderr
       - name: Record source and compiler provenance
         if: always()
         shell: bash
