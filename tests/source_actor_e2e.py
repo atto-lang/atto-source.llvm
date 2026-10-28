@@ -28,7 +28,8 @@ def expected_prefix_last(name, actor_index, processed):
             value = 2 * (value + n)
         return value
     if name in {"source-actor-two-owned-heaps.ores",
-                "source-actor-shared-heap-contract-v1.ores"}:
+                "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores"}:
         value = 0
         start = 1 if actor_index == 0 else 5
         for n in range(start, start + processed):
@@ -94,7 +95,7 @@ def main():
     assert canonical_blob == "430565092d8a4ff114f601a54b771ef3d42eae58", (
         "canonical sealed-state v2 fixture bytes drifted", canonical_blob)
     assert shared_blob != canonical_blob, "pre-sealed guest is not v2 parity"
-    print("SEALED_GUEST_V2_STAGED_NOT_COMPILER_VERIFIED", flush=True)
+    print("SEALED_GUEST_V2_PINNED_NATIVE_EXECUTION_REQUIRED", flush=True)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
@@ -116,6 +117,8 @@ def main():
         # Pre-sealed LLVM lowering precursor. Do NOT promote to v2 conformance
         # even when these handler/lifecycle checks execute successfully.
         ("source-actor-shared-heap-contract-v1.ores", 2, None, None),
+        # Identical canonical sealed v2 bytes from conformance #211.
+        ("source-actor-sealed-state-contract-v2.ores", 2, None, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -196,6 +199,7 @@ def main():
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
                 "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores",
             } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
@@ -211,6 +215,7 @@ def main():
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
                 "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores",
             }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
@@ -238,11 +243,12 @@ def main():
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
             if name in {"source-actor-interleaved-stop.ores",
-                        "source-actor-shared-heap-contract-v1.ores"}:
+                        "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores"}:
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
                 first_stop = (guest.stdout.find("call void @oreslang_source_actor_graceful_stop")
-                              if name == "source-actor-shared-heap-contract-v1.ores"
+                              if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-sealed-state-contract-v2.ores"}
                               else guest.stdout.find("call void @oreslang_source_actor_stop"))
                 final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
                 assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
@@ -297,7 +303,7 @@ def main():
                 observed_last = receipt["last"]
                 expected_accepted = (
                     [1, 2][i] if name == "source-actor-interleaved-stop.ores"
-                    else [4, 5][i] if name == "source-actor-shared-heap-contract-v1.ores"
+                    else [4, 5][i] if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-sealed-state-contract-v2.ores"}
                     else count)
                 assert accepted == expected_accepted, (
                     name, i, accepted, expected_accepted)
@@ -308,12 +314,13 @@ def main():
                     name, i, processed), (
                     name, i, processed, observed_last)
             if name in {"source-actor-two-owned-heaps.ores",
-                        "source-actor-shared-heap-contract-v1.ores"}:
+                        "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores"}:
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
-            if name == "source-actor-shared-heap-contract-v1.ores":
+            if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-sealed-state-contract-v2.ores"}:
                 assert guest.stdout.count(
                     "call void @oreslang_source_actor_graceful_stop(") == 2, (
                     name, "guest must invoke graceful drain and physical join")
@@ -397,10 +404,11 @@ def main():
                                     if slot == 1 and p == 9)
                 assert reclaims[0][0] < final_b_line < reclaims[1][0], (
                     "B must execute after A physical reclaim", reclaims, handlers)
-                print("LLVM_PRE_SEALED_ACTOR_GUEST_ALL_MESSAGES_PROCESSED "
+                flavor = "SEALED_V2" if name.endswith("-v2.ores") else "PRE_SEALED_V1"
+                print("LLVM_" + flavor + "_GUEST_ALL_MESSAGES_PROCESSED "
                       "A=4 B=5 A_LAST=52 B_LAST=362 "
                       "OBSERVED_GENERATED_HANDLER_RECLAIM_AND_HEAP_LEDGER "
-                      "NOT_SEALED_V2_OR_PHYSICAL_LOAN_PARITY", flush=True)
+                      "NOT_FULL_23_EVENT_PHYSICAL_LOAN_PARITY", flush=True)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 

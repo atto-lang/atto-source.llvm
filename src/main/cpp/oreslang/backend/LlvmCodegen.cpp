@@ -1171,7 +1171,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
                 llvm::ConstantInt::get(i64,
                     std::max<std::size_t>(1,
-                        actor->fields.size() + actor->on_message.locals.size()))},
+                        actor->fields.size() + actor->on_message.locals.size() +
+                        (actor->on_message.actor_state_loan
+                            ? actor->on_message.actor_state_loan->locals.size()
+                            : 0)))},
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
