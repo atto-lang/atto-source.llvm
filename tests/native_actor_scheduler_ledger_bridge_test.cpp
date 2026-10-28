@@ -131,15 +131,10 @@ int main() {
     assert(s.trace_count.load() == 0);
     s.hold_first.store(0, std::memory_order_release);
     assert(until(s.supervisory, 1));  // reserved supervisor CONTROL wins
-    for (int i = 0; bridge->messages_arrived() < 2 && i < 2000; ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    assert(bridge->messages_arrived() == 2);
-    assert(s.trace_count.load() == 0); // B can't overtake suspended A
-    for (int i = 0; i < 2000 && s.trace_count.load(std::memory_order_acquire) < 3; ++i) {
-        (void)bridge->retry_kick();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    // No manual retry_kick: supervisor CONTROL completion must rearm retained
+    // timer/Future notices automatically under the authenticated actor lease.
     assert(until(s.trace_count, 3));
+    assert(bridge->messages_arrived() == 2);
     assert(s.trace[0] == 1 && s.trace[1] == 2 && s.trace[2] == 3);
     Pool::Start late{};
     assert(pool.claim_start(h, 1, s.a.generation, 109, late)
