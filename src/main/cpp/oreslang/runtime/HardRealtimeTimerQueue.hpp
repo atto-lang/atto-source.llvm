@@ -48,6 +48,11 @@ public:
         std::uint64_t actor_generation = 0;
     };
     struct Start {
+        // Timestamp is taken by the scheduler at claim, before guest entry;
+        // subsequent scheduling/preemption time requires separate measurement.
+        std::uint64_t deadline_ns = 0;
+        std::uint64_t claimed_at_ns = 0;
+        std::uint64_t maximum_lateness_ns = 0;
         std::uint64_t lateness_ns = 0;
     };
 
@@ -55,9 +60,11 @@ public:
     HardRealtimeTimerQueue(const HardRealtimeTimerQueue&) = delete;
     HardRealtimeTimerQueue& operator=(const HardRealtimeTimerQueue&) = delete;
 
+    // Immutable timer-to-start budget is fixed at timer admission.
+    // It cannot be loosened by a late dispatcher.
     Status arm_after(std::uint64_t now_ns, std::uint64_t delay_ns,
                      std::uint64_t actor_id, std::uint64_t actor_generation,
-                     Handle& out) noexcept {
+                     std::uint64_t maximum_lateness_ns, Handle& out) noexcept {
         if (closed_) return Status::Closed;
         if (domain_ == 0 || actor_id == 0 || actor_generation == 0)
             return Status::Invalid;
@@ -70,6 +77,7 @@ public:
             ++s.generation;
             s.sequence = next_sequence_++;
             s.deadline_ns = now_ns + delay_ns;
+            s.maximum_lateness_ns = maximum_lateness_ns;
             s.actor_id = actor_id;
             s.actor_generation = actor_generation;
             s.phase = Phase::Armed;
@@ -142,17 +150,22 @@ public:
     // validation. DeadlineMissed MUST be reported to the supervisor, not ignored.
     Status claim_start(Handle h, std::uint64_t actor_id,
                        std::uint64_t actor_generation, std::uint64_t now_ns,
-                       std::uint64_t maximum_lateness_ns, Start& out) noexcept {
+                       Start& out) noexcept {
         if (closed_) return Status::Closed;
-        if (!observe_clock(now_ns)) return Status::ClockBackwards;
+        // Reject invalid/cancelled generations BEFORE touching clock state:
+        // forged or stale UINT64_MAX claims must not poison future deadlines.
         Slot* s = locate(h);
         if (!s || s->phase != Phase::Ready || s->actor_id != actor_id ||
             s->actor_generation != actor_generation) return Status::Stale;
+        if (!observe_clock(now_ns)) return Status::ClockBackwards;
         if (now_ns < s->deadline_ns) return Status::ClockBackwards;
+        out.deadline_ns = s->deadline_ns;
+        out.claimed_at_ns = now_ns;
+        out.maximum_lateness_ns = s->maximum_lateness_ns;
         out.lateness_ns = now_ns - s->deadline_ns;
+        const bool missed = out.lateness_ns > s->maximum_lateness_ns;
         retire(*s);
-        return out.lateness_ns > maximum_lateness_ns
-            ? Status::DeadlineMissed : Status::Ok;
+        return missed ? Status::DeadlineMissed : Status::Ok;
     }
 
     void close() noexcept {
@@ -169,6 +182,7 @@ private:
         std::uint64_t generation = 0;
         std::uint64_t sequence = 0;
         std::uint64_t deadline_ns = 0;
+        std::uint64_t maximum_lateness_ns = 0;
         std::uint64_t actor_id = 0;
         std::uint64_t actor_generation = 0;
         Phase phase = Phase::Free;
