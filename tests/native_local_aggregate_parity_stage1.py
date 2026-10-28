@@ -47,6 +47,8 @@ def main():
         ("stack single scalar", "pub fnc main(): int { struct T { int foo } val T point = T{5}; return point.foo; }", 5),
         ("stack ordered fields", "pub fnc main(): int { struct T { int x, int y } val T point = T{3, 9}; return point.y; }", 9),
         ("stack named reordered", "pub fnc main(): int { struct T { int x, int y } val T point = T{y: 9, x: 3}; return point.y; }", 9),
+        ("mutable stack point", "pub fnc main(): int { struct Point { int x, int y } val Point point = Point{3, 4}; point.x = 10; return point.x; }", 10),
+        ("field write reads previous value", "pub fnc main(): int { struct Point { int x, int y } val Point p = Point{3, 4}; p.x = p.x + p.y; return p.x; }", 7),
         ("different local nominal identities",
          "fnc first(): int { struct T { int a } val T p = T{4}; return p.a; } "
          "fnc second(): int { struct T { int b } val T p = T{10}; return p.b; } "
@@ -79,8 +81,13 @@ def main():
          "LOCAL_CONSTRUCT_UNKNOWN_FIELD"),
         ("type mismatch", "pub fnc main(): int { struct T { int x } val T p = T{true}; return p.x; }",
          "constructor parameter type mismatch"),
-        ("cannot write immutable field", "pub fnc main(): int { struct T { int x } val T p = T{5}; p.x = 6; return p.x; }",
+        ("private-return leaf remains immutable",
+         "fnc make_point(): Point { struct Point { int x } val Point p = Point{5}; p.x = 6; return p; } "
+         "pub fnc main(): int { return 0; }",
          "cannot reassign final class field"),
+        ("const local struct owner rejected",
+         "pub fnc main(): int { struct Point { int x } const Point p = Point{5}; return p.x; }",
+         "LOCAL_STRUCT_OWNER_UNSUPPORTED"),
         ("public local return still gated", "pub fnc foo(): T { struct T { int foo } return T{5}; }",
          "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
         ("transparent alias still gated", "fnc foo(): T { type T = struct { int foo } return T{5}; }",
