@@ -345,7 +345,8 @@ bool native_capture_free_task_tree(
     if ((expr.kind == K::Negate || expr.kind == K::LogicalNot) && expr.left)
         return native_capture_free_task_tree(*expr.left, depth + 1);
     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
-            expr.kind == K::Multiply || expr.kind == K::Equal ||
+            expr.kind == K::Multiply || expr.kind == K::NamedBitXor ||
+            expr.kind == K::Equal ||
             expr.kind == K::NotEqual || expr.kind == K::Less ||
             expr.kind == K::LessEqual || expr.kind == K::Greater ||
             expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
@@ -380,7 +381,8 @@ bool native_async_i64_tree(
         return native_async_i64_tree(
             *expr.left, allowed_parameter, depth + 1);
     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
-            expr.kind == K::Multiply || expr.kind == K::Equal ||
+            expr.kind == K::Multiply || expr.kind == K::NamedBitXor ||
+            expr.kind == K::Equal ||
             expr.kind == K::NotEqual || expr.kind == K::Less ||
             expr.kind == K::LessEqual || expr.kind == K::Greater ||
             expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
