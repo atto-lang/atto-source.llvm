@@ -2407,7 +2407,7 @@ private:
                     fail("unsupported native runtime operation in conditional arm");
                 }
                 if (token_.text == "do" && !finally_scope) {
-                    const std::string next = peek_next().text;
+                    const std::string next(peek_next().text);
                     if (next == "match" || next == "switch") {
                         actions.push_back(dispatch_statement());
                         continue;
@@ -2733,7 +2733,7 @@ private:
             if (terminal_try_finally && token_.text != "if")
                 fail("native terminal try supports only return guards and final return");
             if (token_.text == "do") {
-                const std::string next = peek_next().text;
+                const std::string next(peek_next().text);
                 if (next == "match" || next == "switch") {
                     if (return_guards_started)
                         fail("native procedural dispatch cannot follow return guards");
@@ -3455,7 +3455,7 @@ private:
         // nb is a nonblocking channel/select modifier. It is never permission
         // for suspension inside an otherwise synchronous match/switch.
         if (token_.text == "nb") {
-            const std::string next = peek_next().text;
+            const std::string next(peek_next().text);
             if (next == "match" || next == "switch")
                 throw std::runtime_error(
                     "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms at byte " +
@@ -3464,7 +3464,7 @@ private:
         if (token_.text == "match") return value_match_expression();
         if (token_.text == "switch") return value_switch_expression();
         if (token_.text == "do") {
-            const std::string next = peek_next().text;
+            const std::string next(peek_next().text);
             if (next == "match" || next == "switch")
                 throw std::runtime_error(
                     "procedural do match/switch is a statement, not a value expression at byte " +
