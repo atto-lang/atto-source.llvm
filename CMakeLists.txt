@@ -1717,6 +1717,23 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_retained_data_blocks_later_mail
         PROPERTIES TIMEOUT 25)
 
+    # STOP may pre-activate a reserved actor-owner cleanup credit without
+    # any previously queued supervisor CONTROL or Future WAKE turn.
+    # The test also verifies fail-closed physical cleanup quarantine.
+    add_executable(oreslang-native-retained-autocleanup-test
+        tests/native_actor_retained_cleanup_autoadmit_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-autocleanup-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-autocleanup-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-autocleanup-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_prepaid_stop_cleanup_and_failure_quarantine
+        COMMAND oreslang-native-retained-autocleanup-test)
+    set_tests_properties(native_actor_prepaid_stop_cleanup_and_failure_quarantine
+        PROPERTIES TIMEOUT 25)
+
     # Retained DATA receipt survives native callback exit, stays charged to
     # mailbox capacity and prevents false STOP/terminal accounting.
     add_executable(oreslang-native-retained-data-stop-test
