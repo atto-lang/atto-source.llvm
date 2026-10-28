@@ -1294,9 +1294,9 @@ private:
         // continuations, with authenticated scheduler dispatch and state loans.
         if (accept("receive")) {
             require("(");
-            const auto formal = identifier();
-            if (formal != "message")
-                fail("native actor receive formal must be named message");
+            // The formal is an arbitrary source identifier. "message" in
+            // the acceptance fixture is not a new reserved parameter name.
+            (void)identifier();
             require(":");
             require("int");
             require(")");
