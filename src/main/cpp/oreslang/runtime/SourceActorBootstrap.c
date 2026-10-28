@@ -89,6 +89,7 @@ static _Thread_local OresNativeExecutionHandle current_source_execution;
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_initialization;
+static atomic_uint test_graceful_readiness_waits;
 static atomic_int test_initialization_entered;
 static atomic_int test_hold_readiness_publication;
 static atomic_int test_readiness_publication_entered;
@@ -108,6 +109,11 @@ void oreslang_source_actor_test_hold_initialization(int hold) {
 int oreslang_source_actor_test_initialization_entered(void) {
     return atomic_load_explicit(
         &test_initialization_entered, memory_order_acquire);
+}
+
+unsigned oreslang_source_actor_test_graceful_readiness_waits(void) {
+    return atomic_load_explicit(
+        &test_graceful_readiness_waits, memory_order_acquire);
 }
 
 void oreslang_source_actor_test_hold_readiness_publication(int hold) {
@@ -992,6 +998,12 @@ void oreslang_source_actor_graceful_stop(void* opaque) {
         &instance->startup_state, memory_order_acquire);
     while (startup == ORES_SOURCE_ACTOR_STARTUP_PENDING
             || startup == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        /* Signal that the synchronous caller is genuinely parked in the
+         * startup barrier before tests release the constructor CONTROL gate. */
+        atomic_fetch_add_explicit(
+            &test_graceful_readiness_waits, 1, memory_order_release);
+#endif
         ensure(pthread_cond_wait(&group.startup_changed, &group.mutex) == 0);
         startup = atomic_load_explicit(
             &instance->startup_state, memory_order_acquire);

@@ -1,5 +1,6 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 
+#include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -11,6 +12,8 @@ static atomic_int constructor_entered;
 static atomic_int constructor_release;
 static atomic_int readiness_continuation_calls;
 static atomic_int done_continuation_calls;
+static atomic_int graceful_message_calls;
+static atomic_int graceful_returned;
 
 static void check(int condition) {
     if (!condition) abort();
@@ -39,6 +42,24 @@ static int64_t on_message(
     (void)heap;
     check(domain != 0 && epoch != 0);
     return payload;
+}
+
+static int64_t graceful_message(
+        OresActorI64Heap* heap,
+        uint64_t domain,
+        uint64_t epoch,
+        int64_t payload) {
+    (void)heap;
+    check(domain != 0 && epoch != 0);
+    atomic_fetch_add_explicit(
+        &graceful_message_calls, 1, memory_order_acq_rel);
+    return payload;
+}
+
+static void* graceful_joiner(void* actor) {
+    oreslang_source_actor_graceful_stop(actor);
+    atomic_store_explicit(&graceful_returned, 1, memory_order_release);
+    return NULL;
 }
 
 static int64_t readiness_continuation(void* actor) {
@@ -216,11 +237,59 @@ static void successful_readiness(void) {
     oreslang_source_actor_join_done(actor);
 }
 
+static void graceful_drain_waits_for_ready(int publication_hold) {
+    reset_constructor();
+    atomic_store_explicit(&graceful_message_calls, 0, memory_order_release);
+    atomic_store_explicit(&graceful_returned, 0, memory_order_release);
+    atomic_store_explicit(&constructor_release, 1, memory_order_release);
+    oreslang_source_actor_test_hold_initialization(!publication_hold);
+    oreslang_source_actor_test_hold_readiness_publication(publication_hold);
+
+    void* actor = oreslang_source_actor_spawn(constructor, graceful_message, 1);
+    check(actor != NULL);
+    oreslang_source_actor_send(actor, 7);
+    oreslang_source_actor_send(actor, 8);
+
+    if (publication_hold) {
+        while (!oreslang_source_actor_test_readiness_publication_entered())
+            sched_yield();
+        check(oreslang_source_actor_ready_status(actor)
+            == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING);
+    } else {
+        while (!oreslang_source_actor_test_initialization_entered())
+            sched_yield();
+        check(oreslang_source_actor_ready_status(actor)
+            == ORES_SOURCE_ACTOR_STARTUP_PENDING);
+    }
+
+    const unsigned baseline =
+        oreslang_source_actor_test_graceful_readiness_waits();
+    pthread_t joiner;
+    check(pthread_create(&joiner, NULL, graceful_joiner, actor) == 0);
+    /* This is a deterministic test of a *real* blocked graceful caller,
+     * not a sleep-based racy test that might release startup too early. */
+    while (oreslang_source_actor_test_graceful_readiness_waits() == baseline)
+        sched_yield();
+    check(atomic_load_explicit(&graceful_returned, memory_order_acquire) == 0);
+    check(atomic_load_explicit(&graceful_message_calls, memory_order_acquire) == 0);
+
+    if (publication_hold)
+        oreslang_source_actor_test_hold_readiness_publication(0);
+    else
+        oreslang_source_actor_test_hold_initialization(0);
+    check(pthread_join(joiner, NULL) == 0);
+    check(atomic_load_explicit(&graceful_returned, memory_order_acquire) == 1);
+    check(atomic_load_explicit(&constructor_calls, memory_order_acquire) == 1);
+    check(atomic_load_explicit(&graceful_message_calls, memory_order_acquire) == 2);
+}
+
 int main(void) {
     stop_before_constructor();
     stop_during_constructor();
     stop_after_constructor_before_ready();
     successful_readiness();
+    graceful_drain_waits_for_ready(0);
+    graceful_drain_waits_for_ready(1);
     puts("SOURCE_ACTOR_STOP_BEFORE_READY_PASS");
     return 0;
 }

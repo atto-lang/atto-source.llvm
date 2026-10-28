@@ -33,6 +33,8 @@ int oreslang_source_actor_ready_status(void* actor);
  * begin; they are not linked into ordinary source programs. */
 void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
+/* Monotonic test-only counter, increments immediately before cond_wait. */
+unsigned oreslang_source_actor_test_graceful_readiness_waits(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
 #endif
