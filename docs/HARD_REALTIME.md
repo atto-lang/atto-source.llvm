@@ -234,8 +234,13 @@ The strict default matches Java actor continuation draft #161:
    never sufficient evidence for a positive hard-RT admission.
 
 Prototype files: `ActorExecutionLedger.hpp`,
-`tests/actor_execution_ledger_test.cpp`, and
-`tests/native_timer_actor_double_entry_test.cpp`. The second test crosses
+`tests/actor_execution_ledger_test.cpp`,
+`tests/native_timer_actor_double_entry_test.cpp`, and an independent
+Rust reference model `tests/actor_execution_ledger_model.rs`. The Rust
+model enumerates 720 wake/cancel/stop/dispatch action permutations, with
+duplicate notices, generation rejection, single-carrier and supervisor
+retirement invariants. **The Rust test has not been executed locally** because
+this evaluation environment lacks `rustc`; exact-head CI is required. The second test crosses
 the separate actor-side ledger and scheduler-side fixed timer pool with
 deterministic synthetic clock timestamps, verifying a late start is reported
 as `DeadlineMissed` instead of masquerading as RT success. Neither test
