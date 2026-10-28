@@ -31,7 +31,7 @@ CASES = (
     ("prologue-exact-alias", "fnc value(): T { type T = struct { foo: int }; return T{5}; }",
      "AGGREGATE_LOWERING_UNVERIFIED"),
     ("prologue-readonly-record-alias", "fnc value(): T { type T = record { foo: int }; return 1; }",
-     "AGGREGATE_LOWERING_UNVERIFIED"),
+     "AGGREGATE_RETURN_TYPE_MISMATCH"),
     ("named-constructor-order", "fnc value(): T { type T = struct { foo: int, bar: int }; return T{bar: 2, foo: 1}; }",
      "AGGREGATE_LOWERING_UNVERIFIED"),
     ("duplicate-constructor-field", "fnc value(): T { type T = struct { foo: int }; return T{foo: 1, foo: 2}; }",
