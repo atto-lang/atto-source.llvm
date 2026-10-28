@@ -23,7 +23,7 @@ struct Fixture {
     Adapter::Token a{}, b{};
     OresNativeWakeTicket ticket{};
     OresNativeRetainedDataTicket retained{};
-    std::atomic<int> suspended{0}, b_deferred{0}, other_progress{0};
+    std::atomic<int> suspended{0}, other_progress{0};
     std::atomic<int> a_first{0}, a_resumed{0}, b_guest{0}, wake_called{0};
 };
 
@@ -49,19 +49,23 @@ extern "C" void ledger_data(void* raw, std::size_t actor, std::uint64_t payload)
             f.refs[0],f.refs[0],1,1,1,1,&f.ticket));
         CHECK(f.ledger->prepare_await(f.a)==Status::Ok);
         CHECK(f.ledger->suspend(f.a)==Status::Ok);
-        f.suspended.store(1,std::memory_order_release);
-    } else if (payload==2) {
-        // B is admitted to the actor-local ledger but not eligible while A
-        // is suspended. The scheduler retains B's DATA receipt and bounded
-        // mailbox credit instead of falsely completing its guest handler.
-        CHECK(f.ledger->admit(Kind::Mail,f.b)==Status::Ok);
-        CHECK(f.ledger->claim(selection)==Status::NoEligible);
+        // Retain the ORIGINAL handler A DATA receipt, not B's later receipt.
+        // A has a pinned logical frame, but no OS carrier after this callback.
         CHECK(ores_native_actor_scheduler_retain_current_data(
             f.scheduler,&f.retained));
         CHECK(f.retained.actor.generation==f.refs[0].generation);
+        f.suspended.store(1,std::memory_order_release);
+    } else if (payload==2) {
+        // The native scheduler must not dispatch this DATA callback at all
+        // until A's retained ticket was settled inside an authenticated WAKE.
+        CHECK(f.a_resumed.load(std::memory_order_acquire)==1);
         CHECK(ores_native_actor_scheduler_retained_data_count(
-            f.scheduler,f.refs[0])==1);
-        f.b_deferred.store(1,std::memory_order_release);
+            f.scheduler,f.refs[0])==0);
+        CHECK(f.ledger->admit(Kind::Mail,f.b)==Status::Ok);
+        CHECK(f.ledger->claim(selection)==Status::Ok);
+        CHECK(selection.token.sequence==f.b.sequence);
+        CHECK(f.ledger->finish_after_guest_exit(f.b)==Status::Ok);
+        f.b_guest.fetch_add(1,std::memory_order_release);
     } else {
         CHECK(false);
     }
@@ -82,12 +86,10 @@ extern "C" void ledger_wake(void* raw,std::size_t actor,
     CHECK(selection.token.sequence==f.a.sequence);
     f.a_resumed.fetch_add(1,std::memory_order_release);
     CHECK(f.ledger->finish_after_guest_exit(f.a)==Status::Ok);
-    // After A completes, B is the oldest eligible user mail. Execute one
-    // more bounded host test segment without a second physical carrier.
-    CHECK(f.ledger->claim(selection)==Status::Ok);
-    CHECK(selection.token.sequence==f.b.sequence);
-    f.b_guest.fetch_add(1,std::memory_order_release);
-    CHECK(f.ledger->finish_after_guest_exit(f.b)==Status::Ok);
+    // Settling A releases its mailbox credit and permits the *scheduler*
+    // to dispatch B next. B must not be in the actor ledger or have executed
+    // before this authenticated physical guest-exit acknowledgment.
+    CHECK(f.b_guest.load(std::memory_order_acquire)==0);
     OresNativeRetainedDataTicket forged=f.retained;
     ++forged.slot_generation;
     CHECK(!ores_native_actor_scheduler_complete_retained_data(f.scheduler,forged));
@@ -141,11 +143,10 @@ int main() {
     CHECK(f.ledger->deliver_wake(f.a)==Status::Unauthorized);
     CHECK(ores_native_actor_scheduler_send(f.scheduler,f.refs[0],2));
     CHECK(ores_native_actor_scheduler_send(f.scheduler,f.refs[1],9));
-    until(f.b_deferred,"later message B ledgered but not executed");
     until(f.other_progress,"independent actor progress");
-    until_completed(f.scheduler,2);
+    until_completed(f.scheduler,1);
     CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==3);
-    CHECK(ores_native_actor_scheduler_completed(f.scheduler)==2);
+    CHECK(ores_native_actor_scheduler_completed(f.scheduler)==1);
     CHECK(f.a_first.load()==1 && f.a_resumed.load()==0 && f.b_guest.load()==0);
     CHECK(ores_native_actor_scheduler_retained_data_count(
         f.scheduler,f.refs[0])==1);
@@ -162,7 +163,8 @@ int main() {
         f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)==ORES_NATIVE_WAKE_PUBLISHED);
     CHECK(ores_native_actor_scheduler_publish_wake(
         f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)==ORES_NATIVE_WAKE_INVALID);
-    until(f.wake_called,"A resumed and B executed under authenticated lease");
+    until(f.wake_called,"A resumed and physical DATA receipt retired");
+    until(f.b_guest,"B dispatches only after A's exit and acknowledgment");
     CHECK(f.a_resumed.load()==1 && f.b_guest.load()==1);
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
     CHECK(ores_native_actor_scheduler_retained_data_count(
