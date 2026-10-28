@@ -4249,7 +4249,8 @@ private:
                             native_field.scalar_type != ScalarType::I64 ||
                             !native_field.class_name.empty() || native_field.int_array ||
                             !native_field.sum_type.empty() ||
-                            !native_field.public_member || !native_field.final_field ||
+                            !native_field.public_member ||
+                            native_field.final_field != !fn.return_class.empty() ||
                             !native_field.constructor_argument ||
                             !native_field.initializer_expression ||
                             native_field.initializer_expression->kind != Expression::Kind::Variable ||
