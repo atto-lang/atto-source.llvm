@@ -52,7 +52,7 @@ def verify_native_ir_asan(clang, path, temp):
         raise AssertionError(("LOCAL_AGGREGATE_ASAN_INSTRUMENTATION_FAILED",
                               probe.returncode, probe.stderr[:1200]))
     instrumented = inspected.read_text(encoding="utf-8")
-    if not re.search(r"@__asan_(?:report_(?:load|store)|(?:load|store))[0-9N]+\\b", instrumented):
+    if not re.search(r"@__asan_(?:report_(?:load|store)|(?:load|store))[0-9N]+", instrumented):
         raise AssertionError("LOCAL_AGGREGATE_ASAN_INSTRUMENTATION_MISSING: no access checks in generated native IR")
 
 
