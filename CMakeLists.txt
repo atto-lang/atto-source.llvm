@@ -1496,6 +1496,17 @@ if(BUILD_TESTING)
     add_test(NAME native_sealed_state_codegen_authority
         COMMAND oreslang-sealed-state-codegen-authority-test)
     set_tests_properties(native_sealed_state_codegen_authority PROPERTIES TIMEOUT 30)
+    # Exact cross-backend canonical sealed-state contract v2 from conformance #211.
+    # Fail closed: no generic unsupported-grammar rejection is a semantic PASS.
+    oreslang_contract_test(native_canonical_sealed_two_actor_guest
+        source-actor-canonical-sealed-v2.ores
+        --ir "call void @oreslang_source_actor_graceful_stop")
+    oreslang_contract_test(native_canonical_foreign_state_semantic_denial
+        source-actor-canonical-foreign-state-reject-v2.ores
+        --diagnostic "FOREIGN_ACTOR_STATE_DENIED")
+    oreslang_contract_test(native_canonical_read_loan_write_semantic_denial
+        source-actor-canonical-read-loan-write-reject-v2.ores
+        --diagnostic "WRITE_WITH_READ_LOAN_DENIED")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores

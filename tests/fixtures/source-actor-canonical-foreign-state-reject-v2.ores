@@ -1,0 +1,14 @@
+// Canonical semantic negative: ActorRef does not grant access to sealed actor state.
+// A frontend that merely lacks actor syntax is UNSUPPORTED_LOWERING, not a semantic pass.
+define actor Worker as
+    state {
+        total: int = 0;
+    }
+end
+
+pub fnc main(): int {
+    const a: ActorRef<Worker> = spawn Worker();
+    const b: ActorRef<Worker> = spawn Worker();
+    b.state.total = a.state.total;
+    return 43;
+}

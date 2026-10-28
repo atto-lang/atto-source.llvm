@@ -1,0 +1,14 @@
+// Canonical semantic negative: a critical-read loan cannot mutate sealed actor state.
+// Rejection must be WRITE_WITH_READ_LOAN_DENIED, not generic unsupported syntax.
+define actor Worker as
+    state {
+        total: int = 0;
+    }
+
+    pub illegal(int n): int using state.read {
+        return self.handle_state(critical-read |s| -> {
+            s.total = s.total + n;
+            return s.total;
+        });
+    }
+end
