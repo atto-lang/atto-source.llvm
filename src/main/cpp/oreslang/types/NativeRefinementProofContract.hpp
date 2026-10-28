@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cctype>
 #include <cstdint>
 #include <limits>
 #include <set>
@@ -107,7 +108,8 @@ inline bool known_native_refinement_effect(NativeRefinementEffect effect) noexce
 inline void require_native_function_refinement_contract(
         const NativeFunctionRefinement& contract) {
     if (contract.resolved_symbol.empty() || contract.resolved_symbol.size() > 256 ||
-            contract.resolved_symbol.find_first_not_of(" \\t\\n\\r\\f\\v") == std::string::npos)
+            std::all_of(contract.resolved_symbol.begin(), contract.resolved_symbol.end(),
+                    [](unsigned char ch) { return std::isspace(ch) != 0; }))
         throw std::invalid_argument("invalid function identity in refinement contract");
     for (const auto effect : contract.allowed_effects)
         if (!known_native_refinement_effect(effect))
