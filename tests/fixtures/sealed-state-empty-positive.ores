@@ -1,0 +1,13 @@
+define actor Idle as
+  state {
+  }
+  pub fnc on_message(int n): int with state.read {
+    return self.handle_state(|s| -> n);
+  }
+end
+pub fnc main(): int {
+  const worker = spawn Idle();
+  worker.send(41);
+  stop worker;
+  return 42;
+}
