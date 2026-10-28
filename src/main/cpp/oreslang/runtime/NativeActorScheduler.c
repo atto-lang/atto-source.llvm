@@ -1185,6 +1185,111 @@ int ores_native_actor_scheduler_is_current_actor(
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
 }
+/* Retained DATA receipts are actor-generation-fenced and have a separate
+ * preallocated slot incarnation. Caller-supplied tickets are never trusted. */
+static RetainedDataCredit* matching_retained_locked(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket ticket) {
+    if (!matching(s, ticket.actor) || ticket.slot >= s->per_actor_capacity
+            || !ticket.slot_generation || !ticket.execution_id)
+        return NULL;
+    RetainedDataCredit* credit =
+        &s->actors[ticket.actor.actor_slot].retained[ticket.slot];
+    return credit->state != RETAINED_EMPTY
+        && credit->generation == ticket.slot_generation
+        && credit->execution_id == ticket.execution_id ? credit : NULL;
+}
+int ores_native_actor_scheduler_retain_current_data(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket* out) {
+    if (out) *out = (OresNativeRetainedDataTicket){0};
+    if (!s || !out || executing != s || !executing_data_kind
+            || executing_retained_valid || !executing_context.id.execution
+            || !ores_native_actor_scheduler_is_current_actor(s, executing_actor))
+        return 0;
+    const OresNativeActorRef actor = executing_actor;
+    const uint64_t execution_id = executing_context.id.execution;
+    lock(s);
+    ActorLane* lane = &s->actors[actor.actor_slot];
+    int ok = lane->active && lane->carrier_owner_valid
+        && pthread_equal(lane->carrier_owner, pthread_self())
+        && matching(s, actor) && lane->retained_live < s->per_actor_capacity;
+    size_t slot = 0;
+    if (ok) {
+        for (; slot < s->per_actor_capacity; ++slot)
+            if (lane->retained[slot].state == RETAINED_EMPTY
+                    && lane->retained[slot].generation != UINT64_MAX)
+                break;
+        ok = slot < s->per_actor_capacity;
+    }
+    if (ok) {
+        RetainedDataCredit* credit=&lane->retained[slot];
+        ++credit->generation;
+        credit->execution_id=execution_id;
+        credit->state=RETAINED_IN_CALLBACK;
+        ++lane->retained_live;
+        *out=(OresNativeRetainedDataTicket){
+            .actor=actor, .slot=(uint64_t)slot,
+            .slot_generation=credit->generation, .execution_id=execution_id
+        };
+        executing_retained_ticket=*out;
+        executing_retained_valid=1;
+    }
+    unlock(s);
+    return ok;
+}
+static int settle_retained_data(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket ticket,
+        int abandoned) {
+    /* A timer producer never owns the actor heap: even after STOP, only a
+     * currently authenticated actor turn may acknowledge physical cleanup. */
+    if (!s || !ores_native_actor_scheduler_is_current_actor(s, ticket.actor))
+        return 0;
+    lock(s);
+    RetainedDataCredit* credit=matching_retained_locked(s, ticket);
+    int ok = credit && credit->state == RETAINED_PENDING;
+    if (ok) {
+        ActorLane* lane=&s->actors[ticket.actor.actor_slot];
+        if (!lane->active || !lane->carrier_owner_valid
+                || !pthread_equal(lane->carrier_owner, pthread_self())
+                || !lane->retained_live || !s->outstanding)
+            abort();
+        if ((!abandoned && (lane->processed_user_messages == UINT64_MAX
+                        || s->completed == UINT64_MAX))
+                || (abandoned && lane->abandoned_user_messages == UINT64_MAX))
+            abort();
+        --lane->retained_live;
+        --s->outstanding;
+        if (abandoned) ++lane->abandoned_user_messages;
+        else {
+            ++lane->processed_user_messages;
+            ++s->completed;
+        }
+        credit->state=RETAINED_EMPTY;
+        credit->execution_id=0;
+        maybe_finish_stopped_locked(s, (size_t)ticket.actor.actor_slot);
+        if (!s->outstanding) {
+            pthread_cond_broadcast(&s->drained);
+            if (s->retired) pthread_cond_broadcast(&s->ready);
+        }
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_complete_retained_data(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket ticket) {
+    return settle_retained_data(s, ticket, 0);
+}
+int ores_native_actor_scheduler_abandon_retained_data(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket ticket) {
+    return settle_retained_data(s, ticket, 1);
+}
+size_t ores_native_actor_scheduler_retained_data_count(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    size_t count = matching(s, actor) ? s->actors[actor.actor_slot].retained_live : 0;
+    unlock(s);
+    return count;
+}
 int ores_native_actor_scheduler_current_execution_context(
         OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
     if (!s || !out || executing != s || !executing_context.id.runtime_domain
