@@ -84,5 +84,21 @@ class GuestProgressProofTests(unittest.TestCase):
         self.deny(lambda _, l: l.__setitem__(
             9, l[9].replace("slot=1", "slot=0")))
 
+    def test_same_native_heap_domain_is_denied(self):
+        self.deny(lambda _, l: l.__setitem__(
+            slice(None), [line.replace("heap=73", "heap=71") for line in l]))
+
+    def test_same_actor_switching_heaps_is_denied(self):
+        self.deny(lambda _, l: l.__setitem__(
+            2, l[2].replace("heap=71", "heap=79")))
+
+    def test_missing_heap_field_is_denied(self):
+        self.deny(lambda _, l: l.__setitem__(
+            0, l[0].replace("heap=71 ", "")))
+
+    def test_zero_heap_domain_is_denied(self):
+        self.deny(lambda _, l: l.__setitem__(
+            0, l[0].replace("heap=71", "heap=0")))
+
 if __name__ == "__main__":
     unittest.main()
