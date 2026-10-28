@@ -951,15 +951,15 @@ void oreslang_source_actor_join_done(void* opaque) {
         for (uint32_t i = 0; i < summary.stored; ++i) {
             const OresActorHeapAccessEvent* e = &access[i];
             ensure(e->domain == heap_domain && e->actor_id == instance->id
-                && e->incarnation == 1u && e->slot_generation == 1u);
+                && e->incarnation == 1u);
             if (e->kind == ORES_ACTOR_HEAP_ACCESS_FIELD_INIT) {
-                ensure(e->slot_index == 0u);
+                ensure(e->slot_index == 0u && e->slot_generation == 1u);
                 ++inits;
             } else if (e->kind == ORES_ACTOR_HEAP_ACCESS_FIELD_READ) {
-                ensure(e->slot_index == 0u);
+                ensure(e->slot_index == 0u && e->slot_generation == 1u);
                 ++reads;
             } else if (e->kind == ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE) {
-                ensure(e->slot_index == 0u);
+                ensure(e->slot_index == 0u && e->slot_generation == 1u);
                 ++writes;
             }
         }
