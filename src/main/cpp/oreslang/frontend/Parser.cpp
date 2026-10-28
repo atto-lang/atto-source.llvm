@@ -1892,12 +1892,19 @@ private:
                 if (token_.text == "@")
                     fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
-                if (token_.text == "structural")
+                if (token_.text == "structural") {
+                    if (peek_next().text == "(")
+                        fail("native structural positional tuple requires verified readonly-width and nonescape lowering");
                     fail("native structural parameter requires verified structural shape and ABI lowering");
+                }
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
+                if (token_.text == "tuple" || token_.text == "(")
+                    fail("native positional tuple parameter requires verified readonly-slot and optional-tail lowering");
+                if (token_.text == "any" || token_.text == "unknown")
+                    fail("native opaque top type requires tagged value ABI and checked refinement lowering");
                 if (accept("int")) {
                     parameter.scalar_type = ScalarType::I64;
                 } else if (accept("bool")) {
@@ -1937,6 +1944,10 @@ private:
         if (arrow_return_type) require("->");
         value.returns_void = accept("void");
         if (!value.returns_void) {
+            if (token_.text == "tuple")
+                fail("native positional tuple return requires verified tuple ABI lowering");
+            if (token_.text == "any" || token_.text == "unknown")
+                fail("native opaque top type requires tagged value ABI and checked refinement lowering");
             if (accept("int")) {
                 value.return_type = ScalarType::I64;
             } else if (accept("bool")) {
