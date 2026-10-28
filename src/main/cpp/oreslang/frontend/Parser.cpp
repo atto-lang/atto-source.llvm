@@ -2205,6 +2205,41 @@ private:
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
                 const auto mode = token_.text; advance(); binding.assignable = mode == "let"; binding.owner_mutable = mode == "val" || mode == "let"; if (mode == "let") accept("mut");
                 binding.sum_type = type_identifier(); binding.name = identifier(); require("="); binding.initializer = expression();
+            } else if ((token_.text == "const" || token_.text == "val" || token_.text == "let") &&
+                    sum_first.kind == Kind::Identifier &&
+                    callable_aggregate_aliases_.count(std::string(sum_first.text))) {
+                // Keep a declared transparent aggregate as a typed source
+                // value. Mutable aggregate loans/assignments are not admitted
+                // until the independent ownership pass has a checked ABI.
+                const std::string mode(token_.text);
+                advance();
+                if (mode == "let") accept("mut");
+                if (mode != "const")
+                    fail("AGGREGATE_MUTABLE_LOCAL_UNVERIFIED: use immutable const");
+                const std::string alias = identifier();
+                binding.aggregate_type = callable_aggregate_aliases_.at(alias);
+                binding.name = identifier();
+                require("=");
+                binding.initializer = expression();
+                const types::NativeAggregateShape* actual = nullptr;
+                if (binding.initializer->kind == Expression::Kind::AggregateConstruct &&
+                        binding.initializer->aggregate_type)
+                    actual = &*binding.initializer->aggregate_type;
+                else if (binding.initializer->kind == Expression::Kind::Variable) {
+                    const auto& source = binding.initializer->name;
+                    for (const auto& parameter : value.parameters)
+                        if (parameter.name == source && parameter.aggregate_type)
+                            actual = &*parameter.aggregate_type;
+                    for (const auto& prior : value.locals)
+                        if (prior.name == source && prior.aggregate_type)
+                            actual = &*prior.aggregate_type;
+                }
+                if (!actual)
+                    fail("AGGREGATE_LOCAL_INITIALIZER_UNPROVEN: requires known aggregate source");
+                if (binding.aggregate_type->kind != actual->kind)
+                    fail("AGGREGATE_LOCAL_INITIALIZER_KIND_MISMATCH");
+                if (!binding.aggregate_type->same_type_as(*actual))
+                    fail("AGGREGATE_LOCAL_INITIALIZER_SHAPE_MISMATCH");
             } else if (array_effect_ahead()) {
                 binding.name = "$effect" + std::to_string(value.locals.size());
                 binding.initializer = primary();
@@ -5862,6 +5897,9 @@ void resolve_and_validate_program(Program& program) {
         for (const auto& parameter : fn.parameters)
             if (parameter.name == expr.name && parameter.aggregate_type)
                 return &*parameter.aggregate_type;
+        for (const auto& local : fn.locals)
+            if (local.name == expr.name && local.aggregate_type)
+                return &*local.aggregate_type;
         return nullptr;
     };
     for (const auto& fn : program.functions) {
