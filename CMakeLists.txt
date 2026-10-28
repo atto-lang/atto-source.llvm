@@ -1430,6 +1430,20 @@ if(BUILD_TESTING)
         --ir "oreslang_source_actor_spawn")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
+    # Canonical actor syntax is receive(message: int) -> void :: ... end.
+    # This is NOT the old scalar pub on_message(int): int ABI. Until native
+    # compiler guest suspension + timer + stdio lowering exists, fail closed
+    # *after verifying the canonical signature*, with no emitted LLVM IR.
+    oreslang_contract_test(reject_unlowered_actor_receive_await_timer
+        source-actor-receive-await-timer-guest.ores
+        --diagnostic "native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics")
+    oreslang_contract_test(reject_actor_receive_wrong_return_type
+        source-actor-receive-invalid-return-reject.ores
+        --diagnostic "expected 'void'")
+    oreslang_contract_test(reject_actor_receive_wrong_delimiter
+        source-actor-receive-invalid-delimiter-reject.ores
+        --diagnostic "expected '::'")
+
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
         --diagnostic "native final actor fields require typed field initialization and ownership lowering")
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
