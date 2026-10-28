@@ -1303,7 +1303,14 @@ private:
             require("->");
             require("void");
             require("::");
-            fail("native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics");
+            // This is a stable source-language boundary, not an error in the
+            // first body token. The generic fail() helper rewrites errors
+            // when that token is "await"/"select" etc.; bypass that
+            // fallback so both direct-await and if/await bodies receive the
+            // same precise no-IR diagnostic.
+            throw std::runtime_error(
+                "native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics"
+                " at byte " + std::to_string(token_.offset));
         }
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
