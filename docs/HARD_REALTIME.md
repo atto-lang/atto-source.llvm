@@ -118,3 +118,60 @@ functional properties; production guest integration, actor generation leases,
 physical retirement, RTOS wakeups, schedulability and measured hardware
 latency are still missing. Keep hard-RT timer feature admission **disabled**
 until all corresponding requirements are implemented and verified.
+
+## Alignment with Java actor timer code-start contract
+
+The canonical cross-runtime requirement is Java draft
+[hard-RT timer/dispatch PR #2210](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/2210),
+with actor lifetime/heap ownership in
+[Java #2203](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/2203).
+These are specifications, **not** guest execution evidence. LLVM draft
+[#1123](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1123)
+implements only the fixed-pool precursor.
+
+The runtime must distinguish **five** monotonic timestamps, in one comparable
+clock domain: `t_due` (absolute release), `t_expiry` (driver recognition),
+`t_ready` (validated actor CONTROL readiness), `t_start` (first actual guest
+instruction after exclusive actor lease), and `t_end` (physical guest turn
+completion). The pool now returns `Expired.observed_expiry_ns` with
+`Expired.deadline_ns`; it does **not** provide the later three timestamps.
+
+**Do not mistake `claim_start(..., now_ns)` for a measured first instruction.**
+The `now_ns` argument is caller-supplied. Until the compiled guest entry
+prologue samples the clock at the actual entry boundary, a returned `Ok`
+proves only the supplied-timestamp arithmetic and token checks, not
+`t_start <= t_due + B_start`. Any scheduling gap between the sample and
+entry must be included in the proven bound. A successful timer claim and
+timely callback invocation are not physical retirement receipts.
+
+Before accepting a hard-RT timer, use worst-case schedulability analysis that
+includes the existing **non-reentrant** actor handler's maximum remaining
+CPU turn, any serialized/critical actor-state guard, all admitted higher and
+equal priority ready work, interrupt/wakeup and timer service interference,
+CPU/core availability, FFI and bounded cleanup. If an actor can remain in an
+unbounded turn, **reject** its hard-RT activation rather than bypass its
+single-writer lease. Require a reserved deadline/priority lane and bounded
+notification quota separate from ordinary mailbox traffic. Declare a
+guarantee only for a specific qualified OS/kernel, CPU, workload and timing
+budget; absence of one of those bounds is a fail-closed admission error.
+
+The existing `interval.next()` is **demand-driven fixed delay**, not a
+phase-stable hard-RT periodic trigger. Fixed-rate RT periodic activation
+needs a separately admitted epoch + period + WCET + start budget and a
+bounded skip/fail missed-release policy (never an unbounded catch-up queue).
+Timeout observers and timed `select`/channel/critical/network waits may
+signal expiration promptly without having a guarantee for when the guest
+*handles* that signal.
+
+This draft also fences timer pool identities across different compile-time
+capacities, rather than issuing independently restarted domain counters
+for each `HardRealtimeTimerQueue<N>` template. Identity fencing does not
+establish physical actor isolation, code-start timing or cross-thread
+ingress safety.
+
+Required later evidence: deterministic clock-controlled semantics, exact
+source AOT binaries, `due/expiry/ready/start/end` traces, worst-case
+priority/actor-turn interference analysis, target-kernel `rtla timerlat`
+and `osnoise` measurements, and a reproducible missed-deadline fail gate.
+Sanitizer/model tests and source-org zero-step workflows are not hardware
+deadline proof. Keep draft and keep hard-RT feature admission disabled.
