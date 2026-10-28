@@ -954,8 +954,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
-    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
-        sourceAwaitReady, sourceAwaitDone;
+    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceGracefulStop,
+        sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -979,6 +979,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceGracefulStop = module.getOrInsertFunction(
+            "oreslang_source_actor_graceful_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceRequestStop = module.getOrInsertFunction(
             "oreslang_source_actor_request_stop",
@@ -1991,6 +1994,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     builder.CreateCall(
                         sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
+                else if (action.kind == ActorAction::Kind::GracefulStop)
+                    throw std::runtime_error("native graceful_stop cannot block a continuation");
             }
         } else if (!fn.done_await_actor.empty()) {
             /*
@@ -2018,6 +2023,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     if (stopped != fn.done_await_actor)
                         throw std::runtime_error(
                             "get_done continuation references unexpected ActorRef");
+                    if (action.kind == ActorAction::Kind::GracefulStop)
+                        throw std::runtime_error("duplicate physical join in get_done continuation");
                     builder.CreateCall(
                         sourceRequestStop,
                         {actorRefs.at(stopped)});
@@ -2078,10 +2085,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     builder.CreateCall(
                         sourceSend,
                         {actorRefs.at(send.reference), payload});
-                } else {
+                } else if (action.kind == ActorAction::Kind::Stop) {
                     builder.CreateCall(
                         sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
+                } else if (action.kind == ActorAction::Kind::GracefulStop) {
+                    builder.CreateCall(
+                        sourceGracefulStop,
+                        {actorRefs.at(fn.actor_stops.at(action.index))});
+                } else {
+                    throw std::runtime_error("unknown native actor lifecycle action");
                 }
             }
         }

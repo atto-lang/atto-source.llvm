@@ -3031,6 +3031,21 @@ private:
                                                value.actor_sends.size() - 1});
                 continue;
             }
+            // Trusted root-main only: nonabandoning mailbox drain and join.
+            // Never execute a synchronous physical join on a carrier callback.
+            if (action->kind == Expression::Kind::Field
+                    && action->name == "graceful_stop" && accept("(")) {
+                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty())
+                    fail("native graceful_stop requires non-suspending trusted main");
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native graceful_stop requires direct named ActorRef receiver");
+                require(")");
+                require(";");
+                value.actor_stops.push_back(action->left->name);
+                value.actor_actions.push_back({ActorAction::Kind::GracefulStop,
+                                               value.actor_stops.size() - 1});
+                continue;
+            }
             if (action->kind == Expression::Kind::Variable && accept("=")) {
                 statement.kind = Statement::Kind::ScalarWrite;
                 statement.receiver = action->name; statement.expression = expression();
@@ -5031,6 +5046,12 @@ private:
                     if (!live_actors.erase(stop))
                         throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
                 }
+            }
+            if (!fn.done_await_actor.empty()) {
+                for (const auto& action : fn.actor_actions)
+                    if (action.kind == ActorAction::Kind::GracefulStop)
+                        throw std::runtime_error(
+                            "native graceful_stop already joins physical done; get_done is duplicate");
             }
             if (!fn.done_await_actor.empty() && live_actors.count(fn.done_await_actor))
                 throw std::runtime_error("await get_done requires stop before await");

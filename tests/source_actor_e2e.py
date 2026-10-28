@@ -83,7 +83,7 @@ def main():
     shared_bytes = shared_file.read_bytes()
     shared_blob = hashlib.sha1(b"blob " + str(len(shared_bytes)).encode("ascii")
                                + b"\0" + shared_bytes).hexdigest()
-    assert shared_blob == "51519bdf9084d7d8457b1e5a39c92a5efe2b63ce", (
+    assert shared_blob == "016733b1fbc8bdfbde7414a15b877a190dd92806", (
         "canonical shared guest fixture bytes drifted", shared_blob)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
@@ -227,7 +227,9 @@ def main():
                         "source-actor-shared-heap-contract-v1.ores"}:
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
-                first_stop = guest.stdout.find("call void @oreslang_source_actor_stop")
+                first_stop = (guest.stdout.find("call void @oreslang_source_actor_graceful_stop")
+                              if name == "source-actor-shared-heap-contract-v1.ores"
+                              else guest.stdout.find("call void @oreslang_source_actor_stop"))
                 final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
                 assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
             ll = pathlib.Path(temp, name + ".ll")
@@ -298,12 +300,16 @@ def main():
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
             if name == "source-actor-shared-heap-contract-v1.ores":
-                # STOP may abandon DATA; even with an exact native build,
-                # passing this test is ONLY compiler/launch/prefix accounting.
-                # The 23-event physically pinned loan trace is still pending.
-                print("SHARED_ACTOR_GUEST_PREFIX_ONLY "
-                      f"processed={[r[\'processed\'] for r in receipts]} "
-                      f"accepted={[r[\'accepted\'] for r in receipts]} "
+                assert guest.stdout.count(
+                    "call void @oreslang_source_actor_graceful_stop(") == 2, (
+                    name, "guest must invoke graceful drain and physical join")
+                assert all(r["processed"] == r["accepted"]
+                           and r["abandoned"] == 0 for r in receipts), (
+                    name, "graceful stop must not abandon DATA", receipts)
+                assert [r["last"] for r in receipts] == [52, 362], (
+                    name, "same-kind actor states must remain independent", receipts)
+                print("SHARED_ACTOR_GUEST_ALL_MESSAGES_PROCESSED "
+                      "A=4 B=5 A_LAST=52 B_LAST=362 "
                       "NOT_PHYSICAL_LOAN_PARITY", flush=True)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")

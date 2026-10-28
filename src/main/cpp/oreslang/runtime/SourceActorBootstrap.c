@@ -948,6 +948,26 @@ void oreslang_source_actor_join_done(void* opaque) {
     group_unlock();
 }
 
+void oreslang_source_actor_graceful_stop(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    OresNativeExecutionContext carrier = {0};
+    ensure(!ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
+    group_lock();
+    int expected = 0;
+    ensure(atomic_compare_exchange_strong_explicit(
+        &instance->stop_requested, &expected, 1,
+        memory_order_acq_rel, memory_order_acquire));
+    const size_t slot = (size_t)instance->ref.actor_slot;
+    ensure(group.vm && slot < group.next_slot
+        && group.actors[slot] == instance);
+    /* Non-sealed stop closes admission while retaining all queued DATA. */
+    ensure(ores_native_vm_stop(group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    group_unlock();
+    oreslang_source_actor_join_done(opaque);
+}
+
 void oreslang_source_actor_stop(void* opaque) {
     /*
      * Preserve synchronous stop for source paths that do not await get_done.

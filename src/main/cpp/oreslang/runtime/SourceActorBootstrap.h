@@ -59,6 +59,10 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
 void oreslang_source_actor_request_stop(void* actor);
 void oreslang_source_actor_join_done(void* actor);
 void oreslang_source_actor_stop(void* actor);
+/* Trusted root-main-only synchronous drain and physical join. Unlike ordinary
+ * stop, every previously admitted DATA message is processed (not abandoned).
+ * This API must never be called from an actor/reactor carrier. */
+void oreslang_source_actor_graceful_stop(void* actor);
 
 /*
  * Restricted compiler-generated await slice:

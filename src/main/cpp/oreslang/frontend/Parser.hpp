@@ -264,7 +264,7 @@ struct ActorSend {
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
 struct ActorAction {
-    enum class Kind { Send, Stop };
+    enum class Kind { Send, Stop, GracefulStop };
     Kind kind;
     std::size_t index = 0;
 };

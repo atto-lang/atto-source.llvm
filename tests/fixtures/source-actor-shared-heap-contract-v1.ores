@@ -21,8 +21,8 @@ pub fnc main(): int {
   b.send(7);
   a.send(4);
   b.send(8);
-  stop a;
+  a.graceful_stop();
   b.send(9);
-  stop b;
+  b.graceful_stop();
   return 43;
 }
