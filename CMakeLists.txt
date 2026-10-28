@@ -1695,6 +1695,32 @@ if(BUILD_TESTING)
     set_tests_properties(native_realtime_timer_fixed_pool_and_deadline_start
         PROPERTIES TIMEOUT 20)
 
+    # Actor-private double-entry scheduling substrate (host model only):
+    # CONTROL before later DATA; suspended logical turns cannot be overtaken.
+    add_executable(oreslang-actor-execution-ledger-test
+        tests/actor_execution_ledger_test.cpp)
+    target_include_directories(oreslang-actor-execution-ledger-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-execution-ledger-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-execution-ledger-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_execution_double_entry_ledger
+        COMMAND oreslang-actor-execution-ledger-test)
+    set_tests_properties(native_actor_execution_double_entry_ledger
+        PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-timer-actor-double-entry-test
+        tests/native_timer_actor_double_entry_test.cpp)
+    target_include_directories(oreslang-timer-actor-double-entry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-timer-actor-double-entry-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-timer-actor-double-entry-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_timer_actor_double_entry_deadline_miss
+        COMMAND oreslang-timer-actor-double-entry-test)
+    set_tests_properties(native_timer_actor_double_entry_deadline_miss
+        PROPERTIES TIMEOUT 20)
+
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
