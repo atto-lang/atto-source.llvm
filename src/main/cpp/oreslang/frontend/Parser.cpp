@@ -1976,10 +1976,19 @@ private:
             if (token_.kind != Kind::Identifier)
                 fail("AGGREGATE_LOCAL_ALIAS_NAME_REQUIRED");
             const std::string alias = identifier();
+            // A transparent local name must never displace language-owned
+            // container, async, pointer or primitive types. The generic
+            // identifier parser does not reserve these nominal builtins.
             if (alias == "i64" || alias == "String" || alias == "string" ||
                     alias == "uint" || alias == "float" ||
-                    entry_builtin_name(alias) || scalar_alias_targets_.count(alias) ||
-                    defined_type_aliases_.count(alias) || type_only_nominals_.count(alias))
+                    alias == "Option" || alias == "Result" ||
+                    alias == "Task" || alias == "Future" ||
+                    alias == "Pointer" || alias == "Array" ||
+                    alias == "Channel" || alias == "ActorRef" ||
+                    callable_nominal_name(alias) || entry_builtin_name(alias) ||
+                    scalar_alias_targets_.count(alias) ||
+                    defined_type_aliases_.count(alias) || forwards_.count(alias) ||
+                    type_only_nominals_.count(alias))
                 fail("AGGREGATE_LOCAL_ALIAS_SHADOW: builtin or declared type name");
             if (token_.text == "<")
                 fail("AGGREGATE_LOCAL_ALIAS_GENERIC_UNSUPPORTED");

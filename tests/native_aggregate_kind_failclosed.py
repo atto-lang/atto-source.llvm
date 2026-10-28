@@ -52,6 +52,30 @@ CASES = (
      "AGGREGATE_CONSTRUCTOR_LITERAL_TYPE_MISMATCH"),
     ("literal-string-into-int", "fnc value(): T { type T = struct { foo: int }; return T{foo: \"x\"}; }",
      "AGGREGATE_CONSTRUCTOR_LITERAL_TYPE_MISMATCH"),
+
+    # Language-owned builtin type names must not be redirected to a local
+    # aggregate alias. These are contextual identifiers, not lexer keywords.
+    ("alias-shadows-option", "fnc value(): int { type Option = struct { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_SHADOW"),
+    ("alias-shadows-result", "fnc value(): int { type Result = record { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_SHADOW"),
+    ("alias-shadows-task", "fnc value(): int { type Task = struct { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_SHADOW"),
+    ("alias-shadows-future", "fnc value(): int { type Future = struct { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_SHADOW"),
+    ("alias-shadows-pointer", "fnc value(): int { type Pointer = struct { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_SHADOW"),
+    ("alias-shadows-array", "fnc value(): int { type Array = struct { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_SHADOW"),
+    ("alias-shadows-channel", "fnc value(): int { type Channel = struct { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_SHADOW"),
+    ("alias-shadows-actor-ref", "fnc value(): int { type ActorRef = struct { foo: int }; return 1; }",
+     "AGGREGATE_LOCAL_ALIAS_SHADOW"),
+    # Bounded structural source types must fail before parsing the body.
+    ("aggregate-shape-65-fields",
+     "fnc value(): struct { " + ", ".join(f"f{i}: int" for i in range(65)) +
+     " } { return 1; }",
+     "AGGREGATE_SHAPE_FIELD_BUDGET"),
 )
 
 def main():
@@ -72,7 +96,7 @@ def main():
             result = subprocess.run([args.compiler, str(path)], cwd=directory,
                                     capture_output=True, text=True, timeout=30)
             verify_negative_case(name, path, original, expected, result)
-    print("native aggregate kind: 20 fail-closed compiler source checks passed")
+    print(f"native aggregate kind: {len(CASES)} fail-closed compiler source checks passed")
 
 if __name__ == "__main__":
     main()
