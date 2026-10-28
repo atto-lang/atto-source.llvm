@@ -33,6 +33,8 @@ jobs:
           git diff --quiet --exit-code
           test -z "$(git ls-files --others --exclude-standard)"
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Reject malformed compiled actor workflow stages
+        run: python3 -m unittest discover -s tests -p test_llvm_ci_actor_workflow.py -v
       - name: Install LLVM toolchain and native linker
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
       - name: Configure
