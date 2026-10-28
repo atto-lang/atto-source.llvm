@@ -8,6 +8,21 @@
 
 namespace oreslang::runtime::realtime {
 
+namespace detail {
+// One process-global identity source for *all* template pool capacities.
+// A template-local static counter would permit duplicate domain identities
+// between HardRealtimeTimerQueue<2> and HardRealtimeTimerQueue<4>.
+inline std::uint64_t next_realtime_timer_domain() noexcept {
+    static std::atomic<std::uint64_t> next{1};
+    auto candidate = next.load(std::memory_order_relaxed);
+    while (candidate != 0 && candidate != UINT64_MAX) {
+        if (next.compare_exchange_weak(candidate, candidate + 1,
+                std::memory_order_relaxed)) return candidate;
+    }
+    return 0;
+}
+}  // namespace detail
+
 // Bootstrap-allocated, single-owner CONTROL scheduler data structure.
 // NOT thread-safe: cross-thread requests must enter through a separately
 // bounded, preallocated ingress queue. No guest pointers or callbacks.
@@ -27,6 +42,8 @@ public:
     struct Expired {
         Handle handle{};
         std::uint64_t deadline_ns = 0;
+        // Clock sample when expiry was recognized, NOT CONTROL-ready or guest start.
+        std::uint64_t observed_expiry_ns = 0;
         std::uint64_t actor_id = 0;
         std::uint64_t actor_generation = 0;
     };
@@ -34,7 +51,7 @@ public:
         std::uint64_t lateness_ns = 0;
     };
 
-    HardRealtimeTimerQueue() noexcept : domain_(mint_domain()) {}
+    HardRealtimeTimerQueue() noexcept : domain_(detail::next_realtime_timer_domain()) {}
     HardRealtimeTimerQueue(const HardRealtimeTimerQueue&) = delete;
     HardRealtimeTimerQueue& operator=(const HardRealtimeTimerQueue&) = delete;
 
@@ -79,7 +96,7 @@ public:
         Slot& s = slots_[best];
         s.phase = Phase::Ready;
         out = Expired{Handle{domain_, s.generation, static_cast<std::uint32_t>(best)},
-                      s.deadline_ns, s.actor_id, s.actor_generation};
+                      s.deadline_ns, now_ns, s.actor_id, s.actor_generation};
         return Status::Ok;
     }
 
@@ -156,15 +173,6 @@ private:
         std::uint64_t actor_generation = 0;
         Phase phase = Phase::Free;
     };
-    static std::uint64_t mint_domain() noexcept {
-        static std::atomic<std::uint64_t> next{1};
-        auto value = next.load(std::memory_order_relaxed);
-        while (value != 0 && value != UINT64_MAX) {
-            if (next.compare_exchange_weak(value, value + 1,
-                    std::memory_order_relaxed)) return value;
-        }
-        return 0;
-    }
     bool observe_clock(std::uint64_t now) noexcept {
         if (clock_seen_ && now < last_now_ns_) return false;
         clock_seen_ = true;
