@@ -8,28 +8,28 @@ This document prepares an **independent security review**. It is not authorizati
 - Proposed **private** carrier: `usa-acc/usa-acc-e2e`, repository ID `1346346666`.
 - Separate source candidates: LLVM #1056 (native borrow admission) and #1082 (reserved `unsafe` keyword). No other PR is authorized by this proposal.
 - Restacked candidate heads (must be checked live again before an authorized run):
-  - #1056: `777ed287961f50503977c7e47a961eea3c4f8244`.
-  - #1082: `73a9249ffb87f75eba1a3d50ea8f07ee15a4277d`.
-- Carrier review PR: `usa-acc/usa-acc-e2e#46`, current source-free reviewed-plan/workflow candidate `68b3690a307ac017bfbb850bf8af02a4844ca271` (the LLVM toolchain workflow now triggers for changes to either plan).
+  - #1056: `1589c62b0cc802230ab58da11dd4352b4f78950d`.
+  - #1082: `85cd7a5d1b8530617044f1b34a6322e22e4c4ec1`.
+- Carrier review PR: `usa-acc/usa-acc-e2e#46`, current source-free reviewed-plan/workflow candidate `d8705106829754389df5eab9784e50e93fc8289b` (the LLVM toolchain workflow now triggers for changes to either plan).
 - Source-free reviewed plan Git blobs:
-  - `ci/test-plans/llvm-pr1056.json`: `5dfd1b740f7ea5989a34d2d5427fb7b117015d38`.
-  - `ci/test-plans/llvm-pr1082.json`: `98b5de36de0c761d69d8563b61605345a56257f1`.
+  - `ci/test-plans/llvm-pr1056.json`: `2692e09c827641d1591b4d9993914c16e589dc28`.
+  - `ci/test-plans/llvm-pr1082.json`: `4ae4a884a93c6b5ae3b00a69aa935a3a9a21fc14`.
 
 ## Proven source-free carrier capability (NOT guest LLVM source testing)
 
-Carrier PR #46 source-free runs at exact reviewed head `68b3690a307ac017bfbb850bf8af02a4844ca271`:
-- LLVM toolchain, CMake/CTest and Clang ASan+UBSan: `40610637614`, success, five executed steps.
-- Carrier verifier and Java toolchain: `40610637676`, success, eleven verifier steps and five Java-toolchain steps.
-- Evidence contract: `40610637702`, success, eight executed steps.
+Carrier PR #46 source-free runs at exact reviewed head `d8705106829754389df5eab9784e50e93fc8289b`:
+- LLVM toolchain, CMake/CTest and Clang ASan+UBSan: `40754207276`, success, five executed steps.
+- Carrier verifier and Java toolchain: `40754207446`, success, eleven verifier steps and five Java-toolchain steps.
+- Evidence contract: `40754207267`, success, eight executed steps.
 - Source-bearing test jobs were **not** dispatched. Private source has **not** been copied into the carrier.
 
 ## Current-main reconciliation and exact-head admission evidence
 
-- Current LLVM main at reconciliation: `d0c482d536656a6d768e165efed91f239994b76d`.
-- #1056 exact root Git tree: `086d701ca920e9d5a2513fb00c8cb54e68465d4e`. Three scoped files differ; zero commits behind the checked main.
-- #1082 exact root Git tree: `7c15b06822437ccf08017921a31eb13c0a4685d5`. Two scoped files differ; zero commits behind the checked main.
-- All five files pinned by the two carrier plans were re-fetched from these heads; all Git blob SHAs exactly match the existing plan blobs. No plan mutation is required.
-- Fresh source CI attempts are **NOT_EXECUTED**: #1056 [LLVM smoke 40739101327](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40739101327), #1082 [LLVM smoke 40739255490](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40739255490), governance [40739371331](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40739371331). Sampled jobs all failed with `runner_id=null` and `steps=null`. These do not prove native compiler, CTest, or governance regression outcomes.
+- Current LLVM main at reconciliation: `06d73764d01a48b25857980a878088612b19e1c4`.
+- #1056 exact root Git tree: `6e05158c7648c453426bf34d646dbb2d39c73da5`. Three scoped files differ; zero commits behind the checked main.
+- #1082 exact root Git tree: `d7d15a738c905dd8caa2469dd3d0b7250a7bbb13`. Two scoped files differ; zero commits behind the checked main.
+- All five files pinned by the two carrier plans were re-fetched from these heads; all Git blob SHAs exactly match the existing plan blobs. The two plans were re-pinned to the new CMake/Parser blobs; both use `--no-tests=error` in targeted and full-suite CTest commands, with source-free negative regression tests.
+- Fresh source CI attempts are **NOT_EXECUTED**: #1056 [LLVM smoke 40749444863](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40749444863), #1082 [LLVM smoke 40749583177](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40749583177), governance [40739371331](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40739371331). Sampled jobs all failed with `runner_id=null` and `steps=null`. These do not prove native compiler, CTest, or governance regression outcomes.
 
 ## Mandatory fail-closed gates before any export
 
