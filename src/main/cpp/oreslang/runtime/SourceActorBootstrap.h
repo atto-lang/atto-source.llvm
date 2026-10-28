@@ -59,6 +59,10 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
 void oreslang_source_actor_request_stop(void* actor);
 void oreslang_source_actor_join_done(void* actor);
 void oreslang_source_actor_stop(void* actor);
+/* Graceful stop seals future DATA but drains all already accepted messages
+ * before the same physical done/join and native heap reclamation barrier.
+ * This is a trusted compiler ABI; ordinary stop remains abortive. */
+void oreslang_source_actor_graceful_stop(void* actor);
 
 /*
  * Restricted compiler-generated await slice:
