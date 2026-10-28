@@ -7,6 +7,7 @@ on:
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.h
       - tests/native_actor_ledger_scheduler_bridge_test.cpp
+      - tests/native_actor_retained_data_stop_test.c
       - tests/native_actor_execution_ledger_test.cpp
       - docs/ACTOR_EXECUTION_LEDGER_V1.md
       - CMakeLists.txt
@@ -42,7 +43,8 @@ jobs:
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
             tests/native_actor_execution_ledger_test.cpp \
-            tests/native_actor_ledger_scheduler_bridge_test.cpp; do
+            tests/native_actor_ledger_scheduler_bridge_test.cpp \
+            tests/native_actor_retained_data_stop_test.c; do
             expected="$(git rev-parse "HEAD:$path")"
             actual="$(git hash-object "$path")"
             test "$actual" = "$expected"
@@ -91,6 +93,18 @@ jobs:
               -o "build/actor-ledger-gate/bridge-$tool"
             "build/actor-ledger-gate/bridge-$tool"
           done
+      - name: Retained DATA mailbox quota, STOP and physical retirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_retained_data_stop_test.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/actor-ledger-gate/retained-stop-$tool"
+            "build/actor-ledger-gate/retained-stop-$tool"
+          done
       - name: Native scheduler bridge Clang ASan and UBSan
         shell: bash
         env:
@@ -108,3 +122,10 @@ jobs:
             build/actor-ledger-gate/scheduler-sanitized.o \
             -o build/actor-ledger-gate/bridge-sanitized
           build/actor-ledger-gate/bridge-sanitized
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp \
+            tests/native_actor_retained_data_stop_test.c \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/retained-stop-sanitized
+          build/actor-ledger-gate/retained-stop-sanitized
