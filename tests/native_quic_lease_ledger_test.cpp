@@ -24,6 +24,7 @@ int main() {
     auto s3 = ledger.admit_stream(*c1, Ledger::Direction::Unidirectional);
     assert(s3);
     assert(!ledger.admit_stream(*c1, Ledger::Direction::Unidirectional));
+    assert(!ledger.admit_stream(*c1, static_cast<Ledger::Direction>(255)));
     assert(!ledger.admit_stream(*c2, Ledger::Direction::Bidirectional));
     assert(ledger.active_streams() == 3);
 
