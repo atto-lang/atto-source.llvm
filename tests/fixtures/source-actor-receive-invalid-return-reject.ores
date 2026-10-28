@@ -1,0 +1,6 @@
+// receive handlers must return void; a scalar ABI is not a fallback.
+define actor Worker as
+    receive(message: int) -> int ::
+        return message
+    end
+end
