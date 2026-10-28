@@ -71,6 +71,36 @@ foreach(case_name IN ITEMS zero negative min_max)
         message(FATAL_ERROR "Native Java XOR ${case_name}: expected exact 64-bit equality, got OS exit ${exit_status}; ${program_err}")
     endif()
 endforeach()
+# Both operands are eager: a checked overflow must trap instead of
+# producing a seemingly valid XOR result. LLVM's current signed64 error ABI
+# is a native trap, not a typed Result/Option.
+foreach(side IN ITEMS left right)
+    if(side STREQUAL "left")
+        set(expression "Integer.bitXor(9223372036854775807+1,0)")
+    else()
+        set(expression "Integer.bitXor(0,9223372036854775807+1)")
+    endif()
+    set(source "${WORK_DIR}/xor-overflow-${side}.ores")
+    set(ir_file "${WORK_DIR}/xor-overflow-${side}.ll")
+    set(binary "${WORK_DIR}/xor-overflow-${side}")
+    file(WRITE "${source}" "fnc main():int { return ${expression}; }\n")
+    execute_process(COMMAND "${LLVM_COMPILER}" "${source}"
+        RESULT_VARIABLE emit_status OUTPUT_VARIABLE emitted_ir ERROR_VARIABLE emit_err TIMEOUT 30)
+    if(NOT "${emit_status}" STREQUAL "0")
+        message(FATAL_ERROR "Native compiler did not admit checked XOR operand test: ${emit_err}")
+    endif()
+    file(WRITE "${ir_file}" "${emitted_ir}")
+    execute_process(COMMAND "${NATIVE_CLANG}" "-x" "ir" "${ir_file}" "-o" "${binary}"
+        RESULT_VARIABLE clang_status OUTPUT_VARIABLE clang_stdout ERROR_VARIABLE clang_stderr TIMEOUT 60)
+    if(NOT "${clang_status}" STREQUAL "0")
+        message(FATAL_ERROR "Native checked XOR guest failed Clang: ${clang_stderr}")
+    endif()
+    execute_process(COMMAND "${binary}" RESULT_VARIABLE guest_status
+        OUTPUT_VARIABLE guest_stdout ERROR_VARIABLE guest_stderr TIMEOUT 15)
+    if("${guest_status}" STREQUAL "0" OR NOT "${guest_stdout}" STREQUAL "")
+        message(FATAL_ERROR "Checked ${side} operand overflow silently completed: status=${guest_status}, stdout=${guest_stdout}")
+    endif()
+endforeach()
 # All four negative cases must fail in compiler/typecheck before LLVM IR.
 foreach(case_name IN ITEMS wrong_arity too_many boolean_operand unknown_method)
     if(case_name STREQUAL "wrong_arity")
