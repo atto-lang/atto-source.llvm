@@ -1,0 +1,41 @@
+// Independent Oreslang-source guest for strided tensor-view bounds.
+// An integer metadata predicate is not an owned buffer or actor/device loan.
+// Mirrors the source-level logic in Java backend stdlib/tensor.ores.
+// Exit 42 only if all positive AND negative cases execute as expected.
+fnc valid_tensor_span(int backing_elements, int start_element,
+                      int element_count, int element_stride): int {
+  if (backing_elements < 0) { return 0; } fi
+  if (start_element < 0) { return 0; } fi
+  if (element_count < 0) { return 0; } fi
+  if (element_stride <= 0) { return 0; } fi
+  if (start_element > backing_elements) { return 0; } fi
+  if (element_count == 0) { return 1; } fi
+  if (start_element == backing_elements) { return 0; } fi
+  if (element_count - 1 > (backing_elements - 1 - start_element) / element_stride) {
+    return 0;
+  } fi
+  return 1;
+}
+
+pub fnc main(): int {
+  if (valid_tensor_span(8, 0, 8, 1) != 1) { return 1; } fi
+  if (valid_tensor_span(8, 1, 3, 3) != 1) { return 2; } fi
+  if (valid_tensor_span(8, 8, 0, 3) != 1) { return 3; } fi
+  if (valid_tensor_span(0, 0, 0, 1) != 1) { return 4; } fi
+  if (valid_tensor_span(9223372036854775807, 9223372036854775806, 1, 1) != 1) {
+    return 5;
+  } fi
+  if (valid_tensor_span(8, 7, 2, 1) != 0) { return 6; } fi
+  if (valid_tensor_span(8, 8, 1, 1) != 0) { return 7; } fi
+  if (valid_tensor_span(8, 1, 2, 0) != 0) { return 8; } fi
+  if (valid_tensor_span(8, 1, 2, -2) != 0) { return 9; } fi
+  if (valid_tensor_span(9223372036854775807, 1, 9223372036854775807, 2) != 0) {
+    return 10;
+  } fi
+  if (valid_tensor_span(-1, 0, 0, 1) != 0) { return 11; } fi
+  if (valid_tensor_span(8, -1, 1, 1) != 0) { return 12; } fi
+  if (valid_tensor_span(8, 0, -1, 1) != 0) { return 13; } fi
+  if (valid_tensor_span(8, 9, 0, 1) != 0) { return 14; } fi
+  if (valid_tensor_span(8, 0, 3, 4) != 0) { return 15; } fi
+  return 42;
+}
