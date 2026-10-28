@@ -87,12 +87,31 @@ struct NativeFunctionRefinement {
     std::set<NativeRefinementEffect> allowed_effects;
 };
 
+// C++ enum casts can produce values outside the defined effect vocabulary.
+// Unknown bits must not be treated as effect rows that an attacker may bless.
+inline bool known_native_refinement_effect(NativeRefinementEffect effect) noexcept {
+    switch (effect) {
+    case NativeRefinementEffect::Io:
+    case NativeRefinementEffect::Actor:
+    case NativeRefinementEffect::Throw:
+    case NativeRefinementEffect::Raise:
+    case NativeRefinementEffect::Panic:
+    case NativeRefinementEffect::Cancellation:
+        return true;
+    case NativeRefinementEffect::FfiUnknown:
+    case NativeRefinementEffect::UnknownCall:
+        return false;
+    }
+    return false;
+}
 inline void require_native_function_refinement_contract(
         const NativeFunctionRefinement& contract) {
-    if (contract.resolved_symbol.empty() ||
-            contract.allowed_effects.count(NativeRefinementEffect::FfiUnknown) ||
-            contract.allowed_effects.count(NativeRefinementEffect::UnknownCall))
-        throw std::invalid_argument("unknown function identity/effect in refinement contract");
+    if (contract.resolved_symbol.empty() || contract.resolved_symbol.size() > 256 ||
+            contract.resolved_symbol.find_first_not_of(" \\t\\n\\r\\f\\v") == std::string::npos)
+        throw std::invalid_argument("invalid function identity in refinement contract");
+    for (const auto effect : contract.allowed_effects)
+        if (!known_native_refinement_effect(effect))
+            throw std::invalid_argument("unknown or untrusted effect in refinement contract");
 }
 inline void require_native_refined_call(
         const NativeFunctionRefinement& contract,
@@ -105,8 +124,9 @@ inline void require_native_refined_call(
         if (!actual_args[i].entails(contract.parameters[i]))
             throw std::invalid_argument("unproved native refinement precondition");
     for (const auto effect : inferred_effects)
-        if (!contract.allowed_effects.count(effect))
-            throw std::invalid_argument("unproved native callable effect");
+        if (!known_native_refinement_effect(effect) ||
+                !contract.allowed_effects.count(effect))
+            throw std::invalid_argument("unproved or unknown native callable effect");
 }
 inline void require_native_refined_returns(
         const NativeFunctionRefinement& contract,
