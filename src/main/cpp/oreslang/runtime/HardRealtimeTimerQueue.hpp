@@ -92,6 +92,35 @@ public:
         return Status::Ok;
     }
 
+    // Actor STOP/hot-reload revokes ARMED and READY timers for one incarnation.
+    // O(Capacity), one-writer only, with no allocation or callback execution.
+    Status revoke_actor(std::uint64_t actor_id, std::uint64_t actor_generation,
+                        std::size_t& revoked) noexcept {
+        revoked = 0;
+        if (closed_) return Status::Closed;
+        if (actor_id == 0 || actor_generation == 0) return Status::Invalid;
+        for (Slot& s : slots_) {
+            if (s.phase != Phase::Free && s.actor_id == actor_id &&
+                s.actor_generation == actor_generation) {
+                retire(s);
+                ++revoked;
+            }
+        }
+        return Status::Ok;
+    }
+
+    // Earliest ARMED deadline, for a separately qualified absolute OS wakeup.
+    Status next_deadline_ns(std::uint64_t& out) const noexcept {
+        if (closed_) return Status::Closed;
+        bool found = false;
+        for (const Slot& s : slots_) {
+            if (s.phase != Phase::Armed) continue;
+            if (!found || s.deadline_ns < out) out = s.deadline_ns;
+            found = true;
+        }
+        return found ? Status::Ok : Status::NotReady;
+    }
+
     // Call immediately before guest instructions, AFTER actor lease/generation
     // validation. DeadlineMissed MUST be reported to the supervisor, not ignored.
     Status claim_start(Handle h, std::uint64_t actor_id,
