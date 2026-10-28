@@ -1278,6 +1278,33 @@ private:
         if (token_.text == "final") {
             fail("native final actor fields require typed field initialization and ownership lowering");
         }
+        // Canonical Oreslang actor handler spelling:
+        //   define actor A as
+        //       receive(message: int) -> void ::
+        //           ...
+        //       end
+        //   end
+        // Recognize the typed signature BEFORE the legacy scalar-field and
+        // pub on_message admission gates. Do not silently reinterpret it as
+        // the old synchronous i64 handler: that would drop suspension and
+        // actor-local continuation/CONTROL ordering guarantees.
+        //
+        // The typed handler's body is deliberately NOT compiled until it can
+        // lower await/time.sleep/stdio channel sends as real actor-owned
+        // continuations, with authenticated scheduler dispatch and state loans.
+        if (accept("receive")) {
+            require("(");
+            const auto formal = identifier();
+            if (formal != "message")
+                fail("native actor receive formal must be named message");
+            require(":");
+            require("int");
+            require(")");
+            require("->");
+            require("void");
+            require("::");
+            fail("native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics");
+        }
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
