@@ -5849,6 +5849,37 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 void resolve_and_validate_program(Program& program) {
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
+    // Verify known aggregate return identities *before* the deliberately
+    // closed native ABI gate. A structurally identical readonly record is NOT
+    // a source value of an exact struct (nor the reverse). Previously these
+    // mismatches were hidden behind AGGREGATE_LOWERING_UNVERIFIED, leaving the
+    // actual type rule untested. Unknown expression types remain denied below.
+    auto aggregate_result_type = [](const Function& fn, const Expression& expr)
+            -> const types::NativeAggregateShape* {
+        if (expr.kind == Expression::Kind::AggregateConstruct)
+            return expr.aggregate_type ? &*expr.aggregate_type : nullptr;
+        if (expr.kind != Expression::Kind::Variable) return nullptr;
+        for (const auto& parameter : fn.parameters)
+            if (parameter.name == expr.name && parameter.aggregate_type)
+                return &*parameter.aggregate_type;
+        return nullptr;
+    };
+    for (const auto& fn : program.functions) {
+        if (fn.result) {
+            const auto* actual = aggregate_result_type(fn, *fn.result);
+            if (actual && fn.return_aggregate) {
+                if (fn.return_aggregate->kind != actual->kind)
+                    throw std::runtime_error(
+                        "AGGREGATE_RETURN_KIND_MISMATCH: struct and readonly record are distinct");
+                if (!fn.return_aggregate->same_type_as(*actual))
+                    throw std::runtime_error(
+                        "AGGREGATE_RETURN_SHAPE_MISMATCH: closed field identities differ");
+            } else if (actual && !fn.return_aggregate &&
+                       fn.return_class.empty() && fn.return_sum.empty())
+                throw std::runtime_error(
+                    "AGGREGATE_RETURN_TYPE_MISMATCH: aggregate returned as scalar");
+        }
+    }
     // Explicit LLVM admission boundary: the parser preserves aggregate kinds
     // in signatures, but runtime/ownership ABI and executable literals are not
     // certified. Never turn a source aggregate into a default scalar i64 slot.
