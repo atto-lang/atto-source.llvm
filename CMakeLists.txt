@@ -371,6 +371,13 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_LOCAL_AGGREGATE_CLANG}")
     set_tests_properties(native_local_aggregate_types_stage1 PROPERTIES TIMEOUT 90)
+    # Source-free proof that -fsanitize=address by itself is NOT sufficient
+    # for guest LLVM IR: verify the ASan attribute and real access checks.
+    add_test(NAME native_local_aggregate_asan_harness_contract
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_local_aggregate_asan_harness_contract.py"
+            --clang "${ORE_LOCAL_AGGREGATE_CLANG}")
+    set_tests_properties(native_local_aggregate_asan_harness_contract PROPERTIES TIMEOUT 90)
     # LLVM IR is not automatically ASan-instrumented merely by linking the
     # sanitizer runtime. The harness marks native definitions and confirms
     # memory-access checks are present in the generated IR.
