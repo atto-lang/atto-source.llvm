@@ -505,8 +505,9 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     /* Each value is returned from the compiler-generated guest handler.
      * The slot and monotonic actor identity keep peer traces distinct. */
     fprintf(stderr,
-        "SOURCE_ACTOR_GUEST_HANDLER actor=%llu slot=%zu seq=%llu payload=%lld result=%lld\n",
-        (unsigned long long)instance->id, slot,
+        "SOURCE_ACTOR_GUEST_HANDLER actor=%llu heap=%llu slot=%zu seq=%llu payload=%lld result=%lld\n",
+        (unsigned long long)instance->id,
+        (unsigned long long)turn.domain, slot,
         (unsigned long long)sequence, (long long)(int64_t)payload,
         (long long)result);
 #else
