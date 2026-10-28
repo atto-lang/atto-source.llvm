@@ -33,31 +33,50 @@ execute_process(COMMAND "${executable}" RESULT_VARIABLE guest_status
 if(NOT "${guest_status}" STREQUAL "6")
     message(FATAL_ERROR "Native guest Integer.bitXor expected OS exit 6, got ${guest_status}: ${guest_stderr} ${guest_stdout}")
 endif()
-# Additional exact Java strict signed64 XOR result vectors. Compare the
-# full 64-bit result *inside* the guest and return status 0 for equality.
-# OS exit status alone truncates on POSIX and cannot prove 64-bit equality.
-foreach(case_name IN ITEMS zero negative min_max)
-    if(case_name STREQUAL "zero")
-        set(left "0")
-        set(right "0")
-        set(expected "0")
-    elseif(case_name STREQUAL "negative")
-        set(left "-1")
-        set(right "0")
-        set(expected "-1")
-    else()
-        set(left "-9223372036854775808")
-        set(right "9223372036854775807")
-        set(expected "-1")
+# Consume the exact 26-case Java/GraalVM reference fixture. Only bit_xor
+# cases are admitted by this P0 LLVM compiler slice. For every XOR vector,
+# compare the *full signed64 value inside the compiled guest* instead of an
+# 8-bit POSIX OS exit code. No host-only XOR evaluator can satisfy this gate.
+if(NOT DEFINED JAVA_I64_CONTRACT OR NOT EXISTS "${JAVA_I64_CONTRACT}")
+    message(FATAL_ERROR "Missing pinned Java strict signed64 fixture")
+endif()
+file(READ "${JAVA_I64_CONTRACT}" strict_json)
+string(JSON case_count ERROR_VARIABLE inventory_error LENGTH "${strict_json}" cases)
+if(inventory_error OR NOT case_count EQUAL 26)
+    message(FATAL_ERROR "Java signed64 contract must contain exactly 26 reference cases")
+endif()
+set(xor_count 0)
+set(xor_ids "")
+math(EXPR last_case "${case_count} - 1")
+foreach(idx RANGE 0 ${last_case})
+    string(JSON operation GET "${strict_json}" cases ${idx} operation)
+    if(NOT operation STREQUAL "bit_xor")
+        continue()
     endif()
-    set(source "${WORK_DIR}/xor-${case_name}.ores")
-    set(llvm_ir "${WORK_DIR}/xor-${case_name}.ll")
-    set(binary "${WORK_DIR}/xor-${case_name}")
-    file(WRITE "${source}" "fnc main():int { return (Integer.bitXor(${left},${right}) == ${expected}) ? 0 : 1; }\n")
+    string(JSON case_name GET "${strict_json}" cases ${idx} id)
+    string(JSON left GET "${strict_json}" cases ${idx} left)
+    string(JSON right GET "${strict_json}" cases ${idx} right)
+    string(JSON expected GET "${strict_json}" cases ${idx} expect value)
+    if(NOT case_name MATCHES "^xor_[a-z0-9_]+$" OR
+            NOT left MATCHES "^-?[0-9]+$" OR
+            NOT right MATCHES "^-?[0-9]+$" OR
+            NOT expected MATCHES "^-?[0-9]+$" OR
+            case_name IN_LIST xor_ids)
+        message(FATAL_ERROR "Malformed or duplicated Java signed64 XOR fixture")
+    endif()
+    list(APPEND xor_ids "${case_name}")
+    set(source "${WORK_DIR}/${case_name}.ores")
+    set(llvm_ir "${WORK_DIR}/${case_name}.ll")
+    set(binary "${WORK_DIR}/${case_name}")
+    file(WRITE "${source}" "fnc main():int { return (Integer.bitXor(${left},${right}) == ${expected}) ? 0 : 1; }\\n")
     execute_process(COMMAND "${LLVM_COMPILER}" "${source}"
         RESULT_VARIABLE result OUTPUT_VARIABLE result_ir ERROR_VARIABLE result_err TIMEOUT 30)
     if(NOT "${result}" STREQUAL "0")
         message(FATAL_ERROR "LLVM compiler rejected Java XOR ${case_name} vector: ${result_err}")
+    endif()
+    string(FIND "${result_ir}" "xor i64" xor_opcode_at)
+    if(xor_opcode_at LESS 0)
+        message(FATAL_ERROR "Java XOR ${case_name} was not lowered to native LLVM xor i64")
     endif()
     file(WRITE "${llvm_ir}" "${result_ir}")
     execute_process(COMMAND "${NATIVE_CLANG}" "-x" "ir" "${llvm_ir}" "-o" "${binary}"
@@ -68,9 +87,13 @@ foreach(case_name IN ITEMS zero negative min_max)
     execute_process(COMMAND "${binary}" RESULT_VARIABLE exit_status
         OUTPUT_VARIABLE program_out ERROR_VARIABLE program_err TIMEOUT 15)
     if(NOT "${exit_status}" STREQUAL "0")
-        message(FATAL_ERROR "Native Java XOR ${case_name}: expected exact 64-bit equality, got OS exit ${exit_status}; ${program_err}")
+        message(FATAL_ERROR "Native Java XOR ${case_name}: expected exact signed64 equality, got OS exit ${exit_status}; ${program_err}")
     endif()
+    math(EXPR xor_count "${xor_count} + 1")
 endforeach()
+if(NOT xor_count EQUAL 4)
+    message(FATAL_ERROR "Java signed64 reference must contain exactly four bit_xor cases")
+endif()
 # Both operands are eager: a checked overflow must trap instead of
 # producing a seemingly valid XOR result. LLVM's current signed64 error ABI
 # is a native trap, not a typed Result/Option.
