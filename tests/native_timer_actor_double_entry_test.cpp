@@ -16,7 +16,9 @@ int main() {
     assert(actor.admit(Ledger::Kind::Message, a) == Ledger::Status::Ok);
     assert(actor.claim(a, true) == Ledger::Status::Ok);
     assert(actor.suspend(a) == Ledger::Status::Ok);
+    assert(actor.has_unbounded_suspension_blocker()); // strict hard-RT rejects this configuration
     assert(actor.admit(Ledger::Kind::Timer, timer) == Ledger::Status::Ok);
+    // Clock can still model best-effort expiry; it is NOT hard-RT-admitted.
     assert(clock.arm_after(100, 5, 42, 7, 4, clock_ticket) == Pool::Status::Ok);
     assert(actor.admit(Ledger::Kind::Message, b) == Ledger::Status::Ok);
     assert(clock.poll_due(105, due) == Pool::Status::Ok);
