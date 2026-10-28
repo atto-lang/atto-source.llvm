@@ -65,3 +65,56 @@ The existing cooperation watchdog remains diagnostic. It is not a deadline guara
 ## AOT audit
 
 The release gate must inspect the final linked artifact and transitive runtime/FFI dependencies, not only generated LLVM IR. It must fail if a certified path reaches a tracing runtime, interpreter/JIT, unknown allocator, or unknown blocking primitive.
+
+## Fixed-capacity timer substrate (draft, not wired to guests)
+
+`HardRealtimeTimerQueue<Capacity>` is a distinct single-owner CONTROL
+scheduler timer pool; it does **not** replace general `NativeTimerQueue`.
+The latter's `std::map`, `std::set`, `std::vector`, and `std::mutex`
+operations are not qualified as allocation-free, bounded-blocking RT work.
+
+The strict prototype uses embedded fixed-size slot storage (no per-registration
+allocation, mutex, callback, or guest-state pointer) and deterministic bounded
+linear scans at each arm/poll (O(Capacity)). It retains READY tickets against
+capacity, rejects invalid owner/generation and cross-pool/stale slot tokens,
+rejects monotonic-clock rollback and overflow, allows cancellation before
+CONTROL execution claim, and surfaces `DeadlineMissed` as a distinct result.
+The pool is **not thread-safe**: requests across threads require a *separate*
+bounded, preallocated, authenticated ingress path. Its storage must be allocated,
+touched, and locked as required before the RT phase. The caller supplies all
+monotonic timestamps from the same clock domain.
+
+**Crucial distinction:** `poll_due` merely records expiry; `claim_start`
+must be called on the actor carrier **after** acquiring its exclusive actor
+turn/lifetime lease, immediately before the first guest instruction, and with
+the active actor generation. A late start must produce a supervisor deadline
+miss, not silently execute or count as a successful RT turn. Logical callback
+cancellation still cannot preempt running guest code. READY messages must not
+be queued in a general-purpose FIFO behind unbounded ordinary actor work.
+
+A certified `native-hard-rt` timer additionally requires:
+
+1. A prestarted, isolated RT clock/CONTROL driver using monotonic absolute
+   deadlines and an OS/RTOS high-resolution wake primitive (e.g., suitable
+   Linux CLOCK_MONOTONIC high-resolution timer or an RTOS hardware timer).
+   Never derive deadlines from `CLOCK_REALTIME` or a fixed-rate 1ms wheel.
+2. A bounded ingress, timer poll batch, priority/EDF wake lane, and guaranteed
+   actor carrier availability. Bound other actors' nonpreemptible critical
+   sections and priority inversion. Prove the latency chain:
+   clock expiry + wake delivery + ready queue + dispatch + first instruction.
+3. A distinct maximum permitted **start lateness** and, where applicable,
+   execution completion deadline including WCET, blocking and interference.
+   Admission must fail closed when any bound cannot be established.
+4. Trace at both planned deadline, actual clock notification, CONTROL enqueue,
+   carrier claim, and first guest instruction; report max lateness,
+   missed-deadline count, and overrun events under adversarial load.
+   Measured maximum alone is *not* a worst-case guarantee or certification.
+5. Executed exact-head source-to-LLVM-to-native guest tests with Linux
+   RT configuration and target hardware evidence. Host timer unit tests or
+   successful simulator/model CI alone cannot certify hard real time.
+
+The fixed-pool CTest target only proves a portion of the host data structure's
+functional properties; production guest integration, actor generation leases,
+physical retirement, RTOS wakeups, schedulability and measured hardware
+latency are still missing. Keep hard-RT timer feature admission **disabled**
+until all corresponding requirements are implemented and verified.
