@@ -174,6 +174,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             break;
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:

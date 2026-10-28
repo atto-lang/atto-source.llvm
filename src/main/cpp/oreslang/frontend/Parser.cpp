@@ -2316,12 +2316,23 @@ private:
             statement.offset = token_.offset;
             const bool mutable_slot = token_.text == "let";
             const bool mutable_referent = token_.text != "const";
-            advance(); if (mutable_slot) accept("mut");
+            advance(); const bool explicit_mutable = mutable_slot && accept("mut");
             if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
-            if (token_.text == "Array")
-                fail("ordered owning local requires scoped region/drop lowering");
             auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
             local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
+            if (accept("Array")) {
+                local->owner_mutable = mutable_slot ? explicit_mutable : mutable_referent;
+                require("<"); array_element(*local); require(">");
+                local->int_array = true;
+                local->name = identifier(); require("=");
+                require("new"); require("Array"); require("<");
+                LocalBinding constructed; array_element(constructed); require(">");
+                if (constructed.array_element_type != local->array_element_type ||
+                        constructed.array_record_class != local->array_record_class)
+                    fail("array constructor element type mismatch");
+                require("("); require(")"); require(";");
+                statement.branch_local = std::move(local); return statement;
+            }
             auto type_name = [&]() -> std::string {
                 for (const auto* scalar : {"int", "bool", "string", "String"})
                     if (accept(scalar)) return scalar;
@@ -4888,7 +4899,7 @@ private:
                 }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
                     const LocalBinding& local = *stmt.branch_local;
-                    validate_expression(*local.initializer, names, functions);
+                    if (local.initializer) validate_expression(*local.initializer, names, functions);
                     if (!names.insert(local.name).second)
                         throw std::runtime_error("duplicate branch-local name '" +
                             local.name + "' at byte " + std::to_string(local.offset));
@@ -5012,6 +5023,7 @@ private:
             check_statement_types = [&](const Statement& stmt, TypeMap& env) {
                 auto scoped_type = [&](const LocalBinding& local, TypeMap& scope) {
                     scope.emplace(local.name, local.scalar_type);
+                    if (local.int_array) scope.emplace(local.name + ".$element", local.array_element_type);
                     if (!local.class_name.empty()) for (const auto& leaf : layouts.at(local.class_name).leaves) {
                         scope.emplace(local.name + "." + leaf.path, leaf.field->scalar_type);
                         if (leaf.field->int_array) scope.emplace(local.name + "." + leaf.path + ".$element", leaf.field->array_element_type);
@@ -5063,7 +5075,7 @@ private:
                 }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
                     const LocalBinding& local = *stmt.branch_local;
-                    require_scalar(*local.initializer, local.scalar_type,
+                    if (local.initializer) require_scalar(*local.initializer, local.scalar_type,
                         "native branch-local initializer", env);
                     scoped_type(local, env);
                     return;

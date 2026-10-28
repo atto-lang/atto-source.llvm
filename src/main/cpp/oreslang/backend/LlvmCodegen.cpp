@@ -735,6 +735,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (const auto& arg : e->arguments) scan_string(arg.get());
     };
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
+        if (s.branch_local && s.branch_local->int_array) {
+            if (wasm32_target)
+                throw std::runtime_error("wasm32 scoped array owners require allocator-provider scope qualification");
+            if (s.branch_local->array_element_type == ScalarType::String) string_runtime = true;
+            if (!s.branch_local->array_record_class.empty()) record_runtime = true;
+        }
         if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex)
             iteration_runtime = true;
         scan_string(s.expression.get()); scan_string(s.condition.get());
@@ -879,11 +885,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
     // Emit declarations only for functions that actually own Array<int>
     // locals. Opaque, unique handles are never exposed as guest values.
+    std::function<bool(const Statement&)> contains_scoped_array = [&](const Statement& stmt) {
+        return (stmt.kind == Statement::Kind::ScopedLocal && stmt.branch_local->int_array) ||
+            std::any_of(stmt.then_statements.begin(), stmt.then_statements.end(), contains_scoped_array) ||
+            std::any_of(stmt.else_statements.begin(), stmt.else_statements.end(), contains_scoped_array);
+    };
     const bool has_array_bindings = std::any_of(source.classes.begin(), source.classes.end(), [&](const ClassDecl& cls) {
         return layouts.at(cls.name).owns_arrays;
     }) || std::any_of(source.functions.begin(), source.functions.end(),
         [&](const Function& fn) {
-            return std::any_of(fn.locals.begin(), fn.locals.end(),
+            return std::any_of(fn.statements.begin(), fn.statements.end(), contains_scoped_array) || std::any_of(fn.locals.begin(), fn.locals.end(),
                 [&](const LocalBinding& b) {
                     if (b.int_array) return true;
                     if (!b.new_class) return false;
@@ -1179,6 +1190,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             for (const auto& field : record_classes.at(param.class_name)->fields)
                 if (field.int_array) array_field_keys.insert(field_key(param.name, field.name));
         std::size_t array_owner_count = 0;
+        std::function<void(const Statement&)> count_scoped_arrays = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::ScopedLocal && stmt.branch_local->int_array)
+                ++array_owner_count;
+            for (const auto& child : stmt.then_statements) count_scoped_arrays(child);
+            for (const auto& child : stmt.else_statements) count_scoped_arrays(child);
+        };
+        for (const auto& stmt : fn.statements) count_scoped_arrays(stmt);
         for (const auto& local : fn.locals) {
             if (local.int_array) {
                 array_names.insert(local.name);
@@ -1261,7 +1279,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
-            llvm::Value* address = builder.CreateGEP(i64, array_handle_shadows,
+            llvm::IRBuilder<> shadow_slots(llvm::cast<llvm::Instruction>(array_handle_shadows)->getNextNode());
+            llvm::Value* address = shadow_slots.CreateGEP(i64, array_handle_shadows,
                 llvm::ConstantInt::get(i64, next_array_shadow++),
                 label + ".failure.owner");
             array_failure_places.emplace(label, address);
@@ -1700,7 +1719,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             ? llvm::BasicBlock::Create(context, "exit.cleanup", function) : nullptr;
         llvm::Value* structured_snapshot = structured_returns && !fn.returns_void
             ? builder.CreateAlloca(i64, nullptr, "return.snapshot.slot") : nullptr;
-        struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; };
+        struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; llvm::Value* array_shadow = nullptr; };
         auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
             const bool record = !local.class_name.empty();
             llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name)) : i64;
@@ -1708,8 +1727,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             // Allocate once per native invocation, never on every back-edge.
             llvm::IRBuilder<> entry_slots(&function->getEntryBlock(), function->getEntryBlock().begin());
             auto* slot = entry_slots.CreateAlloca(shape, nullptr, local.name + ".arm.stack");
-            native_lifetime_start(builder, slot, bytes);
+            if (local.int_array) entry_slots.CreateStore(llvm::ConstantInt::get(i64, 0), slot);
+            // Array handle slots remain addressable for the whole invocation:
+            // a common return epilogue may inspect an unreached declaration.
+            // The resource itself is still created/dropped at lexical edges.
+            if (!local.int_array) native_lifetime_start(builder, slot, bytes);
             ScopedSlot result{local.name, slot, bytes, {}, {}};
+            if (local.int_array) {
+                init = new_checked_array(local.name);
+                result.array_shadow = array_failure_places.at(local.name);
+                array_names.insert(local.name);
+            }
             if (record) {
                 const auto& cls = *record_classes.at(local.class_name);
                 auto* schema = llvm::ConstantInt::get(i64, record_schemas.at(cls.name));
@@ -1727,8 +1755,33 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (record) result.subobjects = register_subobjects(local.name, local.class_name, slot);
             return result;
         };
+        auto finish_scope = [&](const ScopedSlot& slot) {
+            if (slot.array_shadow) {
+                // The cleanup shadow outlives lexical storage and is also
+                // consumed by the resource-failure epilogue. Retire both
+                // slots before the next loop iteration can allocate again.
+                auto* handle = builder.CreateLoad(i64, slot.address);
+                auto* drop = llvm::BasicBlock::Create(context, "scope.array.drop", function);
+                auto* next = llvm::BasicBlock::Create(context, "scope.array.drop.next", function);
+                builder.CreateCondBr(builder.CreateICmpNE(handle, llvm::ConstantInt::get(i64, 0)), drop, next);
+                builder.SetInsertPoint(drop);
+                builder.CreateCall(arrayDrop, {array_region, handle});
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), slot.address);
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), slot.array_shadow);
+                builder.CreateBr(next);
+                builder.SetInsertPoint(next);
+            }
+            if (!slot.array_shadow) native_lifetime_end(builder, slot.address, slot.bytes);
+        };
+        auto forget_array_scope = [&](const ScopedSlot& slot) {
+            if (slot.array_shadow) {
+                array_names.erase(slot.name);
+                array_failure_places.erase(slot.name);
+            }
+        };
         auto end_scope = [&](const ScopedSlot& slot) {
-            native_lifetime_end(builder, slot.address, slot.bytes);
+            finish_scope(slot);
+            forget_array_scope(slot);
             for (const auto& key : slot.subobjects) { storage.erase(key); class_array_regions.erase(key); }
             for (const auto& key : slot.fields) field_storage.erase(key);
             storage.erase(slot.name);
@@ -1736,6 +1789,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         std::vector<ScopedSlot> active_scopes;
         std::vector<ScopedSlot> ordered_root_scopes;
         auto forget_scope = [&](const ScopedSlot& slot) {
+            forget_array_scope(slot);
             for (const auto& key : slot.subobjects) { storage.erase(key); class_array_regions.erase(key); }
             for (const auto& key : slot.fields) field_storage.erase(key);
             storage.erase(slot.name);
@@ -1754,8 +1808,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     continue;
                 }
                 const LocalBinding& local = *action.branch_local;
-                llvm::Value* init = lower(*local.initializer, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
+                llvm::Value* init = local.initializer ? lower(*local.initializer, builder, i64,
+                    storage, field_storage, declarations, &region_moves) : nullptr;
                 active_scopes.push_back(scoped_value(local, init));
             }
             while (active_scopes.size() > scope_start) {
@@ -1769,7 +1823,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 auto* result = stmt.expression ? lower(*stmt.expression, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
                 if (!fn.returns_void) builder.CreateStore(result, structured_snapshot);
                 for (auto it = active_scopes.rbegin(); it != active_scopes.rend(); ++it)
-                    native_lifetime_end(builder, it->address, it->bytes);
+                    finish_scope(*it);
                 builder.CreateBr(structured_cleanup); return;
             }
             if (stmt.kind == Statement::Kind::ForIndex) {
@@ -1859,7 +1913,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (builder.GetInsertBlock()->getTerminator()) break;
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const auto& local = *stmt.branch_local;
-                auto* value = lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+                auto* value = local.initializer ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
                 ordered_root_scopes.push_back(scoped_value(local, value));
                 continue;
             }
@@ -2132,7 +2186,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             // Root lexical locals can be referenced by deferred cleanup.
             // Their lifetimes end after defers, unlike branch temporaries.
             for (auto it = ordered_root_scopes.rbegin(); it != ordered_root_scopes.rend(); ++it)
-                native_lifetime_end(builder, it->address, it->bytes);
+                finish_scope(*it);
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
                 if (it->int_array) {
                     llvm::Value* handle = builder.CreateLoad(i64,
