@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -236,6 +237,293 @@ int main() {
                 "call graph beyond qualification ceiling must reject");
         require(report.diagnostic == "RT003_WCET_UNPROVEN",
                 "deep finite call graph diagnostic");
+    }
+
+    {
+        Program program;
+        auto remainder = std::make_unique<Expression>();
+        remainder->kind = Expression::Kind::Remainder;
+        remainder->left = integer(10);
+        remainder->right = integer(3);
+        program.functions.push_back(pure("main", std::move(remainder)));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted,
+                "bounded pure signed remainder must be handled by RT switch");
+    }
+
+    {
+        Program program;
+        auto remainder = std::make_unique<Expression>();
+        remainder->kind = Expression::Kind::Remainder;
+        remainder->left = integer(10);
+        remainder->right = integer(-1);
+        program.functions.push_back(pure("main", std::move(remainder)));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted,
+                "literal nonminimum numerator and -1 divisor are trap-free");
+    }
+
+    for (int mode = 0; mode < 4; ++mode) {
+        Program program;
+        auto remainder = std::make_unique<Expression>();
+        remainder->kind = Expression::Kind::Remainder;
+        remainder->left = integer(10);
+        if (mode == 0) {
+            remainder->right = integer(0);
+        } else if (mode == 1) {
+            remainder->right = std::make_unique<Expression>();
+            remainder->right->kind = Expression::Kind::Variable;
+            remainder->right->name = "unproven_divisor";
+        } else if (mode == 2) {
+            remainder->left = std::make_unique<Expression>();
+            remainder->left->kind = Expression::Kind::Variable;
+            remainder->left->name = "unproven_numerator";
+            remainder->right = integer(-1);
+        } else {
+            remainder->left = integer(std::numeric_limits<std::int64_t>::min());
+            remainder->right = integer(-1);
+        }
+        program.functions.push_back(pure("main", std::move(remainder)));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "unproven signed remainder trap must fail closed in hard RT");
+        require(report.diagnostic == "RT006_UNBOUNDED_CLEANUP",
+                "unsafe signed remainder must report panic/cleanup risk");
+    }
+
+    // Constructor defaults are source-executable expressions stored on the
+    // class declaration, not the local binding. They must enter the hard-RT
+    // effect graph even if the function returns a pure scalar.
+    {
+        auto class_report = [](ClassField field, bool declared = true) {
+            Program program;
+            if (declared) {
+                ClassDecl cls;
+                cls.name = "Box";
+                cls.fields.push_back(std::move(field));
+                program.classes.push_back(std::move(cls));
+            }
+            Function main = pure("main", integer(42));
+            LocalBinding local;
+            local.name = "box";
+            local.class_name = "Box";
+            local.new_class = true;
+            main.locals.push_back(std::move(local));
+            program.functions.push_back(std::move(main));
+            return analyze_native_hard_rt(program);
+        };
+
+        ClassField scalar_field;
+        scalar_field.name = "value";
+        scalar_field.initializer_expression = integer(3);
+        const auto scalar_report = class_report(std::move(scalar_field));
+        require(scalar_report.source_admitted,
+                "scalar-only stack constructor should remain RT admissible");
+
+        ClassField string_field;
+        string_field.name = "text";
+        string_field.scalar_type = ScalarType::String;
+        string_field.initializer_expression = std::make_unique<Expression>();
+        string_field.initializer_expression->kind = Expression::Kind::String;
+        const auto string_report = class_report(std::move(string_field));
+        require(!string_report.source_admitted &&
+                    string_report.transitive_effects.has(FunctionEffect::Alloc),
+                "hidden String field initializer must count RT allocation");
+
+        ClassField sum_field;
+        sum_field.name = "choice";
+        sum_field.sum_type = "MaybeInt";
+        sum_field.initializer_expression = std::make_unique<Expression>();
+        sum_field.initializer_expression->kind = Expression::Kind::SumConstruct;
+        sum_field.initializer_expression->sum_type = "MaybeInt";
+        sum_field.initializer_expression->name = "Some";
+        sum_field.initializer_expression->arguments.push_back(integer(7));
+        const auto sum_report = class_report(std::move(sum_field));
+        require(!sum_report.source_admitted &&
+                    sum_report.transitive_effects.has(FunctionEffect::Alloc),
+                "implicit sum field storage must count RT allocation");
+
+        ClassField array_field;
+        array_field.name = "items";
+        array_field.int_array = true;
+        const auto array_report = class_report(std::move(array_field));
+        require(!array_report.source_admitted &&
+                    array_report.transitive_effects.has(FunctionEffect::Alloc),
+                "implicit owned-array field must count RT allocation");
+
+        ClassField uninitialized_field;
+        uninitialized_field.name = "missing";
+        const auto uninitialized_report = class_report(std::move(uninitialized_field));
+        require(!uninitialized_report.source_admitted,
+                "unproven constructor initializer must fail closed");
+
+        ClassField unknown_field;
+        unknown_field.name = "missing_class";
+        const auto unknown_report = class_report(std::move(unknown_field), false);
+        require(!unknown_report.source_admitted,
+                "unresolved constructor class identity must fail closed");
+
+        Function bare = pure("unqualified", integer(1));
+        LocalBinding bare_ctor;
+        bare_ctor.name = "box";
+        bare_ctor.new_class = true;
+        bare_ctor.class_name = "Box";
+        bare.locals.push_back(std::move(bare_ctor));
+        require(realtime_detail::direct_facts(bare, 8).unsupported_runtime,
+                "constructor effects without class-table provenance fail closed");
+    }
+
+    // A scoped/branch local is a LocalBinding too. Nested statements must
+    // preserve class-table provenance to discover implicit constructor effects.
+    {
+        auto scoped_report = [](bool allocating, bool nested, bool with_table = true) {
+            Program program;
+            if (with_table) {
+                ClassDecl cls;
+                cls.name = "ScopedBox";
+                ClassField field;
+                field.name = "value";
+                if (allocating) {
+                    field.scalar_type = ScalarType::String;
+                    field.initializer_expression = std::make_unique<Expression>();
+                    field.initializer_expression->kind = Expression::Kind::String;
+                } else {
+                    field.initializer_expression = integer(7);
+                }
+                cls.fields.push_back(std::move(field));
+                program.classes.push_back(std::move(cls));
+            }
+            Function main = pure("main", integer(42));
+            Statement scoped;
+            scoped.kind = Statement::Kind::ScopedLocal;
+            scoped.branch_local = std::make_unique<LocalBinding>();
+            scoped.branch_local->name = "scoped_box";
+            scoped.branch_local->new_class = true;
+            scoped.branch_local->class_name = "ScopedBox";
+            if (nested) {
+                Statement outer;
+                outer.kind = Statement::Kind::Conditional;
+                outer.condition = integer(1);
+                outer.then_statements.push_back(std::move(scoped));
+                main.statements.push_back(std::move(outer));
+            } else {
+                main.statements.push_back(std::move(scoped));
+            }
+            program.functions.push_back(std::move(main));
+            return analyze_native_hard_rt(program);
+        };
+
+        require(scoped_report(false, false).source_admitted,
+                "scalar scoped constructor remains RT admissible");
+        require(scoped_report(false, true).source_admitted,
+                "scalar nested scoped constructor remains RT admissible");
+        for (bool nested : {false, true}) {
+            const auto report = scoped_report(true, nested);
+            require(!report.source_admitted &&
+                        report.transitive_effects.has(FunctionEffect::Alloc),
+                    "scoped constructor String default must count allocation");
+            require(!scoped_report(false, nested, false).source_admitted,
+                    "scoped constructor without class provenance must fail closed");
+        }
+
+        Program program;
+        ClassDecl cls;
+        cls.name = "ScopedBox";
+        ClassField field;
+        field.name = "value";
+        field.initializer_expression = call("hidden_io");
+        cls.fields.push_back(std::move(field));
+        program.classes.push_back(std::move(cls));
+        Function io = pure("hidden_io", integer(1));
+        io.has_declared_effects = true;
+        io.declared_effects.bits = static_cast<std::uint32_t>(FunctionEffect::Io);
+        program.functions.push_back(std::move(io));
+        Function main = pure("main", integer(42));
+        Statement outer;
+        outer.kind = Statement::Kind::Conditional;
+        outer.condition = integer(1);
+        Statement scoped;
+        scoped.kind = Statement::Kind::ScopedLocal;
+        scoped.branch_local = std::make_unique<LocalBinding>();
+        scoped.branch_local->name = "scoped_box";
+        scoped.branch_local->new_class = true;
+        scoped.branch_local->class_name = "ScopedBox";
+        outer.then_statements.push_back(std::move(scoped));
+        main.statements.push_back(std::move(outer));
+        program.functions.push_back(std::move(main));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "nested scoped constructor default call must enter RT call graph");
+    }
+
+    // Async syntax is represented on dedicated Function members, not in
+    // the scalar expression tree. Every such member must poison the complete
+    // reachable hard-RT graph even when the function returns a constant.
+    for (int mode = 0; mode < 13; ++mode) {
+        Program program;
+        Function worker = pure("worker", integer(17));
+        switch (mode) {
+            case 0: worker.async_source_i64 = true; break;
+            case 1: worker.source_tasks.emplace_back(); break;
+            case 2: worker.future_pipelines.emplace_back(); break;
+            case 3: worker.ready_await_actor = "actor"; break;
+            case 4: worker.done_await_actor = "actor"; break;
+            case 5: worker.ready_future_name = "future"; break;
+            case 6: worker.ready_future_actor = "actor"; break;
+            case 7: worker.ready_await_form = NativeAwaitForm::DirectHasFuture; break;
+            case 8: worker.ready_await_form = NativeAwaitForm::ExplicitGetReady; break;
+            case 9: worker.ready_await_form = NativeAwaitForm::ExplicitGetDone; break;
+            case 10: worker.ready_await_form = NativeAwaitForm::FutureValue; break;
+            case 11: {
+                LocalBinding local;
+                local.name = "task_result";
+                local.task_await_name = "task";
+                worker.locals.push_back(std::move(local));
+                break;
+            }
+            case 12: {
+                LocalBinding local;
+                local.name = "future_result";
+                local.future_await_name = "future";
+                worker.locals.push_back(std::move(local));
+                break;
+            }
+        }
+        program.functions.push_back(std::move(worker));
+        program.functions.push_back(pure("main", call("worker")));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "hidden async field must reject through transitive calls");
+        require(report.diagnostic == "RT002_UNBOUNDED_BLOCKING",
+                "hidden async fields must report suspension (not pure)");
+        require(report.transitive_effects.has(FunctionEffect::Suspend),
+                "hidden async field must contribute a suspend effect");
+    }
+
+    {
+        Program program;
+        Function generic = pure("generic_worker", integer(7));
+        generic.generic_parameters.push_back({"T", ""});
+        program.functions.push_back(std::move(generic));
+        program.functions.push_back(pure("main", call("generic_worker")));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "unspecialized generic source cannot prove closed hard-RT code");
+        require(report.diagnostic == "RT005_DYNAMIC_CODE",
+                "unproven generic specialization must reject fail closed");
+    }
+
+    {
+        Program program;
+        Function unreachable = pure("unreachable_async", integer(1));
+        unreachable.source_tasks.emplace_back();
+        program.functions.push_back(std::move(unreachable));
+        program.functions.push_back(pure("main", integer(42)));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted,
+                "unreachable async helper must not poison closed reachable entry");
+        require(!report.transitive_effects.has(FunctionEffect::Suspend),
+                "unreachable effects must not pollute main");
     }
 
     return 0;

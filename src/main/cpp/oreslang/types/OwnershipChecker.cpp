@@ -872,6 +872,7 @@ void validate_i64_ownership(Program& program) {
         std::function<void(const Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
+            entry.int_array = binding.int_array;
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
@@ -971,7 +972,7 @@ void validate_i64_ownership(Program& program) {
                 if (state.count(local.name))
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
-                check_value(*local.initializer, state, functions);
+                if (local.initializer) check_value(*local.initializer, state, functions);
                 state.emplace(local.name, scoped_entry(local));
                 return;
             }

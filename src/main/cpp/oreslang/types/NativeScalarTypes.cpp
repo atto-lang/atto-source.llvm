@@ -279,7 +279,8 @@ void validate_native_scalar_types(const Program& program) {
                 } else if (item.kind == Statement::Kind::ScopedLocal) {
                     const auto& binding = *item.branch_local;
                     if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
-                    require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
+                    if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
+                    if (binding.initializer) require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
                 } else if (item.kind == Statement::Kind::Conditional) {
                     if (item.condition) require(expression(*item.condition, scope), scalar(true), item.offset, "condition requires bool");

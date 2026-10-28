@@ -128,6 +128,11 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("ordered-array-moves-through-owning-return", "define class Box as pub val Array<int> values;end fnc touch():void{return;}fnc build():Box{touch();val Array<int> values=new Array<int>();values.add(42);return new Box(values);}pub fnc main():int{val Box box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("ordered-array-sibling-scopes", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi if true;then val Array<String> values=new Array<String>();values.add(\"ok\");if values.get(0)!=\"ok\";then return 1;fi fi return 0;}", ""),
+        ("ordered-record-array-loop", "define class EntryValue as pub val int value;end fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int i=0;i<100;i=i+1){val Array<EntryValue> values=new Array<EntryValue>();values.add(new EntryValue(i));val EntryValue entry=values.get(0);total=total+entry.value;}return total==4950?0:1;}", ""),
+
+        ("ordered-array-scopes-loop-and-early-return", include_str!("fixtures/native-class-string/ordered-array-locals.ores"), ""),
         ("ordered-val-keeps-exclusive-referent-capability", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();val int value=42;return observe(rt mut borrow value)==42?0:1;}", ""),
         ("ordered-initial-and-later-mutable-slots", "fnc touch():void{return;}pub fnc main():int{let int initial=1;touch();let int later=2;initial=initial+later;return initial==3?0:1;}", ""),
         ("ordered-routing-counters-and-skipped-initializers", include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
@@ -697,9 +702,16 @@ fn main() {
         }
     }
     let negatives = [
+        ("ordered-let-array-without-mut-cannot-mutate", "fnc touch():void{return;}pub fnc main():int{touch();let Array<int> values=new Array<int>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
+
+        ("ordered-array-readonly-cannot-mutate", "fnc touch():void{return;}pub fnc main():int{touch();const Array<int> values=new Array<int>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-array-constructor-type-mismatch", "fnc touch():void{return;}pub fnc main():int{touch();val Array<int> values=new Array<String>();return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-array-element-type-mismatch", "fnc touch():void{return;}pub fnc main():int{touch();val Array<String> values=new Array<String>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-array-loop-cannot-retain-borrow", "fnc touch():void{return;}pub fnc main():int{touch();for(let int i=0;i<2;i=i+1){val Array<int> values=new Array<int>();values.add(i);}return values.get(0);}".to_owned(), foo.to_owned()),
+
         ("legacy-mut-borrow-spelling-stays-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
         ("ordered-const-cannot-lend-exclusively", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();const int value=42;return observe(rt mut borrow value);}".to_owned(), foo.to_owned()),
-        ("ordered-owning-array-not-hoisted", "fnc touch():void{return;}pub fnc main():int{touch();val Array<int> values=new Array<int>();return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-array-cannot-escape-branch", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi return values.size;}".to_owned(), foo.to_owned()),
         ("ordered-async-frame-not-on-stack", "define actor Worker as {let total:int=0;pub fnc on_message(int n):int{return n;}}pub fnc main():int{const worker:ActorRef<Worker> =spawn Worker();await worker.get_ready();let int value=1;stop worker;return value;}".to_owned(), foo.to_owned()),
         ("ordered-borrow-mut-parameter-not-reassignable", "fnc bad(borrow mut int value):int{value=2;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("ordered-value-parameter-not-reassignable", "fnc bad(int value):int{value=2;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
@@ -1072,7 +1084,7 @@ fn main() {
         let boundary = if target == "--target=wasm32" {
             "native strings currently require"
         } else {
-            "cortex-m target rejects main, effects or non-scalar functions"
+            "cortex-m target rejects main, effects or unbounded functions"
         };
         assert!(
             String::from_utf8_lossy(&rejected.stderr).contains(boundary),
