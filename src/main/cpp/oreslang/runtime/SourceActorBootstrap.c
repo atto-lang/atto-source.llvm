@@ -966,7 +966,7 @@ void oreslang_source_actor_join_done(void* opaque) {
     fprintf(stderr,
         "SOURCE_ACTOR_HEAP_ACCESS_SUMMARY slot=%zu owner=%llu domain=%llu "
         "events=%u field_inits=%u field_reads=%u field_writes=%u "
-        "scoped_allocs=%u scoped_drops=%u other=%u dropped=%llu\\n",
+        "scoped_allocs=%u scoped_drops=%u other=%u dropped=%llu\n",
         slot, (unsigned long long)instance->id,
         (unsigned long long)access_domain, access.stored,
         field_inits, field_reads, field_writes,
