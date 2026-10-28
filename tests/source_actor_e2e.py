@@ -193,6 +193,36 @@ def main():
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
+    # These two mutations are derived from the *exact* sealed v2 source.
+    # Both must reach semantic state-loan checking and emit zero LLVM IR,
+    # rather than passing merely because the frontend lacks the grammar.
+    canonical_text = canonical_bytes.decode("utf-8")
+    semantic_mutations = (
+        ("write-through-read-loan",
+         "using state.write", "using state.read",
+         "critical-write", "critical-read",
+         "read-only actor state loan cannot mutate state"),
+        ("foreign-state-projection",
+         "const previous: owned int = s.total + n;",
+         "const previous: owned int = foreign.total + n;",
+         None, None,
+         "actor state projection requires lexical callback binding"),
+    )
+    with tempfile.TemporaryDirectory(prefix="oreslang-sealed-negative-") as tmp:
+        for case, before, after, second_before, second_after, diagnostic in semantic_mutations:
+            assert canonical_text.count(before) == 1, (case, "source mutation drift")
+            source = canonical_text.replace(before, after)
+            if second_before is not None:
+                assert source.count(second_before) == 1, (case, "mode mutation drift")
+                source = source.replace(second_before, second_after)
+            candidate = pathlib.Path(tmp, case + ".ores")
+            candidate.write_text(source, encoding="utf-8")
+            rejected = run([args.compiler, "--experimental-owned-int", str(candidate)])
+            assert rejected.returncode != 0 and diagnostic in rejected.stderr, (
+                case, "expected semantic compiler rejection", rejected.stderr)
+            assert not rejected.stdout.strip(), (
+                case, "rejected sealed actor emitted LLVM IR")
+    print("PASS sealed v2-derived semantic read-loan and foreign-projection no-IR", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
             flags = ["--experimental-owned-int"] if name in {
