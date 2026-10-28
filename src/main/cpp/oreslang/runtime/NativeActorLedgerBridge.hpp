@@ -154,6 +154,25 @@ public:
         return kick();
     }
 
+    // Cancel only from the authenticated actor carrier. This pairs with
+    // NativeContinuationStore::cancel at the same actor event boundary; a
+    // queued producer wake then becomes a stale notice, never a resurrection.
+    Status cancel_event(Id id) noexcept {
+        if (!authorized()) return Status::Unauthorized;
+        for (auto& entry : slots_) {
+            if (!entry.live || entry.id.actor_id != id.actor_id ||
+                entry.id.actor_generation != id.actor_generation ||
+                entry.id.scheduler_domain != id.scheduler_domain ||
+                entry.id.sequence != id.sequence) continue;
+            const auto result = ledger_.cancel(id);
+            if (result != Status::Ok) return result;
+            entry.live = false;
+            if (entry.charged) credits_.fetch_sub(1, std::memory_order_acq_rel);
+            return Status::Ok;
+        }
+        return Status::Stale;
+    }
+
     // Must be called by supervisor AFTER native wait_done / physical carrier
     // quiescence, with all asynchronous inbox producers externally fenced.
     // Without that external proof, this function MUST NOT be called.
