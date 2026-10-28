@@ -10,14 +10,14 @@ This document prepares an **independent security review**. It is not authorizati
 - Restacked candidate heads (must be checked live again before an authorized run):
   - #1056: `2a84dbdfd463768592ca05a16817b55a6347afbd`.
   - #1082: `a6add6a9399f781c8dc77df2aebf2cfe5023332d`.
-- Carrier review PR: `usa-acc/usa-acc-e2e#46`, current reviewed-plan candidate `3331df5779accb77e32a00d2b7f328d1000c8544`.
+- Carrier review PR: `usa-acc/usa-acc-e2e#46`, current source-free reviewed-plan/workflow candidate `68b3690a307ac017bfbb850bf8af02a4844ca271` (the LLVM toolchain workflow now triggers for changes to either plan).
 - Source-free reviewed plan Git blobs:
   - `ci/test-plans/llvm-pr1056.json`: `5dfd1b740f7ea5989a34d2d5427fb7b117015d38`.
   - `ci/test-plans/llvm-pr1082.json`: `98b5de36de0c761d69d8563b61605345a56257f1`.
 
 ## Proven source-free carrier capability (NOT guest LLVM source testing)
 
-Carrier PR #46 source-free runs at `3331df5779accb77e32a00d2b7f328d1000c8544`:
+Carrier PR #46 source-free baseline runs at `3331df5779accb77e32a00d2b7f328d1000c8544` (final review head above was updated afterwards; requalify exact final head):
 - LLVM toolchain, CMake/CTest and Clang ASan+UBSan: `40607994221`, success, five executed steps.
 - Carrier verifier and Java toolchain: `40607994208`, success, eleven verifier steps and five Java-toolchain steps.
 - Source-bearing test jobs were **not** dispatched. Private source has **not** been copied into the carrier.
