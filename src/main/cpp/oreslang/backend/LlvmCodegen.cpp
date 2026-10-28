@@ -394,6 +394,23 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::Remainder: {
+            // The frontend normalizes syntactically signed literal divisors.
+            // Never trust an externally supplied AST to skip this proof gate.
+            if (!expr.left || !expr.right ||
+                    expr.right->kind != Expression::Kind::Integer ||
+                    expr.right->integer == 0)
+                throw std::runtime_error("native remainder lacks proved nonzero signed literal divisor");
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            // Java's signed remainder is zero for every dividend modulo -1,
+            // including INT64_MIN. LLVM srem INT64_MIN, -1 is poison, so
+            // preserve evaluation of the dividend but emit no srem here.
+            if (expr.right->integer == -1)
+                return llvm::ConstantInt::get(i64, 0);
+            llvm::Value* right = llvm::ConstantInt::get(i64,
+                static_cast<std::uint64_t>(expr.right->integer));
+            return builder.CreateSRem(left, right, "srem");
+        }
         case Expression::Kind::LogicalNot: {
             llvm::Value* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateZExt(
@@ -595,7 +612,9 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+                                  bool cortex_m_target,
+                                  bool bounded_allocator_provider) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -643,13 +662,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
+            if (!fn.source_tasks.empty() || !fn.future_pipelines.empty())
+                throw std::runtime_error(
+                    "wasm32 source Task/Future scheduler runtime is not implemented");
             for (const auto& local : fn.locals) {
                 // Preserve the native heap-owned diagnostic independently
                 // of array-backed ownership rejection.
                 if (local.heap_owned)
                     throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
-                if (local.int_array)
-                    throw std::runtime_error("wasm32 native heap-owned/Array<int> regions are not implemented");
+                if (local.int_array && !bounded_allocator_provider)
+                    throw std::runtime_error(
+                        "wasm32 Array<int> requires an explicit allocator provider");
             }
         }
     }
@@ -683,7 +706,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         for (const auto& arg : e->arguments) scan_string(arg.get());
     };
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
-        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex || s.kind == Statement::Kind::Return) iteration_runtime = true;
+        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex)
+            iteration_runtime = true;
         scan_string(s.expression.get()); scan_string(s.condition.get());
         scan_string(s.loop_step.get());
         scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
@@ -724,7 +748,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     }
     if (string_runtime || record_runtime || owning_result_runtime || iteration_runtime) {
         if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
-                [](const Function& f) { return !f.ready_await_actor.empty() || f.caught_throw_value || f.scalar_while; }))
+                [](const Function& f) {
+                    return !f.ready_await_actor.empty() || f.caught_throw_value ||
+                        f.scalar_while || !f.source_tasks.empty() ||
+                        !f.future_pipelines.empty();
+                }))
             throw std::runtime_error(string_runtime
                 ? "native strings currently require a synchronous host main region without actors, suspension or exception frames"
                 : "native records/owning results currently require a synchronous host main region without actors, suspension or exception frames");
@@ -771,6 +799,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
     llvm::Type* loan_ptr = native_pointer_type(context, i64);
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
     // pointers on modern LLVM while preserving pre-18 typed-pointer support.
@@ -782,6 +811,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // The test-only native owned-int experiment must never leak declarations
     // or allocations into ordinary int code. Resolve the ABI only when a
     // program actually contains a gated experimental heap-owned local.
+    const bool has_source_tasks = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [](const Function& fn) {
+            return !fn.source_tasks.empty() || !fn.future_pipelines.empty();
+        });
+    llvm::FunctionCallee taskStart, taskAwait, taskShutdown;
+    if (has_source_tasks) {
+        taskStart = module.getOrInsertFunction(
+            "oreslang_source_task_start_i64",
+            llvm::FunctionType::get(native_ptr, {native_ptr}, false));
+        taskAwait = module.getOrInsertFunction(
+            "oreslang_source_task_await_i64",
+            llvm::FunctionType::get(i64, {native_ptr}, false));
+        taskShutdown = module.getOrInsertFunction(
+            "oreslang_source_task_runtime_shutdown",
+            llvm::FunctionType::get(i32, {}, false));
+    }
+
     const bool has_region_bindings = std::any_of(source.functions.begin(), source.functions.end(),
         [](const Function& fn) {
             return std::any_of(fn.locals.begin(), fn.locals.end(),
@@ -844,7 +891,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, native_pointer_type(context, loan_ptr),
                  native_pointer_type(context, loan_ptr)}, false));
-        arrayAbort = module.getOrInsertFunction("abort",
+        arrayAbort = module.getOrInsertFunction(
+            bounded_allocator_provider
+                ? "oreslang_freestanding_panic"
+                : "abort",
             llvm::FunctionType::get(voidTy, {}, false));
         arrayUnhandled = module.getOrInsertFunction(
             "oreslang_int_array_unhandled_resource_failure",
@@ -980,7 +1030,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
-            signature, fn.native_internal ? llvm::Function::InternalLinkage : llvm::Function::ExternalLinkage, symbol, module);
+            signature,
+            (fn.native_internal || fn.async_source_i64)
+                ? llvm::Function::InternalLinkage
+                : llvm::Function::ExternalLinkage,
+            symbol, module);
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args()) {
@@ -1200,6 +1254,73 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         region_moves.layouts = &layouts;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+
+        std::unordered_map<std::string, llvm::Value*> source_task_handles;
+        for (const auto& task : fn.source_tasks) {
+            if (!has_source_tasks || !task.result)
+                throw std::runtime_error(
+                    "source Task<int> lacks runtime/result lowering");
+            auto* producer = llvm::Function::Create(
+                llvm::FunctionType::get(i64, {}, false),
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".task." + task.name + ".producer",
+                module);
+            llvm::IRBuilder<> producer_builder(
+                llvm::BasicBlock::Create(
+                    context, "entry", producer));
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            auto* produced = lower(
+                *task.result, producer_builder, i64,
+                no_storage, no_fields, declarations);
+            producer_builder.CreateRet(produced);
+            source_task_handles.emplace(
+                task.name,
+                builder.CreateCall(
+                    taskStart,
+                    {builder.CreatePointerCast(
+                        producer, native_ptr,
+                        task.name + ".task.producer.abi")},
+                    task.name + ".task.handle"));
+        }
+        for (const auto& pipeline : fn.future_pipelines) {
+            const std::uint64_t authority =
+                future_pipeline_authority_fingerprint(pipeline);
+            if (!has_source_tasks || pipeline.plans.empty() ||
+                    pipeline.stages.empty() || !pipeline.ownership_admitted ||
+                    pipeline.ownership_authority_fingerprint == 0 ||
+                    pipeline.ownership_authority_fingerprint != authority)
+                throw std::runtime_error(
+                    "source Future<int> pipeline lacks exact post-ownership lowering authority");
+            auto* producer = llvm::Function::Create(
+                llvm::FunctionType::get(i64, {}, false),
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".future." + pipeline.name +
+                    (pipeline.root_consumed ? ".consumed.producer"
+                                            : ".borrowed.producer"),
+                module);
+            llvm::IRBuilder<> producer_builder(
+                llvm::BasicBlock::Create(context, "entry", producer));
+            llvm::Value* produced = producer_builder.CreateCall(
+                declarations.at(native_function_slot(
+                    pipeline.producer_function, 0)));
+            for (const auto& stage_name : pipeline.stages) {
+                produced = producer_builder.CreateCall(
+                    declarations.at(native_function_slot(stage_name, 1)),
+                    {produced},
+                    pipeline.name + "." + stage_name + ".value");
+            }
+            producer_builder.CreateRet(produced);
+            source_task_handles.emplace(
+                pipeline.name,
+                builder.CreateCall(
+                    taskStart,
+                    {builder.CreatePointerCast(
+                        producer, native_ptr,
+                        pipeline.name + ".future.producer.abi")},
+                    pipeline.name + ".future.handle"));
+        }
+
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
@@ -1364,7 +1485,28 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                          std::move(owned_fields)});
                 continue;
             }
-            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+            llvm::Value* initial = nullptr;
+            if (!binding.task_await_name.empty() ||
+                    !binding.future_await_name.empty()) {
+                const std::string& awaited = !binding.task_await_name.empty()
+                    ? binding.task_await_name
+                    : binding.future_await_name;
+                const auto task = source_task_handles.find(awaited);
+                if (task == source_task_handles.end())
+                    throw std::runtime_error(
+                        "Task/Future<int> await lost runtime handle");
+                initial = builder.CreateCall(
+                    taskAwait, {task->second},
+                    binding.name + (!binding.task_await_name.empty()
+                        ? ".task.awaited" : ".future.awaited"));
+            } else {
+                if (!binding.initializer)
+                    throw std::runtime_error(
+                        "native scalar local lacks initializer");
+                initial = lower(
+                    *binding.initializer, builder, i64, storage,
+                    field_storage, declarations, &region_moves);
+            }
             llvm::Value* slot = nullptr;
             if (binding.heap_owned) {
                 // Store only an opaque, generation-checked lifetime token.
@@ -2446,7 +2588,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     if (native_main) {
         // OS/process ABI boundary: never expose i64/void Oreslang main as C main.
         // Reject invalid statuses without Unix low-byte truncation (256 -> 0).
-        llvm::Type* i32 = llvm::Type::getInt32Ty(context);
         auto* host_main = llvm::Function::Create(
             llvm::FunctionType::get(i32, false),
             llvm::Function::ExternalLinkage, "main", module);
@@ -2480,6 +2621,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.SetInsertPoint(ready);
         }
         llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* tasks_ok = has_source_tasks
+            ? builder.CreateICmpEQ(
+                builder.CreateCall(taskShutdown),
+                llvm::ConstantInt::get(i32, 1),
+                "source.tasks.shutdown.ok")
+            : llvm::ConstantInt::getTrue(context);
         llvm::Value* records_ok = record_runtime
             ? builder.CreateICmpEQ(builder.CreateCall(record_end), llvm::ConstantInt::get(i64, 0))
             : llvm::ConstantInt::getTrue(context);
@@ -2487,6 +2634,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             ? builder.CreateICmpEQ(builder.CreateCall(string_end), llvm::ConstantInt::get(i64, 0))
             : llvm::ConstantInt::getTrue(context);
         output_ok = builder.CreateAnd(output_ok, records_ok);
+        output_ok = builder.CreateAnd(output_ok, tasks_ok);
         if (main_it->returns_void) {
             builder.CreateRet(builder.CreateSelect(output_ok, llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
         } else {
