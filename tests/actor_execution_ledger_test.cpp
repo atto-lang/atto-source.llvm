@@ -61,6 +61,24 @@ int main() {
     assert(replacement.physically_retired());
     assert(replacement.notify_ready(b) == Status::Stale);
 
+    // Mandatory supervisor CONTROL survives STOP and is never cancelled by
+    // the ordinary event-cancellation authority. Retire only after it runs.
+    Ledger stopping(90, 1);
+    Ledger::EventId normal{}, urgent_after_stop{};
+    assert(stopping.admit(Kind::Message, normal) == Status::Ok);
+    assert(stopping.claim(normal, true) == Status::Ok);
+    assert(stopping.admit(Kind::Control, urgent_after_stop) == Status::Ok);
+    assert(stopping.stop() == 0);
+    assert(!stopping.physically_retired());
+    assert(stopping.cancel(urgent_after_stop) == Status::Unauthorized);
+    assert(stopping.finish(normal) == Status::Ok);
+    assert(!stopping.physically_retired());
+    assert(stopping.select(pick) == Status::Ok &&
+           pick.sequence == urgent_after_stop.sequence);
+    assert(stopping.claim(urgent_after_stop, true) == Status::Ok);
+    assert(stopping.finish(urgent_after_stop) == Status::Ok);
+    assert(stopping.physically_retired());
+
     // A timer registration is not a logical mailbox barrier until expiry.
     Ledger timer_first(5, 3);
     assert(timer_first.admit(Kind::Timer, timer) == Status::Ok);
