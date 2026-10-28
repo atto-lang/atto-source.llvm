@@ -94,15 +94,50 @@ narrow-slice changes do **not** imply Java/LLVM feature or semantic parity.
 
 ## Native sanitizer gate (still unverified)
 
-CTest now registers both `native_local_aggregate_types_stage1` and the separate
-`native_local_aggregate_types_asan_ubsan`. The latter compiles each admitted
-local-struct fixture with `-fsanitize=address,undefined`,
-`-fno-omit-frame-pointer` and `-fno-sanitize-recover=all`; it executes the
-resulting native binary with leak detection and fail-fast sanitizer settings.
-Missing Clang, unsupported sanitizer runtime, bad native exit code, sanitizer
-diagnostic, or a negative case emitting IR is a **hard test failure**. This
-gate exercises the emitted executable; sanitizing `oreslang-llvmc` itself
-requires a separately instrumented compiler build.
+CTest includes **three distinct kinds of checks**, each with a separate
+evidence boundary:
+
+* `native_local_aggregate_types_stage1` links and runs ordinary LLVM IR
+  executable fixtures and checks fail-closed compile diagnostics.
+* `native_local_aggregate_asan_harness_contract` is a **source-free**
+  Clang/LLVM IR canary: it proves `-fsanitize=address` alone fails the
+  memory-access instrumentation assertion on pre-generated IR, then adds
+  the LLVM `sanitize_address` function attribute, confirms actual ASan
+  access checks, and links/executes a benign probe.
+  `native_local_aggregate_types_asan_guest` applies this **verified ASan
+  instrumentation** to admitted Oreslang-generated LLVM IR, requiring
+  correct process exits, leak detection and fail-fast memory checks.
+* `native_local_aggregate_types_asan_ubsan_compiler` is registered **only
+  when** configuring a separate build with
+  `-DORES_LOCAL_AGGREGATE_COMPILER_SANITIZERS=ON`. In that configuration
+  `oreslang-llvmc` itself is compiled and linked with
+  `-fsanitize=address,undefined` (and nonrecovering diagnostics), so the
+  C++ compiler's own code is checked while compiling all local-aggregate
+  fixtures. The emitted guest IR gets verified ASan instrumentation.
+
+**Limitation:** `-fsanitize=undefined` at the IR linking stage cannot
+retroactively generate Clang frontend UBSan checks for an already-emitted
+guest LLVM module. Compiler UBSan coverage is therefore reported
+separately from guest ASan coverage; full guest-language arithmetic/
+undefined-behavior checking requires explicit codegen guards.
+
+When an approved exact-head runner is available, execute both build modes:
+
+```bash
+cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/native --target oreslang-llvmc -j2
+ctest --test-dir build/native -R 'native_local_aggregate' --output-on-failure
+
+cmake -S . -B build/compiler-sanitized -DCMAKE_BUILD_TYPE=Debug \\
+  -DORES_LOCAL_AGGREGATE_COMPILER_SANITIZERS=ON
+cmake --build build/compiler-sanitized --target oreslang-llvmc -j2
+ctest --test-dir build/compiler-sanitized -R 'native_local_aggregate' --output-on-failure
+```
+
+Missing Clang, absent sanitizer runtime, missing ASan access checks, wrong
+native exit code, sanitizer diagnostics, or a negative case emitting IR
+must fail the relevant gate. **No compiler, native executable or CTest pass
+has yet been obtained at the exact PR head.**
 
 These checks are *registered, not passed*. Source Actions jobs still fail
 before executing steps. A source-free private carrier was verified with 13
@@ -140,8 +175,10 @@ private record-return LLVM IR. **An actual Clang link+execute pass** is required
 to claim execution evidence; IR-only success is insufficient. The source
 organization's previously observed zero-step Actions failures do not constitute
 compiler or sanitizer results. A check of six proposed private alternate
-repositories also found recent zero-step job failures; runner capacity remains
-unverified. The source repo's
+repositories found recent zero-step job failures. A separate private
+source-free carrier (`elenkos-systems-test/clients-rust-consumer`) has
+executed verifier steps, but its source-bearing test jobs were skipped and
+its `main` remains unprotected. The source repo's
 `.github/private-ci-approved-repositories.txt` currently approves **no
 cross-organization destinations**. No private source may be mirrored without
 independent maintainer/security approvals and a reviewed protected-branch
