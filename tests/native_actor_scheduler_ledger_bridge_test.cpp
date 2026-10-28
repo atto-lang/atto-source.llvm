@@ -194,6 +194,7 @@ int main() {
     assert(!ores_native_continuation_store_notify_ready(
         s.continuations, s.await_ticket.link.continuation)); // no duplicate READY
     assert(bridge->retry_needed());
+    assert(bridge->retry_kick() == Bridge::Notify::Invalid); // producer cannot inspect consumer cursor
     assert(bridge->notify_ready(Id{1, s.a.generation, 1,
         s.a.scheduler_domain + 1}) == Bridge::Notify::Invalid);
     assert(s.trace_count.load() == 0);
