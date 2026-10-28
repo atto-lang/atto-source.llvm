@@ -1,0 +1,13 @@
+// Compiler-owned graceful_stop is root-main-only, drains admitted DATA,
+// and joins physical retirement. Negative tests must emit no native IR.
+define actor Worker as {
+  const base: int = 40;
+  let total: int = 0;
+  pub fnc on_message(int n): int { return base + n; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.graceful_stop();
+  worker.send(1);
+  return 43;
+}
