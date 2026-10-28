@@ -502,7 +502,10 @@ static void* carrier(void* raw) {
             if (!s->runnable_lanes) abort();
             --s->runnable_lanes;
         }
-        if (kind == 2 || kind == 3) ++s->control_completed;
+        /* Internal retained-frame STOP cleanup is a lifecycle turn, not a
+         * supervisor CONTROL envelope. It contributes to accepted/completed
+         * execution accounting but must not inflate control_completed. */
+        if (kind == 2) ++s->control_completed;
         if (kind == 3 && !cleanup_succeeded)
             pthread_cond_broadcast(&s->drained);
         if (lane_has_work(lane)) pthread_cond_signal(&s->ready);
