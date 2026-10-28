@@ -6,8 +6,18 @@ fnc axis_span(int length, int stride): int {
   if (length < 0) { return -1; } fi
   if (stride < 0) { return -1; } fi
   if (length < 2) { return 0; } fi
-  if (stride > 9223372036854775807 / (length - 1)) { return -1; } fi
+  // This v1 LLVM scalar guest is deliberately bounded: no int/int '/'.
+  // Max length and stride are 2^20; all subsequent products fit signed i64.
+  if (length > 1048576) { return -1; } fi
+  if (stride > 1048576) { return -1; } fi
   return (length - 1) * stride;
+}
+
+fnc trivial_one_element(int rows, int cols, int bytes, int capacity): int {
+  if (rows != 1) { return 0; } fi
+  if (cols != 1) { return 0; } fi
+  if (bytes > capacity) { return 0; } fi
+  return 1;
 }
 
 fnc readonly_view(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
@@ -19,6 +29,8 @@ fnc readonly_view(int rows, int cols, int row_stride, int col_stride, int bytes,
   if (capacity < 0) { return 0; } fi
   if (rows == 0) { return 1; } fi
   if (cols == 0) { return 1; } fi
+  if (trivial_one_element(rows, cols, bytes, capacity) == 1) { return 1; } fi
+  if (bytes > 1048576) { return 0; } fi
   let int row_span = axis_span(rows, row_stride);
   let int col_span = axis_span(cols, col_stride);
   if (row_span < 0) { return 0; } fi
@@ -27,7 +39,7 @@ fnc readonly_view(int rows, int cols, int row_stride, int col_stride, int bytes,
   let int last_index = row_span + col_span;
   if (last_index == 9223372036854775807) { return 0; } fi
   let int elements = last_index + 1;
-  if (bytes > 9223372036854775807 / elements) { return 0; } fi
+  if (bytes > 1048576) { return 0; } fi
   if (elements * bytes > capacity) { return 0; } fi
   return 1;
 }
@@ -41,7 +53,9 @@ fnc axis_is_aliased(int length, int stride): int {
 fnc writable_rows_safe(int rows, int cols, int row_stride, int col_stride): int {
   if (rows <= 1) { return 1; } fi
   if (cols <= 1) { return 1; } fi
-  if (col_stride > 9223372036854775807 / cols) { return 0; } fi
+  // The readonly_view gate bounds cols/stride to 2^20 first.
+  if (cols > 1048576) { return 0; } fi
+  if (col_stride > 1048576) { return 0; } fi
   if (row_stride < cols * col_stride) { return 0; } fi
   return 1;
 }
@@ -61,9 +75,11 @@ fnc exact_contiguous(int rows, int cols, int row_stride, int col_stride, int byt
   if (row_stride != cols) { return 0; } fi
   if (rows == 0) { return is_zero(capacity); } fi
   if (cols == 0) { return is_zero(capacity); } fi
-  if (rows > 9223372036854775807 / cols) { return 0; } fi
+  if (trivial_one_element(rows, cols, bytes, capacity) == 1) { return 1; } fi
+  if (rows > 1048576) { return 0; } fi
+  if (cols > 1048576) { return 0; } fi
   let int elements = rows * cols;
-  if (bytes > 9223372036854775807 / elements) { return 0; } fi
+  if (bytes > 1048576) { return 0; } fi
   if (elements * bytes != capacity) { return 0; } fi
   return 1;
 }
