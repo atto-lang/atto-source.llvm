@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -172,9 +173,22 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::Add:
             if (expr->resolved_type == ScalarType::String) add_effect(facts, FunctionEffect::Alloc);
             break;
+        case Expression::Kind::Remainder: {
+            // Signed remainder traps for a zero divisor or INT64_MIN % -1.
+            // An unknown divisor, or an unknown numerator with divisor -1,
+            // has no proof of trap-free hard-RT execution. Fail closed.
+            const auto* rhs = expr->right.get();
+            const auto* lhs = expr->left.get();
+            const bool safe_literal_divisor = rhs && rhs->kind == Expression::Kind::Integer &&
+                rhs->integer != 0 &&
+                (rhs->integer != -1 ||
+                 (lhs && lhs->kind == Expression::Kind::Integer &&
+                  lhs->integer != std::numeric_limits<std::int64_t>::min()));
+            if (!safe_literal_divisor) add_effect(facts, FunctionEffect::Panic);
+            break;
+        }
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
-        case Expression::Kind::Remainder:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:

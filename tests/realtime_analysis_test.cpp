@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -248,6 +249,46 @@ int main() {
         const auto report = analyze_native_hard_rt(program);
         require(report.source_admitted,
                 "bounded pure signed remainder must be handled by RT switch");
+    }
+
+    {
+        Program program;
+        auto remainder = std::make_unique<Expression>();
+        remainder->kind = Expression::Kind::Remainder;
+        remainder->left = integer(10);
+        remainder->right = integer(-1);
+        program.functions.push_back(pure("main", std::move(remainder)));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted,
+                "literal nonminimum numerator and -1 divisor are trap-free");
+    }
+
+    for (int mode = 0; mode < 4; ++mode) {
+        Program program;
+        auto remainder = std::make_unique<Expression>();
+        remainder->kind = Expression::Kind::Remainder;
+        remainder->left = integer(10);
+        if (mode == 0) {
+            remainder->right = integer(0);
+        } else if (mode == 1) {
+            remainder->right = std::make_unique<Expression>();
+            remainder->right->kind = Expression::Kind::Variable;
+            remainder->right->name = "unproven_divisor";
+        } else if (mode == 2) {
+            remainder->left = std::make_unique<Expression>();
+            remainder->left->kind = Expression::Kind::Variable;
+            remainder->left->name = "unproven_numerator";
+            remainder->right = integer(-1);
+        } else {
+            remainder->left = integer(std::numeric_limits<std::int64_t>::min());
+            remainder->right = integer(-1);
+        }
+        program.functions.push_back(pure("main", std::move(remainder)));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "unproven signed remainder trap must fail closed in hard RT");
+        require(report.diagnostic == "RT006_UNBOUNDED_CLEANUP",
+                "unsafe signed remainder must report panic/cleanup risk");
     }
 
     // Async syntax is represented on dedicated Function members, not in
