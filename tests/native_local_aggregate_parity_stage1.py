@@ -6,6 +6,7 @@ Admitted stack-struct cases must generate native IR and run through Clang
 when available. Never confuse IR generation with native execution evidence.
 """
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,6 +22,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
     ap.add_argument("--clang", default="")
+    ap.add_argument("--sanitize", action="store_true", help="require ASan + UBSan execution")
     args = ap.parse_args()
     if not args.clang:
         raise RuntimeError("LOCAL_AGGREGATE_NATIVE_EXECUTION_REQUIRED: Clang unavailable; IR-only is not a passing native parity gate")
@@ -141,13 +143,20 @@ def main():
             ir = Path(temp) / "program.ll"
             exe = Path(temp) / "program"
             ir.write_text(result.stdout, encoding="utf-8")
-            linked = subprocess.run([args.clang, str(ir), "-o", str(exe)],
-                                    capture_output=True, text=True, timeout=50)
+            clang_args = [args.clang, str(ir), "-o", str(exe)]
+            if args.sanitize:
+                clang_args += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+                               "-fno-sanitize-recover=all"]
+            linked = subprocess.run(clang_args, capture_output=True, text=True, timeout=50)
             if linked.returncode:
                 raise AssertionError((label, "Clang could not link native IR",
                                       linked.stderr[:1000]))
+            runtime_env = os.environ.copy()
+            if args.sanitize:
+                runtime_env.update({"ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
+                                    "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"})
             executed = subprocess.run([str(exe)], capture_output=True, text=True,
-                                      timeout=30)
+                                      env=runtime_env, timeout=30)
             if executed.returncode != expected:
                 raise AssertionError((label, "wrong native field result", expected,
                                       executed.returncode, executed.stderr[:1000]))
@@ -182,7 +191,8 @@ def main():
         if leak.returncode != 1 or leak.stdout.strip():
             raise AssertionError(("callable local type leaked or rejection was not clean",
                                   leak.returncode, leak.stdout[:500]))
-    print(f"PASS {len(executable)} native scalar stack programs (LLVM+Clang+OS)"
+    print(f"PASS {len(executable)} native scalar stack programs (LLVM+Clang+OS"
+          + ("+ASan+UBSan)" if args.sanitize else ")")
           + f", {len(accepted_syntax)} gated syntax, {len(errors)} fail-closed negatives, "
             "1 private return IR, 1 baseline and 1 scope-isolation case")
 
