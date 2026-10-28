@@ -86,5 +86,21 @@ fn main() {
         assert!(String::from_utf8_lossy(&output.stderr).contains(expected),
                 "{name}: wrong or generic diagnostic: {}", String::from_utf8_lossy(&output.stderr));
     }
-    println!("PASS: 1 scalar positive, {} fail-closed shapes, {} owned diagnostics", probes.len(), specific.len());
+    // Inverted-class lowering is unavailable in the scalar native subset.
+    // Generic parser or unrelated type errors cannot be counted as admission.
+    let inverted = [
+        ("root", "define inverted class Particle as x: int; end\n"),
+        ("define-pub", "define pub inverted class Particle as x: int; end\n"),
+        ("pub-define", "pub define inverted class Particle as x: int; end\n"),
+        ("module", "define module Physics as\n define inverted class Particle as x: int; end\n pub fnc main(): int { return 0; }\nend\n"),
+    ];
+    for (name, src) in inverted {
+        let output = compile(&compiler, &tmp.0, src);
+        assert_eq!(output.status.code(), Some(1), "{name}: required inverted declaration rejection");
+        assert!(output.stdout.is_empty(), "{name}: emitted IR on inverted declaration");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("INVERTED_BACKEND_UNSUPPORTED"),
+            "{name}: expected compiler-owned inverted-class diagnostic: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    println!("PASS: 1 scalar positive, {} fail-closed shapes, {} structural diagnostics, {} inverted boundaries",
+        probes.len(), specific.len(), inverted.len());
 }
