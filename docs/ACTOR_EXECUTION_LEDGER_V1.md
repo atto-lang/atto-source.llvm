@@ -61,19 +61,55 @@ the independent actor executes; an authenticated wake resumes A, then B.
 The original scheduler's generation-checked escrow still linearizes
 transfer/publish and rejects forged/duplicate wake notices.
 
-**Known blocking discrepancy:** the legacy scheduler still calls
-`on_message(B)` and increments `processed_user_messages` when the
-host callback returns, *before B's ledgered guest handler executes*.
-The bridge temporarily defers B in actor-local storage and executes it
-during the later WAKE callback. This is a test-only adapter and **must not
-be connected to production guest dispatch or counted as a delivery proof**.
-A production scheduler must reserve ledger/mailbox ownership at first
-admission, defer the native DATA envelope itself (not retire its receipt),
-keep one physical execution credit until the guest handler is actually
-retired, and preserve separate supervisor CONTROL and physical STOP
-cleanup barriers. Directly skipping B in the scheduler without fixing
-quota and retirement accounting would introduce lost receipts and
-false physical quiescence. No scheduler source file is changed by this PR.
+## Retained native DATA receipts (new opt-in scheduler path)
+
+The previous bridge exposed a false completion: `on_message(B)` could return
+while the guest turn remained queued behind suspended A. The **opt-in native
+retained DATA protocol** now addresses the scheduler's accounting portion.
+
+- During an authenticated DATA callback, `retain_current_data()` reserves a
+  preallocated slot and returns an immutable ticket
+  `(actor ref, actor generation, slot, slot generation, execution ID)`.
+  A second retention attempt, non-DATA callback, unauthenticated thread, or
+  exhausted pool fails closed without changing the counters.
+- When that callback returns, the scheduler leaves DATA B's accepted credit
+  and `outstanding` count **unchanged**, and does **not** increment
+  `processed_user_messages` or `completed`.
+- `queued + active + retained_live` shares the actor's existing bounded
+  mailbox capacity. Retained messages are not themselves runnable, and do not
+  pin a carrier. A separate admitted WAKE/CONTROL still has its own credit.
+- Once a later authenticated physical actor turn has finished B's guest code,
+  `complete_retained_data(ticket)` atomically consumes that scheduler credit,
+  increments processed/completed, and releases quota. Cancellation after
+  *proven physical frame cleanup* instead calls `abandon_retained_data` and
+  increments the terminal abandoned counter, without claiming execution.
+- Duplicate, stale slot/event generation, forged actor incarnation and
+  off-actor completion attempts cannot settle a retained ticket. The precise
+  moment the guest frame is physically retired is a **trusted host obligation**;
+  the C scheduler cannot inspect compiler-owned guest borrow lifetimes.
+- STOP, terminal publication, `wait_done`, `drain`, and `try_destroy`
+  remain fenced while a retained receipt is unsettled. A pre-admitted
+  supervisor CONTROL cleanup turn may settle one after STOP.
+
+The native integration tests cover two actor lanes with A suspended and B
+deferred, independent actor progress, a genuine scheduler WAKE, exactly-once
+B completion and a separate C STOP / supervisor CONTROL abandonment scenario.
+
+**Remaining production gap:** Retained-data APIs are a trusted native
+scheduler substrate, not a compiler-generated guest dispatcher. The legacy
+DATA callback still receives B, and the host bridge manually deposits B in
+the actor-local ledger. A future integrated event-ingress ABI must co-admit
+the scheduler ticket and actor ledger entry, retain guest frame/heap loans,
+dispatch eligible turns without an intermediate guest execution, and detect
+cross-ledger divergence as a fatal contract violation.
+
+**STOP liveness gap:** If a retained frame exists but STOP/teardown wins before
+a cleanup turn is independently admitted, no new guest callback may be
+started merely to discard that frame. The current implementation deliberately
+remains nonterminal rather than fabricating quiescence. Add an authenticated,
+bounded, actor-owned physical cleanup/retirement path before production or
+hard-real-time qualification. Do not use a generic unproven external
+force-abandon operation.
 
 ## Integration sequence
 
