@@ -2897,6 +2897,22 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-owned-i64-heap-test)
     set_tests_properties(native_actor_owned_i64_heap_loan_quiescence PROPERTIES TIMEOUT 20)
 
+    # Host/runtime substrate only: real per-actor i64 slots, read loan and
+    # physical retirement. This does NOT prove compiled guest tensor lowering.
+    add_executable(oreslang-actor-tensor-i64-test
+        tests/actor_tensor_i64_heap_test.c
+        src/main/cpp/oreslang/runtime/ActorTensorI64.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    set_target_properties(oreslang-actor-tensor-i64-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-actor-tensor-i64-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-tensor-i64-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_tensor_i64_heap_host_only
+        COMMAND oreslang-actor-tensor-i64-test)
+    set_tests_properties(native_actor_tensor_i64_heap_host_only PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-fixed-arena-test tests/fixed_arena_test.cpp)
     target_include_directories(oreslang-fixed-arena-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
