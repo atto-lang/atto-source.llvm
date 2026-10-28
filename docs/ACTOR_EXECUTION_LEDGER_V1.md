@@ -98,13 +98,45 @@ The build, sanitizer and concurrent workload checks must execute on the exact
 source tree before this draft can be advanced. A bounded scheduler-ready
 lane does not yet establish an RT deadline-to-first-guest-instruction proof.
 
-**STOP liveness gap:** If a retained frame exists but STOP/teardown wins before
-a cleanup turn is independently admitted, no new guest callback may be
-started merely to discard that frame. The current implementation deliberately
-remains nonterminal rather than fabricating quiescence. Add an authenticated,
-bounded, actor-owned physical cleanup/retirement path before production or
-hard-real-time qualification. Do not use a generic unproven external
-force-abandon operation.
+## Pre-reserved actor-owned STOP cleanup (opt-in)
+
+A bootstrap-only `configure_retained_cleanup` callback supplies a dedicated
+actor-owned physical cleanup implementation for a suspended continuation.
+When the current DATA handler invokes `retain_current_data`, the scheduler
+reserves **one additional execution ID** while still under the authenticated
+actor lease. No OS thread, heap allocation, user message or guest callback is
+created at this point. The reservation exists before the handler suspends.
+
+If STOP or scheduler retirement occurs without an admitted CONTROL/WAKE,
+the pre-reserved cleanup credit becomes runnable in a separate lifecycle lane
+(ordinary DATA remains blocked). The scheduler acquires the same physical
+actor execution authority, invokes `cleanup(ctx, actor, retained_ticket)`,
+and acknowledges `abandon_retained_data` **only after cleanup returns 1
+and confirms the guest frame and all borrows physically unwound**.
+A successful STOP subsequently reaches a genuine terminal receipt;
+a concurrently running DATA callback must release its physical lease first.
+
+Normal Future completion cancels the unused cleanup reservation without
+incrementing `accepted` or falsely reporting that the cleanup ran.
+If a previously admitted supervisor CONTROL retires the frame, it can also
+cancel an unclaimed cleanup reservation under the actor lease.
+
+If cleanup returns 0, the native scheduler marks `cleanup_failed`, wakes
+host waiters, and makes `wait_done` / `drain` return false. The retained
+frame stays quarantined and `try_destroy` stays forbidden. No retry is
+implicit and this is **not** a proven bounded physical drop or a completed
+actor lifecycle. A time bound for the callback is a separate target-specific
+admission/WCET obligation, not supplied by this host implementation.
+
+The `native_actor_prepaid_stop_cleanup_and_failure_quarantine` regression
+contains a STOP-with-no-prior-CONTROL/WAKE success path and an explicit failed
+cleanup quarantine path. ASan/UBSan run the success-only path because the
+failure path intentionally cannot destroy its quarantined retained frame.
+
+Without an installed trusted cleanup callback, the older fail-closed
+nonterminal behavior is retained. No ordinary guest-code reentrancy is
+introduced by this lifecycle mechanism.
+
 
 ## Integration sequence
 
