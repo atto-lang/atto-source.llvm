@@ -1683,6 +1683,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_execution_ledger_serialization
         PROPERTIES TIMEOUT 20)
 
+    # Lease-authenticated native scheduler DATA/WAKE callbacks interacting
+    # with an actor-private ledger. Deliberately host-only: the legacy
+    # scheduler's native "processed" receipt still precedes ledgered guest B.
+    add_executable(oreslang-actor-ledger-scheduler-bridge-test
+        tests/native_actor_ledger_scheduler_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-actor-ledger-scheduler-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-ledger-scheduler-bridge-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-ledger-scheduler-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-actor-ledger-scheduler-bridge-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_ledger_authenticated_scheduler_bridge
+        COMMAND oreslang-actor-ledger-scheduler-bridge-test)
+    set_tests_properties(native_actor_ledger_authenticated_scheduler_bridge
+        PROPERTIES TIMEOUT 25)
+
     # Host-only CONTROL timer queue: no guest callback, no source async lowering.
     # Expiry tickets are held until exactly-once claim/discard, including
     # accounting for polled-but-not-yet-dispatched timers.
