@@ -71,7 +71,7 @@ def parse_guest_handler(line):
     """Parse a runtime observation emitted only after real on_message returns."""
     parts = line.split()
     assert parts and parts[0] == "SOURCE_ACTOR_GUEST_HANDLER", line
-    keys = {"actor", "slot", "seq", "payload", "result"}
+    keys = {"actor", "heap", "slot", "seq", "payload", "result"}
     fields = {}
     for item in parts[1:]:
         key, sep, value = item.partition("=")
@@ -80,7 +80,7 @@ def parse_guest_handler(line):
         digits = value[1:] if signed else value
         assert digits and digits.isascii() and digits.isdecimal(), item
         fields[key] = int(value)
-    assert set(fields) == keys and fields["actor"] > 0, fields
+    assert set(fields) == keys and fields["actor"] > 0 and fields["heap"] > 0, fields
     return fields
 
 
@@ -103,6 +103,7 @@ def verify_two_actor_guest_progress(receipts, stderr_lines):
         1: [(5, 10), (6, 32), (7, 78), (8, 172), (9, 362)],
     }
     actors = {}
+    heap_domains = {}
     for slot, values in expected.items():
         rows = [(i, event) for i, event in traces if event["slot"] == slot]
         assert len(rows) == len(values), (slot, rows)
@@ -113,7 +114,11 @@ def verify_two_actor_guest_progress(receipts, stderr_lines):
         identities = {e["actor"] for _, e in rows}
         assert len(identities) == 1, (slot, rows)
         actors[slot] = next(iter(identities))
+        domains = {e["heap"] for _, e in rows}
+        assert len(domains) == 1, (slot, rows)
+        heap_domains[slot] = next(iter(domains))
     assert actors[0] != actors[1], actors
+    assert heap_domains[0] != heap_domains[1], heap_domains
 
     # The compiled A.graceful_stop() joins physical heap reclamation
     # before the compiled guest may send B's fifth message.
