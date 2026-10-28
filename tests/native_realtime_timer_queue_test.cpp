@@ -19,6 +19,7 @@ int main() {
     assert(q.poll_due(103, expiry) == Status::Ok);
     assert(expiry.handle.domain == b.domain && expiry.handle.generation == b.generation);
     assert(expiry.actor_id == 8 && expiry.actor_generation == 1);
+    assert(expiry.deadline_ns == 103 && expiry.observed_expiry_ns == 103);
     assert(q.outstanding() == 2);  // READY tickets still retain quota.
     assert(q.claim_start(b, 8, 2, 104, 10, start) == Status::Stale);
     assert(q.claim_start(b, 8, 1, 104, 1, start) == Status::Ok);
@@ -68,5 +69,15 @@ int main() {
     assert(q3.revoke_actor(44, 3, revoked) == Status::Ok && revoked == 0);
     assert(q3.poll_due(10, expiry) == Status::Ok);
     assert(q3.claim_start(replacement, 44, 4, 10, 0, start) == Status::Ok);
+
+    // Timer domains must never alias between different template capacities:
+    // old template-private mint_domain() counters used to collide here.
+    oreslang::runtime::realtime::HardRealtimeTimerQueue<3> other_capacity;
+    oreslang::runtime::realtime::HardRealtimeTimerQueue<3>::Handle other_h{};
+    assert(other_capacity.arm_after(0, 0, 77, 1, other_h)
+        == oreslang::runtime::realtime::HardRealtimeTimerQueue<3>::Status::Ok);
+    assert(q3.arm_after(10, 0, 78, 1, replacement) == Status::Ok);
+    assert(replacement.domain != other_h.domain);
+    assert(q3.cancel(replacement) == Status::Ok);
     return 0;
 }
