@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 static atomic_int constructor_calls;
+static atomic_int message_calls;
 static atomic_int constructor_entered;
 static atomic_int constructor_release;
 static atomic_int readiness_continuation_calls;
@@ -38,6 +39,7 @@ static int64_t on_message(
         int64_t payload) {
     (void)heap;
     check(domain != 0 && epoch != 0);
+    atomic_fetch_add_explicit(&message_calls, 1, memory_order_acq_rel);
     return payload;
 }
 
@@ -72,6 +74,7 @@ static void check_failed_readiness(void* actor) {
 static void reset_constructor(void) {
     atomic_store_explicit(
         &constructor_calls, 0, memory_order_release);
+    atomic_store_explicit(&message_calls, 0, memory_order_release);
     atomic_store_explicit(
         &constructor_entered, 0, memory_order_release);
     atomic_store_explicit(
@@ -216,11 +219,54 @@ static void successful_readiness(void) {
     oreslang_source_actor_join_done(actor);
 }
 
+static void graceful_stop_before_constructor_drains(void) {
+    reset_constructor();
+    atomic_store_explicit(&constructor_release, 1, memory_order_release);
+    oreslang_source_actor_test_hold_readiness_publication(0);
+    oreslang_source_actor_test_hold_initialization(1);
+    void* actor = oreslang_source_actor_spawn(constructor, on_message, 1);
+    check(actor != NULL);
+    while (!oreslang_source_actor_test_initialization_entered())
+        sched_yield();
+    oreslang_source_actor_send(actor, 7);
+    oreslang_source_actor_send(actor, 8);
+    oreslang_source_actor_request_graceful_stop(actor);
+    oreslang_source_actor_test_hold_initialization(0);
+    while (oreslang_source_actor_ready_status(actor)
+            != ORES_SOURCE_ACTOR_STARTUP_READY)
+        sched_yield();
+    oreslang_source_actor_join_done(actor);
+    check(atomic_load_explicit(&constructor_calls, memory_order_acquire) == 1);
+    check(atomic_load_explicit(&message_calls, memory_order_acquire) == 2);
+}
+
+static void graceful_stop_before_ready_publication_drains(void) {
+    reset_constructor();
+    atomic_store_explicit(&constructor_release, 1, memory_order_release);
+    oreslang_source_actor_test_hold_initialization(0);
+    oreslang_source_actor_test_hold_readiness_publication(1);
+    void* actor = oreslang_source_actor_spawn(constructor, on_message, 1);
+    check(actor != NULL);
+    while (!oreslang_source_actor_test_readiness_publication_entered())
+        sched_yield();
+    oreslang_source_actor_send(actor, 9);
+    oreslang_source_actor_request_graceful_stop(actor);
+    oreslang_source_actor_test_hold_readiness_publication(0);
+    while (oreslang_source_actor_ready_status(actor)
+            != ORES_SOURCE_ACTOR_STARTUP_READY)
+        sched_yield();
+    oreslang_source_actor_join_done(actor);
+    check(atomic_load_explicit(&constructor_calls, memory_order_acquire) == 1);
+    check(atomic_load_explicit(&message_calls, memory_order_acquire) == 1);
+}
+
 int main(void) {
     stop_before_constructor();
     stop_during_constructor();
     stop_after_constructor_before_ready();
     successful_readiness();
+    graceful_stop_before_constructor_drains();
+    graceful_stop_before_ready_publication_drains();
     puts("SOURCE_ACTOR_STOP_BEFORE_READY_PASS");
     return 0;
 }
