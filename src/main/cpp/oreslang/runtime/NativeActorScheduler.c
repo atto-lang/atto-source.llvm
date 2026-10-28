@@ -419,7 +419,7 @@ static void* carrier(void* raw) {
         if (kind == 3) {
             /* The callback must prove the guest frame has physically exited.
              * Only after it returns success do we acknowledge abandonment. */
-            cleanup_succeeded=s->cleanup_callback(s->context, i, cleanup_ticket);
+            cleanup_succeeded=s->cleanup_callback(s->context, i, cleanup_ticket) == 1;
             if (cleanup_succeeded
                     && !ores_native_actor_scheduler_abandon_retained_data(
                         s, cleanup_ticket)) abort();
