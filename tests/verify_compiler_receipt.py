@@ -16,8 +16,8 @@ import stat
 import subprocess
 import sys
 
-SHA1 = re.compile(r"[0-9a-f]{40}\\Z")
-SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
+SHA1 = re.compile(r"[0-9a-f]{40}\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SCHEMA = "oreslang.llvm.compiler-receipt.v1"
 
 
@@ -44,7 +44,7 @@ def source_identity(root: Path, expected_head: str) -> tuple[str, str]:
         raise GateFailure("source root is not the exact Git checkout root")
     head = git(root, "rev-parse", "HEAD")
     tree = git(root, "rev-parse", "HEAD^{tree}")
-    if head != expected_head or not SHA1.fullmatch(tree) or \\
+    if head != expected_head or not SHA1.fullmatch(tree) or \
             tree != git(root, "show", "-s", "--format=%T", "HEAD"):
         raise GateFailure("Git head or tree identity mismatch")
     if git(root, "status", "--porcelain", "--untracked-files=no"):
@@ -77,7 +77,7 @@ def compiler_digest(root: Path, binary: Path) -> str:
 def validate_receipt(raw: object, *, head: str, tree: str, digest: str) -> None:
     if not isinstance(raw, dict) or set(raw) != {"schema", "sourceCommit", "sourceTree", "compilerSha256"}:
         raise GateFailure("receipt has unexpected or missing fields")
-    if raw["schema"] != SCHEMA or raw["sourceCommit"] != head or \\
+    if raw["schema"] != SCHEMA or raw["sourceCommit"] != head or \
             raw["sourceTree"] != tree or raw["compilerSha256"] != digest:
         raise GateFailure("receipt does not match this source and compiler executable")
     if not SHA256.fullmatch(raw["compilerSha256"]):
@@ -98,7 +98,7 @@ def run(mode: str, source: str, compiler: str, expected_head: str, receipt: str)
         try:
             with output.open("x", encoding="utf-8") as f:
                 json.dump(data, f, sort_keys=True)
-                f.write("\\n")
+                f.write("\n")
         finally:
             os.umask(old_umask)
         print("PINNED_LLVM_COMPILER_CAPTURED", head, tree, digest)
