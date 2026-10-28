@@ -279,10 +279,14 @@ cannot borrow actor heap pointers or execute callbacks directly.
 
 `publish_control` may fail if the native actor's single reserved CONTROL
 slot is already held by supervisor work. Such an event returns **RetryRequired**
-while keeping its notice in the bounded ingress; the owner must call
-`retry_kick()` after the competing CONTROL turn or provide a separately
-proven bounded automatic retry service. A failed notification is never
-counted as a successful resume. Coalesced wakes are rechecked when the
+while keeping its notice in the bounded ingress; the *actual* authenticated
+supervisor CONTROL callback now attempts a **single bounded automatic rearm**
+after its logical supervisor handler has finished. The source-host regression
+proves progress without external `retry_kick()` polling under this specific
+supervisor-slot saturation scenario. This does **not** prove liveness after
+all possible native admission failures or when the MPSC ingress is itself full:
+these conditions still require an externally fenced producer retry/driver
+protocol and a bounded progress proof. Coalesced wakes are rechecked when the
 native CONTROL turn consumes the ingress. The native CONTROL callback
 routes non-timer supervisor envelopes separately, preserving urgent
 supervisory precedence. Actor STOP and physical completion must be fenced;
@@ -305,8 +309,8 @@ The test creates actors A and B with two prestarted carriers, captures A's
 suspended logical event, admits subsequent mail and a timer event, checks
 that B can run independently, checks that queued supervisor CONTROL wins
 without re-entering A, forces timer/Future wake backpressure when native
-CONTROL is saturated, retries the retained notices, and checks A resumes
-before its timer and later mail. It also checks stale wake handling,
+CONTROL is saturated, and verifies automatic rearm without external retries.
+It then checks A resumes before its timer and later mail. It also checks stale wake handling,
 physical DONE and a synthetic `DeadlineMissed` outcome. The test deliberately
 blocks A's carrier in one adversarial **host-only** case; this is not a legal
 hard-RT guest execution pattern.
@@ -317,6 +321,37 @@ GITHUB_TOKEN checkout. Every mirrored C/C++ file must match its Git source
 blob ID, and GCC, Clang, and Clang ASan/UBSan compile and execute the real
 native scheduler/bridge test. This is narrower than a complete exact-tree
 source AOT run, and hardware deadlines remain unqualified.
+
+### Actual pinned Future continuation integration (native host)
+
+`NativeActorAwaitLedgerLink.hpp` now binds one actor-ledger event to the
+real C11 `NativeExecutionContextStore`, `NativeContinuationStore`, and
+`NativeAwaitTraceBridge` lifecycle. The authenticated actor carrier
+publishes a suspension link with code generation and original execution
+allocation domain. The Future producer (holding a copy of an opaque ticket,
+never a guest heap pointer) marks the continuation READY under the native
+store's cancellation lock, then signals the bounded actor CONTROL ingress.
+The resumed handler calls READY-only `resume_begin` with its current native
+execution identity; an enclosing carrier callback calls
+`finish_after_guest_return` *after* the resumed guest-handler function
+returns, releasing both resumed and suspended logical references.
+
+The same native integration test checks a second, separately pinned Future:
+a supervisor CONTROL turn cancels its suspended logical actor event, releases
+its continuation and original execution pins, then a late producer's READY
+publication fails without resurrecting the event. Duplicate READY notices,
+wrong-scheduler actor IDs, foreign producer-side inspection of the
+single-consumer MPSC cursor, and physical native scheduler retirement are
+explicit negative gates.
+
+Focused private-runner evidence is an **exact-file-slice** test of the
+native C and C++ source plus a separate Rust state-machine oracle. The Rust
+oracle enumerates 720 synthetic wake/cancel/STOP/dispatch interleavings; it
+does not simulate every native platform interleaving or substitute for guest
+compiler execution. Both C stores allocate during bootstrap, not under a
+proven preallocated hard-RT phase. Production integration, actual compiler
+lowering and verified automatic retry following all possible admission
+errors remain open.
 
 For a qualified hard-RT deployment, the bridge's bounded multi-event
 `run_ready` host loop must be replaced or proven against a specific
