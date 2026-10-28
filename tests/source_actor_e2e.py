@@ -251,6 +251,11 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        # Exact conformance #211 v2 bytes. This is intentionally a negative
+        # until sealed state + handle_state critical-write lowering lands;
+        # generic legacy-field execution must never be counted as v2 parity.
+        "source-actor-canonical-v2-sealed-state.ores":
+            "native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
