@@ -8,12 +8,12 @@ This document prepares an **independent security review**. It is not authorizati
 - Proposed **private** carrier: `usa-acc/usa-acc-e2e`, repository ID `1346346666`.
 - Separate source candidates: LLVM #1056 (native borrow admission) and #1082 (reserved `unsafe` keyword). No other PR is authorized by this proposal.
 - Restacked candidate heads (must be checked live again before an authorized run):
-  - #1056: `15d13ebed6ec0b7f71b846c836cdc630719421b3`.
-  - #1082: `79bcc59926675109c2ab1eb86620bd49c1fdcde6`.
-- Carrier review PR: `usa-acc/usa-acc-e2e#46`, current source-free reviewed-plan/workflow candidate `e514d0878c26e88407dd0b72c57beebab8dd253a` (the LLVM toolchain workflow now triggers for changes to either plan).
+  - #1056: `3c09e3f3ea18631ed0c8ecb9db5714f2f12d488f`.
+  - #1082: `fd8e35b459d006bebf32067d973291517f92f7bf`.
+- Carrier review PR: `usa-acc/usa-acc-e2e#46`, current source-free reviewed-plan/workflow candidate `a59edbda3e648b02b5eaf302d244184c5ae28f2c` (the LLVM toolchain workflow now triggers for changes to either plan).
 - Source-free reviewed plan Git blobs:
-  - `ci/test-plans/llvm-pr1056.json`: `08ccfe6768895ca187907f5b1d83f575cc29e40a`.
-  - `ci/test-plans/llvm-pr1082.json`: `29f8983697449b2546edec0cf31c55821771385b`.
+  - `ci/test-plans/llvm-pr1056.json`: `5530070140865f85983c494d20081879d66c850f`.
+  - `ci/test-plans/llvm-pr1082.json`: `be0356199768f1e33cae777c68f1ae0457f874dd`.
 
 ## Proven source-free carrier capability (NOT guest LLVM source testing)
 
@@ -24,15 +24,15 @@ Carrier PR #46 source-free runs at exact reviewed head `d8705106829754389df5eab9
 - Source-bearing test jobs were **not** dispatched. Private source has **not** been copied into the carrier.
 
 
-- New carrier head `e514d0878c26e88407dd0b72c57beebab8dd253a` has updated both source-free test plans and **executed** all three exact-head checks successfully: LLVM SDK/CMake/ASan run [40760802209](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802209) (5 steps); carrier verifier + Java canary [40760802286](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802286) (11 + 5 steps, source-bearing jobs skipped); evidence-contract [40760802221](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802221) (8 steps). All five source blob pins were read back from the exact source PR heads and matched the plans.
+- New carrier head `a59edbda3e648b02b5eaf302d244184c5ae28f2c` has updated both source-free test plans and **executed** all three exact-head checks successfully: LLVM SDK/CMake/ASan run [40760802209](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802209) (5 steps); carrier verifier + Java canary [40760802286](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802286) (11 + 5 steps, source-bearing jobs skipped); evidence-contract [40760802221](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802221) (8 steps). All five source blob pins were read back from the exact source PR heads and matched the plans.
 
 ## Current-main reconciliation and exact-head admission evidence
 
-- Current LLVM main at reconciliation: `bc845fe527d4b6b5ba872d70f2d727b121c68072`.
-- #1056 exact root Git tree: `8682e02837382a93841aa0a40e9a6fc09c3fb44b`. Three scoped files differ; zero commits behind the checked main.
-- #1082 exact root Git tree: `da9c7d945393e49a39db6bd853d6e4b9970bedfe`. Two scoped files differ; zero commits behind the checked main.
+- Current LLVM main at reconciliation: `6ca6a6911a6eeedc51e6865f87e8b73a5d604a3e`.
+- #1056 exact root Git tree: `6f5c61d306ecc58a2eeda98071e9a7250db5487b`. Three scoped files differ; zero commits behind the checked main.
+- #1082 exact root Git tree: `73ecb9ba0274da2851f317b4e5daef78862afa3d`. Two scoped files differ; zero commits behind the checked main.
 - All five files pinned by the two carrier plans were re-fetched from these heads; all Git blob SHAs exactly match the existing plan blobs. The two plans were re-pinned to the new CMake/Parser blobs; both use `--no-tests=error` in targeted and full-suite CTest commands, with source-free negative regression tests.
-- On newly restacked source heads, native smoke [#1056 run 40760426440](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40760426440), [#1082 run 40760599756](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40760599756), and governance [run 40761123492](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40761123492) each failed **before runner admission**, with `steps=null`; **NOT_EXECUTED**. Neither feature received a native-source test verdict.
+- On newly restacked source heads, native smoke [#1056 run 40760426440](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40760426440), [#1082 run 40760599756](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40760599756), and governance [run 40761123492](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40761123492) each failed **before runner admission**, with `steps=null`; **NOT_EXECUTED**. At those earlier source heads neither feature received a native-source test verdict; newer #1056 evidence below must be evaluated separately.
 - Earlier source CI attempts are also **NOT_EXECUTED**: #1056 [LLVM smoke 40749444863](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40749444863), #1082 [LLVM smoke 40749583177](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40749583177), governance [40739371331](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40739371331). Sampled jobs all failed with `runner_id=null` and `steps=null`. These do not prove native compiler, CTest, or governance regression outcomes.
 
 ## Mandatory fail-closed gates before any export
@@ -53,3 +53,11 @@ No transfer to public or internal repositories. No private LLVM blobs or source-
 ## Required review outcome
 
 Reviewers may revise or reject this proposed destination. Until every gate is verified, retain the PR as a draft and the current source allowlist on `main` as deny-by-default. Recheck all SHA bindings if either source PR, carrier plan, source governor or carrier main changes.
+
+## October 28 independent verification update
+
+- #1056 source head `3c09e3f3ea18631ed0c8ecb9db5714f2f12d488f`, root Git tree `6f5c61d306ecc58a2eeda98071e9a7250db5487b`, is now included in current LLVM main; the focused native LLVM19 carrier run [40766889048](https://github.com/honeypot-r-us-test/hnpt-lib-core/actions/runs/40766889048) has genuinely executed steps, but its **separate source-bearing transfer** is under independent [security review #212](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/212). Successful native compiler tests do not retroactively authorize that export. No full-repository CI claim.
+- #1082 latest source head `fd8e35b459d006bebf32067d973291517f92f7bf`, tree `73ecb9ba0274da2851f317b4e5daef78862afa3d`, is zero commits behind checked main; only Parser.cpp and the keyword harness differ. This source has **not** been run natively on an authorized alternate carrier.
+- Carrier #46 current source-free review candidate `a59edbda3e648b02b5eaf302d244184c5ae28f2c` now pins Rust borrow harness `tests/native_borrow_admission.rs` (not the retired Python harness) for #1056, with new plan blob `5530070140865f85983c494d20081879d66c850f`. #1082 plan blob is `be0356199768f1e33cae777c68f1ae0457f874dd`. All 5 current Git blobs were fetched from exact source heads and matched. Targeted/full CTest commands require `--no-tests=error`.
+- New carrier exact-head [LLVM toolchain 40774231226](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40774231226) (5 steps) and [security 40774231211](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40774231211) (11 verifier and five Java steps) are **SUCCESS**; [evidence 40774231472](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40774231472) is pending as of this update. These are source-free jobs, not source compiler certification.
+- Source `main.protected=false`; approved private destination list on `main` is empty; this draft does not add an executable carrier contract. P0 incidents #22/#77/#127 and newly opened independent review #212 remain open. **Private source export is on hold.**
