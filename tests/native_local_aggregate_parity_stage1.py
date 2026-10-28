@@ -81,6 +81,10 @@ def main():
          "LOCAL_CONSTRUCT_UNKNOWN_FIELD"),
         ("type mismatch", "pub fnc main(): int { struct T { int x } val T p = T{true}; return p.x; }",
          "constructor parameter type mismatch"),
+        ("mutable struct use-after-field-take",
+         "pub fnc main(): int { struct Point { int x } val Point p = Point{5}; "
+         "val int moved = rt take p.x; return p.x; }",
+         "use-after-move class field"),
         ("private-return leaf remains immutable",
          "fnc make_point(): Point { struct Point { int x } val Point p = Point{5}; p.x = 6; return p; } "
          "pub fnc main(): int { return 0; }",
