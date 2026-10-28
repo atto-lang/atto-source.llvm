@@ -492,6 +492,16 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     const int64_t result = instance->on_message(
         instance->heap, turn.domain, turn.epoch, (int64_t)payload);
     ores_actor_i64_heap_leave(instance->heap, turn);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* Only the trusted native test build emits this evidence. It is sourced
+     * from the value returned by the actual compiler-generated handler, not
+     * from the guest source's sentinel result or a host-side model. This is
+     * intentionally not production logging or independent attestation. */
+    fprintf(stderr,
+        "SOURCE_ACTOR_GUEST_HANDLER slot=%zu owner=%llu payload=%lld result=%lld\n",
+        slot, (unsigned long long)instance->id,
+        (long long)(int64_t)payload, (long long)result);
+#endif
     atomic_store_explicit(
         &instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(
@@ -907,6 +917,12 @@ void oreslang_source_actor_join_done(void* opaque) {
     ores_actor_i64_heap_retire(instance->heap);
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* Emitted strictly after successful physical heap destruction. The
+     * following source instructions cannot issue another guest send before
+     * this join has returned. */
+    fprintf(stderr,
+        "SOURCE_ACTOR_HEAP_RECLAIMED slot=%zu owner=%llu\n",
+        slot, (unsigned long long)instance->id);
     fprintf(stderr,
         "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d released=1 ready=%d accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
         atomic_load_explicit(

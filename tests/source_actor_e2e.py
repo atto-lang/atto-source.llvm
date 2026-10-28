@@ -312,8 +312,56 @@ def main():
                     name, "graceful stop must not abandon DATA", receipts)
                 assert [r["last"] for r in receipts] == [52, 362], (
                     name, "same-kind actor states must remain independent", receipts)
+                # Observe every value returned by the actual lowered guest
+                # on_message handler. Ordering is per actor; the other actor
+                # may execute on a different carrier. A physical reclaim must
+                # precede B's final message because it is sequenced in main.
+                handler_pattern = re.compile(
+                    r"SOURCE_ACTOR_GUEST_HANDLER slot=([0-9]+) "
+                    r"owner=([0-9]+) payload=(-?[0-9]+) result=(-?[0-9]+)")
+                reclaim_pattern = re.compile(
+                    r"SOURCE_ACTOR_HEAP_RECLAIMED slot=([0-9]+) owner=([0-9]+)")
+                stderr_lines = executed.stderr.splitlines()
+                handlers = []
+                reclaims = []
+                for line_index, line in enumerate(stderr_lines):
+                    if line.startswith("SOURCE_ACTOR_GUEST_HANDLER "):
+                        match = handler_pattern.fullmatch(line)
+                        assert match, ("malformed generated handler observation", line)
+                        slot, owner, payload, result = map(int, match.groups())
+                        assert owner > 0 and slot in (0, 1), line
+                        handlers.append((line_index, slot, owner, payload, result))
+                    if line.startswith("SOURCE_ACTOR_HEAP_RECLAIMED "):
+                        match = reclaim_pattern.fullmatch(line)
+                        assert match, ("malformed native physical reclaim", line)
+                        slot, owner = map(int, match.groups())
+                        assert owner > 0 and slot in (0, 1), line
+                        reclaims.append((line_index, slot, owner))
+                assert len(handlers) == 9, ("missing or replayed guest results", handlers)
+                assert len(reclaims) == 2, ("missing or replayed physical reclaim", reclaims)
+                owners = {}
+                for _, slot, owner, _, _ in handlers:
+                    if slot in owners:
+                        assert owners[slot] == owner, ("actor owner changed", handlers)
+                    else:
+                        owners[slot] = owner
+                assert set(owners) == {0, 1} and owners[0] != owners[1], owners
+                actual_a = [(p, result) for _, slot, _, p, result in handlers if slot == 0]
+                actual_b = [(p, result) for _, slot, _, p, result in handlers if slot == 1]
+                assert actual_a == [(1, 2), (2, 8), (3, 22), (4, 52)], actual_a
+                assert actual_b == [(5, 10), (6, 32), (7, 78),
+                                    (8, 172), (9, 362)], actual_b
+                assert [slot for _, slot, _ in reclaims] == [0, 1], reclaims
+                assert all(owners[slot] == owner for _, slot, owner in reclaims), reclaims
+                # The message after A's graceful_stop is a real compiled
+                # handler invocation, not merely a queued admission receipt.
+                final_b_line = next(index for index, slot, _, p, _ in handlers
+                                    if slot == 1 and p == 9)
+                assert reclaims[0][0] < final_b_line < reclaims[1][0], (
+                    "B must execute after A physical reclaim", reclaims, handlers)
                 print("SHARED_ACTOR_GUEST_ALL_MESSAGES_PROCESSED "
                       "A=4 B=5 A_LAST=52 B_LAST=362 "
+                      "OBSERVED_GENERATED_HANDLER_AND_RECLAIM_ORDER "
                       "NOT_PHYSICAL_LOAN_PARITY", flush=True)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
