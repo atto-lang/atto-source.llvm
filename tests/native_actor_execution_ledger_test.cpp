@@ -18,6 +18,8 @@ int main() {
     test(actor.admit(K::Mail,d)==S::Full, "bounded admission");
     test(actor.claim_under_lease(out)==S::Ok && out.token.sequence==a.sequence,"A first");
     test(actor.claim_under_lease(out)==S::Busy,"no parallel execution");
+    test(actor.suspend(a)==S::AwaitNotArmed,"await registration required");
+    test(actor.prepare_await(a)==S::Ok,"A await armed");
     test(actor.suspend(a)==S::Ok,"A suspended");
     test(actor.wake(b)==S::NotSuspended,"B cannot impersonate A wake");
     test(!actor.snapshot().runnable,"no overtaking while A is suspended");
@@ -48,6 +50,7 @@ int main() {
     test(stop.admit(K::Mail,x)==S::Ok,"x admitted");
     test(stop.admit(K::Mail,y)==S::Ok,"y admitted");
     test(stop.claim_under_lease(out)==S::Ok,"claim x");
+    test(stop.prepare_await(x)==S::Ok,"arm x await");
     test(stop.suspend(x)==S::Ok,"suspend x");
     test(stop.cancel(x)==S::Ok,"cancel x while suspended");
     test(stop.cancel(x)==S::AlreadyCancelled,"idempotent cancellation");
@@ -83,5 +86,54 @@ int main() {
     test(other.snapshot().revision==1,"stale wake does not mutate revision");
     test(other.stop_and_request_cleanup()==S::Ok,"stop other");
     test(other.physically_retired(),"queued-only close retires");
+    // Completion in the registration->suspend race is latched. The same
+    // logical handler continues inline; no actor carrier is parked or B run.
+    L early(300,5);
+    L::Token ea{},eb{};
+    test(early.admit(K::Mail,ea)==S::Ok,"early A admitted");
+    test(early.admit(K::Mail,eb)==S::Ok,"early B admitted");
+    test(early.claim_under_lease(out)==S::Ok,"early A entered");
+    test(early.wake(ea)==S::NotSuspended,"unregistered wake rejected");
+    test(early.prepare_await(ea)==S::Ok,"early await armed first");
+    test(early.wake(ea)==S::Ok,"early completion latched");
+    test(early.wake(ea)==S::AlreadyReady,"early duplicate rejected");
+    test(early.suspend(ea)==S::AlreadyReady,"no lost early wake");
+    test(early.snapshot().executing && !early.snapshot().suspended,
+         "early completion retains actor lease");
+    test(early.claim_under_lease(out)==S::Busy,"early B cannot overtake");
+    test(early.finish_after_exit(ea)==S::Ok,"early A physically finished");
+    test(early.claim_under_lease(out)==S::Ok && out.token.sequence==eb.sequence,
+         "early B now permitted");
+    test(early.finish_after_exit(eb)==S::Ok,"early B finished");
+
+    // Later completion must wake A's suspended logical turn, not enter B.
+    L late(301,1);
+    L::Token la{},lb{};
+    test(late.admit(K::Mail,la)==S::Ok,"late A admitted");
+    test(late.admit(K::Mail,lb)==S::Ok,"late B admitted");
+    test(late.claim_under_lease(out)==S::Ok,"late A entered");
+    test(late.prepare_await(la)==S::Ok,"late await armed");
+    test(late.suspend(la)==S::Ok,"late A suspended");
+    test(late.claim_under_lease(out)==S::NoEligible,"later B blocked");
+    test(late.wake(la)==S::Ok,"late completion reactivates A");
+    test(late.claim_under_lease(out)==S::Ok && out.token.sequence==la.sequence,
+         "late A resumes before B");
+    test(late.finish_after_exit(la)==S::Ok,"late A exits");
+    test(late.claim_under_lease(out)==S::Ok && out.token.sequence==lb.sequence,
+         "late B enters");
+    test(late.finish_after_exit(lb)==S::Ok,"late B exits");
+
+    // Cancel-after-early-completion must not revive the handler or permit
+    // a suspension that would lose the cancellation cleanup requirement.
+    L cancelled(302,1);
+    L::Token ca{};
+    test(cancelled.admit(K::Mail,ca)==S::Ok,"cancel A admitted");
+    test(cancelled.claim_under_lease(out)==S::Ok,"cancel A running");
+    test(cancelled.prepare_await(ca)==S::Ok,"cancel await armed");
+    test(cancelled.wake(ca)==S::Ok,"cancel early ready");
+    test(cancelled.cancel(ca)==S::Ok,"cancel before suspend");
+    test(cancelled.suspend(ca)==S::Cancelled,"cancel prevents new suspension");
+    test(cancelled.wake(ca)==S::AlreadyCancelled,"cancelled wake fails");
+    test(cancelled.finish_after_exit(ca)==S::Ok,"cancel physical retirement");
     std::puts("ActorExecutionLedger: all assertions passed");
 }
