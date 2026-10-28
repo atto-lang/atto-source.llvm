@@ -341,6 +341,24 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_only_declarations.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_type_only_declaration_boundaries PROPERTIES TIMEOUT 90)
+    # Standalone source-kind equality oracle: compile a real C++ test, not
+    # a regex scan. No compiler/LLVM guest runtime is implied by this test.
+    add_executable(oreslang-native-aggregate-kind-test
+        tests/native_aggregate_kind_contract.cpp)
+    target_include_directories(oreslang-native-aggregate-kind-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-aggregate-kind-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-aggregate-kind-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_aggregate_shape_kind_identity
+        COMMAND oreslang-native-aggregate-kind-test)
+    # Real compiler negative admission: source aggregate kinds cannot erase
+    # to i64 or publish unvalidated LLVM IR.
+    add_test(NAME native_aggregate_shape_compiler_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_aggregate_kind_failclosed.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_aggregate_shape_compiler_failclosed PROPERTIES TIMEOUT 90)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"

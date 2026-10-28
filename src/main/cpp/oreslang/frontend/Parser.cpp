@@ -1662,6 +1662,40 @@ private:
         return value;
     }
 
+    // Parse a *source* aggregate type. No member order is used as ABI layout:
+    // it is canonicalized solely for exact shape equality. This stage must
+    // not reinterpret struct as readonly record or an existing nominal class.
+    types::NativeAggregateShape native_aggregate_shape() {
+        types::NativeAggregateShape result;
+        if (accept("struct")) {
+            result.kind = types::NativeAggregateShape::Kind::ExactStruct;
+        } else {
+            require("record");
+            result.kind = types::NativeAggregateShape::Kind::ReadonlyRecord;
+        }
+        require("{");
+        if (!accept("}")) {
+            do {
+                if (token_.kind != Kind::Identifier && token_.kind != Kind::String)
+                    fail("AGGREGATE_SHAPE_FIELD_NAME_REQUIRED");
+                const std::string field(token_.text);
+                advance();
+                require(":");
+                std::string type;
+                if (accept("int") || accept("i64")) type = "int";
+                else if (accept("bool")) type = "bool";
+                else if (accept("string") || accept("String")) type = "string";
+                else fail("AGGREGATE_SHAPE_UNSUPPORTED_FIELD_TYPE: nested/opaque fields require checked lowering");
+                result.fields.push_back({field, type});
+                if (result.fields.size() > 64)
+                    fail("AGGREGATE_SHAPE_FIELD_BUDGET: more than 64 fields");
+            } while (accept(","));
+            require("}");
+        }
+        result.canonicalize();
+        return result;
+    }
+
     Function function(std::string owner = {}, bool visible = false) {
         struct Restore { std::string& target; std::string prior; ~Restore() { target = std::move(prior); } } restore{method_scope_, method_scope_};
         method_scope_ = owner;
@@ -1814,6 +1848,8 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
+                } else if (token_.text == "struct" || token_.text == "record") {
+                    parameter.aggregate_type = native_aggregate_shape();
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
                     // Deferred scalar aliases are admitted only after full resolution.
                 } else if (token_.kind == Kind::Identifier &&
@@ -1853,6 +1889,8 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
+            } else if (token_.text == "struct" || token_.text == "record") {
+                value.return_aggregate = native_aggregate_shape();
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
             } else if (token_.kind == Kind::Identifier &&
@@ -5677,6 +5715,16 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 void resolve_and_validate_program(Program& program) {
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
+    // Explicit LLVM admission boundary: the parser preserves aggregate kinds
+    // in signatures, but runtime/ownership ABI and executable literals are not
+    // certified. Never turn a source aggregate into a default scalar i64 slot.
+    for (const auto& fn : program.functions) {
+        if (fn.return_aggregate)
+            throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source return kind is preserved but native LLVM return ABI is not certified");
+        for (const auto& parameter : fn.parameters)
+            if (parameter.aggregate_type)
+                throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source parameter kind is preserved but native LLVM argument ABI is not certified");
+    }
     resolve_native_methods(program);
     resolve_native_sums(program);
     resolve_future_pipeline_contracts(program);

@@ -3,10 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/NativeAggregateShape.hpp"
 #include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/NativeHasFutureContract.hpp"
 
@@ -80,6 +82,8 @@ struct Parameter {
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
     std::string sum_type;
+    // Retain exact source aggregate kind; NEVER reinterpret as class/i64.
+    std::optional<types::NativeAggregateShape> aggregate_type;
 };
 
 // Immutable, lexical i64 slot with initializer-before-publication semantics.
@@ -359,6 +363,8 @@ struct Function {
     ScalarType return_type = ScalarType::I64;
     std::string pending_return_type_alias;
     std::string return_class; // immutable leaf record handle; never a stack pointer
+    // Frontend-only aggregate signature, gated from native IR until checked lowering exists.
+    std::optional<types::NativeAggregateShape> return_aggregate;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
