@@ -831,8 +831,13 @@ if(BUILD_TESTING)
         native-rt-nested-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
 
+    oreslang_contract_test(native_generator_v1_async_failclosed
+        generator-v1-async-reject.ores
+        --diagnostic "native async gen* requires scheduler-owned async iterator continuation lowering")
+    oreslang_contract_test(native_generator_v1_suspend_failclosed
+        generator-v1-suspend-reject.ores
+        --diagnostic "native suspend gen* requires scheduler-owned async iterator continuation lowering")
     foreach(generator_case IN ITEMS
-            sync async suspend
             legacy-fnc legacy-routine legacy-async-fnc)
         add_test(NAME native_generator_v1_${generator_case}_failclosed
             COMMAND "$<TARGET_FILE:oreslang-llvmc>"
@@ -2080,6 +2085,30 @@ if(BUILD_TESTING)
     # fail-closed, while the host-only admission primitive proves exact
     # boundary/epoch/domain identity and Send gating independently.
     find_program(ORE_RUSTC NAMES rustc REQUIRED)
+
+    # Generator v1 native source-to-frame E2E. Preserve the existing fail-closed
+    # fixture matrix while also proving the admitted canonical sync slice.
+    set(ORE_NATIVE_GENERATOR_E2E
+        "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-generator-i64-e2e")
+    add_custom_command(
+        OUTPUT "${ORE_NATIVE_GENERATOR_E2E}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -O -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_generator_i64_e2e.rs"
+            -o "${ORE_NATIVE_GENERATOR_E2E}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_generator_i64_e2e.rs"
+        VERBATIM)
+    add_custom_target(oreslang-native-generator-i64-e2e-build ALL
+        DEPENDS "${ORE_NATIVE_GENERATOR_E2E}")
+    if(ORE_CLANG)
+        add_test(NAME native_generator_i64_compiled_execution
+            COMMAND "${ORE_NATIVE_GENERATOR_E2E}"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    else()
+        add_test(NAME native_generator_i64_compiled_execution
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_generator_i64_compiled_execution
+        PROPERTIES TIMEOUT 180)
     set(ORE_NATIVE_TASK_BORROW_TEST
         "${CMAKE_CURRENT_BINARY_DIR}/native_task_borrow_rejection")
     add_custom_command(
