@@ -77,14 +77,24 @@ def main():
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
-    # This is the one canonical cross-backend guest source from
-    # oreslang-platform-conformance#211, not a locally re-authored variant.
+    # This *pre-sealed* source actor fixture is an LLVM lowering precursor,
+    # NOT the current canonical conformance #211 v2 sealed actor fixture.
+    # Keep both pinned to make this backend gap explicit, not a false pass.
     shared_file = fixtures / "source-actor-shared-heap-contract-v1.ores"
     shared_bytes = shared_file.read_bytes()
     shared_blob = hashlib.sha1(b"blob " + str(len(shared_bytes)).encode("ascii")
                                + b"\0" + shared_bytes).hexdigest()
     assert shared_blob == "016733b1fbc8bdfbde7414a15b877a190dd92806", (
-        "canonical shared guest fixture bytes drifted", shared_blob)
+        "legacy pre-sealed source actor fixture bytes drifted", shared_blob)
+    canonical_v2 = fixtures / "source-actor-sealed-state-contract-v2.ores"
+    canonical_bytes = canonical_v2.read_bytes()
+    canonical_blob = hashlib.sha1(
+        b"blob " + str(len(canonical_bytes)).encode("ascii")
+        + b"\0" + canonical_bytes).hexdigest()
+    assert canonical_blob == "430565092d8a4ff114f601a54b771ef3d42eae58", (
+        "canonical sealed-state v2 fixture bytes drifted", canonical_blob)
+    assert shared_blob != canonical_blob, "pre-sealed guest is not v2 parity"
+    print("SEALED_GUEST_V2_STAGED_NOT_COMPILER_VERIFIED", flush=True)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
@@ -103,8 +113,8 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
-        # Exact shared .ores input. Full A/B handler delivery and physical
-        # loan ownership are NOT inferred from a launched native executable.
+        # Pre-sealed LLVM lowering precursor. Do NOT promote to v2 conformance
+        # even when these handler/lifecycle checks execute successfully.
         ("source-actor-shared-heap-contract-v1.ores", 2, None, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
@@ -387,10 +397,10 @@ def main():
                                     if slot == 1 and p == 9)
                 assert reclaims[0][0] < final_b_line < reclaims[1][0], (
                     "B must execute after A physical reclaim", reclaims, handlers)
-                print("SHARED_ACTOR_GUEST_ALL_MESSAGES_PROCESSED "
+                print("LLVM_PRE_SEALED_ACTOR_GUEST_ALL_MESSAGES_PROCESSED "
                       "A=4 B=5 A_LAST=52 B_LAST=362 "
-                      "OBSERVED_GENERATED_HANDLER_AND_RECLAIM_ORDER "
-                      "NOT_PHYSICAL_LOAN_PARITY", flush=True)
+                      "OBSERVED_GENERATED_HANDLER_RECLAIM_AND_HEAP_LEDGER "
+                      "NOT_SEALED_V2_OR_PHYSICAL_LOAN_PARITY", flush=True)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
