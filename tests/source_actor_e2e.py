@@ -28,7 +28,7 @@ def expected_prefix_last(name, actor_index, processed):
             value = 2 * (value + n)
         return value
     if name in {"source-actor-two-owned-heaps.ores",
-                "source-actor-shared-heap-contract-v1.ores"}:
+                "source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}:
         value = 0
         start = 1 if actor_index == 0 else 5
         for n in range(start, start + processed):
@@ -77,14 +77,21 @@ def main():
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
-    # This is the one canonical cross-backend guest source from
-    # oreslang-platform-conformance#211, not a locally re-authored variant.
+    # This is a legacy v1 guest regression, NOT the active sealed-state
+    # canonical source from platform-conformance #211.
     shared_file = fixtures / "source-actor-shared-heap-contract-v1.ores"
     shared_bytes = shared_file.read_bytes()
     shared_blob = hashlib.sha1(b"blob " + str(len(shared_bytes)).encode("ascii")
                                + b"\0" + shared_bytes).hexdigest()
     assert shared_blob == "016733b1fbc8bdfbde7414a15b877a190dd92806", (
-        "canonical shared guest fixture bytes drifted", shared_blob)
+        "legacy v1 guest fixture bytes drifted", shared_blob)
+    canonical_file = fixtures / "source-actor-canonical-sealed-v2.ores"
+    canonical_bytes = canonical_file.read_bytes()
+    canonical_blob = hashlib.sha1(
+        b"blob " + str(len(canonical_bytes)).encode("ascii")
+        + b"\0" + canonical_bytes).hexdigest()
+    assert canonical_blob == "430565092d8a4ff114f601a54b771ef3d42eae58", (
+        "canonical v2 sealed-state guest fixture bytes drifted", canonical_blob)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
@@ -106,6 +113,9 @@ def main():
         # Exact shared .ores input. Full A/B handler delivery and physical
         # loan ownership are NOT inferred from a launched native executable.
         ("source-actor-shared-heap-contract-v1.ores", 2, None, None),
+        # Exact sealed guest input, required even if the new language syntax
+        # currently fails. Never substitute v1 as canonical v2 evidence.
+        ("source-actor-canonical-sealed-v2.ores", 2, None, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -185,7 +195,7 @@ def main():
             flags = ["--experimental-owned-int"] if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
-                "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores",
             } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
@@ -228,11 +238,11 @@ def main():
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
             if name in {"source-actor-interleaved-stop.ores",
-                        "source-actor-shared-heap-contract-v1.ores"}:
+                        "source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}:
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
                 first_stop = (guest.stdout.find("call void @oreslang_source_actor_graceful_stop")
-                              if name == "source-actor-shared-heap-contract-v1.ores"
+                              if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}
                               else guest.stdout.find("call void @oreslang_source_actor_stop"))
                 final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
                 assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
@@ -287,7 +297,7 @@ def main():
                 observed_last = receipt["last"]
                 expected_accepted = (
                     [1, 2][i] if name == "source-actor-interleaved-stop.ores"
-                    else [4, 5][i] if name == "source-actor-shared-heap-contract-v1.ores"
+                    else [4, 5][i] if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}
                     else count)
                 assert accepted == expected_accepted, (
                     name, i, accepted, expected_accepted)
@@ -303,7 +313,7 @@ def main():
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
-            if name == "source-actor-shared-heap-contract-v1.ores":
+            if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}:
                 assert guest.stdout.count(
                     "call void @oreslang_source_actor_graceful_stop(") == 2, (
                     name, "guest must invoke graceful drain and physical join")
