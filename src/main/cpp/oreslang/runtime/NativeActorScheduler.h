@@ -155,6 +155,26 @@ int ores_native_actor_scheduler_complete_retained_data(
     OresNativeActorScheduler* scheduler, OresNativeRetainedDataTicket ticket);
 int ores_native_actor_scheduler_abandon_retained_data(
     OresNativeActorScheduler* scheduler, OresNativeRetainedDataTicket ticket);
+/* Optional bootstrap-only STOP cleanup for exactly one suspended logical
+ * handler per actor. Cleanup receives an authenticated actor lease and an
+ * exact retained DATA ticket, but is not a normal guest message. Return 1
+ * only AFTER the guest frame, borrows and continuations have physically
+ * unwound. Scheduler then acknowledges abandonment under that same lease.
+ * Return 0 to quarantine the actor without falsely reporting DONE.
+ *
+ * Installing this callback before any work lets retain_current_data reserve
+ * the eventual cleanup execution ID before suspension; STOP merely activates
+ * the preallocated credit, even when no other CONTROL/WAKE was admitted.
+ * No cleanup callback is ever invoked on a timer/producer thread.
+ */
+typedef int (*OresNativeActorRetainedCleanupFn)(
+    void* ctx, size_t actor_index, OresNativeRetainedDataTicket ticket);
+int ores_native_actor_scheduler_configure_retained_cleanup(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRetainedCleanupFn callback);
+int ores_native_actor_scheduler_retained_cleanup_failed(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+
 /* Diagnostic only. Retained tokens block STOP/terminal/quiescence and may
  * require a separate trusted cleanup turn. Never infer physical quiescence
  * from STOP alone. */
