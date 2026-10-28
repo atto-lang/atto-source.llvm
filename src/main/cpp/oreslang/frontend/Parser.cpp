@@ -1662,7 +1662,7 @@ private:
                 std::all_of(declaration.fields.begin(), declaration.fields.end(),
                     [](const LocalAggregateType::Field& field) { return field.type_name == "int"; })) {
             const std::string original_name = declaration.name;
-            declaration.native_layout_name = "$local$" +
+            declaration.native_layout_name = "$local$" + fn.name + "$" +
                 std::to_string(fn.offset) + "$" + original_name;
             ClassDecl native;
             native.name = declaration.native_layout_name;
@@ -4211,7 +4211,7 @@ private:
                 throw std::runtime_error(
                     "LOCAL_AGGREGATE_ABI_UNSUPPORTED: multiple local types require lexical identity analysis");
             for (const auto& decl : fn.local_aggregates) {
-                const std::string expected_name = "$local$" +
+                const std::string expected_name = "$local$" + fn.name + "$" +
                     std::to_string(fn.offset) + "$" + decl.name;
                 if (decl.kind != LocalAggregateType::Kind::NominalStruct ||
                         decl.native_layout_name != expected_name ||
