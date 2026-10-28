@@ -68,7 +68,7 @@ foreach(idx RANGE 0 ${last_case})
     set(source "${WORK_DIR}/${case_name}.ores")
     set(llvm_ir "${WORK_DIR}/${case_name}.ll")
     set(binary "${WORK_DIR}/${case_name}")
-    file(WRITE "${source}" "fnc main():int { return (Integer.bitXor(${left},${right}) == ${expected}) ? 0 : 1; }\n")
+    file(WRITE "${source}" "fnc xor_case(int a,int b):int { return Integer.bitXor(a,b); }\nfnc main():int { return (xor_case(${left},${right}) == ${expected}) ? 0 : 1; }\n")
     execute_process(COMMAND "${LLVM_COMPILER}" "${source}"
         RESULT_VARIABLE result OUTPUT_VARIABLE result_ir ERROR_VARIABLE result_err TIMEOUT 30)
     if(NOT "${result}" STREQUAL "0")
