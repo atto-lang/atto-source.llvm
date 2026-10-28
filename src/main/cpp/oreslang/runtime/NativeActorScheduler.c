@@ -85,6 +85,7 @@ struct OresNativeActorScheduler {
     uint64_t next_execution;
     uint64_t reserved_executions;
     uint64_t reserved_wakes; /* future accepted/execution credits */
+    uint64_t reserved_cleanup_acceptances; /* STOP cleanup acceptance slots */
     uint64_t accepted, rejected, completed, control_completed, wakes_completed;
     int retired;
     int priority_inheritance_enabled;
@@ -102,6 +103,13 @@ struct OresNativeActorScheduler {
 /* Avoid counting an active DATA callback twice during the handoff from
  * physical execution to retained logical ownership. An active WAKE/CONTROL
  * remains conservatively charged under legacy per-actor capacity policy. */
+/* Reserve an eventual acceptance number for each pre-admitted cleanup.
+ * No normal message or Future wake may consume this slot before STOP. */
+static int accepted_capacity_available(const OresNativeActorScheduler* s) {
+    return s->reserved_cleanup_acceptances <= UINT64_MAX - s->reserved_wakes
+        && accepted_capacity_available(s)
+                          - s->reserved_cleanup_acceptances;
+}
 static size_t actor_data_occupancy(const ActorLane* lane) {
     return lane->queued + lane->retained_live
         + (size_t)(lane->active && !lane->retained_in_callback);
@@ -351,7 +359,9 @@ static void* carrier(void* raw) {
             lane->cleanup_ready=0;
             lane->cleanup_reserved=0;
             lane->cleanup_running=1;
-            if (s->accepted == UINT64_MAX) abort();
+            if (!s->reserved_cleanup_acceptances
+                    || s->accepted == UINT64_MAX) abort();
+            --s->reserved_cleanup_acceptances;
             ++s->accepted;
         } else if (kind == 1) {
             for (size_t offset = 0; offset < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR; ++offset) {
@@ -719,7 +729,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
         || actor_data_occupancy(&s->actors[i]) >= s->per_actor_capacity
-        || s->accepted >= UINT64_MAX - s->reserved_wakes
+        || !accepted_capacity_available(s)
         || !execution_slot_available_locked(s)) {
         if (s->rejected != UINT64_MAX) s->rejected++;
         return 0;
@@ -798,7 +808,7 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
             status = ORES_NATIVE_SEND_TERMINATED;
         } else if (actor_data_occupancy(lane) >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
-        } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
+        } else if (!accepted_capacity_available(s)
                 || !execution_slot_available_locked(s)) {
             status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
         } else {
@@ -878,7 +888,7 @@ int ores_native_actor_scheduler_reserve_wake(
             || (matching(s, target) && !s->actors[target.actor_slot].retired))
         && !s->actors[producer.actor_slot].retired
         && s->reserved_wakes < UINT64_MAX
-        && s->accepted < UINT64_MAX - s->reserved_wakes
+        && accepted_capacity_available(s)
         && execution_slot_available_locked(s);
     WakeCredit* w = NULL;
     ActorLane* lane = NULL;
@@ -1029,7 +1039,7 @@ int ores_native_actor_scheduler_publish_control(
     int ok = !s->retired && s->control_callback && matching(s, parent)
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted < UINT64_MAX - s->reserved_wakes
+        && accepted_capacity_available(s)
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
@@ -1063,7 +1073,7 @@ int ores_native_actor_scheduler_publish_failure(
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted < UINT64_MAX - s->reserved_wakes
+        && accepted_capacity_available(s)
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* a = &s->actors[parent.actor_slot];
@@ -1308,7 +1318,8 @@ int ores_native_actor_scheduler_retain_current_data(
         && lane->retained_live == 0
         && (!s->cleanup_callback
             || (execution_slot_available_locked(s)
-                && !lane->cleanup_reserved));
+                && !lane->cleanup_reserved
+                && accepted_capacity_available(s)));
     size_t slot = 0;
     if (ok) {
         for (; slot < s->per_actor_capacity; ++slot)
@@ -1332,6 +1343,7 @@ int ores_native_actor_scheduler_retain_current_data(
             /* Reserve CPU turn ID BEFORE suspension. No extra outstanding
              * callback is counted unless STOP actually activates cleanup. */
             ++s->reserved_executions;
+            ++s->reserved_cleanup_acceptances;
             lane->cleanup_reserved=1;
             lane->cleanup_ticket=*out;
         }
@@ -1362,8 +1374,10 @@ static int settle_retained_data(
                 || (abandoned && lane->abandoned_user_messages == UINT64_MAX))
             abort();
         if (lane->cleanup_reserved) {
-            if (!s->reserved_executions) abort();
+            if (!s->reserved_executions || !s->reserved_cleanup_acceptances)
+                abort();
             --s->reserved_executions;
+            --s->reserved_cleanup_acceptances;
             lane->cleanup_reserved=0;
             if (lane->cleanup_ready) {
                 if (!s->outstanding) abort();
