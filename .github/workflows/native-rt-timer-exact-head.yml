@@ -4,9 +4,14 @@ on:
     paths:
       - src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp
       - src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
+      - src/main/cpp/oreslang/runtime/NativeActorLedgerBridge.hpp
+      - src/main/cpp/oreslang/runtime/NativeActorScheduler.h
+      - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+      - src/main/cpp/oreslang/runtime/BoundedMpscQueue.hpp
       - tests/native_realtime_timer_queue_test.cpp
       - tests/actor_execution_ledger_test.cpp
       - tests/native_timer_actor_double_entry_test.cpp
+      - tests/native_actor_scheduler_ledger_bridge_test.cpp
       - tests/actor_execution_ledger_model.rs
       - docs/HARD_REALTIME.md
       - .github/workflows/native-rt-timer-exact-head.yml
@@ -39,9 +44,14 @@ jobs:
           for file in \
             src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp \
             src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorLedgerBridge.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            src/main/cpp/oreslang/runtime/BoundedMpscQueue.hpp \
             tests/native_realtime_timer_queue_test.cpp \
             tests/actor_execution_ledger_test.cpp \
             tests/native_timer_actor_double_entry_test.cpp \
+            tests/native_actor_scheduler_ledger_bridge_test.cpp \
             tests/actor_execution_ledger_model.rs; do
             expected="$(git rev-parse "HEAD:$file")"
             actual="$(git hash-object "$file")"
@@ -86,6 +96,42 @@ jobs:
               -o "build/rt-timer-gate/${source}-sanitized"
             "build/rt-timer-gate/${source}-sanitized"
           done
+      - name: Execute exact-head C11 actor carrier + C++ ledger bridge with GCC and Clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in gcc:g++ clang:clang++; do
+            cc="${toolchain%%:*}"
+            cxx="${toolchain#*:}"
+            "$cc" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp -c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/rt-timer-gate/native-scheduler-${cc}.o"
+            "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_scheduler_ledger_bridge_test.cpp \
+              "build/rt-timer-gate/native-scheduler-${cc}.o" \
+              -o "build/rt-timer-gate/native-ledger-${cc}"
+            "build/rt-timer-gate/native-ledger-${cc}"
+          done
+      - name: Execute actual carrier with Clang ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -pthread -Isrc/main/cpp -c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o build/rt-timer-gate/native-scheduler-sanitized.o
+          clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -pthread -Isrc/main/cpp tests/native_actor_scheduler_ledger_bridge_test.cpp \
+            build/rt-timer-gate/native-scheduler-sanitized.o \
+            -o build/rt-timer-gate/native-ledger-sanitized
+          build/rt-timer-gate/native-ledger-sanitized
       - name: Execute deterministic Rust actor ledger state-machine oracle
         shell: bash
         run: |
