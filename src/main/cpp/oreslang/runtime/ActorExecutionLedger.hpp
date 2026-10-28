@@ -26,6 +26,8 @@ public:
         std::uint64_t actor_id = 0;
         std::uint64_t actor_generation = 0;
         std::uint64_t sequence = 0;
+        // Global scheduler domain fences same actor slot/incarnation across VMs.
+        std::uint64_t scheduler_domain = 0;
     };
     struct Snapshot {
         std::size_t live = 0;
@@ -36,8 +38,10 @@ public:
     };
 
     explicit ActorExecutionLedger(std::uint64_t actor_id,
-                                  std::uint64_t actor_generation) noexcept
-        : actor_id_(actor_id), actor_generation_(actor_generation) {}
+                                  std::uint64_t actor_generation,
+                                  std::uint64_t scheduler_domain = 0) noexcept
+        : actor_id_(actor_id), actor_generation_(actor_generation),
+          scheduler_domain_(scheduler_domain) {}
     ActorExecutionLedger(const ActorExecutionLedger&) = delete;
     ActorExecutionLedger& operator=(const ActorExecutionLedger&) = delete;
 
@@ -52,7 +56,7 @@ public:
             slot.sequence = next_sequence_++;
             slot.kind = kind;
             slot.phase = kind == Kind::Timer ? Phase::Pending : Phase::Ready;
-            id = {actor_id_, actor_generation_, slot.sequence};
+            id = {actor_id_, actor_generation_, slot.sequence, scheduler_domain_};
             ++live_;
             return Status::Ok;
         }
@@ -93,7 +97,7 @@ public:
         const Slot* pick = first_control ? first_control : first_normal;
         if (!pick) return Status::Idle;
         if (pick->phase != Phase::Ready) return Status::Blocked;
-        output = {actor_id_, actor_generation_, pick->sequence};
+        output = {actor_id_, actor_generation_, pick->sequence, scheduler_domain_};
         return Status::Ok;
     }
 
@@ -193,18 +197,19 @@ private:
         Phase phase = Phase::Empty;
     };
     static bool equal(EventId id, std::uint64_t actor_id,
-                      std::uint64_t gen) noexcept {
+                      std::uint64_t gen, std::uint64_t domain) noexcept {
         return id.sequence && id.actor_id == actor_id &&
-               id.actor_generation == gen;
+               id.actor_generation == gen && id.scheduler_domain == domain;
     }
     Slot* find(EventId id) noexcept {
-        if (!equal(id, actor_id_, actor_generation_)) return nullptr;
+        if (!equal(id, actor_id_, actor_generation_, scheduler_domain_)) return nullptr;
         for (auto& slot : slots_)
             if (slot.phase != Phase::Empty && slot.sequence == id.sequence) return &slot;
         return nullptr;
     }
     const std::uint64_t actor_id_;
     const std::uint64_t actor_generation_;
+    const std::uint64_t scheduler_domain_;
     std::array<Slot, Capacity> slots_{};
     std::uint64_t next_sequence_ = 1;
     std::uint64_t active_sequence_ = 0;
