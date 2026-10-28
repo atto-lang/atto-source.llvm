@@ -1,0 +1,34 @@
+// Canonical compiled-guest actor-private-heap acceptance fixture.
+// The fixture intentionally uses sealed actor state. Direct state access is forbidden;
+// all mutation is through critical-write. Exit 43 is only a sentinel.
+define actor Worker as
+    state {
+        total: int = 0;
+    }
+
+    pub on_message(int n): int using state.write {
+        return self.handle_state(critical-write |s| -> {
+            const previous: owned int = s.total + n;
+            const doubled: owned int = previous + previous;
+            s.total = doubled;
+            return s.total;
+        });
+    }
+end
+
+pub fnc main(): int {
+    const a: ActorRef<Worker> = spawn Worker();
+    const b: ActorRef<Worker> = spawn Worker();
+    a.send(1);
+    b.send(5);
+    a.send(2);
+    b.send(6);
+    a.send(3);
+    b.send(7);
+    a.send(4);
+    b.send(8);
+    a.graceful_stop();
+    b.send(9);
+    b.graceful_stop();
+    return 43;
+}
