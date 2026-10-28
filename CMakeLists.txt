@@ -1733,6 +1733,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_retained_cleanup_unused_credit_return
         PROPERTIES TIMEOUT 25)
 
+    # STOP and completion publication compete on distinct producer threads:
+    # exactly one authenticated actor turn must physically retire the frame.
+    add_executable(oreslang-native-retained-stop-wake-race-test
+        tests/native_actor_retained_stop_wake_race_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-stop-wake-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-stop-wake-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-stop-wake-race-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_retained_stop_vs_wake_exactly_once
+        COMMAND oreslang-native-retained-stop-wake-race-test)
+    set_tests_properties(native_actor_retained_stop_vs_wake_exactly_once
+        PROPERTIES TIMEOUT 90)
+
     # STOP may pre-activate a reserved actor-owner cleanup credit without
     # any previously queued supervisor CONTROL or Future WAKE turn.
     # The test also verifies fail-closed physical cleanup quarantine.
