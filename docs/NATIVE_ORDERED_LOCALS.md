@@ -115,3 +115,28 @@ iteration and owning aggregate return. ASan instruments the generated guest IR.
 Unsupported scoped Wasm owners still reject before emitting IR. Mutable class
 owners and general actor/HTTP suspension frames remain separate lowering work;
 this support alone does not compile the complete Spin source server.
+
+## Identity-preserving mutable scalar views
+
+A scoped `let mut Item item = values.get(index)` may now reference a record
+whose fields are scalar `int`, `bool` or `String` values. Every field read/write
+resolves the same generation-checked record handle; the compiler does not copy
+its fields into a local object. Collection or record-arena growth therefore
+cannot invalidate an address, and another view observes the same writes.
+The runtime enforces the schema and a constructor-established writable-field
+mask; final fields and immutable record instances cannot be written.
+
+The source checker requires mutable container authority for a mutable view.
+`const` and `let` without `mut`, and current for-of element views, stay read-only.
+Views cannot escape or enter the existing raw-pointer method/borrow ABI.
+Insertion of mutable elements currently requires fresh construction; forwarding
+another getter result is rejected until its view permissions can be transferred
+without strengthening a read-only capability. Owned-array/nested mutable fields
+and general view methods still require separate ownership-aware lowering.
+
+These are synchronous invocation-owned arena records, with deterministic arena
+teardown and no tracing collector. The arena retains records until the invocation
+ends (even if an array entry is replaced), under the existing bounded record
+quota. Actor suspension, actor-local arena lifetimes and HTTP capability transfer
+are not enabled by this path. In particular, the real router's BuildNode still
+owns arrays, so the complete Spin source server is not yet admitted.

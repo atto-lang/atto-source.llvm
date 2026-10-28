@@ -1,0 +1,21 @@
+define class Node as
+  pub val int id;
+  pub let int value=0;
+  pub let String label="";
+  pub let bool active=false;
+end
+fnc touch():void{return;}
+pub routine main():int {
+  val Array<Node> nodes=new Array<Node>();
+  nodes.add(new Node(0));
+  touch();
+  let mut Node first=nodes.get(0);
+  for(let int i=1;i<1025;i=i+1){nodes.add(new Node(i));}
+  first.value=42;
+  first.label="preserved";
+  first.active=true;
+  let mut Node again=nodes.get(0);
+  if again.value!=42||again.label!="preserved"||!again.active;then return 1;fi
+  again.value=99;
+  return first.value==99&&first.id==0&&nodes.size==1025?0:2;
+}

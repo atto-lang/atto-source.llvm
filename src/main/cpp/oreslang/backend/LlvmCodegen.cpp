@@ -71,6 +71,8 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    const std::unordered_map<std::string, std::string>* handle_record_views = nullptr;
+    llvm::FunctionCallee record_new_mutable;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -236,6 +238,15 @@ llvm::Value* lower(const Expression& expr,
                 auto* value = lower(*cls.fields[i].initializer_expression, builder, i64, parameters, no_fields, functions, moves);
                 builder.CreateStore(value, builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
             }
+            if (native_mutable_scalar_record(moves->layouts->source(expr.name))) {
+                std::uint64_t mask = 0;
+                for (std::size_t i = 0; i < cls.fields.size(); ++i)
+                    if (!cls.fields[i].final_field) mask |= UINT64_C(1) << i;
+                return builder.CreateCall(moves->record_new_mutable, {
+                    llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
+                    llvm::ConstantInt::get(i64, cls.fields.size()), values,
+                    llvm::ConstantInt::get(i64, mask)}, "mutable.record.handle");
+            }
             return builder.CreateCall(moves->record_new, {
                 llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
                 llvm::ConstantInt::get(i64, cls.fields.size()), values}, "record.handle");
@@ -281,6 +292,19 @@ llvm::Value* lower(const Expression& expr,
             return stored;
         }
         case Expression::Kind::Field:
+            if (moves && moves->handle_record_views && expr.left &&
+                    expr.left->kind == Expression::Kind::Variable &&
+                    moves->handle_record_views->count(expr.left->name)) {
+                const auto& name = moves->handle_record_views->at(expr.left->name);
+                const auto& cls = *moves->record_classes->at(name);
+                const auto field = std::find_if(cls.fields.begin(), cls.fields.end(),
+                    [&](const ClassField& item) { return item.name == expr.name; });
+                if (field == cls.fields.end()) throw std::runtime_error("unknown mutable record view field");
+                return builder.CreateCall(moves->record_get, {
+                    builder.CreateLoad(i64, storage.at(expr.left->name)),
+                    llvm::ConstantInt::get(i64, moves->record_schemas->at(name)),
+                    llvm::ConstantInt::get(i64, std::distance(cls.fields.begin(), field))}, "record.view.read");
+            }
             if (expr.name == "size" && expr.left &&
                     expr.left->kind == Expression::Kind::Field) {
                 llvm::Value* handle = builder.CreateLoad(i64,
@@ -1003,10 +1027,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     std::unordered_map<std::string, llvm::StructType*> class_types;
     std::unordered_map<std::string, const ClassDecl*> record_classes;
     std::unordered_map<std::string, std::uint64_t> record_schemas;
-    llvm::FunctionCallee record_new, record_get, record_check, sum_check;
+    llvm::FunctionCallee record_new, record_get, record_check, sum_check, record_new_mutable, record_set;
     if (record_runtime) {
         record_new = module.getOrInsertFunction("ores_record_new",
             llvm::FunctionType::get(i64, {i64, i64, native_ptr}, false));
+        record_new_mutable = module.getOrInsertFunction("ores_record_new_mutable",
+            llvm::FunctionType::get(i64, {i64, i64, native_ptr, i64}, false));
+        record_set = module.getOrInsertFunction("ores_record_set",
+            llvm::FunctionType::get(i64, {i64, i64, i64, i64}, false));
         record_get = module.getOrInsertFunction("ores_record_get",
             llvm::FunctionType::get(i64, {i64, i64, i64}, false));
         sum_check = module.getOrInsertFunction("ores_record_check_shape",
@@ -1276,6 +1304,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
             &record_classes, &record_schemas, record_new, record_get, record_check,
             &class_array_regions, &class_array_parameters, &owning_results};
+        std::unordered_map<std::string, std::string> handle_record_views;
+        region_moves.handle_record_views = &handle_record_views;
+        region_moves.record_new_mutable = record_new_mutable;
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
@@ -1579,6 +1610,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
         std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {
+            if (effect.kind == Statement::Kind::FieldWrite && handle_record_views.count(effect.receiver)) {
+                const auto& name = handle_record_views.at(effect.receiver);
+                const auto& cls = *record_classes.at(name);
+                const auto field = std::find_if(cls.fields.begin(), cls.fields.end(),
+                    [&](const ClassField& item) { return item.name == effect.field; });
+                if (field == cls.fields.end()) throw std::runtime_error("unknown mutable view write");
+                auto* value = lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateCall(record_set, {builder.CreateLoad(i64, storage.at(effect.receiver)),
+                    llvm::ConstantInt::get(i64, record_schemas.at(name)),
+                    llvm::ConstantInt::get(i64, std::distance(cls.fields.begin(), field)), value});
+                return;
+            }
             if (effect.kind == Statement::Kind::ScalarWrite) {
                 auto* value = lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
                 builder.CreateStore(value, storage.at(effect.receiver));
@@ -1722,8 +1765,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; llvm::Value* array_shadow = nullptr; };
         auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
             const bool record = !local.class_name.empty();
-            llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name)) : i64;
-            const std::size_t bytes = record ? record_classes.at(local.class_name)->fields.size() * 8 : 8;
+            const bool handle_view = record && native_mutable_scalar_record(*record_classes.at(local.class_name));
+            llvm::Type* shape = record && !handle_view ? static_cast<llvm::Type*>(class_types.at(local.class_name)) : i64;
+            const std::size_t bytes = record && !handle_view ? record_classes.at(local.class_name)->fields.size() * 8 : 8;
             // Allocate once per native invocation, never on every back-edge.
             llvm::IRBuilder<> entry_slots(&function->getEntryBlock(), function->getEntryBlock().begin());
             auto* slot = entry_slots.CreateAlloca(shape, nullptr, local.name + ".arm.stack");
@@ -1738,7 +1782,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 result.array_shadow = array_failure_places.at(local.name);
                 array_names.insert(local.name);
             }
-            if (record) {
+            if (handle_view) {
+                builder.CreateCall(record_check, {init, llvm::ConstantInt::get(i64, record_schemas.at(local.class_name))});
+                builder.CreateStore(init, slot);
+                handle_record_views.emplace(local.name, local.class_name);
+            } else if (record) {
                 const auto& cls = *record_classes.at(local.class_name);
                 auto* schema = llvm::ConstantInt::get(i64, record_schemas.at(cls.name));
                 builder.CreateCall(record_check, {init, schema});
@@ -1752,7 +1800,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 }
             } else builder.CreateStore(init, slot);
             if (!storage.emplace(local.name, slot).second) throw std::runtime_error("scoped value shadows existing storage");
-            if (record) result.subobjects = register_subobjects(local.name, local.class_name, slot);
+            if (record && !handle_view) result.subobjects = register_subobjects(local.name, local.class_name, slot);
             return result;
         };
         auto finish_scope = [&](const ScopedSlot& slot) {
@@ -1782,6 +1830,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto end_scope = [&](const ScopedSlot& slot) {
             finish_scope(slot);
             forget_array_scope(slot);
+            handle_record_views.erase(slot.name);
             for (const auto& key : slot.subobjects) { storage.erase(key); class_array_regions.erase(key); }
             for (const auto& key : slot.fields) field_storage.erase(key);
             storage.erase(slot.name);
@@ -1790,6 +1839,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         std::vector<ScopedSlot> ordered_root_scopes;
         auto forget_scope = [&](const ScopedSlot& slot) {
             forget_array_scope(slot);
+            handle_record_views.erase(slot.name);
             for (const auto& key : slot.subobjects) { storage.erase(key); class_array_regions.erase(key); }
             for (const auto& key : slot.fields) field_storage.erase(key);
             storage.erase(slot.name);

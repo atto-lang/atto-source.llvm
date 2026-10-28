@@ -128,6 +128,9 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("mutable-record-view-retains-identity-across-growth", include_str!("fixtures/native-class-string/mutable-scalar-record-view.ores"), ""),
+        ("mutable-record-readonly-iteration", "define class Item as pub let int value=1;end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item());let int total=0;for(const n of a){total=total+n.value;}return total==1?0:1;}", ""),
+
         ("ordered-array-moves-through-owning-return", "define class Box as pub val Array<int> values;end fnc touch():void{return;}fnc build():Box{touch();val Array<int> values=new Array<int>();values.add(42);return new Box(values);}pub fnc main():int{val Box box=build();return box.values.get(0)==42?0:1;}", ""),
         ("ordered-array-sibling-scopes", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi if true;then val Array<String> values=new Array<String>();values.add(\"ok\");if values.get(0)!=\"ok\";then return 1;fi fi return 0;}", ""),
         ("ordered-record-array-loop", "define class EntryValue as pub val int value;end fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int i=0;i<100;i=i+1){val Array<EntryValue> values=new Array<EntryValue>();values.add(new EntryValue(i));val EntryValue entry=values.get(0);total=total+entry.value;}return total==4950?0:1;}", ""),
@@ -702,6 +705,14 @@ fn main() {
         }
     }
     let negatives = [
+        ("mutable-view-cannot-amplify-read-permission-through-array-insertion", "define class Item as pub let int value=1;end fnc touch():void{return;}pub fnc main():int{val Array<Item> source=new Array<Item>();source.add(new Item());val Array<Item> destination=new Array<Item>();touch();destination.add(source.get(0));return 0;}".to_owned(), foo.to_owned()),
+
+        ("mutable-view-cannot-borrow-with-raw-pointer-ABI", "define class Item as pub let int value=1;end fnc touch():void{return;}fnc read(borrow Item value):int{return value.value;}pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item());touch();let mut Item n=a.get(0);return read(rt borrow n);}".to_owned(), foo.to_owned()),
+        ("mutable-view-const-cannot-write", "define class Item as pub let int value=1;end fnc touch():void{return;}pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item());touch();const Item n=a.get(0);n.value=2;return 0;}".to_owned(), foo.to_owned()),
+        ("mutable-view-let-without-mut-cannot-write", "define class Item as pub let int value=1;end fnc touch():void{return;}pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item());touch();let Item n=a.get(0);n.value=2;return 0;}".to_owned(), foo.to_owned()),
+        ("mutable-view-final-field-cannot-write", "define class Item as pub val int id;pub let int value=1;end fnc touch():void{return;}pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(7));touch();let mut Item n=a.get(0);n.id=2;return 0;}".to_owned(), foo.to_owned()),
+        ("mutable-view-iteration-cannot-write", "define class Item as pub let int value=1;end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item());for(const n of a){n.value=2;}return 0;}".to_owned(), foo.to_owned()),
+
         ("ordered-let-array-without-mut-cannot-mutate", "fnc touch():void{return;}pub fnc main():int{touch();let Array<int> values=new Array<int>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
 
         ("ordered-array-readonly-cannot-mutate", "fnc touch():void{return;}pub fnc main():int{touch();const Array<int> values=new Array<int>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
@@ -822,7 +833,6 @@ fn main() {
         ("shared-class-array-mutation", "define class Box as pub val Array<int> values;end fnc bad(borrow Box owner):void{owner.values.add(1);return;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("constructor-array-borrowed-field", "define class Box as pub val Array<int> values;end fnc bad(borrow Box owner):int{val Box other=new Box(owner.values);return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("class-array-by-value-escape", "define class Box as pub val Array<int> values;end fnc bad(Box owner):int{return owner.values.size;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("mutable-record-array", "define class Item as pub let int value=1; end pub fnc main():int{val Array<Item> a=new Array<Item>();return 0;}".to_owned(), foo.to_owned()),
         ("record-array-integer-forgery", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(1);return 0;}".to_owned(), foo.to_owned()),
         ("record-array-wrong-nominal-type", "define class A as pub val int value; end define class B as pub val int value; end pub fnc main():int{val Array<A> a=new Array<A>();a.add(new B(1));return 0;}".to_owned(), foo.to_owned()),
         ("record-array-handle-return", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));return a.get(0);}".to_owned(), foo.to_owned()),

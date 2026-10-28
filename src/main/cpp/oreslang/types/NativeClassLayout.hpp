@@ -8,6 +8,12 @@
 #include <utility>
 
 namespace oreslang {
+inline bool native_mutable_scalar_record(const ClassDecl& cls) {
+    return std::any_of(cls.fields.begin(), cls.fields.end(), [](const ClassField& field) { return !field.final_field; }) &&
+        std::all_of(cls.fields.begin(), cls.fields.end(), [](const ClassField& field) {
+            return !field.int_array && field.class_name.empty() && field.sum_type.empty();
+        });
+}
 // A source place is a nominal path, not a host pointer or a scalar handle.
 inline std::pair<std::string, std::string> native_place(const Expression& expression) {
     if (expression.kind == Expression::Kind::Variable) return {expression.name, {}};

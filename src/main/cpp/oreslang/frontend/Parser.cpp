@@ -2433,7 +2433,7 @@ private:
                 fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar branch local");
             else if (is_sum_name(type)) local->sum_type = type;
             else {
-                if (mutable_slot) fail("native branch-local class owner requires destructor/drop lowering");
+                local->owner_mutable = mutable_slot ? explicit_mutable : mutable_referent;
                 local->class_name = type; local->record_view = true;
             }
             require("="); local->initializer = expression(); require(";");

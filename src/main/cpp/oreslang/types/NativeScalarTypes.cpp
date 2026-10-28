@@ -66,6 +66,10 @@ void validate_native_scalar_types(const Program& program) {
             if (!leaf.field->final_field || leaf.field->int_array) fail(0, "record collections require immutable scalar/String fields");
         return *classes.at(name);
     };
+    auto collection_record = [&](const std::string& name) -> const ClassDecl& {
+        if (classes.count(name) && native_mutable_scalar_record(*classes.at(name))) return *classes.at(name);
+        return immutable_record(name);
+    };
     for (const auto& fn : program.functions)
         functions.emplace(native_function_slot(fn.name, fn.parameters.size()), &fn);
     auto field_type = [&](Type owner, const std::string& name, std::size_t offset) -> Type {
@@ -153,9 +157,13 @@ void validate_native_scalar_types(const Program& program) {
                 const auto owner = expression(*e.left, locals);
                 if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
                 const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
-                    : Type{Kind::Class, immutable_record(owner.name).name};
+                    : Type{Kind::Class, collection_record(owner.name).name};
                 for (std::size_t i = 0; i < e.arguments.size(); ++i) {
                     const bool index = (e.name == "get" || e.name == "set") && i == 0;
+                    if (!index && element.kind == Kind::Class &&
+                            native_mutable_scalar_record(*classes.at(element.name)) &&
+                            e.arguments[i]->kind != E::RecordConstruct)
+                        fail(e.offset, "mutable record insertion requires fresh construction until view permission transfer is lowered");
                     if (!index && element.kind == Kind::Class &&
                             e.arguments[i]->kind != E::RecordConstruct &&
                             e.arguments[i]->kind != E::Call && e.arguments[i]->kind != E::Conditional &&
@@ -168,7 +176,7 @@ void validate_native_scalar_types(const Program& program) {
             }
             case E::RecordConstruct: {
                 const bool owning = owns_arrays(e.name);
-                const auto& cls = owning ? *classes.at(e.name) : immutable_record(e.name);
+                const auto& cls = owning ? *classes.at(e.name) : collection_record(e.name);
                 if (owning) for (const auto& field : cls.fields)
                     if (field.int_array && !field.constructor_argument)
                         fail(e.offset, "owning return constructor requires explicit array arguments");
@@ -214,7 +222,7 @@ void validate_native_scalar_types(const Program& program) {
     // initialize bool fields; integer bit patterns cannot become boolean storage.
     for (const auto& cls : program.classes) {
         for (const auto& field : cls.fields)
-            if (!field.array_record_class.empty()) (void)immutable_record(field.array_record_class);
+            if (!field.array_record_class.empty()) (void)collection_record(field.array_record_class);
         Locals parameters;
         if (!cls.constructor_parameter_types.empty() && cls.constructor_parameter_types.size() != cls.constructor_parameters.size())
             throw std::runtime_error("native constructor type/parameter arity mismatch");
@@ -240,7 +248,7 @@ void validate_native_scalar_types(const Program& program) {
                         fail(binding.offset, "owning class result requires a named call binding");
                 } else (void)immutable_record(binding.class_name);
             }
-            if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
+            if (!binding.array_record_class.empty()) (void)collection_record(binding.array_record_class);
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
                     binding.initializer->kind == Expression::Kind::Console;
@@ -272,14 +280,19 @@ void validate_native_scalar_types(const Program& program) {
                     if (source.kind != Kind::Array) fail(item.offset, "for-of requires an array");
                     const auto& iterator = *item.branch_local;
                     const Type element = source.name == "String" ? scalar(ScalarType::String) : source.name == "int" ? scalar(false)
-                        : Type{Kind::Class, immutable_record(source.name).name};
+                        : Type{Kind::Class, collection_record(source.name).name};
                     require(local_type(iterator), element, item.offset, "for-of element annotation");
                     Locals body = scope; body.emplace(iterator.name, element);
                     statements(item.then_statements, body);
                 } else if (item.kind == Statement::Kind::ScopedLocal) {
                     const auto& binding = *item.branch_local;
-                    if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
-                    if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
+                    if (!binding.class_name.empty()) {
+                        const auto& cls = collection_record(binding.class_name);
+                        if (native_mutable_scalar_record(cls) && (!binding.initializer ||
+                                binding.initializer->kind != Expression::Kind::ArrayCall || binding.initializer->name != "get"))
+                            fail(binding.offset, "mutable scalar record view requires array.get provenance");
+                    }
+                    if (!binding.array_record_class.empty()) (void)collection_record(binding.array_record_class);
                     if (binding.initializer) require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
                 } else if (item.kind == Statement::Kind::Conditional) {

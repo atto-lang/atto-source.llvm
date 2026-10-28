@@ -26,6 +26,7 @@ struct LocalOwnership {
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
     bool record_view = false; // readonly materialized value, not an incoming loan
+    bool handle_record_view = false; // stable identity, no raw-pointer call ABI
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     bool assignable = false; // lexical slot replacement, not referent mutation
     std::size_t shared_loans = 0;
@@ -161,6 +162,8 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (root->kind != Expression::Kind::Variable)
         reject(expr, "native borrow requires an addressable named int parameter");
     LocalOwnership& source = local(*root, locals);
+    if (source.handle_record_view)
+        reject(expr, "mutable record view call requires handle-aware method/borrow ABI");
     if (source.int_array)
         reject(expr, "ownership violation: native Array<int> cannot be borrowed or escaped");
     // A borrowed parameter has a caller-held lifetime and already carries
@@ -797,6 +800,7 @@ void validate_i64_ownership(Program& program) {
                 };
                 const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
                     [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                if (cls == program.classes.end()) throw std::runtime_error("unknown scoped record class");
                 for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
                     const auto& arg = binding.constructor_arguments[i];
                     const auto* field = constructor_field(*cls, i);
@@ -880,6 +884,10 @@ void validate_i64_ownership(Program& program) {
                 if (!class_fields.count(binding.class_name))
                     throw std::runtime_error("native scoped value has unknown class");
                 entry.mode = Mode::Borrow; entry.record_view = true;
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                entry.handle_record_view = native_mutable_scalar_record(*cls);
+                if (entry.handle_record_view && binding.owner_mutable) entry.mode = Mode::BorrowMut;
                 entry.mutable_paths = layouts.mutable_paths(binding.class_name);
                 entry.subobjects = layouts.at(binding.class_name).subobjects;
                 entry.class_fields = class_fields.at(binding.class_name);
@@ -973,7 +981,14 @@ void validate_i64_ownership(Program& program) {
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
                 if (local.initializer) check_value(*local.initializer, state, functions);
-                state.emplace(local.name, scoped_entry(local));
+                auto entry = scoped_entry(local);
+                if (entry.handle_record_view && local.owner_mutable) {
+                    if (!local.initializer || local.initializer->kind != Expression::Kind::ArrayCall ||
+                            local.initializer->name != "get")
+                        throw std::runtime_error("mutable record view requires array.get provenance");
+                    (void)array_owner(*local.initializer->left, state, true);
+                }
+                state.emplace(local.name, std::move(entry));
                 return;
             }
             if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
