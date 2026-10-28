@@ -3031,6 +3031,20 @@ private:
                                                value.actor_sends.size() - 1});
                 continue;
             }
+            if (action->kind == Expression::Kind::Field &&
+                    action->name == "graceful_stop" && accept("(")) {
+                if (!value.done_await_actor.empty())
+                    fail("actor effects after await get_done are unsupported");
+                if (!action->left ||
+                    action->left->kind != Expression::Kind::Variable)
+                    fail("native graceful_stop requires direct named ActorRef receiver");
+                require(")");
+                require(";");
+                value.actor_stops.push_back(action->left->name);
+                value.actor_actions.push_back({ActorAction::Kind::GracefulStop,
+                                               value.actor_stops.size() - 1});
+                continue;
+            }
             if (action->kind == Expression::Kind::Variable && accept("=")) {
                 statement.kind = Statement::Kind::ScalarWrite;
                 statement.receiver = action->name; statement.expression = expression();
@@ -5034,6 +5048,13 @@ private:
             }
             if (!fn.done_await_actor.empty() && live_actors.count(fn.done_await_actor))
                 throw std::runtime_error("await get_done requires stop before await");
+            if (!fn.done_await_actor.empty() &&
+                    std::any_of(fn.actor_actions.begin(), fn.actor_actions.end(),
+                        [](const ActorAction& a) {
+                            return a.kind == ActorAction::Kind::GracefulStop;
+                        }))
+                throw std::runtime_error(
+                    "native graceful_stop with await get_done unsupported");
             if (!live_actors.empty())
                 throw std::runtime_error("actor reference must be stopped before return");
             if (fn.caught_throw_value) {
