@@ -1726,7 +1726,10 @@ if(BUILD_TESTING)
     # CONTROL notices, NOT a guest compiler or RT clock-driver proof.
     add_executable(oreslang-native-actor-ledger-scheduler-bridge-test
         tests/native_actor_scheduler_ledger_bridge_test.cpp
-        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
     target_include_directories(oreslang-native-actor-ledger-scheduler-bridge-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-native-actor-ledger-scheduler-bridge-test PRIVATE cxx_std_17)
