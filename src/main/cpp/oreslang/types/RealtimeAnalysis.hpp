@@ -174,9 +174,9 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             if (expr->resolved_type == ScalarType::String) add_effect(facts, FunctionEffect::Alloc);
             break;
         case Expression::Kind::Remainder: {
-            // Signed remainder traps for a zero divisor or INT64_MIN % -1.
-            // An unknown divisor, or an unknown numerator with divisor -1,
-            // has no proof of trap-free hard-RT execution. Fail closed.
+            // Qualify only a proven literal divisor. Keep the analyzer's
+            // -1 proof conservative until it shares the code generator's
+            // MIN % -1 special-case witness.
             const auto* rhs = expr->right.get();
             const auto* lhs = expr->left.get();
             const bool safe_literal_divisor = rhs && rhs->kind == Expression::Kind::Integer &&
@@ -189,7 +189,6 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         }
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
-        case Expression::Kind::Remainder:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
