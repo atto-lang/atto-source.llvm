@@ -20,17 +20,17 @@ fnc trivial_one_element(int rows, int cols, int bytes, int capacity): int {
   return 1;
 }
 
-fnc readonly_view(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
+fnc readonly_basic(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
   if (rows < 0) { return 0; } fi
   if (cols < 0) { return 0; } fi
   if (row_stride < 0) { return 0; } fi
   if (col_stride < 0) { return 0; } fi
   if (bytes <= 0) { return 0; } fi
   if (capacity < 0) { return 0; } fi
-  if (rows == 0) { return 1; } fi
-  if (cols == 0) { return 1; } fi
-  if (trivial_one_element(rows, cols, bytes, capacity) == 1) { return 1; } fi
-  if (bytes > 1048576) { return 0; } fi
+  return 1;
+}
+
+fnc readonly_bounded(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
   let int row_span = axis_span(rows, row_stride);
   let int col_span = axis_span(cols, col_stride);
   if (row_span < 0) { return 0; } fi
@@ -39,9 +39,18 @@ fnc readonly_view(int rows, int cols, int row_stride, int col_stride, int bytes,
   let int last_index = row_span + col_span;
   if (last_index == 9223372036854775807) { return 0; } fi
   let int elements = last_index + 1;
-  if (bytes > 1048576) { return 0; } fi
   if (elements * bytes > capacity) { return 0; } fi
   return 1;
+}
+
+fnc readonly_view(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
+  if (readonly_basic(rows, cols, row_stride, col_stride, bytes, capacity) == 0) { return 0; } fi
+  if (rows == 0) { return 1; } fi
+  if (cols == 0) { return 1; } fi
+  if (trivial_one_element(rows, cols, bytes, capacity) == 1) { return 1; } fi
+  // For nontrivial views, axis_span checks dimensions and strides <= 2^20.
+  if (bytes > 1048576) { return 0; } fi
+  return readonly_bounded(rows, cols, row_stride, col_stride, bytes, capacity);
 }
 
 fnc axis_is_aliased(int length, int stride): int {
@@ -69,19 +78,29 @@ fnc writable_view(int rows, int cols, int row_stride, int col_stride, int bytes,
   return writable_rows_safe(rows, cols, row_stride, col_stride);
 }
 
-fnc exact_contiguous(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
-  if (readonly_view(rows, cols, row_stride, col_stride, bytes, capacity) == 0) { return 0; } fi
-  if (col_stride != 1) { return 0; } fi
-  if (row_stride != cols) { return 0; } fi
-  if (rows == 0) { return is_zero(capacity); } fi
-  if (cols == 0) { return is_zero(capacity); } fi
-  if (trivial_one_element(rows, cols, bytes, capacity) == 1) { return 1; } fi
+fnc is_equal(int left, int right): int {
+  if (left == right) { return 1; } fi
+  return 0;
+}
+
+fnc exact_capacity_bounded(int rows, int cols, int bytes, int capacity): int {
   if (rows > 1048576) { return 0; } fi
   if (cols > 1048576) { return 0; } fi
   let int elements = rows * cols;
   if (bytes > 1048576) { return 0; } fi
   if (elements * bytes != capacity) { return 0; } fi
   return 1;
+}
+
+fnc exact_contiguous(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
+  if (readonly_view(rows, cols, row_stride, col_stride, bytes, capacity) == 0) { return 0; } fi
+  if (col_stride != 1) { return 0; } fi
+  if (row_stride != cols) { return 0; } fi
+  if (rows == 0) { return is_zero(capacity); } fi
+  if (cols == 0) { return is_zero(capacity); } fi
+  // Even a one-element tensor must have *exact*, not merely sufficient, capacity.
+  if (trivial_one_element(rows, cols, bytes, capacity) == 1) { return is_equal(bytes, capacity); } fi
+  return exact_capacity_bounded(rows, cols, bytes, capacity);
 }
 
 fnc is_zero(int value): int {
@@ -98,23 +117,43 @@ fnc compatible_axis(int a, int b): int {
   return 0;
 }
 
-pub fnc main(): int {
-  if (writable_view(3,4,4,1,8,96) != 1) { return 1; } fi
+fnc tensor_cases_a(): int {
+if (writable_view(3,4,4,1,8,96) != 1) { return 1; } fi
   if (exact_contiguous(3,4,4,1,8,96) != 1) { return 2; } fi
   if (writable_view(3,4,8,1,4,80) != 1) { return 3; } fi
   if (exact_contiguous(3,4,8,1,4,80) != 0) { return 4; } fi
   if (readonly_view(3,4,0,0,8,8) != 1) { return 5; } fi
   if (writable_view(3,4,0,0,8,8) != 0) { return 6; } fi
+  return 0;
+}
+
+fnc tensor_cases_b(): int {
   if (writable_view(2,2,1,1,8,24) != 0) { return 7; } fi
   if (writable_view(3,4,4,1,8,95) != 0) { return 8; } fi
   if (writable_view(9223372036854775807,3,2,1,8,96) != 0) { return 9; } fi
   if (exact_contiguous(0,4,4,1,8,0) != 1) { return 10; } fi
   if (writable_view(-1,4,4,1,8,96) != 0) { return 11; } fi
   if (compatible_axis(3,1) != 1) { return 12; } fi
+  return 0;
+}
+
+fnc tensor_cases_c(): int {
   if (compatible_axis(1,4) != 1) { return 13; } fi
   if (compatible_axis(0,1) != 1) { return 14; } fi
   if (compatible_axis(3,5) != 0) { return 15; } fi
   if (readonly_view(2,1,9223372036854775807,0,1,9223372036854775807) != 0) { return 16; } fi
   if (writable_view(1,1,0,0,9223372036854775807,9223372036854775807) != 1) { return 17; } fi
+  if (exact_contiguous(1,1,1,1,8,9) != 0) { return 18; } fi
+  if (exact_contiguous(1,1,1,1,8,8) != 1) { return 19; } fi
+  return 0;
+}
+
+pub fnc main(): int {
+  let int a = tensor_cases_a();
+  if (a != 0) { return a; } fi
+  let int b = tensor_cases_b();
+  if (b != 0) { return b; } fi
+  let int c = tensor_cases_c();
+  if (c != 0) { return c; } fi
   return 42;
 }
