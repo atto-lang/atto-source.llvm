@@ -56,7 +56,7 @@ static void control(void* raw,size_t actor,uint64_t payload) {
 int main(void) {
     State state={0};
     state.scheduler=ores_native_actor_scheduler_open_control(
-        1,1,1,data,control,&state);
+        1,3,1,data,control,&state);
     CHECK(state.scheduler);
     state.actor=ores_native_actor_scheduler_spawn(state.scheduler,0);
     CHECK(state.actor.scheduler_domain);
@@ -64,7 +64,10 @@ int main(void) {
         state.scheduler,&state.ticket));
     CHECK(ores_native_actor_scheduler_send(state.scheduler,state.actor,11));
     until(&state.data_entered);
-    CHECK(ores_native_actor_scheduler_try_send(state.scheduler,state.actor,12)
+    /* The retained A callback and active physical carrier reserve two
+     * credits; B gets the final credit, C must fail without admission. */
+    CHECK(ores_native_actor_scheduler_send(state.scheduler,state.actor,12));
+    CHECK(ores_native_actor_scheduler_try_send(state.scheduler,state.actor,13)
         == ORES_NATIVE_SEND_MAILBOX_FULL);
     CHECK(!ores_native_actor_scheduler_complete_retained_data(
         state.scheduler,state.ticket));
@@ -80,7 +83,7 @@ int main(void) {
     CHECK(ores_native_actor_scheduler_retained_data_count(
         state.scheduler,state.actor)==1);
     CHECK(!ores_native_actor_scheduler_poll_done(state.scheduler,state.actor));
-    CHECK(ores_native_actor_scheduler_accepted(state.scheduler)==2);
+    CHECK(ores_native_actor_scheduler_accepted(state.scheduler)==3);
     CHECK(!ores_native_actor_scheduler_complete_retained_data(
         state.scheduler,state.ticket));
     atomic_store_explicit(&state.control_release,1,memory_order_release);
@@ -91,10 +94,10 @@ int main(void) {
     CHECK(ores_native_actor_scheduler_terminal_state(
         state.scheduler,state.actor,&terminal));
     CHECK(terminal.kind==ORES_NATIVE_TERMINATION_STOPPED);
-    CHECK(terminal.accepted_user_messages==1);
+    CHECK(terminal.accepted_user_messages==2);
     CHECK(terminal.processed_user_messages==0);
-    CHECK(terminal.abandoned_user_messages==1);
-    CHECK(ores_native_actor_scheduler_accepted(state.scheduler)==2);
+    CHECK(terminal.abandoned_user_messages==2);
+    CHECK(ores_native_actor_scheduler_accepted(state.scheduler)==3);
     CHECK(ores_native_actor_scheduler_completed(state.scheduler)==1);
     CHECK(ores_native_actor_scheduler_drain(state.scheduler));
     ores_native_actor_scheduler_retire(state.scheduler);
