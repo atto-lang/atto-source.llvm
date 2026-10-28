@@ -7,6 +7,7 @@ on:
       - tests/native_realtime_timer_queue_test.cpp
       - tests/actor_execution_ledger_test.cpp
       - tests/native_timer_actor_double_entry_test.cpp
+      - tests/actor_execution_ledger_model.rs
       - docs/HARD_REALTIME.md
       - .github/workflows/native-rt-timer-exact-head.yml
   workflow_dispatch:
@@ -40,7 +41,8 @@ jobs:
             src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \
             tests/native_realtime_timer_queue_test.cpp \
             tests/actor_execution_ledger_test.cpp \
-            tests/native_timer_actor_double_entry_test.cpp; do
+            tests/native_timer_actor_double_entry_test.cpp \
+            tests/actor_execution_ledger_model.rs; do
             expected="$(git rev-parse "HEAD:$file")"
             actual="$(git hash-object "$file")"
             test "$actual" = "$expected"
@@ -84,3 +86,13 @@ jobs:
               -o "build/rt-timer-gate/${source}-sanitized"
             "build/rt-timer-gate/${source}-sanitized"
           done
+      - name: Execute deterministic Rust actor ledger state-machine oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v rustc
+          rustc --version
+          rustc --edition=2021 --test -D warnings \
+            tests/actor_execution_ledger_model.rs \
+            -o build/rt-timer-gate/actor-execution-ledger-model
+          build/rt-timer-gate/actor-execution-ledger-model
