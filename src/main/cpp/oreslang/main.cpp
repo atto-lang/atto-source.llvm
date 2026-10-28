@@ -745,11 +745,10 @@ int main(int argc, char** argv) {
                 ast, wasm32_target, cortex_m_target,
                 bounded_allocator_provider);
 
-            // The shipped pass is deliberately function-only. Richer Program
-            // owners have hidden semantic/ABI roots that are not represented
-            // by the direct-call graph yet. Fail closed rather than deleting
-            // a helper that is reachable only from an actor handler, class
-            // initializer, or host-driven continuation.
+            // The shipped destructive pass remains function-only. For class
+            // programs, retain every declaration rather than deleting any
+            // constructor/field-initializer helper before Phase-2 graph proof.
+            // Actor and continuation surfaces still fail closed.
             require_supported_tree_shake_surface(ast);
             tree_shake_functions(ast, tree_shake_roots);
         }
