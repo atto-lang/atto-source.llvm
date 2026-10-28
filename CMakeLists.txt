@@ -390,6 +390,12 @@ if(BUILD_TESTING)
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-span-source.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_tensor_span_source_aot PROPERTIES TIMEOUT 120)
+    # Real `.ores` Array<int> native region ownership/lane execution.
+    # A passing host-side reference model cannot satisfy this gate.
+    add_test(NAME native_tensor_owned_array_source_aot
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-owned-array.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_tensor_owned_array_source_aot PROPERTIES TIMEOUT 120)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.
