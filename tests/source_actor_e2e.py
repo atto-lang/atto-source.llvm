@@ -354,6 +354,31 @@ def main():
                 assert actual_a == [(1, 2), (2, 8), (3, 22), (4, 52)], actual_a
                 assert actual_b == [(5, 10), (6, 32), (7, 78),
                                     (8, 172), (9, 362)], actual_b
+                summary_pattern = re.compile(
+                    r"SOURCE_ACTOR_HEAP_ACCESS_SUMMARY slot=([0-9]+) "
+                    r"owner=([0-9]+) domain=([0-9]+) events=([0-9]+) "
+                    r"field_inits=([0-9]+) field_reads=([0-9]+) "
+                    r"field_writes=([0-9]+) scoped_allocs=([0-9]+) "
+                    r"scoped_drops=([0-9]+) other=([0-9]+) dropped=([0-9]+)")
+                heap_summaries = []
+                for line in stderr_lines:
+                    if line.startswith("SOURCE_ACTOR_HEAP_ACCESS_SUMMARY "):
+                        match = summary_pattern.fullmatch(line)
+                        assert match, ("malformed source heap access receipt", line)
+                        heap_summaries.append(tuple(map(int, match.groups())))
+                assert len(heap_summaries) == 2, ("missing heap access proofs", heap_summaries)
+                assert [row[0] for row in heap_summaries] == [0, 1], heap_summaries
+                assert len({row[2] for row in heap_summaries}) == 2, (
+                    "same-kind actors must have distinct heap domains", heap_summaries)
+                for slot, owner, domain, events, inits, reads, writes, allocs, drops, others, lost in heap_summaries:
+                    messages = [4, 5][slot]
+                    assert owner == owners[slot] and domain > 0, heap_summaries
+                    assert lost == 0 and events == inits + reads + writes + allocs + drops + others, (
+                        "heap access ledger inconsistent", heap_summaries)
+                    assert inits >= 1 and reads >= messages and writes >= messages, (
+                        "generated guest field operations missing", heap_summaries)
+                    assert allocs >= messages * 2 and drops == allocs, (
+                        "generated owned-temporary construction/drop absent", heap_summaries)
                 assert [slot for _, slot, _ in reclaims] == [0, 1], reclaims
                 assert all(owners[slot] == owner for _, slot, owner in reclaims), reclaims
                 # The message after A's graceful_stop is a real compiled
