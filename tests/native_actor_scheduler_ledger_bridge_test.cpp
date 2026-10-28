@@ -120,12 +120,14 @@ int main() {
     assert(pool.poll_due(105, due) == Pool::Status::Ok);
     assert(due.actor_id == 1 && due.actor_generation == s.a.generation);
     auto notify_timer = bridge->notify_ready(Id{1, s.a.generation,
-        s.timer_seq.load(std::memory_order_acquire)});
+        s.timer_seq.load(std::memory_order_acquire), s.a.scheduler_domain});
     assert(notify_timer == Bridge::Notify::RetryRequired);
     auto notify_future = bridge->notify_ready(Id{1, s.a.generation,
-        s.suspended_seq.load(std::memory_order_acquire)});
+        s.suspended_seq.load(std::memory_order_acquire), s.a.scheduler_domain});
     assert(notify_future == Bridge::Notify::RetryRequired);
     assert(bridge->retry_needed());
+    assert(bridge->notify_ready(Id{1, s.a.generation, 1,
+        s.a.scheduler_domain + 1}) == Bridge::Notify::Invalid);
     assert(s.trace_count.load() == 0);
     s.hold_first.store(0, std::memory_order_release);
     assert(until(s.supervisory, 1));  // reserved supervisor CONTROL wins
@@ -145,7 +147,7 @@ int main() {
     assert(late.lateness_ns == 4 && late.maximum_lateness_ns == 3);
 
     // Late duplicated wakes are ACKed as stale, not reexecuted.
-    (void)bridge->notify_ready(Id{1, s.a.generation, s.suspended_seq.load()});
+    (void)bridge->notify_ready(Id{1, s.a.generation, s.suspended_seq.load(), s.a.scheduler_domain});
     (void)bridge->retry_kick();
     assert(ores_native_actor_scheduler_drain(s.native));
     assert(s.first_called.load() == 2);
