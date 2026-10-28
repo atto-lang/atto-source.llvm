@@ -44,6 +44,21 @@ add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
+# UBSan checks must instrument C++ compiler code while building it.
+# Linking an already-generated LLVM IR module with -fsanitize=undefined
+# does not retroactively insert C++ frontend undefined-behavior checks.
+option(ORES_LOCAL_AGGREGATE_COMPILER_SANITIZERS
+    "Instrument oreslang-llvmc itself with ASan and UBSan" OFF)
+if(ORES_LOCAL_AGGREGATE_COMPILER_SANITIZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "local-aggregate compiler sanitizer gate requires Clang or GCC")
+    endif()
+    target_compile_options(oreslang-llvmc PRIVATE
+        -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    target_link_options(oreslang-llvmc PRIVATE
+        -fsanitize=address,undefined -fno-sanitize-recover=all)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
@@ -356,16 +371,27 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_LOCAL_AGGREGATE_CLANG}")
     set_tests_properties(native_local_aggregate_types_stage1 PROPERTIES TIMEOUT 90)
-    # This is separate from the ordinary Clang execution gate: sanitizer
-    # toolchain failures or sanitizer findings are hard failures, never skips.
-    # No private-source artifact is exported from this CTest command.
-    add_test(NAME native_local_aggregate_types_asan_ubsan
+    # LLVM IR is not automatically ASan-instrumented merely by linking the
+    # sanitizer runtime. The harness marks native definitions and confirms
+    # memory-access checks are present in the generated IR.
+    add_test(NAME native_local_aggregate_types_asan_guest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_local_aggregate_parity_stage1.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_LOCAL_AGGREGATE_CLANG}"
             --sanitize)
-    set_tests_properties(native_local_aggregate_types_asan_ubsan PROPERTIES TIMEOUT 180)
+    set_tests_properties(native_local_aggregate_types_asan_guest PROPERTIES TIMEOUT 180)
+    # UBSan only provides meaningful C++ compiler coverage in a separate
+    # sanitized CMake build. It cannot be inferred from Clang linking .ll.
+    if(ORES_LOCAL_AGGREGATE_COMPILER_SANITIZERS)
+        add_test(NAME native_local_aggregate_types_asan_ubsan_compiler
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_local_aggregate_parity_stage1.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_LOCAL_AGGREGATE_CLANG}"
+                --sanitize)
+        set_tests_properties(native_local_aggregate_types_asan_ubsan_compiler PROPERTIES TIMEOUT 240)
+    endif()
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
