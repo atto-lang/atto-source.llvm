@@ -159,6 +159,17 @@ public:
         return revoked;
     }
 
+    // A strict hard-RT admission must reject an unresolved serialized await
+    // unless a separately proven finite suspension bound is in its budget.
+    // false does NOT establish hard-RT capability: ready-turn WCET, priorities,
+    // IRQ delay and OS wakeup latency still require independent qualification.
+    bool has_unbounded_suspension_blocker() const noexcept {
+        for (const auto& slot : slots_)
+            if (slot.phase == Phase::Suspended && slot.kind != Kind::Control)
+                return true;
+        return false;
+    }
+
     bool physically_retired() const noexcept { return closed_ && live_ == 0; }
     Snapshot snapshot() const noexcept {
         Snapshot result{};
