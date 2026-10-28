@@ -23,6 +23,22 @@ static void until(atomic_int* flag) {
     }
     fprintf(stderr,"RETAINED_ORDER timeout\n"); abort();
 }
+/* Awaiting A's callback exit is not the same as completion of logical A.
+ * The actor retains A's mailbox credit until its later WAKE settlement.
+ * During the brief IN_CALLBACK interval active+retained counts can fill the
+ * bounded quota; retry only that transient resource-backpressure result. */
+static void admit_after_physical_callback(State* s,uint64_t payload) {
+    for (int attempt=0;attempt<8000;++attempt) {
+        OresNativeSendStatus status=ores_native_actor_scheduler_try_send(
+            s->scheduler,s->actor[0],payload);
+        if (status==ORES_NATIVE_SEND_ACCEPTED) return;
+        CHECK(status==ORES_NATIVE_SEND_MAILBOX_FULL);
+        const struct timespec pause={0,1000000};
+        nanosleep(&pause,NULL);
+    }
+    fprintf(stderr,"RETAINED_ORDER mailbox never became available\\n");
+    abort();
+}
 static void data(void* raw,size_t actor,uint64_t payload) {
     State* s=(State*)raw;
     CHECK(actor<2);
@@ -70,7 +86,7 @@ int main(void) {
     CHECK(s.actor[0].scheduler_domain && s.actor[1].scheduler_domain);
     CHECK(ores_native_actor_scheduler_send(s.scheduler,s.actor[0],1));
     until(&s.first_suspended);
-    CHECK(ores_native_actor_scheduler_send(s.scheduler,s.actor[0],2));
+    admit_after_physical_callback(&s,2);
     CHECK(ores_native_actor_scheduler_try_send(s.scheduler,s.actor[0],3)
         == ORES_NATIVE_SEND_MAILBOX_FULL);
     CHECK(ores_native_actor_scheduler_send(s.scheduler,s.actor[1],9));
