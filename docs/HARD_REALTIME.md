@@ -193,3 +193,56 @@ priority/actor-turn interference analysis, target-kernel `rtla timerlat`
 and `osnoise` measurements, and a reproducible missed-deadline fail gate.
 Sanitizer/model tests and source-org zero-step workflows are not hardware
 deadline proof. Keep draft and keep hard-RT feature admission disabled.
+
+## Actor-local continuation ledger: two-sided dispatch accounting (draft)
+
+The actor must independently decide **which logical turn is eligible next**.
+The scheduler owns runnable actor tokens, OS clock registration, priority and
+physical carriers; the actor-owned region owns the bounded `ActorExecutionLedger`
+with `(actor_id, incarnation, event_sequence)` and turn state. A notification
+is **not** an instruction to execute its callback immediately.
+
+The strict default matches Java actor continuation draft #161:
+
+1. The actor acquires its existing authenticated single-writer turn lease;
+   only then may the actor-controlled ledger be mutated or inspected. The
+   `claim(id, authenticated)` prototype boolean must be supplied only by
+   trusted host scheduler integration; it is **not a guest capability**.
+2. An `await` suspends the **same** logical message turn and releases the
+   physical carrier; later ordinary DATA/mail/timers cannot overtake it even
+   if their own readiness arrives earlier. An unresolved timer registration
+   is not, by itself, an actor logical-turn barrier.
+3. Supervisor/lifecycle CONTROL is an independent urgent lane, but its guest
+   handler still obeys exclusive actor state access. No clock driver or
+   Future completion thread enters the actor heap or executes guest code.
+4. Upon awakening, the actor checks generation, event identity and state,
+   then chooses CONTROL first, otherwise the oldest eligible serialized turn.
+   Duplicate wakeups and stale cancellations cannot create extra executions.
+   An opt-in reentrancy policy is **not implemented**; it will require
+   static proof that borrowed/critical actor state is safe across overtaking.
+5. STOP fences pending/ready/suspended event identities but retains RUNNING
+   physical-turn accounting. `physically_retired()` is one **ledger-only**
+   prerequisite, not an OS/actor/FFI resource retirement receipt.
+6. An unresolved default-serialized await is an **unbounded deadline blocker**
+   absent a separately proven Future completion bound; fail strict hard-RT
+   admission rather than claiming a tight callback start. The
+   `has_unbounded_suspension_blocker()` query is a necessary negative gate,
+   never sufficient evidence for a positive hard-RT admission.
+
+Prototype files: `ActorExecutionLedger.hpp`,
+`tests/actor_execution_ledger_test.cpp`, and
+`tests/native_timer_actor_double_entry_test.cpp`. The second test crosses
+the separate actor-side ledger and scheduler-side fixed timer pool with
+deterministic synthetic clock timestamps, verifying a late start is reported
+as `DeadlineMissed` instead of masquerading as RT success. Neither test
+uses the actual native actor carrier, guest .ores continuation lowering,
+OS wakeup thread, or qualified CPU reservation.
+
+**Next integration gate:** wire generation-checked scheduler CONTROL notices
+to the actor-owned ledger under `NativeActorScheduler`'s *actual* exclusive
+execution authority; reserve finite actor event slots **before** external
+timer/producer admission, preserve failed CONTROL notifications until retry,
+bind source continuations in `NativeContinuationStore`, and make teardown
+wait for the entire native resource/lease retirement barrier. Record real
+`due/expiry/ready/guest-start/guest-end` timestamps. This requires an
+independent scheduler integration review and source guest execution proof.
