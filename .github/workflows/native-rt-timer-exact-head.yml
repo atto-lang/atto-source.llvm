@@ -5,6 +5,14 @@ on:
       - src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp
       - src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
       - src/main/cpp/oreslang/runtime/NativeActorLedgerBridge.hpp
+      - src/main/cpp/oreslang/runtime/NativeActorAwaitLedgerLink.hpp
+      - src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.h
+      - src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+      - src/main/cpp/oreslang/runtime/NativeContinuationStore.h
+      - src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+      - src/main/cpp/oreslang/runtime/NativeExecutionContextStore.h
+      - src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+      - src/main/cpp/oreslang/runtime/NativeTraceSlotNamespace.h
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.h
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
       - src/main/cpp/oreslang/runtime/BoundedMpscQueue.hpp
@@ -45,6 +53,14 @@ jobs:
             src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp \
             src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \
             src/main/cpp/oreslang/runtime/NativeActorLedgerBridge.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorAwaitLedgerLink.hpp \
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.h \
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c \
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.h \
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c \
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c \
+            src/main/cpp/oreslang/runtime/NativeTraceSlotNamespace.h \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             src/main/cpp/oreslang/runtime/BoundedMpscQueue.hpp \
@@ -103,14 +119,18 @@ jobs:
           for toolchain in gcc:g++ clang:clang++; do
             cc="${toolchain%%:*}"
             cxx="${toolchain#*:}"
-            "$cc" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
-              -pthread -Isrc/main/cpp -c \
-              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
-              -o "build/rt-timer-gate/native-scheduler-${cc}.o"
+            objs=()
+            for source in NativeActorScheduler NativeExecutionContextStore NativeContinuationStore NativeAwaitTraceBridge; do
+              "$cc" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+                -pthread -Isrc/main/cpp -c \
+                "src/main/cpp/oreslang/runtime/${source}.c" \
+                -o "build/rt-timer-gate/${source}-${cc}.o"
+              objs+=("build/rt-timer-gate/${source}-${cc}.o")
+            done
             "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
               -pthread -Isrc/main/cpp \
               tests/native_actor_scheduler_ledger_bridge_test.cpp \
-              "build/rt-timer-gate/native-scheduler-${cc}.o" \
+              "${objs[@]}" \
               -o "build/rt-timer-gate/native-ledger-${cc}"
             "build/rt-timer-gate/native-ledger-${cc}"
           done
@@ -121,15 +141,19 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           set -euo pipefail
-          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
-            -fsanitize=address,undefined -fno-omit-frame-pointer \
-            -pthread -Isrc/main/cpp -c \
-            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
-            -o build/rt-timer-gate/native-scheduler-sanitized.o
+          objs=()
+          for source in NativeActorScheduler NativeExecutionContextStore NativeContinuationStore NativeAwaitTraceBridge; do
+            clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -pthread -Isrc/main/cpp -c \
+              "src/main/cpp/oreslang/runtime/${source}.c" \
+              -o "build/rt-timer-gate/${source}-sanitized.o"
+            objs+=("build/rt-timer-gate/${source}-sanitized.o")
+          done
           clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             -pthread -Isrc/main/cpp tests/native_actor_scheduler_ledger_bridge_test.cpp \
-            build/rt-timer-gate/native-scheduler-sanitized.o \
+            "${objs[@]}" \
             -o build/rt-timer-gate/native-ledger-sanitized
           build/rt-timer-gate/native-ledger-sanitized
       - name: Execute deterministic Rust actor ledger state-machine oracle
