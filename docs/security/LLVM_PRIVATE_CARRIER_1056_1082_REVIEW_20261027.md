@@ -24,7 +24,7 @@ Carrier PR #46 source-free runs at exact reviewed head `d8705106829754389df5eab9
 - Source-bearing test jobs were **not** dispatched. Private source has **not** been copied into the carrier.
 
 
-- New carrier head `e514d0878c26e88407dd0b72c57beebab8dd253a` has updated two source-free test plans. Current exact-head verification workflows 40760802209 (LLVM SDK), 40760802286 (private security) and 40760802221 (evidence) were queued/pending at document preparation; do not treat earlier green runs as a pass for this new head until verified.
+- New carrier head `e514d0878c26e88407dd0b72c57beebab8dd253a` has updated both source-free test plans and **executed** all three exact-head checks successfully: LLVM SDK/CMake/ASan run [40760802209](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802209) (5 steps); carrier verifier + Java canary [40760802286](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802286) (11 + 5 steps, source-bearing jobs skipped); evidence-contract [40760802221](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40760802221) (8 steps). All five source blob pins were read back from the exact source PR heads and matched the plans.
 
 ## Current-main reconciliation and exact-head admission evidence
 
@@ -32,7 +32,8 @@ Carrier PR #46 source-free runs at exact reviewed head `d8705106829754389df5eab9
 - #1056 exact root Git tree: `8682e02837382a93841aa0a40e9a6fc09c3fb44b`. Three scoped files differ; zero commits behind the checked main.
 - #1082 exact root Git tree: `da9c7d945393e49a39db6bd853d6e4b9970bedfe`. Two scoped files differ; zero commits behind the checked main.
 - All five files pinned by the two carrier plans were re-fetched from these heads; all Git blob SHAs exactly match the existing plan blobs. The two plans were re-pinned to the new CMake/Parser blobs; both use `--no-tests=error` in targeted and full-suite CTest commands, with source-free negative regression tests.
-- Fresh source CI attempts are **NOT_EXECUTED**: #1056 [LLVM smoke 40749444863](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40749444863), #1082 [LLVM smoke 40749583177](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40749583177), governance [40739371331](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40739371331). Sampled jobs all failed with `runner_id=null` and `steps=null`. These do not prove native compiler, CTest, or governance regression outcomes.
+- On newly restacked source heads, native smoke [#1056 run 40760426440](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40760426440), [#1082 run 40760599756](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40760599756), and governance [run 40761123492](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40761123492) each failed **before runner admission**, with `steps=null`; **NOT_EXECUTED**. Neither feature received a native-source test verdict.
+- Earlier source CI attempts are also **NOT_EXECUTED**: #1056 [LLVM smoke 40749444863](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40749444863), #1082 [LLVM smoke 40749583177](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40749583177), governance [40739371331](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40739371331). Sampled jobs all failed with `runner_id=null` and `steps=null`. These do not prove native compiler, CTest, or governance regression outcomes.
 
 ## Mandatory fail-closed gates before any export
 
