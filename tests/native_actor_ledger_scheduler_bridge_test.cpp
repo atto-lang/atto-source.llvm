@@ -110,6 +110,18 @@ static void until(const std::atomic<int>& flag,const char* name) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
+static void until_completed(OresNativeActorScheduler* scheduler,
+                            std::uint64_t expected) {
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(8);
+    while (ores_native_actor_scheduler_completed(scheduler)<expected) {
+        if (std::chrono::steady_clock::now()>=deadline) {
+            std::fprintf(stderr,"TIMEOUT: expected completed=%llu\n",
+                static_cast<unsigned long long>(expected));
+            std::abort();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
 int main() {
     Fixture f;
     f.scheduler=ores_native_actor_scheduler_open_with_wakes(
@@ -131,6 +143,9 @@ int main() {
     CHECK(ores_native_actor_scheduler_send(f.scheduler,f.refs[1],9));
     until(f.b_deferred,"later message B ledgered but not executed");
     until(f.other_progress,"independent actor progress");
+    until_completed(f.scheduler,2);
+    CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==3);
+    CHECK(ores_native_actor_scheduler_completed(f.scheduler)==2);
     CHECK(f.a_first.load()==1 && f.a_resumed.load()==0 && f.b_guest.load()==0);
     CHECK(ores_native_actor_scheduler_retained_data_count(
         f.scheduler,f.refs[0])==1);
