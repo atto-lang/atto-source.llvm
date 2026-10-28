@@ -358,7 +358,9 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_aggregate_kind_failclosed.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
-    set_tests_properties(native_aggregate_shape_compiler_failclosed PROPERTIES TIMEOUT 90)
+    # 29 isolated compiler launches; allow a bounded cold LLVM toolchain
+    # startup budget without weakening individual 30-second subprocess caps.
+    set_tests_properties(native_aggregate_shape_compiler_failclosed PROPERTIES TIMEOUT 300)
     # Independent source-free adversarial proof of the compiler-negative
     # evidence admission harness. Never substitute this for native compiler run.
     add_test(NAME native_aggregate_negative_receipt_harness
