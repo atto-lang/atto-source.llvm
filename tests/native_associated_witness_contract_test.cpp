@@ -116,5 +116,21 @@ int main() {
         rejected([&] { (void)collisionSafe.resolve("a::b", "c",
                 {named("core", "bool")}); });
     }
+    {
+        // Distinct nominal *type* identities must not alias at the
+        // witness-overlap stage even if their raw "::" display strings do.
+        NativeAssociatedWitnessRegistry nominal;
+        nominal.define("meta", "DistinctNominal", 1, {"item"});
+        const auto first = named("a::b", "c");
+        const auto second = named("a", "b::c");
+        nominal.register_witness({"meta", "DistinctNominal", "meta", "meta.first",
+                {first}, {{"item", first}}});
+        nominal.register_witness({"meta", "DistinctNominal", "meta", "meta.second",
+                {second}, {{"item", second}}});
+        assert(nominal.resolve("meta", "DistinctNominal", {first})
+                .equations.at("item") == first);
+        assert(nominal.resolve("meta", "DistinctNominal", {second})
+                .equations.at("item") == second);
+    }
     return 0;
 }
