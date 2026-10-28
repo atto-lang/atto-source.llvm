@@ -101,9 +101,10 @@ public:
     // never accept this boolean from guest source/FFI. Selection is rechecked.
     Status claim(EventId id, bool authenticated) noexcept {
         if (!authenticated) return Status::Unauthorized;
-        if (closed_) return Status::Closed;
         auto* slot = find(id);
         if (!slot) return Status::Stale;
+        // Already-reserved mandatory CONTROL remains executable after STOP.
+        if (closed_ && slot->kind != Kind::Control) return Status::Closed;
         EventId selected{};
         const auto status = select(selected);
         if (status != Status::Ok) return status;
@@ -139,19 +140,22 @@ public:
     Status cancel(EventId id) noexcept {
         auto* slot = find(id);
         if (!slot) return Status::Stale;
+        if (slot->kind == Kind::Control) return Status::Unauthorized;
         if (slot->phase == Phase::Running) return Status::Busy;
         slot->phase = Phase::Empty;
         --live_;
         return Status::Ok;
     }
 
-    // Shutdown revokes all non-running work and fences late wake notices.
-    // An in-flight guest turn remains counted until finish() is called.
+    // STOP revokes ordinary unclaimed work, but preserves already-reserved
+    // supervisor CONTROL even if not running. Otherwise actor failure and
+    // cleanup notices could be lost. A running turn also stays counted.
     std::size_t stop() noexcept {
         closed_ = true;
         std::size_t revoked = 0;
         for (auto& slot : slots_) {
-            if (slot.phase == Phase::Empty || slot.phase == Phase::Running) continue;
+            if (slot.phase == Phase::Empty || slot.phase == Phase::Running ||
+                slot.kind == Kind::Control) continue;
             slot.phase = Phase::Empty;
             --live_;
             ++revoked;
