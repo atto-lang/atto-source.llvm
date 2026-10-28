@@ -34,6 +34,9 @@ typedef struct {
     atomic_int constructor_started;
     atomic_int stop_requested;
     atomic_int join_started;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    int guest_field_trace_enabled;
+#endif
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
 } SourceActor;
@@ -599,6 +602,15 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->last_result, 0);
 
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* Opt-in and bounded: only the compiled guest test enables this trace.
+     * Other fixtures retain their original allocation/performance behavior. */
+    const char* trace_flag = getenv("ORESLANG_TEST_TRACE_GUEST_FIELDS");
+    if (trace_flag && trace_flag[0] == '1' && trace_flag[1] == '\0') {
+        ensure(ores_actor_i64_heap_trace_enable(instance->heap, 256u));
+        instance->guest_field_trace_enabled = 1;
+    }
+#endif
     group.actors[slot] = instance;
     instance->ref =
         ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
@@ -925,6 +937,42 @@ void oreslang_source_actor_join_done(void* opaque) {
         == atomic_load_explicit(&instance->processed, memory_order_acquire));
     ensure(terminal.abandoned_control_messages == 0);
 
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (instance->guest_field_trace_enabled) {
+        OresActorHeapAccessEvent access[256];
+        OresActorHeapAccessSummary summary = {0};
+        ensure(ores_actor_i64_heap_trace_snapshot(instance->heap, access,
+            256u, &summary));
+        ensure(summary.enabled == 1u && summary.dropped == 0u
+            && summary.capacity == 256u && summary.stored > 0u);
+        const uint64_t heap_domain = access[0].domain;
+        ensure(heap_domain != 0u);
+        uint64_t inits = 0, reads = 0, writes = 0;
+        for (uint32_t i = 0; i < summary.stored; ++i) {
+            const OresActorHeapAccessEvent* e = &access[i];
+            ensure(e->domain == heap_domain && e->actor_id == instance->id
+                && e->incarnation == 1u && e->slot_generation == 1u);
+            if (e->kind == ORES_ACTOR_HEAP_ACCESS_FIELD_INIT) {
+                ensure(e->slot_index == 0u);
+                ++inits;
+            } else if (e->kind == ORES_ACTOR_HEAP_ACCESS_FIELD_READ) {
+                ensure(e->slot_index == 0u);
+                ++reads;
+            } else if (e->kind == ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE) {
+                ensure(e->slot_index == 0u);
+                ++writes;
+            }
+        }
+        ensure(inits == 1u && reads == terminal.processed_user_messages
+            && writes == terminal.processed_user_messages);
+        fprintf(stderr,
+            "SOURCE_ACTOR_HEAP_FIELDS actor=%llu heap=%llu slot=%zu init=%llu reads=%llu writes=%llu dropped=0\n",
+            (unsigned long long)instance->id,
+            (unsigned long long)heap_domain, slot,
+            (unsigned long long)inits, (unsigned long long)reads,
+            (unsigned long long)writes);
+    }
+#endif
     /*
      * get_done parity requires physical quiescence, not a logical stop bit.
      * Reclaim the actor-owned heap only after the VM terminal acknowledgement.
