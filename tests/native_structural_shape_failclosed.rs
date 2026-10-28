@@ -58,5 +58,23 @@ fn main() {
         assert!(output.stdout.iter().all(u8::is_ascii_whitespace), "{name}: emitted LLVM IR on rejection");
         assert!(!output.stderr.is_empty(), "{name}: missing diagnostic");
     }
-    println!("PASS: 1 native scalar positive control; {} structural negative, no-IR/no-artifact checks", probes.len());
+    // Distinguish a compiler-owned unsupported-structural diagnostic from
+    // accidental generic parser failure. These exact constructs must reject
+    // after recognizing their intended syntactic position.
+    let specific = [
+        ("callable", "structural fnc main(): int { return 1; }\n", "native structural callable requires"),
+        ("routine callable", "structural routine main(): int { return 1; }\n", "native structural callable requires"),
+        ("parameter", "fnc check(structural Shape s): int { return 1; }\n", "native structural parameter requires"),
+        ("routine parameter", "routine check(structural Shape s): int { return 1; }\n", "native structural parameter requires"),
+        ("procedural match", "pub fnc main(): int { do match 1 over on structural { id:int } v -> { return 1; } on _ -> { return 0; } end return 1; }\n", "native structural match expression requires"),
+        ("value match", "pub fnc main(): int { return match 1 over on structural { id:int } v -> { return 1; } on _ -> { return 0; } end; }\n", "native structural match expression requires"),
+    ];
+    for (name, src, expected) in specific {
+        let output = compile(&compiler, &tmp.0, src);
+        assert_eq!(output.status.code(), Some(1), "{name}: expected compiler-owned rejection");
+        assert!(output.stdout.is_empty(), "{name}: emitted LLVM IR on rejection");
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected),
+                "{name}: wrong or generic diagnostic: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    println!("PASS: 1 scalar positive, {} fail-closed shapes, {} owned diagnostics", probes.len(), specific.len());
 }
