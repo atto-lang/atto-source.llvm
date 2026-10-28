@@ -54,5 +54,30 @@ int main() {
     assert(ledger.active_connections() == 0);
     assert(ledger.fully_retired());
     assert(!ledger.admit_connection()); // no re-admission after retirement
+
+    // Recycle physical slots many times. Tickets must never be reused, and
+    // late close/stream callbacks for the previous incarnation must fail.
+    Ledger reuse({91, 4});
+    std::uint64_t last_ticket = 0;
+    for (int i = 0; i < 10000; ++i) {
+        auto conn = reuse.admit_connection();
+        assert(conn && conn->ticket > last_ticket);
+        last_ticket = conn->ticket;
+        auto old_stream = reuse.admit_stream(*conn, Ledger::Direction::Bidirectional);
+        assert(old_stream);
+        assert(reuse.settle_stream(*old_stream));
+        auto newer_stream = reuse.admit_stream(*conn, Ledger::Direction::Bidirectional);
+        assert(newer_stream && newer_stream->ticket != old_stream->ticket);
+        assert(!reuse.settle_stream(*old_stream));
+        assert(reuse.settle_stream(*newer_stream));
+        assert(reuse.begin_close(*conn));
+        assert(reuse.settle_connection(*conn));
+        assert(!reuse.begin_close(*conn));
+        assert(!reuse.settle_connection(*conn));
+    }
+    assert(reuse.active_connections() == 0);
+    assert(reuse.active_streams() == 0);
+    reuse.begin_actor_retirement();
+    assert(reuse.fully_retired());
     std::cout << "QUIC native host lease ledger: bounded retirement checks passed\n";
 }
