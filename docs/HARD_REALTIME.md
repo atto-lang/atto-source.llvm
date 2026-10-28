@@ -255,3 +255,63 @@ bind source continuations in `NativeContinuationStore`, and make teardown
 wait for the entire native resource/lease retirement barrier. Record real
 `due/expiry/ready/guest-start/guest-end` timestamps. This requires an
 independent scheduler integration review and source guest execution proof.
+
+
+## Actual C11 native actor carrier bridge (draft, executable host integration)
+
+`NativeActorLedgerBridge<EventSlots, NoticeSlots>` now connects the bounded
+actor-private logical ledger to **actual** native scheduler callback APIs:
+`ores_native_actor_scheduler_is_current_actor`,
+`ores_native_actor_scheduler_try_send`, and
+`ores_native_actor_scheduler_publish_control`.
+This remains an opt-in host-facing test substrate: it does **not** change
+production actor dispatch automatically or lower guest Oreslang `await`.
+
+The bridge reserves one actor-side event credit **before** native mail
+admission, with one ledger slot held back for supervisor CONTROL.
+It buffers payloads in fixed storage, allows no ordinary actor event to
+overtake a suspended logical handler by default, and requires authenticated
+native-carrier execution before touching the actor ledger.
+Future and timer producer threads enqueue opaque `(actor_id, incarnation,
+sequence)` notices in the existing fixed-size MPSC CONTROL ingress; they
+cannot borrow actor heap pointers or execute callbacks directly.
+
+`publish_control` may fail if the native actor's single reserved CONTROL
+slot is already held by supervisor work. Such an event returns **RetryRequired**
+while keeping its notice in the bounded ingress; the owner must call
+`retry_kick()` after the competing CONTROL turn or provide a separately
+proven bounded automatic retry service. A failed notification is never
+counted as a successful resume. Coalesced wakes are rechecked when the
+native CONTROL turn consumes the ingress. The native CONTROL callback
+routes non-timer supervisor envelopes separately, preserving urgent
+supervisory precedence. Actor STOP and physical completion must be fenced;
+`retire_after_native_done` additionally requires producer quiescence and
+does **not** attest foreign-loan/FFI/resource cleanup by itself.
+
+**Actual source compiled host regression:**
+`tests/native_actor_scheduler_ledger_bridge_test.cpp` links the real
+`NativeActorScheduler.c`, not a fabricated simulated callback owner.
+The test creates actors A and B with two prestarted carriers, captures A's
+suspended logical event, admits subsequent mail and a timer event, checks
+that B can run independently, checks that queued supervisor CONTROL wins
+without re-entering A, forces timer/Future wake backpressure when native
+CONTROL is saturated, retries the retained notices, and checks A resumes
+before its timer and later mail. It also checks stale wake handling,
+physical DONE and a synthetic `DeadlineMissed` outcome. The test deliberately
+blocks A's carrier in one adversarial **host-only** case; this is not a legal
+hard-RT guest execution pattern.
+
+A focused exact-source-file-slice test on the separately verified **private**
+carrier repository `honeypot-r-us-test/hnpt-lib-core` uses no cross-organization
+GITHUB_TOKEN checkout. Every mirrored C/C++ file must match its Git source
+blob ID, and GCC, Clang, and Clang ASan/UBSan compile and execute the real
+native scheduler/bridge test. This is narrower than a complete exact-tree
+source AOT run, and hardware deadlines remain unqualified.
+
+For a qualified hard-RT deployment, the bridge's bounded multi-event
+`run_ready` host loop must be replaced or proven against a specific
+per-carrier execution budget; one actor lease is not itself an RT dispatch
+reservation. Genuine guest continuation frames, cancellation/STOP races,
+automatic CONTROL retry progress under saturation, precise guest prologue
+timestamping, priority/EDF admission, WCET and target OS timer driver remain
+necessary **before** claiming start-time bounds.
