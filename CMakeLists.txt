@@ -1681,6 +1681,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_monotonic_timer_admission_and_cancel_race
         PROPERTIES TIMEOUT 20)
 
+    # Fixed-capacity native RT timing substrate. Deterministic source-only
+    # contract tests; not OS wakeup latency or certified guest execution.
+    add_executable(oreslang-native-realtime-timer-queue-test
+        tests/native_realtime_timer_queue_test.cpp)
+    target_include_directories(oreslang-native-realtime-timer-queue-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-realtime-timer-queue-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-realtime-timer-queue-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_realtime_timer_fixed_pool_and_deadline_start
+        COMMAND oreslang-native-realtime-timer-queue-test)
+    set_tests_properties(native_realtime_timer_fixed_pool_and_deadline_start
+        PROPERTIES TIMEOUT 20)
+
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
