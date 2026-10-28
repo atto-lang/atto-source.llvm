@@ -105,7 +105,7 @@ def main():
         control_dir = root / "_positive_control"
         control_dir.mkdir()
         control = control_dir / "scalar-positive.ores"
-        control_bytes = b"pub fnc main(): int { return 42; }\\n".replace(b"\\\\n", b"\\n")
+        control_bytes = ("pub fnc main(): int { return 42; }" + chr(10)).encode("utf-8")
         control.write_bytes(control_bytes)
         control_result = subprocess.run([args.compiler, str(control)],
                                         cwd=control_dir, capture_output=True,
