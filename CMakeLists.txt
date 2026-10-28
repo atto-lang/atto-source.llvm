@@ -398,6 +398,7 @@ if(BUILD_TESTING)
             "-DLLVM_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
             "-DNATIVE_CLANG=${ORE_SOURCE_I64_CLANG}"
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/native-named-bitxor"
+            "-DJAVA_I64_CONTRACT=${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/strict-named-integer-arithmetic-v1.json"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_named_bitxor_guest.cmake")
     set_tests_properties(native_named_integer_bitxor_guest_execution
         PROPERTIES TIMEOUT 120)
