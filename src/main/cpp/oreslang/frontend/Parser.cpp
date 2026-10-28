@@ -3114,7 +3114,35 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return conditional(); }
+    std::unique_ptr<Expression> expression() {
+        auto input = conditional();
+        std::size_t stages = 0;
+        while (accept("|>")) {
+            if (++stages > 32)
+                fail("native scalar value pipeline stage limit exceeded (32)");
+            const auto offset = token_.offset;
+            // Scalar functional |> is a left-to-right value invocation.
+            // Preserve the original expression exactly once as argument 0.
+            // Existing native call type/arity checks validate every stage.
+            auto stage = make_expression(Expression::Kind::Call, offset);
+            stage->name = identifier();
+            stage->arguments.push_back(std::move(input));
+            stage->argument_names.emplace_back();
+            if (accept("(")) {
+                if (!accept(")")) {
+                    do {
+                        if (named_argument_ahead())
+                            fail("native scalar value pipeline requires positional stage arguments");
+                        stage->arguments.push_back(expression());
+                        stage->argument_names.emplace_back();
+                    } while (accept(","));
+                    require(")");
+                }
+            }
+            input = std::move(stage);
+        }
+        return input;
+    }
 
     std::unique_ptr<Expression> conditional() {
         if (++conditional_depth_ > kMaxNativeExpressionDepth) {
