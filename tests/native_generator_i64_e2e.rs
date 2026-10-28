@@ -189,8 +189,10 @@ gen* values(): Iterator<int> { yield 1; return; }\n";
     let arity_overload_ir = String::from_utf8_lossy(&arity_overload.stdout);
     assert!(arity_overload_ir.contains("define i64 @values("),
         "ordinary arity-1 function missing from mixed generator program");
-    assert!(arity_overload_ir.contains("define i32 @oreslang_rt_gen_values_init("),
-        "zero-arity generator ABI missing from mixed generator program");
+    assert!(arity_overload_ir.contains("define internal i32 @oreslang_rt_gen_values_init("),
+        "private zero-arity generator ABI missing from mixed generator program");
+    assert!(!arity_overload_ir.contains("define i32 @oreslang_rt_gen_values_init("),
+        "private generator ABI must not be exported");
 
     let mut too_many = String::new();
     for i in 0..513 {
