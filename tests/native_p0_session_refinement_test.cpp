@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -107,5 +108,22 @@ int main() {
             assert(item.minimum == a * b && item.maximum == a * b);
         }
     }
+    const NativeFunctionRefinement fakeEffect{
+        "ledger.fake", {}, {0, 1},
+        {static_cast<NativeRefinementEffect>(255)}
+    };
+    must_reject([&] { require_native_function_refinement_contract(fakeEffect); });
+    must_reject([&] {
+        require_native_refined_call(contract, {{1, 10}, {2, 3}},
+                {static_cast<NativeRefinementEffect>(255)});
+    });
+    const NativeFunctionRefinement blank{
+        "  ", {}, {0, 1}, {NativeRefinementEffect::Io}
+    };
+    must_reject([&] { require_native_function_refinement_contract(blank); });
+    const NativeFunctionRefinement tooLong{
+        std::string(257, 'x'), {}, {0, 1}, {}
+    };
+    must_reject([&] { require_native_function_refinement_contract(tooLong); });
     return 0;
 }
