@@ -220,9 +220,13 @@ The strict default matches Java actor continuation draft #161:
    Duplicate wakeups and stale cancellations cannot create extra executions.
    An opt-in reentrancy policy is **not implemented**; it will require
    static proof that borrowed/critical actor state is safe across overtaking.
-5. STOP fences pending/ready/suspended event identities but retains RUNNING
-   physical-turn accounting. `physically_retired()` is one **ledger-only**
-   prerequisite, not an OS/actor/FFI resource retirement receipt.
+5. STOP revokes ordinary pending/ready/suspended event identities but
+   retains RUNNING physical-turn accounting **and already-reserved mandatory
+   supervisor CONTROL**. The latter must execute and retire under the exclusive
+   actor lease, not disappear during shutdown. Timer callbacks and ordinary
+   wakes are *not* immortal supervisor CONTROL and must be revoked on STOP.
+   `physically_retired()` is one **ledger-only** prerequisite, not an
+   OS/actor/FFI resource retirement receipt.
 6. An unresolved default-serialized await is an **unbounded deadline blocker**
    absent a separately proven Future completion bound; fail strict hard-RT
    admission rather than claiming a tight callback start. The
