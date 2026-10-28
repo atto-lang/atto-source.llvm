@@ -10,6 +10,7 @@ on:
       - tests/native_actor_retained_data_stop_test.c
       - tests/native_actor_retained_data_ordering_test.c
       - tests/native_actor_retained_cleanup_autoadmit_test.c
+      - tests/native_actor_retained_cleanup_unused_reservation_test.c
       - tests/native_actor_execution_ledger_test.cpp
       - docs/ACTOR_EXECUTION_LEDGER_V1.md
       - CMakeLists.txt
@@ -48,7 +49,8 @@ jobs:
             tests/native_actor_ledger_scheduler_bridge_test.cpp \
             tests/native_actor_retained_data_stop_test.c \
             tests/native_actor_retained_data_ordering_test.c \
-            tests/native_actor_retained_cleanup_autoadmit_test.c; do
+            tests/native_actor_retained_cleanup_autoadmit_test.c \
+            tests/native_actor_retained_cleanup_unused_reservation_test.c; do
             expected="$(git rev-parse "HEAD:$path")"
             actual="$(git hash-object "$path")"
             test "$actual" = "$expected"
@@ -133,6 +135,18 @@ jobs:
               -o "build/actor-ledger-gate/prepaid-cleanup-$tool"
             "build/actor-ledger-gate/prepaid-cleanup-$tool"
           done
+      - name: Normal Future resumes and returns unused cleanup credit
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_retained_cleanup_unused_reservation_test.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/actor-ledger-gate/unused-cleanup-$tool"
+            "build/actor-ledger-gate/unused-cleanup-$tool"
+          done
       - name: Native scheduler bridge Clang ASan and UBSan
         shell: bash
         env:
@@ -172,3 +186,10 @@ jobs:
             build/actor-ledger-gate/scheduler-sanitized.o \
             -o build/actor-ledger-gate/prepaid-cleanup-sanitized
           build/actor-ledger-gate/prepaid-cleanup-sanitized
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp \
+            tests/native_actor_retained_cleanup_unused_reservation_test.c \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/unused-cleanup-sanitized
+          build/actor-ledger-gate/unused-cleanup-sanitized
