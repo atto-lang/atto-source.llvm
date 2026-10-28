@@ -1717,6 +1717,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_retained_data_blocks_later_mail
         PROPERTIES TIMEOUT 25)
 
+    # A Future that resumes normally must release a previously reserved
+    # STOP cleanup credit without counting an unexecuted cleanup callback.
+    add_executable(oreslang-native-retained-unused-cleanup-test
+        tests/native_actor_retained_cleanup_unused_reservation_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-unused-cleanup-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-unused-cleanup-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-unused-cleanup-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_retained_cleanup_unused_credit_return
+        COMMAND oreslang-native-retained-unused-cleanup-test)
+    set_tests_properties(native_actor_retained_cleanup_unused_credit_return
+        PROPERTIES TIMEOUT 25)
+
     # STOP may pre-activate a reserved actor-owner cleanup credit without
     # any previously queued supervisor CONTROL or Future WAKE turn.
     # The test also verifies fail-closed physical cleanup quarantine.
