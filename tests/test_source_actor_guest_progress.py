@@ -18,17 +18,17 @@ def receipt(n, result):
 
 def observed():
     lines = []
-    for slot, actor, values in (
-        (0, 17, [(1, 2), (2, 8), (3, 22), (4, 52)]),
-        (1, 19, [(5, 10), (6, 32), (7, 78), (8, 172)]),
+    for slot, actor, heap, values in (
+        (0, 17, 71, [(1, 2), (2, 8), (3, 22), (4, 52)]),
+        (1, 19, 73, [(5, 10), (6, 32), (7, 78), (8, 172)]),
     ):
         for seq, (payload, value) in enumerate(values, 1):
-            lines.append(f"SOURCE_ACTOR_GUEST_HANDLER actor={actor} slot={slot} "
+            lines.append(f"SOURCE_ACTOR_GUEST_HANDLER actor={actor} heap={heap} slot={slot} "
                          f"seq={seq} payload={payload} result={value}")
     lines.append("SOURCE_ACTOR_SPAWN_STOP_VERIFIED "
                  "constructor_on_worker=1 released=1 ready=1 "
                  "accepted=4 processed=4 abandoned=0 last=52")
-    lines.append("SOURCE_ACTOR_GUEST_HANDLER actor=19 slot=1 "
+    lines.append("SOURCE_ACTOR_GUEST_HANDLER actor=19 heap=73 slot=1 "
                  "seq=5 payload=9 result=362")
     lines.append("SOURCE_ACTOR_SPAWN_STOP_VERIFIED "
                  "constructor_on_worker=1 released=1 ready=1 "
