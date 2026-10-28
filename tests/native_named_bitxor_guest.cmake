@@ -33,9 +33,9 @@ execute_process(COMMAND "${executable}" RESULT_VARIABLE guest_status
 if(NOT "${guest_status}" STREQUAL "6")
     message(FATAL_ERROR "Native guest Integer.bitXor expected OS exit 6, got ${guest_status}: ${guest_stderr} ${guest_stdout}")
 endif()
-# Additional exact Java strict signed64 XOR result vectors. OS return status
-# is sufficient for 0 and -1 (255); the first positive case exercised 5^3=6
-# and checked that the frontend emitted a real xor i64 instruction.
+# Additional exact Java strict signed64 XOR result vectors. Compare the
+# full 64-bit result *inside* the guest and return status 0 for equality.
+# OS exit status alone truncates on POSIX and cannot prove 64-bit equality.
 foreach(case_name IN ITEMS zero negative min_max)
     if(case_name STREQUAL "zero")
         set(left "0")
@@ -44,7 +44,7 @@ foreach(case_name IN ITEMS zero negative min_max)
     elseif(case_name STREQUAL "negative")
         set(left "-1")
         set(right "0")
-        set(expected "255")
+        set(expected "-1")
     else()
         set(left "-9223372036854775808")
         set(right "9223372036854775807")
@@ -53,7 +53,7 @@ foreach(case_name IN ITEMS zero negative min_max)
     set(source "${WORK_DIR}/xor-${case_name}.ores")
     set(llvm_ir "${WORK_DIR}/xor-${case_name}.ll")
     set(binary "${WORK_DIR}/xor-${case_name}")
-    file(WRITE "${source}" "fnc main():int { return Integer.bitXor(${left},${right}); }\n")
+    file(WRITE "${source}" "fnc main():int { return (Integer.bitXor(${left},${right}) == ${expected}) ? 0 : 1; }\n")
     execute_process(COMMAND "${LLVM_COMPILER}" "${source}"
         RESULT_VARIABLE result OUTPUT_VARIABLE result_ir ERROR_VARIABLE result_err TIMEOUT 30)
     if(NOT "${result}" STREQUAL "0")
@@ -67,8 +67,8 @@ foreach(case_name IN ITEMS zero negative min_max)
     endif()
     execute_process(COMMAND "${binary}" RESULT_VARIABLE exit_status
         OUTPUT_VARIABLE program_out ERROR_VARIABLE program_err TIMEOUT 15)
-    if(NOT "${exit_status}" STREQUAL "${expected}")
-        message(FATAL_ERROR "Native Java XOR ${case_name}: expected ${expected}, got ${exit_status}; ${program_err}")
+    if(NOT "${exit_status}" STREQUAL "0")
+        message(FATAL_ERROR "Native Java XOR ${case_name}: expected exact 64-bit equality, got OS exit ${exit_status}; ${program_err}")
     endif()
 endforeach()
 # All four negative cases must fail in compiler/typecheck before LLVM IR.
