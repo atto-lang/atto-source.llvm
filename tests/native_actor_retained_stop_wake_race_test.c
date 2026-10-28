@@ -130,6 +130,7 @@ int main(void) {
         CHECK(ores_native_actor_scheduler_terminal_state(
             f.scheduler,f.actor,&terminal));
         CHECK(terminal.kind==ORES_NATIVE_TERMINATION_STOPPED);
+        CHECK(ores_native_actor_scheduler_control_completed(f.scheduler)==0);
         CHECK(terminal.accepted_user_messages==1);
         CHECK(terminal.processed_user_messages+terminal.abandoned_user_messages==1);
         CHECK(terminal.processed_user_messages==(uint64_t)atomic_load(&f.wake_count));
