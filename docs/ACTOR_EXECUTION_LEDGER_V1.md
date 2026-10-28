@@ -61,47 +61,42 @@ the independent actor executes; an authenticated wake resumes A, then B.
 The original scheduler's generation-checked escrow still linearizes
 transfer/publish and rejects forged/duplicate wake notices.
 
-## Retained native DATA receipts (new opt-in scheduler path)
+## Retained native DATA receipts and non-reentrant scheduler eligibility
 
-The previous bridge exposed a false completion: `on_message(B)` could return
-while the guest turn remained queued behind suspended A. The **opt-in native
-retained DATA protocol** now addresses the scheduler's accounting portion.
+`NativeActorScheduler.c` now has an opt-in retained DATA ticket for the
+original running handler A, not just a deferred B callback.
 
-- During an authenticated DATA callback, `retain_current_data()` reserves a
-  preallocated slot and returns an immutable ticket
-  `(actor ref, actor generation, slot, slot generation, execution ID)`.
-  A second retention attempt, non-DATA callback, unauthenticated thread, or
-  exhausted pool fails closed without changing the counters.
-- When that callback returns, the scheduler leaves DATA B's accepted credit
-  and `outstanding` count **unchanged**, and does **not** increment
-  `processed_user_messages` or `completed`.
-- `queued + active + retained_live` shares the actor's existing bounded
-  mailbox capacity. Retained messages are not themselves runnable, and do not
-  pin a carrier. A separate admitted WAKE/CONTROL still has its own credit.
-- Once a later authenticated physical actor turn has finished B's guest code,
-  `complete_retained_data(ticket)` atomically consumes that scheduler credit,
-  increments processed/completed, and releases quota. Cancellation after
-  *proven physical frame cleanup* instead calls `abandon_retained_data` and
-  increments the terminal abandoned counter, without claiming execution.
-- Duplicate, stale slot/event generation, forged actor incarnation and
-  off-actor completion attempts cannot settle a retained ticket. The precise
-  moment the guest frame is physically retired is a **trusted host obligation**;
-  the C scheduler cannot inspect compiler-owned guest borrow lifetimes.
-- STOP, terminal publication, `wait_done`, `drain`, and `try_destroy`
-  remain fenced while a retained receipt is unsettled. A pre-admitted
-  supervisor CONTROL cleanup turn may settle one after STOP.
+- During authenticated DATA handling of A, `retain_current_data()` allocates
+  a preallocated ticket indexed by actor incarnation, slot generation and
+  execution ID. The logical A frame remains alive after the C DATA callback
+  returns. Its `outstanding` count and bounded mailbox credit stay reserved;
+  neither `processed_user_messages` nor `completed` advances.
+- Both DATA selection paths in `find_ready()` refuse to dispatch later mail
+  while that actor has `retained_live != 0`. The bounded scheduler mailbox
+  *still owns B's queued envelope*, including its receipt and quota.
+  Supervisor CONTROL and already-authorized continuation WAKE bypass this
+  DATA eligibility gate, but never execute alongside another carrier for the
+  actor. Independent actors can proceed normally.
+- The authenticated WAKE for A resumes and physically exits the same logical
+  handler. Only then does `complete_retained_data(A)` consume A's pending
+  ticket, record processed/completed and release its credit. The scheduler
+  can subsequently dispatch B as ordinary DATA on a **separate actor turn**.
+- Cancellation after proven physical A-frame cleanup instead invokes
+  `abandon_retained_data(A)`. No off-actor timer/Future producer can perform
+  the settlement; stale incarnations, forged slot generations, duplicate ACKs
+  and premature host attempts fail closed.
+- A separate STOP test admits B while A is retained, observes another DATA
+  rejection at full quota, seals the queued B, and uses an already-admitted
+  supervisor CONTROL callback to acknowledge A's physical abandonment.
+  Terminal counts reconcile processed and abandoned, and cannot be published
+  until A's retained credit is settled.
 
-The native integration tests cover two actor lanes with A suspended and B
-deferred, independent actor progress, a genuine scheduler WAKE, exactly-once
-B completion and a separate C STOP / supervisor CONTROL abandonment scenario.
-
-**Remaining production gap:** Retained-data APIs are a trusted native
-scheduler substrate, not a compiler-generated guest dispatcher. The legacy
-DATA callback still receives B, and the host bridge manually deposits B in
-the actor-local ledger. A future integrated event-ingress ABI must co-admit
-the scheduler ticket and actor ledger entry, retain guest frame/heap loans,
-dispatch eligible turns without an intermediate guest execution, and detect
-cross-ledger divergence as a fatal contract violation.
+The test bridge is still a **trusted host protocol**, not a compiler-generated
+Oreslang guest continuation. The native code cannot independently prove that
+the embedding has actually exited its guest frames or released borrows.
+The build, sanitizer and concurrent workload checks must execute on the exact
+source tree before this draft can be advanced. A bounded scheduler-ready
+lane does not yet establish an RT deadline-to-first-guest-instruction proof.
 
 **STOP liveness gap:** If a retained frame exists but STOP/teardown wins before
 a cleanup turn is independently admitted, no new guest callback may be
