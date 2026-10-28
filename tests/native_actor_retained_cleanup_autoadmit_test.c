@@ -96,6 +96,7 @@ static void run_case(int cleanup_success) {
         CHECK(terminal.abandoned_user_messages==1);
         CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==2);
         CHECK(ores_native_actor_scheduler_completed(f.scheduler)==1);
+        CHECK(ores_native_actor_scheduler_control_completed(f.scheduler)==0);
         CHECK(ores_native_actor_scheduler_drain(f.scheduler));
         ores_native_actor_scheduler_retire(f.scheduler);
         CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
