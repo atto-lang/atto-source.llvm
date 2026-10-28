@@ -199,7 +199,7 @@ deadline proof. Keep draft and keep hard-RT feature admission disabled.
 The actor must independently decide **which logical turn is eligible next**.
 The scheduler owns runnable actor tokens, OS clock registration, priority and
 physical carriers; the actor-owned region owns the bounded `ActorExecutionLedger`
-with `(actor_id, incarnation, event_sequence)` and turn state. A notification
+with `(scheduler_domain, actor_id, incarnation, event_sequence)` and turn state. A notification
 is **not** an instruction to execute its callback immediately.
 
 The strict default matches Java actor continuation draft #161:
@@ -272,8 +272,9 @@ admission, with one ledger slot held back for supervisor CONTROL.
 It buffers payloads in fixed storage, allows no ordinary actor event to
 overtake a suspended logical handler by default, and requires authenticated
 native-carrier execution before touching the actor ledger.
-Future and timer producer threads enqueue opaque `(actor_id, incarnation,
-sequence)` notices in the existing fixed-size MPSC CONTROL ingress; they
+Future and timer producer threads enqueue opaque `(scheduler_domain,
+actor_id, incarnation, sequence)` notices in the existing fixed-size
+MPSC CONTROL ingress; they
 cannot borrow actor heap pointers or execute callbacks directly.
 
 `publish_control` may fail if the native actor's single reserved CONTROL
@@ -287,6 +288,15 @@ routes non-timer supervisor envelopes separately, preserving urgent
 supervisory precedence. Actor STOP and physical completion must be fenced;
 `retire_after_native_done` additionally requires producer quiescence and
 does **not** attest foreign-loan/FFI/resource cleanup by itself.
+
+
+This identity must include the **native scheduler domain**, because actor slot
+numbers and incarnation counters are only unique within a scheduler instance.
+A notice from another scheduler with the same actor slot/generation/sequence
+must fail authentication before reaching the actor ledger. The bridge now
+rejects cross-scheduler notices and exposes actor-ledger snapshots only while
+the caller holds an authenticated native actor carrier lease; otherwise
+return failure rather than a raw reference to actor-owned bookkeeping.
 
 **Actual source compiled host regression:**
 `tests/native_actor_scheduler_ledger_bridge_test.cpp` links the real
