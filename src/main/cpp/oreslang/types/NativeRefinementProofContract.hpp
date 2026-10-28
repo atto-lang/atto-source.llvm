@@ -1,5 +1,8 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <set>
@@ -11,6 +14,39 @@ namespace oreslang::types {
 
 // Strict native signed-i64 interval pre/post checker. This helper deliberately
 // does not prove arbitrary predicates, full CFG return coverage or codegen.
+
+// Portable C++17 checked i64 arithmetic: all overflow is detected *before*
+// executing signed operations. Neither __int128 nor platform builtins are
+// required; strict-AOT targets cannot rely on undefined signed overflow.
+inline std::int64_t add_i64_checked(std::int64_t a, std::int64_t b) {
+    constexpr auto lo = std::numeric_limits<std::int64_t>::min();
+    constexpr auto hi = std::numeric_limits<std::int64_t>::max();
+    if ((b > 0 && a > hi - b) || (b < 0 && a < lo - b))
+        throw std::invalid_argument("i64 interval add overflow");
+    return a + b;
+}
+inline std::int64_t sub_i64_checked(std::int64_t a, std::int64_t b) {
+    constexpr auto lo = std::numeric_limits<std::int64_t>::min();
+    constexpr auto hi = std::numeric_limits<std::int64_t>::max();
+    if ((b < 0 && a > hi + b) || (b > 0 && a < lo + b))
+        throw std::invalid_argument("i64 interval sub overflow");
+    return a - b;
+}
+inline std::int64_t mul_i64_checked(std::int64_t a, std::int64_t b) {
+    constexpr auto lo = std::numeric_limits<std::int64_t>::min();
+    constexpr auto hi = std::numeric_limits<std::int64_t>::max();
+    if ((a == lo && b == -1) || (b == lo && a == -1))
+        throw std::invalid_argument("i64 interval mul overflow");
+    if (a > 0) {
+        if ((b > 0 && a > hi / b) || (b < 0 && b < lo / a))
+            throw std::invalid_argument("i64 interval mul overflow");
+    } else if (a < 0) {
+        if ((b > 0 && a < lo / b) || (b < 0 && a < hi / b))
+            throw std::invalid_argument("i64 interval mul overflow");
+    }
+    return a * b;
+}
+
 struct NativeI64Interval {
     std::int64_t minimum;
     std::int64_t maximum;
@@ -20,6 +56,24 @@ struct NativeI64Interval {
     }
     bool entails(const NativeI64Interval& desired) const noexcept {
         return minimum >= desired.minimum && maximum <= desired.maximum;
+    }
+    NativeI64Interval plus(const NativeI64Interval& other) const {
+        return {add_i64_checked(minimum, other.minimum),
+                add_i64_checked(maximum, other.maximum)};
+    }
+    NativeI64Interval minus(const NativeI64Interval& other) const {
+        return {sub_i64_checked(minimum, other.maximum),
+                sub_i64_checked(maximum, other.minimum)};
+    }
+    NativeI64Interval times(const NativeI64Interval& other) const {
+        std::array<std::int64_t, 4> endpoints{
+            mul_i64_checked(minimum, other.minimum),
+            mul_i64_checked(minimum, other.maximum),
+            mul_i64_checked(maximum, other.minimum),
+            mul_i64_checked(maximum, other.maximum)
+        };
+        const auto bounds = std::minmax_element(endpoints.begin(), endpoints.end());
+        return {*bounds.first, *bounds.second};
     }
 };
 
