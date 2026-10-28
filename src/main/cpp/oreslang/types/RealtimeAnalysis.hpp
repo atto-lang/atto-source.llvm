@@ -217,13 +217,41 @@ inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
         scan_expression(argument.get(), facts);
         if (facts.call_budget_exceeded) return;
     }
-    if (binding.heap_owned || binding.int_array)
+    if (binding.heap_owned || binding.int_array || !binding.sum_type.empty())
         add_effect(facts, FunctionEffect::Alloc);
     // Materializing an immutable class view allocates a root descriptor even
     // when its initializer is only a named value, rather than a constructor.
     if (binding.record_view && !binding.class_name.empty()) {
         add_effect(facts, FunctionEffect::Alloc);
         facts.unsupported_runtime = true;
+    }
+}
+
+// A stack-local nominal constructor can still execute field initializer
+// expressions (and allocate implicit owned arrays/sum descriptors). They
+// live on the ClassDecl, not on LocalBinding.initializer, so scanning only
+// constructor call arguments would incorrectly certify an allocating path.
+inline void scan_constructor_fields(
+        const LocalBinding& binding, const Program& program, DirectFacts& facts) {
+    const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+        [&](const ClassDecl& candidate) { return candidate.name == binding.class_name; });
+    if (cls == program.classes.end()) {
+        facts.unsupported_runtime = true;
+        return;
+    }
+    for (const ClassField& field : cls->fields) {
+        // Constructors may allocate implicitly even without an initializer
+        // expression: owned arrays, sum storage and nested nominal records
+        // have no currently certified fixed-capacity hard-RT resource proof.
+        if (field.int_array || !field.sum_type.empty() || !field.class_name.empty())
+            add_effect(facts, FunctionEffect::Alloc);
+        if (field.int_array) continue;
+        if (!field.initializer_expression) {
+            facts.unsupported_runtime = true;
+            continue;
+        }
+        scan_expression(field.initializer_expression.get(), facts);
+        if (facts.call_budget_exceeded) return;
     }
 }
 
@@ -266,7 +294,8 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
     }
 }
 
-inline DirectFacts direct_facts(const Function& function, std::size_t call_limit) {
+inline DirectFacts direct_facts(const Function& function, std::size_t call_limit,
+                                const Program* program = nullptr) {
     DirectFacts facts;
     facts.call_limit = call_limit;
     // Async/task/pipeline and lifecycle-await syntax is represented in dedicated
@@ -298,6 +327,13 @@ inline DirectFacts direct_facts(const Function& function, std::size_t call_limit
     for (const auto& local : function.locals) {
         scan_binding(local, facts);
         if (facts.call_budget_exceeded) return facts;
+        if (local.new_class) {
+            // A standalone direct-facts check without its class table cannot
+            // certify constructor defaults; the whole-program check provides it.
+            if (!program) facts.unsupported_runtime = true;
+            else scan_constructor_fields(local, *program, facts);
+            if (facts.call_budget_exceeded) return facts;
+        }
     }
     for (const auto& statement : function.statements) {
         scan_statement(statement, facts);
@@ -439,7 +475,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     for (const auto& [key, function] : functions) {
         const auto remaining_edges =
             realtime_detail::kMaxRealtimeCallEdges - call_edges;
-        auto facts = realtime_detail::direct_facts(*function, remaining_edges);
+        auto facts = realtime_detail::direct_facts(*function, remaining_edges, &program);
         if (facts.call_budget_exceeded) {
             report.diagnostic = "RT003_WCET_UNPROVEN";
             report.reason = "hard-RT call-edge count exceeds compiler qualification ceiling";

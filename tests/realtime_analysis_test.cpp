@@ -291,6 +291,88 @@ int main() {
                 "unsafe signed remainder must report panic/cleanup risk");
     }
 
+    // Constructor defaults are source-executable expressions stored on the
+    // class declaration, not the local binding. They must enter the hard-RT
+    // effect graph even if the function returns a pure scalar.
+    {
+        auto class_report = [](ClassField field, bool declared = true) {
+            Program program;
+            if (declared) {
+                ClassDecl cls;
+                cls.name = "Box";
+                cls.fields.push_back(std::move(field));
+                program.classes.push_back(std::move(cls));
+            }
+            Function main = pure("main", integer(42));
+            LocalBinding local;
+            local.name = "box";
+            local.class_name = "Box";
+            local.new_class = true;
+            main.locals.push_back(std::move(local));
+            program.functions.push_back(std::move(main));
+            return analyze_native_hard_rt(program);
+        };
+
+        ClassField scalar_field;
+        scalar_field.name = "value";
+        scalar_field.initializer_expression = integer(3);
+        const auto scalar_report = class_report(std::move(scalar_field));
+        require(scalar_report.source_admitted,
+                "scalar-only stack constructor should remain RT admissible");
+
+        ClassField string_field;
+        string_field.name = "text";
+        string_field.scalar_type = ScalarType::String;
+        string_field.initializer_expression = std::make_unique<Expression>();
+        string_field.initializer_expression->kind = Expression::Kind::String;
+        const auto string_report = class_report(std::move(string_field));
+        require(!string_report.source_admitted &&
+                    string_report.transitive_effects.has(FunctionEffect::Alloc),
+                "hidden String field initializer must count RT allocation");
+
+        ClassField sum_field;
+        sum_field.name = "choice";
+        sum_field.sum_type = "MaybeInt";
+        sum_field.initializer_expression = std::make_unique<Expression>();
+        sum_field.initializer_expression->kind = Expression::Kind::SumConstruct;
+        sum_field.initializer_expression->sum_type = "MaybeInt";
+        sum_field.initializer_expression->name = "Some";
+        sum_field.initializer_expression->arguments.push_back(integer(7));
+        const auto sum_report = class_report(std::move(sum_field));
+        require(!sum_report.source_admitted &&
+                    sum_report.transitive_effects.has(FunctionEffect::Alloc),
+                "implicit sum field storage must count RT allocation");
+
+        ClassField array_field;
+        array_field.name = "items";
+        array_field.int_array = true;
+        const auto array_report = class_report(std::move(array_field));
+        require(!array_report.source_admitted &&
+                    array_report.transitive_effects.has(FunctionEffect::Alloc),
+                "implicit owned-array field must count RT allocation");
+
+        ClassField uninitialized_field;
+        uninitialized_field.name = "missing";
+        const auto uninitialized_report = class_report(std::move(uninitialized_field));
+        require(!uninitialized_report.source_admitted,
+                "unproven constructor initializer must fail closed");
+
+        ClassField unknown_field;
+        unknown_field.name = "missing_class";
+        const auto unknown_report = class_report(std::move(unknown_field), false);
+        require(!unknown_report.source_admitted,
+                "unresolved constructor class identity must fail closed");
+
+        Function bare = pure("unqualified", integer(1));
+        LocalBinding bare_ctor;
+        bare_ctor.name = "box";
+        bare_ctor.new_class = true;
+        bare_ctor.class_name = "Box";
+        bare.locals.push_back(std::move(bare_ctor));
+        require(realtime_detail::direct_facts(bare, 8).unsupported_runtime,
+                "constructor effects without class-table provenance fail closed");
+    }
+
     // Async syntax is represented on dedicated Function members, not in
     // the scalar expression tree. Every such member must poison the complete
     // reachable hard-RT graph even when the function returns a constant.
