@@ -1721,6 +1721,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_timer_actor_double_entry_deadline_miss
         PROPERTIES TIMEOUT 20)
 
+    # Actual native C11 NativeActorScheduler carrier + actor-private ledger
+    # binding. Uses generation/lease-authenticated callbacks and preallocated
+    # CONTROL notices, NOT a guest compiler or RT clock-driver proof.
+    add_executable(oreslang-native-actor-ledger-scheduler-bridge-test
+        tests/native_actor_scheduler_ledger_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-ledger-scheduler-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-ledger-scheduler-bridge-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-ledger-scheduler-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-actor-ledger-scheduler-bridge-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_ledger_actual_carrier_timer_resume
+        COMMAND oreslang-native-actor-ledger-scheduler-bridge-test)
+    set_tests_properties(native_actor_ledger_actual_carrier_timer_resume
+        PROPERTIES TIMEOUT 25)
+
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
