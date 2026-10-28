@@ -153,6 +153,14 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        # The canonical actor language form must never be silently compiled
+        # via the legacy i64 on_message or trusted-main await paths.
+        "source-actor-receive-await-timer-guest.ores":
+            "native actor receive -> void requires compiler-lowered actor continuation, timer and stdio channel semantics",
+        "source-actor-receive-invalid-return-reject.ores":
+            "expected 'void'",
+        "source-actor-receive-invalid-delimiter-reject.ores":
+            "expected '::'",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
