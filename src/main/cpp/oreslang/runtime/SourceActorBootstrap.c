@@ -984,7 +984,11 @@ void oreslang_source_actor_stop(void* opaque) {
 /* Distinct compiler ABI: preserves all accepted DATA until the worker turns
  * drain, then waits for physical terminal acknowledgment before freeing heap.
  * Does not weaken ordinary stop()'s intentional abandoned-DATA semantics. */
-void oreslang_source_actor_graceful_stop(void* opaque) {
+void oreslang_source_actor_request_graceful_stop(void* opaque) {
     request_stop_impl(opaque, 1);
+}
+
+void oreslang_source_actor_graceful_stop(void* opaque) {
+    oreslang_source_actor_request_graceful_stop(opaque);
     oreslang_source_actor_join_done(opaque);
 }
