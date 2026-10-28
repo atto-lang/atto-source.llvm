@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
+import os
 import pathlib
 import re
 import subprocess
@@ -84,6 +85,21 @@ def parse_guest_handler(line):
     return fields
 
 
+def parse_heap_fields(line):
+    """Validate a bounded actual actor-owned field-access receipt."""
+    parts = line.split()
+    assert parts and parts[0] == "SOURCE_ACTOR_HEAP_FIELDS", line
+    keys = {"actor", "heap", "slot", "init", "reads", "writes", "dropped"}
+    fields = {}
+    for item in parts[1:]:
+        key, sep, value = item.partition("=")
+        assert sep and key in keys and key not in fields, item
+        assert value and value.isascii() and value.isdecimal(), item
+        fields[key] = int(value)
+    assert set(fields) == keys and fields["actor"] > 0 and fields["heap"] > 0, fields
+    return fields
+
+
 def verify_two_actor_guest_progress(receipts, stderr_lines):
     """A prefix, skipped turn, or constant exit 43 is insufficient."""
     assert len(receipts) == 2
@@ -120,13 +136,26 @@ def verify_two_actor_guest_progress(receipts, stderr_lines):
     assert actors[0] != actors[1], actors
     assert heap_domains[0] != heap_domains[1], heap_domains
 
+    native_fields = [(index, parse_heap_fields(line))
+                     for index, line in enumerate(stderr_lines)
+                     if line.startswith("SOURCE_ACTOR_HEAP_FIELDS ")]
+    assert len(native_fields) == 2, native_fields
+    for slot, expected_count in ((0, 4), (1, 5)):
+        index, fields = native_fields[slot]
+        assert fields == {"actor": actors[slot], "heap": heap_domains[slot],
+                          "slot": slot, "init": 1, "reads": expected_count,
+                          "writes": expected_count, "dropped": 0}, (slot, index, fields)
+        actor_traces = [i for i, event in traces if event["slot"] == slot]
+        assert max(actor_traces) < index, (actor_traces, index)
+
     # The compiled A.graceful_stop() joins physical heap reclamation
     # before the compiled guest may send B's fifth message.
     stops = [i for i, line in enumerate(stderr_lines)
              if line.startswith("SOURCE_ACTOR_SPAWN_STOP_VERIFIED ")]
     assert len(stops) == 2, stops
     last_b = next(i for i, e in traces if e["slot"] == 1 and e["seq"] == 5)
-    assert stops[0] < last_b < stops[1], (stops, last_b)
+    assert native_fields[0][0] < stops[0] < last_b < native_fields[1][0] < stops[1], (
+        stops, last_b, native_fields)
     return actors
 
 
@@ -310,7 +339,12 @@ def main():
             ]
             linked = run(command)
             assert linked.returncode == 0, (name, linked.stderr)
-            executed = run([str(exe)])
+            if name == "source-actor-two-owned-heaps-graceful.ores":
+                env = os.environ.copy()
+                env["ORESLANG_TEST_TRACE_GUEST_FIELDS"] = "1"
+                executed = run([str(exe)], env=env)
+            else:
+                executed = run([str(exe)])
             assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
