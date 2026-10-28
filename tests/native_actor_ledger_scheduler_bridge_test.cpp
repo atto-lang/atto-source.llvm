@@ -1,0 +1,138 @@
+#include "oreslang/runtime/ActorLedgerLeaseAdapter.hpp"
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <thread>
+
+using Adapter = oreslang::runtime::ActorLedgerLeaseAdapter<4>;
+using Status = Adapter::Status;
+using Kind = Adapter::Kind;
+
+#define CHECK(x) do { if (!(x)) { \
+    std::fprintf(stderr, "ACTOR_LEDGER_BRIDGE_FAIL %s:%d: %s\n", \
+        __FILE__, __LINE__, #x); std::abort(); \
+} } while (0)
+
+struct Fixture {
+    OresNativeActorScheduler* scheduler = nullptr;
+    OresNativeActorRef refs[2]{};
+    std::unique_ptr<Adapter> ledger;
+    Adapter::Token a{}, b{};
+    OresNativeWakeTicket ticket{};
+    std::atomic<int> suspended{0}, b_deferred{0}, other_progress{0};
+    std::atomic<int> a_first{0}, a_resumed{0}, b_guest{0}, wake_called{0};
+};
+
+extern "C" void ledger_data(void* raw, std::size_t actor, std::uint64_t payload) {
+    auto& f=*static_cast<Fixture*>(raw);
+    CHECK(actor<2);
+    CHECK(ores_native_actor_scheduler_is_current_actor(f.scheduler, f.refs[actor]));
+    if (actor==1) {
+        CHECK(payload==9);
+        f.other_progress.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    CHECK(f.ledger->current_actor_lease());
+    Adapter::Selection selection{};
+    if (payload==1) {
+        CHECK(f.ledger->admit(Kind::Mail,f.a)==Status::Ok);
+        CHECK(f.ledger->claim(selection)==Status::Ok);
+        CHECK(selection.token.sequence==f.a.sequence);
+        f.a_first.fetch_add(1, std::memory_order_relaxed);
+        // Authenticate and escrow the producer-owned continuation BEFORE
+        // publishing the await as suspended.
+        CHECK(ores_native_actor_scheduler_reserve_wake(f.scheduler,
+            f.refs[0],f.refs[0],1,1,1,1,&f.ticket));
+        CHECK(f.ledger->prepare_await(f.a)==Status::Ok);
+        CHECK(f.ledger->suspend(f.a)==Status::Ok);
+        f.suspended.store(1,std::memory_order_release);
+    } else if (payload==2) {
+        // The OLD scheduler still calls on_data while A is suspended.
+        // Quarantine its guest execution into the actor-private ledger:
+        // it must not run, although the old scheduler will incorrectly count
+        // the host callback as processed. This is a host bridge test, NOT
+        // corrected production mailbox receipt accounting.
+        CHECK(f.ledger->admit(Kind::Mail,f.b)==Status::Ok);
+        CHECK(f.ledger->claim(selection)==Status::NoEligible);
+        f.b_deferred.store(1,std::memory_order_release);
+    } else {
+        CHECK(false);
+    }
+}
+
+extern "C" void ledger_wake(void* raw,std::size_t actor,
+                             OresNativeWakeTicket ticket,OresNativeWakeOutcome outcome) {
+    auto& f=*static_cast<Fixture*>(raw);
+    CHECK(actor==0);
+    CHECK(outcome==ORES_NATIVE_WAKE_READY);
+    CHECK(ores_native_actor_scheduler_is_current_wake(f.scheduler,ticket));
+    CHECK(ores_native_actor_scheduler_is_current_actor(f.scheduler,f.refs[0]));
+    CHECK(ticket.continuation_slot==f.ticket.continuation_slot);
+    CHECK(ticket.slot_generation==f.ticket.slot_generation);
+    CHECK(f.ledger->deliver_wake(f.a)==Status::Ok);
+    Adapter::Selection selection{};
+    CHECK(f.ledger->claim(selection)==Status::Ok);
+    CHECK(selection.token.sequence==f.a.sequence);
+    f.a_resumed.fetch_add(1,std::memory_order_release);
+    CHECK(f.ledger->finish_after_guest_exit(f.a)==Status::Ok);
+    // After A completes, B is the oldest eligible user mail. Execute one
+    // more bounded host test segment without a second physical carrier.
+    CHECK(f.ledger->claim(selection)==Status::Ok);
+    CHECK(selection.token.sequence==f.b.sequence);
+    f.b_guest.fetch_add(1,std::memory_order_release);
+    CHECK(f.ledger->finish_after_guest_exit(f.b)==Status::Ok);
+    f.wake_called.fetch_add(1,std::memory_order_release);
+}
+
+static void until(const std::atomic<int>& flag,const char* name) {
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(8);
+    while (!flag.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now()>=deadline) {
+            std::fprintf(stderr,"TIMEOUT: %s\n",name);
+            std::abort();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+int main() {
+    Fixture f;
+    f.scheduler=ores_native_actor_scheduler_open_with_wakes(
+        2,8,2,ledger_data,nullptr,nullptr,ledger_wake,&f);
+    CHECK(f.scheduler);
+    f.refs[0]=ores_native_actor_scheduler_spawn(f.scheduler,0);
+    f.refs[1]=ores_native_actor_scheduler_spawn(f.scheduler,1);
+    CHECK(f.refs[0].scheduler_domain && f.refs[1].scheduler_domain);
+    f.ledger=std::make_unique<Adapter>(f.scheduler,f.refs[0],1234);
+    Adapter::Token unauthorized{};
+    CHECK(!f.ledger->current_actor_lease());
+    CHECK(f.ledger->admit(Kind::Mail,unauthorized)==Status::Unauthorized);
+    Adapter::Selection denied{};
+    CHECK(f.ledger->claim(denied)==Status::Unauthorized);
+    CHECK(ores_native_actor_scheduler_send(f.scheduler,f.refs[0],1));
+    until(f.suspended,"A reaches logical suspension");
+    CHECK(f.ledger->deliver_wake(f.a)==Status::Unauthorized);
+    CHECK(ores_native_actor_scheduler_send(f.scheduler,f.refs[0],2));
+    CHECK(ores_native_actor_scheduler_send(f.scheduler,f.refs[1],9));
+    until(f.b_deferred,"later message B ledgered but not executed");
+    until(f.other_progress,"independent actor progress");
+    CHECK(f.a_first.load()==1 && f.a_resumed.load()==0 && f.b_guest.load()==0);
+    OresNativeWakeTicket forged=f.ticket;
+    ++forged.continuation_generation;
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,forged,ORES_NATIVE_WAKE_READY)==ORES_NATIVE_WAKE_INVALID);
+    CHECK(ores_native_actor_scheduler_transfer_wake(f.scheduler,f.ticket));
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)==ORES_NATIVE_WAKE_PUBLISHED);
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)==ORES_NATIVE_WAKE_INVALID);
+    until(f.wake_called,"A resumed and B executed under authenticated lease");
+    CHECK(f.a_resumed.load()==1 && f.b_guest.load()==1);
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(ores_native_actor_scheduler_wakes_completed(f.scheduler)==1);
+    ores_native_actor_scheduler_retire(f.scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
+    std::puts("ACTOR_LEDGER_NATIVE_SCHEDULER_BRIDGE_PASS");
+}
