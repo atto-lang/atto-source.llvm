@@ -742,6 +742,26 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_bool_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    # Source-level compiler admission (not a host-only ownership model):
+    # rejected sources must fail before emitting LLVM IR, and three accepted
+    # controls must produce IR to prevent parser-only false positives.
+    find_program(ORE_BORROW_RUSTC rustc REQUIRED)
+    set(ORE_BORROW_ADMISSION_BIN "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-admission${CMAKE_EXECUTABLE_SUFFIX}")
+    set(ORE_BORROW_PREDICATES_BIN "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-predicates${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_command(OUTPUT "${ORE_BORROW_ADMISSION_BIN}" "${ORE_BORROW_PREDICATES_BIN}"
+        COMMAND "${ORE_BORROW_RUSTC}" --edition=2021 -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_borrow_admission.rs" -o "${ORE_BORROW_ADMISSION_BIN}"
+        COMMAND "${ORE_BORROW_RUSTC}" --edition=2021 -D warnings --test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_borrow_admission.rs" -o "${ORE_BORROW_PREDICATES_BIN}"
+        DEPENDS tests/native_borrow_admission.rs VERBATIM)
+    add_custom_target(oreslang-native-borrow-admission-build ALL
+        DEPENDS "${ORE_BORROW_ADMISSION_BIN}" "${ORE_BORROW_PREDICATES_BIN}")
+    add_test(NAME native_compile_time_borrow_escape_admission
+        COMMAND "${ORE_BORROW_ADMISSION_BIN}" "$<TARGET_FILE:oreslang-llvmc>")
+    add_test(NAME native_borrow_harness_predicates COMMAND "${ORE_BORROW_PREDICATES_BIN}")
+    set_tests_properties(native_compile_time_borrow_escape_admission
+        PROPERTIES TIMEOUT 90)
+
     add_test(NAME native_shared_borrow_contract
         COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix"
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
@@ -2322,6 +2342,7 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/nested-owned-capture.ores
                 tests/fixtures/native-class-string/routing-option-capture.ores
                 tests/fixtures/native-class-string/ordered-routing-locals.ores
+                tests/fixtures/native-class-string/ordered-array-locals.ores
                 tests/fixtures/native-class-string/routing-path-validation.ores
                 tests/fixtures/native-class-string/typed-array-iteration.ores
                 tests/fixtures/native-class-string/owned-aggregate-return.ores
@@ -4406,3 +4427,44 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
 endif()
 
+# Native select runtime continuation stack: bounded i64 channel, immutable
+# Future readiness, and actor-generation execution fencing. Source select
+# lowering remains fail-closed until compiler ownership/suspension wiring lands.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+
+    add_executable(oreslang-native-selectable-i64-channel-test
+        tests/native_selectable_i64_channel_test.cpp)
+    target_include_directories(oreslang-native-selectable-i64-channel-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selectable-i64-channel-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-selectable-i64-channel-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-selectable-i64-channel-test PRIVATE Threads::Threads)
+    add_test(NAME native_selectable_i64_channel_transaction
+        COMMAND oreslang-native-selectable-i64-channel-test)
+    set_tests_properties(native_selectable_i64_channel_transaction PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-selectable-i64-future-test
+        tests/native_selectable_i64_future_test.cpp)
+    target_include_directories(oreslang-native-selectable-i64-future-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selectable-i64-future-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-selectable-i64-future-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_selectable_i64_future_terminal_readiness
+        COMMAND oreslang-native-selectable-i64-future-test)
+    set_tests_properties(native_selectable_i64_future_terminal_readiness PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-select-continuation-fence-test
+        tests/native_select_continuation_fence_test.cpp)
+    target_include_directories(oreslang-native-select-continuation-fence-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-select-continuation-fence-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-select-continuation-fence-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-select-continuation-fence-test PRIVATE Threads::Threads)
+    add_test(NAME native_select_continuation_generation_fence
+        COMMAND oreslang-native-select-continuation-fence-test)
+    set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
+endif()
