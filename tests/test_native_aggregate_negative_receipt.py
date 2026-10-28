@@ -84,7 +84,7 @@ class ScalarPositiveControlTest(unittest.TestCase):
         self.original = b"pub fnc main(): int { return 42; }" + bytes([10])
         self.source.write_bytes(self.original)
 
-    def verify(self, rc=0, stdout="; ModuleID = 'scalar'\\ndefine i64 @main() {\\n  ret i64 42\\n}\\n",
+    def verify(self, rc=0, stdout="; ModuleID = 'scalar'\ndefine i64 @main() {\n  ret i64 42\n}\n",
                stderr=""):
         result = subprocess.CompletedProcess(["compiler"], rc, stdout, stderr)
         verify_scalar_positive_control("scalar", self.source, self.original, result)
@@ -102,7 +102,7 @@ class ScalarPositiveControlTest(unittest.TestCase):
 
     def test_wrong_result_does_not_pass(self):
         with self.assertRaisesRegex(AssertionError, "expected 42 IR"):
-            self.verify(stdout="; ModuleID = 'scalar'\\ndefine i64 @main() {\\n  ret i64 7\\n}\\n")
+            self.verify(stdout="; ModuleID = 'scalar'\ndefine i64 @main() {\n  ret i64 7\n}\n")
 
     def test_stderr_does_not_pass(self):
         with self.assertRaisesRegex(AssertionError, "emitted stderr"):
