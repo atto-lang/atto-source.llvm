@@ -62,18 +62,26 @@ native subset, reusing already-established class layout and ownership lowering:
   layout identity derived from its callable name, source position and local
   type name (not an exported or cross-module-stable symbol).
 * A public ordinary `main(): int` (or other scalar-return function) may
-  construct that type through `val T p = T{...}`, use its fixed fields,
-  and return scalar results. This constructs an actual native stack class
-  value, not a pseudo-i64 struct.
+  construct that type through `val T p = T{...}`, read or write its
+  scalar fields using the existing native checked field-write path, and
+  return scalar results. The owner remains a native stack class value, not
+  a pseudo-i64 struct. `const T` is not admitted in this first slice.
+  Mutation remains subject to existing ownership and borrow checks.
 * An unexported private function may return the same locally named nominal
   type through the existing checked immutable-leaf record region ABI.
-  Exporting this hidden return type remains forbidden.
+  Its fields are **final** in this return-handle slice and cannot be
+  reassigned; exported hidden returns remain forbidden.
 * Named arguments are checked against the declaration and reordered into
   native layout order. **Named initializer values must be integer literals**
   until source-order-preserving ANF staging exists: reordering side-effecting
   argument expressions would be a semantic bug. Positional constructor
   expressions preserve source order. Missing/extra/duplicate fields, non-int
   field definitions and mutable/fallible representations remain gated.
+
+Executable native test fixtures now include `point.x = 10` and a
+field-to-field arithmetic update. Private-return mutation and `const`
+owners have compile-negative fixtures. These additions are **unverified**
+until a native runner executes their exact source tree.
 
 This does **not** prove that the generated IR compiles and runs; only a
 successful exact-head compiler run followed by Clang/OS execution can establish
@@ -92,7 +100,8 @@ narrow-slice changes do **not** imply Java/LLVM feature or semantic parity.
    recursive unboxed layout. Preserve nominal struct vs structural record.
 2. **Typed construction:** exact arity/type checks, named and positional field
    correspondence, duplicate and missing fields, definite initialization,
-   read-only record capabilities, ownership/borrow and mutation distinction.
+   read-only record capabilities, owner/borrow mutation distinction, and
+   correct source-order evaluation for nonliteral named arguments.
 3. **AOT representation:** aggregate LLVM types and checked stack-vs-arena
    allocation selected by escape analysis (not by source spelling alone);
    real return/call ABI descriptors and stable compiler-generated names.
