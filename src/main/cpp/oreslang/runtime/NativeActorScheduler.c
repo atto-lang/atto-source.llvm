@@ -197,7 +197,13 @@ int ores_native_actor_scheduler_test_set_next_execution(
     return ok;
 }
 #endif
-/* Supervisor CONTROL outranks WAKE which outranks DATA. */
+/* Supervisor CONTROL outranks WAKE which outranks DATA.
+ * A retained DATA receipt represents the actor's unfinished logical handler.
+ * Subsequent DATA must stay in the bounded mailbox until the handler finishes
+ * or its physical frame is explicitly abandoned under an actor execution
+ * lease. CONTROL and WAKE remain runnable so they can retire the handler.
+ * This prevents non-reentrant guest overtaking and preserves DATA receipts.
+ */
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
         size_t recent_actor, unsigned consecutive) {
     for (int pass = 2; pass >= 1; --pass) {
@@ -216,14 +222,16 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
     }
     if (recent_actor < s->actor_count && consecutive < 2
             && !s->actors[recent_actor].active
-            && s->actors[recent_actor].queued) {
+            && s->actors[recent_actor].queued
+            && !s->actors[recent_actor].retained_live) {
         *actor = recent_actor; *kind = 0;
         s->next_actor = (recent_actor + 1) % s->actor_count;
         return 1;
     }
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
-        if (!s->actors[i].active && s->actors[i].queued) {
+        if (!s->actors[i].active && s->actors[i].queued
+                && !s->actors[i].retained_live) {
             *actor = i; *kind = 0;
             s->next_actor = (i + 1) % s->actor_count;
             return 1;
