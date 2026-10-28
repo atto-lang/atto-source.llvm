@@ -26,6 +26,55 @@ A single actor owner serializes local ledger transitions under the authenticated
 7. `ActorExecutionLedger<N>` uses inline fixed-size storage, bounded O(N) admission/selection and no per-event heap allocations. **It is intentionally not thread safe.** Capacity, worst-case scan cost, and the scheduler's separate ingress/lease must be proven for a qualified hard-RT profile. Priority CONTROL and deadline misses cannot silently bypass the suspended-handler rule.
 8. For hard RT, a timer callback behind an unbounded suspended/nonpreemptible handler is **not schedulable**. Admission must bound actor interference or reject the requested deadline. Measure *due → clock observation → scheduler READY → actor lease → first guest instruction*, not just `claim_under_lease`.
 
+## Await registration/completion race
+
+The previous ledger rejected a completion notice delivered while the handler
+was still RUNNING. This could lose a wake between registering a Future and
+parking on it. The corrected one-writer protocol is:
+
+1. Under the authenticated actor lease, call `prepare_await(A)` **before**
+   exposing the producer completion subscription to external threads.
+2. If the actor's bounded completion ingress delivers `wake(A)` before
+   `suspend(A)`, store a one-shot early-completion bit.
+3. `suspend(A)` returns `AlreadyReady` and retains the current physical
+   lease. The caller MUST continue inline, not release or park the carrier.
+4. Otherwise `suspend(A)` records A as the sole suspended logical handler.
+   Future/timer callbacks enqueue authenticated notices; `wake(A)` on the
+   next actor-owned turn makes A ready. A resumes before later queued B.
+5. Late duplicate or stale-generation notifications do not create new turns.
+   Cancellation before suspend wins and prevents parking.
+
+No external producer may call the actor ledger's `wake` directly; delivery
+always occurs on an authenticated actor execution turn.
+
+## Native scheduler lease adapter (host integration, still not production)
+
+`ActorLedgerLeaseAdapter<N>` checks the real native scheduler's
+`ores_native_actor_scheduler_is_current_actor` on **every** mutating call,
+including wake delivery and cleanup; it fails with `Unauthorized` on
+off-actor timer/Future threads. It never caches a lease between callbacks.
+
+`tests/native_actor_ledger_scheduler_bridge_test.cpp` exercises actual
+`NativeActorScheduler.c` DATA and WAKE callbacks (two physical workers,
+two actors). A suspends; B is recorded but not allowed into guest code;
+the independent actor executes; an authenticated wake resumes A, then B.
+The original scheduler's generation-checked escrow still linearizes
+transfer/publish and rejects forged/duplicate wake notices.
+
+**Known blocking discrepancy:** the legacy scheduler still calls
+`on_message(B)` and increments `processed_user_messages` when the
+host callback returns, *before B's ledgered guest handler executes*.
+The bridge temporarily defers B in actor-local storage and executes it
+during the later WAKE callback. This is a test-only adapter and **must not
+be connected to production guest dispatch or counted as a delivery proof**.
+A production scheduler must reserve ledger/mailbox ownership at first
+admission, defer the native DATA envelope itself (not retire its receipt),
+keep one physical execution credit until the guest handler is actually
+retired, and preserve separate supervisor CONTROL and physical STOP
+cleanup barriers. Directly skipping B in the scheduler without fixing
+quota and retirement accounting would introduce lost receipts and
+false physical quiescence. No scheduler source file is changed by this PR.
+
 ## Integration sequence
 
 - Connect an actor-owned ledger to the actual `NativeActorScheduler` lane/actor arena; authenticate every event/continuation token under the same physical actor claim; provide scheduler↔actor revision/slot accounting.
