@@ -1,0 +1,19 @@
+// Canonical source syntax; native guest execution acceptance contract.
+// Do NOT rewrite this to legacy `pub fnc on_message(int): int` or claim
+// a root-main get_ready continuation proves actor-handler await semantics.
+define actor Worker as
+    receive(message: int) -> void ::
+        if message eq 1 then
+            await time.sleep(10)
+            stdio.out.send("A resumed")
+        else
+            stdio.out.send("A later message")
+        fi
+    end
+end
+
+define actor Independent as
+    receive(message: int) -> void ::
+        stdio.out.send("B progressed")
+    end
+end
