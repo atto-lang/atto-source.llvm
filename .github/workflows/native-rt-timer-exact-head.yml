@@ -3,7 +3,10 @@ on:
   pull_request:
     paths:
       - src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp
+      - src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
       - tests/native_realtime_timer_queue_test.cpp
+      - tests/actor_execution_ledger_test.cpp
+      - tests/native_timer_actor_double_entry_test.cpp
       - docs/HARD_REALTIME.md
       - .github/workflows/native-rt-timer-exact-head.yml
   workflow_dispatch:
@@ -34,7 +37,10 @@ jobs:
           fi
           for file in \
             src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp \
-            tests/native_realtime_timer_queue_test.cpp; do
+            src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \
+            tests/native_realtime_timer_queue_test.cpp \
+            tests/actor_execution_ledger_test.cpp \
+            tests/native_timer_actor_double_entry_test.cpp; do
             expected="$(git rev-parse "HEAD:$file")"
             actual="$(git hash-object "$file")"
             test "$actual" = "$expected"
@@ -52,6 +58,12 @@ jobs:
               tests/native_realtime_timer_queue_test.cpp \
               -o "build/rt-timer-gate/rt-timer-${cxx//+/p}"
             "build/rt-timer-gate/rt-timer-${cxx//+/p}"
+            for source in actor_execution_ledger_test native_timer_actor_double_entry_test; do
+              "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+                -pthread -Isrc/main/cpp "tests/${source}.cpp" \
+                -o "build/rt-timer-gate/${source}-${cxx//+/p}"
+              "build/rt-timer-gate/${source}-${cxx//+/p}"
+            done
           done
       - name: Execute Clang ASan/UBSan regression
         shell: bash
@@ -65,3 +77,10 @@ jobs:
             -Isrc/main/cpp tests/native_realtime_timer_queue_test.cpp \
             -o build/rt-timer-gate/rt-timer-sanitized
           build/rt-timer-gate/rt-timer-sanitized
+          for source in actor_execution_ledger_test native_timer_actor_double_entry_test; do
+            clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+              -Isrc/main/cpp "tests/${source}.cpp" \
+              -o "build/rt-timer-gate/${source}-sanitized"
+            "build/rt-timer-gate/${source}-sanitized"
+          done
