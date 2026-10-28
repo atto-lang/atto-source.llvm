@@ -27,5 +27,17 @@ if [[ $status -ne 42 || -s "$work/stdout" || -s "$work/stderr" ]]; then
   cat "$work/stdout" "$work/stderr" >&2
   exit 1
 fi
+# Negative source must fail in compiler admission without emitting LLVM IR.
+bad="$root/tests/fixtures/native-tensor-owner-after-move-reject.ores"
+test -s "$bad" || { echo 'missing moved-owner negative guest' >&2; exit 66; }
+if "$compiler" "$bad" >"$work/negative.ll" 2>"$work/negative.err"; then
+  echo 'compiler incorrectly accepted use-after-take of a tensor owner' >&2
+  exit 1
+fi
+if [[ -s "$work/negative.ll" ]] || ! grep -q '^oreslang-llvmc:' "$work/negative.err"; then
+  echo 'negative owner source did not fail closed without LLVM IR' >&2
+  cat "$work/negative.err" >&2
+  exit 1
+fi
 sha256sum "$fixture" "$compiler" "$work/tensor-guest"
 printf '%s\n' 'TENSOR-OWNED-ARRAY-GUEST-LLVM-OK'
