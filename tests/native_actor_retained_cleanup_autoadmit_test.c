@@ -81,7 +81,7 @@ static void run_case(int cleanup_success) {
     CHECK(!ores_native_actor_scheduler_abandon_retained_data(
         f.scheduler,f.ticket));
     atomic_store_explicit(&f.release_cleanup,1,memory_order_release);
-    if (cleanup_success) {
+    if (cleanup_success == 1) {
         CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actor));
         CHECK(!ores_native_actor_scheduler_retained_cleanup_failed(
             f.scheduler,f.actor));
@@ -117,6 +117,7 @@ int main(void) {
     run_case(1);
 #ifndef ORES_NATIVE_CLEANUP_SUCCESS_ONLY
     run_case(0);
+    run_case(2); /* Noncanonical acknowledgement MUST also fail closed. */
 #endif
     puts("NATIVE_PREPAID_STOP_CLEANUP_PASS");
     return 0;
