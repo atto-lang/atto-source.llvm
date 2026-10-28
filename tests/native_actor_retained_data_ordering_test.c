@@ -36,7 +36,7 @@ static void admit_after_physical_callback(State* s,uint64_t payload) {
         const struct timespec pause={0,1000000};
         nanosleep(&pause,NULL);
     }
-    fprintf(stderr,"RETAINED_ORDER mailbox never became available\\n");
+    fprintf(stderr,"RETAINED_ORDER mailbox never became available\n");
     abort();
 }
 static void data(void* raw,size_t actor,uint64_t payload) {
