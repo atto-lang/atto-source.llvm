@@ -12,7 +12,7 @@ template<std::size_t N> class ActorExecutionLedger final {
     static_assert(N > 0 && N <= UINT32_MAX, "invalid ledger capacity");
 public:
     enum class Status : std::uint8_t { Ok, Full, Stale, Busy, NoEligible,
-        NotRunning, NotSuspended, AlreadyReady, AlreadyCancelled, Cancelled,
+        NotRunning, NotSuspended, AwaitNotArmed, AlreadyReady, AlreadyCancelled, Cancelled,
         Closed, Invalid, Overflow };
     enum class Kind : std::uint8_t { Mail, Timer, Deferred };
     enum class Dispatch : std::uint8_t { Normal, CancelCleanup };
@@ -33,15 +33,32 @@ public:
             Slot& s=slots_[i];
             if (s.phase!=Phase::Free || s.generation==UINT64_MAX) continue;
             ++s.generation; s.sequence=next_++; s.kind=kind;
-            s.phase=Phase::Queued; s.cancel=false; ++live_;
+            s.phase=Phase::Queued; s.cancel=false; s.await_armed=false;
+            s.early_ready=false; ++live_;
             out=token(i); bump(); return Status::Ok;
         }
         return Status::Full;
+    }
+    // Register the awaiting continuation BEFORE exposing completion callbacks.
+    // If completion is delivered between registration and physical suspension,
+    // suspend() must not drop it or incorrectly park the actor.
+    Status prepare_await(Token t) noexcept {
+        Slot* s=find(t); if (!s) return Status::Stale;
+        if (active_!=t.slot || s->phase!=Phase::Running) return Status::NotRunning;
+        if (s->cancel) return Status::Cancelled;
+        if (s->await_armed) return Status::AlreadyReady;
+        s->await_armed=true; s->early_ready=false; bump(); return Status::Ok;
     }
     Status wake(Token t) noexcept {
         Slot* s=find(t); if (!s) return Status::Stale;
         if (s->phase==Phase::Ready) return Status::AlreadyReady;
         if (s->phase==Phase::Cleanup || s->cancel) return Status::AlreadyCancelled;
+        if (s->phase==Phase::Running) {
+            // One-writer callback-delivery seam, already holding actor lease.
+            if (active_!=t.slot || !s->await_armed) return Status::NotSuspended;
+            if (s->early_ready) return Status::AlreadyReady;
+            s->early_ready=true; bump(); return Status::Ok;
+        }
         if (s->phase!=Phase::Suspended) return Status::NotSuspended;
         s->phase=Phase::Ready; bump(); return Status::Ok;
     }
@@ -70,7 +87,14 @@ public:
         Slot* s=find(t); if (!s) return Status::Stale;
         if (active_!=t.slot || s->phase!=Phase::Running) return Status::NotRunning;
         if (s->cancel) return Status::Cancelled;
+        if (!s->await_armed) return Status::AwaitNotArmed;
         if (suspended_!=N) return Status::Busy;
+        s->await_armed=false;
+        if (s->early_ready) {
+            // Future already completed: keep the same execution lease and
+            // continue inline; callers MUST NOT park or release the carrier.
+            s->early_ready=false; bump(); return Status::AlreadyReady;
+        }
         s->phase=Phase::Suspended; suspended_=t.slot; active_=N;
         bump(); return Status::Ok;
     }
@@ -121,7 +145,7 @@ public:
 private:
     enum class Phase : std::uint8_t { Free, Queued, Running, Suspended, Ready, Cleanup };
     struct Slot { std::uint64_t generation=0,sequence=0; Kind kind=Kind::Mail;
-        Phase phase=Phase::Free; bool cancel=false; };
+        Phase phase=Phase::Free; bool cancel=false,await_armed=false,early_ready=false; };
     Token token(std::size_t i) const noexcept {
         return {actor_,generation_,slots_[i].sequence,slots_[i].generation,
             static_cast<std::uint32_t>(i)};
@@ -133,7 +157,8 @@ private:
         return s.phase!=Phase::Free && s.sequence==t.sequence &&
             s.generation==t.slot_generation ? &s : nullptr;
     }
-    void retire(Slot& s) noexcept { s.phase=Phase::Free; s.cancel=false; --live_; }
+    void retire(Slot& s) noexcept { s.phase=Phase::Free; s.cancel=false;
+        s.await_armed=false; s.early_ready=false; --live_; }
     void bump() noexcept { if (revision_!=UINT64_MAX) ++revision_; }
     std::array<Slot,N> slots_{};
     const std::uint64_t actor_,generation_;
