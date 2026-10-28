@@ -38,6 +38,12 @@ def main():
         ("explicit semicolon", "pub fnc foo(): T { struct T { int foo }; return T{5}; }"),
     ]
     executable = [
+        ("maximum bounded 16 int fields",
+         "pub fnc main(): int { struct T { " +
+         ", ".join(f"int x{i}" for i in range(16)) +
+         " } val T p = T{" +
+         ", ".join(str(i + 1) for i in range(16)) +
+         "}; return p.x15; }", 16),
         ("stack single scalar", "pub fnc main(): int { struct T { int foo } val T point = T{5}; return point.foo; }", 5),
         ("stack ordered fields", "pub fnc main(): int { struct T { int x, int y } val T point = T{3, 9}; return point.y; }", 9),
         ("stack named reordered", "pub fnc main(): int { struct T { int x, int y } val T point = T{y: 9, x: 3}; return point.y; }", 9),
@@ -53,6 +59,11 @@ def main():
         ("named noninteger order must remain explicit",
          "pub fnc main(): int { struct T { int x } val T p = T{x: true}; return p.x; }",
          "LOCAL_CONSTRUCT_EVAL_ORDER_UNSUPPORTED"),
+        ("17 fields exceeds native layout",
+         "pub fnc main(): int { struct T { " +
+         ", ".join(f"int x{i}" for i in range(17)) +
+         " } return 7; }",
+         "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
         ("unsupported local bool field",
          "pub fnc main(): int { struct T { bool x } return 7; }",
          "LOCAL_AGGREGATE_ABI_UNSUPPORTED"),
@@ -106,8 +117,8 @@ def main():
         source = Path(temp) / "local.ores"
         for label, program in accepted_syntax:
             result = compile_guest(args.compiler, program, source)
-            if result.returncode == 0 or result.stdout.strip():
-                raise AssertionError((label, "unverified ABI emitted LLVM IR", result.stdout[:500]))
+            if result.returncode != 1 or result.stdout.strip():
+                raise AssertionError((label, "unverified ABI did not fail cleanly", result.returncode, result.stdout[:500]))
             if "LOCAL_AGGREGATE_ABI_UNSUPPORTED" not in result.stderr:
                 raise AssertionError((label, "parser/validator did not reach exact ABI gate",
                                       result.returncode, result.stderr[:1000]))
@@ -144,8 +155,8 @@ def main():
                                   private_return.stdout[:1000]))
         for label, program, diagnostic in errors:
             result = compile_guest(args.compiler, program, source)
-            if result.returncode == 0 or result.stdout.strip():
-                raise AssertionError((label, "malformed aggregate emitted LLVM IR", result.stdout[:500]))
+            if result.returncode != 1 or result.stdout.strip():
+                raise AssertionError((label, "malformed aggregate did not fail cleanly", result.returncode, result.stdout[:500]))
             if diagnostic not in result.stderr:
                 raise AssertionError((label, "wrong diagnostic", diagnostic, result.stderr[:1000]))
 
@@ -157,8 +168,9 @@ def main():
         leak = compile_guest(args.compiler,
                             "fnc first(): T { struct T { int foo } return T{5}; } "
                             "pub fnc main(): int { return T{5}; }", source)
-        if leak.returncode == 0 or leak.stdout.strip():
-            raise AssertionError(("callable local type leaked or unverified IR emitted", leak.stdout[:500]))
+        if leak.returncode != 1 or leak.stdout.strip():
+            raise AssertionError(("callable local type leaked or rejection was not clean",
+                                  leak.returncode, leak.stdout[:500]))
     print(f"PASS {len(executable)} native scalar stack programs (LLVM+Clang+OS)"
           + f", {len(accepted_syntax)} gated syntax, {len(errors)} fail-closed negatives, "
             "1 private return IR, 1 baseline and 1 scope-isolation case")
