@@ -356,6 +356,16 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_LOCAL_AGGREGATE_CLANG}")
     set_tests_properties(native_local_aggregate_types_stage1 PROPERTIES TIMEOUT 90)
+    # This is separate from the ordinary Clang execution gate: sanitizer
+    # toolchain failures or sanitizer findings are hard failures, never skips.
+    # No private-source artifact is exported from this CTest command.
+    add_test(NAME native_local_aggregate_types_asan_ubsan
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_local_aggregate_parity_stage1.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_LOCAL_AGGREGATE_CLANG}"
+            --sanitize)
+    set_tests_properties(native_local_aggregate_types_asan_ubsan PROPERTIES TIMEOUT 180)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
