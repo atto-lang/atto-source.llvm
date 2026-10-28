@@ -99,6 +99,7 @@ int main(void) {
     CHECK(terminal.abandoned_user_messages==2);
     CHECK(ores_native_actor_scheduler_accepted(state.scheduler)==3);
     CHECK(ores_native_actor_scheduler_completed(state.scheduler)==1);
+    CHECK(ores_native_actor_scheduler_control_completed(state.scheduler)==1);
     CHECK(ores_native_actor_scheduler_drain(state.scheduler));
     ores_native_actor_scheduler_retire(state.scheduler);
     CHECK(ores_native_actor_scheduler_try_destroy(state.scheduler));
