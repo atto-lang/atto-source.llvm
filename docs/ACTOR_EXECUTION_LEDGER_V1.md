@@ -116,6 +116,13 @@ and confirms the guest frame and all borrows physically unwound**.
 A successful STOP subsequently reaches a genuine terminal receipt;
 a concurrently running DATA callback must release its physical lease first.
 
+Internal cleanup is a **pre-admitted physical lifecycle execution**, not a
+supervisor CONTROL envelope. It contributes to global `accepted` and
+`completed` once its callback returns, but must never increment the public
+`control_completed` counter. Genuine supervisor CONTROL callbacks are
+counted independently. The STOP, cleanup-only and STOP/wake race regressions
+now assert this split explicitly.
+
 Normal Future completion cancels the unused cleanup reservation without
 incrementing `accepted` or falsely reporting that the cleanup ran. Global
 acceptance accounting reserves numeric headroom for every possible cleanup
