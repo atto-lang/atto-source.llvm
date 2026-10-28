@@ -19,6 +19,8 @@
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
+#define SOURCE_STOP_ABORTIVE 1
+#define SOURCE_STOP_GRACEFUL 2
 
 typedef struct {
     uint64_t magic;
@@ -410,11 +412,13 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
      * Match Java ActorRef.stop(): startup admission and stop admission
      * linearize under the same group mutex. The reserved initialization
      * CONTROL turn survives mailbox sealing, but stop-before-start skips guest
-     * construction completely.
+     * construction completely. Graceful stop instead must run initialization
+     * and drain previously accepted DATA even when stop wins this race.
      */
     group_lock();
     if (atomic_load_explicit(
-            &instance->stop_requested, memory_order_acquire)) {
+            &instance->stop_requested, memory_order_acquire)
+            == SOURCE_STOP_ABORTIVE) {
         atomic_store_explicit(
             &instance->startup_state,
             ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
@@ -461,7 +465,8 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
      */
     group_lock();
     if (atomic_load_explicit(
-            &instance->stop_requested, memory_order_acquire)) {
+            &instance->stop_requested, memory_order_acquire)
+            == SOURCE_STOP_ABORTIVE) {
         atomic_store_explicit(
             &instance->startup_state,
             ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
@@ -846,7 +851,7 @@ static void request_stop_impl(void* opaque, int graceful) {
     ensure(atomic_compare_exchange_strong_explicit(
         &instance->stop_requested,
         &expected,
-        1,
+        graceful ? SOURCE_STOP_GRACEFUL : SOURCE_STOP_ABORTIVE,
         memory_order_acq_rel,
         memory_order_acquire));
 
@@ -872,8 +877,10 @@ void oreslang_source_actor_request_stop(void* opaque) {
 void oreslang_source_actor_join_done(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    ensure(atomic_load_explicit(
-        &instance->stop_requested, memory_order_acquire) == 1);
+    const int stop_mode = atomic_load_explicit(
+        &instance->stop_requested, memory_order_acquire);
+    ensure(stop_mode == SOURCE_STOP_ABORTIVE ||
+           stop_mode == SOURCE_STOP_GRACEFUL);
 
     int expected = 0;
     ensure(atomic_compare_exchange_strong_explicit(
