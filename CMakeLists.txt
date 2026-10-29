@@ -4573,3 +4573,20 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 30)
     endforeach()
 endif()
+
+# Hierarchical tenant and OresVM resource-admission adversarial checks.
+# This is host-side quota verification, NOT hostile-native-code sandboxing.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-oresvm-resource-admission-test
+        tests/native_oresvm_resource_admission_test.cpp)
+    target_include_directories(oreslang-native-oresvm-resource-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-oresvm-resource-admission-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-oresvm-resource-admission-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-oresvm-resource-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_oresvm_resource_admission
+        COMMAND oreslang-native-oresvm-resource-admission-test)
+    set_tests_properties(native_oresvm_resource_admission PROPERTIES TIMEOUT 30)
+endif()
