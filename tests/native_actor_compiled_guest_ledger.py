@@ -57,7 +57,7 @@ def main():
     print("FULL_SOURCE_ACTOR_SUSPENDS_LOWERING_STILL_REJECTED", flush=True)
 
     ir = checked([args.compiler, str(guest_source)]).stdout
-    for symbol in ("guest_step", "guest_resume"):
+    for symbol in ("guest_step", "guest_resume", "guest_cleanup"):
         if not re.search(r"(?m)^define\s+i64\s+@" + symbol + r"\s*\(", ir):
             raise RuntimeError(f"missing actual guest LLVM function: {symbol}")
     if not re.search(r"(?m)^define\s+i64\s+@main\s*\(", ir):
