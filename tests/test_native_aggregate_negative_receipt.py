@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from native_aggregate_negative_receipt import (
+    complete_negative_receipt, git_blob_sha1, result_digest,
     verify_negative_case, verify_scalar_positive_control, verify_isolated_workspace,
 )
 
