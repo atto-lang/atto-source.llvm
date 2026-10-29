@@ -102,6 +102,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
     args = parser.parse_args()
+    compiler = Path(args.compiler).resolve(strict=True)
+    compiler_digest = sha256_file(compiler)
+    fixture_names = [name for name, _, _ in CASES]
+    if len(fixture_names) != 33 or len(set(fixture_names)) != 33:
+        raise AssertionError("expected exactly 33 unique aggregate-negative cases")
+    case_receipts = []
     with tempfile.TemporaryDirectory(prefix="ores-aggregate-kind-") as tmp:
         root = Path(tmp)
         # A real working compiler must first admit one ordinary scalar program.
