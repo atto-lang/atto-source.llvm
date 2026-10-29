@@ -97,14 +97,14 @@ inline PackageNamespaceGraph link_package_namespaces(
         if (program.namespace_name.empty()) continue;
         if (!valid_flat_namespace_name(program.namespace_name))
             throw std::invalid_argument("invalid flat source namespace header");
+        // A module wrapper and a file namespace are distinct scopes. Never
+        // manufacture an empty importable namespace from a module-owned file.
+        if (!program.module.empty())
+            throw std::invalid_argument("module wrapper cannot declare a file namespace");
 
         const PackageNamespaceKey key{unit.package_instance_id, program.namespace_name};
         auto& group = result.namespaces[key];
         group.source_units.insert(unit.source_unit_id);
-
-        // The existing "define module" wrapper is separate. Never merge its
-        // declarations into a file-header namespace.
-        if (!program.module.empty()) continue;
 
         // This only indexes exported scalar functions. Actor, class, types
         // and nominal public API need verified cross-unit type identity.

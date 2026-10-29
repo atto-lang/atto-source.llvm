@@ -88,7 +88,16 @@ int main() {
         (void)link_package_namespaces(units, pins, {{"app/main", "foo", "missing"}});
     }, "no cross-package fallback");
 
-    // 5. Private declarations are not exposed by any namespace import.
+    // 5. A mixed module wrapper + namespace header must fail closed, not
+    // manufacture a ghost namespace that another source can import.
+    Program mixed = make_source("ghost", "leak");
+    mixed.module = "legacy";
+    another = units;
+    another.push_back({"foo/mixed", "foo@1", &mixed});
+    must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                "module wrapper cannot declare a file namespace");
+
+    // 6. Private declarations are not exposed by any namespace import.
     Program private_helper = make_source("a", "private_helper", false);
     another = units;
     another.push_back({"foo/private", "foo@1", &private_helper});
@@ -96,5 +105,5 @@ int main() {
     assert(private_graph.namespaces.at({"foo@1", "a"}).source_units.size() == 4);
     assert(private_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
-    std::cout << "native package namespace source-only graph: 5/5 cases passed\n";
+    std::cout << "native package namespace source-only graph: 6/6 cases passed\n";
 }
