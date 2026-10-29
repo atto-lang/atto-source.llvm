@@ -77,3 +77,9 @@ The script's downloaded Git blob hash was `89ee689f898b42ec7cba29069eab43456176e
 The `trusted-actor-buffer-exact-head.yml` workflow now pins checkout to `github.event.pull_request.head.sha || github.sha` (both ASan matrix jobs and TSan job) rather than trusting the default `pull_request` synthetic merge ref. Each job independently asserts the checkout HEAD, clean state and all eight tracked source/test blob hashes *before* compilation. The checkout action remains commit-pinned with `persist-credentials: false` and `contents: read`.
 
 The remaining native scheduler still carries scalar `uint64_t` DATA only, and the compiler still rejects `Array<T>` actor sends before LLVM emission. Neither the typed host delivery status path nor these verifier changes prove `.ores` zero-copy execution. The source organization's GitHub Actions jobs still fail with **zero executed steps**; no private-tree cross-organization mirror was attempted because `.github/private-ci-approved-repositories.txt` has no authorized destination entries.
+
+## 2026-10-29 sender authority regression
+
+The trusted scheduler gate now validates transferable sender ownership before returning a missing or stopped recipient status. The test suite additionally covers invalid senders with missing/stopped targets. The updated C++ tests are not yet executed at the latest commit.
+
+The exact verifier script blob `7480d571a1bd85b2e725efd9b95b7bcb026056d9` passed a local Bash syntax check and three negative admission cases: wrong expected HEAD (exit 2), dirty checkout (exit 2), and missing source file (nonzero). These results do not establish native source execution.
