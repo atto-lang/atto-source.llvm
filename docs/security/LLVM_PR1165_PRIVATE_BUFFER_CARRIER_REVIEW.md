@@ -103,3 +103,25 @@ use a moving PR ref as source transfer authority.
 
 No steps above authorize source export through this proposal. Do not
 reinterpret source-free execution as approval or skip branch protection.
+
+## Follow-up source-free GCC/Clang/TSan confirmation
+
+- Candidate PR #19 advanced to exact head
+  `88515672877058769824e33729d397c3a8e0d7d4`.
+- Latest source-free canary workflow blob:
+  `3ab0cdc686067ef51785fc0bb2460d9b02e87586`.
+- [Run 40953843035](https://github.com/honeypot-r-us-test/hnpt-e2e/actions/runs/40953843035)
+  executed two jobs and both concluded **success**.
+- Native GCC/Clang job `123728689996` actually emitted
+  `RUNNER_CANARY_EXECUTED=g++ RUN_ID=40953843035` and
+  `RUNNER_CANARY_EXECUTED=clang++ RUN_ID=40953843035` after separate
+  compiler-generated ASan+UBSan binaries were executed.
+- Native GCC ThreadSanitizer job `123728690226` emitted
+  `RUNNER_TSAN_EXECUTED=yes RUN_ID=40953843035` after compiling and
+  executing a source-free threaded C++17 test.
+- No private LLVM source was present in either workflow. No permission
+  is gained to transfer it; all source-protection, incident-closure,
+  approved-carrier, attested-workflow, and test-plan blockers above remain.
+
+This later result supersedes only the **runner capability** evidence; it
+does not turn the source-free canary workflow into a V3 trusted publisher.
