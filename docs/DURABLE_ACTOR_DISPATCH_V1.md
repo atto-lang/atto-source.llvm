@@ -31,8 +31,16 @@ The adapter cannot perform such reconciliation by itself.
 ## Single-host durability, not distributed exactly-once
 
 - The trusted host provisions an absolute owner-only POSIX 0700 directory;
-  guest code cannot choose its path. Symlink roots and insecure directory
-  permissions fail closed.
+  guest code cannot choose its path. Symlinks at **any ancestor** (not only
+  the final directory), relative paths, dot-dot traversal, and insecure
+  directory permissions fail closed. Native LLVM uses a root-anchored
+  O_NOFOLLOW openat walk so another pathname cannot redirect an already
+  opened directory descriptor. Java rejects symlink ancestors and
+  noncanonical paths but still uses pathname-based FileChannel.open;
+  concurrent replacement of directories by an adversary with filesystem
+  rename authority is NOT fully excluded by these checks. For such a
+  threat model use an anchored native directory-handle provider / vetted
+  transactional store, not this Java reference.
 - Claim creation is exclusive and atomic on an appropriate local filesystem,
   mode 0600, with file and parent directory fsync before returning true.
 - The callback is bound through the trusted HostGate, preserving independent
@@ -48,11 +56,13 @@ The adapter cannot perform such reconciliation by itself.
 
 Java 21: independent JVM processes race on a shared private directory;
 one winner. Replays, changed digests, restarted generations, changed Git
-revision, symlink roots and insecure directories are denied.
+revision, symlink ancestors, relative/noncanonical paths and insecure directories are denied.
 
 LLVM POSIX host: GCC and Clang ASan/UBSan pass. Twelve forked claimants
 yield one winner; SIGKILL after claim leaves later claims refused. The
 HostGate is wired to the durable claim callback in the host test.
+The native store now walks all directory components using O_NOFOLLOW
+directory handles, with negative tests for ancestor symlinks and dot-dot.
 
 Interoperability: C++ first then Java, and Java first then C++, deny
 duplicate claims; eight mixed Java/C++ contenders yield one winner and
