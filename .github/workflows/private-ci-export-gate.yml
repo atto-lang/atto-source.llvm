@@ -1,0 +1,47 @@
+name: Private CI export authorization self-test
+on:
+  pull_request:
+    paths:
+      - scripts/private_ci_export_gate.py
+      - tests/test_private_ci_export_gate.py
+      - .github/private-ci-approved-repositories.txt
+      - .github/private-ci-carrier-contracts.json
+      - .github/workflows/private-ci-export-gate.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/private_ci_export_gate.py
+      - tests/test_private_ci_export_gate.py
+      - .github/private-ci-approved-repositories.txt
+      - .github/private-ci-carrier-contracts.json
+      - .github/workflows/private-ci-export-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-export-policy-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Attest checkout identity
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "EXACT_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Run source-free deny-by-default and identity tests
+        env:
+          PYTHONPATH: scripts
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s tests -p test_private_ci_export_gate.py -v
