@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from private_ci_export_gate import GateRejected, authorize, main
 
@@ -101,6 +102,23 @@ class ExportGateTest(unittest.TestCase):
         with self.assertRaises((GateRejected, OSError)):
             authorize(alias, *ARGS)
 
+    def test_symlink_swap_at_open_rejected(self):
+        policy = self.root / ".github/private-ci-approved-repositories.txt"
+        original_open = os.open
+        swapped = False
+
+        def swap_before_open(path, flags, *args, **kwargs):
+            nonlocal swapped
+            if path == policy.name and "dir_fd" in kwargs and not swapped:
+                policy.unlink()
+                policy.symlink_to("private-ci-carrier-contracts.json")
+                swapped = True
+            return original_open(path, flags, *args, **kwargs)
+
+        with patch("private_ci_export_gate.os.open", side_effect=swap_before_open):
+            self.check_rejected()
+        self.assertTrue(swapped)
+
     def test_policy_fifo_rejected_without_blocking(self):
         policy = self.root / ".github/private-ci-carrier-contracts.json"
         policy.unlink()
@@ -160,6 +178,16 @@ class ExportGateTest(unittest.TestCase):
         policy = self.root / ".github/private-ci-carrier-contracts.json"
         raw = json.dumps(self.data)
         policy.write_text(raw[:-1] + ',"unrecognized":1e999}', encoding="utf-8")
+        self.check_rejected()
+
+    def test_contract_casefold_carrier_duplicate_rejected(self):
+        self.data["carriers"][DEST.upper()] = dict(self.data["carriers"][DEST])
+        self.write_contract()
+        self.check_rejected()
+
+    def test_contract_invalid_carrier_key_rejected(self):
+        self.data["carriers"]["not-a-repo"] = dict(self.data["carriers"][DEST])
+        self.write_contract()
         self.check_rejected()
 
     def test_control_character_path_rejected(self):
