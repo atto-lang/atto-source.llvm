@@ -4502,3 +4502,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-trusted-actor-buffer-mailbox-test)
     set_tests_properties(native_trusted_actor_buffer_mailbox PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only authenticated actor-turn admission gate: no guest ABI/source
+# integration claimed by this CTest target. Uses trusted scheduler tickets
+# and rejects stale incarnations or sends racing recipient retirement.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-trusted-actor-buffer-scheduler-gate-test
+        tests/trusted_actor_buffer_scheduler_gate_test.cpp)
+    target_include_directories(oreslang-trusted-actor-buffer-scheduler-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-trusted-actor-buffer-scheduler-gate-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-trusted-actor-buffer-scheduler-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-actor-buffer-scheduler-gate-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_trusted_actor_buffer_scheduler_gate
+        COMMAND oreslang-trusted-actor-buffer-scheduler-gate-test)
+    set_tests_properties(native_trusted_actor_buffer_scheduler_gate PROPERTIES TIMEOUT 60)
+endif()
