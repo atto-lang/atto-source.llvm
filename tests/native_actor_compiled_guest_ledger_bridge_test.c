@@ -12,6 +12,7 @@
 
 extern int64_t guest_step(int64_t prior, int64_t payload);
 extern int64_t guest_resume(int64_t prior, int64_t payload);
+extern int64_t guest_cleanup(int64_t prior, int64_t reason);
 extern int64_t ores_guest_fixture_main(void);
 
 #define CHECK(x) do { if (!(x)) { \
@@ -126,6 +127,82 @@ static void admit_second(Fixture* f) {
     fputs("COMPILED_GUEST_LEDGER B admission timeout\n", stderr);
     abort();
 }
+/* Separate STOP-only bridge case. A host-owned malloc frame represents
+ * pinned continuation state, but the scalar cleanup *function* really comes
+ * from Oreslang-generated LLVM IR. This does not imply that the compiler
+ * generated the continuation, its drop glue, or language-level suspension. */
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef actor;
+    OresNativeRetainedDataTicket retained;
+    int64_t* pinned_frame;
+    atomic_int suspended, released, cleanup_turns;
+} CompiledStopFixture;
+
+static void compiled_stop_data(void* raw, size_t index, uint64_t payload) {
+    CompiledStopFixture* f = (CompiledStopFixture*)raw;
+    CHECK(index == 0 && payload == 5);
+    CHECK(ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor));
+    CHECK(!f->pinned_frame);
+    f->pinned_frame = (int64_t*)malloc(sizeof(*f->pinned_frame));
+    CHECK(f->pinned_frame);
+    *f->pinned_frame = guest_step(0, (int64_t)payload);
+    CHECK(*f->pinned_frame == 5);
+    CHECK(ores_native_actor_scheduler_retain_current_data(
+        f->scheduler, &f->retained));
+    atomic_store_explicit(&f->suspended, 1, memory_order_release);
+}
+static int compiled_stop_cleanup(
+        void* raw, size_t index, OresNativeRetainedDataTicket ticket) {
+    CompiledStopFixture* f = (CompiledStopFixture*)raw;
+    CHECK(index == 0);
+    CHECK(ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor));
+    CHECK(ticket.actor.scheduler_domain == f->retained.actor.scheduler_domain);
+    CHECK(ticket.actor.generation == f->retained.actor.generation);
+    CHECK(ticket.slot_generation == f->retained.slot_generation);
+    CHECK(ticket.execution_id == f->retained.execution_id);
+    CHECK(f->pinned_frame && *f->pinned_frame == 5);
+    /* Generated .ores function executes inside the exclusive trusted cleanup
+     * turn. A host has to certify actual physical frame release. */
+    CHECK(guest_cleanup(*f->pinned_frame, 3) == 1058);
+    free(f->pinned_frame);
+    f->pinned_frame = NULL;
+    atomic_store_explicit(&f->released, 1, memory_order_release);
+    atomic_fetch_add_explicit(&f->cleanup_turns, 1, memory_order_relaxed);
+    return 1; /* physical host frame has been released */
+}
+static void run_compiled_guest_stop_cleanup(void) {
+    CompiledStopFixture f = {0};
+    f.scheduler = ores_native_actor_scheduler_open(
+        1, 1, 1, compiled_stop_data, &f);
+    CHECK(f.scheduler);
+    CHECK(ores_native_actor_scheduler_configure_retained_cleanup(
+        f.scheduler, compiled_stop_cleanup));
+    f.actor = ores_native_actor_scheduler_spawn(f.scheduler, 0);
+    CHECK(f.actor.scheduler_domain);
+    CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 5));
+    until(&f.suspended);
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler, f.actor));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler, f.actor));
+    CHECK(atomic_load_explicit(&f.released, memory_order_acquire) == 1);
+    CHECK(atomic_load_explicit(&f.cleanup_turns, memory_order_acquire) == 1);
+    CHECK(!f.pinned_frame);
+    CHECK(ores_native_actor_scheduler_retained_data_count(
+        f.scheduler, f.actor) == 0);
+    CHECK(ores_native_actor_scheduler_accepted(f.scheduler) == 2);
+    CHECK(ores_native_actor_scheduler_completed(f.scheduler) == 1);
+    CHECK(ores_native_actor_scheduler_control_completed(f.scheduler) == 0);
+    OresNativeActorTerminalState terminal = {0};
+    CHECK(ores_native_actor_scheduler_terminal_state(
+        f.scheduler, f.actor, &terminal));
+    CHECK(terminal.kind == ORES_NATIVE_TERMINATION_STOPPED);
+    CHECK(terminal.accepted_user_messages == 1);
+    CHECK(terminal.processed_user_messages == 0);
+    CHECK(terminal.abandoned_user_messages == 1);
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    ores_native_actor_scheduler_retire(f.scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
+}
 int main(void) {
     CHECK(ores_guest_fixture_main() == 101);
     Fixture f = {0};
@@ -179,6 +256,7 @@ int main(void) {
     CHECK(result.abandoned_user_messages == 0);
     ores_native_actor_scheduler_retire(f.scheduler);
     CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
+    run_compiled_guest_stop_cleanup();
     puts("LLVM_COMPILED_ORES_SEGMENTS_RETAINED_LEDGER_PASS");
     return 0;
 }
