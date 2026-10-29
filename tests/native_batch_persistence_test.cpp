@@ -70,5 +70,23 @@ int main() {
         catch (const std::length_error&) { rejected=true; }
         assert(rejected);
     }
-    std::cout << "PASS LLVM host-only persistence sidecar contract (5 groups)\n";
+    { // The old generation may not replay a successful receipt after fencing.
+        MemoryStore store;store.grant_epoch("tenant-a","a",1);
+        BatchSidecar sidecar("tenant-a",store,8,4096,16,8,64);
+        sidecar.enqueue(write("a","old"));assert(sidecar.flush()[0].status==Status::Committed);
+        store.grant_epoch("tenant-a","a",2);
+        sidecar.enqueue(write("a","old",1));assert(sidecar.flush()[0].status==Status::StaleEpoch);
+        sidecar.enqueue(write("a","old",2,1));assert(sidecar.flush()[0].status==Status::OperationConflict);
+    }
+    { // Delimiter/control identities cannot enter tenant, actor, slot or operation keys.
+        assert(!valid_id(std::string("bad\0id",6)));
+        assert(!valid_id("bad\nactor"));
+        assert(!valid_id("bad\tkey"));
+        MemoryStore store;
+        bool rejected=false;
+        try { store.grant_epoch("tenant-a",std::string("bad\0id",6),1); }
+        catch (const std::invalid_argument&) { rejected=true; }
+        assert(rejected);
+    }
+    std::cout << "PASS LLVM host-only persistence sidecar contract (7 groups)\n";
 }
