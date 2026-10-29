@@ -1,6 +1,15 @@
 #include "oreslang/runtime/OresVM.hpp"
 
 #include <cassert>
+#include <type_traits>
+
+// The tenant VM is an actual C++ owner type, but only OresVM may create it.
+static_assert(!std::is_default_constructible<oreslang::runtime::IsolateVM>::value,
+              "guest code cannot directly create a tenant IsolateVM");
+static_assert(!std::is_copy_constructible<oreslang::runtime::IsolateVM>::value,
+              "tenant ownership must never be copied");
+static_assert(!std::is_move_constructible<oreslang::runtime::IsolateVM>::value,
+              "tenant-owned live state must not be moved");
 #include <cstdint>
 #include <functional>
 #include <stdexcept>
