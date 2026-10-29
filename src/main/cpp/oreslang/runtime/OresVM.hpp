@@ -1,6 +1,6 @@
 #pragma once
 
-#include "oreslang/runtime/OresIsolateAbi.h"
+#include "oreslang/runtime/OresIsolateVM.hpp"
 
 #include <algorithm>
 #include <array>
@@ -20,49 +20,17 @@ namespace oreslang::runtime {
 // HOST-ONLY prototype. This is NOT a native-code security boundary or guest
 // source lowering. Never admit untrusted guest code in TrustedInProcess mode.
 // The process sandbox is deliberately rejected until an OS worker exists.
-enum class IsolateMode { TrustedInProcess, SandboxedProcess };
-enum class IsolatePhase { Created, Running, Quiescing, Stopped };
-
-struct IsolateConfig {
-    std::string tenant_id;
-    std::uint32_t heap_limit_bytes = 0;
-    std::uint32_t max_actors = 0;
-    IsolateMode mode = IsolateMode::TrustedInProcess;
-};
-
-struct IsolateSnapshot {
-    std::string tenant_id;
-    std::uint64_t generation = 0;
-    IsolatePhase phase = IsolatePhase::Created;
-    std::uint32_t used_bytes = 0;
-    std::size_t active_actors = 0;
-    std::size_t active_guest_calls = 0;
-};
-
 // OresVM is the host's isolate registry and admission boundary. It owns no
 // user-code scheduler and exposes only checked offset-based memory operations;
 // no native heap address can escape through this API.
 class OresVM final {
-    struct State {
-        explicit State(IsolateConfig value, std::uint64_t epoch)
-            : config(std::move(value)), generation(epoch) {}
-        IsolateConfig config;
-        const std::uint64_t generation;
-        IsolatePhase phase = IsolatePhase::Created;
-        std::vector<std::uint8_t> heap;  // bounded logical bump arena
-        std::unordered_map<std::uint64_t, std::uint64_t> actors;
-        std::uint64_t next_actor_generation = 1;
-        std::size_t active_guest_calls = 0;
-        std::mutex guest_turn_mutex;  // trusted, serialized non-reentrant guest turns
-        std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> guest_globals{};
-    };
 
 public:
     class IsolateHandle final {
         friend class OresVM;
-        std::weak_ptr<State> state_;
+        std::weak_ptr<IsolateVM> state_;
         std::uint64_t generation_ = 0;
-        explicit IsolateHandle(const std::shared_ptr<State>& state)
+        explicit IsolateHandle(const std::shared_ptr<IsolateVM>& state)
             : state_(state), generation_(state->generation) {}
     public:
         IsolateHandle() = default;
@@ -70,11 +38,11 @@ public:
 
     class Allocation final {
         friend class OresVM;
-        std::weak_ptr<State> state_;
+        std::weak_ptr<IsolateVM> state_;
         std::uint64_t generation_ = 0;
         std::uint32_t offset_ = 0;
         std::uint32_t size_ = 0;
-        Allocation(const std::shared_ptr<State>& state,
+        Allocation(const std::shared_ptr<IsolateVM>& state,
                    std::uint32_t offset, std::uint32_t size)
             : state_(state), generation_(state->generation),
               offset_(offset), size_(size) {}
@@ -86,11 +54,11 @@ public:
 
     class ActorTicket final {
         friend class OresVM;
-        std::weak_ptr<State> state_;
+        std::weak_ptr<IsolateVM> state_;
         std::uint64_t generation_ = 0;
         std::uint64_t id_ = 0;
         std::uint64_t actor_generation_ = 0;
-        ActorTicket(const std::shared_ptr<State>& state, std::uint64_t id,
+        ActorTicket(const std::shared_ptr<IsolateVM>& state, std::uint64_t id,
                     std::uint64_t actor_generation)
             : state_(state), generation_(state->generation), id_(id),
               actor_generation_(actor_generation) {}
@@ -113,7 +81,7 @@ public:
             throw std::logic_error("tenant already has an isolate");
         if (next_generation_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("isolate generations exhausted");
-        auto state = std::make_shared<State>(std::move(config), next_generation_++);
+        auto state = std::shared_ptr<IsolateVM>(new IsolateVM(std::move(config), next_generation_++));
         isolates_.emplace(state->config.tenant_id, state);
         return IsolateHandle(state);
     }
@@ -206,7 +174,7 @@ public:
     std::int64_t invoke_guest(const IsolateHandle& handle, OresGuestEntry guest,
                               std::int64_t input) {
         if (!guest) throw std::invalid_argument("guest entry is null");
-        std::shared_ptr<State> state;
+        std::shared_ptr<IsolateVM> state;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             state = checked(handle);
@@ -218,7 +186,7 @@ public:
         }
         struct GuestPin final {
             OresVM* vm;
-            std::shared_ptr<State> state;
+            std::shared_ptr<IsolateVM> state;
             ~GuestPin() noexcept {
                 std::lock_guard<std::mutex> lock(vm->mutex_);
                 --state->active_guest_calls;
@@ -285,7 +253,7 @@ public:
 private:
     struct GuestCall final {
         OresVM* vm;
-        std::shared_ptr<State> state;
+        std::shared_ptr<IsolateVM> state;
         std::uint64_t generation;
     };
 
@@ -315,7 +283,7 @@ private:
         return 1;
     }
 
-    std::shared_ptr<State> checked(const IsolateHandle& handle) const {
+    std::shared_ptr<IsolateVM> checked(const IsolateHandle& handle) const {
         auto state = handle.state_.lock();
         if (!state || handle.generation_ != state->generation)
             throw std::logic_error("expired isolate handle");
@@ -325,7 +293,7 @@ private:
         return state;
     }
 
-    static void check_ref(const std::shared_ptr<State>& state, const Allocation& ref) {
+    static void check_ref(const std::shared_ptr<IsolateVM>& state, const Allocation& ref) {
         if (ref.state_.lock() != state || ref.generation_ != state->generation ||
             ref.size_ == 0 ||
             static_cast<std::uint64_t>(ref.offset_) + ref.size_ > state->heap.size())
@@ -333,7 +301,7 @@ private:
     }
 
     mutable std::mutex mutex_;
-    std::unordered_map<std::string, std::shared_ptr<State>> isolates_;
+    std::unordered_map<std::string, std::shared_ptr<IsolateVM>> isolates_;
     std::uint64_t next_generation_ = 1;
 };
 
