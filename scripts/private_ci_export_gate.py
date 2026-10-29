@@ -88,7 +88,8 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
 
     contract = json.loads(_read(root, ".github/private-ci-carrier-contracts.json"),
                           object_pairs_hook=_unique_object, parse_constant=_reject_nonfinite)
-    if (type(contract.get("schema")) is not int or contract["schema"] != 1 or
+    if (not isinstance(contract, dict) or type(contract.get("schema")) is not int or
+            contract["schema"] != 1 or
             not isinstance(contract.get("carriers"), dict)):
         raise GateRejected("invalid private carrier policy schema")
     carrier = contract["carriers"].get(destination)
