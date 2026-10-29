@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -44,19 +45,25 @@ public:
         std::shared_ptr<State> state_;
         TrustedBufferActor actor_{};
         bool active_ = false;
+        const std::thread::id thread_;
         Turn(std::shared_ptr<State> s, TrustedBufferActor a)
-            : state_(std::move(s)), actor_(a), active_(true) {}
+            : state_(std::move(s)), actor_(a), active_(true),
+              thread_(std::this_thread::get_id()) {}
     public:
         Turn() = delete;
         Turn(const Turn&) = delete;
         Turn& operator=(const Turn&) = delete;
         Turn(Turn&& other) noexcept
             : state_(std::move(other.state_)), actor_(other.actor_),
-              active_(std::exchange(other.active_, false)) {}
+              active_(std::exchange(other.active_, false)),
+              thread_(other.thread_) {}
         Turn& operator=(Turn&&) = delete;
         ~Turn() { release(); }
         void release() noexcept {
             if (!active_) return;
+            // A scheduler-minted turn is scoped to its admitting carrier.
+            // Foreign-thread destruction cannot silently revoke authority.
+            if (thread_ != std::this_thread::get_id()) std::terminate();
             std::lock_guard<std::mutex> lock(state_->mutex);
             const auto it = state_->actors.find(actor_.id);
             if (it != state_->actors.end() &&
@@ -229,6 +236,8 @@ private:
         require_open();
         if (turn.state_ != state_ || !turn.active_)
             throw std::logic_error("foreign or released execution turn");
+        if (turn.thread_ != std::this_thread::get_id())
+            throw std::logic_error("execution turn belongs to another carrier thread");
         auto& actor = require_actor(turn.actor_);
         if (!actor.in_turn) throw std::logic_error("execution turn not admitted");
         return turn.actor_;
