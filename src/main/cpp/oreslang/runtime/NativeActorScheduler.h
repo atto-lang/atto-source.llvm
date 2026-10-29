@@ -94,7 +94,8 @@ typedef enum {
     ORES_NATIVE_SEND_TERMINATED = 2,
     ORES_NATIVE_SEND_MAILBOX_FULL = 3,
     ORES_NATIVE_SEND_RESOURCE_EXHAUSTED = 4,
-    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5
+    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5,
+    ORES_NATIVE_SEND_OWNERSHIP_REJECTED = 6 /* trusted commit left sender unchanged */
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
