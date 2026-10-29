@@ -18,8 +18,8 @@ spec.loader.exec_module(probe)
 def elf(*, machine=62, kind=2, elf_class=2, endian=1, osabi=0,
         version=1, load=True, interpreter=None, phoff=64, phentsize=56,
         phnum=None, load_offset=0, load_filesz=0, load_memsz=0,
-        load_vaddr=0, load_align=4096):
-    count = (1 if load else 0) + (1 if interpreter is not None else 0)
+        load_vaddr=0, load_align=4096, load_flags=5, stack_flags=None):
+    count = (1 if load else 0) + (1 if interpreter is not None else 0) + (1 if stack_flags is not None else 0)
     if phnum is None:
         phnum = count
     h = bytearray(64)
@@ -29,11 +29,13 @@ def elf(*, machine=62, kind=2, elf_class=2, endian=1, osabi=0,
     struct.pack_into("<HHH", h, 52, 64, phentsize, phnum)
     ph = bytearray()
     if load:
-        ph += struct.pack("<IIQQQQQQ", 1, 5, load_offset, load_vaddr, 0,
+        ph += struct.pack("<IIQQQQQQ", 1, load_flags, load_offset, load_vaddr, 0,
                           load_filesz, load_memsz, load_align)
     if interpreter is not None:
         offset = 64 + 56 * count
         ph += struct.pack("<IIQQQQQQ", 3, 4, offset, 0, 0, len(interpreter), len(interpreter), 1)
+    if stack_flags is not None:
+        ph += struct.pack("<IIQQQQQQ", 0x6474e551, stack_flags, 0, 0, 0, 0, 0, 16)
     return bytes(h + ph) + (interpreter or b"")
 
 
@@ -65,6 +67,19 @@ class CGLAdmissionTests(unittest.TestCase):
         for kwargs in ({"phoff": 100000}, {"phentsize": 0}, {"phnum": 130}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 self.inspect(elf(**kwargs))
+
+    def test_fail_closed_wx_segments_and_executable_stacks(self):
+        for flags in (3, 7):
+            with self.subTest(load_flags=flags), self.assertRaisesRegex(
+                    ValueError, "writable executable"):
+                self.inspect(elf(load_flags=flags))
+        for flags in (1, 5, 7):
+            with self.subTest(stack_flags=flags), self.assertRaisesRegex(
+                    ValueError, "executable PT_GNU_STACK"):
+                self.inspect(elf(stack_flags=flags))
+        # A non-executable stack and a read/execute LOAD are admitted.
+        self.assertEqual(self.inspect(elf(stack_flags=6))["machine"], 62)
+        self.assertEqual(self.inspect(elf(load_flags=5))["machine"], 62)
 
     def test_reject_missing_load_and_overlong_load(self):
         for data in (elf(load=False), elf(load_filesz=100000)):
