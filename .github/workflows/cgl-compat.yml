@@ -46,6 +46,9 @@ jobs:
         run: bash scripts/cgl-native-smoke.sh
       - name: Existing native scalar source regression
         run: |
-          # Fail closed when the selected tests were not registered or built.
+          # Run each named proof separately: a combined regex can silently pass
+          # with just one registered test while the other was never added.
           ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^(native_cgl_linux_host_admission|native_source_i64_os_exit_subset)$'
+            -R '^native_cgl_linux_host_admission
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            -R '^native_source_i64_os_exit_subset
