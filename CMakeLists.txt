@@ -814,15 +814,18 @@ if(BUILD_TESTING)
         native-rt-nested-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
 
+    # Negative source tests must prove compiler rejection, not use CTest WILL_FAIL:
+    # inverted CTest status conflicts with the fail-closed full-suite manifest.
     foreach(generator_case IN ITEMS
             sync async suspend
             legacy-fnc legacy-routine legacy-async-fnc)
         add_test(NAME native_generator_v1_${generator_case}_failclosed
-            COMMAND "$<TARGET_FILE:oreslang-llvmc>"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generator-v1-${generator_case}-reject.ores")
-        set_tests_properties(native_generator_v1_${generator_case}_failclosed PROPERTIES
-            WILL_FAIL TRUE
-            PASS_REGULAR_EXPRESSION "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering")
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generator-v1-${generator_case}-reject.ores"
+                --diagnostic "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering")
+        set_tests_properties(native_generator_v1_${generator_case}_failclosed PROPERTIES TIMEOUT 30)
     endforeach()
 
     add_executable(oreslang-ownership-cfg-dataflow-test
