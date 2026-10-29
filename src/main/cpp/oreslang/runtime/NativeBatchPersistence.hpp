@@ -2,6 +2,7 @@
 // Host-side reference substrate, NOT a compiled .ores actor, tenant sandbox or durable provider.
 // All guest payload bytes are copied into the sidecar's bounded owned queue.
 #include <cstdint>
+#include <algorithm>
 #include <deque>
 #include <limits>
 #include <map>
@@ -35,7 +36,10 @@ struct Receipt {
     bool applied() const { return status == Status::Committed || status == Status::Duplicate; }
     bool durable() const { return applied() && provider_confirmed_durable; }
 };
-inline bool valid_id(const std::string& s) { return !s.empty() && s.size() <= 128; }
+inline bool valid_id(const std::string& s) {
+    return !s.empty() && s.size() <= 128 && std::none_of(s.begin(),s.end(),
+        [](unsigned char c){ return c < 32 || c == 127; });
+}
 
 /** In-memory mock provider. Commit admission/epoch must be enforced by the real durable provider. */
 class MemoryStore final {
@@ -64,6 +68,11 @@ public:
         results.reserve(writes.size());
         for (const auto& w : writes) {
             Operation op{w.id.tenant, w.id.actor, w.id.slot, w.operation_id};
+            // Fencing precedes dedupe so an old activation cannot replay a receipt.
+            auto epoch = epochs_.find({w.id.tenant, w.id.actor});
+            if (epoch == epochs_.end() || epoch->second != w.epoch) {
+                results.push_back({w.operation_id, Status::StaleEpoch, 0}); continue;
+            }
             auto seen = operations_.find(op);
             if (seen != operations_.end()) {
                 const auto& prior = seen->second.write;
@@ -73,10 +82,6 @@ public:
                 results.push_back({w.operation_id, same ? Status::Duplicate : Status::OperationConflict,
                     same ? seen->second.version : 0});
                 continue;
-            }
-            auto epoch = epochs_.find({w.id.tenant, w.id.actor});
-            if (epoch == epochs_.end() || epoch->second != w.epoch) {
-                results.push_back({w.operation_id, Status::StaleEpoch, 0}); continue;
             }
             State key{w.id.tenant, w.id.actor, w.id.slot};
             auto& version = versions_[key];
@@ -112,6 +117,7 @@ class BatchSidecar final {
     std::size_t queued_bytes_ = 0;
     std::size_t outstanding_entries_ = 0;
     std::mutex mu_;
+    std::mutex flush_mu_; // serializes provider writes in dequeue order
 public:
     BatchSidecar(std::string tenant, MemoryStore& store, std::size_t max_entries,
                  std::size_t max_queue_bytes, std::size_t max_payload_bytes,
@@ -119,7 +125,8 @@ public:
         : tenant_(std::move(tenant)), store_(store), max_entries_(max_entries),
           max_queue_bytes_(max_queue_bytes), max_payload_bytes_(max_payload_bytes),
           batch_entries_(batch_entries), batch_bytes_(batch_bytes) {
-        if (!valid_id(tenant_) || !max_entries || !max_queue_bytes || !max_payload_bytes ||
+        if (!valid_id(tenant_) || !max_entries || max_queue_bytes <= 128 ||
+            !max_payload_bytes || max_payload_bytes > max_queue_bytes - 128 ||
             !batch_entries || batch_bytes < max_payload_bytes)
             throw std::invalid_argument("invalid sidecar budget");
     }
@@ -138,6 +145,7 @@ public:
         queued_bytes_ += charge; ++outstanding_entries_;
     }
     std::vector<Receipt> flush() {
+        std::lock_guard<std::mutex> only_one_flusher(flush_mu_);
         std::vector<Write> batch;
         std::size_t charge_total = 0;
         {
