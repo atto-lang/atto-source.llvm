@@ -38,6 +38,12 @@ INCIDENT_GATES = (
      "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/172"),
     (212, 6087989978,
      "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/212"),
+    (198, 6070465058,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/198"),
+    (200, 6071264936,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/200"),
+    (222, 6092501448,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/222"),
 )
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
