@@ -985,6 +985,75 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 v3.exact_source_tree(669, "9" * 40)
         self.assertFalse(any("/git/blobs/" in route for route in seen))
 
+    def test_publish_denies_source_main_drift_before_first_blob_post(self):
+        contract = carrier_contract()
+        rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
+        manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+        with (
+            patch.object(v3, "protected_authority", side_effect=[
+                (PROTECTED, contract), ("2" * 40, contract),
+            ]) as authority,
+            patch.object(v3, "checked_destination", return_value=(BASE_TREE, PLAN)) as destination,
+            patch.object(v3, "exact_source_tree", return_value=(
+                SOURCE_TREE, [("src/synthetic.cpp", "100644", BLOB, DATA)],
+                rows, manifest,
+            )),
+            patch.object(v3, "gh_api") as api,
+            patch.object(v3, "recheck_destination_identity") as verify_destination,
+        ):
+            with self.assertRaisesRegex(
+                    v3.Denied, "protected source authority changed before first destination write"):
+                v3.publish("trusted/ci", 669, "9" * 40,
+                           "ci/test-plans/llvm-pr669.json")
+            self.assertEqual(authority.call_count, 2)
+            self.assertEqual(destination.call_count, 1)
+            api.assert_not_called()
+            verify_destination.assert_not_called()
+
+    def test_publish_denies_carrier_contract_drift_before_first_blob_post(self):
+        contract = carrier_contract()
+        changed = dict(contract)
+        changed["workflow_blob_sha"] = "3" * 40
+        rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
+        manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+        with (
+            patch.object(v3, "protected_authority", side_effect=[
+                (PROTECTED, contract), (PROTECTED, changed),
+            ]),
+            patch.object(v3, "checked_destination", return_value=(BASE_TREE, PLAN)),
+            patch.object(v3, "exact_source_tree", return_value=(
+                SOURCE_TREE, [("src/synthetic.cpp", "100644", BLOB, DATA)],
+                rows, manifest,
+            )),
+            patch.object(v3, "gh_api") as api,
+        ):
+            with self.assertRaisesRegex(
+                    v3.Denied, "protected source authority changed before first destination write"):
+                v3.publish("trusted/ci", 669, "9" * 40,
+                           "ci/test-plans/llvm-pr669.json")
+            api.assert_not_called()
+
+    def test_publish_denies_pr_head_drift_before_first_blob_post(self):
+        contract = carrier_contract()
+        rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
+        manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+        with (
+            patch.object(v3, "protected_authority", return_value=(PROTECTED, contract)),
+            patch.object(v3, "checked_destination", return_value=(BASE_TREE, PLAN)),
+            patch.object(v3, "exact_source_tree", return_value=(
+                SOURCE_TREE, [("src/synthetic.cpp", "100644", BLOB, DATA)],
+                rows, manifest,
+            )),
+            patch.object(v3, "verify_source_pr",
+                         side_effect=v3.Denied("PR head moved")) as verify,
+            patch.object(v3, "gh_api") as api,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "PR head moved"):
+                v3.publish("trusted/ci", 669, "9" * 40,
+                           "ci/test-plans/llvm-pr669.json")
+            verify.assert_called_once_with(669, "9" * 40)
+            api.assert_not_called()
+
     def test_publish_binds_receipt_tree_branch_and_authorization(self):
         contract = carrier_contract()
         rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
