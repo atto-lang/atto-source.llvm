@@ -26,9 +26,9 @@ SOURCE_REPO_ID = 1410897874
 SOURCE_BRANCH = "main"
 INCIDENT_REPO = "ores-truffle-oreslang/oreslang-platform-conformance"
 INCIDENT_GATES = (
-    # Immutable issue ID for #212 is not yet independently attested. A missing
-    # pin is an unconditional DENY until a reviewed PR supplies that ID.
-    (212, None,
+    # Immutable GitHub issue ID verified from the original platform incident.
+    # Identity is not incident clearance; state must be closed/completed.
+    (212, 6087989978,
      "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/212"),
     (22, 5832921751,
      "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22"),

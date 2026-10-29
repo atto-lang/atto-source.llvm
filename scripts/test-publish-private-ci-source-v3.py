@@ -183,22 +183,58 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     with self.assertRaisesRegex(v3.Denied, "not independently completed"):
                         v3.require_incident_closure()
 
-    def test_incident_212_unpinned_identity_fails_closed(self):
-        # A completed GitHub response is insufficient until an independent
-        # security review pins #212's immutable GitHub numeric issue ID.
-        pending = [gate for gate in v3.INCIDENT_GATES if gate[0] == 212]
-        self.assertEqual(len(pending), 1)
-        self.assertIsNone(pending[0][1])
-        fake_completed = {
-            "id": 123456789,
+    def test_incident_212_pin_enforces_identity_and_completed_disposition(self):
+        pin = [g for g in v3.INCIDENT_GATES if g[0] == 212]
+        self.assertEqual(len(pin), 1)
+        self.assertEqual(pin[0][1], 6087989978)
+        expected_url = pin[0][2]
+
+        def issue(issue_id=6087989978, number=212, url=expected_url,
+                  state="closed", reason="completed"):
+            return {
+                "id": issue_id, "number": number, "html_url": url,
+                "state": state, "state_reason": reason,
+            }
+
+        rejected = (
+            issue(state="open", reason=None),
+            issue(reason="not_planned"),
+            issue(issue_id=1),
+            issue(number=211),
+            issue(url="https://github.com/example/other/issues/212"),
+            {**issue(), "pull_request": {}},
+        )
+        for candidate in rejected:
+            with self.subTest(response=candidate):
+                with (patch.object(v3, "INCIDENT_GATES", tuple(pin)),
+                      patch.object(v3, "gh_api", return_value=candidate)):
+                    with self.assertRaisesRegex(v3.Denied, "incident #212"):
+                        v3.require_incident_closure()
+
+        # Synthetic completion exercises this single identity predicate only.
+        with (patch.object(v3, "INCIDENT_GATES", tuple(pin)),
+              patch.object(v3, "gh_api", return_value=issue())):
+            self.assertTrue(v3.require_incident_closure())
+
+    def test_incident_212_open_denied_before_any_source_main_read(self):
+        pending = {
+            "id": 6087989978,
             "number": 212,
-            "html_url": pending[0][2],
-            "state": "closed",
-            "state_reason": "completed",
+            "html_url":
+                "https://github.com/ores-truffle-oreslang/"
+                "oreslang-platform-conformance/issues/212",
+            "state": "open",
+            "state_reason": None,
         }
-        with patch.object(v3, "gh_api", return_value=fake_completed):
+        with (patch.object(v3, "gh_api", return_value=pending),
+              patch.object(v3, "authorized_source_main_sha") as read_main,
+              patch.object(v3, "remote_source_file") as source_file):
             with self.assertRaisesRegex(v3.Denied, "incident #212"):
-                v3.require_incident_closure()
+                v3.protected_authority(
+                    "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
+                )
+            read_main.assert_not_called()
+            source_file.assert_not_called()
 
     def test_allowlist_is_exact_and_fail_closed(self):
         v3.parse_allowlist(b"# x\ntrusted/ci\n", "trusted/ci")
