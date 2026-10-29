@@ -12,6 +12,19 @@ int main() {
     L actor(42,3);
     L::Token a{}, b{}, c{}, d{};
     L::Selection out{};
+    // Host/FFI enum-cast values outside the declared Kind set must not
+    // allocate a slot, advance the actor revision or change the output token.
+    L::Token rejected{17,18,19,20,21};
+    for (unsigned raw=3; raw<=255; ++raw) {
+        auto invalid=static_cast<K>(static_cast<std::uint8_t>(raw));
+        test(actor.admit(invalid,rejected)==S::Invalid,"invalid Kind rejected");
+        auto snap=actor.snapshot();
+        test(snap.revision==0 && snap.live==0 && !snap.runnable &&
+             !snap.executing && !snap.suspended,"invalid Kind leaves ledger unchanged");
+    }
+    test(rejected.actor==17 && rejected.generation==18 && rejected.sequence==19 &&
+         rejected.slot_generation==20 && rejected.slot==21,
+         "invalid Kind leaves output token untouched");
     test(actor.admit(K::Mail,a)==S::Ok, "A admission");
     test(actor.admit(K::Mail,b)==S::Ok, "B admission");
     test(actor.admit(K::Timer,c)==S::Ok, "timer callback admission");

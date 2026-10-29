@@ -29,6 +29,10 @@ public:
 
     Status admit(Kind kind, Token& out) noexcept {
         if (closed_) return Status::Closed;
+        // Host callers may pass cast/deserialized enum bytes. Reject unknown
+        // event kinds before spending a sequence, slot or quota.
+        if (kind != Kind::Mail && kind != Kind::Timer && kind != Kind::Deferred)
+            return Status::Invalid;
         if (next_ == UINT64_MAX || revision_ == UINT64_MAX) return Status::Overflow;
         for (std::size_t i=0; i<N; ++i) {
             Slot& s=slots_[i];
