@@ -17,9 +17,9 @@ immutable platform-conformance incident identities for #22, #77, #127,
 #171, #172, and #212 and
 require each issue to be exactly `closed` with `state_reason=completed`.
 Open incidents, alternate close reasons, issue-ID/URL drift, or a pull request
-masquerading as an issue all fail closed. The gate is rechecked every time
-protected authority is re-attested, including immediately before executable
-carrier authorization.
+masquerading as an issue all fail closed. The gate is rechecked **before each source-bearing Git write**, as well as
+immediately before executable carrier authorization. All six incident IDs
+must have independently verified, completed dispositions.
 
 ## Transfer requirements
 
@@ -105,8 +105,11 @@ source export is denied.
 
 There is deliberately **no review-attested fallback for the source repository**.
 A reviewed governance PR, CODEOWNERS text, or source-free carrier success cannot
-substitute for live source-main protection. The source PR under test is also
-bound separately to its exact open-PR head and complete root tree.
+substitute for live source-main protection. The source PR under test must
+be non-draft, be an exact same-repository open PR against `main` (head
+and base verified by immutable GitHub repository ID), and have a current
+independent `@ORESoftware` approval on its exact head. A stale or
+dismissed review denies transfer. The full root tree is SHA-verified.
 
 An allowlist entry is necessary but not sufficient. The protected
 `.github/private-ci-carrier-contracts.json` additionally pins:
@@ -129,8 +132,11 @@ strict required checks pinned to positive GitHub App IDs, administrator
 enforcement, and no bypass/force-push/deletion allowances. It checks main
 SHA and protection metadata twice during carrier attestation. A
 historical merged/reviewed carrier PR cannot replace these controls.
-Carrier-main movement, protection weakening, workflow/plan change, or
-unresolved containment incident must deny source export.
+Before **every source-bearing Git blob/tree/commit write**, the publisher
+re-attests carrier-main protection, source-main authority, all six incident
+dispositions, the immutable policy contract, and independent source-PR approval.
+Carrier-main movement, protection weakening, workflow/plan change, PR review
+revocation, or unresolved containment incident must deny source export.
 
 The carrier workflow keeps the source-test job at `contents: read`. Cleanup is
 performed by a separate no-checkout job with `contents: write` that validates
