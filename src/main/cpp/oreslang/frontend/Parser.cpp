@@ -64,16 +64,18 @@ bool reserved_unsafe_stdlib_import(std::string_view path) {
         return false;
     };
     if (reserved(path)) return true;
-    if (path.substr(0, 4) != "std/" &&
-            path.substr(0, 9) != "ores.std/") return false;
+    const bool rooted = path.substr(0, 4) == "std/" ||
+                        path.substr(0, 9) == "ores.std/";
+    // Relative imports may canonicalize into the reserved stdlib namespace.
+    if (path.find('/') == std::string_view::npos) return false;
     std::vector<std::string_view> segments;
     for (std::size_t from = 0; from <= path.size();) {
         const auto slash = path.find('/', from);
         const auto part = path.substr(from, slash == std::string_view::npos
                 ? path.size() - from : slash - from);
         if (part == "..") {
-            if (segments.size() <= 1) return true; // Root traversal is noncanonical.
-            segments.pop_back();
+            if (rooted && segments.size() <= 1) return true; // Root traversal is noncanonical.
+            if (!segments.empty()) segments.pop_back();
         } else if (!part.empty() && part != ".") {
             segments.push_back(part);
         }
