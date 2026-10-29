@@ -6,6 +6,11 @@ pub fnc guest_step(int prior, int payload): int {
 pub fnc guest_resume(int prior, int payload): int {
   return guest_step(prior, payload) + 100;
 }
+// A compiled guest scalar cleanup segment, called only while trusted host
+// owns the actor lease. The HOST (not this function) frees the pinned frame.
+pub fnc guest_cleanup(int prior, int reason): int {
+  return guest_step(prior, reason) + 1000;
+}
 pub fnc main(): int {
   return guest_resume(0, 1);
 }
