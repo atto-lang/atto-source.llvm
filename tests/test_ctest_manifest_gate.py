@@ -97,8 +97,8 @@ class ManifestAuditTests(unittest.TestCase):
         cmake = (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(
             encoding="utf-8"
         )
-        pattern = (r"foreach\\(generator_case IN ITEMS\\s+(.*?)\\)\\s+"
-                   r"add_test\\(NAME native_generator_v1_\\$\\{generator_case\\}_failclosed")
+        pattern = (r"foreach\(generator_case IN ITEMS\s+(.*?)\)\s+"
+                   r"add_test\(NAME native_generator_v1_\$\{generator_case\}_failclosed")
         matches = re.findall(pattern, cmake, flags=re.DOTALL)
         self.assertEqual(len(matches), 1, "expected one canonical generator CMake registration")
         cases = matches[0].split()
