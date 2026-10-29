@@ -4590,3 +4590,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-oresvm-resource-admission-test)
     set_tests_properties(native_oresvm_resource_admission PROPERTIES TIMEOUT 30)
 endif()
+
+# Exact-head race regression: queued calls are lifecycle-pinned and cancelled
+# by tenant shutdown without impacting another tenant's execution.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-oresvm-shutdown-race-test
+        tests/native_oresvm_shutdown_race_test.cpp)
+    target_include_directories(oreslang-native-oresvm-shutdown-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-oresvm-shutdown-race-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-oresvm-shutdown-race-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-oresvm-shutdown-race-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_oresvm_shutdown_queued_turn_fence
+        COMMAND oreslang-native-oresvm-shutdown-race-test)
+    set_tests_properties(native_oresvm_shutdown_queued_turn_fence PROPERTIES TIMEOUT 30)
+endif()
