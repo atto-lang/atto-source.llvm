@@ -40,6 +40,10 @@ public:
     // Forged/stale/borrowed handles still throw (host contract violation).
     Admission try_send(const Handle& owned, TrustedBufferActor sender) {
         std::lock_guard<std::mutex> guard(mutex_);
+        // Invalid guest-derived handles must never masquerade as ordinary
+        // backpressure. This validation is read-only; the take below is the
+        // single irreversible ownership commit after slot admission.
+        pool_->require_transferable(owned, sender);
         if (closed_) return Admission::Closed;
         if (count_ == entries_.size()) return Admission::Full;
         Handle transferred = pool_->take(owned, sender, recipient_);
