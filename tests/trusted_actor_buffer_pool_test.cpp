@@ -16,13 +16,18 @@ using oreslang::runtime::TrustedBufferActor;
 // Instrument C++ global allocation on the metadata-only ownership path.
 // This is NOT a whole-program malloc/syscall/GC measurement.
 static std::atomic<std::size_t> allocations{0};
-void* operator new(std::size_t bytes) {
+#if defined(__GNUC__) || defined(__clang__)
+#define ORES_NOINLINE __attribute__((noinline))
+#else
+#define ORES_NOINLINE
+#endif
+ORES_NOINLINE void* operator new(std::size_t bytes) {
     allocations.fetch_add(1, std::memory_order_relaxed);
     if (void* p = std::malloc(bytes ? bytes : 1)) return p;
     throw std::bad_alloc();
 }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+ORES_NOINLINE void operator delete(void* p) noexcept { std::free(p); }
+ORES_NOINLINE void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 template <class F> bool rejects(F&& fn) {
     try { fn(); } catch (const std::exception&) { return true; }
