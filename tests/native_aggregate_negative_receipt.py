@@ -103,7 +103,8 @@ def verify_scalar_positive_control(name: str, source: Path, original: bytes,
         raise AssertionError(f"{name}: valid scalar control emitted stderr: "
                              f"{result.stderr[:1200]!r}")
     if (not result.stdout.startswith("; ModuleID") or
-            "define i64 @main(" not in result.stdout or
+            "define i64 @__oreslang_guest_main(" not in result.stdout or
+            "define i32 @main(" not in result.stdout or
             "ret i64 42" not in result.stdout):
         raise AssertionError(f"{name}: valid scalar control did not emit expected 42 IR")
     if source.is_symlink() or not source.is_file() or source.read_bytes() != original:
