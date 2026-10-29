@@ -4590,3 +4590,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-oresvm-resource-admission-test)
     set_tests_properties(native_oresvm_resource_admission PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Stacked OresVM actor resource-retirement acceptance gate.
+# Accounting only: physical external I/O retirement must be signaled by its adapter.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-oresvm-resource-retirement-test
+        tests/native_oresvm_resource_retirement_test.cpp)
+    target_include_directories(oreslang-native-oresvm-resource-retirement-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-oresvm-resource-retirement-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-oresvm-resource-retirement-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-oresvm-resource-retirement-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_oresvm_actor_resource_retirement
+        COMMAND oreslang-native-oresvm-resource-retirement-test)
+    set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
+endif()
