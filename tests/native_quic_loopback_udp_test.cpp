@@ -33,12 +33,14 @@ int main() {
     assert(got.size == sizeof ping && got.source_port == first.port());
     for (std::size_t i=0; i<got.size; ++i) assert(input[i] == ping[i]);
     assert(first.send_to_loopback(second.port(), ping, sizeof ping) == Sock::Outcome::Ok);
+    input.fill(0x6b);
     for (int i=0; i<1000; ++i) {
         got=second.receive(input.data(), 2);
         if (got.outcome != Sock::Outcome::WouldBlock) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     assert(got.outcome == Sock::Outcome::Invalid);
+    for (auto value : input) assert(value == 0x6b);
     // Boundary: the full 1350-byte datagram must survive untruncated.
     std::array<std::uint8_t, Sock::MaxDatagram> full{};
     full.fill(0xa5);
@@ -63,12 +65,14 @@ int main() {
     assert(::sendto(raw, oversized.data(), oversized.size(), 0,
                     reinterpret_cast<sockaddr*>(&dst), sizeof(dst)) ==
            static_cast<ssize_t>(oversized.size()));
+    input.fill(0x3c);
     for (int i=0; i<1000; ++i) {
         got=second.receive(input.data(), input.size());
         if (got.outcome != Sock::Outcome::WouldBlock) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     assert(got.outcome == Sock::Outcome::Invalid);
+    for (auto value : input) assert(value == 0x3c);
     assert(::close(raw) == 0);
     first.close();
     assert(first.send_to_loopback(second.port(), ping, sizeof ping) == Sock::Outcome::Closed);
