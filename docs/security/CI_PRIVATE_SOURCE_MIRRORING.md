@@ -16,6 +16,10 @@ Before the publisher may read or export private source bytes, it must query the
 immutable platform-conformance incident identities for #22, #77, #127,
 #171, #172, #198, #200, #212, and #222 and
 require each issue to be exactly `closed` with `state_reason=completed`.
+Issue closure is necessary but not sufficient. The protected-main `.github/private-ci-incident-dispositions.json` registry must also mark every blocking incident resolved and pin the exact independent `@ORESoftware` disposition comment ID, body digest, timestamp, and reviewer identity. A `hold` entry denies export even when the GitHub issue itself is closed.
+
+The immutable carrier quarantine set also denies Zed, Scintilla, dummy-stack, agent-pontifex, led-dynamo, and ClaimGraph by case-folded slug and immutable repository ID, so repository rename cannot bypass containment.
+
 Open incidents, alternate close reasons, issue-ID/URL drift, or a pull request
 masquerading as an issue all fail closed. The gate is rechecked **before each source-bearing Git write**, as well as
 immediately before executable carrier authorization. All nine incident IDs
