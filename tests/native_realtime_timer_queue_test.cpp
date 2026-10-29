@@ -116,5 +116,30 @@ int main() {
            == Status::Ok);
     assert(strict_start.lateness_ns == 2);
     assert(strict_start.maximum_lateness_ns == 2);
+
+    // Rejected registrations are not clock observations. Previously a
+    // full/overflowing arm at UINT64_MAX advanced the watermark and made
+    // otherwise valid earlier polls/arms fail with ClockBackwards.
+    Queue rejection;
+    Queue::Handle pending{}, near_due{}, denied{};
+    Queue::Expired rejection_due{};
+    assert(rejection.arm_after(10, 20, 101, 1, 1, pending) == Status::Ok);
+    assert(rejection.arm_after(UINT64_MAX, 1, 102, 1, 1, denied)
+           == Status::Overflow);
+    assert(denied.domain == 0 && rejection.outstanding() == 1);
+    assert(rejection.poll_due(11, rejection_due) == Status::NotReady);
+    assert(rejection.arm_after(11, 2, 102, 1, 1, near_due) == Status::Ok);
+    assert(rejection.arm_after(UINT64_MAX, 0, 103, 1, 1, denied)
+           == Status::Full);
+    assert(denied.domain == 0 && rejection.outstanding() == 2);
+    assert(rejection.poll_due(12, rejection_due) == Status::NotReady);
+    assert(rejection.poll_due(13, rejection_due) == Status::Ok);
+    assert(rejection_due.handle.domain == near_due.domain &&
+           rejection_due.handle.generation == near_due.generation &&
+           rejection_due.handle.slot == near_due.slot);
+    assert(rejection.claim_start(near_due, 102, 1, 13, strict_start)
+           == Status::Ok);
+    assert(rejection.cancel(pending) == Status::Ok);
+    assert(rejection.outstanding() == 0);
     return 0;
 }

@@ -68,12 +68,18 @@ public:
         if (closed_) return Status::Closed;
         if (domain_ == 0 || actor_id == 0 || actor_generation == 0)
             return Status::Invalid;
-        if (!observe_clock(now_ns)) return Status::ClockBackwards;
+        // Rejected admissions must not advance the clock watermark: an
+        // overflowing or full request with a far-future timestamp must not
+        // prevent an already-armed timer from subsequently being polled.
+        // Commit the observation only when a slot is actually admitted.
+        if (clock_seen_ && now_ns < last_now_ns_) return Status::ClockBackwards;
         if (delay_ns > UINT64_MAX - now_ns) return Status::Overflow;
         if (next_sequence_ == UINT64_MAX) return Status::Overflow;
         for (std::size_t i = 0; i < Capacity; ++i) {
             Slot& s = slots_[i];
             if (s.phase != Phase::Free || s.generation == UINT64_MAX) continue;
+            clock_seen_ = true;
+            last_now_ns_ = now_ns;
             ++s.generation;
             s.sequence = next_sequence_++;
             s.deadline_ns = now_ns + delay_ns;
