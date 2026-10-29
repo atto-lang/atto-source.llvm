@@ -130,8 +130,6 @@ def verify_native_entry_linkage(ir):
     guest_calls = re.findall(
         rb"(?m)^\s*(?:%[A-Za-z0-9_.$-]+\s*=\s*)?"
         rb"(?:(?:tail|musttail|notail)\s+)?call\s+", body)
-    require(len(guest_calls) == 1,
-            "native main must contain exactly one guest call")
     require(re.search(
         rb"(?m)^\s*(?:br|switch|indirectbr|invoke|callbr|resume|unreachable)\b",
         body) is None,
@@ -143,6 +141,8 @@ def verify_native_entry_linkage(ir):
         rb"(?m)^\s*(%[A-Za-z0-9_.$-]+)\s*=\s*(?:tail\s+)?call\s+i64\s+"
         rb"@__oreslang_guest_main\s*\(", body)
     require(call is not None, "native main does not call guest entrypoint")
+    require(len(guest_calls) == 1,
+            "native main must contain exactly one guest call")
     result_name = re.escape(call.group(1))
     narrowed = re.search(
         rb"(?m)^\s*(%[A-Za-z0-9_.$-]+)\s*=\s*trunc\s+i64\s+" +
