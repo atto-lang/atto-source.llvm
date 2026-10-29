@@ -141,7 +141,7 @@ int main(void) {
     check(ores_native_actor_scheduler_try_send(
         s.vm,s.refs[0],4) == ORES_NATIVE_SEND_ACCEPTED);
     wait_for(&s.messages,5);
-    check(atomic_load(&s.result) == ORES_NATIVE_SEND_INVALID_REF);
+    check(atomic_load(&s.result) == ORES_NATIVE_SEND_OWNERSHIP_REJECTED);
     check(atomic_load(&s.commits) == 2);
     check(atomic_load(&s.errors) == 0);
 
