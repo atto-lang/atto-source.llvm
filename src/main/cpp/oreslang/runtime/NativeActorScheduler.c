@@ -990,12 +990,19 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
         unlock(s);
         return ORES_NATIVE_WAKE_PRODUCER_RETIRED;
     }
+    /* The target may STOP after a successful TRANSFER. PUBLISH must check
+     * its exact generation again under the same scheduler mutex. A retired
+     * target is a failed send, not a READY/delivered message. Still wake the
+     * live producer with a typed CANCELLED outcome: that authenticated turn
+     * must unwind any retained guest frame and return its physical loans. */
+    const int target_retired = !matching(s, ticket.target)
+        || s->actors[ticket.target.actor_slot].retired;
     /* Admission/execution identifiers were reserved before the Future could
      * suspend. Publication is an allocation-free in-memory state change. */
     if (!s->reserved_wakes || s->accepted == UINT64_MAX) abort();
     const int new_lane = !lane->active && !lane_has_work(lane);
     --s->reserved_wakes;
-    w->outcome = outcome;
+    w->outcome = target_retired ? ORES_NATIVE_WAKE_CANCELLED : outcome;
     w->state = WAKE_READY;
     ++lane->wake_ready;
     if (new_lane) ++s->runnable_lanes;
@@ -1004,7 +1011,10 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     ++s->outstanding;
     pthread_cond_signal(&s->ready);
     unlock(s);
-    return ORES_NATIVE_WAKE_PUBLISHED;
+    /* The scheduled producer callback is internal completion accounting.
+     * TARGET_RETIRED must never be interpreted as destination delivery. */
+    return target_retired ? ORES_NATIVE_WAKE_TARGET_RETIRED
+        : ORES_NATIVE_WAKE_PUBLISHED;
 }
 int ores_native_actor_scheduler_is_current_wake(
         OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
