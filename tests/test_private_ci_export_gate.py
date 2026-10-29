@@ -113,12 +113,12 @@ class ExportGateTest(unittest.TestCase):
         self.check_rejected()
 
     def test_control_character_path_rejected(self):
-        self.check_rejected(DEST, 1234, A, ".github/workflows/carrier.yml\\nextra",
+        self.check_rejected(DEST, 1234, A, ".github/workflows/carrier.yml\nextra",
                             B, ARGS[5], C, 1123)
 
     def test_oversized_policy_file_rejected(self):
         (self.root / ".github/private-ci-approved-repositories.txt").write_text(
-            "#" + ("x" * (1024 * 1024)) + "\\n" + DEST + "\\n",
+            "#" + ("x" * (1024 * 1024)) + "\n" + DEST + "\n",
             encoding="utf-8")
         self.check_rejected()
 
