@@ -18,11 +18,16 @@ int main() {
   const std::string dir(name);
   DurableLocalDispatchClaim store(dir);
   auto req=request("dispatch");
-  assert(local_claim_filename(req)=="094cebe33e39cfe9c78133d726cbe2ea792b663bd24c596b77b903dc1dbf3e66.claim");
+  assert(local_claim_filename(req)=="0d308e5482aa6701e9dc55b9c1e70e311eb83188e26c8bf86befa838c2d11e21.claim");
   assert(store.claim_once(req));
   assert(!store.claim_once(req));
   auto changed=req;changed.context_sha256=std::string(64,'c');
   assert(!store.claim_once(changed)); // different payload, same identity
+  auto reincarnated=req;
+  reincarnated.generation=8;reincarnated.epoch=10;
+  reincarnated.exact_revision=std::string(40,'c');
+  assert(local_claim_filename(req)==local_claim_filename(reincarnated));
+  assert(!store.claim_once(reincarnated));
   auto independent=request("independent");
   assert(store.claim_once(independent));
   auto invalid=request("../invalid"); // ID may contain '/' but filename is opaque hash
