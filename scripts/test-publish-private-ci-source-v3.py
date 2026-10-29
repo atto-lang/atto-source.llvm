@@ -83,6 +83,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             22: issue(22, 5832921751),
             77: issue(77, 5904679716),
             127: issue(127, 5935338521),
+            171: issue(171, 6042555082),
+            172: issue(172, 6042602777),
+            212: issue(212, 6087989978),
         }
 
         def api_for(values):
@@ -106,6 +109,16 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         wrong_id = dict(good)
         wrong_id[127] = issue(127, 1)
         cases.append(wrong_id)
+        for incident, incident_id in (
+            (171, 6042555082),
+            (172, 6042602777),
+            (212, 6087989978),
+        ):
+            reopened = dict(good)
+            reopened[incident] = issue(
+                incident, incident_id, state="open", reason=None
+            )
+            cases.append(reopened)
         wrong_url = dict(good)
         wrong_url[22] = issue(22, 5832921751, url="https://github.com/other/repo/issues/22")
         cases.append(wrong_url)
