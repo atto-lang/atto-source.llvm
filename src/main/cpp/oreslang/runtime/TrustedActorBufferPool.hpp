@@ -166,6 +166,20 @@ public:
         slot->data[offset] = value;
     }
 
+    // Pure admission preflight: no ownership or generation change. This
+    // distinguishes a legitimately full/closed destination from an already
+    // moved, borrowed or forged sender handle. A later take rechecks under
+    // the same pool lock; the scheduler gate serializes legitimate senders.
+    void require_transferable(const Handle& h, TrustedBufferActor sender) const {
+        validate_actor(sender);
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        const auto slot = checked(h, sender);
+        if (slot->read_loans)
+            throw std::logic_error("cannot transfer an immutably borrowed buffer");
+        if (slot->generation == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("buffer generation exhausted");
+    }
+
     // This is a metadata-only ownership move: no payload copying or allocating.
     // Mailbox reservation/recipient validation must precede this commit.
     Handle take(const Handle& h, TrustedBufferActor from, TrustedBufferActor to) {
