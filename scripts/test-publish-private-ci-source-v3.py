@@ -985,6 +985,22 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 v3.exact_source_tree(669, "9" * 40)
         self.assertFalse(any("/git/blobs/" in route for route in seen))
 
+    def test_publish_rejects_invalid_clock_before_authority_or_blob_write(self):
+        for invalid in (dt.datetime(2026, 10, 20), "2026-10-20", 0):
+            with self.subTest(value=invalid), (
+                patch.object(v3, "protected_authority") as authority,
+                patch.object(v3, "gh_api") as api,
+                patch.object(v3, "exact_source_tree") as tree,
+            ):
+                with self.assertRaisesRegex(v3.Denied, "timezone-aware"):
+                    v3.publish(
+                        "trusted/ci", 669, "9" * 40,
+                        "ci/test-plans/llvm-pr669.json", now=invalid,
+                    )
+                authority.assert_not_called()
+                api.assert_not_called()
+                tree.assert_not_called()
+
     def test_publish_denies_source_main_drift_before_first_blob_post(self):
         contract = carrier_contract()
         rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
