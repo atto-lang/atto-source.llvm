@@ -1,0 +1,32 @@
+name: LLVM persistence sidecar host contract (NOT guest parity)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeBatchPersistence.hpp'
+      - 'tests/native_batch_persistence_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/persistence-sidecar-native-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-native-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and execute native host persistence tests under ASan/UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_batch_persistence_test.cpp \
+            -o /tmp/oreslang-native-batch-persistence-test
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-native-batch-persistence-test
+      - name: Independent Clang compilation and execution
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp tests/native_batch_persistence_test.cpp \
+            -o /tmp/oreslang-native-batch-persistence-clang
+          /tmp/oreslang-native-batch-persistence-clang
