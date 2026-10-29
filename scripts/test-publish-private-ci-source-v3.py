@@ -76,6 +76,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
              "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/127"),
             (212, 6087989978,
              "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/212"),
+            (222, 6092501448,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/222"),
         )
         self.assertEqual(v3.INCIDENT_GATES, expected)
         self.assertEqual(len({number for number, _id, _url in expected}), len(expected))
@@ -107,6 +109,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             77: issue(77, 5904679716),
             127: issue(127, 5935338521),
             212: issue(212, 6087989978),
+            222: issue(222, 6092501448),
         }
 
         def api_for(values):
@@ -122,8 +125,12 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
 
         cases = []
         latest_incident_open = dict(good)
-        latest_incident_open[212] = issue(212, 6087989978, state="open", reason=None)
+        latest_incident_open[222] = issue(222, 6092501448, state="open", reason=None)
         cases.append(latest_incident_open)
+
+        prior_latest_incident_open = dict(good)
+        prior_latest_incident_open[212] = issue(212, 6087989978, state="open", reason=None)
+        cases.append(prior_latest_incident_open)
         opened = dict(good)
         opened[22] = issue(22, 5832921751, state="open", reason=None)
         cases.append(opened)
