@@ -6,6 +6,9 @@ on:
       - 'tests/trusted_actor_buffer_*_test.cpp'
       - '.github/workflows/trusted-actor-buffer-exact-head.yml'
       - 'tests/verify_trusted_actor_buffers.sh'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
+      - 'tests/native_actor_owned_buffer_scheduler_test.c'
   workflow_dispatch:
 permissions:
   contents: read
@@ -85,3 +88,47 @@ jobs:
             -Isrc/main/cpp tests/trusted_actor_buffer_scheduler_gate_test.cpp \
             -o "${RUNNER_TEMP}/trusted-buffer-tsan"
           "${RUNNER_TEMP}/trusted-buffer-tsan"
+
+  tagged-native-data:
+    name: ${{ matrix.compiler }} native tagged DATA host C11
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['gcc', 'clang']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact scheduler and native test source
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          for path in \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
+            tests/native_actor_owned_buffer_scheduler_test.c; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+          done
+          echo "EXACT_NATIVE_TAGGED_HEAD=$EXPECTED_HEAD"
+      - name: Compile and run tagged buffer scheduler ABI regression
+        shell: bash
+        env:
+          CC: ${{ matrix.compiler }}
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          "${CC}" -std=c11 -pthread -UNDEBUG -O1 -g \
+            -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -Isrc/main/cpp \
+            tests/native_actor_owned_buffer_scheduler_test.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o "${RUNNER_TEMP}/native-tagged-buffer"
+          "${RUNNER_TEMP}/native-tagged-buffer"
