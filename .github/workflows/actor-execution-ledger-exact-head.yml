@@ -13,6 +13,9 @@ on:
       - tests/native_actor_retained_cleanup_unused_reservation_test.c
       - tests/native_actor_retained_stop_wake_race_test.c
       - tests/native_actor_execution_ledger_test.cpp
+      - tests/native_actor_compiled_guest_ledger_bridge_test.c
+      - tests/native_actor_compiled_guest_ledger.py
+      - tests/fixtures/native-retained-guest-steps.ores
       - docs/ACTOR_EXECUTION_LEDGER_V1.md
       - CMakeLists.txt
       - .github/workflows/actor-execution-ledger-exact-head.yml
@@ -53,7 +56,10 @@ jobs:
             tests/native_actor_retained_cleanup_autoadmit_test.c \
             tests/native_actor_retained_cleanup_unused_reservation_test.c \
             tests/native_actor_retained_stop_wake_race_test.c \
-            tests/source_actor_await_trace_runtime_test.c; do
+            tests/source_actor_await_trace_runtime_test.c \
+            tests/native_actor_compiled_guest_ledger_bridge_test.c \
+            tests/native_actor_compiled_guest_ledger.py \
+            tests/fixtures/native-retained-guest-steps.ores; do
             expected="$(git rev-parse "HEAD:$path")"
             actual="$(git hash-object "$path")"
             test "$actual" = "$expected"
@@ -238,3 +244,51 @@ jobs:
             build/actor-ledger-gate/scheduler-sanitized.o \
             -o build/actor-ledger-gate/stop-wake-race-sanitized
           build/actor-ledger-gate/stop-wake-race-sanitized
+
+  compiled-ores-guest:
+    # Genuine guest code compiled by oreslang-llvmc, not an IR fixture or
+    # a C mock. Only trusted checkout of the source repo's exact PR tree.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout original private repository at immutable PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source identity and compiled guest gate blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "EXACT_GUEST_HEAD=$(git rev-parse HEAD)"
+          echo "EXACT_GUEST_TREE=$(git rev-parse 'HEAD^{tree}')"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+          for path in \
+              tests/fixtures/native-retained-guest-steps.ores \
+              tests/native_actor_compiled_guest_ledger.py \
+              tests/native_actor_compiled_guest_ledger_bridge_test.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+          done
+      - name: Build real Oreslang LLVM compiler against installed LLVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! find /usr/lib/llvm-* -name LLVMConfig.cmake -print -quit 2>/dev/null | grep -q .; then
+            sudo apt-get update
+            sudo apt-get install -y llvm-dev
+          fi
+          cmake -S . -B build/actor-ledger-guest -G Ninja -DBUILD_TESTING=OFF
+          cmake --build build/actor-ledger-guest --target oreslang-llvmc -j 2
+      - name: Compile and execute actual guest segments under native retained DATA/WAKE
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/native_actor_compiled_guest_ledger.py \
+            --compiler "$PWD/build/actor-ledger-guest/oreslang-llvmc" \
+            --clang clang --root "$PWD"
+          python3 tests/native_actor_compiled_guest_ledger.py \
+            --compiler "$PWD/build/actor-ledger-guest/oreslang-llvmc" \
+            --clang clang --root "$PWD" --sanitize
