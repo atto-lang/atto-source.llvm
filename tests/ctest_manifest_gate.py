@@ -28,6 +28,14 @@ VISIBILITY_NEGATIVE_FIXTURES = {
     "reject_native_private_filled_commit": "class-private-filled-array-commit-reject.ores",
 }
 VISIBILITY_POSITIVE = "native_public_class_field_read"
+GENERATOR_REJECTION_DIAGNOSTIC = (
+    "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering"
+)
+GENERATOR_NEGATIVE_FIXTURES = {
+    f"native_generator_v1_{case}_failclosed": f"generator-v1-{case}-reject.ores"
+    for case in ("sync", "async", "suspend",
+                 "legacy-fnc", "legacy-routine", "legacy-async-fnc")
+}
 
 
 CRITICAL_TESTS = (
@@ -59,6 +67,7 @@ CRITICAL_TESTS = (
     "reject_panic_effect",
     *VISIBILITY_NEGATIVE_FIXTURES,
     VISIBILITY_POSITIVE,
+    *GENERATOR_NEGATIVE_FIXTURES,
     "native_borrow_alias_matrix_release",
     "native_borrow_alias_matrix_sanitizer",
 )
@@ -91,6 +100,8 @@ GUEST_FIXTURES = {
     "reject_throw_effect": ("unsupported-throw-effect.ores", "--diagnostic"),
     "reject_raise_effect": ("unsupported-raise-effect.ores", "--diagnostic"),
     "reject_panic_effect": ("unsupported-panic-effect.ores", "--diagnostic"),
+    **{name: (fixture, "--diagnostic")
+       for name, fixture in GENERATOR_NEGATIVE_FIXTURES.items()},
 }
 SOURCE_ACTOR_TESTS = frozenset({
     "source_actor_compiled_native_lifecycle",
@@ -163,6 +174,8 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
         expected_evidence = ("ret i64 42" if name == "constant_main" else
             "native realtime source loop requires verified LLVM continuation lowering"
             if name == "native_rt_while_loop_failclosed" else
+            GENERATOR_REJECTION_DIAGNOSTIC
+            if name in GENERATOR_NEGATIVE_FIXTURES else
             "native exceptional-control boundary unsupported")
         if actual_evidence != expected_evidence:
             raise ManifestFailure(f"critical guest fixture requires exact evidence: {name}")
