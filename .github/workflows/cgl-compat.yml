@@ -3,7 +3,12 @@ on:
   pull_request:
     paths:
       - 'scripts/cgl-*'
+      - 'scripts/compile-aot.sh'
       - 'tests/test_cgl_preflight.py'
+      - 'tests/native_cgl_host_admission_test.cpp'
+      - 'tests/fixtures/forward-call-main.ores'
+      - 'src/main/cpp/oreslang/runtime/CglHostAdmission.hpp'
+      - 'CMakeLists.txt'
       - 'docs/CGL_DEPLOYMENT.md'
       - '.github/workflows/cgl-compat.yml'
   workflow_dispatch:
@@ -28,5 +33,6 @@ jobs:
       - name: End to end source to ELF64 process on generic Linux
         run: bash scripts/cgl-native-smoke.sh
       - name: Existing native scalar source regression
-        run: ctest --test-dir build --output-on-failure -R '^(native_cgl_linux_host_admission|native_source_i64_os_exit_subset)
-
+        run: |
+          ctest --test-dir build --output-on-failure \
+            -R '^(native_cgl_linux_host_admission|native_source_i64_os_exit_subset)$'
