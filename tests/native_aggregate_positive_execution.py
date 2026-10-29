@@ -125,7 +125,7 @@ def main():
                     src.read_bytes() == original and not src.is_symlink(),
                     name + ": compiler mutated source or emitted unexpected artifacts")
             if calls:
-                matches = [re.search(rb"call\\s+i64\\s+@" + re.escape(call) + rb"\\s*\\(",
+                matches = [re.search(rb"call\s+i64\s+@" + re.escape(call) + rb"\s*\(",
                                      compilation.stdout) for call in calls]
                 require(all(matches) and matches[0].start() < matches[1].start(),
                         name + ": lexical initializer call order lost in unoptimized LLVM IR")
