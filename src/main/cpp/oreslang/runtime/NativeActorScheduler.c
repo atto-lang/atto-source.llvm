@@ -803,7 +803,14 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_owned_buffer(
             } else {
                 const OresNativeOwnedBufferTicket prior = ticket;
                 if (!s->buffer_commit(s->context, sender, recipient, &ticket)) {
-                    /* Rejected commit MUST leave sender's owner unchanged. */
+                    /* A failed commit must not even rewrite the capability
+                     * presented to the scheduler. Underlying pool ownership
+                     * is separately guaranteed by the trusted host hook. */
+                    if (ticket.tenant_epoch != prior.tenant_epoch
+                            || ticket.type_schema != prior.type_schema
+                            || ticket.buffer_id != prior.buffer_id
+                            || ticket.buffer_generation != prior.buffer_generation)
+                        abort();
                     status = ORES_NATIVE_SEND_OWNERSHIP_REJECTED;
                 } else {
                     /* Committed ticket cannot silently change tenant, type or
