@@ -237,9 +237,16 @@ int ores_native_actor_scheduler_cancel_wake(
  * This is NOT late producer cancellation and must settle the send as failed. */
 int ores_native_actor_scheduler_abort_transferred_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
-/* After transfer, publication cannot fail due to capacity or allocation.
- * If STOP won first it consumes the reserved ticket as a terminal failure,
- * without scheduling user code or fabricating successful delivery. */
+/* After TRANSFER, PUBLISH is allocation-free and capacity-infallible.
+ * If the producer STOPs, return PRODUCER_RETIRED and release its loan: no
+ * guest callback runs. If the separate local target STOPs after TRANSFER,
+ * return TARGET_RETIRED and queue exactly one CANCELLED wake on the still-
+ * live producer's authenticated actor lane, allowing it to unwind retained
+ * frames and release loans. This producer wake increments internal accepted/
+ * completed execution accounting; it is NOT successful target delivery.
+ * A target STOP after PUBLISH is a later event, and a PUBLISHED return alone
+ * is never proof of remote/destination mailbox delivery. On all terminal
+ * outcomes the caller must settle the target send descriptor as failed. */
 OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
     OresNativeWakeOutcome outcome);
