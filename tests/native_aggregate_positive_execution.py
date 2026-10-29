@@ -122,6 +122,23 @@ def verify_native_entry_linkage(ir):
     require(guest is not None and host is not None,
             "missing exact guest or native entrypoint definition")
     body = host.group("body")
+    # This acceptance corpus has four synchronous, stack-only programs.
+    # Their C wrapper must be one straight-line block with one guest call
+    # and one return. Otherwise unreachable, unrelated code could contain
+    # a convincing guest result while the actual host main returns a
+    # separately fabricated constant (or calls exit() before reaching it).
+    guest_calls = re.findall(
+        rb"(?m)^\s*(?:%[A-Za-z0-9_.$-]+\s*=\s*)?"
+        rb"(?:(?:tail|musttail|notail)\s+)?call\s+", body)
+    require(len(guest_calls) == 1,
+            "native main must contain exactly one guest call")
+    require(re.search(
+        rb"(?m)^\s*(?:br|switch|indirectbr|invoke|callbr|resume|unreachable)\b",
+        body) is None,
+        "native main contains unsupported control flow")
+    exits = re.findall(rb"(?m)^\s*ret\s+i32\s+([^\s,;]+)", body)
+    require(len(exits) == 1,
+            "native main must have exactly one OS return")
     call = re.search(
         rb"(?m)^\s*(%[A-Za-z0-9_.$-]+)\s*=\s*(?:tail\s+)?call\s+i64\s+"
         rb"@__oreslang_guest_main\s*\(", body)
