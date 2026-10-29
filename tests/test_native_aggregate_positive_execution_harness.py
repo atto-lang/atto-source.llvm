@@ -60,6 +60,59 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "does not convert"):
             verify_native_entry_linkage(ir)
 
+    def test_native_truncation_without_return_link_rejected(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i32 @main() {\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %valid = icmp ule i64 %r, 255\n"
+              b" %narrowed = trunc i64 %r to i32\n"
+              b" %checked = select i1 %valid, i32 %narrowed, i32 1\n"
+              b" ret i32 19\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "does not return checked"):
+            verify_native_entry_linkage(ir)
+
+    def test_native_constant_guard_rejected(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i32 @main() {\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %valid = icmp ule i64 19, 255\n"
+              b" %narrowed = trunc i64 %r to i32\n"
+              b" %checked = select i1 %valid, i32 %narrowed, i32 1\n"
+              b" ret i32 %checked\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "lacks a guest-bound"):
+            verify_native_entry_linkage(ir)
+
+    def test_native_selecting_constant_instead_of_guest_rejected(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i32 @main() {\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %valid = icmp ule i64 %r, 255\n"
+              b" %narrowed = trunc i64 %r to i32\n"
+              b" %checked = select i1 %valid, i32 19, i32 1\n"
+              b" ret i32 %checked\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "does not select checked"):
+            verify_native_entry_linkage(ir)
+
+    def test_native_selecting_without_guest_guard_rejected(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i32 @main() {\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %valid = icmp ule i64 %r, 255\n"
+              b" %narrowed = trunc i64 %r to i32\n"
+              b" %checked = select i1 true, i32 %narrowed, i32 1\n"
+              b" ret i32 %checked\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "does not select checked"):
+            verify_native_entry_linkage(ir)
+
+    def test_native_unchecked_guest_exit_rejected(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i32 @main() {\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %narrowed = trunc i64 %r to i32\n"
+              b" ret i32 %narrowed\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "lacks a guest-bound"):
+            verify_native_entry_linkage(ir)
+
     def test_real_guest_status_accepted(self):
         observed = subprocess.CompletedProcess(["guest"], 19, b"", b"")
         verify_guest_process("named-source-order", observed, 19)
