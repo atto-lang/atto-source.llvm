@@ -51,7 +51,7 @@ CARRIER_CODEOWNERS = (
 CARRIER_CODEOWNERS_BLOB = v3.git_blob_sha(CARRIER_CODEOWNERS)
 
 
-def carrier_contract(review_pr=None):
+def carrier_contract():
     value = {
         "repository_id": 1323598177,
         "base_sha": BASE,
@@ -60,8 +60,6 @@ def carrier_contract(review_pr=None):
         "test_plan_path": "ci/test-plans/llvm-pr669.json",
         "test_plan_blob_sha": PLAN_BLOB,
     }
-    if review_pr is not None:
-        value["review_pr"] = review_pr
     return value
 
 
@@ -143,7 +141,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(v3.Denied):
                 v3.parse_allowlist(raw, "trusted/ci")
 
-    def test_contract_pins_repo_base_workflow_plan_and_pr(self):
+    def test_contract_pins_repo_base_workflow_plan_and_allowed_prs(self):
         raw = json.dumps(
             {
                 "schema": 1,
@@ -569,7 +567,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "exceeds size limit"):
                 v3.run_bounded_gh(["/usr/bin/gh"], env={}, timeout=1)
 
-    def test_contract_rejects_invalid_carrier_review_pr(self):
+    def test_contract_rejects_retired_carrier_review_pr_field(self):
         raw = json.dumps(
             {
                 "schema": 1,
@@ -733,7 +731,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             review.assert_not_called()
 
     def test_recheck_destination_identity_rejects_carrier_main_movement(self):
-        contract = carrier_contract(review_pr=17)
+        contract = carrier_contract()
         eligible = {
             "id": contract["repository_id"],
             "full_name": "trusted/ci",
