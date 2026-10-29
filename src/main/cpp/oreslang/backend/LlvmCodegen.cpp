@@ -3,6 +3,7 @@
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/OresIsolateAbi.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -3009,15 +3010,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* load_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 4));
         auto* store_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 5));
         auto* compatible = b.CreateAnd(
-            b.CreateAnd(b.CreateICmpEQ(version, llvm::ConstantInt::get(i32, 2)),
-                        b.CreateICmpEQ(slots, llvm::ConstantInt::get(i32, 16))),
+            b.CreateAnd(b.CreateICmpEQ(version, llvm::ConstantInt::get(i32, ORES_ISOLATE_ABI_VERSION)),
+                        b.CreateICmpEQ(slots, llvm::ConstantInt::get(i32, ORES_ISOLATE_I64_SLOTS))),
             b.CreateAnd(b.CreateIsNotNull(data),
                 b.CreateAnd(b.CreateIsNotNull(load_fn), b.CreateIsNotNull(store_fn))));
         b.CreateCondBr(compatible, read, bad_context);
         b.SetInsertPoint(read);
         auto* old_slot = b.CreateAlloca(i64, nullptr, "tenant.old");
         auto* load_type = llvm::FunctionType::get(i32, {native_ptr, i32, native_ptr}, false);
-        auto* load_ok = b.CreateCall(load_type, load_fn,
+        // LLVM 14-17 typed pointers require an actual function pointer type;
+        // LLVM 18+ opaque pointers naturally collapse this to the same ptr.
+        auto* load_callee = b.CreateBitCast(load_fn, load_type->getPointerTo());
+        auto* load_ok = b.CreateCall(load_type, load_callee,
             {data, llvm::ConstantInt::get(i32, 0), b.CreateBitCast(old_slot, native_ptr)});
         b.CreateCondBr(b.CreateICmpEQ(load_ok, llvm::ConstantInt::get(i32, 1)),
                        execute, bad_load);
@@ -3026,7 +3030,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* next = b.CreateCall(declarations.at(native_function_slot(isolate_entry, 2)),
                                   {old, input});
         auto* store_type = llvm::FunctionType::get(i32, {native_ptr, i32, i64}, false);
-        auto* saved = b.CreateCall(store_type, store_fn,
+        auto* store_callee = b.CreateBitCast(store_fn, store_type->getPointerTo());
+        auto* saved = b.CreateCall(store_type, store_callee,
             {data, llvm::ConstantInt::get(i32, 0), next});
         b.CreateCondBr(b.CreateICmpEQ(saved, llvm::ConstantInt::get(i32, 1)),
                        success, bad_store);

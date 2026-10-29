@@ -1,6 +1,8 @@
 ; Test-only hand-written LLVM IR. ABI v2 status/out-value, not .ores lowering.
 %OresIsolateContext = type { i32, i32, i64, ptr, ptr, ptr }
 
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
+
 define i32 @guest_counter_llvm(ptr %ctx, i64 %delta, ptr %out) {
 entry:
   %vp = getelementptr inbounds %OresIsolateContext, ptr %ctx, i32 0, i32 0
@@ -22,7 +24,13 @@ invalid_load:
   ret i32 2
 call_store:
   %value = load i64, ptr %old, align 8
-  %next = add i64 %value, %delta
+  %checked = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %value, i64 %delta)
+  %overflow = extractvalue { i64, i1 } %checked, 1
+  br i1 %overflow, label %invalid_overflow, label %safe_store
+invalid_overflow:
+  ret i32 4
+safe_store:
+  %next = extractvalue { i64, i1 } %checked, 0
   %store_fnptr = getelementptr inbounds %OresIsolateContext, ptr %ctx, i32 0, i32 5
   %store_fn = load ptr, ptr %store_fnptr, align 8
   %stored = call i32 %store_fn(ptr %data, i32 0, i64 %next)

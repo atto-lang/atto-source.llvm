@@ -250,3 +250,25 @@ function pointer cast or native invocation. Do not load or hot-swap a v1
 entrypoint as v2; context version checks performed by a wrongly cast native
 function cannot prevent calling-convention undefined behavior. The host
 test harness uses known compile-time typed functions, not a dynamic loader.
+
+## Cross-backend IsolateVM parity rollout
+
+The lifecycle vocabulary above applies to every Oreslang execution backend.
+Actual host prototypes are being developed independently in the following
+**draft PRs**, each with a versioned tenant handle, explicit shutdown
+and backend-specific security boundaries:
+
+| Backend | Draft PR | Current narrow scope |
+| --- | --- | --- |
+| .NET Native AOT | [#243](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/243) | Static Native AOT tenant registry, actor mailboxes and resource lifetime pins; not CLR/OS memory isolation |
+| WASM | [#172](https://github.com/ores-truffle-oreslang/oreslang-source.wasm/pull/172) | Tenant admission/quota wrapper over real disposable import-free WebAssembly workers; workers are not OS sandboxes |
+| Forge | [#131](https://github.com/ores-truffle-oreslang/oreslang-source.forge/pull/131) | Independent C++20 tenant/actor tickets and physical-operation retirement accounting; native generated code not sandboxed |
+| Cranelift | [#16](https://github.com/ores-truffle-oreslang/oreslang-source.cranelift/pull/16) | Independent Rust tenant/actor ticket registry; in-process JIT entrypoints not connected or sandboxed |
+
+Each repository has `docs/VM_ISOLATE_CONTRACT.md`, which repeats the
+lifecycle and V8-inspired distinctions and records the backend-specific
+limitations. None of these four draft PRs proves full .ores guest lowering,
+native process sandboxing, per-actor runtime parity, or cross-backend
+conformance. Require actual executed jobs at exact hashes before accepting
+any as merged parity. The Cranelift and Forge engines remain **independent**;
+one must not wrap or link to the other for implementation convenience.
