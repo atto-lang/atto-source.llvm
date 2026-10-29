@@ -30,17 +30,21 @@ fnc readonly_basic(int rows, int cols, int row_stride, int col_stride, int bytes
   return 1;
 }
 
+fnc readonly_last_index_fits(int last_index, int bytes, int capacity): int {
+  if (last_index == 9223372036854775807) { return 0; } fi
+  // Precondition: axis_span bounded to 2^20, bytes bounded to 2^20,
+  // so (last_index + 1) * bytes is below signed-i64 overflow.
+  if ((last_index + 1) * bytes > capacity) { return 0; } fi
+  return 1;
+}
+
 fnc readonly_bounded(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
   let int row_span = axis_span(rows, row_stride);
   let int col_span = axis_span(cols, col_stride);
   if (row_span < 0) { return 0; } fi
   if (col_span < 0) { return 0; } fi
   if (row_span > 9223372036854775807 - col_span) { return 0; } fi
-  let int last_index = row_span + col_span;
-  if (last_index == 9223372036854775807) { return 0; } fi
-  let int elements = last_index + 1;
-  if (elements * bytes > capacity) { return 0; } fi
-  return 1;
+  return readonly_last_index_fits(row_span + col_span, bytes, capacity);
 }
 
 fnc readonly_view(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
@@ -83,13 +87,18 @@ fnc is_equal(int left, int right): int {
   return 0;
 }
 
+fnc exact_capacity_product(int rows, int cols, int bytes, int capacity): int {
+  // Caller bounds all three multiplicands to 2^20.
+  let int elements = rows * cols;
+  if (elements * bytes != capacity) { return 0; } fi
+  return 1;
+}
+
 fnc exact_capacity_bounded(int rows, int cols, int bytes, int capacity): int {
   if (rows > 1048576) { return 0; } fi
   if (cols > 1048576) { return 0; } fi
-  let int elements = rows * cols;
   if (bytes > 1048576) { return 0; } fi
-  if (elements * bytes != capacity) { return 0; } fi
-  return 1;
+  return exact_capacity_product(rows, cols, bytes, capacity);
 }
 
 fnc exact_contiguous(int rows, int cols, int row_stride, int col_stride, int bytes, int capacity): int {
@@ -150,10 +159,10 @@ fnc tensor_cases_c(): int {
 
 pub fnc main(): int {
   let int a = tensor_cases_a();
-  if (a != 0) { return a; } fi
   let int b = tensor_cases_b();
-  if (b != 0) { return b; } fi
   let int c = tensor_cases_c();
+  if (a != 0) { return a; } fi
+  if (b != 0) { return b; } fi
   if (c != 0) { return c; } fi
   return 42;
 }
