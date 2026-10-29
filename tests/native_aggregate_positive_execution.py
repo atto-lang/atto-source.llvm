@@ -95,6 +95,22 @@ def sha256(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def verify_negative_rejection(result, diagnostic):
+    """Reject lookalike identifiers, published IR, and abnormal termination.
+
+    A substring match would falsely admit
+    AGGREGATE_FIELD_TYPE_UNVERIFIED_WRONG as the expected diagnostic.
+    """
+    token = rb"(?<![A-Za-z0-9_])" + re.escape(diagnostic.encode("ascii")) + rb"(?![A-Za-z0-9_])"
+    require(type(result.returncode) is int and result.returncode > 0,
+            "compiler did not reject source normally")
+    require(result.stdout == b"", "rejected source emitted output (possible LLVM IR)")
+    require(re.search(token, result.stderr) is not None,
+            "expected diagnostic not found as complete identifier: " + diagnostic)
+    for marker in (b"; ModuleID", b"source_filename =", b"target triple =", b"define "):
+        require(marker not in result.stderr, "rejected source leaked LLVM IR in stderr")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", type=Path, required=True)
