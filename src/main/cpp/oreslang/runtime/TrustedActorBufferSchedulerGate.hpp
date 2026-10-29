@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -73,7 +74,10 @@ public:
     }
     TrustedActorBufferSchedulerGate(const TrustedActorBufferSchedulerGate&) = delete;
     TrustedActorBufferSchedulerGate& operator=(const TrustedActorBufferSchedulerGate&) = delete;
-    ~TrustedActorBufferSchedulerGate() { close(); }
+    ~TrustedActorBufferSchedulerGate() noexcept {
+        // Destroying the native gate with a live turn would orphan authority.
+        if (!close()) std::terminate();
+    }
 
     // Host must establish authenticated actor identity and tenant before
     // registration. Generation is strictly increasing even after retirement.
@@ -157,15 +161,18 @@ public:
         rec.mailbox.reset();
     }
 
-    void close() noexcept {
+    bool close() noexcept {
         std::lock_guard<std::mutex> lock(state_->mutex);
-        if (state_->closed) return;
+        if (state_->closed) return true;
+        for (const auto& item : state_->actors)
+            if (item.second.in_turn) return false;
         state_->closed = true;
         for (auto& item : state_->actors) {
             if (item.second.mailbox) item.second.mailbox->close();
             item.second.live = false;
         }
         state_->pool->retire();
+        return true;
     }
 
 private:
