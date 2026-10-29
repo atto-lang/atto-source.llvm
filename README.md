@@ -17,6 +17,12 @@ Notes on the compiler and runtime:
 * OresLang must be built around excellent tree-shaking so we can get final binary executables as small as possible and reduce startup overhead etc.
 
 
+## OresVM root host and tenant IsolateVM architecture
+
+**OresVM** is the root supervisor and tenant admission runtime; each **IsolateVM** is a tenant-owned execution domain containing many Oreslang actors. The OresIsolateContext is a temporary guest-call ABI view, not a separate VM. This distinction and the relevant V8 isolate/context, pointer-compression and security lessons are documented in [OresVM vs IsolateVM](docs/ORESVM_VS_ISOLATEVM.md).
+
+Current implementation is **host-only and incomplete**; per-tenant guest source lowering, actor scheduler integration and OS-process sandboxing remain outstanding. See [OresVM tenant-isolate substrate status](docs/ORESVM_TENANT_ISOLATES.md).
+
 **Parity commitment: LLVM and Java/GraalVM are first-class Oreslang backends with the same language and observable runtime semantics.** Full feature parity is a standing requirement for the compiler, type system, standard library, actors, supervision, ownership/borrowing, scheduling, async/await, I/O and error handling—not an optional stretch goal. Features added to either backend must be tracked against the other backend and covered by shared conformance tests. LLVM must not be treated as a permanently restricted dialect of Oreslang.
 
 **Current verification status (October 2026):** LLVM has a tested but incomplete native source-to-IR/AOT implementation. **Full end-to-end parity has not yet been verified.** The inventory below documents implementation gaps to close, not exceptions to the parity requirement. Unsupported source fails closed rather than silently compiling with different semantics.
