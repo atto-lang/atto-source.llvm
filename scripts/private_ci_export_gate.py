@@ -122,9 +122,14 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
     if destination.casefold() not in approved:
         raise GateRejected("destination not approved on protected main")
 
-    contract = json.loads(_read(root, ".github/private-ci-carrier-contracts.json"),
-                          object_pairs_hook=_unique_object, parse_constant=_reject_nonfinite,
-                          parse_float=_finite_float)
+    try:
+        contract = json.loads(_read(root, ".github/private-ci-carrier-contracts.json"),
+                              object_pairs_hook=_unique_object, parse_constant=_reject_nonfinite,
+                              parse_float=_finite_float)
+    except GateRejected:
+        raise
+    except (ValueError, RecursionError, OverflowError) as exc:
+        raise GateRejected("invalid or overly nested carrier policy JSON") from exc
     if (not isinstance(contract, dict) or set(contract) != {"schema", "carriers"}
             or type(contract.get("schema")) is not int or contract["schema"] != 1
             or not isinstance(contract.get("carriers"), dict)):
