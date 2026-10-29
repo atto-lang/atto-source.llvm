@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/OresIsolateAbi.h"
+#include "oreslang/runtime/DurableLockQueues.hpp"
 
 #include <array>
 #include <cstddef>
@@ -26,6 +27,7 @@ struct IsolateConfig {
     // Includes queued and currently executing trusted guest invocations.
     // Bounded independently of actor admission; it is not a CPU-time limit.
     std::size_t max_inflight_guest_calls = 64;
+    DurableLockQueues::Limits durable_queues{};
 };
 
 // OresVM host-level reservation and queue budgets. The heap budget charges
@@ -51,7 +53,7 @@ struct IsolateSnapshot {
 class IsolateVM final {
     friend class OresVM;
     explicit IsolateVM(IsolateConfig value, std::uint64_t epoch)
-        : config(std::move(value)), generation(epoch) {}
+        : config(std::move(value)), generation(epoch), durable_queues(epoch, config.durable_queues) {}
     IsolateVM(const IsolateVM&) = delete;
     IsolateVM& operator=(const IsolateVM&) = delete;
     IsolateVM(IsolateVM&&) = delete;
@@ -68,6 +70,7 @@ class IsolateVM final {
     // This is not a production actor scheduler or per-actor concurrency gate.
     std::mutex guest_turn_mutex;
     std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> guest_globals{};
+    DurableLockQueues durable_queues;
 };
 
 } // namespace oreslang::runtime

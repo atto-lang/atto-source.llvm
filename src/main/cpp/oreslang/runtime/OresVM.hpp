@@ -254,12 +254,50 @@ public:
         return outcome.value;
     }
 
+    // Host-only durable-object lock admission for this exact tenant incarnation.
+    // A guest cannot call this until actor authentication and source lowering
+    // have been implemented; the root alone authorizes these operations.
+    DurableLockQueues::Admission enqueue_durable(const IsolateHandle& handle,
+            std::uint64_t lock_id, std::uint64_t operation_id, std::size_t bytes) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("isolate is not accepting durable work");
+        return state->durable_queues.enqueue(lock_id, operation_id, bytes);
+    }
+
+    std::optional<DurableLockQueues::Ticket> release_durable(
+            const IsolateHandle& handle, DurableLockQueues::Ticket ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("isolate is not draining durable work");
+        return state->durable_queues.release(ticket);
+    }
+
+    void cancel_durable_waiter(const IsolateHandle& handle,
+            DurableLockQueues::Ticket ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("isolate is not draining durable work");
+        state->durable_queues.cancel_waiter(ticket);
+    }
+
+    DurableLockQueues::Snapshot durable_snapshot(const IsolateHandle& handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return checked(handle)->durable_queues.snapshot();
+    }
+
     void begin_shutdown(const IsolateHandle& handle) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Running &&
             state->phase != IsolatePhase::Created)
             throw std::logic_error("shutdown already started");
+        state->durable_queues.quiesce();
         state->phase = IsolatePhase::Quiescing;
     }
 
@@ -267,7 +305,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Quiescing || !state->actors.empty() ||
-            state->active_guest_calls != 0)
+            state->active_guest_calls != 0 || !state->durable_queues.drained())
             throw std::logic_error("actor or guest invocation still active");
         state->phase = IsolatePhase::Stopped;
     }
