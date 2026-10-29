@@ -59,6 +59,17 @@ class PinnedActorGuestRunnerNegatives(unittest.TestCase):
         (self.root / "untracked.ores").write_text("fake")
         self.reject("untracked checkout", head=self.head)
 
+    def test_ignored_source_injection_rejected(self):
+        # Synthetic Git ignore rules can mask code outside the reviewed tree.
+        (self.root / ".git/info/exclude").write_text("injected.ores\n")
+        (self.root / "injected.ores").write_text("fake ignored actor\n")
+        self.reject("ignored checkout paths", head=self.head)
+
+    def test_ignored_compiler_module_injection_rejected(self):
+        (self.root / ".git/info/exclude").write_text("cmake/override.cmake\n")
+        (self.root / "cmake").mkdir()
+        (self.root / "cmake/override.cmake").write_text("message(WARNING injected)\n")
+        self.reject("ignored checkout paths", head=self.head)
     def test_modified_tracked_source_rejected(self):
         (self.root / "README.md").write_text("mutated")
         self.reject("tracked source checkout modified", head=self.head)
