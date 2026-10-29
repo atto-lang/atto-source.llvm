@@ -84,6 +84,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             171: issue(171, 6042555082),
             172: issue(172, 6042602777),
             212: issue(212, 6087989978),
+            198: issue(198, 6070465058),
+            200: issue(200, 6071264936),
+            222: issue(222, 6092501448),
         }
 
         def api_for(values):
@@ -111,6 +114,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             (171, 6042555082),
             (172, 6042602777),
             (212, 6087989978),
+            (198, 6070465058),
+            (200, 6071264936),
+            (222, 6092501448),
         ):
             reopened = dict(good)
             reopened[incident] = issue(
