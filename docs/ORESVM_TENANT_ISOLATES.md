@@ -148,3 +148,31 @@ strings, FFI, suspension, or other side effects. The native host serializes
 same-tenant invocations. Error sentinels -1/-2/-3 are provisional and can
 collide with valid negative scalar results; a status + out-value ABI is the
 next compatibility improvement. This is not arbitrary tenant sandboxing.
+
+
+## Guest result ABI v2 (no sentinel collisions)
+
+OresIsolateAbi.h now defines ORES_ISOLATE_ABI_VERSION=2. The native entry
+signature returns an int32 status and writes a signed int64 result through a
+separate out pointer only on success. ORES_GUEST_OK=0; nonzero status codes
+signal bad context, load denial, store denial, overflow or generic failure.
+Negative integer values, including -1, -2 and -3, are valid results when
+status is OK. OresVM::invoke_guest_result returns a status/value pair; the
+legacy convenience invoke_guest throws on any nonzero status. On failed guest
+execution the host deliberately discards the output field.
+
+The compiler-generated ores_guest_entry wrapper, the handwritten LLVM AOT
+fixture, and both host/source test declarations use ABI v2. **This is an
+incompatible ABI bump**: old v1 artifacts must not be invoked as v2. A
+production module loader must check an artifact ABI descriptor before
+converting a symbol to OresGuestEntry. A mismatched function-pointer
+signature is undefined behavior and cannot be fixed by checking the
+in-function context version alone.
+
+Guest function arithmetic currently uses the compiler's checked arithmetic
+trap behavior; arithmetic traps are **not** translated into a recoverable
+status code for arbitrary generated .ores expressions. Native panic and
+untrusted arbitrary C/C++/FFI code remain outside the safety guarantees.
+The initial host test exercises valid negative returns, status masking,
+explicit overflow on the host test guest, and native AOT invocation.
+Full source compiler/CTest CI must still be executed on a working runner.
