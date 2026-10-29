@@ -65,6 +65,8 @@ public:
     Status arm_after(std::uint64_t now_ns, std::uint64_t delay_ns,
                      std::uint64_t actor_id, std::uint64_t actor_generation,
                      std::uint64_t maximum_lateness_ns, Handle& out) noexcept {
+        // Failed admission must not leave a reusable or misleading ticket.
+        out = Handle{};
         if (closed_) return Status::Closed;
         if (domain_ == 0 || actor_id == 0 || actor_generation == 0)
             return Status::Invalid;
@@ -96,6 +98,8 @@ public:
 
     // Expiry is readiness only; caller enqueues an opaque token to actor CONTROL.
     Status poll_due(std::uint64_t now_ns, Expired& out) noexcept {
+        // A NotReady/error status must not expose a previous expiry receipt.
+        out = Expired{};
         if (closed_) return Status::Closed;
         if (!observe_clock(now_ns)) return Status::ClockBackwards;
         std::size_t best = Capacity;
@@ -142,6 +146,7 @@ public:
 
     // Earliest ARMED deadline, for a separately qualified absolute OS wakeup.
     Status next_deadline_ns(std::uint64_t& out) const noexcept {
+        out = 0;
         if (closed_) return Status::Closed;
         bool found = false;
         for (const Slot& s : slots_) {
@@ -157,6 +162,8 @@ public:
     Status claim_start(Handle h, std::uint64_t actor_id,
                        std::uint64_t actor_generation, std::uint64_t now_ns,
                        Start& out) noexcept {
+        // A stale, revoked or early claim is not a guest-start receipt.
+        out = Start{};
         if (closed_) return Status::Closed;
         // Reject invalid/cancelled generations BEFORE touching clock state:
         // forged or stale UINT64_MAX claims must not poison future deadlines.
@@ -176,7 +183,8 @@ public:
 
     void close() noexcept {
         closed_ = true;
-        for (Slot& s : slots_) s.phase = Phase::Free;
+        // Permanent close scrubs actor identity and retained deadline data.
+        for (Slot& s : slots_) s = Slot{};
         outstanding_ = 0;
     }
     std::size_t outstanding() const noexcept { return outstanding_; }

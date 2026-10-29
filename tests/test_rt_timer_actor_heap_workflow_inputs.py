@@ -137,6 +137,8 @@ def check():
              "ledger-clang", "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
         ),
         "Clang ASan and UBSan actor-heap execution": (
+            ("tests/native_realtime_timer_queue_test.cpp",
+             "timer-san", None),
             ("tests/native_rt_timer_actor_heap_integration_test.cpp",
              "integration-san", "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
             ("tests/native_rt_timer_actor_ledger_integration_test.cpp",

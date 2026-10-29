@@ -141,5 +141,38 @@ int main() {
            == Status::Ok);
     assert(rejection.cancel(pending) == Status::Ok);
     assert(rejection.outstanding() == 0);
+    // Failed operations fail closed even when the caller reuses output storage:
+    // old tickets and start receipts cannot masquerade as new authority.
+    Queue receipt;
+    Queue::Handle reused{}, saved{};
+    Queue::Expired reuse_due{};
+    Queue::Start reuse_start{};
+    std::uint64_t next_deadline = 12345;
+    assert(receipt.arm_after(50, 1, 314, 1, 0, reused) == Status::Ok);
+    saved = reused;
+    assert(receipt.arm_after(50, 0, 0, 1, 0, reused) == Status::Invalid);
+    assert(reused.domain == 0 && reused.generation == 0);
+    assert(receipt.cancel(saved) == Status::Ok);
+    assert(receipt.next_deadline_ns(next_deadline) == Status::NotReady);
+    assert(next_deadline == 0);
+    assert(receipt.arm_after(51, 0, 314, 1, 0, reused) == Status::Ok);
+    assert(receipt.poll_due(51, reuse_due) == Status::Ok);
+    assert(reuse_due.handle.domain == reused.domain);
+    assert(receipt.poll_due(51, reuse_due) == Status::NotReady);
+    assert(reuse_due.handle.domain == 0 && reuse_due.actor_id == 0);
+    assert(receipt.claim_start(reused, 314, 1, 51, reuse_start) == Status::Ok);
+    assert(reuse_start.claimed_at_ns == 51);
+    assert(receipt.claim_start(reused, 314, 1, 52, reuse_start) == Status::Stale);
+    assert(reuse_start.claimed_at_ns == 0 && reuse_start.deadline_ns == 0);
+    receipt.close();
+    reuse_due.actor_id = 314;
+    assert(receipt.poll_due(53, reuse_due) == Status::Closed);
+    assert(reuse_due.actor_id == 0);
+    next_deadline = 12345;
+    assert(receipt.next_deadline_ns(next_deadline) == Status::Closed);
+    assert(next_deadline == 0);
+    reused = saved;
+    assert(receipt.arm_after(54, 0, 314, 1, 0, reused) == Status::Closed);
+    assert(reused.domain == 0);
     return 0;
 }
