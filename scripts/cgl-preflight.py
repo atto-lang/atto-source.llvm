@@ -78,6 +78,7 @@ def inspect_elf(path):
             f.seek(phoff)
             phdrs = f.read(phnum * phentsize)
             has_load = False
+            has_executable_load = False
             interp = None
             for i in range(phnum):
                 p_type, p_flags, p_offset, p_vaddr, _, p_filesz, p_memsz, p_align = struct.unpack_from(
@@ -87,6 +88,8 @@ def inspect_elf(path):
                     # is simultaneously writable and executable.
                     if (p_flags & 0x3) == 0x3:
                         raise ValueError("ELF PT_LOAD has writable executable mapping")
+                    if p_flags & 0x1:
+                        has_executable_load = True
                     has_load = True
                 if p_type == 0x6474e551 and p_flags & 0x1:
                     raise ValueError("ELF requests executable PT_GNU_STACK")
@@ -129,6 +132,8 @@ def inspect_elf(path):
                         raise ValueError("ELF interpreter must be an absolute path")
             if not has_load:
                 raise ValueError("ELF lacks loadable segments")
+            if not has_executable_load:
+                raise ValueError("ELF lacks an executable PT_LOAD segment")
             if kind == 3 and interp is None:
                 raise ValueError("ET_DYN without interpreter is not admitted by pilot")
             if interp is not None and not os.path.isfile(interp):
