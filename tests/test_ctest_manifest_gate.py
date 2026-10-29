@@ -5,8 +5,9 @@ import sys
 import unittest
 
 from ctest_manifest_gate import (
-    CRITICAL_TESTS, GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES,
-    SOURCE_ACTOR_TESTS, TIMED_TESTS, VISIBILITY_NEGATIVE_FIXTURES, VISIBILITY_POSITIVE, check_manifest,
+    CRITICAL_TESTS, GENERATOR_NEGATIVE_FIXTURES, GENERATOR_REJECTION_DIAGNOSTIC,
+    GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES, SOURCE_ACTOR_TESTS,
+    TIMED_TESTS, VISIBILITY_NEGATIVE_FIXTURES, VISIBILITY_POSITIVE, check_manifest,
 )
 
 
@@ -40,6 +41,8 @@ def fixture():
                        evidence, ("ret i64 42" if evidence == "--ir" else
                                   "native realtime source loop requires verified LLVM continuation lowering"
                                   if name == "native_rt_while_loop_failclosed" else
+                                  GENERATOR_REJECTION_DIAGNOSTIC
+                                  if name in GENERATOR_NEGATIVE_FIXTURES else
                                   "native exceptional-control boundary unsupported")]
         elif name in SOURCE_ACTOR_TESTS:
             command = [sys.executable, "/work/src/tests/source_actor_e2e.py",
@@ -87,6 +90,39 @@ class ManifestAuditTests(unittest.TestCase):
 
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
+
+    def test_generator_compiler_rejections_are_mandatory_real_source_cases(self):
+        for name, fixture_name in GENERATOR_NEGATIVE_FIXTURES.items():
+            self.assertIn(name, CRITICAL_TESTS)
+            item = next(x for x in self.manifest["tests"] if x["name"] == name)
+            self.assertIn("/tests/contract.py", item["command"][1])
+            self.assertIn("/tests/fixtures/" + fixture_name, item["command"])
+            self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
+
+    def test_generator_omission_substitution_or_inversion_is_rejected(self):
+        for name in GENERATOR_NEGATIVE_FIXTURES:
+            for mutation in ("missing", "fixture", "diagnostic", "compiler",
+                             "inverted", "skip", "fake_command"):
+                with self.subTest(name=name, mutation=mutation):
+                    document = fixture()
+                    entry = next(x for x in document["tests"] if x["name"] == name)
+                    command = entry["command"]
+                    if mutation == "missing":
+                        document["tests"].remove(entry)
+                    elif mutation == "fixture":
+                        command[command.index("--fixture") + 1] = "/work/src/tests/fixtures/constant-main.ores"
+                    elif mutation == "diagnostic":
+                        command[command.index("--diagnostic") + 1] = "wrong diagnostic"
+                    elif mutation == "compiler":
+                        command[command.index("--compiler") + 1] = "/work/build/fake-compiler"
+                    elif mutation == "inverted":
+                        entry["properties"] = [{"name": "WILL_FAIL", "value": True}]
+                    elif mutation == "skip":
+                        entry["properties"] = [{"name": "SKIP_RETURN_CODE", "value": 1}]
+                    elif mutation == "fake_command":
+                        entry["command"] = [sys.executable, "-c", "pass"]
+                    with self.assertRaises(ManifestFailure):
+                        check_manifest(document)
 
     def test_visibility_negatives_cannot_be_missing_or_swapped(self):
         for name in VISIBILITY_NEGATIVE_FIXTURES:
