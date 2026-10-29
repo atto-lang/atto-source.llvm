@@ -111,6 +111,17 @@ def verify_negative_rejection(result, diagnostic):
         require(marker not in result.stderr, "rejected source leaked LLVM IR in stderr")
 
 
+def verify_guest_process(name, result, expected_exit):
+    """Observed OS status is bound to the individual .ores fixture, not 42."""
+    require(type(expected_exit) is int and 0 < expected_exit < 128,
+            name + ": invalid expected exit status")
+    require(type(result.returncode) is int and
+            result.returncode == expected_exit and
+            result.stdout == b"" and result.stderr == b"",
+            name + ": expected OS exit " + str(expected_exit) + ": " +
+            repr((result.returncode, result.stdout, result.stderr)))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", type=Path, required=True)
@@ -161,10 +172,7 @@ def main():
                     name + ": Clang failed to link actual guest IR: " +
                     repr(linked.stderr[:800]))
             observed = run([str(exe)], case_dir)
-            require(observed.returncode == expected_exit and observed.stdout == b"" and
-                    observed.stderr == b"",
-                    name + ": expected OS exit " + str(expected_exit) + ": " +
-                    repr((observed.returncode, observed.stdout, observed.stderr)))
+            verify_guest_process(name, observed, expected_exit)
             observations.append({
                 "case": name, "os_exit": observed.returncode,
                 "expected_os_exit": expected_exit,
