@@ -396,6 +396,12 @@ if(BUILD_TESTING)
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-owned-array.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_tensor_owned_array_source_aot PROPERTIES TIMEOUT 120)
+    # Prove explicit signed-i64 quotient with actual compiler-generated LLVM
+    # executable, rejected source types, and invalid native traps.
+    add_test(NAME native_checked_i64_quotient_source_aot
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-checked-i64-quotient.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_checked_i64_quotient_source_aot PROPERTIES TIMEOUT 120)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.
