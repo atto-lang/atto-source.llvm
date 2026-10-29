@@ -1,5 +1,6 @@
 #pragma once
 // HOST-ONLY admission substrate. Not a guest intrinsic, durable store or signature verifier.
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -39,13 +40,12 @@ class HostGate final {
            std::uint64_t generation, std::uint64_t epoch,
            std::string revision, std::uint64_t token_cap)
       : tenant_(std::move(expected_tenant)), actor_(std::move(expected_actor)),
-        generation_(generation), epoch_(epoch), revision_(std::move(revision)),
+        revision_(std::move(revision)), generation_(generation), epoch_(epoch),
         token_cap_(token_cap) {}
   // The host creates Scope, including measured bytes/tokens and actual content hash.
   // Single-use even when a remote send fails ambiguously.
   bool dispatch(const Scope& scope, const TrustedHost& host, std::uint64_t now_ms) {
-    if (used_) return false;
-    used_ = true;
+    if (used_.exchange(true, std::memory_order_acq_rel)) return false;
     if (!safe_id(tenant_) || !safe_id(actor_) || !safe_id(scope.dispatch_id) ||
         scope.tenant_id != tenant_ || scope.actor_id != actor_ ||
         scope.generation == 0 || scope.generation != generation_ ||
@@ -68,6 +68,6 @@ class HostGate final {
  private:
   std::string tenant_, actor_, revision_;
   std::uint64_t generation_, epoch_, token_cap_;
-  bool used_ = false; // never shared across concurrent threads
+  std::atomic<bool> used_{false}; // never shared across concurrent threads
 };
 } // namespace oreslang::agent_dispatch
