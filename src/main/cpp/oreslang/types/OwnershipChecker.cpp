@@ -31,6 +31,9 @@ struct LocalOwnership {
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
+    // Exact-shape readonly lexical value. It has no scalar/i64 identity,
+    // no mutable loans, and never escapes the current stack frame.
+    std::optional<types::NativeAggregateShape> aggregate_type;
     std::unordered_set<std::string> mutable_paths;
     std::unordered_map<std::string, std::string> subobjects;
     std::unordered_set<std::string> class_fields;
@@ -284,6 +287,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 reject(expr, "ownership violation: native Array<int> is non-Copy and cannot escape");
             if (!source.class_name.empty())
                 reject(expr, "ownership violation: class is non-Copy; use an explicit borrow");
+            if (source.aggregate_type)
+                reject(expr, "AGGREGATE_VALUE_ESCAPE_UNVERIFIED: use a checked scalar field");
             return;
         }
         case Expression::Kind::Field: {
@@ -294,6 +299,20 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             }
             if (expr.left && expr.left->kind == Expression::Kind::Variable) {
                 const auto found = locals.find(expr.left->name);
+                if (found != locals.end() && found->second.aggregate_type) {
+                    const auto& source = found->second;
+                    if (source.moved || source.exclusive_loan)
+                        reject(expr, "AGGREGATE_FIELD_LOAN_UNVERIFIED");
+                    const auto& fields = source.aggregate_type->fields;
+                    const auto member = std::find_if(fields.begin(), fields.end(),
+                        [&](const types::NativeAggregateShape::Field& field) {
+                            return field.name == expr.name;
+                        });
+                    if (member == fields.end() ||
+                            (member->type != "int" && member->type != "bool"))
+                        reject(expr, "AGGREGATE_FIELD_TYPE_UNVERIFIED");
+                    return;
+                }
                 if (found != locals.end() && found->second.int_array) {
                     if (found->second.moved)
                         reject(expr, "ownership violation: use-after-move Array<int> owner");
@@ -741,6 +760,19 @@ void validate_i64_ownership(Program& program) {
                     throw std::runtime_error(
                         "ownership violation: Future<int> await lost pipeline provenance");
                 types::validate_future_pipeline_chain(future->plans);
+            } else if (binding.aggregate_type) {
+                if (!binding.initializer ||
+                        binding.initializer->kind != Expression::Kind::AggregateConstruct ||
+                        !binding.initializer->aggregate_type ||
+                        binding.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct ||
+                        !binding.aggregate_type->same_type_as(*binding.initializer->aggregate_type))
+                    throw std::runtime_error("AGGREGATE_LOCAL_OWNERSHIP_UNVERIFIED");
+                for (const auto& field : binding.aggregate_type->fields)
+                    if (field.type != "int" && field.type != "bool")
+                        throw std::runtime_error("AGGREGATE_NATIVE_FIELD_UNVERIFIED");
+                for (const auto& argument : binding.initializer->arguments)
+                    check_value(*argument, locals, functions);
+                entry.aggregate_type = binding.aggregate_type;
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
