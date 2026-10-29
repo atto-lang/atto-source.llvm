@@ -68,20 +68,24 @@ public:
         std::shared_ptr<State> state_;
         std::shared_ptr<Slot> slot_;
         std::uint64_t generation_ = 0;
+        TrustedBufferActor reader_{};
         bool active_ = false;
-        ReadLoan(std::shared_ptr<State> state, std::shared_ptr<Slot> slot)
+        ReadLoan(std::shared_ptr<State> state, std::shared_ptr<Slot> slot,
+                 TrustedBufferActor reader)
             : state_(std::move(state)), slot_(std::move(slot)),
-              generation_(slot_->generation), active_(true) {}
+              generation_(slot_->generation), reader_(reader), active_(true) {}
     public:
         ReadLoan(const ReadLoan&) = delete;
         ReadLoan& operator=(const ReadLoan&) = delete;
         ReadLoan(ReadLoan&& other) noexcept
             : state_(std::move(other.state_)), slot_(std::move(other.slot_)),
-              generation_(other.generation_), active_(std::exchange(other.active_, false)) {}
+              generation_(other.generation_), reader_(other.reader_),
+              active_(std::exchange(other.active_, false)) {}
         ReadLoan& operator=(ReadLoan&&) = delete;
         ~ReadLoan() { release(); }
 
-        std::uint8_t read(std::size_t offset) const {
+        std::uint8_t read(TrustedBufferActor reader, std::size_t offset) const {
+            if (!(reader == reader_)) throw std::logic_error("loan reader mismatch");
             if (!state_) throw std::logic_error("loan is moved");
             std::lock_guard<std::mutex> guard(state_->mutex);
             if (!active_ || state_->retired || slot_->generation != generation_)
@@ -171,7 +175,7 @@ public:
         if (slot->read_loans == std::numeric_limits<std::size_t>::max())
             throw std::overflow_error("read loan counter exhausted");
         ++slot->read_loans;
-        return ReadLoan(state_, slot);
+        return ReadLoan(state_, slot, reader);
     }
 
     void drop(const Handle& h, TrustedBufferActor owner) {
