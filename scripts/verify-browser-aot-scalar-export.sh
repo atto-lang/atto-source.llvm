@@ -61,11 +61,3 @@ cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
     fail "real compiled scalar export failed"
 printf 'NATIVE_BROWSER_AOT_SCALAR_EXPORT_ACCEPTANCE source_sha=%s source_tree=%s compiler_sha256=%s\n' \
     "$head" "$tree" "$digest"
- "$tmp/exports" ||
-    fail "canary falsely defines browser ABI symbols"
-cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
-    tests/browser_aot_scalar_export_host.c -ldl -o "$tmp/host"
-"$limiter" --kill-after=5s 10s "$tmp/host" "$tmp/probe.so" ||
-    fail "real compiled scalar export failed"
-printf 'NATIVE_BROWSER_AOT_SCALAR_EXPORT_ACCEPTANCE source_sha=%s source_tree=%s compiler_sha256=%s\n' \
-    "$head" "$tree" "$digest"
