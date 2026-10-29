@@ -110,6 +110,10 @@ fn main() {
             "native opaque top type requires tagged value ABI"),
         ("any result", "fnc get(): any { return 0; }\n",
             "native opaque top type requires tagged value ABI"),
+        ("unknown result", "fnc get(): unknown { return 0; }\n",
+            "native opaque top type requires tagged value ABI"),
+        ("borrowed unknown parameter", "fnc normalize(borrow unknown value): int { return 0; }\n",
+            "native opaque top type requires tagged value ABI"),
         ("tuple explicit", "fnc take(tuple (int,int,string?) value): int { return 1; }\n",
             "native positional tuple parameter requires verified readonly-slot and optional-tail lowering"),
         ("tuple shorthand", "fnc take((int,int,string?) value): int { return 1; }\n",
@@ -117,6 +121,10 @@ fn main() {
         ("tuple structural", "fnc take(structural (int,int,string?) value): int { return 1; }\n",
             "native structural positional tuple requires verified readonly-width and nonescape lowering"),
         ("tuple result", "fnc take(): tuple (int,int) { return 1; }\n",
+            "native positional tuple return requires verified tuple ABI lowering"),
+        ("tuple shorthand result", "fnc take(): (int,int) { return 1; }\n",
+            "native positional tuple return requires verified tuple ABI lowering"),
+        ("tuple arrow result", "fnc take() -> (int,int) { return 1; }\n",
             "native positional tuple return requires verified tuple ABI lowering"),
     ];
     for (name, source, required) in missing_abis {

@@ -1944,7 +1944,7 @@ private:
         if (arrow_return_type) require("->");
         value.returns_void = accept("void");
         if (!value.returns_void) {
-            if (token_.text == "tuple")
+            if (token_.text == "tuple" || token_.text == "(")
                 fail("native positional tuple return requires verified tuple ABI lowering");
             if (token_.text == "any" || token_.text == "unknown")
                 fail("native opaque top type requires tagged value ABI and checked refinement lowering");
