@@ -26,6 +26,10 @@ SOURCE_REPO_ID = 1410897874
 SOURCE_BRANCH = "main"
 INCIDENT_REPO = "ores-truffle-oreslang/oreslang-platform-conformance"
 INCIDENT_GATES = (
+    # Immutable issue ID for #212 is not yet independently attested. A missing
+    # pin is an unconditional DENY until a reviewed PR supplies that ID.
+    (212, None,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/212"),
     (22, 5832921751,
      "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22"),
     (77, 5904679716,
@@ -740,7 +744,8 @@ def require_incident_closure():
     """Require independent completion of every pinned private-CI P0 incident."""
     for number, issue_id, html_url in INCIDENT_GATES:
         issue = gh_api(f"repos/{INCIDENT_REPO}/issues/{number}")
-        if (not isinstance(issue, dict)
+        if (type(issue_id) is not int or issue_id <= 0
+                or not isinstance(issue, dict)
                 or issue.get("id") != issue_id
                 or issue.get("number") != number
                 or issue.get("html_url") != html_url
