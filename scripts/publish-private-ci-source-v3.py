@@ -37,6 +37,8 @@ INCIDENT_GATES = (
     (222, 6092501448,
      "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/222"),
 )
+INCIDENT_REVIEW_LOGIN = "ORESoftware"
+INCIDENT_REVIEW_USER_ID = 11139560
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
@@ -57,8 +59,8 @@ SAFE_EXECUTABLE = re.compile(
     r"^(?:python3|mvn|cmake|ctest|g\+\+|clang\+\+|/tmp/ores-[A-Za-z0-9_.-]+)$"
 )
 MAX_MAVEN_PREFETCH_ARTIFACTS = 16
-CARRIER_REVIEW_LOGIN = "ORESoftware"
-CARRIER_REVIEW_USER_ID = 11139560
+CARRIER_REVIEW_LOGIN = INCIDENT_REVIEW_LOGIN
+CARRIER_REVIEW_USER_ID = INCIDENT_REVIEW_USER_ID
 MAX_GOVERNANCE_FILE = 1024 * 1024
 MAX_FILES = 1024
 MAX_TREE_ENTRIES = 4096
@@ -740,22 +742,44 @@ def verify_required_source_blobs(files, required):
             )
 
 
+def validated_incident_gates():
+    """Validate the immutable incident gate contract before any network lookup."""
+    if not isinstance(INCIDENT_GATES, tuple) or not INCIDENT_GATES:
+        raise Denied("private-CI incident gate configuration is invalid")
+    normalized = []
+    for entry in INCIDENT_GATES:
+        if not isinstance(entry, tuple) or len(entry) != 3:
+            raise Denied("private-CI incident gate configuration is invalid")
+        number, issue_id, html_url = entry
+        if (not isinstance(number, int) or isinstance(number, bool) or number <= 0
+                or not isinstance(issue_id, int) or isinstance(issue_id, bool) or issue_id <= 0
+                or not isinstance(html_url, str)
+                or html_url != f"https://github.com/{INCIDENT_REPO}/issues/{number}"):
+            raise Denied("private-CI incident gate configuration is invalid")
+        normalized.append((number, issue_id, html_url))
+    gates = tuple(normalized)
+    if (len({number for number, _issue_id, _url in gates}) != len(gates)
+            or len({_issue_id for _number, _issue_id, _url in gates}) != len(gates)
+            or len({_url for _number, _issue_id, _url in gates}) != len(gates)):
+        raise Denied("private-CI incident gate configuration is invalid")
+    return gates
+
+
 def require_incident_closure():
     """Require independent completion of every pinned private-CI P0 incident."""
-    if (not INCIDENT_GATES
-            or len({number for number, _issue_id, _url in INCIDENT_GATES}) != len(INCIDENT_GATES)
-            or len({_issue_id for _number, _issue_id, _url in INCIDENT_GATES}) != len(INCIDENT_GATES)
-            or len({_url for _number, _issue_id, _url in INCIDENT_GATES}) != len(INCIDENT_GATES)):
-        raise Denied("private-CI incident gate configuration is invalid")
-    for number, issue_id, html_url in INCIDENT_GATES:
+    for number, issue_id, html_url in validated_incident_gates():
         issue = gh_api(f"repos/{INCIDENT_REPO}/issues/{number}")
+        closed_by = issue.get("closed_by") if isinstance(issue, dict) else None
         if (not isinstance(issue, dict)
                 or issue.get("id") != issue_id
                 or issue.get("number") != number
                 or issue.get("html_url") != html_url
                 or issue.get("state") != "closed"
                 or issue.get("state_reason") != "completed"
-                or "pull_request" in issue):
+                or "pull_request" in issue
+                or not isinstance(closed_by, dict)
+                or closed_by.get("login") != INCIDENT_REVIEW_LOGIN
+                or closed_by.get("id") != INCIDENT_REVIEW_USER_ID):
             raise Denied(
                 f"platform-conformance incident #{number} is not independently completed"
             )
