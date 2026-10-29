@@ -40,7 +40,7 @@ struct Expression {
     enum class Kind {
         Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
-        Add, Subtract, Multiply, Remainder, CheckedDiv,
+        Add, Subtract, Multiply, Remainder,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
