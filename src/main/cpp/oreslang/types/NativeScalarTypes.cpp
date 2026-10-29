@@ -2,7 +2,9 @@
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include <algorithm>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 
