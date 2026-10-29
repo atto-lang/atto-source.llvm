@@ -19,6 +19,8 @@ struct TrustedHost {
   std::function<bool(const Scope&)> claim_once;
   // Provider must independently revalidate; data-only, no tools/capabilities.
   std::function<bool(const Scope&)> submit_data_only;
+  // Trusted clock, independently supplied by host and rechecked before submit.
+  std::function<std::uint64_t()> now_ms;
 };
 inline bool safe_id(const std::string& s) {
   if (s.empty() || s.size() > 128) return false;
@@ -57,11 +59,16 @@ class HostGate final {
         scope.measured_tokens > 16384 || token_cap_ == 0 ||
         scope.measured_tokens > token_cap_ ||
         !host.current_revision || !host.authorize || !host.claim_once ||
-        !host.submit_data_only) return false;
+        !host.submit_data_only || !host.now_ms) return false;
     try {
-      if (!host.current_revision(scope) || !host.authorize(scope) ||
+      const auto admitted_at = host.now_ms();
+      if (scope.expires_at_ms <= admitted_at ||
+          !host.current_revision(scope) || !host.authorize(scope) ||
           !host.claim_once(scope) || !host.current_revision(scope) ||
           !host.authorize(scope)) return false;
+      const auto before_submit = host.now_ms();
+      if (before_submit < admitted_at || scope.expires_at_ms <= before_submit)
+        return false;
       return host.submit_data_only(scope);
     } catch (...) { return false; }
   }
