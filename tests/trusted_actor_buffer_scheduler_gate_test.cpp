@@ -105,8 +105,11 @@ int main() {
     std::thread producer([&] {
         auto carrier_turn=gate.enter_turn(a);
         while(!go.load(std::memory_order_acquire)) std::this_thread::yield();
-        try {gate.send(carrier_turn,{3,1},race_h);sent.store(true,std::memory_order_release);}
-        catch(const std::logic_error&) {}
+        const auto outcome=gate.try_send(carrier_turn,{3,1},race_h);
+        assert(outcome == TrustedActorBufferSchedulerGate::SendStatus::Accepted ||
+               outcome == TrustedActorBufferSchedulerGate::SendStatus::RecipientStopped);
+        sent.store(outcome == TrustedActorBufferSchedulerGate::SendStatus::Accepted,
+                   std::memory_order_release);
     });
     std::thread retire([&] {
         while(!go.load(std::memory_order_acquire)) std::this_thread::yield();
