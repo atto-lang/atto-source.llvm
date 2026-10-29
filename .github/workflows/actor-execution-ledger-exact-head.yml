@@ -17,10 +17,12 @@ on:
       - tests/actor_owned_heap_lifecycle_test.cpp
       - tests/pinned_actor_heap_suspend_test.cpp
       - src/main/cpp/oreslang/runtime/PinnedContinuationGate.hpp
+      - src/main/cpp/oreslang/runtime/AsyncIoCompletionGate.hpp
       - tests/native_actor_execution_ledger_test.cpp
       - tests/native_actor_compiled_guest_ledger_bridge_test.c
       - tests/native_actor_compiled_guest_ledger.py
       - tests/fixtures/native-retained-guest-steps.ores
+      - tests/fixtures/source-actor-suspend-method-reject.ores
       - docs/ACTOR_EXECUTION_LEDGER_V1.md
       - CMakeLists.txt
       - .github/workflows/actor-execution-ledger-exact-head.yml
@@ -64,6 +66,7 @@ jobs:
             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h \
             src/main/cpp/oreslang/runtime/PinnedContinuationGate.hpp \
+            src/main/cpp/oreslang/runtime/AsyncIoCompletionGate.hpp \
             tests/actor_owned_heap_lifecycle_test.cpp \
             tests/pinned_actor_heap_suspend_test.cpp \
             tests/source_actor_await_trace_runtime_test.c \
@@ -319,9 +322,12 @@ jobs:
               tests/fixtures/native-retained-guest-steps.ores \
               tests/native_actor_compiled_guest_ledger.py \
               tests/native_actor_compiled_guest_ledger_bridge_test.c \
+              tests/fixtures/source-actor-suspend-method-reject.ores \
               src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
               src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
-              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h; do
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h \
+              CMakeLists.txt; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
           done
       - name: Build real Oreslang LLVM compiler against installed LLVM
