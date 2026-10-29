@@ -1333,6 +1333,52 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patches.append(patch.object(v3, "delete_exact_ref", side_effect=delete_exact_ref))
         return contract, patches
 
+    def test_publish_denies_authorization_ref_after_per_write_revocation(self):
+        """An inert payload must roll back if authority changes before auth POST."""
+        created = []
+        deleted = []
+
+        def api(route, method="GET", payload=None):
+            if method == "POST" and route.endswith("/git/blobs"):
+                data = base64.b64decode(payload["content"], validate=True)
+                return {"sha": v3.git_blob_sha(data)}
+            if method == "POST" and route.endswith("/git/trees"):
+                return {"sha": SOURCE_TREE if payload.get("base_tree") is None else "3" * 40}
+            if method == "POST" and route.endswith("/git/commits"):
+                return {"sha": CARRIER_COMMIT}
+            if method == "POST" and route.endswith("/git/refs"):
+                created.append(payload["ref"])
+                return {"ref": payload["ref"], "object": {"sha": payload["sha"]}}
+            raise AssertionError((method, route))
+
+        contract, patches = self._publish_fixture(
+            api,
+            delete_exact_ref=lambda *args: deleted.append(args) or True,
+        )
+        payload_ref = "refs/heads/ci/oreslang-" + SOURCE_TREE
+        with patches[0], patches[1], patches[2], patches[3] as authorize, \
+                patches[4], patches[5], patches[6], patches[7], \
+                patches[8], patches[9]:
+            def revoke_after_payload(*_args, **_kwargs):
+                if payload_ref in created:
+                    raise v3.Denied("authority revoked before authorization ref")
+            authorize.side_effect = revoke_after_payload
+            with self.assertRaisesRegex(
+                    v3.Denied, "authority revoked before authorization ref"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                    now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
+                )
+        self.assertEqual(created, [payload_ref])
+        self.assertEqual(
+            deleted,
+            [(
+                "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                CARRIER_COMMIT, contract["repository_id"],
+            )],
+        )
+
     def test_publish_rolls_back_payload_if_pr_head_moves_before_authorization(self):
         writes = []
         def api(route, method="GET", payload=None):

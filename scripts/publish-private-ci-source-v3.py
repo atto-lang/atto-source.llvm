@@ -1376,6 +1376,11 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     payload_attempted = False
     authorization_attempted = False
     try:
+        # The inert payload ref is itself a source-bearing Git write.
+        authorize_source_write(
+            repository, contract, source_pr, source_commit,
+            test_plan, protected_sha
+        )
         payload_attempted = True
         branch_ref = gh_api(
             f"repos/{repository}/git/refs",
@@ -1405,6 +1410,12 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         # the carrier becomes executable.
         verify_source_pr(source_pr, source_commit)
 
+        # Re-attest the full incident/source/carrier gate immediately before
+        # making the payload executable, not only before the earlier blob writes.
+        authorize_source_write(
+            repository, contract, source_pr, source_commit,
+            test_plan, protected_sha
+        )
         authorization_attempted = True
         auth_ref = gh_api(
             f"repos/{repository}/git/refs",
