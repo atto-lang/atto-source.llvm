@@ -30,3 +30,16 @@ Missing: compiler emitted actor turns, native scheduler source continuation wiri
 - The `flush_mu_` guard serializes concurrent flushers around dequeuing AND provider commit, preserving per-actor FIFO/CAS ordering. Quotas remain held while a write is in-flight.
 - Local GCC 17 C++ host tests: **8/8**, AddressSanitizer + UndefinedBehaviorSanitizer; independent Clang++ compiler run: **8/8**. This is not guest/native actor source execution.
 - The dedicated LLVM PR GitHub Actions job currently has zero recorded steps; CI confirmation is NOT_EXECUTED.
+
+
+## Real SQLite WAL provider — 2026-10-29
+
+`SqliteBatchPersistence.hpp` is a native C++17, `sqlite3`-linked on-disk provider implementing the same `Store` interface used by the bounded `BatchSidecar`. The provider's SQLite transaction includes activation epoch checks, persisted operation-ID deduplication, per-state CAS, snapshots and versioned events. `Receipt::durable()` is true only after a successful WAL/FULL provider commit, distinct from the volatile `MemoryStore`.
+
+The recovery API returns the latest snapshot and subsequent journal events. For an event-first actor the snapshot is empty and snapshot_version=0. Path selection and epoch grants are **trusted host-only capabilities**; neither is an untrusted guest API. SQLite calls block and must run on dedicated I/O workers, not native actor scheduler carriers.
+
+**Executed local evidence:** GCC C++17 `-Wall -Wextra -Werror -pedantic -fsanitize=address,undefined`, plus an independent Clang C++17 build, successfully executed an on-disk 1,000-actor/4-batch test and reopening/restoration test. A child process performed a confirmed commit then exited via `_exit` while another write remained only in memory; the parent observed the committed state and absence of the unflushed write. Ten repeat sanitizer executions passed before the event-first fix, and new event-first and receipt-check tests also passed. This is actual storage-provider evidence, **NOT compiler-generated `.ores` actor execution or power-loss certification**.
+
+The native provider also checks provider receipt cardinality/identity and caps direct writes at 1MiB. On ambiguous SQLite COMMIT exceptions callers must use the same operation ID for retries; no exactly-once external effects are promised. `CMakeLists.txt` has a dedicated host-only CTest target. The native host Actions workflow now adds real SQLite GCC sanitizer and Clang checks, but its source-org runner admission must be proven separately.
+
+Production blockers: secure tenant/activation directory, async source actor storage bridge, per-actor arena encoding, transaction I/O deadline and fair scheduling, CRC/bitflip storage injection, real power-failure recovery certification, verified native compiler guest execution, and backend conformance.
