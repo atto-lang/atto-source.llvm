@@ -119,6 +119,12 @@ inline PackageNamespaceGraph link_package_namespaces(
 
         for (const auto& fn : program.functions) {
             if (!fn.exported) continue;
+            // A linker-owned implementation is private even if a malformed AST
+            // sets the public bit; public ABI names must be flat identifiers.
+            if (fn.native_internal)
+                throw std::invalid_argument("private native implementation cannot be a namespace export");
+            if (!valid_flat_namespace_name(fn.name))
+                throw std::invalid_argument("invalid public namespace export name");
             if (!fn.generic_parameters.empty() || !fn.method_owner.empty())
                 throw std::invalid_argument("native namespace generic/method exports require checked lowering");
             // An arity-only export cannot hide a borrowed, nominal, sum,

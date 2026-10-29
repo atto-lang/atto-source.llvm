@@ -217,5 +217,28 @@ int main() {
         fn.async_source_i64 = true;
     }, "async export");
 
-    std::cout << "native package namespace source-only graph: 26/26 cases passed\n";
+    // 11. Linker-owned private implementations must not be promoted into
+    // the public namespace ABI; exported names must be valid flat identifiers.
+    reject_signature("internal_export", [](Function& fn) {
+        fn.native_internal = true;
+    }, "private native implementation");
+    reject_signature("empty_export_name", [](Function& fn) {
+        fn.name.clear();
+    }, "invalid public namespace export name");
+    reject_signature("dotted_export_name", [](Function& fn) {
+        fn.name = "some.path";
+    }, "invalid public namespace export name");
+    reject_signature("reserved_export_name", [](Function& fn) {
+        fn.name = "__root__";
+    }, "invalid public namespace export name");
+
+    // Private internal implementation remains invisible and is not rejected.
+    Program private_internal = make_source("a", "native_internal_helper", false);
+    private_internal.functions.front().native_internal = true;
+    auto internal_units = units;
+    internal_units.push_back({"foo/native_internal_helper", "foo@1", &private_internal});
+    const auto internal_graph = link_package_namespaces(internal_units, pins, {request});
+    assert(internal_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
+
+    std::cout << "native package namespace source-only graph: 31/31 cases passed\n";
 }
