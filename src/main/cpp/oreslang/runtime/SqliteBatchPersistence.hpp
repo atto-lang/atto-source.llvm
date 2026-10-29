@@ -106,6 +106,7 @@ public:
             for(const auto& w:writes) {
                 if(!valid_id(w.id.tenant)||!valid_id(w.id.actor)||!valid_id(w.id.slot)||!valid_id(w.operation_id)||
                    !w.epoch||!w.schema_version||w.epoch>INT64_MAX||w.expected_version>=INT64_MAX||
+                   w.payload.size()>1048576||
                    (w.kind!=WriteKind::Snapshot && w.kind!=WriteKind::Event))
                     throw std::invalid_argument("invalid persistent write metadata");
                 if(epoch(w.id)!=std::optional<std::uint64_t>(w.epoch)) {
