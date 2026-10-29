@@ -6,7 +6,9 @@ These are NOT .ores compiler executions or evidence of LLVM guest parity.
 import subprocess
 import unittest
 
-from native_aggregate_positive_execution import verify_negative_rejection
+from native_aggregate_positive_execution import (
+    POSITIVE, NEGATIVE, verify_guest_process, verify_negative_rejection,
+)
 
 
 class NativeAggregatePositiveHarnessTest(unittest.TestCase):
@@ -18,6 +20,35 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
 
     def test_exact_diagnostic_accepted(self):
         self.check_result()
+
+    def test_registered_fixture_exits_are_distinct(self):
+        self.assertEqual(len(POSITIVE), 4)
+        self.assertEqual(len(NEGATIVE), 4)
+        self.assertEqual(set(status for _, _, _, status in POSITIVE), {7, 19, 42, 73})
+
+    def test_real_guest_status_accepted(self):
+        observed = subprocess.CompletedProcess(["guest"], 19, b"", b"")
+        verify_guest_process("named-source-order", observed, 19)
+
+    def test_constant_42_mock_rejected_for_19_case(self):
+        observed = subprocess.CompletedProcess(["fake-constant-42-compiler"], 42, b"", b"")
+        with self.assertRaisesRegex(RuntimeError, "expected OS exit 19"):
+            verify_guest_process("named-source-order", observed, 19)
+
+    def test_guest_stdout_rejected(self):
+        observed = subprocess.CompletedProcess(["guest"], 19, b"unwanted", b"")
+        with self.assertRaisesRegex(RuntimeError, "expected OS exit 19"):
+            verify_guest_process("named-source-order", observed, 19)
+
+    def test_guest_stderr_rejected(self):
+        observed = subprocess.CompletedProcess(["guest"], 19, b"", b"unwanted")
+        with self.assertRaisesRegex(RuntimeError, "expected OS exit 19"):
+            verify_guest_process("named-source-order", observed, 19)
+
+    def test_guest_signal_rejected(self):
+        observed = subprocess.CompletedProcess(["guest"], -9, b"", b"")
+        with self.assertRaisesRegex(RuntimeError, "expected OS exit 19"):
+            verify_guest_process("named-source-order", observed, 19)
 
     def test_prefixed_diagnostic_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "complete identifier"):
