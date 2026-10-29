@@ -1,0 +1,23 @@
+# Source-free GitHub Actions admission probe. This never checks out or reads
+# private LLVM repository files, transfers source, or accesses credentials.
+# Its only job is to distinguish runner admission from compiler/runtime tests.
+name: LLVM source-free runner admission canary
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/runner-admission-canary.yml"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  runner-admission-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Prove a GitHub-hosted runner actually executed
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GITHUB_RUN_ID:-}"
+          test -n "${RUNNER_NAME:-}"
+          test -n "${RUNNER_OS:-}"
+          printf 'SOURCE_FREE_RUNNER_ADMITTED run=%s attempt=%s os=%s\n'             "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-unknown}" "$RUNNER_OS"
