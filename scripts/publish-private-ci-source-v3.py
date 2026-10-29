@@ -1130,13 +1130,12 @@ def recheck_destination_identity(repository, contract):
 def _gh_ref_request(repository, ref_name, method):
     if not isinstance(ref_name, str) or not HANDOFF_REF.fullmatch(ref_name):
         raise Denied("ref cleanup target is invalid")
-    if method not in ("GET", "DELETE"):
-        raise Denied("ref cleanup method is invalid")
+    if method != "GET":
+        raise Denied("name-based carrier ref deletion is forbidden without an atomic lease")
     encoded = ref_name.replace("/", "%2F")
-    family = "ref" if method == "GET" else "refs"
     argv = [
         trusted_github_cli(), "api", "--method", method,
-        f"repos/{repository}/git/{family}/heads/{encoded}",
+        f"repos/{repository}/git/ref/heads/{encoded}",
         "--header", "Accept: application/vnd.github+json",
     ]
     return run_bounded_gh(
