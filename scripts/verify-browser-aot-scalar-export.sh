@@ -10,6 +10,7 @@ command -v git >/dev/null || fail "git unavailable"
 command -v clang >/dev/null || fail "clang unavailable"
 command -v cc >/dev/null || fail "C compiler unavailable"
 command -v nm >/dev/null || fail "native dynamic-symbol inspection unavailable"
+command -v readelf >/dev/null || fail "ELF compiler provenance inspection unavailable"
 [[ "$(uname -s)" == "Linux" ]] || fail "this ELF/Clang AOT smoke requires Linux"
 limiter="$(command -v timeout || command -v gtimeout || true)"
 [[ -n "$limiter" ]] || fail "timeout unavailable"
@@ -34,6 +35,8 @@ else
 fi
 [[ "$digest" == "$ORESLANG_COMPILER_SHA256" ]] ||
     fail "compiler digest mismatch"
+readelf -h "$compiler" > /dev/null 2>&1 ||
+    fail "compiler must be a native ELF binary, not a script or wrapper"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 chmod 700 "$tmp"
