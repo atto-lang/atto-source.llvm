@@ -19,8 +19,8 @@ an independently approved carrier have been established.
 | Source PR | `#1126`, draft until executed CI and independent review |
 | Source PR head at proposal creation | `0bc88d079d78e15e3abfc946a8eb6f87d078e151` (historical, **not** current authorization) |
 | Previously observed candidate actor head (historical; NOT approved) | `40ae15ac5fdfb52f3e83dd16aa5e92eb23832d9e` (superseded; no independent sign-off) |
-| Latest observed source PR head (2026-10-29 Git API; NOT approved) | `29798cab7d48f919a3672c9609dbbe977051cd64` |
-| Latest observed source root Git tree (2026-10-29 Git API; NOT approved) | `e2efa08d2122077ab975373c4a881b4329fcdc39` |
+| Latest observed source PR head (2026-10-29 Git API; NOT approved) | `4fa3306c8a857eef6bbc841fea31460d15e99543` |
+| Latest observed source root Git tree (2026-10-29 Git API; NOT approved) | `557bc08d0c78aafb1ec981ee160e10a2f50687ea` |
 | Source root Git tree independently approved | **NO — observed identity requires reviewer attestation and live recheck before export** |
 | Source `main` protection/ruleset proof | **DENY: GitHub branch API reports `protected:false`, required checks enforcement `off` (2026-10-29); protection endpoint returned 403 to GitHub App, so no additional rule attestation is available** |
 | Source main allowlist | **EMPTY — zero active destinations** |
@@ -96,6 +96,26 @@ during this admission re-probe.
   capacity; they do not prove remaining billable minutes for a full LLVM
   compile, runner isolation, repository owner consent, export approval, or
   sufficient cleanup controls.
+
+### Fresh alternate-organization source-free runner result (attempt 2)
+
+A repeat of the unrelated private `honeypot-r-us-test/hnpt-infra`
+[source-free run 40813194544, attempt 2](https://github.com/honeypot-r-us-test/hnpt-infra/actions/runs/40813194544/attempts/2)
+executed successfully with six recorded steps on job `123288048929`:
+setup, admitted runner/toolchain inventory, standalone GCC/Clang C11 toy
+test, standalone GCC/Clang C++17 threaded toy test, Clang ASan/UBSan toy
+test and completion. This confirms *fresh source-free toolchain capacity*,
+not a verified Actions billing balance or an approved source-bearing carrier.
+
+The latest LLVM actor PR #1126 source-local hardening now includes explicit
+native runtime dependency path filters, clean-checkout assertions, pre-run
+Git blob verification for native authority/turn-gate/source actor tracing
+and 48 additional concurrent wake-publication versus target-STOP attempts.
+[Exact-head source run 40825645119](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40825645119)
+again failed the `actor-ledger-contract` and `compiled-ores-guest`
+jobs with **zero** executed steps. Thus there is no native compiler or
+sanitizer verdict for this source tree. No private LLVM source was copied
+into the unrelated runner repository during this canary.
 
 ## 3. Destination authorization — all required before ANY source write
 
