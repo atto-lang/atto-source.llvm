@@ -153,6 +153,13 @@ def main():
                 "sourceGitBlobSha1": git_blob_sha1(original),
                 "stderrSha256": result_digest(result.stderr),
             })
+        verify_isolated_workspace(root, workspace_sources)
+    if sha256_file(compiler) != compiler_digest:
+        raise AssertionError("compiler executable changed during aggregate tests")
+    receipt = complete_negative_receipt(
+        compiler_digest, scalar_receipt, case_receipts, fixture_names)
+    print("NATIVE_AGGREGATE_NEGATIVE_RECEIPT_JSON=" +
+          json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     print(f"native aggregate kind: 1 positive scalar IR control and {len(CASES)} fail-closed compiler source checks passed")
 
 if __name__ == "__main__":
