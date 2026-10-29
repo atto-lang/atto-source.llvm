@@ -62,7 +62,7 @@ class HostGate final {
         !host.submit_data_only || !host.now_ms) return false;
     try {
       const auto admitted_at = host.now_ms();
-      if (scope.expires_at_ms <= admitted_at ||
+      if (admitted_at == 0 || scope.expires_at_ms <= admitted_at ||
           !host.current_revision(scope) || !host.authorize(scope) ||
           !host.claim_once(scope) || !host.current_revision(scope) ||
           !host.authorize(scope)) return false;
