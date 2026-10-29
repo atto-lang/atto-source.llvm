@@ -1584,6 +1584,27 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
+
+        # Intermediate genuine guest execution bridge: compile .ores scalar
+        # segments to LLVM IR, link the real native retained DATA/WAKE
+        # scheduler, assert A-before-B and separate actor-owned state. This
+        # does NOT claim compiler-generated suspends actor method lowering.
+        add_test(NAME source_actor_compiled_native_retained_guest_bridge
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_compiled_guest_ledger.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(source_actor_compiled_native_retained_guest_bridge
+            PROPERTIES TIMEOUT 180)
+        add_test(NAME source_actor_compiled_native_retained_guest_bridge_sanitized
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_compiled_guest_ledger.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
+        set_tests_properties(source_actor_compiled_native_retained_guest_bridge_sanitized
+            PROPERTIES TIMEOUT 180)
     endif()
 
     # Run both direct await and typed Future<void> source through real
