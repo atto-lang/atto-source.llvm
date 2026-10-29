@@ -6,6 +6,7 @@ on:
       - src/main/cpp/oreslang/frontend/**
       - src/main/cpp/oreslang/types/**
       - src/main/cpp/oreslang/backend/**
+      - src/main/cpp/oreslang/runtime/**
       - src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
       - src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
