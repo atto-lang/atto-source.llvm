@@ -740,6 +740,11 @@ def verify_required_source_blobs(files, required):
 
 def require_incident_closure():
     """Require independent completion of every pinned private-CI P0 incident."""
+    if (not INCIDENT_GATES
+            or len({number for number, _issue_id, _url in INCIDENT_GATES}) != len(INCIDENT_GATES)
+            or len({_issue_id for _number, _issue_id, _url in INCIDENT_GATES}) != len(INCIDENT_GATES)
+            or len({_url for _number, _issue_id, _url in INCIDENT_GATES}) != len(INCIDENT_GATES)):
+        raise Denied("private-CI incident gate configuration is invalid")
     for number, issue_id, html_url in INCIDENT_GATES:
         issue = gh_api(f"repos/{INCIDENT_REPO}/issues/{number}")
         if (not isinstance(issue, dict)
