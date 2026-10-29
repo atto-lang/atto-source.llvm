@@ -239,3 +239,14 @@ per-tenant VM, whether implemented initially as a private State or eventually
 as a separately testable C++ type. OresIsolateContext is a *borrowed execution
 ABI view*, never a synonym for either VM. V8 Isolate and V8 Context are
 separate reference concepts, not aliases for our naming.
+
+
+### ABI evolution and code-loading guard
+
+The initial scalar guest-call ABI is now **v2**, with independent int32 status
+and i64 output pointer. An OresVM module loader must associate the ABI version
+and validated symbol signature with each compiled AOT artifact *before* any
+function pointer cast or native invocation. Do not load or hot-swap a v1
+entrypoint as v2; context version checks performed by a wrongly cast native
+function cannot prevent calling-convention undefined behavior. The host
+test harness uses known compile-time typed functions, not a dynamic loader.
