@@ -4524,6 +4524,37 @@ if(BUILD_TESTING)
             add_test(NAME native_oresvm_handwritten_llvm_aot_context
                 COMMAND oreslang-native-oresvm-guest-aot-test)
             set_tests_properties(native_oresvm_handwritten_llvm_aot_context PROPERTIES TIMEOUT 30)
+
+            # Compile real Oreslang source through the same production compiler.
+            set(ORES_ISOLATE_SOURCE_IR "${CMAKE_CURRENT_BINARY_DIR}/oresvm-source-step.ll")
+            set(ORES_ISOLATE_SOURCE_OBJ "${CMAKE_CURRENT_BINARY_DIR}/oresvm-source-step.o")
+            add_custom_command(OUTPUT "${ORES_ISOLATE_SOURCE_IR}"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DORES_LLVM_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DORES_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/oresvm-tenant-step.ores"
+                    "-DORES_OUTPUT=${ORES_ISOLATE_SOURCE_IR}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/CompileIsolateSource.cmake"
+                DEPENDS oreslang-llvmc
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/oresvm-tenant-step.ores"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/CompileIsolateSource.cmake"
+                VERBATIM)
+            add_custom_command(OUTPUT "${ORES_ISOLATE_SOURCE_OBJ}"
+                COMMAND "${ORES_ISOLATE_TEST_CLANG}" -x ir -c
+                    "${ORES_ISOLATE_SOURCE_IR}" -o "${ORES_ISOLATE_SOURCE_OBJ}"
+                DEPENDS "${ORES_ISOLATE_SOURCE_IR}" VERBATIM)
+            set_source_files_properties("${ORES_ISOLATE_SOURCE_OBJ}" PROPERTIES
+                GENERATED TRUE EXTERNAL_OBJECT TRUE)
+            add_executable(oreslang-native-oresvm-source-guest-test
+                tests/native_oresvm_source_guest_test.cpp "${ORES_ISOLATE_SOURCE_OBJ}")
+            target_include_directories(oreslang-native-oresvm-source-guest-test PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_compile_features(oreslang-native-oresvm-source-guest-test PRIVATE cxx_std_17)
+            target_link_libraries(oreslang-native-oresvm-source-guest-test PRIVATE Threads::Threads)
+            target_compile_options(oreslang-native-oresvm-source-guest-test PRIVATE
+                $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+            add_test(NAME native_oresvm_source_llvm_aot_context
+                COMMAND oreslang-native-oresvm-source-guest-test)
+            set_tests_properties(native_oresvm_source_llvm_aot_context PROPERTIES TIMEOUT 30)
         endif()
     endif()
 endif()

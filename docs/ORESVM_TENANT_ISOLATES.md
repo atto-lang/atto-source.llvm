@@ -134,3 +134,17 @@ invocations while allowing already-running synchronous code to finish.
 Nested calls on one host thread fail closed. Queued calls are pinned for
 shutdown accounting; this is not FIFO, a scheduler, preemptive cancellation,
 security isolation, or hard-real-time timing certification.
+
+## First compiler-generated .ores isolate guest (experimental)
+
+Compile one source-defined, synchronous scalar transition with
+`oreslang-llvmc --isolate-entry=tenant_step tests/fixtures/oresvm-tenant-step.ores`.
+The produced `ores_guest_entry(OresIsolateContext*, int64_t)` loads tenant
+slot zero, calls the compiler-lowered `tenant_step(old, delta)`, then stores
+the result through the host's generation-pinned context. It has no process-
+shared mutable LLVM global. This is a restricted, opt-in, host-only stage:
+only one pure public function with two i64 parameters, no actors, heap,
+strings, FFI, suspension, or other side effects. The native host serializes
+same-tenant invocations. Error sentinels -1/-2/-3 are provisional and can
+collide with valid negative scalar results; a status + out-value ABI is the
+next compatibility improvement. This is not arbitrary tenant sandboxing.

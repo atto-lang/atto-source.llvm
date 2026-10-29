@@ -1,0 +1,4 @@
+// Source-defined tenant state transition, not handwritten LLVM IR.
+pub fnc tenant_step(int old, int delta): int {
+    return old + delta;
+}
