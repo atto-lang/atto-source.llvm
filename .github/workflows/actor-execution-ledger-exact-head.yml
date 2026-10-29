@@ -332,7 +332,15 @@ jobs:
               src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
               src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
               src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h \
-              CMakeLists.txt; do
+              CMakeLists.txt \
+              src/main/cpp/oreslang/main.cpp \
+              src/main/cpp/oreslang/frontend/Parser.cpp \
+              src/main/cpp/oreslang/frontend/ModuleLoader.cpp \
+              src/main/cpp/oreslang/frontend/MethodResolver.cpp \
+              src/main/cpp/oreslang/types/NativeScalarTypes.cpp \
+              src/main/cpp/oreslang/types/OwnershipChecker.cpp \
+              src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+              src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
           done
       - name: Build real Oreslang LLVM compiler against installed LLVM
