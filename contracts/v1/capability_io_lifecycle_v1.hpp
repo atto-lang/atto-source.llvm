@@ -13,11 +13,7 @@ class HostLifecycleGate final {
 public:
     struct Ticket { std::size_t slot = 0; std::uint64_t nonce = 0; };
     explicit HostLifecycleGate(std::size_t capacity, std::size_t max_revocations = 1024)
-        : slots_(capacity), revoked_(max_revocations) {
-        if (capacity == 0 || capacity > 65536 || max_revocations == 0 ||
-            max_revocations > 65536)
-            throw std::invalid_argument("bounded lifecycle capacity required");
-    }
+        : slots_(bounded_count(capacity)), revoked_(bounded_count(max_revocations)) {}
     Ticket reserve(bool authenticated, bool requested_allowed,
                    bool selected_allowed, std::uint64_t actor,
                    std::uint64_t incarnation, std::uint64_t selected_binding) {
@@ -92,6 +88,12 @@ public:
         return in_flight_;
     }
 private:
+    // Reject hostile oversized requests BEFORE allocating either vector.
+    static std::size_t bounded_count(std::size_t n) {
+        if (n == 0 || n > 65536)
+            throw std::invalid_argument("bounded lifecycle capacity required");
+        return n;
+    }
     enum class Phase : std::uint8_t { free, reserved, dispatched, cancel_requested, settled };
     struct Slot {
         std::uint64_t actor = 0, incarnation = 0, selected = 0, nonce = 0;
