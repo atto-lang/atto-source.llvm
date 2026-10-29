@@ -46,6 +46,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Native host-only reference for P0 named signed-64 arithmetic. This
+    # verifies integer rules, not guest syntax lowering or LLVM backend parity.
+    add_executable(oreslang-strict-signed64-oracle-test
+        tests/strict_signed64_oracle_test.cpp)
+    target_include_directories(oreslang-strict-signed64-oracle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-strict-signed64-oracle-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_strict_signed64_reference
+        COMMAND oreslang-strict-signed64-oracle-test)
+    set_tests_properties(native_strict_signed64_reference PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
