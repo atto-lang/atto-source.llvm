@@ -189,6 +189,35 @@ public:
         state_->used -= bytes;
     }
 
+    // Trusted scheduler retirement preflight: loan pins cannot be silently
+    // invalidated by an actor incarnation's normal retirement.
+    void require_actor_quiescent(TrustedBufferActor actor) const {
+        validate_actor(actor);
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        require_live(*state_);
+        for (const auto& entry : state_->slots)
+            if (entry.second->owner == actor && entry.second->read_loans)
+                throw std::logic_error("actor still has immutable buffer loans");
+    }
+
+    // Called only after scheduler quiescence and mailbox closure. All
+    // receiver-owned outstanding buffers are reclaimed, not just queued DATA.
+    void reclaim_actor(TrustedBufferActor actor) {
+        validate_actor(actor);
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        require_live(*state_);
+        for (const auto& entry : state_->slots)
+            if (entry.second->owner == actor && entry.second->read_loans)
+                throw std::logic_error("actor still has immutable buffer loans");
+        for (auto it = state_->slots.begin(); it != state_->slots.end();) {
+            const auto& slot = it->second;
+            if (!(slot->owner == actor)) { ++it; continue; }
+            std::fill(slot->data.begin(), slot->data.end(), 0);
+            state_->used -= slot->data.size();
+            it = state_->slots.erase(it);
+        }
+    }
+
     std::size_t used_bytes() const {
         std::lock_guard<std::mutex> guard(state_->mutex);
         return state_->used;
