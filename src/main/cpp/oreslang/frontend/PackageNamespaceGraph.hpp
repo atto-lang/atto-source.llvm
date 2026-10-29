@@ -102,17 +102,20 @@ inline PackageNamespaceGraph link_package_namespaces(
         if (!program.module.empty())
             throw std::invalid_argument("module wrapper cannot declare a file namespace");
 
+        // Reject unlowered top-level declarations before registering the
+        // namespace; no nominal/constraint/loop ABI can enter this scalar graph.
+        if (!program.classes.empty() || !program.actors.empty()
+                || !program.type_only_declarations.empty()
+                || !program.type_constraint_descriptors.empty()
+                || !program.contracts.empty() || !program.conforms.empty()
+                || !program.sum_types.empty()
+                || !program.generators.empty()
+                || !program.cooperative_loops.empty())
+            throw std::invalid_argument("native namespace non-scalar declarations need checked ABI lowering");
+
         const PackageNamespaceKey key{unit.package_instance_id, program.namespace_name};
         auto& group = result.namespaces[key];
         group.source_units.insert(unit.source_unit_id);
-
-        // This only indexes exported scalar functions. Actor, class, types
-        // and nominal public API need verified cross-unit type identity.
-        if (!program.classes.empty() || !program.actors.empty()
-                || !program.type_only_declarations.empty()
-                || !program.contracts.empty()
-                || !program.generators.empty())
-            throw std::invalid_argument("native namespace non-scalar declarations need checked ABI lowering");
 
         for (const auto& fn : program.functions) {
             if (!fn.exported) continue;

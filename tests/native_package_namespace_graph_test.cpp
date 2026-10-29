@@ -105,5 +105,39 @@ int main() {
     assert(private_graph.namespaces.at({"foo@1", "a"}).source_units.size() == 4);
     assert(private_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
-    std::cout << "native package namespace source-only graph: 6/6 cases passed\n";
+    // 7. Unlowered top-level AST families must never enter the scalar graph.
+    {
+        Program unsupported = make_source("a", "with_sum");
+        unsupported.sum_types.push_back(NativeSumType{});
+        another = units;
+        another.push_back({"foo/sum", "foo@1", &unsupported});
+        must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                    "non-scalar declarations");
+    }
+    {
+        Program unsupported = make_source("a", "with_constraint");
+        unsupported.type_constraint_descriptors.push_back(TypeConstraintDescriptor{});
+        another = units;
+        another.push_back({"foo/constraint", "foo@1", &unsupported});
+        must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                    "non-scalar declarations");
+    }
+    {
+        Program unsupported = make_source("a", "with_conformance");
+        unsupported.conforms.push_back("SomeTrait");
+        another = units;
+        another.push_back({"foo/conformance", "foo@1", &unsupported});
+        must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                    "non-scalar declarations");
+    }
+    {
+        Program unsupported = make_source("a", "with_loop");
+        unsupported.cooperative_loops.push_back(CooperativeScalarLoop{});
+        another = units;
+        another.push_back({"foo/loop", "foo@1", &unsupported});
+        must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                    "non-scalar declarations");
+    }
+
+    std::cout << "native package namespace source-only graph: 10/10 cases passed\n";
 }
