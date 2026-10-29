@@ -122,6 +122,35 @@ void verify_sealed_actor_state_shape(const ActorContainer& actors) {
                 !method.return_sum.empty() || !method.pending_return_type_alias.empty() ||
                 !method.method_owner.empty() || method.native_internal)
             throw std::runtime_error("sealed actor state cannot carry lifecycle or alternate lowering");
+        // Compiler passes can construct a sealed callback AST without
+        // going through the parser's lexical owned-local checks. Reject
+        // non-i64, mutable, forwarding, or escaped ownership metadata before
+        // any native IR allocation or heap slot lowering.
+        if (loan->locals.size() > 8)
+            throw std::runtime_error("sealed callback owned-local bound exceeded");
+        std::unordered_set<std::string> owned_names;
+        for (const auto& local : loan->locals) {
+            if (local.name.empty() || local.name == message ||
+                    local.name == loan->binder ||
+                    field_names.count(local.name) ||
+                    !owned_names.insert(local.name).second ||
+                    !local.heap_owned || !local.initializer ||
+                    local.scalar_type != decltype(local.scalar_type)::I64 ||
+                    local.array_element_type != decltype(local.array_element_type)::I64 ||
+                    local.owner_mutable || local.assignable ||
+                    local.field_mutable || local.int_array || local.record_view ||
+                    local.new_class || local.move_class ||
+                    !local.class_name.empty() ||
+                    !local.array_record_class.empty() ||
+                    !local.move_source.empty() ||
+                    !local.constructor_arguments.empty() ||
+                    !local.pending_type_alias.empty() ||
+                    !local.sum_type.empty() ||
+                    !local.task_await_name.empty() ||
+                    !local.future_await_name.empty())
+                throw std::runtime_error(
+                    "sealed callback rejects forged owned-local provenance");
+        }
         for (const auto& write : loan->writes) {
             if (!field_names.count(write.field) || !write.expression)
                 throw std::runtime_error("sealed actor state write references an invalid field");

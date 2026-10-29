@@ -40,11 +40,25 @@ struct Write {
     std::string field;
     std::unique_ptr<Expression> expression = std::make_unique<Expression>();
 };
+struct OwnedLocal {
+    enum class ScalarType { I64, Bool };
+    std::string name = "previous";
+    std::unique_ptr<Expression> initializer = std::make_unique<Expression>();
+    bool heap_owned = true;
+    ScalarType scalar_type = ScalarType::I64;
+    ScalarType array_element_type = ScalarType::I64;
+    bool owner_mutable = false, assignable = false, field_mutable = false;
+    bool int_array = false, record_view = false, new_class = false, move_class = false;
+    std::string class_name, array_record_class, move_source, pending_type_alias, sum_type;
+    std::string task_await_name, future_await_name;
+    std::vector<int> constructor_arguments;
+};
 struct Loan {
     enum class Mode { Read, Write };
     Mode mode = Mode::Read;
     std::string binder = "s";
     std::vector<Write> writes;
+    std::vector<OwnedLocal> locals;
     std::unique_ptr<Expression> result = std::make_unique<Expression>();
 };
 struct Method {
@@ -303,7 +317,53 @@ int main() {
         a.on_message.actor_state_loan->writes.back().expression.reset();});
     must_reject([](Actor& a){a.fields.clear();
         for (int i=0;i<17;i++) {a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
-    if (admitted != 6 || rejected != 110)
+    auto with_owned_local=valid();
+    with_owned_local.front().on_message.actor_state_loan->locals.emplace_back();
+    must_admit(std::move(with_owned_local));
+    // Every injected invalid AST is checked at the same production admission
+    // entry point. These are not guest-runtime or borrow-quiescence tests.
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().name.clear();});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().name="s";});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().name="n";});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().name="count";});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.emplace_back();});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().heap_owned=false;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().owner_mutable=true;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().initializer.reset();});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().int_array=true;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().class_name="Foreign";});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().future_await_name="escape";});
+    must_reject([](Actor& a){for(int i=0;i<9;i++){
+        a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().name="v"+std::to_string(i);}});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().assignable=true;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().field_mutable=true;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().scalar_type=OwnedLocal::ScalarType::Bool;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().new_class=true;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().move_class=true;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().pending_type_alias="Alias";});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().sum_type="Option";});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->locals.emplace_back();
+        a.on_message.actor_state_loan->locals.back().task_await_name="t";});
+    if (admitted != 7 || rejected != 130)
         throw std::runtime_error("sealed-state admission case count changed");
     std::cout << "Sealed-state admission: " << admitted << " valid / "
               << rejected << " rejected: PASS\n";
