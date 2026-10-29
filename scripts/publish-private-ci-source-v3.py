@@ -1112,6 +1112,22 @@ def recheck_destination_identity(repository, contract):
         raise Denied("carrier main changed during transfer")
 
 
+def authorize_source_write(
+        repository, contract, source_pr, source_commit,
+        test_plan, expected_source_authority):
+    """Re-attest every mutable source and carrier gate before a Git write."""
+    recheck_destination_identity(repository, contract)
+    if checked_carrier_main(repository, contract) != contract["base_sha"]:
+        raise Denied("carrier main protection changed before source write")
+    authority, current_contract = protected_authority(
+        repository, source_pr, test_plan
+    )
+    if authority != expected_source_authority or current_contract != contract:
+        raise Denied("protected source authority changed before source write")
+    if verify_source_pr(source_pr, source_commit) != SOURCE_REPO_ID:
+        raise Denied("source PR identity or independent review changed")
+
+
 def _gh_ref_request(repository, ref_name, method):
     if not isinstance(ref_name, str) or not HANDOFF_REF.fullmatch(ref_name):
         raise Denied("ref cleanup target is invalid")
@@ -1214,7 +1230,10 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
 
     elements = []
     for path, mode, sha, data in files:
-        recheck_destination_identity(repository, contract)
+        authorize_source_write(
+            repository, contract, source_pr, source_commit,
+            test_plan, protected_sha
+        )
         result = gh_api(
             f"repos/{repository}/git/blobs",
             method="POST",
@@ -1230,7 +1249,10 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
             "path": path, "mode": mode, "type": "blob", "sha": uploaded
         })
 
-    recheck_destination_identity(repository, contract)
+    authorize_source_write(
+        repository, contract, source_pr, source_commit,
+        test_plan, protected_sha
+    )
     isolated = gh_api(
         f"repos/{repository}/git/trees",
         method="POST",
@@ -1270,7 +1292,10 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     receipt_bytes = canonical_bytes(receipt) + b"\n"
     receipt_digest = canonical_digest(receipt)
 
-    recheck_destination_identity(repository, contract)
+    authorize_source_write(
+        repository, contract, source_pr, source_commit,
+        test_plan, protected_sha
+    )
     rb = gh_api(
         f"repos/{repository}/git/blobs",
         method="POST",
@@ -1283,7 +1308,10 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     if receipt_blob != git_blob_sha(receipt_bytes):
         raise Denied("receipt blob digest mismatch")
 
-    recheck_destination_identity(repository, contract)
+    authorize_source_write(
+        repository, contract, source_pr, source_commit,
+        test_plan, protected_sha
+    )
     root = gh_api(
         f"repos/{repository}/git/trees",
         method="POST",
@@ -1297,7 +1325,10 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     )
     root_sha = valid_sha(root.get("sha"), "carrier root tree SHA")
 
-    recheck_destination_identity(repository, contract)
+    authorize_source_write(
+        repository, contract, source_pr, source_commit,
+        test_plan, protected_sha
+    )
     commit = gh_api(
         f"repos/{repository}/git/commits",
         method="POST",
