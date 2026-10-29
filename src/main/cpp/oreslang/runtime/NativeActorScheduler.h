@@ -126,9 +126,9 @@ typedef int (*OresNativeBufferCommitFn)(
     void* context, OresNativeActorRef sender, OresNativeActorRef recipient,
     OresNativeOwnedBufferTicket* inout_ticket);
 typedef void (*OresNativeBufferDeliverFn)(
-    void* context, size_t actor_slot, OresNativeOwnedBufferTicket ticket);
+    void* context, OresNativeActorRef recipient, OresNativeOwnedBufferTicket ticket);
 typedef void (*OresNativeBufferDiscardFn)(
-    void* context, size_t actor_slot, OresNativeOwnedBufferTicket ticket);
+    void* context, OresNativeActorRef recipient, OresNativeOwnedBufferTicket ticket);
 /* Bootstrap-only; reject configuration after worker or DATA admission. */
 int ores_native_actor_scheduler_configure_owned_buffer(
     OresNativeActorScheduler* scheduler,
