@@ -21,6 +21,34 @@ masquerading as an issue all fail closed. The gate is rechecked **before each so
 immediately before executable carrier authorization. All nine incident IDs
 must have independently verified, completed dispositions.
 
+## Rust-first and Oreslang verification path
+
+The dependency-free `tools/private-ci-policy` Rust crate is an executable,
+**source-free policy oracle**. Run `cargo test --offline --manifest-path
+tools/private-ci-policy/Cargo.toml` to check default denial, pinned
+repository IDs, strict app-bound checks, independent exact-head review,
+nine completed P0 incidents, and policy changes between observations.
+It does not fetch GitHub state, issue an export capability, sign a
+receipt, or authorize a Git write. All source-bearing transfers still
+require the independently audited live publisher until replaced by a
+fully verified native implementation.
+
+The Oreslang fixture
+`tests/fixtures/private-ci-admission-projection.ores` provides a
+pure scalar fail-closed semantics projection. CTest
+`native_private_ci_oreslang_admission_projection` uses the **Rust
+test harness** to compile real Oreslang guest code to LLVM IR, link
+it with Clang, and require OS exit code 42. It is not a substitute
+for verifying live GitHub permissions or incident state. Both Rust and
+Oreslang tests must run successfully on the exact PR head before this
+Rust-first component may be considered executed.
+
+Python remains only for existing production publisher compatibility
+and regression coverage while the live export path is migrated
+incrementally to Rust, with unchanged review and rollback semantics.
+Do not delete a working security gate before its Rust replacement has
+independent exact-head evidence.
+
 ## Transfer requirements
 
 Any future publisher must run from trusted protected-source code, never from the PR under test, and must:
