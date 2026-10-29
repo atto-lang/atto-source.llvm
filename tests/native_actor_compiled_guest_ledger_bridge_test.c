@@ -88,11 +88,13 @@ static void data(void* raw, size_t actor, uint64_t payload) {
     if (actor == 1) {
         CHECK(payload == 9);
         int64_t next = guest_step(prior, (int64_t)payload);
-        CHECK(next == 9);
+        CHECK((prior == 0 && next == 9)
+            || (prior == 9 && next == 108));
         ores_actor_i64_heap_write(f->heaps[actor], turn, state, next);
         atomic_store_explicit(&f->observed_state[actor], next,
             memory_order_release);
-        atomic_store_explicit(&f->independent_ran, 1, memory_order_release);
+        atomic_fetch_add_explicit(&f->independent_ran, 1,
+            memory_order_release);
     } else if (payload == 1) {
         CHECK(prior == 0);
         int64_t next = guest_step(prior, (int64_t)payload);
@@ -292,8 +294,19 @@ int main(void) {
     CHECK(atomic_load_explicit(&f.observed_state[0], memory_order_acquire) == 1256);
     CHECK(atomic_load_explicit(&f.observed_state[1], memory_order_acquire) == 9);
     CHECK(ores_native_actor_scheduler_stop(f.scheduler, f.actors[0]));
-    CHECK(ores_native_actor_scheduler_stop(f.scheduler, f.actors[1]));
     CHECK(ores_native_actor_scheduler_wait_done(f.scheduler, f.actors[0]));
+    /* A's native actor-owned heap can be physically destroyed while B's
+     * separate scheduler actor and allocation remain alive. */
+    ores_actor_i64_heap_retire(f.heaps[0]);
+    CHECK(ores_actor_i64_heap_try_destroy(f.heaps[0]));
+    f.heaps[0] = NULL;
+    CHECK(f.heaps[1] != NULL);
+    CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actors[1], 9));
+    until_completed(&f, 5);
+    CHECK(atomic_load_explicit(&f.independent_ran, memory_order_acquire) == 2);
+    CHECK(atomic_load_explicit(&f.observed_state[1], memory_order_acquire) == 108);
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(ores_native_actor_scheduler_stop(f.scheduler, f.actors[1]));
     CHECK(ores_native_actor_scheduler_wait_done(f.scheduler, f.actors[1]));
     OresNativeActorTerminalState result = {0};
     CHECK(ores_native_actor_scheduler_terminal_state(
@@ -303,17 +316,14 @@ int main(void) {
     CHECK(result.abandoned_user_messages == 0);
     CHECK(ores_native_actor_scheduler_terminal_state(
         f.scheduler, f.actors[1], &result));
-    CHECK(result.accepted_user_messages == 1);
-    CHECK(result.processed_user_messages == 1);
+    CHECK(result.accepted_user_messages == 2);
+    CHECK(result.processed_user_messages == 2);
     CHECK(result.abandoned_user_messages == 0);
     ores_native_actor_scheduler_retire(f.scheduler);
     CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
-    /* Heaps have independent allocations and independent physical teardown.
-     * Actor B must survive when A's heap is reclaimed. */
-    ores_actor_i64_heap_retire(f.heaps[0]);
-    CHECK(ores_actor_i64_heap_try_destroy(f.heaps[0]));
-    f.heaps[0] = NULL;
-    CHECK(f.heaps[1] != NULL);
+    /* B remained executable after A's physical reclamation; now the
+     * independently allocated B heap can be safely destroyed as well. */
+    CHECK(f.heaps[0] == NULL && f.heaps[1] != NULL);
     ores_actor_i64_heap_retire(f.heaps[1]);
     CHECK(ores_actor_i64_heap_try_destroy(f.heaps[1]));
     f.heaps[1] = NULL;
