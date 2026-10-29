@@ -83,6 +83,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             22: issue(22, 5832921751),
             77: issue(77, 5904679716),
             127: issue(127, 5935338521),
+            212: issue(212, 6087989978),
         }
 
         def api_for(values):
@@ -97,6 +98,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             self.assertTrue(v3.require_incident_closure())
 
         cases = []
+        latest_incident_open = dict(good)
+        latest_incident_open[212] = issue(212, 6087989978, state="open", reason=None)
+        cases.append(latest_incident_open)
         opened = dict(good)
         opened[22] = issue(22, 5832921751, state="open", reason=None)
         cases.append(opened)
