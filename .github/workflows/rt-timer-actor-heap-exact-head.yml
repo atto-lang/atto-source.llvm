@@ -45,6 +45,8 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             test "$head" = "${{ github.event.pull_request.head.sha }}"
           fi
+          # Blob attestations alone cannot detect an untracked build input.
+          test -z "$(git status --porcelain --untracked-files=all)"
           for path in \
             CMakeLists.txt \
             src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \

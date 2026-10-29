@@ -83,6 +83,134 @@ def check():
     assert not missing_blobs, (
         f"unverified dependencies: {sorted(missing_blobs)}"
     )
+    # A hash-object comparison alone does not reject untracked or modified
+    # non-manifest inputs. Require a clean exact-head checkout before builds.
+    identity_name = "Verify exact commit and relevant Git blobs"
+    identity_marker = f"      - name: {identity_name}\\n"
+    assert section.count(identity_marker) == 1, "missing identity gate"
+    identity_step = section.split(identity_marker, 1)[1].split(
+        "\\n      - name:", 1
+    )[0]
+    assert re.search(r"(?m)^\\s*set -euo pipefail\\s*$", identity_step), (
+        "identity gate is not fail-fast"
+    )
+    assert re.search(
+        r'(?m)^\\s*test -z "\\$\\(git status --porcelain '
+        r'--untracked-files=all\\)"\\s*    # manifest. In particular, deleting a timer or heap command must fail the
+    # same self-audit that already protects the authenticated ledger fixture.
+    build_matrix = {
+        "GCC strict timer and actor-heap execution": (
+            ("tests/native_realtime_timer_queue_test.cpp", "timer-gcc", None),
+            ("tests/native_rt_timer_actor_heap_integration_test.cpp",
+             "integration-gcc", "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
+            ("tests/native_rt_timer_actor_ledger_integration_test.cpp",
+             "ledger-gcc", "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
+        ),
+        "Clang strict timer and actor-heap execution": (
+            ("tests/native_realtime_timer_queue_test.cpp", "timer-clang", None),
+            ("tests/native_rt_timer_actor_heap_integration_test.cpp",
+             "integration-clang", "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
+            ("tests/native_rt_timer_actor_ledger_integration_test.cpp",
+             "ledger-clang", "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
+        ),
+        "Clang ASan and UBSan actor-heap execution": (
+            ("tests/native_rt_timer_actor_heap_integration_test.cpp",
+             "integration-san", "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
+            ("tests/native_rt_timer_actor_ledger_integration_test.cpp",
+             "ledger-san", "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
+        ),
+    }
+    for step_name, expectations in build_matrix.items():
+        step_marker = f"      - name: {step_name}\n"
+        assert section.count(step_marker) == 1, (
+            f"missing or duplicate execution step: {step_name}"
+        )
+        step = section.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
+        assert re.search(r"(?m)^\s*set -euo pipefail\s*$", step), (
+            f"{step_name}: native step is not fail-fast"
+        )
+        assert "continue-on-error: true" not in step, (
+            f"{step_name}: failures are explicitly ignored"
+        )
+        assert "|| true" not in step, (
+            f"{step_name}: failures may be masked"
+        )
+        if step_name == "Clang ASan and UBSan actor-heap execution":
+            assert step.count("-fsanitize=address,undefined") >= 4, (
+                "sanitizer instrumentation missing from build/link commands"
+            )
+            assert step.count("-fno-omit-frame-pointer") >= 4, (
+                "sanitizer frame-pointer instrumentation missing"
+            )
+            assert step.count("ASAN_OPTIONS=") >= 2, (
+                "ASan runtime enforcement missing"
+            )
+            assert step.count("UBSAN_OPTIONS=") >= 2, (
+                "UBSan runtime enforcement missing"
+            )
+        for fixture, binary, dependency in expectations:
+            assert fixture in step, f"{step_name}: missing {fixture}"
+            if dependency:
+                assert dependency in step, (
+                    f"{step_name}: missing linked source {dependency}"
+                )
+            binary_path = f"build/rt-timer-actor-heap/{binary}"
+            assert re.search(
+                r"(?m)(?:^|\s)-o\s+" + re.escape(binary_path) + r"(?:\s|$)",
+                step,
+            ), f"{step_name}: missing {binary} build output"
+            assert re.search(
+                r"(?m)^\s*(?:(?:ASAN_OPTIONS|UBSAN_OPTIONS)=[^\s]+\s+)*"\n                + re.escape(binary_path) + r"\s*$", step
+            ), f"{step_name}: {binary} never executed"
+
+    cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+    for test_name, fixture in (
+        ("native_realtime_timer_queue_contract",
+         "tests/native_realtime_timer_queue_test.cpp"),
+        ("native_rt_timer_actor_heap_loan_lifecycle",
+         "tests/native_rt_timer_actor_heap_integration_test.cpp"),
+        ("native_rt_timer_actor_ledger_start_authority",
+         "tests/native_rt_timer_actor_ledger_integration_test.cpp"),
+    ):
+        assert f"add_test(NAME {test_name}" in cmake, (
+            f"CMake registration missing: {test_name}"
+        )
+        assert fixture in cmake, f"CMake fixture missing: {fixture}"
+
+    for item in required:
+        resolved = (root / item).resolve()
+        assert resolved.is_relative_to(root), f"escaped source path {item}"
+        assert (root / item).is_file() and not (root / item).is_symlink(), (
+            f"missing or symlink source input: {item}"
+        )
+
+    for special in (
+        "CMakeLists.txt",
+        ".github/workflows/rt-timer-actor-heap-exact-head.yml",
+    ):
+        assert f"      - {special}\n" in header, (
+            f"missing control-file PR trigger: {special}"
+        )
+        assert special in loop_text, f"missing control-file blob identity: {special}"
+
+    print(
+        "RT_TIMER_ACTOR_HEAP_SOURCE_DEPENDENCY_ATTESTATION_PASS "
+        f"inputs={len(required)}"
+    )
+
+
+if __name__ == "__main__":
+    try:
+        check()
+    except (AssertionError, OSError, UnicodeError) as exc:
+        print(
+            f"RT_TIMER_ACTOR_HEAP_SOURCE_DEPENDENCY_ATTESTATION_FAIL: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+, identity_step
+    ), "missing clean checkout guard"
+
     # Keep the native test matrix executable, not merely listed in the blob
     # manifest. In particular, deleting a timer or heap command must fail the
     # same self-audit that already protects the authenticated ledger fixture.
