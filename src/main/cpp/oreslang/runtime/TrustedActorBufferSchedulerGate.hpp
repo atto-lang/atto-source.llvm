@@ -170,14 +170,32 @@ public:
         state_->pool->drop(buffer, require_turn(turn));
     }
 
-    // Recipient identity and liveness are checked under the same gate as
-    // send publication. The mailbox then reserves a slot BEFORE pool.take().
-    void send(const Turn& sender, TrustedBufferActor recipient,
-              const Handle& buffer) {
+    enum class SendStatus {
+        Accepted, UnknownRecipient, RecipientStopped, MailboxFull
+    };
+    // Authenticated host-turn admission is serialized against receiver STOP.
+    // Only ACCEPTED transfers ownership. Expected failures return a typed
+    // status; illegal/stale source handles still fail closed with an error.
+    SendStatus try_send(const Turn& sender, TrustedBufferActor recipient,
+                        const Handle& buffer) {
         std::lock_guard<std::mutex> lock(state_->mutex);
         const auto from = require_turn(sender);
-        auto& target = require_actor(recipient);
-        target.mailbox->send(buffer, from);
+        const auto it = state_->actors.find(recipient.id);
+        if (it == state_->actors.end() || it->second.incarnation != recipient.incarnation)
+            return SendStatus::UnknownRecipient;
+        if (!it->second.live) return SendStatus::RecipientStopped;
+        switch (it->second.mailbox->try_send(buffer, from)) {
+            case Mailbox::Admission::Accepted: return SendStatus::Accepted;
+            case Mailbox::Admission::Closed: return SendStatus::RecipientStopped;
+            case Mailbox::Admission::Full: return SendStatus::MailboxFull;
+        }
+        std::terminate();
+    }
+    void send(const Turn& sender, TrustedBufferActor recipient,
+              const Handle& buffer) {
+        const SendStatus status = try_send(sender, recipient, buffer);
+        if (status != SendStatus::Accepted)
+            throw std::logic_error("trusted actor buffer send was not admitted");
     }
     Handle receive(const Turn& recipient) {
         std::lock_guard<std::mutex> lock(state_->mutex);
