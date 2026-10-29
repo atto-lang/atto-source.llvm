@@ -2,6 +2,7 @@
 #include "oreslang/runtime/TrustedActorBufferPool.hpp"
 
 #include <cstddef>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -30,7 +31,7 @@ public:
     }
     TrustedActorBufferMailbox(const TrustedActorBufferMailbox&) = delete;
     TrustedActorBufferMailbox& operator=(const TrustedActorBufferMailbox&) = delete;
-    ~TrustedActorBufferMailbox() { close(); }
+    ~TrustedActorBufferMailbox() noexcept { if (!close()) std::terminate(); }
 
     // Reserve a queue slot under the publication mutex, then move ownership.
     // There is no allocation or throwable publication action after take().
@@ -66,17 +67,28 @@ public:
     // but unread DATA as the receiver. The pool is retained by shared_ptr,
     // so a mailbox cannot dereference a destructed pool. If the pool was
     // already retired, its storage has already been revoked/zeroed.
-    void close() noexcept {
+    // Do not throw away the only queued owner handle when immutable loans
+    // still pin the tenant pool. The caller may retry after loan release.
+    // Caller must serialize guest loan admission with this close operation
+    // using the trusted scheduler gate; direct pool use is host-only.
+    bool close() noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
-        if (closed_) return;
+        if (closed_) return true;
+        if (pool_->has_borrowed_buffers_owned_by(recipient_)) return false;
         closed_ = true;
         while (count_) {
             Handle abandoned = std::move(entries_[head_]);
             head_ = (head_ + 1) % entries_.size();
             --count_;
             try { pool_->drop(abandoned, recipient_); }
-            catch (...) { /* pool retirement already revoked ownership */ }
+            catch (...) {
+                // A previously retired pool has already invalidated every
+                // handle. Any other unexpected loss of ownership is a
+                // fatal host invariant violation, never silently swallowed.
+                if (!pool_->is_retired()) std::terminate();
+            }
         }
+        return true;
     }
 
 private:
