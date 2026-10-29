@@ -24,9 +24,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          g++ --version | head -1
-          clang --version | head -1
-          cmake --version | head -1
+          for tool in gcc g++ clang clang++ cmake; do
+            command -v "$tool" >/dev/null
+          done
+          # sed reads all output: avoid head-induced SIGPIPE under pipefail.
+          g++ --version | sed -n '1p'
+          clang --version | sed -n '1p'
+          cmake --version | sed -n '1p'
           echo "LLVM_SOURCE_FREE_TOOLCHAIN_PRESENT=true"
       - name: Execute synthetic native program with no repository source
         shell: bash
@@ -43,3 +47,24 @@ jobs:
               -o "$RUNNER_TEMP/llvm-source-free/$cc"
             "$RUNNER_TEMP/llvm-source-free/$cc"
           done
+          # All compiled inputs are synthetic, inline source, no checkout.
+          printf '%s\n' \
+            '#include <cstdint>' \
+            '#include <cstdio>' \
+            'int main() { std::uint64_t generation=7; if (generation!=7) return 1; std::puts("LLVM_SOURCE_FREE_CPP17_EXECUTED"); }' \
+            >"$RUNNER_TEMP/llvm-source-free/hello.cpp"
+          for cxx in g++ clang++; do
+            "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              "$RUNNER_TEMP/llvm-source-free/hello.cpp" \
+              -o "$RUNNER_TEMP/llvm-source-free/${cxx//+/p}"
+            "$RUNNER_TEMP/llvm-source-free/${cxx//+/p}"
+          done
+          clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            "$RUNNER_TEMP/llvm-source-free/hello.cpp" \
+            -o "$RUNNER_TEMP/llvm-source-free/sanitized"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            "$RUNNER_TEMP/llvm-source-free/sanitized"
+          echo "LLVM_SOURCE_FREE_NATIVE_TOOLCHAIN_EXECUTED=true"
+          echo "LLVM_PRIVATE_SOURCE_CHECKOUT=false"
