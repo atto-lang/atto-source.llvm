@@ -9,6 +9,7 @@ on:
       - src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp
       - tests/native_realtime_timer_queue_test.cpp
       - tests/native_rt_timer_actor_heap_integration_test.cpp
+      - tests/test_rt_timer_actor_heap_workflow_inputs.py
       - .github/workflows/rt-timer-actor-heap-exact-head.yml
   workflow_dispatch:
 
@@ -37,12 +38,18 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             test "$head" = "${{ github.event.pull_request.head.sha }}"
           fi
-          for path in             CMakeLists.txt             src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h             src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp             tests/native_realtime_timer_queue_test.cpp             tests/native_rt_timer_actor_heap_integration_test.cpp             .github/workflows/rt-timer-actor-heap-exact-head.yml; do
+          for path in             CMakeLists.txt             src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h             src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp             tests/native_realtime_timer_queue_test.cpp             tests/native_rt_timer_actor_heap_integration_test.cpp             tests/test_rt_timer_actor_heap_workflow_inputs.py             .github/workflows/rt-timer-actor-heap-exact-head.yml; do
             expected="$(git rev-parse "HEAD:$path")"
             actual="$(git hash-object "$path")"
             test "$actual" = "$expected"
             echo "EXACT_BLOB $path $actual"
           done
+
+      - name: Assert focused source-input coverage before native builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B tests/test_rt_timer_actor_heap_workflow_inputs.py
 
       - name: GCC strict timer and actor-heap execution
         shell: bash
