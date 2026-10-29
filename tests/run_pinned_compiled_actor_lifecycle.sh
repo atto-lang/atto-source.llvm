@@ -20,13 +20,19 @@ root="$(git rev-parse --show-toplevel)" || fail 'no source checkout'
   fail 'checkout differs from reviewed EXPECTED_HEAD'
 [[ "$(git rev-parse 'HEAD^{tree}')" == "$(git show -s --format=%T HEAD)" ]] ||
   fail 'Git source tree identity mismatch'
-[[ -z "$(git status --porcelain --untracked-files=no)" ]] ||
-  fail 'tracked source checkout modified'
+tracked="$(git status --porcelain --untracked-files=no)" ||
+  fail 'tracked Git source inventory unavailable'
+[[ -z "$tracked" ]] || fail 'tracked source checkout modified'
 [[ ! -e "$root/build" && ! -L "$root/build" ]] ||
   fail 'requires a fresh checkout with no preexisting build directory'
-[[ -z "$(git ls-files --others --exclude-standard)" ]] ||
-  fail 'untracked checkout paths exist before build'
-
+untracked="$(git ls-files --others --exclude-standard)" ||
+  fail 'untracked Git source inventory unavailable'
+[[ -z "$untracked" ]] || fail 'untracked checkout paths exist before build'
+# Git-ignored files outside build can override compiler headers/modules without
+# affecting the exact Git root tree. A fresh source build admits none.
+ignored="$(git ls-files --others --ignored --exclude-standard)" ||
+  fail 'ignored Git source inventory unavailable'
+[[ -z "$ignored" ]] || fail 'ignored checkout paths exist before build'
 receipt_dir="$(mktemp -d "${TMPDIR:-/tmp}/ores-llvm-actor-receipt.XXXXXXXX")"
 trap 'rm -rf -- "$receipt_dir"' EXIT
 receipt="$receipt_dir/compiler.json"
