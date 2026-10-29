@@ -8,8 +8,10 @@ verifies GitHub administrator settings; both are independent requirements.
 import argparse
 import json
 import math
+import os
 import re
 import sys
+import stat
 from pathlib import Path
 
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -24,22 +26,42 @@ class GateRejected(ValueError):
 
 
 def _read(root: Path, name: str) -> str:
-    current = root
-    if current.is_symlink():
-        raise GateRejected("policy root is a symlink")
-    for part in name.split("/"):
-        if part in ("", ".", ".."):
-            raise GateRejected("unsafe policy path")
-        current = current / part
-        if current.is_symlink():
-            raise GateRejected("policy path contains a symlink")
-    if not current.is_file():
-        raise GateRejected("required policy file missing")
-    with current.open("rb") as stream:
-        data = stream.read(MAX_POLICY_BYTES + 1)
-    if len(data) > MAX_POLICY_BYTES:
-        raise GateRejected("policy file exceeds byte bound")
-    return data.decode("utf-8")
+    """Open protected policy objects by descriptor, never following symlinks.
+
+    Opening each ancestor relative to its verified directory descriptor also
+    avoids an lstat->open swap of a parent, policy directory or final file.
+    """
+    if not all(hasattr(os, flag) for flag in ("O_NOFOLLOW", "O_DIRECTORY")):
+        raise GateRejected("no symlink-safe policy file opening available")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    absolute = root.absolute()
+    parents = list(absolute.parts[1:])
+    parts = name.split("/")
+    if any(part in ("", ".", "..") for part in parents + parts):
+        raise GateRejected("unsafe policy path")
+
+    directory_fd = os.open("/", directory_flags)
+    try:
+        for part in parents + parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(parts[-1], file_flags, dir_fd=directory_fd)
+        with os.fdopen(file_fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise GateRejected("policy is not a regular file")
+            if info.st_size > MAX_POLICY_BYTES:
+                raise GateRejected("policy file exceeds byte bound")
+            data = stream.read(MAX_POLICY_BYTES + 1)
+        if len(data) > MAX_POLICY_BYTES:
+            raise GateRejected("policy file exceeds byte bound")
+        return data.decode("utf-8")
+    except OSError as exc:
+        raise GateRejected("policy file cannot be opened without following symlinks") from exc
+    finally:
+        os.close(directory_fd)
 
 
 def _unique_object(pairs):
@@ -77,9 +99,14 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
         raise GateRejected("invalid PR number")
     if not all(map(_sha, (base_sha, workflow_blob_sha, plan_blob_sha))):
         raise GateRejected("invalid immutable Git object SHA")
-    for path in (workflow_path, plan_path):
-        if not isinstance(path, str) or path.startswith("/") or "\\" in path or any(ord(ch) < 32 or ord(ch) == 127 for ch in path) or any(
-                x in ("", ".", "..") for x in path.split("/")):
+    for path, prefix, suffix in (
+            (workflow_path, ".github/workflows/", ".yml"),
+            (plan_path, "ci/test-plans/", ".json")):
+        if (not isinstance(path, str) or not path.startswith(prefix)
+                or not path.endswith(suffix) or path.startswith("/")
+                or not re.fullmatch(r"[A-Za-z0-9._/-]+", path)
+                or any(segment in ("", ".", "..", ".git")
+                       for segment in path.split("/"))):
             raise GateRejected("unsafe workflow or plan path")
 
     allowlist = _read(root, ".github/private-ci-approved-repositories.txt")
