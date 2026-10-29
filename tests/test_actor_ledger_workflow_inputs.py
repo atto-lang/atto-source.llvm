@@ -69,6 +69,8 @@ def local_header_closure(root, paths):
             resolved = candidate.resolve()
             if not resolved.is_relative_to(root):
                 raise AssertionError(f"quoted include escapes repository: {include}")
+            if candidate.is_symlink():
+                raise AssertionError(f"symlink local include: {include}")
             if not candidate.exists():
                 if include.startswith("llvm/"):
                     continue  # SDK headers are not private repository inputs.
@@ -142,6 +144,16 @@ def audit_selftest():
             assert "missing repository-local quoted include" in str(exc)
         else:
             raise AssertionError("missing relative local header not blocked")
+        (root / main).write_text(
+            '#include "dangling.hpp"\\n', encoding="utf-8"
+        )
+        (root / "src/main/cpp/oreslang/demo/dangling.hpp").symlink_to("absent.hpp")
+        try:
+            local_header_closure(root, {main})
+        except AssertionError as exc:
+            assert "symlink local include" in str(exc)
+        else:
+            raise AssertionError("dangling local symlink not blocked")
     print(
         "ACTOR_CI_HEADER_CLOSURE_SELFTEST_PASS "
         "wildcard=6 relative_cycle=1 transitive_omission=1 "
