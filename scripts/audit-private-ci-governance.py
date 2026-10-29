@@ -26,6 +26,7 @@ REQUIRED_OWNERS = {
     "/.github/workflows/*",
     "/.github/private-ci-approved-repositories.txt",
     "/.github/private-ci-carrier-contracts.json",
+    "/.github/private-ci-incident-dispositions.json",
     "/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md",
     "/scripts/audit-private-ci-governance.py",
     "/scripts/test-audit-private-ci-governance.py",
