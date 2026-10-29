@@ -240,7 +240,24 @@ public:
         OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
                               state->generation, &call, &guest_load_i64, &guest_store_i64};
         std::int64_t value = 0;
-        const auto status = guest(&ctx, input, &value);
+        std::int32_t status = ORES_GUEST_FAILED;
+        try {
+            status = guest(&ctx, input, &value);
+        } catch (...) {
+            // A native guest exception may occur AFTER a partial write to
+            // tenant-owned globals. Never reuse this incarnation: quarantine
+            // it, retain existing resource pins, and let the host explicitly
+            // drain/retire the tenant. This is only trusted-in-process safety,
+            // NOT containment against arbitrary native memory corruption.
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (state->phase == IsolatePhase::Running)
+                    state->phase = IsolatePhase::Quiescing;
+            }
+            throw;
+        }
+        // A returned status is a typed guest result (e.g. checked overflow),
+        // not a C++ trap. Preserve such outcomes without retiring the tenant.
         if (status != ORES_GUEST_OK) return {status, 0};
         return {ORES_GUEST_OK, value};
     }
