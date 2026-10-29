@@ -698,7 +698,10 @@ public:
                         !fn.locals.empty() || !fn.statements.empty() ||
                         !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
                         !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
-                        !fn.actor_actions.empty() || !fn.source_tasks.empty() ||
+                        !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                        !fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+                        !fn.ready_future_name.empty() || !fn.ready_future_actor.empty() ||
+                        !fn.source_tasks.empty() ||
                         !fn.future_pipelines.empty() || fn.scalar_while ||
                         fn.caught_throw_value || !fn.caught_throw_defers.empty())
                         fail("C_EXPORT_U32_REJECT: initial browser version export must be literal int 1 without effects");
