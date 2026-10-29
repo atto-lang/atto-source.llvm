@@ -33,18 +33,25 @@ public:
     TrustedActorBufferMailbox& operator=(const TrustedActorBufferMailbox&) = delete;
     ~TrustedActorBufferMailbox() noexcept { if (!close()) std::terminate(); }
 
-    // Reserve a queue slot under the publication mutex, then move ownership.
-    // There is no allocation or throwable publication action after take().
-    // If quota, ownership, loan or close validation fails, the old handle
-    // remains owned by the sender and nothing is enqueued.
-    void send(const Handle& owned, TrustedBufferActor sender) {
+    enum class Admission { Accepted, Closed, Full };
+
+    // Reserve mailbox credit BEFORE the irreversible ownership take.
+    // Rejections leave sender ownership and its generation unchanged.
+    // Forged/stale/borrowed handles still throw (host contract violation).
+    Admission try_send(const Handle& owned, TrustedBufferActor sender) {
         std::lock_guard<std::mutex> guard(mutex_);
-        if (closed_) throw std::logic_error("buffer mailbox closed");
-        if (count_ == entries_.size()) throw std::logic_error("buffer mailbox full");
+        if (closed_) return Admission::Closed;
+        if (count_ == entries_.size()) return Admission::Full;
         Handle transferred = pool_->take(owned, sender, recipient_);
         entries_[tail_] = std::move(transferred); // noexcept
         tail_ = (tail_ + 1) % entries_.size();
         ++count_;
+        return Admission::Accepted;
+    }
+    void send(const Handle& owned, TrustedBufferActor sender) {
+        const Admission admission = try_send(owned, sender);
+        if (admission == Admission::Closed) throw std::logic_error("buffer mailbox closed");
+        if (admission == Admission::Full) throw std::logic_error("buffer mailbox full");
     }
 
     Handle receive(TrustedBufferActor reader) {
