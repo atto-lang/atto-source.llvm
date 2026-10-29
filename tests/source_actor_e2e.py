@@ -170,6 +170,14 @@ def main():
         ) else []
         result = run([args.compiler, *flags, str(fixtures / name)])
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
+        if name in {
+            "source-actor-send-owned-array-reject.ores",
+            "source-actor-send-borrowed-array-reject.ores",
+            "source-actor-send-unmoved-array-reject.ores",
+        }:
+            # A crash with a matching diagnostic is not a semantic rejection.
+            assert result.returncode == 1, ("buffer payload reject must exit 1", name, result.returncode)
+            assert "AddressSanitizer" not in result.stderr and "Segmentation fault" not in result.stderr, name
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
