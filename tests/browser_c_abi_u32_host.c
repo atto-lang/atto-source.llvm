@@ -18,16 +18,12 @@ int main(int argc, char **argv) {
         return 3;
     }
     void *host_symbol = dlsym(handle, "ores_browser_abi_version");
-    void *guest_symbol = dlsym(handle, "browser_native_abi_v1");
-    if (!host_symbol || !guest_symbol) return 4;
+    if (!host_symbol || dlsym(handle, "browser_native_abi_v1") != NULL)
+        return 4;
     uint32_t (*version)(void) = NULL;
-    int64_t (*guest)(void) = NULL;
-    if (sizeof(version) != sizeof(host_symbol) ||
-        sizeof(guest) != sizeof(guest_symbol)) return 5;
+    if (sizeof(version) != sizeof(host_symbol)) return 5;
     memcpy(&version, &host_symbol, sizeof(version));
-    memcpy(&guest, &guest_symbol, sizeof(guest));
-    if (version() != UINT32_C(1) || guest() != INT64_C(1))
-        return 6;
+    if (version() != UINT32_C(1)) return 6;
     for (size_t i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); ++i) {
         if (dlsym(handle, forbidden[i]) != NULL) return 7;
     }
