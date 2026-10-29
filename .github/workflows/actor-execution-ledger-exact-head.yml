@@ -361,6 +361,8 @@ jobs:
           build/actor-ledger-gate/stop-wake-race-sanitized
 
   compiled-ores-guest:
+    # No guest compilation before native source-integrity and contract gates pass.
+    needs: actor-ledger-contract
     # Genuine guest code compiled by oreslang-llvmc, not an IR fixture or
     # a C mock. Only trusted checkout of the source repo's exact PR tree.
     runs-on: ubuntu-24.04

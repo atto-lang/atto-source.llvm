@@ -157,7 +157,27 @@ def verify_executed_blob_comparison(section, job):
     )
 
 
+def require_guest_gate_dependency(section):
+    """Guest compilation must never outrun the native integrity/safety gate."""
+    needs = re.findall(
+        r"(?m)^    needs:[ \t]*([a-z][a-z0-9-]*)[ \t]*$", section
+    )
+    assert needs == ["actor-ledger-contract"], (
+        "compiled guest job must depend on exactly actor-ledger-contract"
+    )
+
+
 def audit_selftest():
+    require_guest_gate_dependency("    needs: actor-ledger-contract\n")
+    for unsafe in ("    runs-on: ubuntu-24.04\n",
+                   "    needs: unrelated-job\n",
+                   "    # needs: actor-ledger-contract\n"):
+        try:
+            require_guest_gate_dependency(unsafe)
+        except AssertionError as exc:
+            assert "must depend" in str(exc)
+        else:
+            raise AssertionError("unguarded guest job dependency accepted")
     directory = "src/main/cpp/oreslang/runtime"
     assert triggered(f"{directory}/added/new.hpp", [f"{directory}/**"])
     assert not triggered(f"{directory}-evil/new.hpp", [f"{directory}/**"])
@@ -328,6 +348,7 @@ def check():
         for i, match in enumerate(boundaries)
     }
     assert set(REQUIRED_JOBS) <= sections.keys(), "missing mandatory jobs"
+    require_guest_gate_dependency(sections["compiled-ores-guest"])
     all_inputs = set()
     for name in REQUIRED_JOBS:
         section = sections[name]
