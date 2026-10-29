@@ -121,6 +121,9 @@ pub struct Expected {
     pub source_main_sha: String,
     pub source_pr_number: u64,
     pub source_pr_sha: String,
+    /// Pinned outside the live snapshot; never derive expected CI identity from a PR.
+    pub source_required_checks: Vec<RequiredCheck>,
+    pub carrier_required_checks: Vec<RequiredCheck>,
 }
 
 fn sha40(value: &str) -> bool {
@@ -174,6 +177,12 @@ fn protection(main: &ProtectedMain) -> Result<(), Denied> {
     Ok(())
 }
 
+/// Compare the complete set of trusted check identities, not just positivity.
+fn same_required_checks(actual: &[RequiredCheck], expected: &[RequiredCheck]) -> bool {
+    actual.len() == expected.len()
+        && actual.iter().all(|check| expected.iter().any(|pin| pin == check))
+}
+
 fn validate(snapshot: &Snapshot, pin: &Expected) -> Result<(), Denied> {
     if snapshot.source.name != SOURCE_NAME || snapshot.source.id != SOURCE_ID
         || !private_repo(&snapshot.source)
@@ -191,6 +200,9 @@ fn validate(snapshot: &Snapshot, pin: &Expected) -> Result<(), Denied> {
         Denied::UnpinnedCheck => Denied::UnpinnedCheck,
         _ => Denied::SourceProtection,
     })?;
+    if !same_required_checks(&snapshot.source_main.checks, &pin.source_required_checks) {
+        return Err(Denied::UnpinnedCheck);
+    }
     if !sha40(&pin.source_main_sha) || snapshot.source_main.sha != pin.source_main_sha {
         return Err(Denied::SourceProtection);
     }
@@ -198,6 +210,9 @@ fn validate(snapshot: &Snapshot, pin: &Expected) -> Result<(), Denied> {
         Denied::UnpinnedCheck => Denied::UnpinnedCheck,
         _ => Denied::CarrierProtection,
     })?;
+    if !same_required_checks(&snapshot.carrier_main.checks, &pin.carrier_required_checks) {
+        return Err(Denied::UnpinnedCheck);
+    }
     if !sha40(&pin.carrier_main_sha) || snapshot.carrier_main.sha != pin.carrier_main_sha {
         return Err(Denied::CarrierProtection);
     }
@@ -281,6 +296,8 @@ mod tests {
             carrier_main_sha: carrier_main.sha.clone(),
             source_main_sha: main.sha.clone(),
             source_pr_number: pr.number, source_pr_sha: pr.head_sha.clone(),
+            source_required_checks: main.checks.clone(),
+            carrier_required_checks: carrier_main.checks.clone(),
         };
         (Snapshot {
             source, carrier, source_main: main, carrier_main, source_pr: pr,
@@ -416,6 +433,26 @@ mod tests {
         let mut after = s.clone();
         after.source_main.sha = "e".repeat(40);
         assert_eq!(verify_source_free(&s, &after, &p), Err(Denied::SourceProtection));
+    }
+
+    #[test]
+    fn independently_pinned_check_identities_cannot_be_substituted() {
+        let (mut s, p) = fixture();
+        s.source_main.checks[0].app_id += 1;
+        assert_eq!(verify_source_free(&s, &s, &p), Err(Denied::UnpinnedCheck));
+
+        let (mut s, p) = fixture();
+        s.carrier_main.checks[0].app_id += 1;
+        assert_eq!(verify_source_free(&s, &s, &p), Err(Denied::UnpinnedCheck));
+
+        let (mut s, p) = fixture();
+        s.source_main.checks[0].context = "other-check".into();
+        s.source_main.legacy_contexts[0] = "other-check".into();
+        assert_eq!(verify_source_free(&s, &s, &p), Err(Denied::UnpinnedCheck));
+
+        let (s, mut p) = fixture();
+        p.source_required_checks[0].app_id += 1;
+        assert_eq!(verify_source_free(&s, &s, &p), Err(Denied::UnpinnedCheck));
     }
 
     #[test]
