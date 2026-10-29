@@ -83,32 +83,65 @@ def check():
     assert not missing_blobs, (
         f"unverified dependencies: {sorted(missing_blobs)}"
     )
-    # The ledger/scheduler integration is the only focused test that checks
-    # authenticated WAKE against an actual retained actor turn. Do not let it
-    # disappear from the build steps while remaining on the blob allowlist.
-    ledger_fixture = "tests/native_rt_timer_actor_ledger_integration_test.cpp"
-    scheduler_source = "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
-    for step_name, binary in (
-        ("GCC strict timer and actor-heap execution", "ledger-gcc"),
-        ("Clang strict timer and actor-heap execution", "ledger-clang"),
-        ("Clang ASan and UBSan actor-heap execution", "ledger-san"),
-    ):
+    # Keep the native test matrix executable, not merely listed in the blob
+    # manifest. In particular, deleting a timer or heap command must fail the
+    # same self-audit that already protects the authenticated ledger fixture.
+    build_matrix = {
+        "GCC strict timer and actor-heap execution": (
+            ("tests/native_realtime_timer_queue_test.cpp", "timer-gcc", None),
+            ("tests/native_rt_timer_actor_heap_integration_test.cpp",
+             "integration-gcc", "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
+            ("tests/native_rt_timer_actor_ledger_integration_test.cpp",
+             "ledger-gcc", "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
+        ),
+        "Clang strict timer and actor-heap execution": (
+            ("tests/native_realtime_timer_queue_test.cpp", "timer-clang", None),
+            ("tests/native_rt_timer_actor_heap_integration_test.cpp",
+             "integration-clang", "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
+            ("tests/native_rt_timer_actor_ledger_integration_test.cpp",
+             "ledger-clang", "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
+        ),
+        "Clang ASan and UBSan actor-heap execution": (
+            ("tests/native_rt_timer_actor_heap_integration_test.cpp",
+             "integration-san", "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
+            ("tests/native_rt_timer_actor_ledger_integration_test.cpp",
+             "ledger-san", "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
+        ),
+    }
+    for step_name, expectations in build_matrix.items():
         step_marker = f"      - name: {step_name}\n"
-        assert step_marker in section, f"missing execution step: {step_name}"
-        step = section.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
-        assert ledger_fixture in step, f"{step_name}: missing ledger fixture"
-        assert scheduler_source in step, f"{step_name}: missing scheduler"
-        binary_path = f"build/rt-timer-actor-heap/{binary}"
-        assert f"-o {binary_path}" in step, (
-            f"{step_name}: missing ledger build output"
+        assert section.count(step_marker) == 1, (
+            f"missing or duplicate execution step: {step_name}"
         )
-        assert re.search(
-            r"(?m)^\s*" + re.escape(binary_path) + r"\s*$", step
-        ), f"{step_name}: ledger binary never executed"
+        step = section.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
+        for fixture, binary, dependency in expectations:
+            assert fixture in step, f"{step_name}: missing {fixture}"
+            if dependency:
+                assert dependency in step, (
+                    f"{step_name}: missing linked source {dependency}"
+                )
+            binary_path = f"build/rt-timer-actor-heap/{binary}"
+            assert re.search(
+                r"(?m)(?:^|\s)-o\s+" + re.escape(binary_path) + r"(?:\s|$)",
+                step,
+            ), f"{step_name}: missing {binary} build output"
+            assert re.search(
+                r"(?m)^\s*" + re.escape(binary_path) + r"\s*$", step
+            ), f"{step_name}: {binary} never executed"
+
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
-    assert "add_test(NAME native_rt_timer_actor_ledger_start_authority" in cmake, (
-        "CMake timer-to-actor start-authority registration missing"
-    )
+    for test_name, fixture in (
+        ("native_realtime_timer_queue_contract",
+         "tests/native_realtime_timer_queue_test.cpp"),
+        ("native_rt_timer_actor_heap_loan_lifecycle",
+         "tests/native_rt_timer_actor_heap_integration_test.cpp"),
+        ("native_rt_timer_actor_ledger_start_authority",
+         "tests/native_rt_timer_actor_ledger_integration_test.cpp"),
+    ):
+        assert f"add_test(NAME {test_name}" in cmake, (
+            f"CMake registration missing: {test_name}"
+        )
+        assert fixture in cmake, f"CMake fixture missing: {fixture}"
 
     for item in required:
         resolved = (root / item).resolve()
