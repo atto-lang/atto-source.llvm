@@ -21,7 +21,7 @@ JOB = re.compile(r"(?m)^  ([a-z][a-z0-9-]*):\s*$")
 TRIGGER = re.compile(
     r"(?m)^      - ((?:src/main/cpp|tests)/[A-Za-z0-9_./*-]+)$"
 )
-LOCAL_INCLUDE = re.compile(r'(?m)^\s*#include\s+"([^"]+)"')
+LOCAL_INCLUDE = re.compile(r'(?m)^[ \t]*#[ \t]*include[ \t]+"([^"\r\n]+)"')
 BLOB_LOOP = re.compile(r"for path in \\\n(.*?); do", re.DOTALL)
 REQUIRED_JOBS = ("actor-ledger-contract", "compiled-ores-guest")
 MINIMUM_SOURCE_INPUTS = 55
@@ -142,6 +142,15 @@ def audit_selftest():
         dependencies = local_header_closure(root, {main})
         assert dependencies == {local, nested}, dependencies
         assert dependencies - {local} == {nested}, "transitive omission not detected"
+        # Standard C/C++ preprocessor whitespace must not bypass exact-blob
+        # dependency closure and transitive omission detection.
+        (root / main).write_text(
+            '# include "local.hpp"\n#\tinclude "../nested/detail.h"\n',
+            encoding="utf-8",
+        )
+        spaced = local_header_closure(root, {main})
+        assert spaced == {local, nested}, "spaced preprocessor include skipped"
+        assert spaced - {local} == {nested}, "spaced include omission not detected"
         (root / main).write_text(
             '#include "../../../../../../escape.h"\n', encoding="utf-8"
         )
