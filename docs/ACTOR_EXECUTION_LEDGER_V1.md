@@ -171,6 +171,43 @@ cross-scheduler API has been added. A future bridge must authenticate both
 domains, exact target generation and actual destination mailbox acceptance
 before granting an irrevocable delivery receipt; until then it fails closed.
 
+### Local target STOP between transfer and publication (#1153)
+
+The local target can retire **after** a successful TRANSFER but **before**
+PUBLISH obtains the scheduler lock. TRANSFER does not make a future target
+generation permanently live and a producer wake is not a target delivery
+receipt. PUBLISH therefore rechecks the exact target incarnation under the
+scheduler lock immediately before it commits the preallocated wake credit.
+
+If the **producer** has stopped, PUBLISH releases its transferred escrow
+and returns `ORES_NATIVE_WAKE_PRODUCER_RETIRED`; it does not execute guest
+code. If the **target** retired while the producer remains live, PUBLISH
+returns `ORES_NATIVE_WAKE_TARGET_RETIRED` and queues a single
+`ORES_NATIVE_WAKE_CANCELLED` callback on the producer's authenticated
+actor lane. The callback, not the completion thread, may physically settle
+a retained message and release its actor-owned loans. This callback increments
+the scheduler's own `accepted/completed/wakes_completed` execution counters:
+**it does not imply the target accepted or processed a message**. A normal
+`ORES_NATIVE_WAKE_PUBLISHED` only proves that the producer-side wake was
+queued while the target was live at the publication linearization point;
+it is not proof of any later remote/mailbox delivery.
+
+The deterministic same-scheduler two-actor regression in
+`tests/native_actor_retained_stop_wake_race_test.c` now includes STOP of
+the target B before TRANSFER, STOP of B after TRANSFER before PUBLISH, and
+STOP of producer A after TRANSFER. It also exercises a retained DATA frame
+when the target STOP occurs before TRANSFER: the producer must explicitly
+cancel its old escrow and schedule a *new local cancellation wake* to unwind
+the retained frame; denying TRANSFER alone cannot complete a Future. The
+post-TRANSFER test verifies that the automatic typed cancellation callback
+settles the original retained DATA and that an old ticket cannot reclaim a
+recycled wake-credit generation. The previously existing 80 STOP/wake
+interleavings for a same-actor target remain intact.
+
+These regression cases have been committed to the original private LLVM
+source branch but require an executing, authorized runner before they may
+be reported as passing.
+
 These cases are committed source-level assertions, **not** runtime passes:
 the source organization's latest Actions attempts still have zero executed
 steps. An alternate private-org source-free toolchain canary tests only the
