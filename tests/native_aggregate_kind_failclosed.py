@@ -5,6 +5,7 @@ This does NOT certify struct or record code generation; each source must fail
 before any LLVM IR is published until tagged lowering is implemented.
 """
 import argparse
+import json
 from pathlib import Path
 import subprocess
 import tempfile
