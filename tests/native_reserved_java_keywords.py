@@ -207,6 +207,9 @@ UNSAFE_IMPORT_PATHS = (
     "std.unsafe.ffi",
     "ores.std:unsafe",
     "std:unsafe.ffi",
+    "std/./unsafe/ffi",
+    "std/lib/../unsafe/native",
+    "ores.std//unsafe/memory",
 )
 for index, path in enumerate(UNSAFE_IMPORT_PATHS):
     CASES[f"unsafe-stdlib-import-{index}"] = (
