@@ -196,6 +196,12 @@ class CGLAdmissionTests(unittest.TestCase):
                     [sys.executable, "-c", code, str(SCRIPT), str(fifo)],
                     capture_output=True, text=True, timeout=5, check=False)
                 self.assertEqual(completed.returncode, 0, completed.stderr)
+                writer = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+                try:
+                    os.write(writer, b"1\n")
+                    self.assertIsNone(probe.read_preempt_rt(fifo))
+                finally:
+                    os.close(writer)
 
     def test_no_fake_certification_and_rt_fail_closed(self):
         ordinary = probe.preflight()
