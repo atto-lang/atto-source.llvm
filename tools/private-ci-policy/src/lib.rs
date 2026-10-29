@@ -411,8 +411,11 @@ mod tests {
         after.carrier_main.checks[0].app_id = 42;
         assert_eq!(verify_source_free(&s, &after, &p), Err(Denied::GovernanceDrift));
         let mut after = s.clone();
-        after.source_main.sha = "e".repeat(40);
+        after.source_main.approvals = 2;
         assert_eq!(verify_source_free(&s, &after, &p), Err(Denied::GovernanceDrift));
+        let mut after = s.clone();
+        after.source_main.sha = "e".repeat(40);
+        assert_eq!(verify_source_free(&s, &after, &p), Err(Denied::SourceProtection));
     }
 
     #[test]
