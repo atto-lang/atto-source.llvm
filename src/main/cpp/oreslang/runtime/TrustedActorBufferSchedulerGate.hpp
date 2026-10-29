@@ -191,7 +191,8 @@ public:
         auto& rec = require_actor(actor);
         if (rec.in_turn) throw std::logic_error("active turn blocks retirement");
         state_->pool->require_actor_quiescent(actor);
-        rec.mailbox->close();
+        if (!rec.mailbox->close())
+            throw std::logic_error("immutable loans block mailbox retirement");
         state_->pool->reclaim_actor(actor);
         rec.live = false;
         rec.mailbox.reset();
