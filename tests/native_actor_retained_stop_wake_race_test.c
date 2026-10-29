@@ -95,6 +95,142 @@ static void* publisher(void* raw) {
     atomic_store_explicit(&f->publication_done,1,memory_order_release);
     return NULL;
 }
+
+/* These two actors are deliberately distinct. The Future/producer runs on A;
+ * target B can STOP independently after the credit was transferred. A must
+ * receive an authenticated CANCELLED wake so its retained DATA can unwind. */
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef actors[2];
+    OresNativeWakeTicket ticket;
+    OresNativeRetainedDataTicket retained;
+    atomic_int retained_ready, wake_count, cancelled;
+} TargetStopFixture;
+static void target_stop_data(void* raw,size_t actor,uint64_t payload) {
+    TargetStopFixture* f=(TargetStopFixture*)raw;
+    CHECK(actor==0 && payload==42);
+    CHECK(ores_native_actor_scheduler_is_current_actor(
+        f->scheduler,f->actors[0]));
+    CHECK(ores_native_actor_scheduler_reserve_wake(
+        f->scheduler,f->actors[0],f->actors[1],1,1,1,1,&f->ticket));
+    CHECK(ores_native_actor_scheduler_retain_current_data(
+        f->scheduler,&f->retained));
+    atomic_store_explicit(&f->retained_ready,1,memory_order_release);
+}
+static void target_stop_wake(void* raw,size_t actor,OresNativeWakeTicket ticket,
+                             OresNativeWakeOutcome outcome) {
+    TargetStopFixture* f=(TargetStopFixture*)raw;
+    CHECK(actor==0 && outcome==ORES_NATIVE_WAKE_CANCELLED);
+    CHECK(ores_native_actor_scheduler_is_current_actor(
+        f->scheduler,f->actors[0]));
+    CHECK(ores_native_actor_scheduler_is_current_wake(f->scheduler,ticket));
+    CHECK(ticket.slot_generation==f->ticket.slot_generation);
+    CHECK(ticket.target.scheduler_domain==f->actors[1].scheduler_domain);
+    CHECK(ticket.target.actor_slot==f->actors[1].actor_slot);
+    CHECK(ticket.target.generation==f->actors[1].generation);
+    CHECK(ores_native_actor_scheduler_complete_retained_data(
+        f->scheduler,f->retained));
+    CHECK(!ores_native_actor_scheduler_complete_retained_data(
+        f->scheduler,f->retained));
+    atomic_store_explicit(&f->cancelled,1,memory_order_release);
+    atomic_fetch_add_explicit(&f->wake_count,1,memory_order_release);
+}
+static void test_target_stop_after_transfer(void) {
+    TargetStopFixture f={0};
+    f.scheduler=ores_native_actor_scheduler_open_with_wakes(
+        2,2,2,target_stop_data,NULL,NULL,target_stop_wake,&f);
+    CHECK(f.scheduler);
+    f.actors[0]=ores_native_actor_scheduler_spawn(f.scheduler,0);
+    f.actors[1]=ores_native_actor_scheduler_spawn(f.scheduler,1);
+    CHECK(f.actors[0].scheduler_domain && f.actors[1].scheduler_domain);
+    CHECK(ores_native_actor_scheduler_send(f.scheduler,f.actors[0],42));
+    wait_for(&f.retained_ready);
+    CHECK(ores_native_actor_scheduler_transfer_wake(f.scheduler,f.ticket));
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler,f.actors[1]));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actors[1]));
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)
+        == ORES_NATIVE_WAKE_TARGET_RETIRED);
+    /* This is an internal CANCELLED callback on A, not a receipt for B. */
+    CHECK(!ores_native_actor_scheduler_abort_transferred_wake(
+        f.scheduler,f.ticket));
+    CHECK(!ores_native_actor_scheduler_transfer_wake(f.scheduler,f.ticket));
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)
+        == ORES_NATIVE_WAKE_INVALID);
+    wait_for(&f.cancelled);
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(atomic_load_explicit(&f.wake_count,memory_order_acquire)==1);
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actors[0])==0);
+    CHECK(ores_native_actor_scheduler_retained_data_count(
+        f.scheduler,f.actors[0])==0);
+    CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==2);
+    CHECK(ores_native_actor_scheduler_completed(f.scheduler)==2);
+    CHECK(ores_native_actor_scheduler_wakes_completed(f.scheduler)==1);
+    OresNativeActorTerminalState terminal={0};
+    CHECK(ores_native_actor_scheduler_terminal_state(
+        f.scheduler,f.actors[1],&terminal));
+    CHECK(terminal.accepted_user_messages==0);
+    CHECK(terminal.processed_user_messages==0);
+    CHECK(terminal.abandoned_user_messages==0);
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler,f.actors[0]));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actors[0]));
+    ores_native_actor_scheduler_retire(f.scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
+}
+static void test_target_stop_before_transfer(void) {
+    TargetStopFixture f={0};
+    f.scheduler=ores_native_actor_scheduler_open_with_wakes(
+        2,2,1,target_stop_data,NULL,NULL,target_stop_wake,&f);
+    CHECK(f.scheduler);
+    f.actors[0]=ores_native_actor_scheduler_spawn(f.scheduler,0);
+    f.actors[1]=ores_native_actor_scheduler_spawn(f.scheduler,1);
+    CHECK(f.actors[0].scheduler_domain && f.actors[1].scheduler_domain);
+    CHECK(ores_native_actor_scheduler_reserve_wake(
+        f.scheduler,f.actors[0],f.actors[1],1,1,1,1,&f.ticket));
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler,f.actors[1]));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actors[1]));
+    CHECK(!ores_native_actor_scheduler_transfer_wake(f.scheduler,f.ticket));
+    CHECK(ores_native_actor_scheduler_cancel_wake(f.scheduler,f.ticket));
+    CHECK(!ores_native_actor_scheduler_cancel_wake(f.scheduler,f.ticket));
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actors[0])==0);
+    CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==0);
+    CHECK(ores_native_actor_scheduler_wakes_completed(f.scheduler)==0);
+    CHECK(atomic_load(&f.wake_count)==0);
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler,f.actors[0]));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actors[0]));
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    ores_native_actor_scheduler_retire(f.scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
+}
+static void test_producer_stop_after_transfer(void) {
+    TargetStopFixture f={0};
+    f.scheduler=ores_native_actor_scheduler_open_with_wakes(
+        2,2,1,target_stop_data,NULL,NULL,target_stop_wake,&f);
+    CHECK(f.scheduler);
+    f.actors[0]=ores_native_actor_scheduler_spawn(f.scheduler,0);
+    f.actors[1]=ores_native_actor_scheduler_spawn(f.scheduler,1);
+    CHECK(ores_native_actor_scheduler_reserve_wake(
+        f.scheduler,f.actors[0],f.actors[1],1,1,1,1,&f.ticket));
+    CHECK(ores_native_actor_scheduler_transfer_wake(f.scheduler,f.ticket));
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler,f.actors[0]));
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)
+        == ORES_NATIVE_WAKE_PRODUCER_RETIRED);
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actors[0]));
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actors[0])==0);
+    CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==0);
+    CHECK(atomic_load(&f.wake_count)==0);
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler,f.actors[1]));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actors[1]));
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    ores_native_actor_scheduler_retire(f.scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
+}
+
 int main(void) {
     for (int i=0;i<80;++i) {
         Fixture f={0};
