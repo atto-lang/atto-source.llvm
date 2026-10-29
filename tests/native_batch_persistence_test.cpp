@@ -20,7 +20,7 @@ int main() {
         }
         std::size_t committed = 0;
         while (sidecar.queued_count()) {
-            for (auto& r : sidecar.flush()) { assert(r.durable()); ++committed; }
+            for (auto& r : sidecar.flush()) { assert(r.applied() && !r.durable()); ++committed; }
         }
         assert(committed == 1000 && store.commit_calls() == 4);
         assert(store.version({"tenant-a","actor-999","main"}) == 1);
@@ -53,7 +53,7 @@ int main() {
         MemoryStore store;store.grant_epoch("tenant-a","a",1);
         BatchSidecar sidecar("tenant-a",store,16,4096,16,16,64);
         auto x=write("a","copied");sidecar.enqueue(x);x.payload[0]=9;
-        assert(sidecar.flush()[0].durable());
+        { auto r=sidecar.flush()[0]; assert(r.applied() && !r.durable()); }
         assert(store.snapshot({"tenant-a","a","main"})[0] == 42);
         bool rejected=false;
         try { auto y=write("a","forged"); y.id.tenant="tenant-b"; sidecar.enqueue(y); }
