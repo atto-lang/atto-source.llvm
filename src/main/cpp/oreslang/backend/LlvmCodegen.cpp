@@ -2885,6 +2885,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             !fn.statements.empty() || !fn.early_returns.empty() ||
             !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
             !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+            !fn.actor_field_writes.empty() ||
+            !fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+            !fn.ready_future_name.empty() || !fn.ready_future_actor.empty() ||
+            !source.actors.empty() ||
             !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
             fn.scalar_while || fn.caught_throw_value ||
             !fn.caught_throw_defers.empty())
