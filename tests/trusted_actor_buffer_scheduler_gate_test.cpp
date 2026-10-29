@@ -26,6 +26,7 @@ int main() {
     assert(rejects([&] {gate.register_actor({1,0}, 1); }));
     assert(rejects([&] {gate.enter_turn(b2); }));
     auto ta = gate.enter_turn(a);
+    assert(!gate.close()); // no mutation while an actor turn remains active
     assert(rejects([&] {gate.enter_turn(a); }));
     assert(rejects([&] {gate.retire_actor(a); }));
     auto h = gate.allocate(ta, 64);
@@ -96,7 +97,7 @@ int main() {
     ta2.release();
     gate.retire_actor(a);
     assert(pool->used_bytes()==0);
-    gate.close();
+    assert(gate.close());
     assert(rejects([&] {gate.enter_turn(a); }));
-    gate.close();
+    assert(gate.close());
 }
