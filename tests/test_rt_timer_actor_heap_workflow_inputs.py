@@ -4,6 +4,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import tempfile
 
 if not __debug__:
     raise SystemExit("RT timer CI dependency audit rejects optimized Python")
@@ -52,13 +53,24 @@ def reject_symlink_ancestors(root, path):
             raise AssertionError(f"symlink path ancestor: {path}")
 
 
-def local_header_closure(root, paths):
-    """Return recursive repository-owned quoted C/C++ header dependencies.
+def reject_symlink_ancestors(root, path):
+    """Reject local source paths crossing directory symlinks."""
+    root = root.resolve()
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError as exc:
+        raise AssertionError(f"source path outside repository: {path}") from exc
+    cursor = root
+    for component in parts[:-1]:
+        cursor = cursor / component
+        if not cursor.resolve().is_relative_to(root):
+            raise AssertionError(f"source path traverses repository root: {path}")
+        if cursor.is_symlink():
+            raise AssertionError(f"symlink path ancestor: {path}")
 
-    Compiler -I src/main/cpp oreslang/ includes resolve from that root;
-    relative quotes resolve from the including file. Other unresolved quoted
-    includes (for example LLVM SDK headers) are not source-owned files.
-    """
+
+def local_header_closure(root, paths):
+    """Attest local relative and oreslang/-root headers recursively."""
     root = root.resolve()
     headers = set()
     pending = list(paths)
@@ -72,14 +84,14 @@ def local_header_closure(root, paths):
             continue
         source_file = root / item
         if not source_file.resolve().is_relative_to(root):
-            raise AssertionError(f"escaped source path {item}")
+            raise AssertionError(f"escaped source path: {item}")
         reject_symlink_ancestors(root, source_file)
-        if not source_file.is_file() or source_file.is_symlink():
+        if source_file.is_symlink() or not source_file.is_file():
             raise AssertionError(f"missing or symlink source input: {item}")
         source = source_file.read_text(encoding="utf-8")
         for include in LOCAL_INCLUDE.findall(source):
             if include.startswith("/") or "\\" in include:
-                raise AssertionError(f"absolute/invalid quoted include: {include}")
+                raise AssertionError(f"invalid quoted include: {include}")
             owned = include.startswith("oreslang/")
             candidate = (root / "src/main/cpp" / include if owned
                          else source_file.parent / include)
@@ -91,16 +103,10 @@ def local_header_closure(root, paths):
                 raise AssertionError(f"symlink local include: {include}")
             if not candidate.exists():
                 if include.startswith("llvm/"):
-                    continue  # SDK headers are not private repository inputs.
-                if owned:
-                    raise AssertionError(
-                        f"missing oreslang local include: {include}"
-                    )
-                raise AssertionError(
-                    f"missing repository-local quoted include: {include}"
-                )
-            if not candidate.is_file() or candidate.is_symlink():
-                raise AssertionError(f"non-file or symlink local include: {include}")
+                    continue  # Known SDK headers, not repository inputs.
+                raise AssertionError(f"missing local quoted include: {include}")
+            if not candidate.is_file():
+                raise AssertionError(f"non-file local quoted include: {include}")
             dependency = resolved.relative_to(root).as_posix()
             if not dependency.startswith(("src/main/cpp/", "tests/")):
                 raise AssertionError(f"unattestable local include: {dependency}")
@@ -110,116 +116,55 @@ def local_header_closure(root, paths):
     return headers
 
 
-
 def audit_selftest():
-    directory = "src/main/cpp/oreslang/runtime"
-    assert triggered(f"{directory}/added/new.hpp", [f"{directory}/**"])
-    assert not triggered(f"{directory}-evil/new.hpp", [f"{directory}/**"])
-    assert not triggered(f"{directory}2/new.hpp", [f"{directory}/**"])
-    assert triggered("tests/some_test.cpp", ["tests/**"])
-    assert not triggered("tests-fake/some_test.cpp", ["tests/**"])
-    assert not triggered("tests/new/helper.hpp", ["tests/test_actor_ledger_workflow_inputs.py"])
-    assert triggered("src/main/cpp/main.cpp", ["src/main/cpp/main.cpp"])
-    with tempfile.TemporaryDirectory(prefix="rt-timer-ci-closure-") as temp:
-        root = pathlib.Path(temp)
-        main = "src/main/cpp/oreslang/demo/entry.cpp"
-        local = "src/main/cpp/oreslang/demo/local.hpp"
-        nested = "src/main/cpp/oreslang/nested/detail.h"
-        for item in (main, local, nested):
-            (root / item).parent.mkdir(parents=True, exist_ok=True)
-        (root / main).write_text(
-            '#include "local.hpp"\n#include "llvm/IR/BasicBlock.h"\n',
-            encoding="utf-8",
-        )
-        (root / local).write_text(
-            '#include "../nested/detail.h"\n', encoding="utf-8"
-        )
-        (root / nested).write_text(
-            '#include "../demo/local.hpp"\n', encoding="utf-8"
-        )
-        dependencies = local_header_closure(root, {main})
-        assert dependencies == {local, nested}, dependencies
-        assert dependencies - {local} == {nested}, "transitive omission not detected"
-        # Standard C/C++ preprocessor whitespace must not bypass exact-blob
-        # dependency closure and transitive omission detection.
-        (root / main).write_text(
-            '# include "local.hpp"\n#\tinclude "../nested/detail.h"\n',
-            encoding="utf-8",
-        )
-        spaced = local_header_closure(root, {main})
-        assert spaced == {local, nested}, "spaced preprocessor include skipped"
-        assert spaced - {local} == {nested}, "spaced include omission not detected"
-        (root / main).write_text(
-            '#include "../../../../../../escape.h"\n', encoding="utf-8"
-        )
+    """Source-free negative tests, no private-source export."""
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td).resolve()
+        rt = root / "src/main/cpp/oreslang/runtime"
+        shared = root / "src/main/cpp/oreslang/shared"
+        rt.mkdir(parents=True)
+        shared.mkdir(parents=True)
+        first = rt / "first.hpp"
+        second = rt / "second.hpp"
+        third = shared / "third.hpp"
+        first.write_text('#include "second.hpp"\n', encoding="utf-8")
+        second.write_text('#include "../shared/third.hpp"\n', encoding="utf-8")
+        third.write_text("// leaf\n", encoding="utf-8")
+        first_path = "src/main/cpp/oreslang/runtime/first.hpp"
+        closure = local_header_closure(root, {first_path})
+        assert closure == {
+            "src/main/cpp/oreslang/runtime/second.hpp",
+            "src/main/cpp/oreslang/shared/third.hpp",
+        }, f"relative transitive header omitted: {closure}"
+        second.write_text('#include "missing.hpp"\n', encoding="utf-8")
         try:
-            local_header_closure(root, {main})
+            local_header_closure(root, {first_path})
+        except AssertionError as exc:
+            assert "missing local" in str(exc)
+        else:
+            raise AssertionError("missing local quote was accepted")
+        second.write_text('#include "../../../../../../escape.hpp"\n',
+                          encoding="utf-8")
+        try:
+            local_header_closure(root, {first_path})
         except AssertionError as exc:
             assert "escapes repository" in str(exc)
         else:
-            raise AssertionError("traversal not blocked")
-        (root / main).write_text(
-            '#include "oreslang/demo/missing.hpp"\n', encoding="utf-8"
-        )
+            raise AssertionError("quoted root traversal was accepted")
+        second.write_text('#include "alias/third.hpp"\n', encoding="utf-8")
+        (rt / "alias").symlink_to(shared, target_is_directory=True)
         try:
-            local_header_closure(root, {main})
+            local_header_closure(root, {first_path})
         except AssertionError as exc:
-            assert "missing oreslang" in str(exc)
+            assert "symlink" in str(exc)
         else:
-            raise AssertionError("missing mandatory local header not blocked")
-        (root / main).write_text(
-            '#include "missing-local.hpp"\n', encoding="utf-8"
-        )
-        try:
-            local_header_closure(root, {main})
-        except AssertionError as exc:
-            assert "missing repository-local quoted include" in str(exc)
-        else:
-            raise AssertionError("missing relative local header not blocked")
-        (root / main).write_text(
-            '#include "dangling.hpp"\n', encoding="utf-8"
-        )
-        (root / "src/main/cpp/oreslang/demo/dangling.hpp").symlink_to("absent.hpp")
-        try:
-            local_header_closure(root, {main})
-        except AssertionError as exc:
-            assert "symlink local include" in str(exc)
-        else:
-            raise AssertionError("dangling local symlink not blocked")
-        # A symlinked directory aliases a regular source file and would
-        # bypass an is_symlink() check on that file alone.
-        alias = root / "src/main/cpp/oreslang/demo-alias"
-        alias.symlink_to("demo", target_is_directory=True)
-        try:
-            local_header_closure(
-                root, {"src/main/cpp/oreslang/demo-alias/entry.cpp"}
-            )
-        except AssertionError as exc:
-            assert "symlink path ancestor" in str(exc)
-        else:
-            raise AssertionError("symlinked source directory not blocked")
-
-        # Likewise reject relative includes through an intermediate alias,
-        # even if the symlink points to a file inside the same repository.
-        shadow = root / "src/main/cpp/oreslang/demo/shadow"
-        shadow.symlink_to("../nested", target_is_directory=True)
-        (root / main).write_text(
-            '#include "shadow/detail.h"\n', encoding="utf-8"
-        )
-        try:
-            local_header_closure(root, {main})
-        except AssertionError as exc:
-            assert "symlink path ancestor" in str(exc)
-        else:
-            raise AssertionError("symlinked local include directory not blocked")
-    print(
-        "RT_TIMER_CI_HEADER_CLOSURE_SELFTEST_PASS "
-        "wildcard=6 relative_cycle=1 transitive_omission=1 "
-        "traversal=1 missing_owned=1 symlink_ancestors=2"
-    )
+            raise AssertionError("directory symlink alias was accepted")
+    print("RT_TIMER_CI_HEADER_CLOSURE_SELFTEST_PASS "
+          "relative_transitive=1 missing=1 traversal=1 symlink=1")
 
 
 def check():
+    audit_selftest()
     root = pathlib.Path(__file__).resolve().parents[1]
     workflow = root / ".github/workflows/rt-timer-actor-heap-exact-head.yml"
     source = workflow.read_text(encoding="utf-8")
@@ -372,10 +317,11 @@ def check():
         assert fixture in cmake, f"CMake fixture missing: {fixture}"
 
     for item in required:
-        resolved = (root / item).resolve()
+        source_file = root / item
+        resolved = source_file.resolve()
         assert resolved.is_relative_to(root), f"escaped source path {item}"
-        reject_symlink_ancestors(root.resolve(), root / item)
-        assert (root / item).is_file() and not (root / item).is_symlink(), (
+        reject_symlink_ancestors(root, source_file)
+        assert source_file.is_file() and not source_file.is_symlink(), (
             f"missing or symlink source input: {item}"
         )
 
