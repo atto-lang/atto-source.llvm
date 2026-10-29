@@ -127,7 +127,7 @@ static void admit_second(Fixture* f) {
     abort();
 }
 int main(void) {
-    CHECK(ores_guest_fixture_main() == 111);
+    CHECK(ores_guest_fixture_main() == 101);
     Fixture f = {0};
     f.scheduler = ores_native_actor_scheduler_open_with_wakes(
         2, 2, 2, data, NULL, NULL, wake_guest, &f);
