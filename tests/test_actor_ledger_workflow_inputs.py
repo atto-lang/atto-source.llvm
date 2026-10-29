@@ -167,7 +167,44 @@ def require_guest_gate_dependency(section):
     )
 
 
+def reject_conditional_gate_bypass(sections):
+    """Safety and identity acceptance steps must be unconditional and fatal.
+
+    Job-level if: always() can override a failed needs prerequisite, while
+    step-level conditions and continue-on-error can skip critical checks.
+    """
+    for job in REQUIRED_JOBS:
+        section = sections[job]
+        for field in ("if", "continue-on-error"):
+            pattern = rf"(?m)^ {{4}}{field} *:|^ {{8}}{field} *:"
+            assert re.search(pattern, section) is None, (
+                f"{job}: conditional/non-fatal CI gate forbidden: {field}"
+            )
+
 def audit_selftest():
+    valid = {
+        "actor-ledger-contract": "    runs-on: ubuntu-24.04\n      - name: Gate\n        run: echo gate\n",
+        "compiled-ores-guest": "    needs: actor-ledger-contract\n      - name: Guest\n        run: echo guest\n",
+    }
+    reject_conditional_gate_bypass(valid)
+    for job, field, indentation, value in (
+        ("actor-ledger-contract", "if", 4, "always()"),
+        ("compiled-ores-guest", "if", 4, "always()"),
+        ("actor-ledger-contract", "if", 8, "false"),
+        ("compiled-ores-guest", "if", 8, "false"),
+        ("actor-ledger-contract", "continue-on-error", 4, "true"),
+        ("actor-ledger-contract", "continue-on-error", 8, "true"),
+        ("compiled-ores-guest", "continue-on-error", 4, "true"),
+        ("compiled-ores-guest", "continue-on-error", 8, "true"),
+    ):
+        unsafe = dict(valid)
+        unsafe[job] += " " * indentation + field + ": " + value + "\n"
+        try:
+            reject_conditional_gate_bypass(unsafe)
+        except AssertionError as exc:
+            assert "conditional/non-fatal CI gate forbidden" in str(exc)
+        else:
+            raise AssertionError(f"bypassed CI gate accepted: {job} {field}")
     require_guest_gate_dependency("    needs: actor-ledger-contract\n")
     for unsafe in ("    runs-on: ubuntu-24.04\n",
                    "    needs: unrelated-job\n",
@@ -349,6 +386,7 @@ def check():
     }
     assert set(REQUIRED_JOBS) <= sections.keys(), "missing mandatory jobs"
     require_guest_gate_dependency(sections["compiled-ores-guest"])
+    reject_conditional_gate_bypass(sections)
     all_inputs = set()
     for name in REQUIRED_JOBS:
         section = sections[name]
