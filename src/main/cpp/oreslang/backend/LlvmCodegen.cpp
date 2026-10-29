@@ -2895,7 +2895,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             !fn.caught_throw_defers.empty())
             throw std::runtime_error(
                 "C_EXPORT_U32_REJECT: forged or unsupported browser host ABI declaration");
-        if (module.getFunction(fn.c_export_u32_symbol))
+        if (module.getNamedValue(fn.c_export_u32_symbol))
             throw std::runtime_error(
                 "C_EXPORT_U32_REJECT: C ABI symbol collision");
         llvm::Function* guest =
