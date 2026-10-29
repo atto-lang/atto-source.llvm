@@ -19,6 +19,7 @@ int main() {
     const TrustedBufferActor a{1,1}, b{2,1}, b2{2,2};
     auto pool = std::make_shared<TrustedActorBufferPool>(25, 2048, 16);
     TrustedActorBufferSchedulerGate gate(pool);
+    assert(rejects([&] { TrustedActorBufferSchedulerGate duplicate(pool); }));
     gate.register_actor(a, 1);
     gate.register_actor(b, 1);
     assert(rejects([&] {gate.register_actor(a, 1); }));
