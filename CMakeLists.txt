@@ -4485,9 +4485,10 @@ if(BUILD_TESTING)
   set_tests_properties(agent_model_dispatch_host_fencing_v1 PROPERTIES TIMEOUT 15)
 endif()
 
-# Trusted POSIX single-host claim v1. OpenSSL is only required for this test
-# target; this does NOT assert multi-host CAS, provider receipt, or guest execution.
-if(BUILD_TESTING AND UNIX)
+# Trusted Linux-POSIX single-host claim v1. OpenSSL is only required for
+# this test target; no multi-host CAS, provider receipt, or guest execution.
+# macOS/Windows require separately reviewed filesystem durability semantics.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   find_package(OpenSSL REQUIRED COMPONENTS Crypto)
   add_executable(ores_agent_durable_local_claim_v1
     contracts/v1/agent-dispatch/agent_durable_claim_test.cpp)
