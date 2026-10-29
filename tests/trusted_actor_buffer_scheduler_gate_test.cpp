@@ -34,6 +34,13 @@ int main() {
     auto h = gate.allocate(ta, 64);
     gate.write(ta,h,0,41);
     assert(gate.read(ta,h,0)==41);
+    // Possession of another carrier's Turn is insufficient authority.
+    std::thread wrong_carrier([&] {
+        assert(rejects([&] {gate.read(ta,h,0); }));
+        assert(rejects([&] {gate.send(ta,b,h); }));
+    });
+    wrong_carrier.join();
+    assert(gate.read(ta,h,0)==41);
     assert(rejects([&] {gate.send(ta,b2,h); }));
     assert(gate.read(ta,h,0)==41); // unknown target: no take
     gate.send(ta,b,h);
@@ -90,13 +97,15 @@ int main() {
     // Send versus recipient retirement: a concurrent retire cannot race
     // mailbox publication or create dangling receiver-owned buffers.
     gate.register_actor({3,1},1);
-    auto ta2=gate.enter_turn(a);
-    auto race_h=gate.allocate(ta2,10);
+    auto setup_turn=gate.enter_turn(a);
+    auto race_h=gate.allocate(setup_turn,10);
+    setup_turn.release();
     std::atomic<bool> go{false};
     std::atomic<bool> sent{false};
     std::thread producer([&] {
+        auto carrier_turn=gate.enter_turn(a);
         while(!go.load(std::memory_order_acquire)) std::this_thread::yield();
-        try {gate.send(ta2,{3,1},race_h);sent.store(true,std::memory_order_release);}
+        try {gate.send(carrier_turn,{3,1},race_h);sent.store(true,std::memory_order_release);}
         catch(const std::logic_error&) {}
     });
     std::thread retire([&] {
@@ -105,11 +114,12 @@ int main() {
     });
     go.store(true,std::memory_order_release);
     producer.join();retire.join();
+    auto verify_turn=gate.enter_turn(a);
     if (!sent.load(std::memory_order_acquire))
-        assert(gate.read(ta2,race_h,0)==0); // sender still owns on failed send
+        assert(gate.read(verify_turn,race_h,0)==0); // sender retained on rejection
     else
-        assert(rejects([&] {gate.read(ta2,race_h,0); })); // retired receiver reclaimed
-    ta2.release();
+        assert(rejects([&] {gate.read(verify_turn,race_h,0); })); // receiver reclaimed
+    verify_turn.release();
     gate.retire_actor(a);
     assert(pool->used_bytes()==0);
     assert(gate.close());
