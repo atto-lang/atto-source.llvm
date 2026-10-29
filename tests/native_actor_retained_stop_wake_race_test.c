@@ -278,6 +278,9 @@ int main(void) {
         ores_native_actor_scheduler_retire(f.scheduler);
         CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
     }
-    puts("NATIVE_RETAINED_STOP_WAKE_RACE_PASS iterations=80 orderings=4");
+    test_target_stop_before_transfer();
+    test_target_stop_after_transfer();
+    test_producer_stop_after_transfer();
+    puts("NATIVE_RETAINED_STOP_WAKE_RACE_PASS iterations=80 orderings=4 target_cases=3");
     return 0;
 }
