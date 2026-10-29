@@ -423,6 +423,37 @@ llvm::Value* lower(const Expression& expr,
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
         }
+        case Expression::Kind::CheckedDiv: {
+            // Oreslang '/' remains floating-point. This explicit rt
+            // operation is exact signed-i64 truncation toward zero. Guard
+            // both LLVM poison-producing cases before emitting sdiv:
+            // zero divisor and INT64_MIN/-1 signed overflow.
+            llvm::Value* left = lower(*expr.left, builder, i64, storage,
+                                      field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage,
+                                       field_storage, functions, moves);
+            auto* zero = llvm::ConstantInt::get(i64, 0);
+            auto* minus_one = llvm::ConstantInt::getSigned(i64, -1);
+            auto* min_i64 = llvm::ConstantInt::get(
+                i64, (std::uint64_t{1} << 63));
+            auto* bad_zero = builder.CreateICmpEQ(right, zero, "div.zero");
+            auto* bad_min = builder.CreateAnd(
+                builder.CreateICmpEQ(left, min_i64),
+                builder.CreateICmpEQ(right, minus_one), "div.signed.overflow");
+            auto* failure = builder.CreateOr(bad_zero, bad_min, "div.invalid");
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* trapped = llvm::BasicBlock::Create(
+                builder.getContext(), "div.checked.trap", parent);
+            auto* ready = llvm::BasicBlock::Create(
+                builder.getContext(), "div.checked.ok", parent);
+            builder.CreateCondBr(failure, trapped, ready);
+            builder.SetInsertPoint(trapped);
+            builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                parent->getParent(), llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(ready);
+            return builder.CreateSDiv(left, right, "div.trunc.checked");
+        }
         case Expression::Kind::Remainder: {
             // The frontend normalizes syntactically signed literal divisors.
             // Never trust an externally supplied AST to skip this proof gate.
