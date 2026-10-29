@@ -59,7 +59,7 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
     if not all(map(_sha, (base_sha, workflow_blob_sha, plan_blob_sha))):
         raise GateRejected("invalid immutable Git object SHA")
     for path in (workflow_path, plan_path):
-        if not isinstance(path, str) or path.startswith("/") or "\" in path or any(
+        if not isinstance(path, str) or path.startswith("/") or "\\" in path or any(
                 x in ("", ".", "..") for x in path.split("/")):
             raise GateRejected("unsafe workflow or plan path")
 
