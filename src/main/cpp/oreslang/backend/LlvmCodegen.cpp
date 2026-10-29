@@ -1071,7 +1071,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            (fn.native_internal || fn.async_source_i64)
+            (fn.native_internal || fn.async_source_i64 ||
+             !fn.c_export_u32_symbol.empty())
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
@@ -2901,7 +2902,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Function* guest =
             declarations.at(native_function_slot(fn.name, 0));
         if (guest->getReturnType() != i64 || guest->arg_size() != 0 ||
-            guest->getLinkage() != llvm::GlobalValue::ExternalLinkage)
+            guest->getLinkage() != llvm::GlobalValue::InternalLinkage)
             throw std::runtime_error(
                 "C_EXPORT_U32_REJECT: guest ABI does not match checked i64() contract");
         auto* host = llvm::Function::Create(
