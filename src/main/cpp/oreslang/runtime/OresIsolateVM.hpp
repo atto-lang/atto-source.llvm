@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -52,6 +53,9 @@ class IsolateVM final {
     std::unordered_map<std::uint64_t, std::uint64_t> actors;
     std::uint64_t next_actor_generation = 1;
     std::size_t active_guest_calls = 0;
+    // Temporary serialized entry for trusted synchronous scalar guests.
+    // This is not a production actor scheduler or per-actor concurrency gate.
+    std::mutex guest_turn_mutex;
     std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> guest_globals{};
 };
 
