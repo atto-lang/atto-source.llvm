@@ -14,7 +14,7 @@ fnc valid_span(int capacity, int start, int count, int stride): int {
   if (start > capacity) { return 0; } fi
   if (count == 0) { return 1; } fi
   if (start == capacity) { return 0; } fi
-  if (count - 1 > (capacity - 1 - start) / stride) { return 0; } fi
+  if (count - 1 > rt div_trunc_checked(capacity - 1 - start, stride)) { return 0; } fi
   return 1;
 }
 
