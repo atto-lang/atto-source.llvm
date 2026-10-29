@@ -87,3 +87,38 @@ host API operations; explicit refusal of nonexistent sandbox mode.
 6. Differential execution suite on matched Java/GraalVM and LLVM commits.
    Require real compiled guest execution, ASan/UBSan and instrumented CI
    evidence before claiming isolate parity or production readiness.
+
+## Host guest-call ABI (follow-up integration)
+
+The versioned C ABI lives in src/main/cpp/oreslang/runtime/OresIsolateAbi.h.
+OresVM::invoke_guest(handle, entry, i64) pins exactly that isolate's
+invocation before entering trusted native code. Each isolate has 16 private
+signed i64 global slots. The guest accesses these through checked callbacks
+rather than process-wide mutable globals. The callback ABI is synchronous
+and trusted-only; call_data and context pointers must not be retained.
+No asynchronous guest work, FFI pointer isolation, guest verification,
+or safe unwinding from untrusted native code is provided.
+
+Entering Quiescing rejects new invocations, but admitted calls can finish.
+complete_shutdown rejects outstanding guest calls or actors. Throwing
+test guest entries release their invocation pin via RAII.
+load_i64/store_i64 is NOT an atomic increment: future concurrency contracts
+must enforce actor serialization or provide explicit atomic operations.
+
+New tests:
+- native_oresvm_guest_call_lifecycle: private tenant slots, independent
+  progress, shutdown pins, exception cleanup and stale handle rejection.
+- native_oresvm_handwritten_llvm_aot_context: handwritten LLVM IR compiled
+  to native code and called for two separate tenant contexts; only when
+  a 64-bit pointer host and clang are available.
+
+These tests are host-only. Handwritten LLVM IR is not Oreslang compiler
+source lowering. TrustedInProcess does NOT sandbox native pointers.
+Actual actor scheduler integration, compiler lowering, continuation
+retirement, process sandboxing and Java/LLVM parity remain outstanding.
+
+Run registered tests with:
+
+    ctest --test-dir build -R 'native_oresvm_(tenant_isolate_admission|guest_call_lifecycle|handwritten_llvm_aot_context)' --output-on-failure
+
+Full-repository CI must execute real steps before acceptance.
