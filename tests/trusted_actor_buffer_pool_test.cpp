@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstdint>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <thread>
@@ -50,18 +51,19 @@ int main() {
 
     auto loan1 = pool.borrow_read(original, a, b);
     auto loan2 = pool.borrow_read(original, a, b_new);
-    assert(loan1.read(0) == 37);
-    assert(loan2.read(95) == 99);
+    assert(loan1.read(b, 0) == 37);
+    assert(loan2.read(b_new, 95) == 99);
+    assert(rejects([&] { loan2.read(b, 0); }));
     assert(rejects([&] { pool.write(original, a, 0, 99); }));
     assert(rejects([&] { pool.take(original, a, b); }));
     assert(rejects([&] { pool.drop(original, a); }));
-    assert(rejects([&] { loan1.read(96); }));
+    assert(rejects([&] { loan1.read(b, 96); }));
     std::atomic<bool> go{false};
     std::thread reader([lease = std::move(loan2), &go]() mutable {
         while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
-        assert(lease.read(0) == 37);
+        assert(lease.read(b_new, 0) == 37);
         lease.release();
-        assert(rejects([&] { lease.read(0); }));
+        assert(rejects([&] { lease.read(b_new, 0); }));
     });
     go.store(true, std::memory_order_release);
     reader.join();
@@ -105,7 +107,7 @@ int main() {
     auto last_loan = pool.borrow_read(replacement, a, b);
     pool.retire(); // revoke without freeing loan backing storage early
     assert(pool.used_bytes() == 0);
-    assert(rejects([&] { last_loan.read(0); }));
+    assert(rejects([&] { last_loan.read(b, 0); }));
     assert(rejects([&] { pool.allocate(a, 1); }));
     assert(rejects([&] { pool.take(replacement, a, b); }));
     last_loan.release();
@@ -118,6 +120,6 @@ int main() {
     auto item = transient->allocate(a, 8);
     auto detached_loan = transient->borrow_read(item, a, b);
     transient.reset();
-    assert(rejects([&] { detached_loan.read(0); }));
+    assert(rejects([&] { detached_loan.read(b, 0); }));
     detached_loan.release();
 }
