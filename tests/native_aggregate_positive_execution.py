@@ -111,6 +111,26 @@ def verify_negative_rejection(result, diagnostic):
         require(marker not in result.stderr, "rejected source leaked LLVM IR in stderr")
 
 
+def verify_native_entry_linkage(ir):
+    """Require the C entrypoint to use the Oreslang guest result as OS status.
+
+    Source-free IR admission only. Actual native execution is checked later.
+    """
+    guest = re.search(rb"(?m)^define\s+i64\s+@__oreslang_guest_main\(", ir)
+    host = re.search(
+        rb"(?ms)^define\s+i32\s+@main\([^)]*\)[^{\n]*\{(?P<body>.*?)^\}", ir)
+    require(guest is not None and host is not None,
+            "missing exact guest or native entrypoint definition")
+    body = host.group("body")
+    call = re.search(
+        rb"(?m)^\s*(%[A-Za-z0-9_.$-]+)\s*=\s*(?:tail\s+)?call\s+i64\s+"
+        rb"@__oreslang_guest_main\s*\(", body)
+    require(call is not None, "native main does not call guest entrypoint")
+    result_name = re.escape(call.group(1))
+    require(re.search(rb"\btrunc\s+i64\s+" + result_name + rb"\s+to\s+i32\b", body)
+            is not None, "native main does not convert guest result to OS status")
+
+
 def verify_guest_process(name, result, expected_exit):
     """Observed OS status is bound to the individual .ores fixture, not 42."""
     require(type(expected_exit) is int and 0 < expected_exit < 128,
@@ -153,11 +173,10 @@ def main():
             src.write_text(source, encoding="utf-8")
             original = src.read_bytes()
             compilation = run([str(compiler), str(src)], case_dir)
-            require(compilation.returncode == 0 and compilation.stderr == b"" and
-                    b"define i64 @__oreslang_guest_main(" in compilation.stdout and
-                    b"define i32 @main(" in compilation.stdout,
+            require(compilation.returncode == 0 and compilation.stderr == b"",
                     name + ": real Oreslang compiler failed: " +
                     repr(compilation.stderr[:800]))
+            verify_native_entry_linkage(compilation.stdout)
             require(set(p.name for p in case_dir.iterdir()) == {"case.ores"} and
                     src.read_bytes() == original and not src.is_symlink(),
                     name + ": compiler mutated source or emitted unexpected artifacts")
