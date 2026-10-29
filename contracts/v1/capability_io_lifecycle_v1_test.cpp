@@ -42,5 +42,21 @@ int main() {
     assert(gate.revoke_actor(42,2));
     assert(gate.revoke_actor(43,1)); // exhausted revocation ledger seals admission
     assert(gate.reserve(true,true,true,44,1,55).nonce == 0);
+    // Global shutdown retains credits until the trusted host sees quiescence.
+    HostLifecycleGate shutdown_gate(2,2);
+    const auto started = shutdown_gate.reserve(true,true,true,77,1,88);
+    const auto queued = shutdown_gate.reserve(true,true,true,78,1,89);
+    assert(started.nonce != 0 && queued.nonce != 0);
+    assert(shutdown_gate.dispatch(started,77,1,88));
+    assert(shutdown_gate.shutdown());
+    assert(!shutdown_gate.shutdown());
+    assert(shutdown_gate.in_flight() == 2);
+    assert(!shutdown_gate.dispatch(queued,78,1,89));
+    assert(shutdown_gate.reserve(true,true,true,79,1,90).nonce == 0);
+    assert(!shutdown_gate.retire(started,77,1,false));
+    assert(shutdown_gate.complete(started,77,1));
+    assert(shutdown_gate.retire(started,77,1,true));
+    assert(shutdown_gate.retire(queued,78,1,true));
+    assert(shutdown_gate.in_flight() == 0);
     std::cout << "CAPABILITY_IO_HOST_LIFECYCLE_REFERENCE_PASS\n";
 }
