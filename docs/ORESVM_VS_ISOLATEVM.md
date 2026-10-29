@@ -210,7 +210,7 @@ https://chromium.googlesource.com/v8/v8/+/HEAD/docs/compiler/concurrency-and-bac
 | C ABI OresIsolateContext and 16 private i64 globals | Synchronous host ABI exists |
 | Guest invocation pin and quiescence admission gate | Synchronous host proof exists |
 | Handwritten LLVM-IR guest call against two tenants | Test fixture exists; **not** .ores lowering |
-| A first-class separate IsolateVM C++ class | **Not implemented**: represented by OresVM private State |
+| A first-class separate IsolateVM C++ class | **Implemented as a private, noncopyable tenant state owner** in OresIsolateVM.hpp; only OresVM constructs and mutates it; this is not yet an autonomous scheduler |
 | Compiled .ores guest module-global lowering | **Not implemented** |
 | Actual per-isolate actor scheduler, mailbox, async/await, I/O drain | **Not implemented** |
 | Production tenant heap & host/global resource quotas | **Not implemented** |
@@ -234,7 +234,7 @@ https://chromium.googlesource.com/v8/v8/+/HEAD/docs/compiler/concurrency-and-bac
   cross-backend conformance. A workflow marked failed with zero recorded
   steps is neither an execution failure nor a successful acceptance test.
 
-**Stable naming rule:** OresVM is the root host. IsolateVM is the logical
+**Implementation note:** The first-class IsolateVM type now owns per-tenant heap, actor registry, guest slots and guest-turn mutex; OresVM holds the isolate registry and provides the only lifecycle methods. The guest-visible OresIsolateContext remains a borrowed ABI record, not a native IsolateVM pointer.\n\n**Stable naming rule:** OresVM is the root host. IsolateVM is the logical
 per-tenant VM, whether implemented initially as a private State or eventually
 as a separately testable C++ type. OresIsolateContext is a *borrowed execution
 ABI view*, never a synonym for either VM. V8 Isolate and V8 Context are
