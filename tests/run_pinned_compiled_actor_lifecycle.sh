@@ -40,6 +40,7 @@ python3 "$root/tests/verify_compiler_receipt.py" capture \
 
 python3 -m unittest discover -s "$root/tests" -p test_verify_compiler_receipt.py -v
 python3 -m unittest discover -s "$root/tests" -p test_require_compiled_actor_ctest.py -v
+python3 -m unittest discover -s "$root/tests" -p test_verify_ctest_execution.py -v
 python3 -m unittest discover -s "$root/tests" -p test_llvm_ci_actor_workflow.py -v
 
 python3 "$root/tests/require_compiled_actor_ctest.py" \
@@ -51,7 +52,10 @@ python3 "$root/tests/verify_compiler_receipt.py" verify \
   --expected-head "$EXPECTED_HEAD" --receipt "$receipt"
 
 python3 "$root/tests/ctest_manifest_gate.py" --build-dir "$root/build" --min-tests 250
-ctest --test-dir "$root/build" --output-on-failure --timeout 240 --parallel 2
+ctest --test-dir "$root/build" --output-on-failure --timeout 240 --parallel 2 \
+  --output-junit "$receipt_dir/full-ctest.xml"
+python3 "$root/tests/verify_ctest_execution.py" \
+  --build-dir "$root/build" --junit "$receipt_dir/full-ctest.xml" --min-tests 250
 python3 "$root/tests/verify_compiler_receipt.py" verify \
   --source "$root" --compiler "$root/build/oreslang-llvmc" \
   --expected-head "$EXPECTED_HEAD" --receipt "$receipt"
