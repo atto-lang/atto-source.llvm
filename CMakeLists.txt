@@ -3267,6 +3267,22 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+
+    # Real C scheduler tagged buffer DATA callback and exactly-once STOP
+    # abandonment contract. Host-only mock tickets, not .ores guest execution.
+    add_executable(oreslang-native-actor-owned-buffer-scheduler-test
+        tests/native_actor_owned_buffer_scheduler_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_tagged_owned_buffer_stop_cleanup
+        COMMAND oreslang-native-actor-owned-buffer-scheduler-test)
+    set_tests_properties(native_actor_tagged_owned_buffer_stop_cleanup
+        PROPERTIES TIMEOUT 45)
     # Scheduler-owned producer continuation wake escrow: independent from
     # supervisor CONTROL and USER mail capacity. Native host substrate only.
     add_executable(oreslang-native-continuation-wake-escrow-test
