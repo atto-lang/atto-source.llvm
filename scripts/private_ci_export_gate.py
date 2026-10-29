@@ -7,6 +7,7 @@ verifies GitHub administrator settings; both are independent requirements.
 """
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -54,6 +55,13 @@ def _reject_nonfinite(value):
     raise GateRejected("non-finite JSON policy value")
 
 
+def _finite_float(value):
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise GateRejected("non-finite JSON policy number")
+    return parsed
+
+
 def _sha(value):
     return isinstance(value, str) and SHA.fullmatch(value) is not None
 
@@ -80,14 +88,15 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
         item = line.strip()
         if not item or item.startswith("#"):
             continue
-        if item != line or not REPO.fullmatch(item) or item in approved:
+        if item != line or not REPO.fullmatch(item) or item.casefold() in approved:
             raise GateRejected("invalid or duplicate private carrier allowlist entry")
-        approved.add(item)
-    if destination not in approved:
+        approved.add(item.casefold())
+    if destination.casefold() not in approved:
         raise GateRejected("destination not approved on protected main")
 
     contract = json.loads(_read(root, ".github/private-ci-carrier-contracts.json"),
-                          object_pairs_hook=_unique_object, parse_constant=_reject_nonfinite)
+                          object_pairs_hook=_unique_object, parse_constant=_reject_nonfinite,
+                          parse_float=_finite_float)
     if (not isinstance(contract, dict) or type(contract.get("schema")) is not int or
             contract["schema"] != 1 or
             not isinstance(contract.get("carriers"), dict)):
