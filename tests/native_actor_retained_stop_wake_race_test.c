@@ -333,6 +333,111 @@ static void test_producer_stop_after_transfer(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
 }
 
+/* Concurrent B STOP versus PUBLISH: the scheduler mutex must select one
+ * linearization point. Exactly one A wake runs, with the outcome matching
+ * that point, and B never receives a fabricated DATA delivery receipt. */
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef actor[2];
+    OresNativeWakeTicket ticket;
+    atomic_int go, publisher_status, stopped, wake_calls;
+    atomic_int ready_calls, cancelled_calls;
+} TargetPublishRace;
+static void target_publish_race_data(void* raw,size_t i,uint64_t payload) {
+    (void)raw; (void)i; (void)payload;
+    CHECK(0); /* No DATA was admitted to either actor in this race. */
+}
+static void target_publish_race_wake(void* raw,size_t i,
+        OresNativeWakeTicket ticket,OresNativeWakeOutcome outcome) {
+    TargetPublishRace* f=(TargetPublishRace*)raw;
+    CHECK(i==0);
+    CHECK(ores_native_actor_scheduler_is_current_actor(
+        f->scheduler,f->actor[0]));
+    CHECK(ores_native_actor_scheduler_is_current_wake(f->scheduler,ticket));
+    CHECK(ticket.slot_generation==f->ticket.slot_generation);
+    CHECK(outcome==ORES_NATIVE_WAKE_READY
+        || outcome==ORES_NATIVE_WAKE_CANCELLED);
+    if (outcome==ORES_NATIVE_WAKE_READY)
+        atomic_fetch_add_explicit(&f->ready_calls,1,memory_order_relaxed);
+    else atomic_fetch_add_explicit(&f->cancelled_calls,1,memory_order_relaxed);
+    atomic_fetch_add_explicit(&f->wake_calls,1,memory_order_release);
+}
+static void* target_publish_race_stopper(void* raw) {
+    TargetPublishRace* f=(TargetPublishRace*)raw;
+    wait_for(&f->go);
+    CHECK(ores_native_actor_scheduler_stop_sealed(
+        f->scheduler,f->actor[1]));
+    atomic_store_explicit(&f->stopped,1,memory_order_release);
+    return NULL;
+}
+static void* target_publish_race_publisher(void* raw) {
+    TargetPublishRace* f=(TargetPublishRace*)raw;
+    wait_for(&f->go);
+    const OresNativeWakePublishStatus status =
+        ores_native_actor_scheduler_publish_wake(
+            f->scheduler,f->ticket,ORES_NATIVE_WAKE_READY);
+    CHECK(status==ORES_NATIVE_WAKE_PUBLISHED
+        || status==ORES_NATIVE_WAKE_TARGET_RETIRED);
+    atomic_store_explicit(&f->publisher_status,(int)status,
+        memory_order_release);
+    return NULL;
+}
+static void test_concurrent_target_stop_publish(void) {
+    for (int attempt=0;attempt<48;++attempt) {
+        TargetPublishRace f={0};
+        f.scheduler=ores_native_actor_scheduler_open_with_wakes(
+            2,2,2,target_publish_race_data,NULL,NULL,
+            target_publish_race_wake,&f);
+        CHECK(f.scheduler);
+        f.actor[0]=ores_native_actor_scheduler_spawn(f.scheduler,0);
+        f.actor[1]=ores_native_actor_scheduler_spawn(f.scheduler,1);
+        CHECK(f.actor[0].scheduler_domain && f.actor[1].scheduler_domain);
+        CHECK(ores_native_actor_scheduler_reserve_wake(
+            f.scheduler,f.actor[0],f.actor[1],1,1,1,1,&f.ticket));
+        CHECK(ores_native_actor_scheduler_transfer_wake(f.scheduler,f.ticket));
+        pthread_t stopper,publisher;
+        CHECK(pthread_create(&stopper,NULL,
+            target_publish_race_stopper,&f)==0);
+        CHECK(pthread_create(&publisher,NULL,
+            target_publish_race_publisher,&f)==0);
+        atomic_store_explicit(&f.go,1,memory_order_release);
+        CHECK(pthread_join(stopper,NULL)==0);
+        CHECK(pthread_join(publisher,NULL)==0);
+        CHECK(atomic_load_explicit(&f.stopped,memory_order_acquire)==1);
+        CHECK(ores_native_actor_scheduler_wait_done(
+            f.scheduler,f.actor[1]));
+        CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+        const int status=atomic_load_explicit(
+            &f.publisher_status,memory_order_acquire);
+        CHECK(atomic_load_explicit(&f.wake_calls,memory_order_acquire)==1);
+        CHECK(atomic_load(&f.ready_calls)
+            ==(status==ORES_NATIVE_WAKE_PUBLISHED));
+        CHECK(atomic_load(&f.cancelled_calls)
+            ==(status==ORES_NATIVE_WAKE_TARGET_RETIRED));
+        CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==1);
+        CHECK(ores_native_actor_scheduler_completed(f.scheduler)==1);
+        CHECK(ores_native_actor_scheduler_wakes_completed(f.scheduler)==1);
+        CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+            f.scheduler,f.actor[0])==0);
+        CHECK(!ores_native_actor_scheduler_transfer_wake(
+            f.scheduler,f.ticket));
+        CHECK(ores_native_actor_scheduler_publish_wake(
+            f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)
+            ==ORES_NATIVE_WAKE_INVALID);
+        OresNativeActorTerminalState terminal={0};
+        CHECK(ores_native_actor_scheduler_terminal_state(
+            f.scheduler,f.actor[1],&terminal));
+        CHECK(terminal.accepted_user_messages==0);
+        CHECK(terminal.processed_user_messages==0);
+        CHECK(terminal.abandoned_user_messages==0);
+        CHECK(ores_native_actor_scheduler_stop_sealed(
+            f.scheduler,f.actor[0]));
+        CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actor[0]));
+        ores_native_actor_scheduler_retire(f.scheduler);
+        CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
+    }
+}
+
 int main(void) {
     for (int i=0;i<80;++i) {
         Fixture f={0};
@@ -385,6 +490,7 @@ int main(void) {
     test_target_stop_before_transfer_with_retained_frame();
     test_producer_stop_after_transfer();
     test_both_stop_after_transfer();
-    puts("NATIVE_RETAINED_STOP_WAKE_RACE_PASS iterations=80 orderings=4 target_cases=5");
+    test_concurrent_target_stop_publish();
+    puts("NATIVE_RETAINED_STOP_WAKE_RACE_PASS iterations=80 orderings=4 target_cases=5 concurrent_target_stop_publish=48");
     return 0;
 }
