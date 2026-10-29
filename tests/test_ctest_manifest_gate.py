@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Adversarial validation for the source-owned full-CTest manifest gate."""
 import copy
+from pathlib import Path
+import re
 import sys
 import unittest
 
@@ -90,6 +92,35 @@ class ManifestAuditTests(unittest.TestCase):
 
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
+
+    def test_generator_actual_cmake_has_no_inverted_ctest_properties(self):
+        cmake = (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(
+            encoding="utf-8"
+        )
+        pattern = (r"foreach\\(generator_case IN ITEMS\\s+(.*?)\\)\\s+"
+                   r"add_test\\(NAME native_generator_v1_\\$\\{generator_case\\}_failclosed")
+        matches = re.findall(pattern, cmake, flags=re.DOTALL)
+        self.assertEqual(len(matches), 1, "expected one canonical generator CMake registration")
+        cases = matches[0].split()
+        self.assertEqual(
+            cases, ["sync", "async", "suspend", "legacy-fnc",
+                    "legacy-routine", "legacy-async-fnc"]
+        )
+        block = cmake[cmake.index("    foreach(generator_case IN ITEMS", cmake.index(
+            "# Negative source tests must prove compiler rejection")):]
+        block = block[:block.index("    endforeach()")]
+        for fragment in (
+            'COMMAND "${Python3_EXECUTABLE}"',
+            '/tests/contract.py"',
+            '--compiler "$<TARGET_FILE:oreslang-llvmc>"',
+            '--fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generator-v1-${generator_case}-reject.ores"',
+            '--diagnostic "' + GENERATOR_REJECTION_DIAGNOSTIC + '"',
+            "TIMEOUT 30",
+        ):
+            self.assertIn(fragment, block)
+        for forbidden in ("WILL_FAIL TRUE", "SKIP_RETURN_CODE", "SKIP_REGULAR_EXPRESSION",
+                          "PASS_REGULAR_EXPRESSION"):
+            self.assertNotIn(forbidden, block)
 
     def test_generator_compiler_rejections_are_mandatory_real_source_cases(self):
         for name, fixture_name in GENERATOR_NEGATIVE_FIXTURES.items():
