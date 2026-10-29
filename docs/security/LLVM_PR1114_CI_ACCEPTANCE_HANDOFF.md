@@ -5,15 +5,15 @@
 ## Source and verified source-free test evidence
 
 - Source: `ores-truffle-oreslang/oreslang-source.llvm`; draft PR #1114.
-- Tested source revision before this documentation commit: `4ccf93d0bd8a297da91b2570580e305d77f192e7`.
-- Locally executed the actual Python unittest entry point `tests/test_native_aggregate_negative_receipt.py` with standard Python and `python3 -O`: **63 of 63 PASS in each mode; 126 of 126 total**.
+- Tested source revision before this documentation update: `295aa70f2caafc28944c2bc07ab1b4b234e13e98`.
+- Locally executed the actual Python unittest entry point `tests/test_native_aggregate_negative_receipt.py` with standard Python and `python3 -O`: **66 of 66 PASS in each mode; 132 of 132 total**.
 - Every required source-free file was independently compared byte-for-byte to its exact Git blob SHA:
   - `tests/native_aggregate_negative_receipt.py` — `4f33a7e08d87d7f246fbeb9bc3685913f8d7df88`
   - `tests/test_native_aggregate_negative_receipt.py` — `02f226924c1cd3f07d65e32cc11017af42a61f7a`
   - `tests/native_aggregate_kind_failclosed.py` — `1a88d570e344385b8c4a040f96ec753dbfaf453c`
-  - `tests/native_aggregate_positive_execution.py` — `45b0cb0ec0ca647dc1f703696b13ad43708a077e`
-  - `tests/test_native_aggregate_positive_execution_harness.py` — `2a1ccbccb24306a9b3d29b16666fe46b36985bfc`
-- Python syntax compilation passed. No `oreslang-llvmc` binary, real 33-case compiler outcome, native guest executable, or exact-head compiler receipt was produced by these tests. Test-source hashes do **not** independently establish the trustworthiness of a compiler build.
+  - `tests/native_aggregate_positive_execution.py` — `dbdf1216d910ac8cdb8e4dd503cbbb1191dcfb12`
+  - `tests/test_native_aggregate_positive_execution_harness.py` — `62fcb6e7574e9bae12006b609a5cdfb9dd1f2982`
+- Python syntax compilation passed. A real Clang-linked adversarial IR example returned OS status `19` while its Oreslang guest body returned `7`; the **prior** source-free admission check incorrectly accepted it. The hardened verifier now rejects the same LLVM IR, and three adversarial tests cover dead blocks, early `exit()` calls, and branched wrappers. The pure stack-only guest fixture scope requires exactly one guest call and one return with no alternate control-flow terminators. This test is a **synthetic IR decoy**, not Oreslang compiler execution. No `oreslang-llvmc` binary, real 33-case compiler outcome, native Oreslang guest executable, or exact-head compiler receipt was produced. Test-source hashes do **not** independently establish the trustworthiness of a compiler build.
 
 ## Live governance observations: every export gate still denies
 
