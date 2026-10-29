@@ -70,6 +70,11 @@ class ExportGateTest(unittest.TestCase):
             DEST + "\n" + DEST + "\n", encoding="utf-8")
         self.check_rejected()
 
+    def test_allowlist_casefold_duplicate_rejected(self):
+        (self.root / ".github/private-ci-approved-repositories.txt").write_text(
+            DEST + "\n" + DEST.upper() + "\n", encoding="utf-8")
+        self.check_rejected()
+
     def test_allowlist_bad_whitespace(self):
         (self.root / ".github/private-ci-approved-repositories.txt").write_text(
             DEST + " \n", encoding="utf-8")
@@ -115,6 +120,14 @@ class ExportGateTest(unittest.TestCase):
     def test_nonfinite_json_rejected(self):
         self.data["unexpected"] = float("nan")
         self.write_contract()
+        self.check_rejected()
+
+    def test_overflow_numeric_json_rejected(self):
+        # Python's JSON parser otherwise interprets syntactically legal 1e999
+        # as floating-point infinity without calling parse_constant.
+        policy = self.root / ".github/private-ci-carrier-contracts.json"
+        raw = json.dumps(self.data)
+        policy.write_text(raw[:-1] + ',"unrecognized":1e999}', encoding="utf-8")
         self.check_rejected()
 
     def test_control_character_path_rejected(self):
