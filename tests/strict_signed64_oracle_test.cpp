@@ -26,6 +26,12 @@ static_assert(StrictSigned64Arithmetic::mod(2, 0).failure
 static_assert(StrictSigned64Arithmetic::pow(2, -1).failure
     == StrictIntegerFailure::negative_exponent);
 static_assert(StrictSigned64Arithmetic::bitXor(5, 3).value == 6);
+static_assert(StrictSigned64Arithmetic::bitXor(
+    std::numeric_limits<I>::min(), I(0)).value == std::numeric_limits<I>::min());
+static_assert(StrictSigned64Arithmetic::bitXor(
+    std::numeric_limits<I>::min(), I(-1)).value == std::numeric_limits<I>::max());
+static_assert(StrictSigned64Arithmetic::bitXor(
+    std::numeric_limits<I>::max(), I(-1)).value == std::numeric_limits<I>::min());
 
 // Source fixture: oreslang-source.java/contracts/v1/strict-named-integer-arithmetic-v1.json
 // Exact Java fixture blob 3f65f557f06e8cd0d34a738a0d357d6c2e477665; every case below is copied by

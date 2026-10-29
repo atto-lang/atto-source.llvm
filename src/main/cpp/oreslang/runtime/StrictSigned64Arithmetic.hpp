@@ -101,8 +101,22 @@ struct StrictSigned64Arithmetic {
         return {converted, StrictIntegerFailure::none};
     }
 
+    // Reconstruct an i64 from its unsigned two's-complement bit pattern
+    // without implementation-defined uint64_t -> int64_t narrowing. Signed
+    // inputs convert to uint64_t modulo 2^64, so the bitwise operation itself
+    // has an exact, representation-independent 64-bit domain.
+    static constexpr I fromUnsignedBits(std::uint64_t bits) noexcept {
+        constexpr auto sign = std::uint64_t(1) << 63U;
+        if ((bits & sign) == 0) return static_cast<I>(bits);
+        const auto magnitude = (~bits) + std::uint64_t(1);
+        if (magnitude == sign) return std::numeric_limits<I>::min();
+        return -static_cast<I>(magnitude);
+    }
+
     static constexpr StrictIntegerResult bitXor(I left, I right) noexcept {
-        return {left ^ right, StrictIntegerFailure::none};
+        const auto bits = static_cast<std::uint64_t>(left)
+            ^ static_cast<std::uint64_t>(right);
+        return {fromUnsignedBits(bits), StrictIntegerFailure::none};
     }
 };
 
