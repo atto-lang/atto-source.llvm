@@ -5,6 +5,7 @@
 #include <string>
 #ifdef __linux__
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -56,6 +57,11 @@ int main() {
     require(unlink(path) == 0, "unlink");
     require(mkfifo(path, 0600) == 0, "mkfifo");
     require(read_preempt_rt_flag(path) == std::nullopt, "empty FIFO must fail without blocking");
+    const int fifo_writer = open(path, O_RDWR | O_NONBLOCK);
+    require(fifo_writer >= 0, "FIFO writer");
+    require(write(fifo_writer, "1\n", 2) == 2, "FIFO valid-looking data");
+    require(read_preempt_rt_flag(path) == std::nullopt, "populated FIFO is not sysfs");
+    require(close(fifo_writer) == 0, "close FIFO writer");
     require(unlink(path) == 0, "unlink fifo");
 #else
     require(!probe.compatible(), "non-Linux host must fail closed");
