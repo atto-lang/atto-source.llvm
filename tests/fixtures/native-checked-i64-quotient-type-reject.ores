@@ -1,0 +1,4 @@
+// Must reject at source typing without emitting LLVM IR.
+pub fnc main(): int {
+  return rt div_trunc_checked(true, 2);
+}
