@@ -63,6 +63,8 @@ jobs:
           python3 tests/ctest_manifest_gate.py --build-dir build --min-tests 250
       - name: Test fail-closed compiled actor CTest inventory mutations
         run: python3 -m unittest discover -s tests -p test_require_compiled_actor_ctest.py -v
+      - name: Test complete JUnit execution anti-skip and omission gates
+        run: python3 -m unittest discover -s tests -p test_verify_ctest_execution.py -v
       - name: Require exact compiled source actor CTest registration
         shell: bash
         run: |
@@ -128,7 +130,12 @@ jobs:
           TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
             ./build/hungry-carrier-tsan
       - name: Verify parser, IR and native execution
-        run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2
+        run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2 --output-junit "$RUNNER_TEMP/llvm-full-ctest.xml"
+      - name: Require every registered CTest to have a completed non-skipped JUnit result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/verify_ctest_execution.py --build-dir "$GITHUB_WORKSPACE/build" --junit "$RUNNER_TEMP/llvm-full-ctest.xml" --min-tests 250
       - name: Reverify compiler/source after complete CTest suite
         if: ${{ always() }}
         shell: bash
