@@ -66,23 +66,35 @@ public:
         ActorTicket() = default;
     };
 
-    OresVM() = default;
+    explicit OresVM(OresVmLimits limits = {}) : limits_(limits) {
+        if (limits_.max_tenants == 0 || limits_.max_admitted_heap_bytes == 0 ||
+            limits_.max_inflight_guest_calls == 0)
+            throw std::invalid_argument("OresVM requires positive aggregate quotas");
+    }
     OresVM(const OresVM&) = delete;
     OresVM& operator=(const OresVM&) = delete;
 
     IsolateHandle create_isolate(IsolateConfig config) {
         if (config.tenant_id.empty() || config.heap_limit_bytes == 0 ||
-            config.max_actors == 0)
+            config.max_actors == 0 || config.max_inflight_guest_calls == 0)
             throw std::invalid_argument("isolate requires an ID and positive quotas");
         if (config.mode != IsolateMode::TrustedInProcess)
             throw std::logic_error("sandboxed-process isolation is not implemented");
         std::lock_guard<std::mutex> lock(mutex_);
         if (isolates_.count(config.tenant_id))
             throw std::logic_error("tenant already has an isolate");
+        if (isolates_.size() >= limits_.max_tenants)
+            throw std::logic_error("OresVM tenant quota exhausted");
+        // Charge the entire declared logical heap limit at admission, not
+        // only current committed vector bytes. Prevent tenant overcommit.
+        if (config.heap_limit_bytes >
+            limits_.max_admitted_heap_bytes - admitted_heap_bytes_)
+            throw std::bad_alloc();
         if (next_generation_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("isolate generations exhausted");
         auto state = std::shared_ptr<IsolateVM>(new IsolateVM(std::move(config), next_generation_++));
         isolates_.emplace(state->config.tenant_id, state);
+        admitted_heap_bytes_ += state->config.heap_limit_bytes;
         return IsolateHandle(state);
     }
 
@@ -185,9 +197,13 @@ public:
             state = checked(handle);
             if (state->phase != IsolatePhase::Running)
                 throw std::logic_error("guest admission is closed");
-            if (state->active_guest_calls == std::numeric_limits<std::size_t>::max())
-                throw std::overflow_error("too many pinned guest invocations");
+            // Includes invocations waiting on guest_turn_mutex. Bound both
+            // per-tenant queues and the aggregate VM workload before pinning.
+            if (state->active_guest_calls >= state->config.max_inflight_guest_calls ||
+                pinned_guest_calls_ >= limits_.max_inflight_guest_calls)
+                throw std::logic_error("OresVM guest invocation budget exhausted");
             ++state->active_guest_calls;
+            ++pinned_guest_calls_;
         }
         struct GuestPin final {
             OresVM* vm;
@@ -195,6 +211,7 @@ public:
             ~GuestPin() noexcept {
                 std::lock_guard<std::mutex> lock(vm->mutex_);
                 --state->active_guest_calls;
+                --vm->pinned_guest_calls_;
             }
         } pin{this, state};
         // Pin queued turns, and recheck admission after waiting for the tenant.
@@ -257,6 +274,7 @@ public:
         std::fill(state->heap.begin(), state->heap.end(), 0);
         state->guest_globals.fill(0);
         isolates_.erase(state->config.tenant_id);
+        admitted_heap_bytes_ -= state->config.heap_limit_bytes;
     }
 
     IsolateSnapshot snapshot(const IsolateHandle& handle) const {
@@ -318,6 +336,9 @@ private:
     }
 
     mutable std::mutex mutex_;
+    const OresVmLimits limits_;
+    std::uint64_t admitted_heap_bytes_ = 0;
+    std::size_t pinned_guest_calls_ = 0;
     std::unordered_map<std::string, std::shared_ptr<IsolateVM>> isolates_;
     std::uint64_t next_generation_ = 1;
 };
