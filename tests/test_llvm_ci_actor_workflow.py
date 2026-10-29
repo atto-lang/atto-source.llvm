@@ -46,5 +46,27 @@ class CompiledActorWorkflowTests(unittest.TestCase):
                         names.index("Reverify compiler/source after compiled guest actor execution"))
 
 
+    def test_prebuild_checkout_requires_clean_and_no_ignored_source(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        start = source.index("      - name: Verify exact source revision\\n")
+        end = source.index("      - name: Reject malformed compiled actor workflow stages\\n", start)
+        self.assertLess(end, source.index("      - name: Configure\\n"))
+        segment = source[start:end]
+        for guard in (
+            'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"',
+            'test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"',
+            'git status --porcelain --untracked-files=no',
+            'test ! -e build',
+            'test ! -L build',
+            'git ls-files --others --exclude-standard',
+            'git ls-files --others --ignored --exclude-standard',
+        ):
+            self.assertIn(guard, segment)
+        self.assertLess(segment.index("git status --porcelain"), segment.index("test ! -e build"))
+        self.assertLess(segment.index("git ls-files --others --ignored"),
+                        source[end:].find("NONEXISTENT_MARKER")
+                        if False else len(source))
+
+
 if __name__ == "__main__":
     unittest.main()
