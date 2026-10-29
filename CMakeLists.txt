@@ -3275,6 +3275,8 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-owned-buffer-scheduler-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
     target_link_libraries(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
         Threads::Threads)
     target_compile_options(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
