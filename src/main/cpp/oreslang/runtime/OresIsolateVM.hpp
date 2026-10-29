@@ -23,6 +23,17 @@ struct IsolateConfig {
     std::uint32_t heap_limit_bytes = 0;
     std::uint32_t max_actors = 0;
     IsolateMode mode = IsolateMode::TrustedInProcess;
+    // Includes queued and currently executing trusted guest invocations.
+    // Bounded independently of actor admission; it is not a CPU-time limit.
+    std::size_t max_inflight_guest_calls = 64;
+};
+
+// OresVM host-level reservation and queue budgets. The heap budget charges
+// declared tenant heap limits, not measured resident/native process memory.
+struct OresVmLimits {
+    std::uint32_t max_tenants = 1024;
+    std::uint64_t max_admitted_heap_bytes = UINT64_C(1) << 32;
+    std::size_t max_inflight_guest_calls = 4096;
 };
 
 struct IsolateSnapshot {
