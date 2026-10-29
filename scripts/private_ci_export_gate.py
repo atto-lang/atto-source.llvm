@@ -15,6 +15,9 @@ REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
+MAX_POLICY_BYTES = 1024 * 1024
+
+
 class GateRejected(ValueError):
     pass
 
@@ -31,7 +34,11 @@ def _read(root: Path, name: str) -> str:
             raise GateRejected("policy path contains a symlink")
     if not current.is_file():
         raise GateRejected("required policy file missing")
-    return current.read_text(encoding="utf-8")
+    with current.open("rb") as stream:
+        data = stream.read(MAX_POLICY_BYTES + 1)
+    if len(data) > MAX_POLICY_BYTES:
+        raise GateRejected("policy file exceeds byte bound")
+    return data.decode("utf-8")
 
 
 def _unique_object(pairs):
@@ -41,6 +48,10 @@ def _unique_object(pairs):
             raise GateRejected("duplicate JSON policy key")
         result[key] = value
     return result
+
+
+def _reject_nonfinite(value):
+    raise GateRejected("non-finite JSON policy value")
 
 
 def _sha(value):
@@ -59,7 +70,7 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
     if not all(map(_sha, (base_sha, workflow_blob_sha, plan_blob_sha))):
         raise GateRejected("invalid immutable Git object SHA")
     for path in (workflow_path, plan_path):
-        if not isinstance(path, str) or path.startswith("/") or "\\" in path or any(
+        if not isinstance(path, str) or path.startswith("/") or "\\" in path or any(ord(ch) < 32 or ord(ch) == 127 for ch in path) or any(
                 x in ("", ".", "..") for x in path.split("/")):
             raise GateRejected("unsafe workflow or plan path")
 
@@ -76,8 +87,9 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
         raise GateRejected("destination not approved on protected main")
 
     contract = json.loads(_read(root, ".github/private-ci-carrier-contracts.json"),
-                          object_pairs_hook=_unique_object)
-    if contract.get("schema") != 1 or not isinstance(contract.get("carriers"), dict):
+                          object_pairs_hook=_unique_object, parse_constant=_reject_nonfinite)
+    if (type(contract.get("schema")) is not int or contract["schema"] != 1 or
+            not isinstance(contract.get("carriers"), dict)):
         raise GateRejected("invalid private carrier policy schema")
     carrier = contract["carriers"].get(destination)
     if not isinstance(carrier, dict):
@@ -93,6 +105,7 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
     if (not isinstance(plan, dict) or plan.get("blob_sha") != plan_blob_sha or
             not isinstance(plan.get("allowed_prs"), list) or
             any(type(x) is not int or x <= 0 for x in plan["allowed_prs"]) or
+            len(set(plan["allowed_prs"])) != len(plan["allowed_prs"]) or
             pr_number not in plan["allowed_prs"]):
         raise GateRejected("missing exact pinned test plan for PR")
 
