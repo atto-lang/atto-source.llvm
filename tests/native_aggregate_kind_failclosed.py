@@ -117,11 +117,18 @@ def main():
         control = control_dir / "scalar-positive.ores"
         control_bytes = ("pub fnc main(): int { return 42; }" + chr(10)).encode("utf-8")
         control.write_bytes(control_bytes)
-        control_result = subprocess.run([args.compiler, str(control)],
+        control_result = subprocess.run([str(compiler), str(control)],
                                         cwd=control_dir, capture_output=True,
                                         text=True, timeout=30)
         verify_scalar_positive_control("scalar-positive", control,
                                        control_bytes, control_result)
+        scalar_receipt = {
+            "id": "scalar-positive",
+            "verified": True,
+            "returnCode": control_result.returncode,
+            "sourceGitBlobSha1": git_blob_sha1(control_bytes),
+            "stdoutSha256": result_digest(control_result.stdout),
+        }
         workspace_sources = {"_positive_control": (control, control_bytes)}
         verify_isolated_workspace(root, workspace_sources)
         for name, source, expected in CASES:
