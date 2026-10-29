@@ -430,6 +430,55 @@ fn actor_persistent_fields(compiler: &Path, clang: &Path, root: &Path) -> Result
     Ok(())
 }
 
+fn private_ci_ores_projection(
+    compiler: &Path, clang: &Path, fixture: &Path
+) -> Result<(), String> {
+    // Compile and execute REAL Oreslang guest code. This models scalar
+    // fail-closed decisions only; it never authorizes an actual CI export.
+    let temp = TempDir::new("ores-private-ci-projection-")
+        .map_err(|e| e.to_string())?;
+    let ir = temp.path.join("projection.ll");
+    let binary = temp.path.join("projection");
+    let compiled = run(compiler, [
+        OsStr::new("--target=host"), fixture.as_os_str()
+    ])?;
+    require(
+        compiled.status.success(),
+        format!("Oreslang policy fixture rejected: {}", stderr(&compiled))
+    )?;
+    require(!compiled.stdout.is_empty(), "Oreslang emitted empty policy LLVM IR")?;
+    fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
+
+    let linked = Command::new(clang)
+        .arg("-O2")
+        .arg("-x")
+        .arg("ir")
+        .arg(&ir)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .map_err(|e| format!("run Clang on Oreslang policy IR: {e}"))?;
+    require(
+        linked.status.success(),
+        format!("cannot link policy fixture: {}", stderr(&linked))
+    )?;
+
+    let executed = Command::new(&binary)
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .output()
+        .map_err(|e| format!("execute native Oreslang policy projection: {e}"))?;
+    require(
+        executed.status.code() == Some(42),
+        format!(
+            "Oreslang policy projection returned {:?}, stderr={}",
+            executed.status.code(), stderr(&executed)
+        )
+    )?;
+    println!("native Oreslang private-CI scalar policy projection: PASS");
+    Ok(())
+}
+
 fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
     let contents = fs::read_to_string(vectors)
         .map_err(|e| format!("read {}: {e}", vectors.display()))?;
@@ -833,6 +882,12 @@ fn real_main() -> Result<(), String> {
             let clang = path_arg(&args, 3, "usage: actor-persistent-fields <compiler> <clang> <root>")?;
             let root = path_arg(&args, 4, "usage: actor-persistent-fields <compiler> <clang> <root>")?;
             actor_persistent_fields(&compiler, &clang, &root)
+        }
+        Some("private-ci-ores-projection") => {
+            let compiler = path_arg(&args, 2, "usage: private-ci-ores-projection <compiler> <clang> <fixture>")?;
+            let clang = path_arg(&args, 3, "usage: private-ci-ores-projection <compiler> <clang> <fixture>")?;
+            let fixture = path_arg(&args, 4, "usage: private-ci-ores-projection <compiler> <clang> <fixture>")?;
+            private_ci_ores_projection(&compiler, &clang, &fixture)
         }
         Some("tagged-message-wire") => {
             let binary = path_arg(&args, 2, "usage: tagged-message-wire <binary> <vectors>")?;
