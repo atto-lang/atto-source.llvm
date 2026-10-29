@@ -41,6 +41,9 @@ int main() {
     }
     assert(got.outcome == Sock::Outcome::Invalid);
     for (auto value : input) assert(value == 0x6b);
+    // The rejected datagram is consumed exactly once; no stale prefix or
+    // rejected packet may remain queued ahead of subsequent traffic.
+    assert(second.receive(input.data(), input.size()).outcome == Sock::Outcome::WouldBlock);
     // Boundary: the full 1350-byte datagram must survive untruncated.
     std::array<std::uint8_t, Sock::MaxDatagram> full{};
     full.fill(0xa5);
@@ -73,6 +76,18 @@ int main() {
     }
     assert(got.outcome == Sock::Outcome::Invalid);
     for (auto value : input) assert(value == 0x3c);
+    assert(second.receive(input.data(), input.size()).outcome == Sock::Outcome::WouldBlock);
+    // Recovery: an oversize rejection must not poison the socket or reorder
+    // the next valid datagram.
+    assert(first.send_to_loopback(second.port(), ping, sizeof ping) == Sock::Outcome::Ok);
+    for (int i=0; i<1000; ++i) {
+        got=second.receive(input.data(), input.size());
+        if (got.outcome != Sock::Outcome::WouldBlock) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(got.outcome == Sock::Outcome::Ok);
+    assert(got.size == sizeof ping && got.source_port == first.port());
+    for (std::size_t i=0; i<got.size; ++i) assert(input[i] == ping[i]);
     assert(::close(raw) == 0);
     first.close();
     assert(first.send_to_loopback(second.port(), ping, sizeof ping) == Sock::Outcome::Closed);
