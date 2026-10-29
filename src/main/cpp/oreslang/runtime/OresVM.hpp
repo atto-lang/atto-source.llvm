@@ -66,6 +66,17 @@ public:
         ActorTicket() = default;
     };
 
+    class ResourceTicket final {
+        friend class OresVM;
+        std::weak_ptr<IsolateVM> state_;
+        std::uint64_t generation_ = 0;
+        std::uint64_t resource_id_ = 0;
+        ResourceTicket(const std::shared_ptr<IsolateVM>& state, std::uint64_t id)
+            : state_(state), generation_(state->generation), resource_id_(id) {}
+    public:
+        ResourceTicket() = default;
+    };
+
     explicit OresVM(OresVmLimits limits = {}) : limits_(limits) {
         if (limits_.max_tenants == 0 || limits_.max_admitted_heap_bytes == 0 ||
             limits_.max_inflight_guest_calls == 0)
@@ -76,7 +87,8 @@ public:
 
     IsolateHandle create_isolate(IsolateConfig config) {
         if (config.tenant_id.empty() || config.heap_limit_bytes == 0 ||
-            config.max_actors == 0 || config.max_inflight_guest_calls == 0)
+            config.max_actors == 0 || config.max_inflight_guest_calls == 0 ||
+            config.max_resource_pins == 0)
             throw std::invalid_argument("isolate requires an ID and positive quotas");
         if (config.mode != IsolateMode::TrustedInProcess)
             throw std::logic_error("sandboxed-process isolation is not implemented");
@@ -177,7 +189,53 @@ public:
             actor.state_.lock() != state || it == state->actors.end() ||
             it->second != actor.actor_generation_)
             throw std::logic_error("stale or foreign actor ticket");
+        for (const auto& pin : state->resource_pins)
+            if (pin.second.actor_id == actor.id_ &&
+                pin.second.actor_generation == actor.actor_generation_)
+                throw std::logic_error("actor has outstanding native resource pins");
         state->actors.erase(it);
+    }
+
+    // A ticket must be released only after the underlying I/O registration,
+    // callback, continuation or mailbox loan has PHYSICALLY retired. This
+    // substrate cannot prove external retirement; native adapters must do so.
+    ResourceTicket pin_actor_resource(const IsolateHandle& handle,
+                                      const ActorTicket& actor,
+                                      IsolateResourceKind kind) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        const auto it = state->actors.find(actor.id_);
+        if (state->phase != IsolatePhase::Running ||
+            actor.state_.lock() != state || actor.generation_ != state->generation ||
+            it == state->actors.end() || it->second != actor.actor_generation_)
+            throw std::logic_error("resource pin admission denied or actor stale");
+        if (state->resource_pins.size() >= state->config.max_resource_pins)
+            throw std::logic_error("tenant resource pin quota exhausted");
+        if (state->next_resource_id == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("resource pin generations exhausted");
+        const auto id = state->next_resource_id++;
+        state->resource_pins.emplace(id, IsolateResourceRecord{
+            actor.id_, actor.actor_generation_, kind});
+        return ResourceTicket(state, id);
+    }
+
+    void retire_actor_resource(const IsolateHandle& handle,
+                               const ActorTicket& actor,
+                               const ResourceTicket& ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        const auto actor_it = state->actors.find(actor.id_);
+        const auto pin_it = state->resource_pins.find(ticket.resource_id_);
+        if ((state->phase != IsolatePhase::Running &&
+             state->phase != IsolatePhase::Quiescing) ||
+            actor.state_.lock() != state || actor.generation_ != state->generation ||
+            actor_it == state->actors.end() || actor_it->second != actor.actor_generation_ ||
+            ticket.state_.lock() != state || ticket.generation_ != state->generation ||
+            pin_it == state->resource_pins.end() ||
+            pin_it->second.actor_id != actor.id_ ||
+            pin_it->second.actor_generation != actor.actor_generation_)
+            throw std::logic_error("resource retirement denied or stale ticket");
+        state->resource_pins.erase(pin_it);
     }
 
     // Invoke precompiled native guest code with this isolate's pinned state.
@@ -260,7 +318,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Quiescing || !state->actors.empty() ||
-            state->active_guest_calls != 0)
+            state->active_guest_calls != 0 || !state->resource_pins.empty())
             throw std::logic_error("actor or guest invocation still active");
         state->phase = IsolatePhase::Stopped;
     }
@@ -282,7 +340,8 @@ public:
         auto state = checked(handle);
         return {state->config.tenant_id, state->generation, state->phase,
                 static_cast<std::uint32_t>(state->heap.size()),
-                state->actors.size(), state->active_guest_calls};
+                state->actors.size(), state->active_guest_calls,
+                state->resource_pins.size()};
     }
 
 private:
