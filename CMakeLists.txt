@@ -4476,6 +4476,8 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-native-batch-persistence-contract-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-native-batch-persistence-contract-test PRIVATE cxx_std_17)
+    find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-native-batch-persistence-contract-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-batch-persistence-contract-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_batch_persistence_host_only_contract
