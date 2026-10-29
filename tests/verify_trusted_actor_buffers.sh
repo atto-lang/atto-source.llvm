@@ -15,7 +15,14 @@ if [[ -n "${EXPECTED_SOURCE_HEAD:-}" && "$head" != "$EXPECTED_SOURCE_HEAD" ]]; t
   echo "FAIL: checkout HEAD $head differs from expected $EXPECTED_SOURCE_HEAD" >&2
   exit 2
 fi
-echo "SOURCE_HEAD=$head"
+tree="$(git rev-parse 'HEAD^{tree}')"
+# A token-free cross-org mirror normally creates a DIFFERENT commit SHA.
+# Validate immutable source-tree identity, not a guessed equivalent commit.
+if [[ -n "${EXPECTED_SOURCE_TREE:-}" && "$tree" != "$EXPECTED_SOURCE_TREE" ]]; then
+  echo "FAIL: checkout tree $tree differs from expected $EXPECTED_SOURCE_TREE" >&2
+  exit 2
+fi
+echo "SOURCE_HEAD=$head SOURCE_TREE=$tree"
 paths=(
   src/main/cpp/oreslang/runtime/TrustedActorBufferPool.hpp
   src/main/cpp/oreslang/runtime/TrustedActorBufferMailbox.hpp
@@ -25,6 +32,9 @@ paths=(
   tests/trusted_actor_buffer_mailbox_test.cpp
   tests/trusted_actor_buffer_scheduler_gate_test.cpp
   tests/trusted_actor_buffer_delivery_test.cpp
+  src/main/cpp/oreslang/runtime/NativeActorScheduler.h
+  src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+  tests/native_actor_owned_buffer_scheduler_test.c
 )
 for path in "${paths[@]}"; do
   expected="$(git rev-parse "HEAD:$path")"
@@ -65,4 +75,26 @@ for name in "${names[@]}"; do
   TSAN_OPTIONS=halt_on_error=1 "$tmp/${name}.tsan"
   echo "PASS GCC_TSAN ${name} HEAD=${head}"
 done
-echo "PASS HOST_ONLY_EXACT_HEAD=$head tests=12 guest_ores=NOT_TESTED"
+# Mixed scalar/owned-buffer DATA is exercised on the real C scheduler;
+# mock host ownership hooks are NOT a compiler-generated .ores guest.
+for compiler in gcc clang; do
+  command -v "$compiler" >/dev/null || { echo "missing compiler: $compiler" >&2; exit 2; }
+  "$compiler" -std=c11 -pthread -O1 -g -UNDEBUG \
+    -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined \
+    -fno-omit-frame-pointer -Isrc/main/cpp \
+    tests/native_actor_owned_buffer_scheduler_test.c \
+    src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+    -o "$tmp/native-actor-tagged.$compiler"
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 "$tmp/native-actor-tagged.$compiler"
+  echo "PASS ${compiler} NATIVE_TAGGED_ASAN_UBSAN HEAD=$head TREE=$tree"
+done
+gcc -std=c11 -pthread -O1 -g -UNDEBUG \
+  -Wall -Wextra -Wpedantic -Werror -fsanitize=thread \
+  -fno-omit-frame-pointer -Isrc/main/cpp \
+  tests/native_actor_owned_buffer_scheduler_test.c \
+  src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+  -o "$tmp/native-actor-tagged.tsan"
+TSAN_OPTIONS=halt_on_error=1 "$tmp/native-actor-tagged.tsan"
+echo "PASS gcc NATIVE_TAGGED_TSAN HEAD=$head TREE=$tree"
+echo "PASS HOST_ONLY_SOURCE_HEAD=$head SOURCE_TREE=$tree tests=15 guest_ores=NOT_TESTED"
