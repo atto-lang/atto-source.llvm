@@ -209,20 +209,27 @@ accepted=completed=5. Only after C's own STOP does it retire C's heap.
 This is stronger than mere logical actor-indexed state separation.
 
 A second isolated scheduler fixture also exercises **STOP without any prior
-WAKE**. The host DATA handler allocates a pinned C frame and retains its
-original DATA receipt. A supervisor seals STOP; the pre-reserved cleanup turn
-executes *compiled* Oreslang `guest_cleanup` under the authenticated actor
-lease, and the trusted host explicitly frees the pinned frame before
-returning a successful acknowledgement. The test checks the physical
-release flag, exact ticket and actor generation, one abandoned user message,
-zero processed messages, accepted=2, completed=1, no phantom supervisor
-CONTROL receipt and actual terminal/quiescence. Both paths run under the
-existing release and sanitizer CTest/Actions gate.
+WAKE**. The trusted host allocates a separate native `OresActorI64Heap`
+for this actor. The first DATA turn executes compiled `guest_step`, creates
+an owned heap slot, takes a shared loan, retains the original DATA receipt,
+and physically exits while the loan remains pinned. A supervisor seals STOP.
+The pre-reserved, authenticated actor cleanup turn re-enters that same heap,
+reads the pinned slot, and executes *compiled* Oreslang `guest_cleanup`.
+Only after that guest function exits does the trusted cleanup turn release
+the loan, leave/retire the arena and **physically destroy the native heap**.
+Only then may it acknowledge retained-DATA abandonment. The test checks exact
+ticket/generation, one cleanup turn, the physical release flag, one abandoned
+user message, zero processed messages, accepted=2, completed=1, no phantom
+supervisor CONTROL receipt and terminal/quiescence. Both paths are registered
+for release and ASan/UBSan exact-head CTest/Actions verification.
 
-The pinned frame and its drop are **host-managed** in this test. Calling
-a compiled guest function from trusted cleanup is not proof of compiler
-lowered defer/drop glue, actor heap segregation or source-level `suspends`.
-Those remain separate mandatory acceptance tests.
+The native heap and its loan/drop protocol are still **host-managed** in this
+test. This is evidence of the intended native runtime ownership boundary,
+NOT proof of compiler-lowered suspension, automatic generated defer/drop glue,
+or guest source-level actor isolation. In addition, the exact-head workflow
+now runs existing standalone native actor-heap misuse rejection and pinned
+continuation cancellation tests under GCC, Clang, and Clang ASan/UBSan. These
+checks must execute before any claim that the STOP/loan changes passed.
 
 A native C test runner cannot implement the Oreslang compiler's missing
 source-level actor continuation lowering. This gate therefore exercises
