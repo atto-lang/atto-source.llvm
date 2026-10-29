@@ -117,6 +117,46 @@ def local_header_closure(root, paths):
     return headers
 
 
+def verify_executed_blob_comparison(section, job):
+    """Require an executable, fail-fast Git blob equality guard per input.
+
+    Listing paths in a shell loop is insufficient if a later workflow edit
+    removes the comparison or converts it into an echo-only attestation.
+    """
+    marker = "for path in " + "\\" + "\n"
+    assert section.count(marker) == 1, f"{job}: missing/ambiguous blob loop"
+    prefix, tail = section.split(marker, 1)
+    assert "set -euo pipefail" in prefix, f"{job}: non-fail-fast verification"
+    assert 'git status --porcelain --untracked-files=all' in prefix, (
+        f"{job}: missing clean-checkout verification"
+    )
+    assert "persist-credentials: false" in prefix, (
+        f"{job}: checkout retained credentials"
+    )
+    assert "github.event.pull_request.head.sha || github.sha" in prefix, (
+        f"{job}: checkout not bound to immutable PR head"
+    )
+    assert "; do\n" in tail, f"{job}: blob loop has no body"
+    loop_body = tail.split("; do\n", 1)[1]
+    end = re.search(r"(?m)^[ \t]*done[ \t]*$", loop_body)
+    assert end, f"{job}: unterminated blob loop"
+    lines = {
+        line.strip() for line in loop_body[:end.start()].splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    direct = (
+        'test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"'
+    )
+    staged = {
+        'expected="$(git rev-parse "HEAD:$path")"',
+        'actual="$(git hash-object "$path")"',
+        'test "$actual" = "$expected"',
+    }
+    assert direct in lines or staged.issubset(lines), (
+        f"{job}: immutable blob equality check removed or disabled"
+    )
+
+
 def audit_selftest():
     directory = "src/main/cpp/oreslang/runtime"
     assert triggered(f"{directory}/added/new.hpp", [f"{directory}/**"])
@@ -126,6 +166,49 @@ def audit_selftest():
     assert not triggered("tests-fake/some_test.cpp", ["tests/**"])
     assert not triggered("tests/new/helper.hpp", ["tests/test_actor_ledger_workflow_inputs.py"])
     assert triggered("src/main/cpp/main.cpp", ["src/main/cpp/main.cpp"])
+    # Catch a workflow edit that lists inputs but removes hash comparison.
+    prefix = (
+        'persist-credentials: false\n'
+        'ref: github.event.pull_request.head.sha || github.sha\n'
+        'set -euo pipefail\n'
+        'test -z "$(git status --porcelain --untracked-files=all)"\n'
+        'for path in ' + '\\' + '\n'
+        'tests/fixture.c; do\n'
+    )
+    direct = (
+        '  test "$(git hash-object "$path")" = '
+        '"$(git rev-parse "HEAD:$path")"\n'
+    )
+    verify_executed_blob_comparison(
+        prefix + direct + 'done\n', 'selftest-direct'
+    )
+    staged = (
+        '  expected="$(git rev-parse "HEAD:$path")"\n'
+        '  actual="$(git hash-object "$path")"\n'
+        '  test "$actual" = "$expected"\n'
+    )
+    verify_executed_blob_comparison(
+        prefix + staged + 'done\n', 'selftest-staged'
+    )
+    try:
+        verify_executed_blob_comparison(
+            prefix.replace("set -euo pipefail", "set +e")
+            + direct + 'done\n',
+            'selftest-nonfailfast',
+        )
+    except AssertionError as exc:
+        assert "non-fail-fast" in str(exc)
+    else:
+        raise AssertionError("non-fail-fast blob verification not rejected")
+    try:
+        verify_executed_blob_comparison(
+            prefix + '  echo "EXACT_BLOB $path"\n' + 'done\n',
+            'selftest-no-comparison',
+        )
+    except AssertionError as exc:
+        assert "equality check" in str(exc)
+    else:
+        raise AssertionError("echo-only blob attestation not rejected")
     with tempfile.TemporaryDirectory(prefix="actor-ci-closure-") as temp:
         root = pathlib.Path(temp)
         main = "src/main/cpp/oreslang/demo/entry.cpp"
@@ -248,6 +331,7 @@ def check():
     all_inputs = set()
     for name in REQUIRED_JOBS:
         section = sections[name]
+        verify_executed_blob_comparison(section, name)
         loops = BLOB_LOOP.findall(section)
         assert len(loops) == 1, f"{name}: expected one exact-blob loop"
         declared_paths = INPUT.findall(loops[0])
