@@ -123,6 +123,12 @@ class ExecutionEvidenceTests(unittest.TestCase):
         with self.assertRaises(checker.EvidenceError):
             validate(run, jobs, required_steps=[])
 
+    def test_setup_or_cleanup_cannot_count_as_required_test(self):
+        run, jobs = fixture()
+        for name in ["Set up job", "Complete job", "Post Run actions/checkout@v4"]:
+            with self.assertRaisesRegex(checker.EvidenceError, "not test execution"):
+                validate(run, jobs, required_steps=[name])
+
     def test_cli_exit_codes_are_fail_closed(self):
         with tempfile.TemporaryDirectory() as d:
             run, jobs = fixture()
