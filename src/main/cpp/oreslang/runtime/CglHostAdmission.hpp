@@ -1,21 +1,31 @@
 #pragma once
 // Read-only Linux CGL host observation. NOT privileged RT admission or deadline proof.
 #include <cstddef>
-#include <fstream>
 #include <optional>
-#include <string>
 #ifdef __linux__
+#include <fcntl.h>
 #include <sched.h>
 #include <time.h>
+#include <unistd.h>
 #endif
 namespace oreslang::cgl {
 inline std::optional<bool> read_preempt_rt_flag(const char* path = "/sys/kernel/realtime") {
-    std::ifstream in(path);
-    std::string value;
-    std::string trailing;
-    if (!(in >> value) || (in >> trailing)) return std::nullopt;
-    if (value == "1") return true;
-    if (value == "0") return false;
+#ifdef __linux__
+    if (path == nullptr) return std::nullopt;
+    // A preflight must never hang on a FIFO, follow an attacker-supplied
+    // symlink or allocate unbounded memory while parsing a sysfs-shaped flag.
+    const int fd = ::open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return std::nullopt;
+    char raw[8]{};
+    const ssize_t n = ::read(fd, raw, sizeof(raw));
+    (void)::close(fd);
+    if (n == 1 || (n == 2 && raw[1] == '\n')) {
+        if (raw[0] == '1') return true;
+        if (raw[0] == '0') return false;
+    }
+#else
+    (void)path;
+#endif
     return std::nullopt;
 }
 struct HostProbe {
