@@ -147,6 +147,15 @@ def main():
         "source-actor-send-return-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-expression-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-class-value-reject.ores": "ownership violation: class is non-Copy",
+        # Native actor DATA is scalar i64 only. No owned array handle or
+        # borrowed reference may be silently reinterpreted as a scalar
+        # message until the typed buffer ABI and Sendable proof are lowered.
+        "source-actor-send-owned-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
+        "source-actor-send-borrowed-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
+        "source-actor-send-unmoved-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
         "source-actor-send-moved-class-field-reject.ores": "ownership violation: use-after-move class field",
         "source-actor-send-field-take-reject.ores": "ownership violation: use-after-move class field",
         # Explicitly refuse source contracts that need typed actor field
