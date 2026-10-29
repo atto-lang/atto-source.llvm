@@ -4,6 +4,7 @@ on:
     paths:
       - 'tests/fixtures/browser-aot-scalar-export.ores'
       - 'tests/browser_aot_scalar_export_host.c'
+      - 'scripts/test-host-export-harness.sh'
       - 'scripts/verify-browser-aot-scalar-export.sh'
       - '.github/workflows/browser-native-aot-export.yml'
       - 'src/main/cpp/oreslang/**'
@@ -19,6 +20,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Prove synthetic host harness rejects invalid exports (not Oreslang)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/test-host-export-harness.sh
+          bash -n scripts/verify-browser-aot-scalar-export.sh
+          bash scripts/test-host-export-harness.sh
       - name: Install native LLVM compiler dependencies
         run: |
           sudo apt-get update
