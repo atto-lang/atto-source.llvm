@@ -5025,6 +5025,29 @@ private:
                         throw std::runtime_error("unknown actor message receiver '" + send.reference + "'");
                     if (!live_actors.count(send.reference))
                         throw std::runtime_error("actor message sent after stop '" + send.reference + "'");
+                    // Actor DATA is still a scalar i64 ABI. A native Array<T>
+                    // owner is a bounded region handle, not an i64 message:
+                    // passing it through the scalar send ABI would allow
+                    // use-after-move, foreign-tenant aliasing and wrong drop.
+                    // Reject explicitly before ownership authorization or IR.
+                    const Expression* payload_place = send.payload.get();
+                    if ((payload_place->kind == Expression::Kind::Take ||
+                         payload_place->kind == Expression::Kind::Borrow ||
+                         payload_place->kind == Expression::Kind::BorrowMut ||
+                         payload_place->kind == Expression::Kind::Copy ||
+                         payload_place->kind == Expression::Kind::Share) &&
+                        payload_place->left)
+                        payload_place = payload_place->left.get();
+                    if (payload_place->kind == Expression::Kind::Variable) {
+                        const auto local = std::find_if(fn.locals.begin(), fn.locals.end(),
+                            [&](const LocalBinding& binding) {
+                                return binding.name == payload_place->name && binding.int_array;
+                            });
+                        if (local != fn.locals.end())
+                            throw std::runtime_error(
+                                "native actor Array<T> DATA send requires typed owned-buffer "
+                                "mailbox lowering; scalar i64 send forbidden");
+                    }
                     validate_expression(*send.payload, params, functions);
                 } else {
                     const auto& stop = fn.actor_stops.at(action.index);
