@@ -5,6 +5,7 @@
 #ifdef __linux__
 #include <fcntl.h>
 #include <sched.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #endif
@@ -16,6 +17,11 @@ inline std::optional<bool> read_preempt_rt_flag(const char* path = "/sys/kernel/
     // symlink or allocate unbounded memory while parsing a sysfs-shaped flag.
     const int fd = ::open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) return std::nullopt;
+    struct stat st{};
+    if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        (void)::close(fd);
+        return std::nullopt;
+    }
     char raw[8]{};
     const ssize_t n = ::read(fd, raw, sizeof(raw));
     (void)::close(fd);
