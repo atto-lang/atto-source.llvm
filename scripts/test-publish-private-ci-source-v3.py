@@ -83,6 +83,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             22: issue(22, 5832921751),
             77: issue(77, 5904679716),
             127: issue(127, 5935338521),
+            212: issue(212, 6087989978),
         }
 
         def api_for(values):
@@ -100,6 +101,19 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         opened = dict(good)
         opened[22] = issue(22, 5832921751, state="open", reason=None)
         cases.append(opened)
+        incident_212_open = dict(good)
+        incident_212_open[212] = issue(212, 6087989978, state="open", reason=None)
+        cases.append(incident_212_open)
+        incident_212_wrong_id = dict(good)
+        incident_212_wrong_id[212] = issue(212, 1)
+        cases.append(incident_212_wrong_id)
+        incident_212_wrong_url = dict(good)
+        incident_212_wrong_url[212] = issue(212, 6087989978,
+            url="https://github.com/other/repo/issues/212")
+        cases.append(incident_212_wrong_url)
+        incident_212_pr_object = dict(good)
+        incident_212_pr_object[212] = {**issue(212, 6087989978), "pull_request": {}}
+        cases.append(incident_212_pr_object)
         wrong_reason = dict(good)
         wrong_reason[77] = issue(77, 5904679716, reason="not_planned")
         cases.append(wrong_reason)
