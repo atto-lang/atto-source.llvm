@@ -120,6 +120,13 @@ def main():
         require(binary.exists() and binary.is_file(),
                 "required exact-head compiler or Clang missing: " + str(binary))
     compiler, clang = args.compiler.resolve(), args.clang.resolve()
+    compiler_digest, clang_digest = (
+        sha256(compiler.read_bytes()), sha256(clang.read_bytes()))
+    positive_names = [name for name, _, _ in POSITIVE]
+    negative_names = [name for name, _, _ in NEGATIVE]
+    require(len(positive_names) == 4 and len(negative_names) == 4 and
+            len(set(positive_names + negative_names)) == 8,
+            "aggregate executable acceptance requires four distinct positives and four distinct negatives")
     observations = []
     with tempfile.TemporaryDirectory(prefix="oreslang-native-aggregate-") as tmp:
         root = Path(tmp)
