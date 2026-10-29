@@ -42,6 +42,17 @@ int main() {
     assert(rejects([] { OresVM invalid(OresVmLimits{2, 0, 2}); }));
     assert(rejects([] { OresVM invalid(OresVmLimits{2, 32, 0}); }));
 
+    // An aggregate heap budget is independent of the tenant count limit.
+    OresVM heap_budget(OresVmLimits{3, 32, 1});
+    auto budget_a = heap_budget.create_isolate({"budget-a", 16, 1});
+    assert(rejects([&] { heap_budget.create_isolate({"budget-b", 17, 1}); }));
+    auto budget_b = heap_budget.create_isolate({"budget-b", 16, 1});
+    for (const auto& h : {budget_a, budget_b}) {
+        heap_budget.begin_shutdown(h);
+        heap_budget.complete_shutdown(h);
+        heap_budget.destroy(h);
+    }
+
     // Root heap reservations are charged at create time, not on allocation.
     // Rejection leaves no tenant admitted and destruction returns the charge.
     OresVM vm(OresVmLimits{2, 32, 2});
