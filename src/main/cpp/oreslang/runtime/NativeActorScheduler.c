@@ -88,6 +88,7 @@ struct OresNativeActorScheduler {
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
     OresNativeActorWakeFn wake_callback;
+    OresNativeBufferValidateFn buffer_validate;
     OresNativeBufferCommitFn buffer_commit;
     OresNativeBufferDeliverFn buffer_delivery;
     OresNativeBufferDiscardFn buffer_discard;
@@ -662,16 +663,18 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     return 1;
 }
 int ores_native_actor_scheduler_configure_owned_buffer(
-        OresNativeActorScheduler* s, OresNativeBufferCommitFn on_commit,
+        OresNativeActorScheduler* s, OresNativeBufferValidateFn on_validate,
+        OresNativeBufferCommitFn on_commit,
         OresNativeBufferDeliverFn on_delivery,
         OresNativeBufferDiscardFn on_discard) {
-    if (!s || !on_commit || !on_delivery || !on_discard) return 0;
+    if (!s || !on_validate || !on_commit || !on_delivery || !on_discard) return 0;
     lock(s);
     /* No callback can execute until all three ownership hooks are installed.
      * Callbacks are immutable after carrier/admission startup. */
     const int ok = !s->retired && !s->started_workers
         && !s->accepted && !s->outstanding && !s->buffer_delivery;
     if (ok) {
+        s->buffer_validate = on_validate;
         s->buffer_commit = on_commit;
         s->buffer_delivery = on_delivery;
         s->buffer_discard = on_discard;
@@ -772,10 +775,16 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_owned_buffer(
             || executing_actor.actor_slot != sender.actor_slot
             || executing_actor.generation != sender.generation
             || !matching(s, sender) || sender.actor_slot == recipient.actor_slot
-            || !s->buffer_commit || !s->buffer_delivery || !s->buffer_discard
-            || !ticket.tenant_epoch || !ticket.type_schema
+            || !s->buffer_validate || !s->buffer_commit
+            || !s->buffer_delivery || !s->buffer_discard) {
+        status = ORES_NATIVE_SEND_INVALID_REF;
+    } else if (!ticket.tenant_epoch || !ticket.type_schema
             || !ticket.buffer_id || !ticket.buffer_generation
-            || !matching(s, recipient)) {
+            || !s->buffer_validate(s->context, sender, ticket)) {
+        /* Invalid owner authority is NEVER reported as mailbox backpressure,
+         * termination or unknown recipient. No ownership mutation occurred. */
+        status = ORES_NATIVE_SEND_OWNERSHIP_REJECTED;
+    } else if (!matching(s, recipient)) {
         status = ORES_NATIVE_SEND_INVALID_REF;
     } else {
         ActorLane* lane = &s->actors[recipient.actor_slot];
