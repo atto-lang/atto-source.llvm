@@ -28,3 +28,23 @@ The exact-head source GitHub Actions workflow in this branch includes the new na
 ## Host adapter verification receipt (latest branch revision)
 
 The exact new source Git blob hashes are `TrustedActorBufferDelivery.hpp` **393621f5b4ade4793b12199de28b7a995f92115d** and `trusted_actor_buffer_delivery_test.cpp` **50fd602af4f6937074d5e98f0989f2c8cd5544a0**. Both matched local `git hash-object`. GCC and Clang C++17 `-Wall -Wextra -Wpedantic -Werror -UNDEBUG -fsanitize=address,undefined` with leak detection passed, and GCC ThreadSanitizer passed; the isolated 4-target CMake/CTest project passed 4/4. This is host-only evidence, not source `.ores` execution, exact-head repository build, or Actions certification.
+
+## 2026-10-29 audit: mailbox terminal ownership and runner security
+
+The earlier `TrustedActorBufferMailbox::close()` caught **every** pool-drop exception and discarded the associated queue handle. If a genuinely unexpected ownership mismatch occurred, cleanup would be silently incomplete. Terminal queue cleanup now checks that every queued handle still belongs to the receiver and has no outstanding read loans before publishing close. Borrowed unread DATA prevents queue closure without losing any slot. An unexpected failed drop is fatal unless the pool was already retired (and thus logically revoked the bytes). `close()` returns a success boolean and its destructor fails closed on a nonquiescent queue; the scheduler gate propagates a refused mailbox close rather than proceeding with retirement. **Only queued DATA** is checked by mailbox closure: a previously delivered actor-owned buffer belongs to the actor lifecycle gate, so its loan must not indefinitely block closure of an otherwise empty mailbox.
+
+The final changed exact Git blobs were confirmed by local `git hash-object`:
+- `TrustedActorBufferPool.hpp`: `aa15615d6b3eab092889e1645b6d834de26deb2c`
+- `TrustedActorBufferMailbox.hpp`: `133ebdf4200f3f33cc37cac1428c346e45446dcc`
+- `TrustedActorBufferSchedulerGate.hpp`: `e5d6a548442fe6856163ee064a9421aa8c620b97`
+- `tests/trusted_actor_buffer_mailbox_test.cpp`: `08ade147f78d8ec1fee1b08d3e5359037c6e6bb0`
+
+**Actually executed on the final native blobs:** fresh isolated CMake/CTest **4/4 passed**, GCC and Clang C++17 with `-Wall -Wextra -Wpedantic -Werror -UNDEBUG` + ASan/UBSan + leak detection **4/4 each passed**, GCC ThreadSanitizer **4/4 passed**. The first combined test command exhausted its overall command timeout while compiling its third TSan test; the two remaining TSan tests were compiled and executed separately and passed. No failures or races were reported in the completed executions. This is host-only evidence, **not** full LLVM-repository or compiled `.ores` test evidence.
+
+### Private runner mirror decision
+
+Source-branch `.github/private-ci-approved-repositories.txt` contains **zero approved private-source destination repositories** and requires security-owner/maintainer review on a protected branch. The related `.github/private-ci-carrier-contracts.json` pins specific carrier repository/workflow/test-plan blobs for older, unrelated PRs, not this integration head. This is a mandatory source-export gate even when the user authorizes a token-free cross-org mirror. Do **not** transfer the 1,315 source Git blobs to another org or treat a manually prepared temporary branch as authorized until the exact private destination is approved.
+
+Two candidate private carriers were checked read-only: `akrion-sim/akrion-sim-e2e` run `40812378019` and `opto-sync-test/go-java-validation` run `40919664446`. Their inspected failure jobs executed **zero steps**, so neither is verified to have available Actions execution capacity. No private source was exported to either organization. Exact per-blob/tree SHA mirroring can be performed only **after** an approved destination has been provisioned and a source-free canary confirms actual executed runner steps; it must preserve original source tree and blobs, use no cross-org secret/token checkout, and leave both the mirror and source PRs unmerged until full exact-head verification.
+
+Remaining blockers: source-level typed owned-buffer actor send/receive compiler lowering and actual scheduler envelope, real `.ores` execution, verified source CI/approved private runner, and Java/LLVM/other-backend conformance. Keep this PR **DRAFT**.
