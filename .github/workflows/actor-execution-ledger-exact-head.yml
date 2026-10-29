@@ -28,6 +28,7 @@ on:
       - src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
       - tests/source_actor_await_trace_runtime_test.c
       - tests/test_actor_ledger_workflow_inputs.py
+      - tests/**
       - tests/native_actor_execution_ledger_test.cpp
       - tests/native_actor_compiled_guest_ledger_bridge_test.c
       - tests/native_actor_compiled_guest_ledger.py
