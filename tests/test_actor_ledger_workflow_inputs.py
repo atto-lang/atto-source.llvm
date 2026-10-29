@@ -99,6 +99,10 @@ def local_header_closure(root, paths):
             if not candidate.exists():
                 if include.startswith("llvm/"):
                     continue  # SDK headers are not private repository inputs.
+                if owned:
+                    raise AssertionError(
+                        f"missing oreslang local include: {include}"
+                    )
                 raise AssertionError(
                     f"missing repository-local quoted include: {include}"
                 )
