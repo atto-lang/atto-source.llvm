@@ -4,6 +4,8 @@ on:
     paths:
       - scripts/private_ci_export_gate.py
       - tests/test_private_ci_export_gate.py
+      - scripts/publish-private-ci-source-v3.py
+      - scripts/test-publish-private-ci-source-v3.py
       - .github/private-ci-approved-repositories.txt
       - .github/private-ci-carrier-contracts.json
       - .github/workflows/private-ci-export-gate.yml
@@ -12,6 +14,8 @@ on:
     paths:
       - scripts/private_ci_export_gate.py
       - tests/test_private_ci_export_gate.py
+      - scripts/publish-private-ci-source-v3.py
+      - scripts/test-publish-private-ci-source-v3.py
       - .github/private-ci-approved-repositories.txt
       - .github/private-ci-carrier-contracts.json
       - .github/workflows/private-ci-export-gate.yml
@@ -45,3 +49,7 @@ jobs:
           PYTHONPATH: scripts
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -m unittest discover -s tests -p test_private_ci_export_gate.py -v
+      - name: Run authoritative V3 publisher negative/regression suite
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 scripts/test-publish-private-ci-source-v3.py -v
