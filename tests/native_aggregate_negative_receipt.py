@@ -75,7 +75,8 @@ def verify_negative_case(name: str, source: Path, original: bytes,
                          diagnostic: str, result) -> None:
     if type(result.returncode) is not int or result.returncode <= 0:
         raise AssertionError(f"{name}: compiler did not fail")
-    if diagnostic not in result.stderr:
+    diagnostic_token = r"(?<![A-Za-z0-9_])" + re.escape(diagnostic) + r"(?![A-Za-z0-9_])"
+    if re.search(diagnostic_token, result.stderr) is None:
         raise AssertionError(f"{name}: expected diagnostic {diagnostic!r} in stderr; "
                              f"got {result.stderr[:1200]!r}")
     if result.stdout.strip():
