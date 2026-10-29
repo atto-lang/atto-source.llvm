@@ -75,3 +75,20 @@ Local validation is limited to the self-contained preflight/host probe.
 Actual compiler execution on the exact PR Git tree, a real MontaVista/CGL
 image, PREEMPT_RT deadlines, and >24h telecom fault-soak remain UNVERIFIED
 until the named jobs record executed test steps on approved runners.
+
+## Executable-mapping and stack admission (2026-10-29)
+
+The ELF preflight rejects load segments carrying both PF_W and PF_X and any
+PT_GNU_STACK segment with PF_X set. This is a narrow fail-closed *file-level*
+security admission rule; it is **not** an enforcement of final process mappings,
+JIT mappings, dynamic loader behavior, dependency flags, memory permissions,
+or CGL real-time guarantees. The negative matrix includes writable/executable
+PT_LOAD and executable-stack fixtures as well as admitted RX/normal-stack
+controls. Inspect loaded shared libraries and actual `/proc/<pid>/maps` on
+the target image separately before production admission.
+
+The linked GitHub CI jobs must execute steps on the PR's exact head and record
+source SHA/tree provenance. Zero-step GitHub failures remain runner admission
+failures, not compiler test outcomes. Private-source mirroring remains blocked
+until the source policy explicitly approves an immutable private destination
+repository ID through independent security review.
