@@ -76,11 +76,14 @@ int main() {
     for (std::uint64_t i=0;i<64;++i) {
         const TrustedBufferActor dying{100+i, 1};
         pipe.admit(dying, 1);
-        auto source_turn = pipe.enter_turn(sender);
-        auto h = pipe.allocate(source_turn, 2);
-        pipe.write(source_turn, h, 0, 77);
+        auto setup_turn = pipe.enter_turn(sender);
+        auto h = pipe.allocate(setup_turn, 2);
+        pipe.write(setup_turn, h, 0, 77);
+        setup_turn.release();
         std::atomic<bool> go{false}, accepted{false};
         std::thread producer([&] {
+            // Physical scheduler-turn authority belongs to this carrier.
+            auto source_turn = pipe.enter_turn(sender);
             while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
             try {
                 pipe.send(source_turn, dying, h);
@@ -94,13 +97,14 @@ int main() {
         go.store(true, std::memory_order_release);
         producer.join();
         stop.join();
+        auto verify_turn = pipe.enter_turn(sender);
         if (accepted.load(std::memory_order_acquire)) {
-            assert(fails([&] { pipe.drop(source_turn,h); }));
+            assert(fails([&] { pipe.drop(verify_turn,h); }));
         } else {
-            pipe.write(source_turn,h,0,78);
-            pipe.drop(source_turn,h);
+            pipe.write(verify_turn,h,0,78);
+            pipe.drop(verify_turn,h);
         }
-        source_turn.release();
+        verify_turn.release();
         assert(pool->used_bytes() == 0);
     }
     pipe.retire(sender);
