@@ -97,6 +97,14 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             source.assert_not_called()
             api.assert_not_called()
 
+    def test_ref_api_helper_rejects_name_only_delete_without_cli(self):
+        with patch.object(v3, "run_bounded_gh") as runner:
+            with self.assertRaisesRegex(v3.Denied, "atomic lease"):
+                v3._gh_ref_request(
+                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT, "DELETE"
+                )
+            runner.assert_not_called()
+
     def test_matching_ref_never_triggers_unconditional_rest_delete(self):
         with (
             patch.object(v3, "live_ref_sha", return_value=CARRIER_COMMIT),
