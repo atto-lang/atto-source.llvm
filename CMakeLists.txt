@@ -362,15 +362,6 @@ if(BUILD_TESTING)
     # negatives. Each child has a 30-second cap. Per-case digest receipt
     # integration remains separately gated; this is not guest certification.
     set_tests_properties(native_aggregate_shape_compiler_failclosed PROPERTIES TIMEOUT 360)
-    # Actual .ores -> LLVM IR -> Clang -> native executable, plus pre-IR
-    # negative diagnostics. No skip-on-missing-toolchain behavior.
-    add_test(NAME native_aggregate_exact_struct_guest_execution
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_aggregate_positive_execution.py"
-            --compiler "$<TARGET_FILE:oreslang-llvmc>"
-            --clang "${ORE_SOURCE_I64_CLANG}")
-    set_tests_properties(native_aggregate_exact_struct_guest_execution
-        PROPERTIES TIMEOUT 180)
     # Independent source-free adversarial proof of the compiler-negative
     # evidence admission harness. Never substitute this for native compiler run.
     add_test(NAME native_aggregate_negative_receipt_harness
@@ -419,6 +410,15 @@ if(BUILD_TESTING)
         message(WARNING "Portable native i64 execution gate will fail: Clang not found")
         set(ORE_SOURCE_I64_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-source-i64-clang")
     endif()
+    # Actual .ores -> LLVM IR -> Clang -> native executable, plus pre-IR
+    # negative diagnostics. No skip-on-missing-toolchain behavior.
+    add_test(NAME native_aggregate_exact_struct_guest_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_aggregate_positive_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_aggregate_exact_struct_guest_execution
+        PROPERTIES TIMEOUT 180)
     add_test(NAME native_source_i64_os_exit_subset
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_i64_executable.py"
