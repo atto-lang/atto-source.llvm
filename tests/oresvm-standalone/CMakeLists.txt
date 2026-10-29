@@ -17,7 +17,7 @@ endif()
 set(ORE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 foreach(test IN ITEMS native_oresvm_isolate_test native_oresvm_guest_call_test
     native_oresvm_resource_admission_test native_oresvm_shutdown_race_test
-    native_oresvm_durable_queues_test)
+    native_oresvm_durable_queues_test native_durable_lock_queues_test)
     add_executable("${test}" "${ORE_ROOT}/tests/${test}.cpp")
     target_include_directories("${test}" PRIVATE "${ORE_ROOT}/src/main/cpp")
     target_compile_features("${test}" PRIVATE cxx_std_17)
