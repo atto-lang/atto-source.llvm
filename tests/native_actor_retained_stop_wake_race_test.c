@@ -125,9 +125,9 @@ static void target_stop_wake(void* raw,size_t actor,OresNativeWakeTicket ticket,
         f->scheduler,f->actors[0]));
     CHECK(ores_native_actor_scheduler_is_current_wake(f->scheduler,ticket));
     CHECK(ticket.slot_generation==f->ticket.slot_generation);
-    CHECK(ticket.target.scheduler_domain==f->actors[1].scheduler_domain);
-    CHECK(ticket.target.actor_slot==f->actors[1].actor_slot);
-    CHECK(ticket.target.generation==f->actors[1].generation);
+    CHECK(ticket.target.scheduler_domain==f->ticket.target.scheduler_domain);
+    CHECK(ticket.target.actor_slot==f->ticket.target.actor_slot);
+    CHECK(ticket.target.generation==f->ticket.target.generation);
     CHECK(ores_native_actor_scheduler_complete_retained_data(
         f->scheduler,f->retained));
     CHECK(!ores_native_actor_scheduler_complete_retained_data(
