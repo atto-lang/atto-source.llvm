@@ -22,10 +22,10 @@ root="$(git rev-parse --show-toplevel)" || fail 'no source checkout'
   fail 'Git source tree identity mismatch'
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] ||
   fail 'tracked source checkout modified'
-[[ -z "$(git ls-files --others --exclude-standard)" ]] ||
-  fail 'untracked checkout paths exist before build'
 [[ ! -e "$root/build" && ! -L "$root/build" ]] ||
   fail 'requires a fresh checkout with no preexisting build directory'
+[[ -z "$(git ls-files --others --exclude-standard)" ]] ||
+  fail 'untracked checkout paths exist before build'
 
 receipt_dir="$(mktemp -d "${TMPDIR:-/tmp}/ores-llvm-actor-receipt.XXXXXXXX")"
 trap 'rm -rf -- "$receipt_dir"' EXIT
