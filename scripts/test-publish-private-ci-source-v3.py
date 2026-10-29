@@ -159,7 +159,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "base_sha": BASE,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
-                         "test_plans": {
+                        "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
                                 "blob_sha": PLAN_BLOB,
                                 "allowed_prs": [669],
@@ -175,7 +175,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(got["repository_id"], 42)
         self.assertEqual(got["base_sha"], BASE)
         self.assertEqual(got["workflow_blob_sha"], WORKFLOW)
-         with self.assertRaisesRegex(v3.Denied, "not authorized"):
+        with self.assertRaisesRegex(v3.Denied, "not authorized"):
             v3.parse_contract(
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
             )
