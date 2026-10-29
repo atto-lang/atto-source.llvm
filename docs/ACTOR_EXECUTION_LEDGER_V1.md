@@ -174,6 +174,43 @@ this latest native source head** until a runner executes real compile/test
 steps. Scheduling four forced interleavings is not a proof of all possible
 interleavings or a hard-real-time WCET bound. The implementation remains draft.
 
+## Compiled native guest-segment bridge (intermediate, not actor-await lowering)
+
+`tests/fixtures/native-retained-guest-steps.ores` now contains three real
+Oreslang functions (`guest_step`, `guest_resume`, `main`). The CTest
+`source_actor_compiled_native_retained_guest_bridge` and its sanitizer variant
+run `oreslang-llvmc` on these exact source bytes, verify that the generated
+LLVM IR defines executable `i64` symbols and no tracing-GC calls, rename only
+the guest module's `main`, then link its native machine code with
+`NativeActorScheduler.c` and
+`tests/native_actor_compiled_guest_ledger_bridge_test.c`.
+
+A's first DATA executes compiled `guest_step`, reserves a Future WAKE and
+retains **A's original DATA receipt**. B remains queued, and actor C executes
+its own compiled guest step. Before WAKE, the bridge requires global accepted
+= 3 and completed = 1 (C only), A retained = 1 and B not executed. An
+authenticated WAKE executes compiled `guest_resume`, settles the original
+ticket exactly once, then the scheduler dispatches B to another authenticated
+DATA turn. Expected independent physical actor-state results: A = 1256, C = 9.
+After drain accepted = completed = 4; both actor terminal receipts reconcile.
+
+A native C test runner cannot implement the Oreslang compiler's missing
+source-level actor continuation lowering. This gate therefore exercises
+**actual compiled guest scalar code under trusted host DATA/WAKE control**, not
+a compiled `suspends on_message` state machine, source-level suspension
+frame ownership, or native actor heap allocation by the language compiler.
+The test explicitly checks that
+`source-actor-suspend-method-reject.ores` still fails closed with the existing
+unsupported-continuation diagnostic. When guest continuation lowering is
+implemented, replace that rejection guard with a genuinely compiled positive
+source-actor-await test and require correct guest-state physical reclamation.
+
+The additional `compiled-ores-guest` GitHub Actions job uses a private
+exact-PR-head checkout, checks source Git blobs, builds the actual LLVM
+compiler and executes 12 optimized and 3 sanitized isolated schedules.
+This is **defined CI**, not a claim of completed runs: GitHub runner admission
+and nonzero job steps must be verified on the final immutable head.
+
 ## Integration sequence
 
 - Connect an actor-owned ledger to the actual `NativeActorScheduler` lane/actor arena; authenticate every event/continuation token under the same physical actor claim; provide scheduler↔actor revision/slot accounting.
