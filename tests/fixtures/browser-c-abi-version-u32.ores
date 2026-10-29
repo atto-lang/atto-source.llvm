@@ -1,0 +1,5 @@
+// P0 C ABI contract: only compiled Oreslang source owns the version value.
+@CExportU32("ores_browser_abi_version")
+pub fnc browser_native_abi_v1(): int {
+  return 1;
+}
