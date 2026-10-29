@@ -324,6 +324,7 @@ jobs:
           set -euo pipefail
           echo "EXACT_GUEST_HEAD=$(git rev-parse HEAD)"
           echo "EXACT_GUEST_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test -z "$(git status --porcelain --untracked-files=all)"
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           fi
