@@ -105,6 +105,28 @@ class ExecutionEvidenceTests(unittest.TestCase):
         with self.assertRaises(checker.EvidenceError):
             validate(run, jobs)
 
+    def test_each_matrix_job_must_execute_required_test(self):
+        run, jobs = fixture()
+        second = copy.deepcopy(jobs["jobs"][0])
+        second["id"] = 9999
+        second["runner_id"] = 200
+        second["runner_name"] = "GitHub Actions 8"
+        second["steps"][1]["name"] = "Unrelated setup"
+        jobs["jobs"].append(second)
+        jobs["total_count"] = 2
+        with self.assertRaisesRegex(checker.EvidenceError, "each job"):
+            validate(run, jobs, expected_jobs=2)
+
+    def test_complete_matrix_with_distinct_runners_admits(self):
+        run, jobs = fixture()
+        second = copy.deepcopy(jobs["jobs"][0])
+        second["id"] = 9999
+        second["runner_id"] = 200
+        second["runner_name"] = "GitHub Actions 8"
+        jobs["jobs"].append(second)
+        jobs["total_count"] = 2
+        self.assertEqual(validate(run, jobs, expected_jobs=2)["jobs"], 2)
+
     def test_duplicate_job_ids_denied(self):
         run, jobs = fixture()
         jobs["jobs"].append(copy.deepcopy(jobs["jobs"][0]))
