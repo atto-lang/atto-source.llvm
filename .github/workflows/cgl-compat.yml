@@ -4,6 +4,8 @@ on:
     paths:
       - 'scripts/cgl-*'
       - 'scripts/compile-aot.sh'
+      - 'src/main/cpp/oreslang/**'
+      - 'tests/fixtures/**'
       - 'tests/test_cgl_preflight.py'
       - 'tests/native_cgl_host_admission_test.cpp'
       - 'tests/fixtures/forward-call-main.ores'
