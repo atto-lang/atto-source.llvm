@@ -14,6 +14,8 @@ template<class F> bool rejects(F&& f) {
 }
 static_assert(!std::is_constructible<TrustedActorBufferSchedulerGate::Turn,
     TrustedBufferActor>::value, "actor must not mint its own token");
+static_assert(!std::is_default_constructible<TrustedActorBufferSchedulerGate::Loan>::value,
+              "reader must not mint a borrow token");
 
 int main() {
     const TrustedBufferActor a{1,1}, b{2,1}, b2{2,2};
@@ -48,8 +50,18 @@ int main() {
     assert(rejects([&] {gate.retire_actor(b); }));
     auto from_a = gate.receive(tb);
     assert(gate.read(tb,from_a,0)==41);
-    auto loan = pool->borrow_read(from_a,b,a);
+    auto loan = gate.borrow_read(tb,a,from_a);
+    assert(rejects([&] {gate.borrow_read(tb,b2,from_a); })); // stale reader
     tb.release();
+    assert(!gate.close()); // loan alone pins tenant shutdown, no turn active
+    auto ta_reader = gate.enter_turn(a);
+    assert(gate.read_loan(ta_reader,loan,0)==41);
+    gate.register_actor({4,1},1);
+    auto wrong_reader = gate.enter_turn({4,1});
+    assert(rejects([&] {gate.read_loan(wrong_reader,loan,0); }));
+    wrong_reader.release();
+    gate.retire_actor({4,1});
+    ta_reader.release();
     assert(rejects([&] {gate.retire_actor(b); })); // owner loan pin
     assert(rejects([&] {gate.retire_actor(a); })); // reader loan pin
     // Refuse actor reincarnation while its old borrower loan is live.
