@@ -1,0 +1,5 @@
+// Must compile, then trap before LLVM sdiv by zero.
+pub fnc main(): int {
+  let int zero = 0;
+  return rt div_trunc_checked(42, zero);
+}
