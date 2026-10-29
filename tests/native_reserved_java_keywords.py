@@ -195,6 +195,31 @@ CASES = {
     ),
 }
 
+
+# Native imports are supported by this frontend. The reserved unsafe
+# stdlib must fail before any source graph resolution or LLVM IR emission.
+UNSAFE_IMPORT_PATHS = (
+    "ores.std/unsafe",
+    "ores.std/unsafe/ffi",
+    "std/unsafe",
+    "std/unsafe/native",
+    "ores.std.unsafe.memory",
+    "std.unsafe.ffi",
+    "ores.std:unsafe",
+    "std:unsafe.ffi",
+)
+for index, path in enumerate(UNSAFE_IMPORT_PATHS):
+    CASES[f"unsafe-stdlib-import-{index}"] = (
+        f'import module native_ops from "{path}"; pub fnc main():int{{return 42;}}',
+        "native unsafe standard-library import unavailable in guest domains",
+    )
+# The same import must not be disguised by a local module alias.
+CASES["unsafe-stdlib-import-alias"] = (
+    'import module ffi as innocuous from "ores.std/unsafe/ffi"; '
+    'pub fnc main():int{return 42;}',
+    "native unsafe standard-library import unavailable in guest domains",
+)
+
 # Bound native lexical admission consistently with Java/.NET/Forge.
 # The template lexer has a separate block-comment scanner.
 CASES.update({
