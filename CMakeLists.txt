@@ -2605,6 +2605,14 @@ if(BUILD_TESTING)
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}")
         set_tests_properties(native_colon_class_field_execution PROPERTIES TIMEOUT 120)
+        # Genuine source -> LLVM IR -> clang -> native exit, plus strict
+        # negative admission (no partial IR on unsafe initializer source).
+        add_test(NAME native_implicit_val_initialize_v1
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_implicit_val_initialize.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        set_tests_properties(native_implicit_val_initialize_v1 PROPERTIES TIMEOUT 180)
     endif()
     # Executable transfer + exact-once conditional owned-region drop flags.
     # Wasm has no native region ABI; unsafe transfers must reject with no IR.
