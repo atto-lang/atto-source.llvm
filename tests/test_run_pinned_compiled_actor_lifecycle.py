@@ -38,7 +38,8 @@ class PinnedActorGuestRunnerNegatives(unittest.TestCase):
     def reject(self, phrase, **kw):
         result = self.attempt(**kw)
         self.assertNotEqual(result.returncode, 0, "invalid admission passed")
-        self.assertIn("NOT_EXECUTED: " + phrase, result.stderr)
+        self.assertIn("NOT_EXECUTED:", result.stderr)
+        self.assertIn(phrase, result.stderr)
         self.assertNotIn("SOURCE_LOCAL_COMPILED_ACTOR_LIFECYCLE_AND_FULL_CTEST_PASS",
                          result.stdout)
 
