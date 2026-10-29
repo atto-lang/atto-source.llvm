@@ -203,7 +203,14 @@ cancel its old escrow and schedule a *new local cancellation wake* to unwind
 the retained frame; denying TRANSFER alone cannot complete a Future. The
 post-TRANSFER test verifies that the automatic typed cancellation callback
 settles the original retained DATA and that an old ticket cannot reclaim a
-recycled wake-credit generation. The previously existing 80 STOP/wake
+recycled wake-credit generation. The concurrently exercised version runs
+48 target STOP/PUBLISH interleavings on separate threads. Each case asserts
+exactly one producer wake outcome — PUBLISHED/READY if publication linearizes
+first or TARGET_RETIRED/CANCELLED if STOP linearizes first — no accepted
+target DATA receipt, no wake-credit leak and exact execution accounting.
+An outcome already published while the target was live is not retroactively
+rewritten by a later STOP; the producer wake is distinct from target delivery.
+The previously existing 80 STOP/wake
 interleavings for a same-actor target remain intact.
 
 These regression cases have been committed to the original private LLVM
