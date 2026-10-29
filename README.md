@@ -21,7 +21,7 @@ Notes on the compiler and runtime:
 
 **OresVM** is the root supervisor and tenant admission runtime; each **IsolateVM** is a tenant-owned execution domain containing many Oreslang actors. The OresIsolateContext is a temporary guest-call ABI view, not a separate VM. This distinction and the relevant V8 isolate/context, pointer-compression and security lessons are documented in [OresVM vs IsolateVM](docs/ORESVM_VS_ISOLATEVM.md).
 
-Current implementation is **host-only and incomplete**; per-tenant guest source lowering, actor scheduler integration and OS-process sandboxing remain outstanding. See [OresVM tenant-isolate substrate status](docs/ORESVM_TENANT_ISOLATES.md).
+The host uses a concrete, privately owned IsolateVM C++ class. There is also a narrow opt-in synchronous scalar .ores-to-LLVM isolate entry, but general guest source lowering, the actor scheduler and OS-process sandboxing remain outstanding. See [OresVM tenant-isolate substrate status](docs/ORESVM_TENANT_ISOLATES.md).
 
 **Parity commitment: LLVM and Java/GraalVM are first-class Oreslang backends with the same language and observable runtime semantics.** Full feature parity is a standing requirement for the compiler, type system, standard library, actors, supervision, ownership/borrowing, scheduling, async/await, I/O and error handling—not an optional stretch goal. Features added to either backend must be tracked against the other backend and covered by shared conformance tests. LLVM must not be treated as a permanently restricted dialect of Oreslang.
 
