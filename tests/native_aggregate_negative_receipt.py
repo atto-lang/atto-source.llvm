@@ -103,12 +103,12 @@ def verify_scalar_positive_control(name: str, source: Path, original: bytes,
         raise AssertionError(f"{name}: valid scalar control emitted stderr: "
                              f"{result.stderr[:1200]!r}")
     guest_body = re.search(
-        r"define\\s+i64\\s+@__oreslang_guest_main\\([^)]*\\)\\s*\\{([^}]*)\\}",
+        r"define\s+i64\s+@__oreslang_guest_main\([^)]*\)\s*\{([^}]*)\}",
         result.stdout, re.DOTALL)
     if (not result.stdout.startswith("; ModuleID") or
             guest_body is None or
             "define i32 @main(" not in result.stdout or
-            re.search(r"\\bret\\s+i64\\s+42\\b", guest_body.group(1)) is None):
+            re.search(r"\bret\s+i64\s+42\b", guest_body.group(1)) is None):
         raise AssertionError(f"{name}: valid scalar control did not emit expected 42 IR")
     if source.is_symlink() or not source.is_file() or source.read_bytes() != original:
         raise AssertionError(f"{name}: compiler mutated or replaced scalar control")
