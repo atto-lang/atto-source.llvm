@@ -1287,7 +1287,11 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         deleted = []
         contract, patches = self._publish_fixture(
             api,
+            # First pre-write admission and post-object attestation pass;
+            # the final pre-authorization recheck fails AFTER the inert
+            # source-bearing ref exists, exercising the rollback path.
             verify_source_pr=[
+                v3.SOURCE_REPO_ID,
                 v3.SOURCE_REPO_ID,
                 v3.Denied("PR head moved"),
             ],
