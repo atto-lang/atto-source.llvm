@@ -88,6 +88,11 @@ def main():
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
+            # Necessary compiler-side no-tracing-GC guard. This is not a
+            # linked-runtime/FFI closure audit or a timing qualification.
+            assert "@llvm.gcroot" not in guest.stdout, name
+            assert "@llvm.experimental.gc.statepoint" not in guest.stdout, name
+            assert 'gc "' not in guest.stdout, name
             if name not in {
                 "source-actor-spawn-stop.ores",
             }:
@@ -124,6 +129,12 @@ def main():
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
+            # The native bootstrap must finish physical group reclamation
+            # after every compiled guest actor has reached STOP.
+            reclaimed = [line for line in executed.stderr.splitlines()
+                         if "SOURCE_ACTOR_GROUP_VERIFIED" in line]
+            assert len(reclaimed) == 1, (name, reclaimed)
+            assert f"active=0 slots={actors}" in reclaimed[0], (name, reclaimed)
             for i, line in enumerate(lines):
                 assert "constructor_on_worker=1 released=1" in line, line
                 if name == "source-actor-interleaved-stop.ores":
