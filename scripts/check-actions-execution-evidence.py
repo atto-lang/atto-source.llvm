@@ -46,7 +46,7 @@ def verify(run, jobs_data, *, expected_sha, expected_run_id, expected_attempt,
             or not isinstance(jobs, list) or len(jobs) != expected_job_count):
         raise EvidenceError("job list incomplete, truncated, or unexpected matrix size")
     seen_ids = set()
-    successful_steps = set()
+    successful_steps = set(required_steps)
     for job in jobs:
         if not isinstance(job, dict):
             raise EvidenceError("job record not an object")
@@ -67,6 +67,7 @@ def verify(run, jobs_data, *, expected_sha, expected_run_id, expected_attempt,
         if not isinstance(steps, list) or not steps:
             raise EvidenceError("job has zero recorded execution steps")
         observed = set()
+        job_successful_steps = set()
         for step in steps:
             if not isinstance(step, dict) or not isinstance(step.get("name"), str):
                 raise EvidenceError("invalid step record")
@@ -77,10 +78,10 @@ def verify(run, jobs_data, *, expected_sha, expected_run_id, expected_attempt,
             if name in required_steps:
                 if step.get("status") != "completed" or step.get("conclusion") != "success":
                     raise EvidenceError("required step missing completed/success status: " + name)
-                successful_steps.add(name)
-    absent = set(required_steps) - successful_steps
-    if absent:
-        raise EvidenceError("required executed steps absent: " + ", ".join(sorted(absent)))
+                job_successful_steps.add(name)
+        absent = set(required_steps) - job_successful_steps
+        if absent:
+            raise EvidenceError("required executed steps absent from each job: " + ", ".join(sorted(absent)))
     return {"verdict": "executed_success", "head_sha": expected_sha,
             "run_id": expected_run_id, "attempt": expected_attempt,
             "jobs": len(jobs), "required_steps": sorted(successful_steps)}
