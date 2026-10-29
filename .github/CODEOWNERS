@@ -5,6 +5,9 @@
 /CMakeLists.txt @ORESoftware
 
 # Security review for all changes that can authorize private-source exports.
+/contracts/private-ci-authority-v1.json @ORESoftware
+/scripts/private_ci_authorization_oracle.py @ORESoftware
+/scripts/test_private_ci_authorization_oracle.py @ORESoftware
 /.github/CODEOWNERS @ORESoftware
 /.github/workflows/* @ORESoftware
 /.github/private-ci-approved-repositories.txt @ORESoftware
