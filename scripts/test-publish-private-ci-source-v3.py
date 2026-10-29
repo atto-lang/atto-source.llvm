@@ -790,6 +790,101 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "advanced beyond reviewed base"):
                 v3.checked_carrier_main("trusted/ci", carrier_contract())
 
+    def test_source_pr_requires_exact_head_independent_security_review(self):
+        pr = {
+            "number": 669, "state": "open", "draft": False,
+            "user": {"id": 424242, "login": "llvm-author"},
+            "head": {
+                "sha": "9" * 40,
+                "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
+            },
+            "base": {
+                "ref": v3.SOURCE_BRANCH,
+                "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
+            },
+        }
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}/pulls/669":
+                return pr
+            raise AssertionError(route)
+
+        approved = {"state": "APPROVED", "commit_id": "9" * 40}
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "_latest_review", return_value=approved) as review,
+        ):
+            self.assertEqual(v3.verify_source_pr(669, "9" * 40), v3.SOURCE_REPO_ID)
+            review.assert_called_once_with(
+                v3.SOURCE_REPO, 669, v3.CARRIER_REVIEW_USER_ID,
+                v3.CARRIER_REVIEW_LOGIN, "source PR",
+            )
+
+        for kind, field in (
+            ("head", "id"), ("base", "id"), ("head", "full_name"),
+            ("base", "full_name"),
+        ):
+            broken = json.loads(json.dumps(pr))
+            broken[kind]["repo"][field] = 777 if field == "id" else "other/repo"
+            with (
+                self.subTest(kind=kind, field=field),
+                patch.object(v3, "gh_api", return_value=broken),
+                patch.object(v3, "_latest_review") as review,
+            ):
+                with self.assertRaisesRegex(v3.Denied, "exact independently reviewable"):
+                    v3.verify_source_pr(669, "9" * 40)
+                review.assert_not_called()
+
+        for key, value in (("draft", True), ("state", "closed")):
+            broken = json.loads(json.dumps(pr))
+            broken[key] = value
+            with (
+                self.subTest(key=key),
+                patch.object(v3, "gh_api", return_value=broken),
+                patch.object(v3, "_latest_review") as review,
+            ):
+                with self.assertRaises(v3.Denied):
+                    v3.verify_source_pr(669, "9" * 40)
+                review.assert_not_called()
+
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "_latest_review",
+                         return_value={"state": "APPROVED", "commit_id": "8" * 40}),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "stale or revoked"):
+                v3.verify_source_pr(669, "9" * 40)
+
+    def test_per_write_authorization_rejects_mid_upload_policy_revocation(self):
+        contract = carrier_contract()
+        with (
+            patch.object(v3, "recheck_destination_identity") as destination,
+            patch.object(v3, "checked_carrier_main", return_value=BASE) as carrier,
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, contract)) as protected,
+            patch.object(v3, "verify_source_pr",
+                         return_value=v3.SOURCE_REPO_ID) as review,
+        ):
+            v3.authorize_source_write(
+                "trusted/ci", contract, 669, "9" * 40,
+                "ci/test-plans/llvm-pr669.json", PROTECTED
+            )
+            destination.assert_called_once_with("trusted/ci", contract)
+            carrier.assert_called_once_with("trusted/ci", contract)
+            protected.assert_called_once()
+            review.assert_called_once_with(669, "9" * 40)
+
+        with (
+            patch.object(v3, "recheck_destination_identity"),
+            patch.object(v3, "checked_carrier_main", return_value=BASE),
+            patch.object(v3, "protected_authority",
+                         return_value=("8" * 40, contract)),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "protected source authority changed"):
+                v3.authorize_source_write(
+                    "trusted/ci", contract, 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json", PROTECTED
+                )
+
     def test_exact_source_tree_reads_only_pinned_git_blobs(self):
         def api(route, method="GET", payload=None):
             if route == f"repos/{v3.SOURCE_REPO}/pulls/669":
@@ -826,7 +921,10 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 }
             raise AssertionError(route)
 
-        with patch.object(v3, "gh_api", side_effect=api):
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+        ):
             tree, files, rows, digest = v3.exact_source_tree(669, "9" * 40)
         self.assertEqual(tree, SOURCE_TREE)
         self.assertEqual(files, [("src/synthetic.cpp", "100644", BLOB, DATA)])
@@ -864,7 +962,10 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     }],
                 }
             raise AssertionError(route)
-        with patch.object(v3, "gh_api", side_effect=api):
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+        ):
             with self.assertRaisesRegex(v3.Denied, "file exceeds mirror limit"):
                 v3.exact_source_tree(669, "9" * 40)
         self.assertFalse(any("/git/blobs/" in route for route in seen))
@@ -902,7 +1003,10 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "content": base64.b64encode(DATA).decode(),
                 }
             raise AssertionError(route)
-        with patch.object(v3, "gh_api", side_effect=api):
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+        ):
             with self.assertRaisesRegex(v3.Denied, "size differs"):
                 v3.exact_source_tree(669, "9" * 40)
 
@@ -936,7 +1040,10 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     ],
                 }
             raise AssertionError(route)
-        with patch.object(v3, "gh_api", side_effect=api):
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+        ):
             with self.assertRaisesRegex(v3.Denied, "symlink"):
                 v3.exact_source_tree(669, "9" * 40)
         self.assertFalse(any("/git/blobs/" in route for route in seen))
@@ -979,7 +1086,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     manifest,
                 ),
             ),
-            patch.object(v3, "recheck_destination_identity"),
+            patch.object(v3, "authorize_source_write"),
             patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
             patch.object(v3, "verify_published_root_and_commit"),
             patch.object(v3, "require_handoff_refs_absent"),
@@ -1102,7 +1209,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     manifest,
                 ),
             ),
-            patch.object(v3, "recheck_destination_identity"),
+            patch.object(v3, "authorize_source_write"),
             patch.object(v3, "verify_published_root_and_commit"),
             patch.object(v3, "require_handoff_refs_absent"),
             patch.object(v3, "gh_api", side_effect=api),
