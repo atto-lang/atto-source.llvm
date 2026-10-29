@@ -18,9 +18,9 @@ an independently approved carrier have been established.
 | Visibility | Private (verify live before every write) |
 | Source PR | `#1126`, draft until executed CI and independent review |
 | Source PR head at proposal creation | `0bc88d079d78e15e3abfc946a8eb6f87d078e151` (historical, **not** current authorization) |
-| Latest reviewed-candidate actor head (2026-10-28/29) | `40ae15ac5fdfb52f3e83dd16aa5e92eb23832d9e` (**new head requires fresh immutable root-tree evidence and review**) |
-| Latest observed source PR head (2026-10-29 Git API; NOT approved) | `4517875ae1ce34ca4c2fc1d809c30daebb681ce2` |
-| Latest observed source root Git tree (2026-10-29 Git API; NOT approved) | `4e5c55bc00f4dbfddbd370a0b7e6cf1829724a44` |
+| Previously observed candidate actor head (historical; NOT approved) | `40ae15ac5fdfb52f3e83dd16aa5e92eb23832d9e` (superseded; no independent sign-off) |
+| Latest observed source PR head (2026-10-29 Git API; NOT approved) | `29798cab7d48f919a3672c9609dbbe977051cd64` |
+| Latest observed source root Git tree (2026-10-29 Git API; NOT approved) | `e2efa08d2122077ab975373c4a881b4329fcdc39` |
 | Source root Git tree independently approved | **NO — observed identity requires reviewer attestation and live recheck before export** |
 | Source `main` protection/ruleset proof | **DENY: GitHub branch API reports `protected:false`, required checks enforcement `off` (2026-10-29); protection endpoint returned 403 to GitHub App, so no additional rule attestation is available** |
 | Source main allowlist | **EMPTY — zero active destinations** |
@@ -56,6 +56,28 @@ re-reviewed, and attested again. A matching file list alone does not imply an
 identical Git tree. Treat mismatched root tree, blob, mode, commit, visibility or
 repository ID as a hard stop. The candidate test plan MUST NOT be loaded from a
 PR-controlled checkout as if it were the authority for its own export.
+
+### Runner admission re-probe and retained-source incidents (2026-10-29)
+
+On governance branch head `847cbac570f9dfb663cb8fe418bfaf59fe3ead15`,
+source-org source-free [run 40822470456, attempt 2](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40822470456/attempts/2)
+was **explicitly rerun** using GitHub Actions permissions. Its `runner-admission`
+job `123280013756` returned `runner_id:0`, `steps:[]`,
+`conclusion:failure`, with one check-run annotation. That annotation
+cannot be read through the available GitHub App endpoint; an administrator
+must inspect the job/check UI and report its literal error before inferring
+billing exhaustion or deciding any runner policy change. Logs were not
+available. Source-free status is an admission measurement only, not a
+compiler/actor test. See [runner issue #159](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/159).
+
+Independent [source retention incident #1150](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1150)
+is **open** and documents pre-existing cross-org private LLVM source-bearing
+test refs and incomplete Git-object/Actions retention disposition. Ref
+resets do not prove private blobs were purged. This independently vetoes
+fresh transfers until the security owner resolves incident disposition
+and confirms authorized retention, destination ACLs and full export gates.
+No source-bearing data was copied to investigate or reproduce the issue
+during this admission re-probe.
 
 ## 2. Known source-free capacity (NOT an approved source carrier)
 
