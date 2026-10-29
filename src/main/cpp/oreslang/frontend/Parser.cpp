@@ -3238,6 +3238,22 @@ private:
                 statement.kind = Statement::Kind::ScalarWrite;
                 statement.receiver = action->name; statement.expression = expression();
             } else if (action->kind == Expression::Kind::Field && accept("=")) {
+                // ActorRef identity conveys mailbox authority, not physical state
+                // read/write authority. Inspect the *typed source actor binding*
+                // before the generic nested-field error: this is an ownership
+                // denial, not merely an unsupported nested-assignment grammar.
+                if (action->left && action->left->kind == Expression::Kind::Field &&
+                        action->left->name == "state" && action->left->left &&
+                        action->left->left->kind == Expression::Kind::Variable) {
+                    const std::string& owner = action->left->left->name;
+                    const bool actor_ref = std::any_of(
+                        value.actor_spawns.begin(), value.actor_spawns.end(),
+                        [&](const ActorSpawnBinding& entry) {
+                            return entry.name == owner;
+                        });
+                    if (actor_ref)
+                        fail("FOREIGN_ACTOR_STATE_DENIED: ActorRef does not confer sealed state authority");
+                }
                 // No nested assignment may resolve through a flattened field.
                 if (!action->left || action->left->kind != Expression::Kind::Variable)
                     fail("native field assignment requires direct named class receiver");
@@ -4835,7 +4851,7 @@ private:
                             "actor state read loan requires state.read effect");
                     if (!loan.writes.empty())
                         throw std::runtime_error(
-                            "read-only actor state loan cannot mutate state");
+                            "WRITE_WITH_READ_LOAN_DENIED: read-only actor state loan cannot mutate state");
                 } else if (!method.declared_effects.has(FunctionEffect::StateWrite)) {
                     throw std::runtime_error(
                         "actor state write loan requires state.write effect");

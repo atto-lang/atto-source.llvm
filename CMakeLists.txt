@@ -1502,6 +1502,7 @@ if(BUILD_TESTING)
     # Fail closed: no generic unsupported-grammar rejection is a semantic PASS.
     oreslang_contract_test(native_canonical_sealed_two_actor_guest
         source-actor-sealed-state-contract-v2.ores
+        --experimental-owned-int
         --ir "call void @oreslang_source_actor_graceful_stop")
     oreslang_contract_test(native_canonical_foreign_state_semantic_denial
         source-actor-canonical-foreign-state-reject-v2.ores
