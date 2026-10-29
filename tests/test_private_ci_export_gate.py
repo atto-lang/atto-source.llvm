@@ -97,6 +97,11 @@ class ExportGateTest(unittest.TestCase):
                                "--pr", "1123"]), 1)
 
 
+    def test_nonobject_policy_rejected(self):
+        (self.root / ".github/private-ci-carrier-contracts.json").write_text(
+            "[]", encoding="utf-8")
+        self.check_rejected()
+
     def test_boolean_schema_rejected(self):
         self.data["schema"] = True  # bool == 1 in Python, but never a schema version
         self.write_contract()
