@@ -38,6 +38,45 @@ The canary does not allocate browser handles, emulate tabs in C, run an
 Oreslang actor, or imply browser functionality. A separately labeled synthetic
 IR probe can validate the C harness itself, but **cannot** satisfy step 2.
 
+### October 29 host audit and runner status
+
+The source-native LLVM test still has no executed Actions steps
+(latest known browser AOT run
+[#40957352865](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40957352865):
+`runner_id=0`, zero steps). **No guest compiler verdict exists.**
+
+The host acceptance program is covered by
+`scripts/test-host-export-harness.sh`. It compiles synthetic LLVM IR
+(not Oreslang), then asserts:
+- Valid exported `i64` probe is callable.
+- Wrong return value, absent symbol, forged browser ABI symbol, relative
+  library path, and corrupt library are all rejected.
+
+Local compilation and each positive/negative test executed. The tested
+synthetic-host script was verified byte-for-byte against Git blob
+`4d07e8d341fbd2ef9090cd5e0a2bc0ef446e2d4d`.
+
+The real-compiler acceptance script now requires a native ELF executable
+(`readelf`), a pinned compiler SHA256, exact clean checkout, strict Clang
+shared-library linking, and a **defined** text export on the built ELF
+(`nm -D --defined-only`). It rejects extra browser symbols both in the
+generated LLVM IR and in the linked library. A shell-script fake compiler
+was confirmed to fail this ELF gate locally. The successful standalone
+host harness checks only synthetic inputs and is not source execution.
+
+An ELF format check and SHA pin **cannot independently prove the compiler
+binary's provenance**: a deliberately malicious replacement ELF can still
+spoof an export. Production certification requires a separate trusted,
+verified build-from-exact-source attestation and actual native execution.
+
+The private alternate Actions candidate
+`usa-acc/usa-acc-e2e` executed its source-free C/Clang canary
+[run #40956752596](https://github.com/usa-acc/usa-acc-e2e/actions/runs/40956752596)
+with runner ID `1000001855` and four successful recorded steps.
+**No LLVM source was copied there.** The independent source-specific
+[approval issue #1172](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1172)
+is open; any cross-organization private tree transfer remains blocked.
+
 ### Required next compiler/runtime slices
 
 1. Introduce an *explicit* external C ABI declaration/export facility
