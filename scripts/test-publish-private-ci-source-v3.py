@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import importlib.util
 import json
+from contextlib import ExitStack
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -114,6 +115,23 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         incident_212_pr_object = dict(good)
         incident_212_pr_object[212] = {**issue(212, 6087989978), "pull_request": {}}
         cases.append(incident_212_pr_object)
+        incident_212_wrong_number = dict(good)
+        incident_212_wrong_number[212] = issue(211, 6087989978)
+        cases.append(incident_212_wrong_number)
+        incident_212_not_completed = dict(good)
+        incident_212_not_completed[212] = issue(
+            212, 6087989978, reason="not_planned"
+        )
+        cases.append(incident_212_not_completed)
+        incident_212_missing_reason = dict(good)
+        incident_212_missing_reason[212] = {
+            key: value for key, value in issue(212, 6087989978).items()
+            if key != "state_reason"
+        }
+        cases.append(incident_212_missing_reason)
+        incident_212_missing_response = dict(good)
+        incident_212_missing_response[212] = {}
+        cases.append(incident_212_missing_response)
         wrong_reason = dict(good)
         wrong_reason[77] = issue(77, 5904679716, reason="not_planned")
         cases.append(wrong_reason)
@@ -132,6 +150,96 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 with patch.object(v3, "gh_api", side_effect=api_for(values)):
                     with self.assertRaisesRegex(v3.Denied, "not independently completed"):
                         v3.require_incident_closure()
+
+    def test_incident_212_denies_before_protected_source_access(self):
+        with (
+            patch.object(
+                v3, "require_incident_closure",
+                side_effect=v3.Denied("incident #212 open"),
+            ) as incident_gate,
+            patch.object(v3, "authorized_source_main_sha") as source_main,
+            patch.object(v3, "remote_source_file") as source_file,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "incident #212 open"):
+                v3.protected_authority(
+                    "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
+                )
+        incident_gate.assert_called_once_with()
+        source_main.assert_not_called()
+        source_file.assert_not_called()
+
+    def test_incident_212_reopen_denies_ref_handoff_and_rolls_back(self):
+        for checkpoint, successful_authority_checks in (
+            ("before-first-ref", 1),
+            ("before-authorization", 2),
+        ):
+            with self.subTest(checkpoint=checkpoint):
+                writes = []
+                deleted = []
+
+                def api(route, method="GET", payload=None):
+                    writes.append((method, route, payload))
+                    if method == "POST" and route.endswith("/git/blobs"):
+                        data = base64.b64decode(payload["content"], validate=True)
+                        return {"sha": v3.git_blob_sha(data)}
+                    if method == "POST" and route.endswith("/git/trees"):
+                        return {
+                            "sha": (
+                                SOURCE_TREE if "base_tree" not in payload
+                                else "3" * 40
+                            )
+                        }
+                    if method == "POST" and route.endswith("/git/commits"):
+                        return {"sha": CARRIER_COMMIT}
+                    if method == "POST" and route.endswith("/git/refs"):
+                        return {
+                            "ref": payload["ref"],
+                            "object": {"sha": payload["sha"]},
+                        }
+                    raise AssertionError((method, route))
+
+                contract, patches = self._publish_fixture(
+                    api,
+                    delete_exact_ref=lambda *args: deleted.append(args) or True,
+                )
+                with ExitStack() as stack:
+                    mocks = [stack.enter_context(item) for item in patches]
+                    mocks[0].side_effect = (
+                        [(PROTECTED, contract)] * successful_authority_checks
+                        + [v3.Denied("incident #212 reopened")]
+                    )
+                    with self.assertRaisesRegex(
+                        v3.Denied, "incident #212 reopened"
+                    ):
+                        v3.publish(
+                            "trusted/ci", 669, "9" * 40,
+                            "ci/test-plans/llvm-pr669.json",
+                            now=dt.datetime(
+                                2026, 10, 20, tzinfo=dt.timezone.utc
+                            ),
+                        )
+                    self.assertEqual(
+                        mocks[0].call_count, successful_authority_checks + 1
+                    )
+
+                created_refs = [
+                    payload["ref"]
+                    for method, route, payload in writes
+                    if method == "POST" and route.endswith("/git/refs")
+                ]
+                expected_refs = (
+                    [] if successful_authority_checks == 1
+                    else ["refs/heads/ci/oreslang-" + SOURCE_TREE]
+                )
+                self.assertEqual(created_refs, expected_refs)
+                expected_deleted = (
+                    [] if successful_authority_checks == 1
+                    else [(
+                        "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                        CARRIER_COMMIT, contract["repository_id"],
+                    )]
+                )
+                self.assertEqual(deleted, expected_deleted)
 
     def test_allowlist_is_exact_and_fail_closed(self):
         v3.parse_allowlist(b"# x\ntrusted/ci\n", "trusted/ci")
