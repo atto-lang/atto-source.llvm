@@ -1,5 +1,7 @@
 # OresVM tenant-isolate substrate (native host prototype)
 
+**Architecture and terminology:** [OresVM vs IsolateVM (including V8 isolate lessons)](ORESVM_VS_ISOLATEVM.md) explains the root-host vs tenant VM vs actor responsibilities and separates V8 Isolates, V8 Contexts and OS sandboxing. The component named IsolateVM is a design-level concept; the current implementation uses OresVM's private tenant State, not a separately implemented IsolateVM type.
+
 **Status:** C++17 host-only substrate, not a guest-code VM, process sandbox,
 LLVM compiler lowering, production scheduler, or verified Java/GraalVM parity.
 
