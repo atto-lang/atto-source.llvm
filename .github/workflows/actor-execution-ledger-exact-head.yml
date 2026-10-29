@@ -2,11 +2,6 @@ name: Actor execution ledger exact-head
 on:
   pull_request:
     paths:
-      - src/main/cpp/oreslang/main.cpp
-      - src/main/cpp/oreslang/frontend/**
-      - src/main/cpp/oreslang/types/**
-      - src/main/cpp/oreslang/backend/**
-      - src/main/cpp/oreslang/runtime/**
       - src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
       - src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
@@ -23,12 +18,33 @@ on:
       - tests/pinned_actor_heap_suspend_test.cpp
       - src/main/cpp/oreslang/runtime/PinnedContinuationGate.hpp
       - src/main/cpp/oreslang/runtime/AsyncIoCompletionGate.hpp
+      - src/main/cpp/oreslang/runtime/**
+      - src/main/cpp/oreslang/runtime/NativeOresVM.c
+      - src/main/cpp/oreslang/runtime/NativeActorFuture.c
+      - src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+      - src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+      - src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+      - src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+      - src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+      - tests/source_actor_await_trace_runtime_test.c
+      - tests/test_actor_ledger_workflow_inputs.py
       - tests/native_actor_execution_ledger_test.cpp
       - tests/native_actor_compiled_guest_ledger_bridge_test.c
       - tests/native_actor_compiled_guest_ledger.py
       - tests/fixtures/native-retained-guest-steps.ores
       - tests/fixtures/source-actor-suspend-method-reject.ores
       - docs/ACTOR_EXECUTION_LEDGER_V1.md
+      - src/main/cpp/oreslang/main.cpp
+      - src/main/cpp/oreslang/frontend/Parser.cpp
+      - src/main/cpp/oreslang/frontend/ModuleLoader.cpp
+      - src/main/cpp/oreslang/frontend/MethodResolver.cpp
+      - src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+      - src/main/cpp/oreslang/types/OwnershipChecker.cpp
+      - src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+      - src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
+      - src/main/cpp/oreslang/frontend/**
+      - src/main/cpp/oreslang/types/**
+      - src/main/cpp/oreslang/backend/**
       - CMakeLists.txt
       - .github/workflows/actor-execution-ledger-exact-head.yml
   workflow_dispatch:
@@ -64,9 +80,6 @@ jobs:
             src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
-            src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h \
-            src/main/cpp/oreslang/runtime/NativeExecutionContext.h \
-            src/main/cpp/oreslang/runtime/NativePhysicalTurnGate.h \
             tests/native_actor_execution_ledger_test.cpp \
             tests/native_actor_ledger_scheduler_bridge_test.cpp \
             tests/native_actor_retained_data_stop_test.c \
@@ -78,9 +91,20 @@ jobs:
             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h \
             src/main/cpp/oreslang/runtime/PinnedContinuationGate.hpp \
             src/main/cpp/oreslang/runtime/AsyncIoCompletionGate.hpp \
+            src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionContext.h \
+            src/main/cpp/oreslang/runtime/NativePhysicalTurnGate.h \
+            src/main/cpp/oreslang/runtime/NativeOresVM.h \
+            src/main/cpp/oreslang/runtime/NativeCpuBudget.h \
+            src/main/cpp/oreslang/runtime/NativeActorFuture.h \
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.h \
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.h \
+            src/main/cpp/oreslang/runtime/NativeTraceSlotNamespace.h \
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.h \
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.h \
             tests/actor_owned_heap_lifecycle_test.cpp \
             tests/pinned_actor_heap_suspend_test.cpp \
-            tests/source_actor_await_trace_runtime_test.c \
             src/main/cpp/oreslang/runtime/NativeOresVM.c \
             src/main/cpp/oreslang/runtime/NativeActorFuture.c \
             src/main/cpp/oreslang/runtime/SourceActorBootstrap.c \
@@ -88,6 +112,8 @@ jobs:
             src/main/cpp/oreslang/runtime/NativeContinuationStore.c \
             src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c \
             src/main/cpp/oreslang/runtime/NativeLogicalTrace.c \
+            tests/source_actor_await_trace_runtime_test.c \
+            tests/test_actor_ledger_workflow_inputs.py \
             tests/native_actor_compiled_guest_ledger_bridge_test.c \
             tests/native_actor_compiled_guest_ledger.py \
             tests/fixtures/native-retained-guest-steps.ores \
@@ -97,6 +123,11 @@ jobs:
             test "$actual" = "$expected"
             echo "EXACT_BLOB $path $actual"
           done
+      - name: Assert immutable source-input coverage before native builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B tests/test_actor_ledger_workflow_inputs.py
       - name: GCC and Clang strict native execution
         shell: bash
         run: |
@@ -347,7 +378,6 @@ jobs:
               src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
               src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
               src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h \
-              CMakeLists.txt \
               src/main/cpp/oreslang/main.cpp \
               src/main/cpp/oreslang/frontend/Parser.cpp \
               src/main/cpp/oreslang/frontend/ModuleLoader.cpp \
@@ -355,7 +385,34 @@ jobs:
               src/main/cpp/oreslang/types/NativeScalarTypes.cpp \
               src/main/cpp/oreslang/types/OwnershipChecker.cpp \
               src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
-              src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp; do
+              src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp \
+              src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h \
+              src/main/cpp/oreslang/runtime/NativeExecutionContext.h \
+              src/main/cpp/oreslang/runtime/NativePhysicalTurnGate.h \
+              src/main/cpp/oreslang/backend/LlvmCodegen.hpp \
+              src/main/cpp/oreslang/backend/LlvmCompat.hpp \
+              src/main/cpp/oreslang/backend/NativeFlatClasses.hpp \
+              src/main/cpp/oreslang/frontend/CallableSelector.hpp \
+              src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp \
+              src/main/cpp/oreslang/frontend/LibraryProfile.hpp \
+              src/main/cpp/oreslang/frontend/MethodResolver.hpp \
+              src/main/cpp/oreslang/frontend/ModuleLoader.hpp \
+              src/main/cpp/oreslang/frontend/Parser.hpp \
+              src/main/cpp/oreslang/frontend/ProjectRootImport.hpp \
+              src/main/cpp/oreslang/frontend/SourceInput.hpp \
+              src/main/cpp/oreslang/runtime/CoreLog.hpp \
+              src/main/cpp/oreslang/runtime/TargetAbi.hpp \
+              src/main/cpp/oreslang/types/NativeClassLayout.hpp \
+              src/main/cpp/oreslang/types/NativeScalarTypes.hpp \
+              src/main/cpp/oreslang/types/NativeSumTypes.hpp \
+              src/main/cpp/oreslang/types/OwnershipCfg.hpp \
+              src/main/cpp/oreslang/types/OwnershipChecker.hpp \
+              src/main/cpp/oreslang/types/RealtimeAnalysis.hpp \
+              src/main/cpp/oreslang/types/FunctionEffects.hpp \
+              src/main/cpp/oreslang/types/FuturePipelineContract.hpp \
+              src/main/cpp/oreslang/types/NativeHasFutureContract.hpp \
+              src/main/cpp/oreslang/types/AutoTraitRules.hpp \
+              CMakeLists.txt; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
           done
       - name: Build real Oreslang LLVM compiler against installed LLVM
