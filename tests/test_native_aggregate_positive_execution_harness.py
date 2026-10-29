@@ -113,6 +113,47 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "lacks a guest-bound"):
             verify_native_entry_linkage(ir)
 
+    def test_unreachable_guest_block_after_constant_return_rejected(self):
+        # LLVM accepts this two-block module. The real OS exit is 19, while
+        # the guest returns 7; all apparent linkage lives in a dead block.
+        ir = (b"; ModuleID = 'dead-guest'\n"
+              b"define i64 @__oreslang_guest_main() {\nentry:\n ret i64 7\n}\n"
+              b"define i32 @main() {\nentry:\n ret i32 19\n"
+              b"decoy:\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %valid = icmp ule i64 %r, 255\n"
+              b" %narrowed = trunc i64 %r to i32\n"
+              b" %checked = select i1 %valid, i32 %narrowed, i32 1\n"
+              b" ret i32 %checked\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "exactly one OS return"):
+            verify_native_entry_linkage(ir)
+
+    def test_host_early_exit_call_cannot_bypass_guest_rejected(self):
+        # A prior call to exit(19) could hide the guest's actual result.
+        ir = (b"declare void @exit(i32)\n"
+              b"define i64 @__oreslang_guest_main() {\n ret i64 7\n}\n"
+              b"define i32 @main() {\n"
+              b" call void @exit(i32 19)\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %valid = icmp ule i64 %r, 255\n"
+              b" %narrowed = trunc i64 %r to i32\n"
+              b" %checked = select i1 %valid, i32 %narrowed, i32 1\n"
+              b" ret i32 %checked\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "exactly one guest call"):
+            verify_native_entry_linkage(ir)
+
+    def test_branched_native_wrapper_rejected_for_pure_fixtures(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 7\n}\n"
+              b"define i32 @main() {\n"
+              b" br label %entry2\nentry2:\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %valid = icmp ule i64 %r, 255\n"
+              b" %narrowed = trunc i64 %r to i32\n"
+              b" %checked = select i1 %valid, i32 %narrowed, i32 1\n"
+              b" ret i32 %checked\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "unsupported control flow"):
+            verify_native_entry_linkage(ir)
+
     def test_real_guest_status_accepted(self):
         observed = subprocess.CompletedProcess(["guest"], 19, b"", b"")
         verify_guest_process("named-source-order", observed, 19)
