@@ -173,5 +173,80 @@ class IsolatedWorkspaceTest(unittest.TestCase):
             verify_isolated_workspace(self.root, self.expected)
 
 
+
+class CompleteReceiptTest(unittest.TestCase):
+    """Negative-only receipts cannot claim missing cases or guest execution."""
+
+    def setUp(self):
+        self.compiler_digest = "a" * 64
+        self.control = {
+            "id": "scalar-positive", "verified": True, "returnCode": 0,
+            "sourceGitBlobSha1": git_blob_sha1(b"scalar source"),
+            "stdoutSha256": result_digest("valid scalar IR"),
+        }
+        self.expected = ["first", "second"]
+        self.cases = [
+            {"id": name, "verified": True, "returnCode": 1,
+             "diagnostic": "AGGREGATE_LOWERING_UNVERIFIED",
+             "sourceGitBlobSha1": git_blob_sha1(name.encode("utf-8")),
+             "stderrSha256": result_digest("expected failure")}
+            for name in self.expected
+        ]
+
+    def receipt(self):
+        return complete_negative_receipt(
+            self.compiler_digest, self.control, self.cases, self.expected)
+
+    def test_complete_receipt_has_negative_only_scope(self):
+        result = self.receipt()
+        self.assertEqual(result["executedNegativeCaseCount"], 2)
+        self.assertFalse(result["guestAggregateLoweringVerified"])
+        self.assertFalse(result["exactSourceProvenanceVerified"])
+
+    def test_missing_case_rejected(self):
+        self.cases.pop()
+        with self.assertRaisesRegex(AssertionError, "incomplete"):
+            self.receipt()
+
+    def test_swapped_case_order_rejected(self):
+        self.cases.reverse()
+        with self.assertRaisesRegex(AssertionError, "incomplete"):
+            self.receipt()
+
+    def test_duplicate_registry_rejected(self):
+        self.expected = ["first", "first"]
+        with self.assertRaisesRegex(AssertionError, "duplicate"):
+            self.receipt()
+
+    def test_invalid_compiler_digest_rejected(self):
+        self.compiler_digest = "f" * 63
+        with self.assertRaisesRegex(AssertionError, "compiler SHA-256"):
+            self.receipt()
+
+    def test_failed_scalar_control_rejected(self):
+        self.control["returnCode"] = 1
+        with self.assertRaisesRegex(AssertionError, "scalar"):
+            self.receipt()
+
+    def test_forged_case_verification_rejected(self):
+        self.cases[1]["verified"] = False
+        with self.assertRaisesRegex(AssertionError, "unverified"):
+            self.receipt()
+
+    def test_signal_killed_case_rejected(self):
+        self.cases[0]["returnCode"] = -9
+        with self.assertRaisesRegex(AssertionError, "unverified"):
+            self.receipt()
+
+    def test_invalid_blob_hash_rejected(self):
+        self.cases[0]["sourceGitBlobSha1"] = "bad"
+        with self.assertRaisesRegex(AssertionError, "unverified"):
+            self.receipt()
+
+    def test_missing_diagnostic_rejected(self):
+        self.cases[0]["diagnostic"] = ""
+        with self.assertRaisesRegex(AssertionError, "unverified"):
+            self.receipt()
+
 if __name__ == "__main__":
     unittest.main()
