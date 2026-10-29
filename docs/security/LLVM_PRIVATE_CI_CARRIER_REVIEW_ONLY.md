@@ -141,6 +141,16 @@ or on the **approved** private carrier only after the above authorization.
 - LLVM native exact-head [run 40813096713](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40813096713)
   failed both ledger and compiled guest jobs with **zero** steps. Do not
   classify this as a source regression or a successful compiler test.
+- Fresh **source-free** admission probe on this review PR:
+  [LLVM source-run #40814139647](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40814139647),
+  job `123251144798`: **failure before execution, zero recorded steps,
+  no assigned runner**. This workflow has `permissions: {}`, requires no
+  checkout, does not load/compile the private LLVM repository, uses no
+  secrets, and uploads nothing. The parallel ordinary LLVM compiler
+  [run #40814139498](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40814139498),
+  job `123251143511`, likewise recorded **zero steps**. This separates
+  admission failure from C/C++/LLVM compiler correctness, but cannot identify
+  the exact GitHub billing/policy/runner restriction without admin evidence.
 - [LLVM runner issue #159](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/159)
   requires an organization admin to inspect Actions billing/spending and
   actual runner-admission annotations and fix admission, not repeat reruns.
