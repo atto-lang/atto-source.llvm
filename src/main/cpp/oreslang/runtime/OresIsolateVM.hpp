@@ -17,12 +17,21 @@ namespace oreslang::runtime {
 // SandboxedProcess fails closed pending a separately supervised OS worker.
 enum class IsolateMode { TrustedInProcess, SandboxedProcess };
 enum class IsolatePhase { Created, Running, Quiescing, Stopped };
+// A resource ticket pins an actor incarnation until the native owner
+// confirms physical deregistration/retirement of the underlying operation.
+enum class IsolateResourceKind { Continuation, IoRegistration, Callback, MailboxLoan };
+struct IsolateResourceRecord {
+    std::uint64_t actor_id;
+    std::uint64_t actor_generation;
+    IsolateResourceKind kind;
+};
 
 struct IsolateConfig {
     std::string tenant_id;
     std::uint32_t heap_limit_bytes = 0;
     std::uint32_t max_actors = 0;
     IsolateMode mode = IsolateMode::TrustedInProcess;
+    std::uint32_t max_resource_pins = 1024;
     // Includes queued and currently executing trusted guest invocations.
     // Bounded independently of actor admission; it is not a CPU-time limit.
     std::size_t max_inflight_guest_calls = 64;
@@ -43,6 +52,7 @@ struct IsolateSnapshot {
     std::uint32_t used_bytes = 0;
     std::size_t active_actors = 0;
     std::size_t active_guest_calls = 0;
+    std::size_t active_resource_pins = 0;
 };
 
 // One concrete tenant-owned execution domain. OresVM is the sole constructor,
@@ -63,6 +73,8 @@ class IsolateVM final {
     std::vector<std::uint8_t> heap; // logical bounded tenant region
     std::unordered_map<std::uint64_t, std::uint64_t> actors;
     std::uint64_t next_actor_generation = 1;
+    std::uint64_t next_resource_id = 1;
+    std::unordered_map<std::uint64_t, IsolateResourceRecord> resource_pins;
     std::size_t active_guest_calls = 0;
     // Temporary serialized entry for trusted synchronous scalar guests.
     // This is not a production actor scheduler or per-actor concurrency gate.
