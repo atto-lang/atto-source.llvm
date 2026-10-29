@@ -89,14 +89,18 @@ public:
         if (!is_open()) return {Outcome::Closed, 0, 0};
         if (!output || capacity == 0 || capacity > MaxDatagram)
             return {Outcome::Invalid, 0, 0};
+        // Stage into a fixed-capacity private buffer. Invalid/truncated packets
+        // are consumed but never publish attacker-controlled prefixes into the
+        // caller's output buffer.
+        std::array<std::uint8_t, MaxDatagram> staged{};
         sockaddr_in sender{};
-        iovec data{output, capacity};
+        iovec data{staged.data(), staged.size()};
         msghdr message{};
         message.msg_name = &sender;
         message.msg_namelen = sizeof(sender);
         message.msg_iov = &data;
         message.msg_iovlen = 1;
-        // MSG_TRUNC returns real UDP datagram length on Linux. Oversize
+        // MSG_TRUNC returns the real UDP datagram length on Linux. Oversize
         // packets are consumed and rejected rather than accepted truncated.
         const auto bytes = ::recvmsg(descriptor_, &message, MSG_DONTWAIT | MSG_TRUNC);
         if (bytes < 0) {
@@ -107,8 +111,10 @@ public:
         if (message.msg_namelen != sizeof(sender) || sender.sin_family != AF_INET ||
             ntohl(sender.sin_addr.s_addr) != INADDR_LOOPBACK || ntohs(sender.sin_port) == 0 ||
             (message.msg_flags & MSG_TRUNC) ||
+            static_cast<std::size_t>(bytes) > staged.size() ||
             static_cast<std::size_t>(bytes) > capacity || bytes == 0)
             return {Outcome::Invalid, 0, 0};
+        std::memcpy(output, staged.data(), static_cast<std::size_t>(bytes));
         return {Outcome::Ok, static_cast<std::size_t>(bytes), ntohs(sender.sin_port)};
     }
 };
