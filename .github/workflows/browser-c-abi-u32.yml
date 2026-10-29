@@ -1,0 +1,48 @@
+name: Browser exact-width u32 C export (native Oreslang, not tabs)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/fixtures/browser-c-abi-version-u32*.ores'
+      - 'tests/browser_c_abi_u32_host.c'
+      - 'scripts/verify-browser-c-abi-u32.sh'
+      - '.github/workflows/browser-c-abi-u32.yml'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compiled-oreslang-c-u32:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Native toolchain dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev clang cmake ninja-build binutils
+      - name: Build genuine LLVM compiler outside Git checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/browser-u32-compiler" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build "$RUNNER_TEMP/browser-u32-compiler" \
+            --target oreslang-llvmc --parallel 2
+      - name: Compile guest and run exact-width u32 host and negatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          export EXPECTED_SOURCE_SHA="$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          export ORESLANG_LLVMC="$RUNNER_TEMP/browser-u32-compiler/oreslang-llvmc"
+          export ORESLANG_COMPILER_SHA256="$(sha256sum "$ORESLANG_LLVMC" | cut -d ' ' -f1)"
+          bash -n scripts/verify-browser-c-abi-u32.sh
+          bash scripts/verify-browser-c-abi-u32.sh
