@@ -47,6 +47,21 @@ int main() {
   int status=0;assert(::waitpid(pid,&status,0)==pid);
   assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);
   assert(!store.claim_once(killed));
+  // HostGate -> durable store integration. The second process-equivalent gate
+  // cannot submit the same logical effect, even with a different digest.
+  auto integrated=request("integrated");
+  int sends=0;
+  TrustedHost callbacks{
+    [](const Scope&){return true;}, [](const Scope&){return true;},
+    [&](const Scope& item){return store.claim_once(item);},
+    [&](const Scope&){sends++;return true;},
+    [](){return std::uint64_t{9000};}};
+  HostGate first("tenant","worker",7,9,std::string(40,'a'),100);
+  assert(first.dispatch(integrated,callbacks,9000));
+  HostGate second("tenant","worker",7,9,std::string(40,'a'),100);
+  integrated.context_sha256=std::string(64,'c');
+  assert(!second.dispatch(integrated,callbacks,9000));
+  assert(sends==1);
   // Owner-only private root is mandatory.
   assert(::chmod(dir.c_str(),0755)==0);
   assert(!store.claim_once(request("insecure-dir")));
