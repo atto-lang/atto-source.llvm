@@ -1,15 +1,14 @@
-; Handwritten LLVM IR for native OresVM ABI smoke.
-; This is NOT .ores source lowering.
+; Test-only hand-written LLVM IR. ABI v2 status/out-value, not .ores lowering.
 %OresIsolateContext = type { i32, i32, i64, ptr, ptr, ptr }
 
-define i64 @guest_counter_llvm(ptr %ctx, i64 %delta) {
+define i32 @guest_counter_llvm(ptr %ctx, i64 %delta, ptr %out) {
 entry:
   %vp = getelementptr inbounds %OresIsolateContext, ptr %ctx, i32 0, i32 0
   %version = load i32, ptr %vp, align 4
-  %compatible = icmp eq i32 %version, 1
+  %compatible = icmp eq i32 %version, 2
   br i1 %compatible, label %call_load, label %invalid_version
 invalid_version:
-  ret i64 -1
+  ret i32 1
 call_load:
   %data_ptr = getelementptr inbounds %OresIsolateContext, ptr %ctx, i32 0, i32 3
   %data = load ptr, ptr %data_ptr, align 8
@@ -20,7 +19,7 @@ call_load:
   %valid = icmp eq i32 %ok, 1
   br i1 %valid, label %call_store, label %invalid_load
 invalid_load:
-  ret i64 -2
+  ret i32 2
 call_store:
   %value = load i64, ptr %old, align 8
   %next = add i64 %value, %delta
@@ -30,7 +29,8 @@ call_store:
   %ok_store = icmp eq i32 %stored, 1
   br i1 %ok_store, label %success, label %invalid_store
 invalid_store:
-  ret i64 -3
+  ret i32 3
 success:
-  ret i64 %next
+  store i64 %next, ptr %out, align 8
+  ret i32 0
 }
