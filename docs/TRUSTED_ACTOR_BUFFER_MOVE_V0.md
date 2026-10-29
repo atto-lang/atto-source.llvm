@@ -39,3 +39,17 @@ It checks invalid actors, memory/slot quotas, byte bounds, foreign pool, wrong o
 The test additionally instruments global C++ `operator new` during a controlled pure-ownership-move loop: the hot `take` path must allocate no heap objects via global `new`. This does **not** establish zero allocations in all runtime paths, zero syscalls, zero GC, or zero payload-copy for a complete actor message.
 
 Release gates: compile and run exact-branch CTest with both GCC and Clang, ASan+UBSan+TSan where supported, then link a true compiled `.ores` actor-send fixture. Add failure injection at mailbox reserve and cancellation publication. Require measured payload-copy counts, allocations, message p50/p99, memory budget and cancellation linearizability before declaring a source-language zero-copy feature.
+
+## Added bounded DATA mailbox host integration
+
+`TrustedActorBufferMailbox.hpp` now has a preallocated ring of buffer tickets, one trusted recipient identity, an explicit close barrier and a strong pool-lifetime reference.
+
+- `send` locks the publication boundary and rejects closed/full queues **before** calling `pool.take`. A rejected send cannot consume the sender's ownership.
+- Accepted sends do not allocate or copy payload bytes after the mailbox has been created. A C++ static assertion requires the handle move assignment/publication to be noexcept.
+- `receive` is restricted to the expected actor incarnation; a wrong-generation recipient cannot dequeue DATA.
+- `close` atomically closes admission then retires unreceived receiver-owned buffers. A racing send is either rejected while the sender retains ownership or accepted and reclaimed by close; there is no split publication.
+- This is a host-only immediate-admission DATA queue, **not** async mailbox backpressure/futures, compiler-lowered actor messaging, a hardened actor-tick security boundary, or a cross-tenant queue.
+
+CTest: `native_trusted_actor_buffer_mailbox` covers full-mailbox rollback, borrowed-buffer send rejection, stale handle checks, 10,000 forward/back moves, wrong actor incarnation, queued teardown, and 64 concurrent close/send races. The exact Git blob header and test both compiled and passed locally with GCC and Clang, including ASan+UBSan+leak checking; this is still not full source-org CI acceptance.
+
+**Remaining highest-priority gate:** the authenticated scheduler must mint actor-incarnation authority and bind the mailbox to a real target registration. Add source-compiled `.ores` `rt take` sends, cancellation/STOP, multi-producer fairness, bounded await continuations and endpoint lifetime pinning before exposing this component as a language feature.
