@@ -105,7 +105,8 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
         if (not isinstance(path, str) or not path.startswith(prefix)
                 or not path.endswith(suffix) or path.startswith("/")
                 or not re.fullmatch(r"[A-Za-z0-9._/-]+", path)
-                or any(segment in ("", ".", "..", ".git")
+                or path[len(prefix):] == suffix
+                or any(segment in ("", ".", "..") or segment.casefold() == ".git"
                        for segment in path.split("/"))):
             raise GateRejected("unsafe workflow or plan path")
 
@@ -124,9 +125,9 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
     contract = json.loads(_read(root, ".github/private-ci-carrier-contracts.json"),
                           object_pairs_hook=_unique_object, parse_constant=_reject_nonfinite,
                           parse_float=_finite_float)
-    if (not isinstance(contract, dict) or type(contract.get("schema")) is not int or
-            contract["schema"] != 1 or
-            not isinstance(contract.get("carriers"), dict)):
+    if (not isinstance(contract, dict) or set(contract) != {"schema", "carriers"}
+            or type(contract.get("schema")) is not int or contract["schema"] != 1
+            or not isinstance(contract.get("carriers"), dict)):
         raise GateRejected("invalid private carrier policy schema")
     # GitHub repository identities are case-insensitive. Reject ambiguous
     # contracts instead of letting JSON insertion order select an identity.
@@ -138,6 +139,15 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
     carrier = contract["carriers"].get(destination)
     if not isinstance(carrier, dict):
         raise GateRejected("missing exact destination contract")
+    required_carrier_fields = {
+        "repository_id", "base_sha", "workflow_path", "workflow_blob_sha", "test_plans"
+    }
+    if (not required_carrier_fields.issubset(carrier)
+            or not set(carrier).issubset(required_carrier_fields | {"review_pr"})):
+        raise GateRejected("unexpected or missing carrier contract fields")
+    if "review_pr" in carrier and (type(carrier["review_pr"]) is not int
+                                    or carrier["review_pr"] <= 0):
+        raise GateRejected("invalid carrier independent-review PR number")
     if (type(carrier.get("repository_id")) is not int or
             carrier["repository_id"] != repository_id or
             carrier.get("base_sha") != base_sha or
@@ -146,7 +156,8 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
         raise GateRejected("carrier identity/workflow pin mismatch")
     plans = carrier.get("test_plans")
     plan = plans.get(plan_path) if isinstance(plans, dict) else None
-    if (not isinstance(plan, dict) or plan.get("blob_sha") != plan_blob_sha or
+    if (not isinstance(plan, dict) or set(plan) != {"blob_sha", "allowed_prs"}
+            or plan.get("blob_sha") != plan_blob_sha or
             not isinstance(plan.get("allowed_prs"), list) or
             any(type(x) is not int or x <= 0 for x in plan["allowed_prs"]) or
             len(set(plan["allowed_prs"])) != len(plan["allowed_prs"]) or
