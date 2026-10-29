@@ -1,9 +1,8 @@
 # OresVM tenant-isolate substrate (native host prototype)
 
-**Architecture and terminology:** [OresVM vs IsolateVM (including V8 isolate lessons)](ORESVM_VS_ISOLATEVM.md) explains the root-host vs tenant VM vs actor responsibilities and separates V8 Isolates, V8 Contexts and OS sandboxing. The component named IsolateVM is a design-level concept; the current implementation uses OresVM's private tenant State, not a separately implemented IsolateVM type.
+**Architecture and terminology:** [OresVM vs IsolateVM (including V8 isolate lessons)](ORESVM_VS_ISOLATEVM.md) explains the root-host vs tenant VM vs actor responsibilities and separates V8 Isolates, V8 Contexts and OS sandboxing. IsolateVM is now a concrete noncopyable C++ tenant-state type, privately constructed and managed by OresVM. It is not yet an autonomous scheduler or OS sandbox.
 
-**Status:** C++17 host-only substrate, not a guest-code VM, process sandbox,
-LLVM compiler lowering, production scheduler, or verified Java/GraalVM parity.
+**Status:** C++17 native host prototype with one experimental scalar source-to-LLVM guest entry. It is not a complete guest VM, process sandbox, production actor scheduler or verified Java/GraalVM parity.
 
 ## Shape and intended hierarchy
 
@@ -15,10 +14,11 @@ LLVM compiler lowering, production scheduler, or verified Java/GraalVM parity.
 - **Actors** live inside exactly one tenant isolate, with their own
   ownership arenas and generation-fenced state/messaging.
 
-The current C++ header provides the first *host* OresVM object and opaque
-isolate/actor/allocation tickets. It does not execute guest Oreslang source.
+The OresIsolateVM.hpp header now defines the concrete IsolateVM tenant-state owner. OresVM alone constructs and mutates it; callers receive opaque isolate, actor and allocation tickets. One opt-in pure scalar .ores source function can be lowered and invoked via the isolate ABI. Full Oreslang actor/heap/scheduler parity is still missing.
 
 ## Implemented contract
+
+- Each tenant owns a noncopyable IsolateVM object; its constructor and writable internals are private to OresVM. Compile-time regression assertions reject direct construction, copying and moving.
 
 - Reject blank tenant IDs, invalid quotas, duplicate live tenant IDs and
   SandboxedProcess requests (no sandbox implementation exists yet).
