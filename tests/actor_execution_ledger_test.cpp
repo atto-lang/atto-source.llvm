@@ -92,8 +92,8 @@ int main() {
     assert(suspended_control.stop() == 1);
     assert(!suspended_control.physically_retired());
     assert(suspended_control.notify_ready(queued) == Status::Stale);
-    assert(suspended_control.select(pick) == Status::Blocked ||
-           suspended_control.select(pick) == Status::Idle);
+    assert(suspended_control.select(pick) == Status::Idle);
+    assert(suspended_control.claim(cleanup, true) == Status::Idle);
     old_cleanup = cleanup;
     ++old_cleanup.actor_generation;
     assert(suspended_control.notify_ready(old_cleanup) == Status::Stale);
