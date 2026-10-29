@@ -46,6 +46,7 @@ class PolicyAuditTest(unittest.TestCase):
             "required_pull_request_reviews": {
                 "require_code_owner_reviews": True,
                 "dismiss_stale_reviews": True,
+                "require_last_push_approval": True,
                 "required_approving_review_count": 1,
                 "bypass_pull_request_allowances": {
                     "users": [],
@@ -53,6 +54,12 @@ class PolicyAuditTest(unittest.TestCase):
                     "apps": [],
                 },
             },
+            "required_status_checks": {
+                "strict": True,
+                "contexts": ["private-ci-governance"],
+                "checks": [{"context": "private-ci-governance", "app_id": 15368}],
+            },
+            "required_conversation_resolution": {"enabled": True},
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
@@ -168,6 +175,22 @@ class PolicyAuditTest(unittest.TestCase):
                 },
             ),
         ]
+        for section, field, value in (
+            ("required_pull_request_reviews", "require_last_push_approval", False),
+            ("required_conversation_resolution", "enabled", False),
+            ("required_status_checks", "strict", False),
+            ("required_status_checks", "checks", []),
+            ("required_status_checks", "checks", [
+                {"context": "private-ci-governance", "app_id": -1}]),
+            ("required_status_checks", "checks", [
+                {"context": "private-ci-governance", "app_id": True}]),
+            ("required_status_checks", "contexts", ["unbound-check"]),
+        ):
+            weakened = {
+                **protection,
+                section: {**protection[section], field: value},
+            }
+            invalids.append((repo, branch, weakened))
         for r, b, p in invalids:
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
                 audit.check_live_metadata(r, b, p)
@@ -179,7 +202,7 @@ class PolicyAuditTest(unittest.TestCase):
                 (root / relative).parent.mkdir(parents=True, exist_ok=True)
             (root / audit.APPROVAL_PATH).write_text("# empty\n")
             (root / audit.OWNERS_PATH).write_text("/.github/CODEOWNERS @ORESoftware\n")
-            (root / audit.DOC_PATH).write_text("protected private tree canary Direct GitHub connector review-attested")
+            (root / audit.DOC_PATH).write_text("protected private tree canary Direct GitHub connector app-pinned")
             with self.assertRaises(audit.GovernanceError):
                 audit.check_policy_files(root)
 
