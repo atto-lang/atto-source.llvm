@@ -1451,7 +1451,7 @@ private:
                         if (token_.text == "as")
                             fail("callable bodies cannot use 'as'");
                         if (source_.substr(return_type_end,
-                                token_.offset - return_type_end).find_first_of("\\r\\n") == std::string_view::npos)
+                                token_.offset - return_type_end).find_first_of("\r\n") == std::string_view::npos)
                             fail("initialize body requires '::', '{', or a newline after void");
                     }
                     const auto closer = braced ? "}" : "end";
