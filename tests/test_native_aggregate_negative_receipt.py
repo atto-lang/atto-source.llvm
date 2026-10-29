@@ -106,10 +106,10 @@ class ScalarPositiveControlTest(unittest.TestCase):
             self.verify(stdout="; ModuleID = 'scalar'\ndefine i64 @__oreslang_guest_main() {\n  ret i64 7\n}\ndefine i32 @main() {\n  ret i32 42\n}\n")
 
     def test_unrelated_helper_return_42_does_not_pass(self):
-        fake_ir = ("; ModuleID = 'scalar'\\n"
-                   "define i64 @__oreslang_guest_main() {\\n  ret i64 7\\n}\\n"
-                   "define i64 @unrelated_helper() {\\n  ret i64 42\\n}\\n"
-                   "define i32 @main() {\\n  ret i32 7\\n}\\n")
+        fake_ir = ("; ModuleID = 'scalar'\n"
+                   "define i64 @__oreslang_guest_main() {\n  ret i64 7\n}\n"
+                   "define i64 @unrelated_helper() {\n  ret i64 42\n}\n"
+                   "define i32 @main() {\n  ret i32 7\n}\n")
         with self.assertRaisesRegex(AssertionError, "expected 42 IR"):
             self.verify(stdout=fake_ir)
 
