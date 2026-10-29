@@ -1752,6 +1752,23 @@ if(BUILD_TESTING)
     set_tests_properties(native_rt_timer_actor_ledger_start_authority
         PROPERTIES TIMEOUT 30)
 
+    # Compose timer start authority with physically distinct actor-owned heaps.
+    # Shared loans survive suspension, STOP cleanup gates physical reclamation,
+    # and an unrelated actor heap must continue after the stopped heap is freed.
+    add_executable(oreslang-rt-timer-actor-heap-integration-test
+        tests/native_rt_timer_actor_heap_integration_test.cpp
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-rt-timer-actor-heap-integration-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-rt-timer-actor-heap-integration-test PRIVATE
+        c_std_11 cxx_std_17)
+    target_compile_options(oreslang-rt-timer-actor-heap-integration-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_rt_timer_actor_heap_loan_lifecycle
+        COMMAND oreslang-rt-timer-actor-heap-integration-test)
+    set_tests_properties(native_rt_timer_actor_heap_loan_lifecycle
+        PROPERTIES TIMEOUT 30)
+
     # A retained unfinished logical DATA turn must prevent later DATA
     # overtaking, while separately admitted WAKE and other actor lanes run.
     add_executable(oreslang-native-retained-data-order-test
