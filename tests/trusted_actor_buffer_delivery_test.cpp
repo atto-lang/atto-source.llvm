@@ -39,6 +39,7 @@ int main() {
     assert(fails([&] {(void)pipe.try_send(producer, receiver, first); }));
     auto loan = pool->borrow_read(rejected, sender, receiver);
     assert(fails([&] {(void)pipe.try_send(producer, receiver, rejected); }));
+    assert(fails([&] {(void)pipe.try_send(producer, {999,1}, rejected); }));
     loan.release();
     assert(pipe.try_send(producer, receiver, rejected) == Send::MailboxFull);
     assert(fails([&] { pipe.send(producer, receiver, rejected); }));
