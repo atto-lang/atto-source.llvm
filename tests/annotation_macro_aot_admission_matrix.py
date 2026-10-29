@@ -35,6 +35,33 @@ NEGATIVE_CASES = {
 }
 
 
+
+def common_annotation_vectors():
+    """Load the exact shared fixture, rejecting malformed or ambiguous rows."""
+    manifest = pathlib.Path(__file__).resolve().parents[1] / "contracts/v1/annotation-admission-v1.tsv"
+    denied, allowed, seen = {}, {}, set()
+    for row in manifest.read_text(encoding="utf-8").splitlines():
+        if not row or row.startswith("#"):
+            continue
+        fields = row.split("\t")
+        if len(fields) != 3:
+            raise ValueError("malformed annotation parity row")
+        kind, name, encoded_source = fields
+        if not name or name in seen or not encoded_source:
+            raise ValueError("duplicate/empty annotation parity entry: " + name)
+        seen.add(name)
+        source = encoded_source.replace("\\n", "\n")
+        if kind in ("shared-deny", "bootstrap-deny"):
+            denied["parity_" + name] = source
+        elif kind == "shared-allow":
+            allowed["parity_" + name] = source
+        else:
+            raise ValueError("unknown annotation parity class: " + kind)
+    if len(seen) < 12 or not denied or not allowed:
+        raise ValueError("incomplete annotation parity corpus")
+    return denied, allowed
+
+
 def invoke(compiler, directory, case, source, target=None):
     # Give every fixture an isolated working directory. A reject result may
     # emit an .ll, .bc or binary file without printing IR to stdout: that
@@ -92,6 +119,7 @@ def main():
     ap.add_argument("--clang", required=True)
     args = ap.parse_args()
     failures = []
+    corpus_denied, corpus_allowed = common_annotation_vectors()
     with tempfile.TemporaryDirectory(prefix="oreslang-aot-attributes-") as directory:
         for target in ("host", "wasm32"):
             # Native Oreslang main is i64 behind the checked i32 OS wrapper.
@@ -133,7 +161,19 @@ def main():
                 error = execute_host_ir(args.clang, directory, "typed_calls", calls.stdout)
                 if error:
                     failures.append("host typed-call guest AOT: " + error)
-            for label, source in NEGATIVE_CASES.items():
+            for label, source in corpus_allowed.items():
+                result, emitted = invoke(args.compiler, directory, label + "_" + target, source, target)
+                if result.returncode or any(signature not in result.stdout for signature in main_signatures):
+                    failures.append(label + "/" + target + " failed admitted scalar control: "
+                                    + result.stderr[:350])
+                if emitted:
+                    failures.append(label + "/" + target + " wrote unexpected artifacts: "
+                                    + ", ".join(emitted))
+                if target == "host" and result.returncode == 0:
+                    error = execute_host_ir(args.clang, directory, label, result.stdout)
+                    if error:
+                        failures.append("host shared parity control " + label + ": " + error)
+            for label, source in {**NEGATIVE_CASES, **corpus_denied}.items():
                 result, emitted = invoke(args.compiler, directory, label + "_" + target, source, target)
                 if result.returncode == 0:
                     failures.append(label + "/" + target + " accepted unsupported syntax")
