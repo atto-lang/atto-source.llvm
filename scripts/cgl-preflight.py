@@ -64,6 +64,11 @@ def inspect_elf(path):
             kind, machine, version = struct.unpack_from("<HHI", hdr, 16)
             if kind not in (2, 3) or version != 1:
                 raise ValueError("not a supported ELF executable or PIE")
+            # The pilot is intentionally restricted to two native target ABIs.
+            # Keep the architecture gate in inspect_elf as well as preflight
+            # so direct consumers cannot treat unknown e_machine as admitted.
+            if machine not in MACHINES.values():
+                raise ValueError("unsupported ELF machine architecture")
             phoff = struct.unpack_from("<Q", hdr, 32)[0]
             ehsize, phentsize, phnum = struct.unpack_from("<HHH", hdr, 52)
             if ehsize != 64 or phentsize != 56 or not 1 <= phnum <= MAX_PROGRAM_HEADERS:
