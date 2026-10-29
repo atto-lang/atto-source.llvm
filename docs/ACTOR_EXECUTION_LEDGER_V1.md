@@ -151,6 +151,31 @@ nonterminal behavior is retained. No ordinary guest-code reentrancy is
 introduced by this lifecycle mechanism.
 
 
+## Cross-scheduler wake admission (deny by default)
+
+The native scheduler's `reserve_wake`/`transfer_wake` path is a **local**
+mailbox-credit and producer-lease protocol. It has no authenticated
+cross-scheduler target-admission bridge. Previously a foreign
+`target.scheduler_domain` was accepted at reservation and excluded from
+local target-liveness verification at transfer. This could produce an
+irrevocable producer credit without proof that the foreign target was ever
+admitted, allowing a false cross-domain delivery claim.
+
+The current implementation **rejects foreign scheduler-domain targets at
+RESERVE**, and checks the exact live local target incarnation at TRANSFER.
+The native cleanup-reservation regression additionally requires a forged
+local generation and a foreign scheduler domain to leave the wake escrow
+empty and `accepted` unchanged; after normal wake completion it rejects
+transfer, cancellation and republication of the stale ticket. No new
+cross-scheduler API has been added. A future bridge must authenticate both
+domains, exact target generation and actual destination mailbox acceptance
+before granting an irrevocable delivery receipt; until then it fails closed.
+
+These cases are committed source-level assertions, **not** runtime passes:
+the source organization's latest Actions attempts still have zero executed
+steps. An alternate private-org source-free toolchain canary tests only the
+funded runner and does not authorize transfer of this private LLVM tree.
+
 ## Deterministic STOP-versus-wake linearization matrix
 
 `tests/native_actor_retained_stop_wake_race_test.c` adds 80 actual
