@@ -8,12 +8,21 @@
 
 namespace oreslang {
 namespace {
-enum class Kind { Int, Bool, String, Class, Array, Sum, Void };
+enum class Kind { Int, Bool, String, Class, Array, Sum, Aggregate, Void };
 struct Type {
     Kind kind = Kind::Int;
     std::string name;
-    bool operator==(const Type& other) const { return kind == other.kind && name == other.name; }
+    std::optional<types::NativeAggregateShape> aggregate;
+    bool operator==(const Type& other) const {
+        if (kind != other.kind || name != other.name) return false;
+        if (kind != Kind::Aggregate) return true;
+        return aggregate && other.aggregate &&
+            aggregate->same_type_as(*other.aggregate);
+    }
 };
+Type aggregate(const types::NativeAggregateShape& shape) {
+    return {Kind::Aggregate, {}, shape};
+}
 using Locals = std::unordered_map<std::string, Type>;
 Type scalar(bool boolean) { return {boolean ? Kind::Bool : Kind::Int, {}}; }
 Type scalar(ScalarType type) { return {type == ScalarType::String ? Kind::String : type == ScalarType::Bool ? Kind::Bool : Kind::Int, {}}; }
@@ -30,15 +39,18 @@ Type constructor_parameter_type(const ClassDecl& cls, std::size_t index) {
         ? ScalarType::I64 : cls.constructor_parameter_types.at(index));
 }
 Type parameter_type(const Parameter& p) {
+    if (p.aggregate_type) return aggregate(*p.aggregate_type);
     if (!p.sum_type.empty()) return {Kind::Sum, p.sum_type};
     return p.class_name.empty() ? scalar(p.scalar_type) : Type{Kind::Class, p.class_name};
 }
 Type result_type(const Function& fn) {
+    if (fn.return_aggregate) return aggregate(*fn.return_aggregate);
     if (!fn.return_sum.empty()) return {Kind::Sum, fn.return_sum};
     return fn.returns_void ? Type{Kind::Void, {}} : fn.return_class.empty()
         ? scalar(fn.return_type) : Type{Kind::Class, fn.return_class};
 }
 Type local_type(const LocalBinding& local) {
+    if (local.aggregate_type) return aggregate(*local.aggregate_type);
     if (!local.sum_type.empty()) return {Kind::Sum, local.sum_type};
     if (local.int_array && local.array_element_type != ScalarType::I64 &&
             local.array_element_type != ScalarType::String)
@@ -70,6 +82,15 @@ void validate_native_scalar_types(const Program& program) {
         functions.emplace(native_function_slot(fn.name, fn.parameters.size()), &fn);
     auto field_type = [&](Type owner, const std::string& name, std::size_t offset) -> Type {
         if (owner.kind == Kind::Array && name == "size") return scalar(false);
+        if (owner.kind == Kind::Aggregate && owner.aggregate) {
+            for (const auto& field : owner.aggregate->fields)
+                if (field.name == name) {
+                    if (field.type == "int") return scalar(false);
+                    if (field.type == "bool") return scalar(true);
+                    fail(offset, "AGGREGATE_NATIVE_FIELD_UNVERIFIED");
+                }
+            fail(offset, "AGGREGATE_UNKNOWN_FIELD");
+        }
         if (owner.kind != Kind::Class) fail(offset, "field needs a nominal class");
         const auto cls = classes.find(owner.name);
         if (cls == classes.end()) fail(offset, "unknown class");
@@ -82,8 +103,27 @@ void validate_native_scalar_types(const Program& program) {
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
-            case E::AggregateConstruct:
-                throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source aggregate is not scalar");
+            case E::AggregateConstruct: {
+                if (!e.aggregate_type ||
+                        e.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct ||
+                        e.argument_names.size() != e.arguments.size())
+                    fail(e.offset, "AGGREGATE_CONSTRUCTOR_UNVERIFIED");
+                for (std::size_t i = 0; i < e.arguments.size(); ++i) {
+                    const auto& name = e.argument_names[i];
+                    const auto& fields = e.aggregate_type->fields;
+                    const auto found = std::find_if(fields.begin(), fields.end(),
+                        [&](const types::NativeAggregateShape::Field& field) {
+                            return field.name == name;
+                        });
+                    if (found == fields.end() ||
+                            (found->type != "int" && found->type != "bool"))
+                        fail(e.offset, "AGGREGATE_NATIVE_FIELD_UNVERIFIED");
+                    require(expression(*e.arguments[i], locals),
+                        scalar(found->type == "bool"), e.arguments[i]->offset,
+                        "AGGREGATE_CONSTRUCTOR_FIELD_TYPE_MISMATCH");
+                }
+                return aggregate(*e.aggregate_type);
+            }
             case E::SumConstruct: {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
