@@ -45,9 +45,9 @@ int main() {
     // Uncharged tenant ID memory and control bytes must not bypass admission.
     OresVM ids;
     assert(rejects([&] { ids.create_isolate({std::string(257, 'x'), 1, 1}); }));
-    assert(rejects([&] { ids.create_isolate({std::string("a\\0b", 3), 1, 1}); }));
-    assert(rejects([&] { ids.create_isolate({"control\\n", 1, 1}); }));
-    assert(rejects([&] { ids.create_isolate({std::string("a\\x7f", 2), 1, 1}); }));
+    assert(rejects([&] { ids.create_isolate({std::string("a\0b", 3), 1, 1}); }));
+    assert(rejects([&] { ids.create_isolate({"control\n", 1, 1}); }));
+    assert(rejects([&] { ids.create_isolate({std::string("a\x7f", 2), 1, 1}); }));
 
 
     // An aggregate heap budget is independent of the tenant count limit.
