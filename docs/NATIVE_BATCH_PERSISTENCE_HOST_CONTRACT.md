@@ -19,6 +19,14 @@ c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -pedantic \
 ASAN_OPTIONS=detect_leaks=1 /tmp/ores-sidecar-test
 \`\`\`
 
-Actual tested locally with compiler instrumentation; five host-only test groups passed. The CMake target \`native_batch_persistence_host_only_contract\` is deliberately named not to masquerade as native Oreslang source actor parity.
+Actual tested locally with compiler instrumentation; eight host-only test groups passed. The CMake target \`native_batch_persistence_host_only_contract\` is deliberately named not to masquerade as native Oreslang source actor parity.
 
 Missing: compiler emitted actor turns, native scheduler source continuation wiring, hard tenant VM-isolate isolation, per-actor arena address token checks, durable WAL provider, tests under actual Oreslang guest execution and distributed failover.
+
+## Security audit (2026-10-29)
+
+- Provider checks activation epoch before consulting durable-operation dedupe records, so a retired activation cannot replay a previous success.
+- Identity validation rejects ASCII control characters (including NUL) across tenant, actor, state and operation IDs.
+- The `flush_mu_` guard serializes concurrent flushers around dequeuing AND provider commit, preserving per-actor FIFO/CAS ordering. Quotas remain held while a write is in-flight.
+- Local GCC 17 C++ host tests: **8/8**, AddressSanitizer + UndefinedBehaviorSanitizer; independent Clang++ compiler run: **8/8**. This is not guest/native actor source execution.
+- The dedicated LLVM PR GitHub Actions job currently has zero recorded steps; CI confirmation is NOT_EXECUTED.
