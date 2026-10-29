@@ -1,0 +1,36 @@
+; Handwritten LLVM IR for native OresVM ABI smoke.
+; This is NOT .ores source lowering.
+%OresIsolateContext = type { i32, i32, i64, ptr, ptr, ptr }
+
+define i64 @guest_counter_llvm(ptr %ctx, i64 %delta) {
+entry:
+  %vp = getelementptr inbounds %OresIsolateContext, ptr %ctx, i32 0, i32 0
+  %version = load i32, ptr %vp, align 4
+  %compatible = icmp eq i32 %version, 1
+  br i1 %compatible, label %call_load, label %invalid_version
+invalid_version:
+  ret i64 -1
+call_load:
+  %data_ptr = getelementptr inbounds %OresIsolateContext, ptr %ctx, i32 0, i32 3
+  %data = load ptr, ptr %data_ptr, align 8
+  %load_fnptr = getelementptr inbounds %OresIsolateContext, ptr %ctx, i32 0, i32 4
+  %load_fn = load ptr, ptr %load_fnptr, align 8
+  %old = alloca i64, align 8
+  %ok = call i32 %load_fn(ptr %data, i32 0, ptr %old)
+  %valid = icmp eq i32 %ok, 1
+  br i1 %valid, label %call_store, label %invalid_load
+invalid_load:
+  ret i64 -2
+call_store:
+  %value = load i64, ptr %old, align 8
+  %next = add i64 %value, %delta
+  %store_fnptr = getelementptr inbounds %OresIsolateContext, ptr %ctx, i32 0, i32 5
+  %store_fn = load ptr, ptr %store_fnptr, align 8
+  %stored = call i32 %store_fn(ptr %data, i32 0, i64 %next)
+  %ok_store = icmp eq i32 %stored, 1
+  br i1 %ok_store, label %success, label %invalid_store
+invalid_store:
+  ret i64 -3
+success:
+  ret i64 %next
+}
