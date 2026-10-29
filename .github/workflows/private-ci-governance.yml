@@ -12,6 +12,8 @@ on:
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
       - 'scripts/run-in-private-ci-destination.sh'
+      - 'tools/private-ci-policy/**'
+      - 'tests/fixtures/private-ci-admission-projection.ores'
   push:
     branches: [main]
     paths:
@@ -25,6 +27,8 @@ on:
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
       - 'scripts/run-in-private-ci-destination.sh'
+      - 'tools/private-ci-policy/**'
+      - 'tests/fixtures/private-ci-admission-projection.ores'
 permissions:
   contents: read
 jobs:
@@ -35,6 +39,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+      - name: Source-free Rust admission oracle
+        run: |
+          set -euo pipefail
+          cargo test --offline --manifest-path tools/private-ci-policy/Cargo.toml
       - name: Offline governance regression suite
         run: python3 scripts/test-audit-private-ci-governance.py
       - name: LLVM v3 private publisher regression suite
