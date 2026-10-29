@@ -27,6 +27,16 @@ int main() {
     for (auto& t : workers) t.join();
     assert(vm.invoke_guest(a, ores_guest_entry, 0) == 1009);
     assert(vm.invoke_guest(b, ores_guest_entry, 0) == 102);
+    // The source-generated wrapper must return a recoverable ABI failure,
+    // never llvm.trap, wrapping signed i64 or publishing a partial state.
+    const auto overflow = vm.invoke_guest_result(a, ores_guest_entry, INT64_MAX);
+    assert(overflow.status == ORES_GUEST_OVERFLOW && overflow.value == 0);
+    assert(vm.invoke_guest(a, ores_guest_entry, 0) == 1009);
+    assert(vm.invoke_guest(b, ores_guest_entry, INT64_MIN) == INT64_MIN + 102);
+    const auto underflow = vm.invoke_guest_result(b, ores_guest_entry, -103);
+    assert(underflow.status == ORES_GUEST_OVERFLOW && underflow.value == 0);
+    assert(vm.invoke_guest(b, ores_guest_entry, 0) == INT64_MIN + 102);
+    assert(vm.invoke_guest(a, ores_guest_entry, 0) == 1009);
     vm.begin_shutdown(a); vm.complete_shutdown(a); vm.destroy(a);
     vm.begin_shutdown(b); vm.complete_shutdown(b); vm.destroy(b);
 }

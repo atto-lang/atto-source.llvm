@@ -139,15 +139,20 @@ security isolation, or hard-real-time timing certification.
 
 Compile one source-defined, synchronous scalar transition with
 `oreslang-llvmc --isolate-entry=tenant_step tests/fixtures/oresvm-tenant-step.ores`.
-The produced `ores_guest_entry(OresIsolateContext*, int64_t)` loads tenant
-slot zero, calls the compiler-lowered `tenant_step(old, delta)`, then stores
-the result through the host's generation-pinned context. It has no process-
-shared mutable LLVM global. This is a restricted, opt-in, host-only stage:
+The ABI-v2 `ores_guest_entry(OresIsolateContext*, int64_t, int64_t*)`
+loads tenant slot zero and lowers the validated pure `.ores` expression
+directly into checked LLVM instructions. The underlying standard function
+is internal to the artifact and is NOT called by the guest wrapper because
+its normal overflow trap would abort the shared host. The wrapper stores
+the result only after every arithmetic operation succeeds; an overflow
+returns `ORES_GUEST_OVERFLOW` without changing tenant state. No process-
+shared mutable LLVM global is emitted by this entrypoint. This remains
+a restricted, opt-in, trusted host-only stage:
 only one pure public function with two i64 parameters, no actors, heap,
 strings, FFI, suspension, or other side effects. The native host serializes
-same-tenant invocations. Error sentinels -1/-2/-3 are provisional and can
-collide with valid negative scalar results; a status + out-value ABI is the
-next compatibility improvement. This is not arbitrary tenant sandboxing.
+same-tenant invocations. ABI v2 separates status from the full signed
+64-bit result; negative values are valid. This is not arbitrary-tenant
+sandboxing, process isolation or a general runtime error/effect ABI.
 
 
 ## Guest result ABI v2 (no sentinel collisions)
@@ -169,10 +174,21 @@ converting a symbol to OresGuestEntry. A mismatched function-pointer
 signature is undefined behavior and cannot be fixed by checking the
 in-function context version alone.
 
-Guest function arithmetic currently uses the compiler's checked arithmetic
-trap behavior; arithmetic traps are **not** translated into a recoverable
-status code for arbitrary generated .ores expressions. Native panic and
-untrusted arbitrary C/C++/FFI code remain outside the safety guarantees.
-The initial host test exercises valid negative returns, status masking,
-explicit overflow on the host test guest, and native AOT invocation.
-Full source compiler/CTest CI must still be executed on a working runner.
+The isolate-entry compiler-only pure scalar expression subset maps signed
+add/subtract/multiply/negation overflow to `ORES_GUEST_OVERFLOW` before
+any guest-global write. The ordinary compiler path still emits traps,
+and Native panic, stacks, FFI, borrowed pointers, unsafe extensions and
+untrusted arbitrary C/C++ code remain outside this protection.
+`tests/native_oresvm_source_guest_test.cpp` includes source-defined
+overflow and underflow rollback assertions; the standalone host CTest
+suite also includes `native_oresvm_shutdown_race_test.cpp` to check
+queued-call shutdown cancellation and independent tenant progress.
+
+**Verification gate:** The new tests are committed but have not been
+verified by an executed exact-head full-repo CI job. Inspected source
+LLVM jobs have failed before execution (0 recorded steps), which is not
+evidence of a compiler failure or a passing test. A dedicated new
+Actions workflow could not be created during this pass because the write
+was blocked by security controls. Use the existing root CMake/CTest and
+standalone `tests/oresvm-standalone` test entrypoints on an authorized
+runner, recording the exact commit/tree SHA and nonzero executed steps.

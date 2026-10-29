@@ -260,10 +260,10 @@ and backend-specific security boundaries:
 
 | Backend | Draft PR | Current narrow scope |
 | --- | --- | --- |
-| .NET Native AOT | [#243](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/243) | Static Native AOT tenant registry, actor mailboxes and resource lifetime pins; not CLR/OS memory isolation |
+| .NET Native AOT | [#243](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/243) | Native AOT tenant host with actor mailboxes and a statically linked generated-CIL scalar entry smoke; full stateful .ores actor lowering and CLR/OS isolation remain missing |
 | WASM | [#172](https://github.com/ores-truffle-oreslang/oreslang-source.wasm/pull/172) | Tenant admission/quota wrapper over real disposable import-free WebAssembly workers; workers are not OS sandboxes |
-| Forge | [#131](https://github.com/ores-truffle-oreslang/oreslang-source.forge/pull/131) | Independent C++20 tenant/actor tickets and physical-operation retirement accounting; native generated code not sandboxed |
-| Cranelift | [#16](https://github.com/ores-truffle-oreslang/oreslang-source.cranelift/pull/16) | Independent Rust tenant/actor ticket registry; in-process JIT entrypoints not connected or sandboxed |
+| Forge | [#131](https://github.com/ores-truffle-oreslang/oreslang-source.forge/pull/131) | Independent C++20 IsolateVM plus compiled Forge x86-64 scalar entry CTest for two tenant states; no native sandbox, recoverable overflow ABI or actor guest lowering |
+| Cranelift | [#16](https://github.com/ores-truffle-oreslang/oreslang-source.cranelift/pull/16) | Rust tenant registry plus host-mediated execution of one compiled Cranelift JIT scalar entry for separate tenant state; JIT remains in-process and unsandboxed |
 
 Each repository has `docs/VM_ISOLATE_CONTRACT.md`, which repeats the
 lifecycle and V8-inspired distinctions and records the backend-specific
