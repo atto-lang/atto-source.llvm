@@ -63,9 +63,8 @@ class CompiledActorWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(guard, segment)
         self.assertLess(segment.index("git status --porcelain"), segment.index("test ! -e build"))
-        self.assertLess(segment.index("git ls-files --others --ignored"),
-                        source[end:].find("NONEXISTENT_MARKER")
-                        if False else len(source))
+        self.assertLess(segment.index("git ls-files --others --exclude-standard"),
+                        segment.index("git ls-files --others --ignored --exclude-standard"))
 
 
 if __name__ == "__main__":
