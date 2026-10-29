@@ -4,7 +4,7 @@
 Only the V3 publisher may authorize export. Source export always requires
 enforced protected-main governance. This preflight checks local policy
 structure; --live diagnoses that mandatory source gate. V3 may separately use
-exact review attestation for an unprotected private carrier. No writes or
+enforced protected carrier main with app-bound CI checks. No writes or
 transfers.
 """
 import argparse
@@ -79,7 +79,7 @@ def check_policy_files(root: Path) -> tuple[str, ...]:
     doc = (root / DOC_PATH).read_text(encoding="utf-8")
     for phrase in (
         "protected", "private", "tree", "canary",
-        "Direct GitHub connector", "review-attested",
+        "Direct GitHub connector", "app-pinned",
     ):
         if phrase not in doc:
             raise GovernanceError(f"missing documented security condition: {phrase}")
@@ -111,6 +111,11 @@ def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dic
         raise GovernanceError("required CODEOWNER reviews not enforced")
     if reviews.get("dismiss_stale_reviews") is not True:
         raise GovernanceError("stale reviews are not dismissed")
+    if reviews.get("require_last_push_approval") is not True:
+        raise GovernanceError("latest-push approval is not enforced")
+    conversations = protection_data.get("required_conversation_resolution")
+    if not isinstance(conversations, dict) or conversations.get("enabled") is not True:
+        raise GovernanceError("conversation resolution is not enforced")
 
     approval_count = reviews.get("required_approving_review_count")
     if type(approval_count) is not int or approval_count < 1:
@@ -121,6 +126,23 @@ def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dic
         raise GovernanceError("review bypass policy unavailable")
     if any(bypass.get(kind) for kind in ("users", "teams", "apps")):
         raise GovernanceError("review bypass allowances are not empty")
+
+    checks = protection_data.get("required_status_checks")
+    if not isinstance(checks, dict) or checks.get("strict") is not True:
+        raise GovernanceError("strict required checks are not enforced")
+    contexts = checks.get("contexts")
+    bound = checks.get("checks")
+    if (not isinstance(contexts, list) or not isinstance(bound, list)
+            or not bound
+            or any(not isinstance(x, str) or not x.strip() for x in contexts)
+            or any(not isinstance(x, dict) or not isinstance(x.get("context"), str)
+                   or not x["context"].strip()
+                   or type(x.get("app_id")) is not int or x["app_id"] <= 0
+                   for x in bound)
+            or len(contexts) != len(set(contexts))
+            or len(bound) != len({x["context"] for x in bound})
+            or not set(contexts).issubset({x["context"] for x in bound})):
+        raise GovernanceError("required checks are not pinned to GitHub App IDs")
 
     if (protection_data.get("enforce_admins") or {}).get("enabled") is not True:
         raise GovernanceError("administrator protection not enforced")
@@ -151,7 +173,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--live", action="store_true",
-                        help="diagnose mandatory source protected-main mode; V3 separately verifies carrier review attestation")
+                        help="diagnose mandatory source protected-main mode; V3 also requires protected carrier main")
     args = parser.parse_args()
     try:
         approved = check_policy_files(args.root)
@@ -165,7 +187,7 @@ def main() -> int:
                 _github_get("branches/main", token),
                 _github_get("branches/main/protection", token),
             )
-            print("Mandatory source protected-main mode verified; carrier review attestation, if used, is validated separately by V3.")
+            print("Mandatory source protected-main mode verified; protected carrier main is validated separately by V3.")
         return 0
     except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
         print(f"DENIED: {exc}", file=sys.stderr)
