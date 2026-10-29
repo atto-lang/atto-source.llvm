@@ -33,8 +33,8 @@ timeout --kill-after=5s 45s "$compiler" --target=host \
     fail "native Oreslang compiler rejected valid ABI source"
 [[ "$(grep -Ec '^define (dso_local )?i32 @ores_browser_abi_version\(' "$work/version.ll")" == 1 ]] ||
     fail "exact i32 C ABI export absent or duplicated"
-[[ "$(grep -Ec '^define (dso_local )?i64 @browser_native_abi_v1\(' "$work/version.ll")" == 1 ]] ||
-    fail "expected guest i64 symbol absent or duplicated"
+[[ "$(grep -Ec '^define internal i64 @browser_native_abi_v1\(' "$work/version.ll")" == 1 ]] ||
+    fail "expected private guest i64 implementation absent or duplicated"
 ! grep -Eq '^define .*@ores_browser_(open|dispatch|snapshot|close)\(' "$work/version.ll" ||
     fail "unexpected browser session C ABI symbol"
 timeout --kill-after=5s 45s clang -O2 -fPIC -shared \
@@ -44,8 +44,64 @@ readelf -h "$work/version.so" | grep -q 'DYN' ||
     fail "AOT output is not a shared ELF object"
 nm -D --defined-only "$work/version.so" > "$work/exports" ||
     fail "ELF dynamic symbols not inspectable"
-[[ "$(grep -Ec ' [TW] ores_browser_abi_version$' "$work/exports")" == 1 ]] ||
+[[ "$(grep -Ec ' [TW] ores_browser_abi_version
+! grep -Eq ' ores_browser_(open|dispatch|snapshot|close)$' "$work/exports" ||
+    fail "unexpected exported session ABI"
+cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+    tests/browser_c_abi_u32_host.c -ldl -o "$work/c-host"
+timeout --kill-after=5s 15s "$work/c-host" "$work/version.so" ||
+    fail "compiled Oreslang-to-C ABI runtime failed"
+for fixture in \
+    browser-c-abi-version-u32-bad-symbol \
+    browser-c-abi-version-u32-private \
+    browser-c-abi-version-u32-bad-value \
+    browser-c-abi-version-u32-bad-signature \
+    browser-c-abi-version-u32-bad-type \
+    browser-c-abi-version-u32-symbol-clash \
+    browser-c-abi-version-u32-effectful \
+    browser-c-abi-version-u32-duplicate
+do
+    if timeout --kill-after=5s 20s "$compiler" --target=host \
+        "tests/fixtures/$fixture.ores" > "$work/rejected.ll" 2>"$work/rejected.err"; then
+        fail "compiler wrongly accepted $fixture"
+    fi
+    [[ ! -s "$work/rejected.ll" ]] ||
+        fail "compiler emitted IR for rejected source $fixture"
+done
+echo "REAL_ORESLANG_C_U32_ABI_NEGATIVE_TESTS_PASS"
+printf 'REAL_ORESLANG_C_U32_ABI_ACCEPTANCE source_sha=%s tree_sha=%s compiler_sha256=%s\n' \
+    "$head" "$tree" "$digest"
+ "$work/exports")" == 1 ]] ||
     fail "compiled C ABI symbol not defined in ELF"
+! grep -Eq '[[:space:]]browser_native_abi_v1
+! grep -Eq ' ores_browser_(open|dispatch|snapshot|close)$' "$work/exports" ||
+    fail "unexpected exported session ABI"
+cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+    tests/browser_c_abi_u32_host.c -ldl -o "$work/c-host"
+timeout --kill-after=5s 15s "$work/c-host" "$work/version.so" ||
+    fail "compiled Oreslang-to-C ABI runtime failed"
+for fixture in \
+    browser-c-abi-version-u32-bad-symbol \
+    browser-c-abi-version-u32-private \
+    browser-c-abi-version-u32-bad-value \
+    browser-c-abi-version-u32-bad-signature \
+    browser-c-abi-version-u32-bad-type \
+    browser-c-abi-version-u32-symbol-clash \
+    browser-c-abi-version-u32-effectful \
+    browser-c-abi-version-u32-duplicate
+do
+    if timeout --kill-after=5s 20s "$compiler" --target=host \
+        "tests/fixtures/$fixture.ores" > "$work/rejected.ll" 2>"$work/rejected.err"; then
+        fail "compiler wrongly accepted $fixture"
+    fi
+    [[ ! -s "$work/rejected.ll" ]] ||
+        fail "compiler emitted IR for rejected source $fixture"
+done
+echo "REAL_ORESLANG_C_U32_ABI_NEGATIVE_TESTS_PASS"
+printf 'REAL_ORESLANG_C_U32_ABI_ACCEPTANCE source_sha=%s tree_sha=%s compiler_sha256=%s\n' \
+    "$head" "$tree" "$digest"
+ "$work/exports" ||
+    fail "private i64 guest was exported to C ABI callers"
 ! grep -Eq ' ores_browser_(open|dispatch|snapshot|close)$' "$work/exports" ||
     fail "unexpected exported session ABI"
 cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
