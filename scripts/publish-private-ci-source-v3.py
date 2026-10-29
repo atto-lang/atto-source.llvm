@@ -45,9 +45,27 @@ INCIDENT_GATES = (
     (222, 6092501448,
      "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/222"),
 )
+INCIDENT_REPO_ID = 1413795502
+QUARANTINED_DESTINATIONS = (
+    "zed-pkg-test/java-app",
+    "scintilla-run-test/gleam-runner-conformance",
+    "ores-dummy-org-oreslang-stack/ores-dummy-org-oreslang-stack-infra",
+    "agent-pontifex-test/agent-pontifex-e2e-tests",
+    "led-dynamo/leddy-e2e",
+    "ClaimGraph-test/claimgraph-e2e",
+)
+QUARANTINED_DESTINATION_IDS = (
+    1323575966,
+    1323598260,
+    1412142815,
+    1370782550,
+    1324139596,
+    1350751074,
+)
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
+INCIDENT_DISPOSITION_PATH = ".github/private-ci-incident-dispositions.json"
 CODEOWNERS_PATH = ".github/CODEOWNERS"
 PREFIX = "private-oreslang-source"
 RECEIPT_PATH = "ci/oreslang-receipt.json"
@@ -57,6 +75,7 @@ HANDOFF_REF = re.compile(
     r"^ci/(?:oreslang-[0-9a-f]{40}|authorized-[0-9a-f]{40})$"
 )
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MAVEN_ARTIFACT = re.compile(
     r"^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"
     r"(?::[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?)?$"
@@ -74,6 +93,8 @@ MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
 MAX_POLICY = 64 * 1024
 MAX_PLAN = 64 * 1024
+MAX_INCIDENT_DISPOSITION = 64 * 1024
+MAX_DISPOSITION_COMMENT = 64 * 1024
 MAX_CODEOWNERS = 64 * 1024
 MAX_GH_API_RESPONSE_BYTES = 24 * 1024 * 1024
 TTL = dt.timedelta(hours=24)
@@ -155,6 +176,7 @@ def require_source_security_codeowners(contents):
         "/.github/workflows/* @ORESoftware",
         "/.github/private-ci-approved-repositories.txt @ORESoftware",
         "/.github/private-ci-carrier-contracts.json @ORESoftware",
+        "/.github/private-ci-incident-dispositions.json @ORESoftware",
         "/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md @ORESoftware",
         "/scripts/run-in-private-ci-destination.sh @ORESoftware",
         "/scripts/publish-private-ci-source.py @ORESoftware",
@@ -538,17 +560,37 @@ def remote_source_file(path, main_sha, max_bytes):
     return data, valid_sha(item.get("sha"), "protected file blob SHA invalid")
 
 
+def _quarantine_sets():
+    return (
+        {item.casefold() for item in QUARANTINED_DESTINATIONS},
+        set(QUARANTINED_DESTINATION_IDS),
+    )
+
+
+def require_not_quarantined(repository, repository_id=None):
+    names, ids = _quarantine_sets()
+    if not isinstance(repository, str) or repository.casefold() in names:
+        raise Denied("destination is quarantined")
+    if repository_id is not None and repository_id in ids:
+        raise Denied("destination repository ID is quarantined")
+
+
 def parse_allowlist(raw, repository):
+    require_not_quarantined(repository)
     lines = canonical_security_lines(raw, "allowlist")
     seen = set()
     allowed = False
+    quarantined_names, _ = _quarantine_sets()
     for line in lines:
         if not line or line.startswith("#"):
             continue
-        if not NAME.fullmatch(line) or line.casefold() in seen:
+        key = line.casefold()
+        if not NAME.fullmatch(line) or key in seen:
             raise Denied("allowlist contains invalid/duplicate entry")
-        seen.add(line.casefold())
-        if line.casefold() == repository.casefold():
+        if key in quarantined_names:
+            raise Denied("allowlist contains quarantined destination")
+        seen.add(key)
+        if key == repository.casefold():
             allowed = True
     if not allowed:
         raise Denied("destination absent from protected allowlist")
@@ -573,52 +615,76 @@ def parse_contract(raw, repository, source_pr, test_plan):
         doc = strict_json_loads(raw.decode("utf-8"), "invalid carrier contract JSON")
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise Denied("invalid carrier contract JSON") from exc
-    if not isinstance(doc, dict) or doc.get("schema") != 1:
+    if not isinstance(doc, dict) or set(doc) != {"schema", "carriers"} or doc.get("schema") != 1:
         raise Denied("carrier contract schema")
     carriers = doc.get("carriers")
-    carrier = carriers.get(repository) if isinstance(carriers, dict) else None
-    if not isinstance(carrier, dict):
-        raise Denied("destination absent from protected carrier contract")
+    if not isinstance(carriers, dict) or not carriers or len(carriers) > 32:
+        raise Denied("carrier contract registry")
     required_carrier_fields = {
         "repository_id", "base_sha", "workflow_path",
         "workflow_blob_sha", "test_plans"
     }
-    allowed_carrier_fields = required_carrier_fields
-    if (not required_carrier_fields.issubset(carrier)
-            or not set(carrier).issubset(allowed_carrier_fields)):
-        raise Denied("carrier contract fields")
-    repo_id = carrier.get("repository_id")
-    if not isinstance(repo_id, int) or isinstance(repo_id, bool) or repo_id <= 0:
-        raise Denied("carrier repository id")
-    base_sha = valid_sha(carrier.get("base_sha"), "carrier base SHA")
-    workflow_path = safe_path(
-        carrier.get("workflow_path"), ".github/workflows/", ".yml"
-    )
-    workflow_blob = valid_sha(
-        carrier.get("workflow_blob_sha"), "carrier workflow blob"
-    )
-    plans = carrier.get("test_plans")
+    seen_slugs = set()
+    seen_ids = set()
+    quarantined_names, quarantined_ids = _quarantine_sets()
+    selected = None
+    for slug, carrier in carriers.items():
+        if not isinstance(slug, str) or not NAME.fullmatch(slug):
+            raise Denied("carrier contract repository identity")
+        key = slug.casefold()
+        if key in seen_slugs:
+            raise Denied("carrier contract duplicate repository identity")
+        if key in quarantined_names:
+            raise Denied("carrier contract contains quarantined destination")
+        seen_slugs.add(key)
+        if (not isinstance(carrier, dict)
+                or set(carrier) != required_carrier_fields):
+            raise Denied("carrier contract fields")
+        repo_id = carrier.get("repository_id")
+        if not isinstance(repo_id, int) or isinstance(repo_id, bool) or repo_id <= 0:
+            raise Denied("carrier repository id")
+        if repo_id in seen_ids:
+            raise Denied("carrier contract duplicate repository ID")
+        if repo_id in quarantined_ids:
+            raise Denied("carrier contract contains quarantined repository ID")
+        seen_ids.add(repo_id)
+        valid_sha(carrier.get("base_sha"), "carrier base SHA")
+        safe_path(carrier.get("workflow_path"), ".github/workflows/", ".yml")
+        valid_sha(carrier.get("workflow_blob_sha"), "carrier workflow blob")
+        plans = carrier.get("test_plans")
+        if not isinstance(plans, dict) or not plans or len(plans) > 64:
+            raise Denied("carrier test plans missing")
+        for candidate_path, plan in plans.items():
+            safe_path(candidate_path, "ci/test-plans/", ".json")
+            if not isinstance(plan, dict) or set(plan) != {"blob_sha", "allowed_prs"}:
+                raise Denied("carrier test plan fields are not exact")
+            valid_sha(plan.get("blob_sha"), "test plan blob")
+            allowed = plan.get("allowed_prs")
+            if (not isinstance(allowed, list) or not allowed
+                    or len(set(allowed)) != len(allowed)
+                    or any(not isinstance(x, int) or isinstance(x, bool) or x <= 0
+                           for x in allowed)):
+                raise Denied("carrier test plan PR allowlist invalid")
+        if key == repository.casefold():
+            selected = carrier
+    require_not_quarantined(repository)
+    if selected is None:
+        raise Denied("destination absent from protected carrier contract")
     plan_path = safe_path(test_plan, "ci/test-plans/", ".json")
-    plan = plans.get(plan_path) if isinstance(plans, dict) else None
-    if not isinstance(plan, dict) or set(plan) != {"blob_sha", "allowed_prs"}:
+    plan = selected["test_plans"].get(plan_path)
+    if not isinstance(plan, dict):
         raise Denied("test plan absent from protected carrier contract")
-    blob_sha = valid_sha(plan.get("blob_sha"), "test plan blob")
-    allowed = plan.get("allowed_prs")
-    if (not isinstance(allowed, list) or not allowed
-            or len(set(allowed)) != len(allowed)
-            or any(not isinstance(x, int) or isinstance(x, bool) or x <= 0
-                   for x in allowed)
-            or source_pr not in allowed):
+    allowed = plan["allowed_prs"]
+    if source_pr not in allowed:
         raise Denied("source PR not authorized by protected test plan")
     return {
-        "repository_id": repo_id,
-        "base_sha": base_sha,
-        "workflow_path": workflow_path,
-        "workflow_blob_sha": workflow_blob,
+        "repository_id": selected["repository_id"],
+        "base_sha": selected["base_sha"],
+        "workflow_path": selected["workflow_path"],
+        "workflow_blob_sha": selected["workflow_blob_sha"],
         "test_plan_path": plan_path,
-        "test_plan_blob_sha": blob_sha,
+        "test_plan_blob_sha": plan["blob_sha"],
     }
-
 
 def _validate_maven_prefetch_artifacts(plan, uses_maven):
     extras = plan.get("maven_prefetch_artifacts", [])
@@ -811,10 +877,103 @@ def require_incident_closure():
     return True
 
 
+def parse_incident_dispositions(raw):
+    try:
+        doc = strict_json_loads(raw.decode("utf-8"), "invalid incident disposition JSON")
+    except UnicodeError as exc:
+        raise Denied("invalid incident disposition JSON") from exc
+    expected_numbers = {str(number) for number, _issue_id, _url in INCIDENT_GATES}
+    if (not isinstance(doc, dict)
+            or set(doc) != {"schema", "incident_repository", "incident_repository_id", "incidents"}
+            or doc.get("schema") != 1
+            or doc.get("incident_repository") != INCIDENT_REPO
+            or doc.get("incident_repository_id") != INCIDENT_REPO_ID
+            or not isinstance(doc.get("incidents"), dict)
+            or set(doc["incidents"]) != expected_numbers):
+        raise Denied("incident disposition registry identity/schema invalid")
+    expected_ids = {number: issue_id for number, issue_id, _url in INCIDENT_GATES}
+    result = {}
+    for number, issue_id in expected_ids.items():
+        entry = doc["incidents"][str(number)]
+        if not isinstance(entry, dict) or entry.get("issue_id") != issue_id:
+            raise Denied("incident disposition issue identity changed")
+        status = entry.get("status")
+        if status == "hold":
+            if set(entry) != {"issue_id", "status"}:
+                raise Denied("hold incident disposition fields are not exact")
+        elif status == "resolved":
+            required = {
+                "issue_id", "status", "comment_id", "comment_body_sha256",
+                "comment_updated_at", "reviewer_id", "reviewer_login",
+            }
+            if (set(entry) != required
+                    or type(entry.get("comment_id")) is not int
+                    or entry["comment_id"] <= 0
+                    or not isinstance(entry.get("comment_body_sha256"), str)
+                    or HEX64.fullmatch(entry["comment_body_sha256"]) is None
+                    or entry.get("reviewer_id") != CARRIER_REVIEW_USER_ID
+                    or entry.get("reviewer_login") != CARRIER_REVIEW_LOGIN):
+                raise Denied("resolved incident disposition authority invalid")
+            github_timestamp(
+                entry.get("comment_updated_at"),
+                "incident disposition timestamp invalid",
+            )
+        else:
+            raise Denied("incident disposition status invalid")
+        result[number] = entry
+    return result
+
+
+def checked_incident_dispositions(main_sha):
+    remote, _ = remote_source_file(
+        INCIDENT_DISPOSITION_PATH, main_sha, MAX_INCIDENT_DISPOSITION
+    )
+    local = read_local_regular(
+        INCIDENT_DISPOSITION_PATH, MAX_INCIDENT_DISPOSITION
+    )
+    if local != remote:
+        raise Denied("local incident disposition registry differs from protected source main")
+    entries = parse_incident_dispositions(remote)
+    for number, _issue_id, _url in INCIDENT_GATES:
+        entry = entries[number]
+        if entry["status"] != "resolved":
+            raise Denied(
+                f"blocking P0 incident #{number} lacks protected independent disposition"
+            )
+        comment = gh_api(
+            f"repos/{INCIDENT_REPO}/issues/comments/{entry['comment_id']}"
+        )
+        expected_issue_url = (
+            f"https://api.github.com/repos/{INCIDENT_REPO}/issues/{number}"
+        )
+        user = comment.get("user")
+        body = comment.get("body")
+        if (comment.get("id") != entry["comment_id"]
+                or comment.get("issue_url") != expected_issue_url
+                or not isinstance(user, dict)
+                or user.get("id") != CARRIER_REVIEW_USER_ID
+                or not isinstance(user.get("login"), str)
+                or user["login"].casefold() != CARRIER_REVIEW_LOGIN.casefold()
+                or not isinstance(body, str) or not body
+                or len(body.encode("utf-8")) > MAX_DISPOSITION_COMMENT
+                or comment.get("updated_at") != entry["comment_updated_at"]):
+            raise Denied("incident disposition comment identity/state invalid")
+        github_timestamp(
+            comment.get("updated_at"), "incident disposition live timestamp invalid"
+        )
+        if hashlib.sha256(body.encode("utf-8")).hexdigest() != entry["comment_body_sha256"]:
+            raise Denied("incident disposition comment body changed")
+        marker = f"PRIVATE_CI_INCIDENT_DISPOSITION_RESOLVED issue=#{number}"
+        if marker not in body.splitlines():
+            raise Denied("incident disposition comment lacks exact resolution marker")
+    return True
+
+
 def protected_authority(repository, source_pr, test_plan):
     """Attest incidents, this exact script, and local policies to enforced protected source main."""
     require_incident_closure()
     main_sha = authorized_source_main_sha()
+    checked_incident_dispositions(main_sha)
     remote_self, remote_self_sha = remote_source_file(
         SELF_PATH, main_sha, 512 * 1024
     )
@@ -886,6 +1045,7 @@ def checked_carrier_main(repository, contract):
     return base_sha
 
 def checked_destination(repository, contract):
+    require_not_quarantined(repository, contract["repository_id"])
     repo = gh_api(f"repos/{repository}")
     if (repo.get("id") != contract["repository_id"]
             or repo.get("full_name") != repository
