@@ -2,6 +2,45 @@
 
 **Status: PROPOSAL ONLY — NOT AN AUTHORIZATION TO COPY SOURCE.**
 
+## Latest source-free CI probe: 2026-10-29
+
+**Latest review-only head:** `4141763f387c914609b923fad714d140c9c99d27`
+(tree `a5eec88f514ee5419c517fd051ab96bbb047f6b4`).
+The source-free workflow blob is
+`44873c3d8072da0de491666cf42bbe960eaf6845`.
+The workflow uses `permissions: {}` and no checkout/secret.
+It checks gcc/g++/clang/clang++/cmake, compiles and executes **only inline,
+synthetic** C11 and C++17 programs, and executes the C++17 synthetic program
+with Clang ASan/UBSan. Version output uses `sed -n '1p'` rather than
+`head -1`, avoiding an avoidable producer SIGPIPE under `pipefail`.
+
+**Source-local validation:** the exact Git blob was reconstructed and verified
+locally (`git hash-object` matched `44873c3d8072da0de491666cf42bbe960eaf6845`).
+Its three shell steps ran successfully (3/3) in an isolated **local container
+using simulated `RUNNER_NAME`/`GITHUB_RUN_ID` values**. This is a compiler
+and script smoke test, **NOT** evidence that GitHub assigned a runner.
+
+**Live GitHub verification:** the exact-head
+[source-org run #40958086518](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40958086518)
+failed before an Actions runner was assigned. Job `123743370166`
+reported `runner_id=0` and zero executed steps. Thus the source-org capacity
+blocker remains. An unrelated source-free
+[canary #40814847356 attempt 5](https://github.com/honeypot-r-us-test/hnpt-lib-core/actions/runs/40814847356)
+had 3/3 executed steps, but does not authorize source transfer or establish
+a billing-minute balance.
+
+**Separate immutable export vetoes:** source `main.protected=false`,
+candidate carrier `main.protected=false`, source allowlist empty, independent
+security review missing, issue #1150 and platform-conformance incidents #22,
+#77, #127, #212 all OPEN. **Publisher issue #1154** leaves
+`require_atomic_ref_rollback()` an unconditional denial before private source
+reads or destination writes. Do not remove this hold or create a new private
+source mirror based on runner availability. A new protected/approved dedicated
+carrier and independently reviewed, actually executed atomic ref cleanup are
+required before any transfer.
+
+
+
 This document is an independently reviewable security and test-plan handoff. It
 does not add an entry to `.github/private-ci-approved-repositories.txt`, create
 a source-bearing Git object in another organization, install a privileged
