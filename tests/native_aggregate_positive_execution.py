@@ -21,31 +21,31 @@ pub fnc main(): int {
     const T value = T{42};
     return value.foo;
 }
-""", ()),
+""", (), 42),
     ("named-source-order", """
 fnc mark_two(int x): int { return x; }
 fnc mark_one(int x): int { return x; }
 pub fnc main(): int {
     type T = struct { foo: int, bar: int };
-    const T value = T{bar: mark_two(2), foo: mark_one(40)};
+    const T value = T{bar: mark_two(2), foo: mark_one(17)};
     return value.foo + value.bar;
 }
-""", (b"mark_two", b"mark_one")),
+""", (b"mark_two", b"mark_one"), 19),
     ("bool-field", """
-fnc ready(bool value): int { return value ? 42 : 0; }
+fnc ready(bool value): int { return value ? 7 : 0; }
 pub fnc main(): int {
     type T = struct { active: bool };
     const T value = T{active: true};
     return ready(value.active);
 }
-""", ()),
+""", (), 7),
     ("reordered-declaration", """
 pub fnc main(): int {
     type T = struct { z: int, a: int };
-    const T value = T{z: 2, a: 40};
+    const T value = T{z: 3, a: 70};
     return value.a + value.z;
 }
-""", ()),
+""", (), 73),
 )
 
 NEGATIVE = (
@@ -122,15 +122,18 @@ def main():
     compiler, clang = args.compiler.resolve(), args.clang.resolve()
     compiler_digest, clang_digest = (
         sha256(compiler.read_bytes()), sha256(clang.read_bytes()))
-    positive_names = [name for name, _, _ in POSITIVE]
+    positive_names = [name for name, _, _, _ in POSITIVE]
+    expected_exits = [status for _, _, _, status in POSITIVE]
     negative_names = [name for name, _, _ in NEGATIVE]
     require(len(positive_names) == 4 and len(negative_names) == 4 and
-            len(set(positive_names + negative_names)) == 8,
-            "aggregate executable acceptance requires four distinct positives and four distinct negatives")
+            len(set(positive_names + negative_names)) == 8 and
+            len(set(expected_exits)) == 4 and
+            all(type(exit_code) is int and 0 < exit_code < 128 for exit_code in expected_exits),
+            "aggregate executable acceptance requires four distinct positives, exits and four distinct negatives")
     observations = []
     with tempfile.TemporaryDirectory(prefix="oreslang-native-aggregate-") as tmp:
         root = Path(tmp)
-        for name, source, calls in POSITIVE:
+        for name, source, calls, expected_exit in POSITIVE:
             case_dir = root / name
             case_dir.mkdir()
             src = case_dir / "case.ores"
@@ -158,12 +161,13 @@ def main():
                     name + ": Clang failed to link actual guest IR: " +
                     repr(linked.stderr[:800]))
             observed = run([str(exe)], case_dir)
-            require(observed.returncode == 42 and observed.stdout == b"" and
+            require(observed.returncode == expected_exit and observed.stdout == b"" and
                     observed.stderr == b"",
-                    name + ": expected OS exit 42: " +
+                    name + ": expected OS exit " + str(expected_exit) + ": " +
                     repr((observed.returncode, observed.stdout, observed.stderr)))
             observations.append({
                 "case": name, "os_exit": observed.returncode,
+                "expected_os_exit": expected_exit,
                 "source_sha256": sha256(original),
                 "ir_sha256": sha256(compilation.stdout),
                 "binary_sha256": sha256(exe.read_bytes())
