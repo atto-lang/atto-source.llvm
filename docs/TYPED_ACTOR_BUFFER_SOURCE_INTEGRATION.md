@@ -48,3 +48,22 @@ Source-branch `.github/private-ci-approved-repositories.txt` contains **zero app
 Two candidate private carriers were checked read-only: `akrion-sim/akrion-sim-e2e` run `40812378019` and `opto-sync-test/go-java-validation` run `40919664446`. Their inspected failure jobs executed **zero steps**, so neither is verified to have available Actions execution capacity. No private source was exported to either organization. Exact per-blob/tree SHA mirroring can be performed only **after** an approved destination has been provisioned and a source-free canary confirms actual executed runner steps; it must preserve original source tree and blobs, use no cross-org secret/token checkout, and leave both the mirror and source PRs unmerged until full exact-head verification.
 
 Remaining blockers: source-level typed owned-buffer actor send/receive compiler lowering and actual scheduler envelope, real `.ores` execution, verified source CI/approved private runner, and Java/LLVM/other-backend conformance. Keep this PR **DRAFT**.
+
+## Turn affinity and typed admission — later draft hardening
+
+`TrustedActorBufferSchedulerGate::Turn` is now bound to the **physical C++ thread that admitted the turn**. Gate data operations reject a turn presented by a different thread even if the actor ID and incarnation match. An active turn destroyed on another thread terminates rather than silently clearing another carrier's execution authority. Host continuations must mint a new turn when resumed on another carrier; moving a `Turn` to a new thread is not an authorization transfer. This is a *host-side check*, not yet proof that `NativeActorScheduler` cryptographically or structurally authorizes the ticket: the scheduler-to-gate binding is still missing.
+
+The new `TrustedActorBufferDelivery::try_send` returns `Gate::SendStatus`:
+
+| Result | Ownership after call |
+| --- | --- |
+| `Accepted` | Moves to the recipient; the sender's generation-bound alias becomes stale |
+| `MailboxFull` | Remains with sender; no buffer generation change |
+| `RecipientStopped` | Remains with sender; no buffer generation change |
+| `UnknownRecipient` | Remains with sender; no buffer generation change |
+
+After a **live** receiver is found, the mailbox validates that the sender owns an unborrowed, current-generation buffer **before** reporting `MailboxFull` or `Closed`. An invalid owner or stale/borrowed handle throws, rather than impersonating transient backpressure. All accepted sends commit under the scheduler gate lock, serialized with recipient retirement. These result codes are for trusted C++ callers only; they are **not yet** an Oreslang `Result<T,E>` or a real scheduler-native DATA envelope.
+
+Updated native tests assert wrong-carrier turn rejection; stale/borrowed-vs-full distinction; sender buffer usability after all expected rejection statuses; and exactly one accepted-versus-stopped outcome in repeated concurrent send-vs-STOP races. Existing compiled guest `Array<T>` actor sends must still fail closed.
+
+**Verification status for this later revision:** GitHub source files and test fixtures are committed; the new revision has **not been executed locally as an exact-head build**. Prior 4/4 CTest and sanitizer evidence applies only to the earlier audited blobs, not automatically to these changes. Exact-head GitHub Actions are currently failing before executing job steps. Keep this PR **DRAFT** pending executed CTest/GCC/Clang sanitizers, real compiler-negative fixtures, and source-to-native positive `.ores` execution.
