@@ -48,20 +48,44 @@ inline constexpr std::size_t kMaxNativeTemplateInterpolations = 1024;
 inline constexpr std::size_t kMaxNativeBlockCommentDepth = 128;
 
 bool reserved_unsafe_stdlib_import(std::string_view path) {
-    // Import spellings are not authority. At G0 no native-host stdlib is
-    // available; reject the exact segment before graph resolution or LLVM IR.
-    for (const std::string_view root : {
-            "ores.std/unsafe", "std/unsafe", "ores.std.unsafe",
-            "std.unsafe", "ores.std:unsafe", "std:unsafe"}) {
-        if (path == root ||
-            (path.size() > root.size() &&
-             path.substr(0, root.size()) == root &&
-             (path[root.size()] == '/' || path[root.size()] == '.')))
-            return true;
+    // G0: lexical package identity is compared before loading native modules.
+    // Later path normalization must not make std/./unsafe look harmless.
+    const auto reserved = [](std::string_view candidate) {
+        for (const std::string_view root : {
+                "ores.std/unsafe", "std/unsafe", "ores.std.unsafe",
+                "std.unsafe", "ores.std:unsafe", "std:unsafe"}) {
+            if (candidate == root ||
+                (candidate.size() > root.size() &&
+                 candidate.substr(0, root.size()) == root &&
+                 (candidate[root.size()] == '/' || candidate[root.size()] == '.')))
+                return true;
+        }
+        return false;
+    };
+    if (reserved(path)) return true;
+    if (path.substr(0, 4) != "std/" &&
+            path.substr(0, 9) != "ores.std/") return false;
+    std::vector<std::string_view> segments;
+    for (std::size_t from = 0; from <= path.size();) {
+        const auto slash = path.find('/', from);
+        const auto part = path.substr(from, slash == std::string_view::npos
+                ? path.size() - from : slash - from);
+        if (part == "..") {
+            if (segments.size() <= 1) return true; // Root traversal is noncanonical.
+            segments.pop_back();
+        } else if (!part.empty() && part != ".") {
+            segments.push_back(part);
+        }
+        if (slash == std::string_view::npos) break;
+        from = slash + 1;
     }
-    return false;
+    std::string canonical;
+    for (const auto part : segments) {
+        if (!canonical.empty()) canonical.push_back('/');
+        canonical.append(part);
+    }
+    return reserved(canonical);
 }
-
 
 [[noreturn]] void template_error(std::string_view detail, std::size_t offset) {
     throw std::runtime_error("native template " + std::string(detail) +
