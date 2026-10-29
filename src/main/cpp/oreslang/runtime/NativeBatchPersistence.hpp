@@ -169,7 +169,14 @@ public:
         }
         if (batch.empty()) return {};
         std::vector<Receipt> receipts;
-        try { receipts = store_.commit(batch); }
+        try {
+            receipts = store_.commit(batch);
+            if(receipts.size()!=batch.size())throw std::runtime_error("provider receipt cardinality mismatch");
+            for(std::size_t i=0;i<batch.size();++i)
+                if(receipts[i].operation_id!=batch[i].operation_id ||
+                   (receipts[i].durable()&&!receipts[i].applied()))
+                    throw std::runtime_error("provider receipt identity mismatch");
+        }
         catch (...) {
             std::lock_guard<std::mutex> lock(mu_);
             queued_bytes_ -= charge_total; outstanding_entries_ -= batch.size();
