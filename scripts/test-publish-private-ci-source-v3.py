@@ -97,6 +97,16 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             source.assert_not_called()
             api.assert_not_called()
 
+    def test_ref_api_helper_rejects_invalid_repository_without_cli(self):
+        for repository in ("bad/../repo", "evil/repo?ref=main", "not-a-repo"):
+            with self.subTest(repository=repository):
+                with patch.object(v3, "run_bounded_gh") as runner:
+                    with self.assertRaisesRegex(v3.Denied, "repository is invalid"):
+                        v3._gh_ref_request(
+                            repository, "ci/authorized-" + CARRIER_COMMIT, "GET"
+                        )
+                    runner.assert_not_called()
+
     def test_ref_api_helper_rejects_name_only_delete_without_cli(self):
         with patch.object(v3, "run_bounded_gh") as runner:
             with self.assertRaisesRegex(v3.Denied, "atomic lease"):
