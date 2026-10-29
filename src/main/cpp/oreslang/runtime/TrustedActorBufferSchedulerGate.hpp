@@ -180,6 +180,10 @@ public:
                         const Handle& buffer) {
         std::lock_guard<std::mutex> lock(state_->mutex);
         const auto from = require_turn(sender);
+        // A stale, foreign or borrowed source is an ownership error even
+        // when the requested receiver does not exist or has stopped.
+        // Do not disguise invalid authority as an ordinary send rejection.
+        state_->pool->require_transferable(buffer, from);
         const auto it = state_->actors.find(recipient.id);
         if (it == state_->actors.end() || it->second.incarnation != recipient.incarnation)
             return SendStatus::UnknownRecipient;
