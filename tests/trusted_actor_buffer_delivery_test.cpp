@@ -86,6 +86,8 @@ int main() {
            == Send::RecipientStopped);
     pipe.write(terminated_source_turn, terminated_payload, 0, 21);
     pipe.drop(terminated_source_turn, terminated_payload);
+    assert(fails([&] {(void)pipe.try_send(
+        terminated_source_turn, receiver, terminated_payload); }));
     terminated_source_turn.release();
     assert(pool->used_bytes() == 0);
     assert(fails([&] {pipe.deliver_one(receiver, [](auto&) {});}));
