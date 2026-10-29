@@ -4484,3 +4484,24 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-batch-persistence-contract-test)
     set_tests_properties(native_batch_persistence_host_only_contract PROPERTIES TIMEOUT 30)
 endif()
+
+
+# REAL SQLite WAL/FULL host provider. The test executes native C++ and SQLite,
+# but is not compiler-generated Oreslang guest execution.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-native-sqlite-persistence-test
+            tests/native_sqlite_persistence_test.cpp)
+        target_include_directories(oreslang-native-sqlite-persistence-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+        target_compile_features(oreslang-native-sqlite-persistence-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-sqlite-persistence-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-sqlite-persistence-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_sqlite_wal_actor_state_crash_recovery_host_only
+            COMMAND oreslang-native-sqlite-persistence-test)
+        set_tests_properties(native_sqlite_wal_actor_state_crash_recovery_host_only
+            PROPERTIES TIMEOUT 60)
+    endif()
+endif()
