@@ -23,7 +23,7 @@ def triggered(path, triggers):
     if path in triggers:
         return True
     return any(
-        item.endswith("/**") and path.startswith(item[:-3])
+        item.endswith("/**") and path.startswith(item[:-2])
         for item in triggers
     )
 
@@ -59,6 +59,25 @@ def check():
     trigger_paths = TRIGGER.findall(header)
     trigger_set = set(trigger_paths)
     assert len(trigger_paths) == len(trigger_set), "duplicate PR path trigger"
+
+    # Broad trigger coverage must survive adding a new quoted runtime header
+    # or test helper that is not yet in the fixed exact-blob manifest. Its
+    # introducing PR will run this audit and fail closed until attested.
+    for wildcard, new_input, sibling in (
+        ("src/main/cpp/oreslang/runtime/**",
+         "src/main/cpp/oreslang/runtime/NewTimerDependency.hpp",
+         "src/main/cpp/oreslang/runtime-other/Unrelated.hpp"),
+        ("tests/**",
+         "tests/new_rt_timer_helper.hpp",
+         "tests-other/unrelated.hpp"),
+    ):
+        assert wildcard in trigger_set, f"missing broad PR trigger: {wildcard}"
+        assert triggered(new_input, trigger_set), (
+            f"new dependency cannot trigger focused CI: {new_input}"
+        )
+        assert not triggered(sibling, {wildcard}), (
+            f"wildcard escapes directory boundary: {wildcard}"
+        )
 
     job_marker = f"  {JOB}:\n"
     assert job_marker in body, "missing focused RT job"

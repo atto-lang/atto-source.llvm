@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - CMakeLists.txt
+      - src/main/cpp/oreslang/runtime/**
+      - tests/**
       - src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
       - src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
