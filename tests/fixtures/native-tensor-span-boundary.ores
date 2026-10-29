@@ -11,7 +11,7 @@ fnc valid_tensor_span(int backing_elements, int start_element,
   if (start_element > backing_elements) { return 0; } fi
   if (element_count == 0) { return 1; } fi
   if (start_element == backing_elements) { return 0; } fi
-  if (element_count - 1 > (backing_elements - 1 - start_element) / element_stride) {
+  if (element_count - 1 > rt div_trunc_checked(backing_elements - 1 - start_element, element_stride)) {
     return 0;
   } fi
   return 1;
