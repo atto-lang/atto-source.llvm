@@ -1,0 +1,45 @@
+name: LLVM source-free runner admission
+on:
+  pull_request:
+    paths:
+      - .github/workflows/llvm-source-free-runner-admission.yml
+      - docs/security/LLVM_PRIVATE_CI_CARRIER_REVIEW_ONLY.md
+  workflow_dispatch:
+permissions: {}
+jobs:
+  runner-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Confirm actual source-org runner scheduling
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "LLVM_SOURCE_FREE_RUNNER_ADMITTED=true"
+          echo "RUN_ID=$GITHUB_RUN_ID"
+          echo "RUNNER_NAME=$RUNNER_NAME"
+          test -n "$RUNNER_NAME"
+          test -d "$RUNNER_TEMP"
+      - name: Verify installed native toolchain without checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ --version | head -1
+          clang --version | head -1
+          cmake --version | head -1
+          echo "LLVM_SOURCE_FREE_TOOLCHAIN_PRESENT=true"
+      - name: Execute synthetic native program with no repository source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/llvm-source-free"
+          printf '%s\n' \
+            '#include <stdio.h>' \
+            'int main(void) { puts("LLVM_SOURCE_FREE_C_TEST_EXECUTED"); return 0; }' \
+            >"$RUNNER_TEMP/llvm-source-free/hello.c"
+          for cc in gcc clang; do
+            "$cc" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              "$RUNNER_TEMP/llvm-source-free/hello.c" \
+              -o "$RUNNER_TEMP/llvm-source-free/$cc"
+            "$RUNNER_TEMP/llvm-source-free/$cc"
+          done
