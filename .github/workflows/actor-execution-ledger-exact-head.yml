@@ -276,16 +276,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! find /usr/lib/llvm-* -name LLVMConfig.cmake -print -quit 2>/dev/null | grep -q .; then
+          llvm_cmake="$(find /usr/lib/llvm-* -path '*/lib/cmake/llvm/LLVMConfig.cmake' \
+            -print 2>/dev/null | sort -V | tail -n 1)"
+          if [[ -z "$llvm_cmake" ]]; then
             sudo apt-get update
             sudo apt-get install -y llvm-dev
+            llvm_cmake="$(find /usr/lib/llvm-* -path '*/lib/cmake/llvm/LLVMConfig.cmake' \
+              -print 2>/dev/null | sort -V | tail -n 1)"
           fi
-          cmake -S . -B build/actor-ledger-guest -G Ninja -DBUILD_TESTING=OFF
+          test -f "$llvm_cmake"
+          cmake -S . -B build/actor-ledger-guest -G Ninja \
+            -DBUILD_TESTING=OFF -DLLVM_DIR="$(dirname "$llvm_cmake")"
           cmake --build build/actor-ledger-guest --target oreslang-llvmc -j 2
       - name: Compile and execute actual guest segments under native retained DATA/WAKE
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m py_compile tests/native_actor_compiled_guest_ledger.py
           python3 tests/native_actor_compiled_guest_ledger.py \
             --compiler "$PWD/build/actor-ledger-guest/oreslang-llvmc" \
             --clang clang --root "$PWD"
