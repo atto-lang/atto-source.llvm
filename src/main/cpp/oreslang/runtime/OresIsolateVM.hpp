@@ -32,7 +32,7 @@ struct IsolateConfig {
 // declared tenant heap limits, not measured resident/native process memory.
 struct OresVmLimits {
     std::uint32_t max_tenants = 1024;
-    std::uint64_t max_admitted_heap_bytes = UINT64_C(1) << 32;
+    std::uint64_t max_admitted_heap_bytes = std::uint64_t{1} << 32;
     std::size_t max_inflight_guest_calls = 4096;
 };
 
