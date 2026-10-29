@@ -128,6 +128,13 @@ def authorize(root: Path, destination: str, repository_id: int, base_sha: str,
             contract["schema"] != 1 or
             not isinstance(contract.get("carriers"), dict)):
         raise GateRejected("invalid private carrier policy schema")
+    # GitHub repository identities are case-insensitive. Reject ambiguous
+    # contracts instead of letting JSON insertion order select an identity.
+    normalized = set()
+    for key in contract["carriers"]:
+        if not isinstance(key, str) or not REPO.fullmatch(key) or key.casefold() in normalized:
+            raise GateRejected("invalid or case-duplicate private carrier contract key")
+        normalized.add(key.casefold())
     carrier = contract["carriers"].get(destination)
     if not isinstance(carrier, dict):
         raise GateRejected("missing exact destination contract")
