@@ -13,8 +13,11 @@ Java repository approvals do not authorize LLVM source exports.
 ## Incident resume gate
 
 Before the publisher may read or export private source bytes, it must query the
-immutable platform-conformance incident identities for #22, #77, and #127 and
-require each issue to be exactly `closed` with `state_reason=completed`.
+immutable platform-conformance incident identities for #22, #77, #127, and
+#212 and require each issue to be exactly `closed` with `state_reason=completed`.
+Incident #212 is additionally blocked until an independent security reviewer
+pins its actual immutable numeric GitHub issue ID in the protected publisher;
+a missing ID pin is **not** a discretionary bypass.
 Open incidents, alternate close reasons, issue-ID/URL drift, or a pull request
 masquerading as an issue all fail closed. The gate is rechecked every time
 protected authority is re-attested, including immediately before executable
