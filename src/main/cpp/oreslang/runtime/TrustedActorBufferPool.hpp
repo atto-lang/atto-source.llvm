@@ -250,11 +250,11 @@ public:
 
     // Called by scheduler shutdown before retiring the pool. A live loan
     // pins both its owner and reader, even when neither has an active turn.
-    bool has_borrowed_buffers_owned_by(TrustedBufferActor actor) const noexcept {
+    // This is a queue-ownership preflight: unqueued buffers (including
+    // buffers already delivered to an actor) do not prevent inbox closure.
+    bool has_active_loans_for_handle(const Handle& h, TrustedBufferActor owner) const {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        for (const auto& entry : state_->slots)
-            if (entry.second->owner == actor && entry.second->read_loans) return true;
-        return false;
+        return checked(h, owner)->read_loans != 0;
     }
 
     bool is_retired() const noexcept {
