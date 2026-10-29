@@ -66,6 +66,26 @@ public:
         }
     };
 
+    // Actor-scoped, noncopyable loan. No public read method: the actual
+    // reader must present its current scheduler Turn to read_loan().
+    class Loan final {
+        friend class TrustedActorBufferSchedulerGate;
+        std::shared_ptr<State> state_;
+        TrustedBufferActor reader_;
+        TrustedActorBufferPool::ReadLoan backing_;
+        Loan(std::shared_ptr<State> state, TrustedBufferActor reader,
+             TrustedActorBufferPool::ReadLoan backing)
+            : state_(std::move(state)), reader_(reader),
+              backing_(std::move(backing)) {}
+    public:
+        Loan() = delete;
+        Loan(const Loan&) = delete;
+        Loan& operator=(const Loan&) = delete;
+        Loan(Loan&&) noexcept = default;
+        Loan& operator=(Loan&&) = delete;
+        void release() noexcept { backing_.release(); }
+    };
+
     explicit TrustedActorBufferSchedulerGate(
             std::shared_ptr<TrustedActorBufferPool> pool)
         : state_(std::make_shared<State>(std::move(pool))) {
@@ -122,6 +142,22 @@ public:
         std::lock_guard<std::mutex> lock(state_->mutex);
         return state_->pool->read(buffer, require_turn(turn), offset);
     }
+    Loan borrow_read(const Turn& owner, TrustedBufferActor reader,
+                     const Handle& buffer) {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto actor = require_turn(owner);
+        (void)require_actor(reader);
+        return Loan(state_, reader, state_->pool->borrow_read(buffer, actor, reader));
+    }
+    std::uint8_t read_loan(const Turn& reader, const Loan& loan,
+                           std::size_t offset) const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto actor = require_turn(reader);
+        if (loan.state_ != state_ || !(loan.reader_ == actor))
+            throw std::logic_error("foreign or unauthorized read loan");
+        return loan.backing_.read(actor, offset);
+    }
+
     void drop(const Turn& turn, const Handle& buffer) {
         std::lock_guard<std::mutex> lock(state_->mutex);
         state_->pool->drop(buffer, require_turn(turn));
@@ -166,6 +202,7 @@ public:
         if (state_->closed) return true;
         for (const auto& item : state_->actors)
             if (item.second.in_turn) return false;
+        if (state_->pool->has_active_loans()) return false;
         state_->closed = true;
         for (auto& item : state_->actors) {
             if (item.second.mailbox) item.second.mailbox->close();
