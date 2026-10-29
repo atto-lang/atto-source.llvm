@@ -118,6 +118,7 @@ pub struct Expected {
     pub carrier_name: String,
     pub carrier_id: u64,
     pub carrier_main_sha: String,
+    pub source_main_sha: String,
     pub source_pr_number: u64,
     pub source_pr_sha: String,
 }
@@ -190,6 +191,9 @@ fn validate(snapshot: &Snapshot, pin: &Expected) -> Result<(), Denied> {
         Denied::UnpinnedCheck => Denied::UnpinnedCheck,
         _ => Denied::SourceProtection,
     })?;
+    if !sha40(&pin.source_main_sha) || snapshot.source_main.sha != pin.source_main_sha {
+        return Err(Denied::SourceProtection);
+    }
     protection(&snapshot.carrier_main).map_err(|error| match error {
         Denied::UnpinnedCheck => Denied::UnpinnedCheck,
         _ => Denied::CarrierProtection,
@@ -275,6 +279,7 @@ mod tests {
         let expected = Expected {
             carrier_name: carrier.name.clone(), carrier_id: carrier.id,
             carrier_main_sha: carrier_main.sha.clone(),
+            source_main_sha: main.sha.clone(),
             source_pr_number: pr.number, source_pr_sha: pr.head_sha.clone(),
         };
         (Snapshot {
