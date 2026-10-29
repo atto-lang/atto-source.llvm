@@ -86,10 +86,15 @@ public:
     OresVM& operator=(const OresVM&) = delete;
 
     IsolateHandle create_isolate(IsolateConfig config) {
-        if (config.tenant_id.empty() || config.heap_limit_bytes == 0 ||
+        // Reject unsafe tenant metadata before it reaches accounting or logs.
+        const bool unsafe_tenant_id = config.tenant_id.empty() ||
+            config.tenant_id.size() > 256 ||
+            std::any_of(config.tenant_id.begin(), config.tenant_id.end(),
+                [](unsigned char c) { return c < 0x20 || c == 0x7f; });
+        if (unsafe_tenant_id || config.heap_limit_bytes == 0 ||
             config.max_actors == 0 || config.max_inflight_guest_calls == 0 ||
             config.max_resource_pins == 0)
-            throw std::invalid_argument("isolate requires an ID and positive quotas");
+            throw std::invalid_argument("isolate requires a bounded ID and positive quotas");
         if (config.mode != IsolateMode::TrustedInProcess)
             throw std::logic_error("sandboxed-process isolation is not implemented");
         std::lock_guard<std::mutex> lock(mutex_);
