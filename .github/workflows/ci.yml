@@ -37,6 +37,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_llvm_ci_actor_workflow.py -v
       - name: Install LLVM toolchain and native linker
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Reject unsafe source-local guest runner admissions
+        run: python3 -m unittest discover -s tests -p test_run_pinned_compiled_actor_lifecycle.py -v
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
