@@ -124,3 +124,13 @@ Run registered tests with:
     ctest --test-dir build -R 'native_oresvm_(tenant_isolate_admission|guest_call_lifecycle|handwritten_llvm_aot_context)' --output-on-failure
 
 Full-repository CI must execute real steps before acceptance.
+
+## Synchronous non-reentrant guest turns
+
+Guest calls inside one isolate are serialized with a per-isolate host mutex.
+Calls against different tenants do not share this mutex. Admission is
+rechecked after a queued call obtains its turn: shutdown cancels queued
+invocations while allowing already-running synchronous code to finish.
+Nested calls on one host thread fail closed. Queued calls are pinned for
+shutdown accounting; this is not FIFO, a scheduler, preemptive cancellation,
+security isolation, or hard-real-time timing certification.

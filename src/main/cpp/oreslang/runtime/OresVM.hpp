@@ -53,6 +53,7 @@ class OresVM final {
         std::unordered_map<std::uint64_t, std::uint64_t> actors;
         std::uint64_t next_actor_generation = 1;
         std::size_t active_guest_calls = 0;
+        std::mutex guest_turn_mutex;  // trusted, serialized non-reentrant guest turns
         std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> guest_globals{};
     };
 
@@ -223,6 +224,21 @@ public:
                 --state->active_guest_calls;
             }
         } pin{this, state};
+        // Pin queued turns, and recheck admission after waiting for the tenant.
+        // A shutdown closes admission even for already-waiting calls.
+        static thread_local bool guest_active = false;
+        if (guest_active) throw std::logic_error("nested guest entry forbidden");
+        std::unique_lock<std::mutex> tenant_turn(state->guest_turn_mutex);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (state->phase != IsolatePhase::Running)
+                throw std::logic_error("guest invocation cancelled during shutdown");
+        }
+        guest_active = true;
+        struct GuestThreadGuard {
+            bool& active;
+            ~GuestThreadGuard() noexcept { active = false; }
+        } thread_guard{guest_active};
         GuestCall call{this, state, state->generation};
         OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
                               state->generation, &call, &guest_load_i64, &guest_store_i64};

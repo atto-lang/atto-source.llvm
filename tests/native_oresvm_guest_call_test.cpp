@@ -36,6 +36,15 @@ int main() {
     assert(vm.invoke_guest(b, guest_sum, 19) == 19);
     assert(vm.invoke_guest(a, guest_sum, 0) == 11);
     assert(vm.snapshot(a).active_guest_calls == 0);
+    // Counter previously allowed lost updates: load/store are two callbacks.
+    // Synchronous calls must be serialized per tenant but not across tenants.
+    std::thread parallel[4];
+    for (auto& worker : parallel) worker = std::thread([&] {
+        for (int i = 0; i < 250; ++i)
+            (void)vm.invoke_guest(b, guest_sum, 1);
+    });
+    for (auto& worker : parallel) worker.join();
+    assert(vm.invoke_guest(b, guest_sum, 0) == 1019);
     assert(rejects([&]{ vm.invoke_guest(a, guest_throw, 0); }));
     assert(vm.snapshot(a).active_guest_calls == 0);
     assert(rejects([&]{ vm.invoke_guest(a, nullptr, 0); }));
@@ -46,7 +55,7 @@ int main() {
     assert(vm.snapshot(a).phase == IsolatePhase::Quiescing);
     assert(rejects([&]{ vm.invoke_guest(a, guest_sum, 0); }));
     assert(rejects([&]{ vm.complete_shutdown(a); }));
-    assert(vm.invoke_guest(b, guest_sum, 1) == 20);
+    assert(vm.invoke_guest(b, guest_sum, 1) == 1020);
     allow_exit.store(true, std::memory_order_release);
     worker.join();
     vm.complete_shutdown(a); vm.destroy(a);
