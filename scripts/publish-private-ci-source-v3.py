@@ -1135,6 +1135,8 @@ def recheck_destination_identity(repository, contract):
 
 
 def _gh_ref_request(repository, ref_name, method):
+    if not isinstance(repository, str) or not NAME.fullmatch(repository):
+        raise Denied("carrier ref repository is invalid")
     if not isinstance(ref_name, str) or not HANDOFF_REF.fullmatch(ref_name):
         raise Denied("ref cleanup target is invalid")
     if method != "GET":
