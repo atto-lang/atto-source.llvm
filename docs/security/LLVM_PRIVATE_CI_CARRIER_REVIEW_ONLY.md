@@ -22,10 +22,25 @@ an independently approved carrier have been established.
 | Latest observed source PR head (2026-10-29 Git API; NOT approved) | `4517875ae1ce34ca4c2fc1d809c30daebb681ce2` |
 | Latest observed source root Git tree (2026-10-29 Git API; NOT approved) | `4e5c55bc00f4dbfddbd370a0b7e6cf1829724a44` |
 | Source root Git tree independently approved | **NO — observed identity requires reviewer attestation and live recheck before export** |
-| Source `main` protection/ruleset proof | **UNVERIFIED — independently verify effective enforcement** |
+| Source `main` protection/ruleset proof | **DENY: GitHub branch API reports `protected:false`, required checks enforcement `off` (2026-10-29); protection endpoint returned 403 to GitHub App, so no additional rule attestation is available** |
 | Source main allowlist | **EMPTY — zero active destinations** |
 | Security owner | `@ORESoftware` (independent decision required) |
 | Approval state | **DENY** |
+
+**Live protected-origin veto (2026-10-29):** authenticated GitHub
+`GET /repos/ores-truffle-oreslang/oreslang-source.llvm/branches/main`
+reported `protected:false`, `protection.enabled:false`,
+`required_status_checks.enforcement_level:"off"`, and an empty required
+check list for `main` at `6ca6a6911a6eeedc51e6865f87e8b73a5d604a3e`.
+The direct branch-protection endpoint is not accessible to this GitHub App
+(`403 Resource not accessible by integration`), and `GET /rulesets`
+returned `403` with a plan/feature availability error. These results
+**do not prove protected-source enforcement**; the branch's explicit
+`protected:false` is sufficient to **deny any private source export**
+under the V3 policy. An administrator must establish protection and
+independently attest effective source-main enforcement before reviewing a
+destination allowlist. This review-only document does not remediate
+branch settings, bypass the protected-main prerequisite, or grant approval.
 
 The latest observed head/tree were read from GitHub's immutable git-commit
 metadata endpoint, not inferred from filenames or a check-run. They establish
