@@ -4,11 +4,18 @@ on:
     paths:
       - CMakeLists.txt
       - src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
+      - src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp
+      - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+      - src/main/cpp/oreslang/runtime/NativeActorScheduler.h
+      - src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h
+      - src/main/cpp/oreslang/runtime/NativeExecutionContext.h
+      - src/main/cpp/oreslang/runtime/NativePhysicalTurnGate.h
       - src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
       - src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h
       - src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp
       - tests/native_realtime_timer_queue_test.cpp
       - tests/native_rt_timer_actor_heap_integration_test.cpp
+      - tests/native_rt_timer_actor_ledger_integration_test.cpp
       - tests/test_rt_timer_actor_heap_workflow_inputs.py
       - .github/workflows/rt-timer-actor-heap-exact-head.yml
   workflow_dispatch:
@@ -38,7 +45,23 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             test "$head" = "${{ github.event.pull_request.head.sha }}"
           fi
-          for path in             CMakeLists.txt             src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h             src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp             tests/native_realtime_timer_queue_test.cpp             tests/native_rt_timer_actor_heap_integration_test.cpp             tests/test_rt_timer_actor_heap_workflow_inputs.py             .github/workflows/rt-timer-actor-heap-exact-head.yml; do
+          for path in \
+            CMakeLists.txt \
+            src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h \
+            src/main/cpp/oreslang/runtime/HardRealtimeTimerQueue.hpp \
+            tests/native_realtime_timer_queue_test.cpp \
+            tests/native_rt_timer_actor_heap_integration_test.cpp \
+            tests/test_rt_timer_actor_heap_workflow_inputs.py \
+            .github/workflows/rt-timer-actor-heap-exact-head.yml \
+            src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionContext.h \
+            src/main/cpp/oreslang/runtime/NativePhysicalTurnGate.h \
+            tests/native_rt_timer_actor_ledger_integration_test.cpp; do
             expected="$(git rev-parse "HEAD:$path")"
             actual="$(git hash-object "$path")"
             test "$actual" = "$expected"
@@ -61,6 +84,14 @@ jobs:
           gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c             -o build/rt-timer-actor-heap/heap-gcc.o
           g++ -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror             -Isrc/main/cpp tests/native_rt_timer_actor_heap_integration_test.cpp             build/rt-timer-actor-heap/heap-gcc.o             -o build/rt-timer-actor-heap/integration-gcc
           build/rt-timer-actor-heap/integration-gcc
+          gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o build/rt-timer-actor-heap/scheduler-gcc.o
+          g++ -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_rt_timer_actor_ledger_integration_test.cpp \
+            build/rt-timer-actor-heap/scheduler-gcc.o \
+            -o build/rt-timer-actor-heap/ledger-gcc
+          build/rt-timer-actor-heap/ledger-gcc
 
       - name: Clang strict timer and actor-heap execution
         shell: bash
@@ -71,6 +102,14 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c             -o build/rt-timer-actor-heap/heap-clang.o
           clang++ -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror             -Isrc/main/cpp tests/native_rt_timer_actor_heap_integration_test.cpp             build/rt-timer-actor-heap/heap-clang.o             -o build/rt-timer-actor-heap/integration-clang
           build/rt-timer-actor-heap/integration-clang
+          clang -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o build/rt-timer-actor-heap/scheduler-clang.o
+          clang++ -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_rt_timer_actor_ledger_integration_test.cpp \
+            build/rt-timer-actor-heap/scheduler-clang.o \
+            -o build/rt-timer-actor-heap/ledger-clang
+          build/rt-timer-actor-heap/ledger-clang
 
       - name: Clang ASan and UBSan actor-heap execution
         shell: bash
@@ -79,3 +118,15 @@ jobs:
           clang -std=c11 -O1 -g -fsanitize=address,undefined             -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c             -o build/rt-timer-actor-heap/heap-san.o
           clang++ -std=c++17 -O1 -g -UNDEBUG -fsanitize=address,undefined             -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror             -Isrc/main/cpp tests/native_rt_timer_actor_heap_integration_test.cpp             build/rt-timer-actor-heap/heap-san.o             -o build/rt-timer-actor-heap/integration-san
           ASAN_OPTIONS=detect_leaks=1:abort_on_error=1           UBSAN_OPTIONS=halt_on_error=1             build/rt-timer-actor-heap/integration-san
+          clang -std=c11 -O1 -g -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o build/rt-timer-actor-heap/scheduler-san.o
+          clang++ -std=c++17 -O1 -g -UNDEBUG -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_rt_timer_actor_ledger_integration_test.cpp \
+            build/rt-timer-actor-heap/scheduler-san.o \
+            -o build/rt-timer-actor-heap/ledger-san
+          ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            build/rt-timer-actor-heap/ledger-san

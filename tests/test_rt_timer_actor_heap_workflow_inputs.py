@@ -83,6 +83,33 @@ def check():
     assert not missing_blobs, (
         f"unverified dependencies: {sorted(missing_blobs)}"
     )
+    # The ledger/scheduler integration is the only focused test that checks
+    # authenticated WAKE against an actual retained actor turn. Do not let it
+    # disappear from the build steps while remaining on the blob allowlist.
+    ledger_fixture = "tests/native_rt_timer_actor_ledger_integration_test.cpp"
+    scheduler_source = "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+    for step_name, binary in (
+        ("GCC strict timer and actor-heap execution", "ledger-gcc"),
+        ("Clang strict timer and actor-heap execution", "ledger-clang"),
+        ("Clang ASan and UBSan actor-heap execution", "ledger-san"),
+    ):
+        step_marker = f"      - name: {step_name}\n"
+        assert step_marker in section, f"missing execution step: {step_name}"
+        step = section.split(step_marker, 1)[1].split("\\n      - name:", 1)[0]
+        assert ledger_fixture in step, f"{step_name}: missing ledger fixture"
+        assert scheduler_source in step, f"{step_name}: missing scheduler"
+        binary_path = f"build/rt-timer-actor-heap/{binary}"
+        assert f"-o {binary_path}" in step, (
+            f"{step_name}: missing ledger build output"
+        )
+        assert step.count(binary_path) >= 2, (
+            f"{step_name}: ledger binary never executed"
+        )
+    cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert "add_test(NAME native_rt_timer_actor_ledger_start_authority" in cmake, (
+        "CMake timer-to-actor start-authority registration missing"
+    )
+
     for item in required:
         resolved = (root / item).resolve()
         assert resolved.is_relative_to(root), f"escaped source path {item}"
