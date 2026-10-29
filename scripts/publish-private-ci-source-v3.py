@@ -1198,12 +1198,14 @@ def delete_exact_ref(repository, ref_name, expected_sha, expected_repository_id)
         return False
     if actual != expected_sha:
         raise Denied("carrier ref moved; refusing rollback")
-    result = _gh_ref_request(repository, ref_name, "DELETE")
-    if result.returncode != 0 and not _is_http_status(result.stderr, 404):
-        raise Denied("carrier ref rollback failed")
-    if live_ref_sha(repository, ref_name, expected_repository_id) is not None:
-        raise Denied("carrier ref still exists after rollback")
-    return True
+    # GitHub's REST DELETE reference endpoint has no atomic old-SHA
+    # precondition. The preceding GET does not prevent a concurrent writer
+    # from moving this ref before DELETE. Never issue name-only deletion.
+    # Until a reviewed compare-and-delete Git transport implementation ships,
+    # retain the ref and surface a security incident for owner-managed cleanup.
+    raise Denied(
+        "automatic carrier ref deletion disabled: atomic compare-and-delete required (#1154)"
+    )
 
 
 def require_atomic_ref_rollback():
