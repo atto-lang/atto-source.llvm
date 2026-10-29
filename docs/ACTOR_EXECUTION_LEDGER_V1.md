@@ -194,8 +194,10 @@ it is not proof of any later remote/mailbox delivery.
 
 The deterministic same-scheduler two-actor regression in
 `tests/native_actor_retained_stop_wake_race_test.c` now includes STOP of
-the target B before TRANSFER, STOP of B after TRANSFER before PUBLISH, and
-STOP of producer A after TRANSFER. It also exercises a retained DATA frame
+the target B before TRANSFER, STOP of B after TRANSFER before PUBLISH, STOP
+of producer A after TRANSFER, and STOP of **both** producer and target before
+publication (producer retirement takes precedence without a wake callback
+or accepted execution credit). It also exercises a retained DATA frame
 when the target STOP occurs before TRANSFER: the producer must explicitly
 cancel its old escrow and schedule a *new local cancellation wake* to unwind
 the retained frame; denying TRANSFER alone cannot complete a Future. The
