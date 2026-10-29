@@ -30,7 +30,11 @@ int main() {
     pipe.write(producer, first, 0, 42);
     pipe.write(producer, first, 31, 7);
     auto rejected = pipe.allocate(producer, 16);
-    pipe.send(producer, receiver, first);
+    using Send = TrustedActorBufferDelivery::SendStatus;
+    assert(pipe.try_send(producer, {999,1}, first) == Send::UnknownRecipient);
+    pipe.write(producer, first, 0, 42); // invalid target did not take ownership
+    assert(pipe.try_send(producer, receiver, first) == Send::Accepted);
+    assert(pipe.try_send(producer, receiver, rejected) == Send::MailboxFull);
     assert(fails([&] { pipe.send(producer, receiver, rejected); }));
     // Full mailbox did not revoke sender authority or copy DATA.
     pipe.write(producer, rejected, 0, 9);
@@ -68,6 +72,14 @@ int main() {
     pipe.send(last_turn, receiver, last);
     last_turn.release();
     pipe.retire(receiver);
+    assert(pool->used_bytes() == 0);
+    auto terminated_source_turn = pipe.enter_turn(sender);
+    auto terminated_payload = pipe.allocate(terminated_source_turn, 1);
+    assert(pipe.try_send(terminated_source_turn, receiver, terminated_payload)
+           == Send::RecipientStopped);
+    pipe.write(terminated_source_turn, terminated_payload, 0, 21);
+    pipe.drop(terminated_source_turn, terminated_payload);
+    terminated_source_turn.release();
     assert(pool->used_bytes() == 0);
     assert(fails([&] {pipe.deliver_one(receiver, [](auto&) {});}));
     // Concurrent DATA admission versus terminal STOP is linearized by the
