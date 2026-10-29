@@ -4,11 +4,12 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "checked-i64 quotient failure line %d: %s\\n", __LINE__, #expr); \
+    fprintf(stderr, "checked-i64 quotient failure line %d: %s\n", __LINE__, #expr); \
     exit(1); \
 } } while (0)
 
@@ -45,7 +46,7 @@ static void compare_case(int64_t a, int64_t b) {
     if (got != expected || actual != reference) {
         fprintf(stderr, "mismatch: a=%" PRId64 " b=%" PRId64
                 " status=%d expected=%d actual=%" PRId64
-                " reference=%" PRId64 "\\n",
+                " reference=%" PRId64 "\n",
                 a, b, (int)got, (int)expected, actual, reference);
         exit(1);
     }
@@ -95,8 +96,11 @@ int main(void) {
     /* Deterministic, full-width and intentionally degenerate randomized
      * signed input distributions. Zero/one/-one and MIN appear frequently. */
     for (uint32_t i = 0; i < 200000; ++i) {
-        int64_t a = (int64_t)next_u64();
-        int64_t b = (int64_t)next_u64();
+        const uint64_t a_bits = next_u64();
+        const uint64_t b_bits = next_u64();
+        int64_t a, b;
+        memcpy(&a, &a_bits, sizeof(a));
+        memcpy(&b, &b_bits, sizeof(b));
         switch (i % 16) {
             case 0: b = 0; break;
             case 1: b = -1; break;
