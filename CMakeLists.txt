@@ -4485,3 +4485,45 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-oresvm-isolate-test)
     set_tests_properties(native_oresvm_tenant_isolate_admission PROPERTIES TIMEOUT 30)
 endif()
+
+# OresVM synchronous trusted guest-call ABI; host-only, not source lowering.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-oresvm-guest-call-test
+        tests/native_oresvm_guest_call_test.cpp)
+    target_include_directories(oreslang-native-oresvm-guest-call-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-oresvm-guest-call-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-oresvm-guest-call-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-oresvm-guest-call-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_oresvm_guest_call_lifecycle
+        COMMAND oreslang-native-oresvm-guest-call-test)
+    set_tests_properties(native_oresvm_guest_call_lifecycle PROPERTIES TIMEOUT 30)
+    # Handwritten LLVM IR fixture only, not .ores compiler source lowering.
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        find_program(ORES_ISOLATE_TEST_CLANG clang)
+        if(ORES_ISOLATE_TEST_CLANG)
+            set(ORES_ISOLATE_AOT_OBJ "${CMAKE_CURRENT_BINARY_DIR}/oresvm-guest-counter-aot.o")
+            add_custom_command(OUTPUT "${ORES_ISOLATE_AOT_OBJ}"
+                COMMAND "${ORES_ISOLATE_TEST_CLANG}" -x ir -c
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_oresvm_guest_counter.ll"
+                    -o "${ORES_ISOLATE_AOT_OBJ}"
+                DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_oresvm_guest_counter.ll"
+                VERBATIM)
+            set_source_files_properties("${ORES_ISOLATE_AOT_OBJ}" PROPERTIES
+                GENERATED TRUE EXTERNAL_OBJECT TRUE)
+            add_executable(oreslang-native-oresvm-guest-aot-test
+                tests/native_oresvm_guest_aot_test.cpp "${ORES_ISOLATE_AOT_OBJ}")
+            target_include_directories(oreslang-native-oresvm-guest-aot-test PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_compile_features(oreslang-native-oresvm-guest-aot-test PRIVATE cxx_std_17)
+            target_link_libraries(oreslang-native-oresvm-guest-aot-test PRIVATE Threads::Threads)
+            target_compile_options(oreslang-native-oresvm-guest-aot-test PRIVATE
+                $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+            add_test(NAME native_oresvm_handwritten_llvm_aot_context
+                COMMAND oreslang-native-oresvm-guest-aot-test)
+            set_tests_properties(native_oresvm_handwritten_llvm_aot_context PROPERTIES TIMEOUT 30)
+        endif()
+    endif()
+endif()
