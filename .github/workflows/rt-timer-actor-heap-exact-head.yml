@@ -123,9 +123,7 @@ jobs:
             -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror \
             -Isrc/main/cpp tests/native_realtime_timer_queue_test.cpp \
             -o build/rt-timer-actor-heap/timer-san
-          ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
-            UBSAN_OPTIONS=halt_on_error=1 \
-            build/rt-timer-actor-heap/timer-san
+          ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 build/rt-timer-actor-heap/timer-san
           clang -std=c11 -O1 -g -fsanitize=address,undefined             -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c             -o build/rt-timer-actor-heap/heap-san.o
           clang++ -std=c++17 -O1 -g -UNDEBUG -fsanitize=address,undefined             -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror             -Isrc/main/cpp tests/native_rt_timer_actor_heap_integration_test.cpp             build/rt-timer-actor-heap/heap-san.o             -o build/rt-timer-actor-heap/integration-san
           ASAN_OPTIONS=detect_leaks=1:abort_on_error=1           UBSAN_OPTIONS=halt_on_error=1             build/rt-timer-actor-heap/integration-san
@@ -138,6 +136,4 @@ jobs:
             -Isrc/main/cpp tests/native_rt_timer_actor_ledger_integration_test.cpp \
             build/rt-timer-actor-heap/scheduler-san.o \
             -o build/rt-timer-actor-heap/ledger-san
-          ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
-            UBSAN_OPTIONS=halt_on_error=1 \
-            build/rt-timer-actor-heap/ledger-san
+          ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 build/rt-timer-actor-heap/ledger-san
