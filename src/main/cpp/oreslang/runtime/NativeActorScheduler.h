@@ -38,7 +38,8 @@ typedef struct {
 typedef enum {
     ORES_NATIVE_WAKE_INVALID = 0,
     ORES_NATIVE_WAKE_PUBLISHED = 1,
-    ORES_NATIVE_WAKE_PRODUCER_RETIRED = 2
+    ORES_NATIVE_WAKE_PRODUCER_RETIRED = 2,
+    ORES_NATIVE_WAKE_TARGET_RETIRED = 3
 } OresNativeWakePublishStatus;
 
 typedef enum {
