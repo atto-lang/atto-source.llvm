@@ -1326,6 +1326,58 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
 
         for (const auto& binding : fn.locals) {
+            if (binding.aggregate_type) {
+                // Stack-only v1 aggregate value. All fields have checked i64
+                // storage; bool values are canonical 0/1 in that transport.
+                // This is NOT a callable aggregate ABI or a string handle.
+                const auto& shape = *binding.aggregate_type;
+                if (shape.kind != types::NativeAggregateShape::Kind::ExactStruct ||
+                        !binding.initializer ||
+                        binding.initializer->kind != Expression::Kind::AggregateConstruct ||
+                        !binding.initializer->aggregate_type ||
+                        !shape.same_type_as(*binding.initializer->aggregate_type) ||
+                        binding.initializer->arguments.size() != shape.fields.size() ||
+                        binding.initializer->argument_names.size() != shape.fields.size())
+                    throw std::runtime_error("AGGREGATE_STACK_LOWERING_UNVERIFIED");
+                for (const auto& field : shape.fields)
+                    if (field.type != "int" && field.type != "bool")
+                        throw std::runtime_error("AGGREGATE_NATIVE_FIELD_UNVERIFIED");
+                auto* struct_type = llvm::StructType::get(
+                    context, std::vector<llvm::Type*>(shape.fields.size(), i64));
+                auto* slot = builder.CreateAlloca(
+                    struct_type, nullptr, binding.name + ".aggregate");
+                // Declaration order is canonical, but *evaluation* follows
+                // source expression order. Never sort initializer expressions.
+                for (std::size_t i = 0; i < binding.initializer->arguments.size(); ++i) {
+                    const auto& field_name = binding.initializer->argument_names[i];
+                    const auto field = std::find_if(shape.fields.begin(), shape.fields.end(),
+                        [&](const types::NativeAggregateShape::Field& member) {
+                            return member.name == field_name;
+                        });
+                    if (field == shape.fields.end())
+                        throw std::runtime_error("AGGREGATE_CONSTRUCTOR_UNKNOWN_FIELD");
+                    const std::size_t index = static_cast<std::size_t>(
+                        field - shape.fields.begin());
+                    auto* value = lower(*binding.initializer->arguments[i],
+                        builder, i64, storage, field_storage, declarations,
+                        &region_moves);
+                    auto* address = builder.CreateStructGEP(
+                        struct_type, slot, static_cast<unsigned>(index),
+                        binding.name + "." + field_name);
+                    builder.CreateStore(value, address);
+                }
+                for (std::size_t i = 0; i < shape.fields.size(); ++i) {
+                    auto* address = builder.CreateStructGEP(
+                        struct_type, slot, static_cast<unsigned>(i),
+                        binding.name + "." + shape.fields[i].name + ".place");
+                    if (!field_storage.emplace(
+                            field_key(binding.name, shape.fields[i].name),
+                            address).second)
+                        throw std::runtime_error("AGGREGATE_FIELD_STORAGE_COLLISION");
+                }
+                storage.emplace(binding.name, slot);
+                continue;
+            }
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
