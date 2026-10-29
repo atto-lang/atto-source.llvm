@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Closed-world LLVM AOT admission: unsupported attributes/macros must fail without IR."""
 import argparse
+import base64
+import binascii
+import re
 import pathlib
 import shutil
 import subprocess
@@ -35,6 +38,37 @@ NEGATIVE_CASES = {
     "trailing_attribute_after_valid_program": BASE + "@derive(Eq)\n",
     "trailing_macro_after_valid_program": BASE + "macro_rules! x { () => { 42 }; }\n",
 }
+
+
+def shared_annotation_cases():
+    """Schema-checked byte-identical corpus; expected index 2 is LLVM."""
+    path = pathlib.Path(__file__).resolve().parents[1] / (
+        "contracts/v1/annotation-admission-v1.cases")
+    cases = []
+    seen = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("|")
+        if len(fields) != 7:
+            raise ValueError("invalid annotation parity row schema")
+        key, *expected, encoded = fields
+        if not re.fullmatch(r"[a-z][a-z_0-9]*", key) or key in seen:
+            raise ValueError("invalid or duplicate annotation parity id: " + key)
+        seen.add(key)
+        if any(value not in {"pass", "reject"} for value in expected):
+            raise ValueError("invalid annotation parity expectation: " + key)
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+            source = raw.decode("utf-8", errors="strict")
+        except (ValueError, UnicodeError, binascii.Error) as ex:
+            raise ValueError("invalid annotation parity source: " + key) from ex
+        if base64.b64encode(raw).decode("ascii") != encoded:
+            raise ValueError("noncanonical source bytes: " + key)
+        cases.append((key, source, expected[1]))
+    if len(cases) != 17:
+        raise ValueError("incomplete annotation parity corpus")
+    return cases
 
 
 def invoke(compiler, directory, case, source, target=None):
@@ -135,6 +169,18 @@ def main():
                 error = execute_host_ir(args.clang, directory, "typed_calls", calls.stdout)
                 if error:
                     failures.append("host typed-call guest AOT: " + error)
+            for label, source, expectation in shared_annotation_cases():
+                result, emitted = invoke(args.compiler, directory,
+                                         "parity_" + label + "_" + target,
+                                         source, target)
+                if expectation == "reject":
+                    if result.returncode == 0 or result.stdout.strip() or emitted or not result.stderr.strip():
+                        failures.append("annotation parity reject failed: " + label
+                                        + "/" + target + " stderr=" + result.stderr[:250])
+                else:
+                    if result.returncode or any(sig not in result.stdout for sig in main_signatures) or emitted:
+                        failures.append("annotation parity positive failed: " + label
+                                        + "/" + target + " stderr=" + result.stderr[:250])
             for label, source in NEGATIVE_CASES.items():
                 result, emitted = invoke(args.compiler, directory, label + "_" + target, source, target)
                 if result.returncode == 0:
