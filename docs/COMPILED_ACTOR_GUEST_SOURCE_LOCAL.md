@@ -20,6 +20,8 @@ EXPECTED_HEAD='<independently-reviewed-40-hex-source-commit>' \
 
 The run refuses missing or mismatched `EXPECTED_HEAD`, positional skip flags, modified/untracked source, symlinked or reused `build/`, and execution from a subdirectory. It creates a fresh build, runs receipt capture against the actual compiled `build/oreslang-llvmc`, runs the source-free regression suites, verifies the compiled guest CTest command and pinned source/negative fixtures, executes the real source-actor wasm32 guest test, reverifies the compiler, executes the full registered CTest suite, and reverifies the compiler again.
 
+The full `ctest` execution writes a CTest-generated JUnit report into that same temporary directory. `tests/verify_ctest_execution.py` re-reads the actual CTest JSON inventory and requires **all** registered tests (minimum 250) to have unique `status="run"` JUnit records, with no missing/duplicate results, skipped/disabled/failure/error cases, or inconsistent suite counts. Its source-free mutation suite is `tests/test_verify_ctest_execution.py`. A CTest exit code of zero alone is **not** sufficient. The JUnit report and gate result are source-local evidence only; they do not authenticate a CI runner and do not prove all six actor isolation scenarios.
+
 The receipt is held in a private temporary directory and removed on exit. The console output includes source commit, source tree and compiler digest; the external evidence collector must preserve authenticated logs with the exact command, process exit status, host/toolchain provenance, and receipt bindings. A manually pasted string containing `PASS` is not independent execution proof.
 
 ## Fail-closed negative admission tests
