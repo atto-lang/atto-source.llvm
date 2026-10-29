@@ -1207,6 +1207,13 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     if not isinstance(source_pr, int) or isinstance(source_pr, bool) or source_pr <= 0:
         raise Denied("invalid source PR number")
     source_commit = valid_sha(source_commit, "invalid source commit")
+    # Reject invalid caller-supplied publication time before loading any private
+    # source or creating even a dangling destination blob.
+    if now is not None and (not isinstance(now, dt.datetime)
+                            or now.tzinfo is None or now.utcoffset() is None):
+        raise Denied("publisher clock must be timezone-aware")
+    now = now or dt.datetime.now(dt.timezone.utc)
+    expires = (now.astimezone(dt.timezone.utc) + TTL).replace(microsecond=0)
 
     protected_sha, contract = protected_authority(
         repository, source_pr, test_plan
@@ -1263,10 +1270,6 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     if isolated_sha != source_tree:
         raise Denied("uploaded source tree differs from source PR root tree")
 
-    now = now or dt.datetime.now(dt.timezone.utc)
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise Denied("publisher clock must be timezone-aware")
-    expires = (now.astimezone(dt.timezone.utc) + TTL).replace(microsecond=0)
     receipt = {
         "schema": "ores-private-ci-receipt-v3",
         "expires_at": expires.isoformat().replace("+00:00", "Z"),
