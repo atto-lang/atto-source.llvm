@@ -1,0 +1,11 @@
+// LLVM guest *function* execution under a trusted scheduler host bridge.
+// Not yet compiler-generated suspends actor method / await lowering.
+pub fnc guest_step(int prior, int payload): int {
+  return prior * 11 + payload;
+}
+pub fnc guest_resume(int prior, int payload): int {
+  return guest_step(prior, payload) + 100;
+}
+pub fnc main(): int {
+  return guest_resume(0, 1);
+}
