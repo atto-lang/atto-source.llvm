@@ -8,6 +8,7 @@ never authorize a cross-organization private source transfer.
 import pathlib
 import re
 import sys
+import tempfile
 
 if not __debug__:
     raise SystemExit("actor CI dependency audit rejects optimized Python")
@@ -30,17 +31,19 @@ def triggered(path, triggers):
     if path in triggers:
         return True
     return any(
-        trigger.endswith("/**") and path.startswith(trigger[:-3])
+        trigger.endswith("/**") and path.startswith(trigger[:-2])
         for trigger in triggers
     )
 
 
 def local_header_closure(root, paths):
-    """Return recursive quoted oreslang/... header dependencies.
+    """Return recursive repository-owned quoted C/C++ header dependencies.
 
-    Start from all compiled C/C++ inputs and continue through discovered local
-    headers until a fixed point. A visited set makes include cycles harmless.
+    Compiler -I src/main/cpp oreslang/ includes resolve from that root;
+    relative quotes resolve from the including file. Other unresolved quoted
+    includes (for example LLVM SDK headers) are not source-owned files.
     """
+    root = root.resolve()
     headers = set()
     pending = list(paths)
     scanned = set()
@@ -49,17 +52,89 @@ def local_header_closure(root, paths):
         if item in scanned:
             continue
         scanned.add(item)
-        if pathlib.Path(item).suffix not in {".c", ".cpp", ".h", ".hpp"}:
+        if pathlib.PurePosixPath(item).suffix not in {".c", ".cpp", ".h", ".hpp"}:
             continue
-        source = (root / item).read_text(encoding="utf-8")
+        source_file = root / item
+        if not source_file.resolve().is_relative_to(root):
+            raise AssertionError(f"escaped source path {item}")
+        if not source_file.is_file() or source_file.is_symlink():
+            raise AssertionError(f"missing or symlink source input: {item}")
+        source = source_file.read_text(encoding="utf-8")
         for include in LOCAL_INCLUDE.findall(source):
-            if not include.startswith("oreslang/"):
+            if include.startswith("/") or "\\" in include:
+                raise AssertionError(f"absolute/invalid quoted include: {include}")
+            owned = include.startswith("oreslang/")
+            candidate = (root / "src/main/cpp" / include if owned
+                         else source_file.parent / include)
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(root):
+                raise AssertionError(f"quoted include escapes repository: {include}")
+            if not candidate.exists():
+                if owned:
+                    raise AssertionError(f"missing oreslang local include: {include}")
                 continue
-            dependency = "src/main/cpp/" + include
+            if not candidate.is_file() or candidate.is_symlink():
+                raise AssertionError(f"non-file or symlink local include: {include}")
+            dependency = resolved.relative_to(root).as_posix()
+            if not dependency.startswith(("src/main/cpp/", "tests/")):
+                raise AssertionError(f"unattestable local include: {dependency}")
             if dependency not in headers:
                 headers.add(dependency)
                 pending.append(dependency)
     return headers
+
+
+def audit_selftest():
+    directory = "src/main/cpp/oreslang/runtime"
+    assert triggered(f"{directory}/added/new.hpp", [f"{directory}/**"])
+    assert not triggered(f"{directory}-evil/new.hpp", [f"{directory}/**"])
+    assert not triggered(f"{directory}2/new.hpp", [f"{directory}/**"])
+    assert triggered("tests/some_test.cpp", ["tests/**"])
+    assert not triggered("tests-fake/some_test.cpp", ["tests/**"])
+    assert triggered("src/main/cpp/main.cpp", ["src/main/cpp/main.cpp"])
+    with tempfile.TemporaryDirectory(prefix="actor-ci-closure-") as temp:
+        root = pathlib.Path(temp)
+        main = "src/main/cpp/oreslang/demo/entry.cpp"
+        local = "src/main/cpp/oreslang/demo/local.hpp"
+        nested = "src/main/cpp/oreslang/nested/detail.h"
+        for item in (main, local, nested):
+            (root / item).parent.mkdir(parents=True, exist_ok=True)
+        (root / main).write_text(
+            '#include "local.hpp"\n#include "llvm/IR/BasicBlock.h"\n',
+            encoding="utf-8",
+        )
+        (root / local).write_text(
+            '#include "../nested/detail.h"\n', encoding="utf-8"
+        )
+        (root / nested).write_text(
+            '#include "../demo/local.hpp"\n', encoding="utf-8"
+        )
+        dependencies = local_header_closure(root, {main})
+        assert dependencies == {local, nested}, dependencies
+        assert dependencies - {local} == {nested}, "transitive omission not detected"
+        (root / main).write_text(
+            '#include "../../../../../../escape.h"\n', encoding="utf-8"
+        )
+        try:
+            local_header_closure(root, {main})
+        except AssertionError as exc:
+            assert "escapes repository" in str(exc)
+        else:
+            raise AssertionError("traversal not blocked")
+        (root / main).write_text(
+            '#include "oreslang/demo/missing.hpp"\n', encoding="utf-8"
+        )
+        try:
+            local_header_closure(root, {main})
+        except AssertionError as exc:
+            assert "missing oreslang" in str(exc)
+        else:
+            raise AssertionError("missing mandatory local header not blocked")
+    print(
+        "ACTOR_CI_HEADER_CLOSURE_SELFTEST_PASS "
+        "wildcard=6 relative_cycle=1 transitive_omission=1 "
+        "traversal=1 missing_owned=1"
+    )
 
 
 def check():
@@ -132,6 +207,7 @@ def check():
 
 if __name__ == "__main__":
     try:
+        audit_selftest()
         check()
     except (AssertionError, OSError, UnicodeError) as exc:
         print(f"ACTOR_LEDGER_SOURCE_DEPENDENCY_ATTESTATION_FAIL: {exc}",
