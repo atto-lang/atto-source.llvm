@@ -47,6 +47,7 @@ class TrustedActorBufferPool final {
         std::size_t used = 0;
         std::uint64_t next_id = 1;
         bool retired = false;
+        bool scheduler_claimed = false;
         std::unordered_map<std::uint64_t, std::shared_ptr<Slot>> slots;
     };
 
@@ -110,6 +111,16 @@ public:
     TrustedActorBufferPool(const TrustedActorBufferPool&) = delete;
     TrustedActorBufferPool& operator=(const TrustedActorBufferPool&) = delete;
     ~TrustedActorBufferPool() { retire(); }
+
+    // One trusted scheduler control plane per tenant pool. A second gate
+    // could otherwise close/revoke another gate's actor-owned bytes.
+    void claim_scheduler_owner() {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        require_live(*state_);
+        if (state_->scheduler_claimed)
+            throw std::logic_error("buffer pool already has a scheduler gate");
+        state_->scheduler_claimed = true;
+    }
 
     Handle allocate(TrustedBufferActor actor, std::size_t bytes) {
         validate_actor(actor);
