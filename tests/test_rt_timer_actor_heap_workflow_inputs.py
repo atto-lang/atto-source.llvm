@@ -95,16 +95,16 @@ def check():
     ):
         step_marker = f"      - name: {step_name}\n"
         assert step_marker in section, f"missing execution step: {step_name}"
-        step = section.split(step_marker, 1)[1].split("\\n      - name:", 1)[0]
+        step = section.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
         assert ledger_fixture in step, f"{step_name}: missing ledger fixture"
         assert scheduler_source in step, f"{step_name}: missing scheduler"
         binary_path = f"build/rt-timer-actor-heap/{binary}"
         assert f"-o {binary_path}" in step, (
             f"{step_name}: missing ledger build output"
         )
-        assert step.count(binary_path) >= 2, (
-            f"{step_name}: ledger binary never executed"
-        )
+        assert re.search(
+            r"(?m)^\\s*" + re.escape(binary_path) + r"\\s*$", step
+        ), f"{step_name}: ledger binary never executed"
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME native_rt_timer_actor_ledger_start_authority" in cmake, (
         "CMake timer-to-actor start-authority registration missing"
