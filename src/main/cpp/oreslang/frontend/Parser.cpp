@@ -692,8 +692,16 @@ public:
                         fn.returns_void || fn.return_type != ScalarType::I64 ||
                         !fn.pending_return_type_alias.empty() ||
                         !fn.return_class.empty() || !fn.return_sum.empty() ||
-                        fn.has_declared_effects)
-                        fail("C_EXPORT_U32_REJECT: requires public pure sync zero-argument int function");
+                        fn.has_declared_effects || !fn.result ||
+                        fn.result->kind != Expression::Kind::Integer ||
+                        fn.result->integer != 1 ||
+                        !fn.locals.empty() || !fn.statements.empty() ||
+                        !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                        !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                        !fn.actor_actions.empty() || !fn.source_tasks.empty() ||
+                        !fn.future_pipelines.empty() || fn.scalar_while ||
+                        fn.caught_throw_value || !fn.caught_throw_defers.empty())
+                        fail("C_EXPORT_U32_REJECT: initial browser version export must be literal int 1 without effects");
                     if (fn.name == c_symbol || fn.name == "main")
                         fail("C_EXPORT_U32_REJECT: guest symbol collides with C ABI");
                     for (const auto& prior : program.functions)
