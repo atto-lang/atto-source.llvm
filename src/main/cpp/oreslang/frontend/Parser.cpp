@@ -1352,10 +1352,11 @@ private:
         // effect upper bound; `using` is reserved for lexical capability
         // acquisition inside the body. Keep this distinct even though older
         // ordinary native functions still parse signature-level `using`.
-        if (accept("using")) {
-            fail("actor effect declarations use with; using is lexical state acquisition");
-        }
-        if (accept("with")) {
+        // Canonical v2 spells the signature effect bound "using state.write".
+        // Existing sealed tests use "with state.write"; both are statically
+        // checked effects, not a first-class or transferable state loan.
+        if (token_.text == "using" || token_.text == "with") {
+            advance();
             if (!actor.sealed_state)
                 fail("actor state effects require a sealed state schema");
             method.has_declared_effects = true;
@@ -1391,7 +1392,18 @@ private:
                 require("(");
                 loan->mode = ActorStateLoan::Mode::Read;
                 if (accept("critical")) {
-                    if (accept("read")) {
+                    // The native lexer correctly splits hyphenated operators
+                    // as IDENT '-' IDENT to preserve ordinary subtraction.
+                    // Accept canonical critical-write / critical-read as
+                    // explicit lexical loan modes, never as opaque tokens.
+                    if (accept("-")) {
+                        if (accept("write"))
+                            loan->mode = ActorStateLoan::Mode::Write;
+                        else if (accept("read"))
+                            loan->mode = ActorStateLoan::Mode::Read;
+                        else
+                            fail("expected critical-write or critical-read");
+                    } else if (accept("read")) {
                         loan->mode = ActorStateLoan::Mode::Read;
                     } else {
                         (void)accept("write");
@@ -1429,13 +1441,42 @@ private:
             if (loan->binder == method.parameters.front().name)
                 fail("state callback binding shadows actor message parameter");
             require("|");
-            require("-");
-            require(">");
+            // Lexer returns contiguous arrow as a single -> token.
+            require("->");
 
             if (accept("{")) {
                 while (token_.text != "return") {
                     if (token_.kind == Kind::End || token_.text == "}")
                         fail("state callback requires return");
+                    if (accept("const")) {
+                        if (!experimental_owned_int_)
+                            fail("experimental owned int requires --experimental-owned-int");
+                        if (!loan->writes.empty())
+                            fail("sealed callback owned temporaries must precede writes");
+                        LocalBinding local;
+                        local.offset = token_.offset;
+                        local.name = identifier();
+                        if (local.name == loan->binder ||
+                                local.name == method.parameters.front().name ||
+                                names.count(local.name))
+                            fail("sealed owned temporary shadows a state field or binder");
+                        if (loan->locals.size() >= 8)
+                            fail("sealed callback owned temporary limit exceeded (8)");
+                        require(":");
+                        require("owned");
+                        require("int");
+                        require("=");
+                        local.initializer = expression();
+                        if (!native_constructor_scalar_tree(*local.initializer))
+                            fail("sealed callback owned temporary requires scalar initializer");
+                        require(";");
+                        for (const auto& prior : loan->locals)
+                            if (prior.name == local.name)
+                                fail("duplicate sealed callback owned local");
+                        local.heap_owned = true;
+                        loan->locals.push_back(std::move(local));
+                        continue;
+                    }
                     ActorFieldWrite write;
                     write.offset = token_.offset;
                     const std::string receiver = identifier();
@@ -4762,16 +4803,12 @@ private:
             std::unordered_set<std::string> mutables;
             const std::unordered_set<std::string> empty;
             for (const auto& field : actor.fields) {
-                if (!field.initializer)
-                    throw std::runtime_error("actor state field requires initializer");
                 validate_expression(*field.initializer, empty, {});
                 if (!fields.insert(field.name).second)
                     throw std::runtime_error("duplicate actor field '" + field.name + "'");
                 if (field.field_mutable) mutables.insert(field.name);
             }
             const auto& method = actor.on_message;
-            if (method.parameters.size() != 1)
-                throw std::runtime_error("native actor requires exactly one message parameter");
             const std::string& parameter = method.parameters.at(0).name;
             if (actor.sealed_state) {
                 if (!method.actor_state_loan || method.result ||
@@ -4805,15 +4842,17 @@ private:
                 }
 
                 bool reads_state = false;
+                std::unordered_set<std::string> sealed_local_names;
                 std::function<void(const Expression&)> validate_state_expression;
                 validate_state_expression = [&](const Expression& expr) {
                     switch (expr.kind) {
                         case Expression::Kind::Integer:
                             return;
                         case Expression::Kind::Variable:
-                            if (expr.name != parameter)
+                            if (expr.name != parameter &&
+                                    !sealed_local_names.count(expr.name))
                                 throw std::runtime_error(
-                                    "state callback may capture only its message parameter");
+                                    "state callback rejects nonlocal or forward-owned capture");
                             return;
                         case Expression::Kind::Field:
                             if (!expr.left ||
@@ -4845,6 +4884,16 @@ private:
                     }
                 };
 
+                for (const auto& local : loan.locals) {
+                    if (!local.heap_owned || local.owner_mutable || !local.initializer ||
+                            local.name.empty() || local.name == parameter ||
+                            local.name == loan.binder || fields.count(local.name))
+                        throw std::runtime_error(
+                            "sealed state owned-local binding violates lexical ownership");
+                    validate_state_expression(*local.initializer);
+                    if (!sealed_local_names.insert(local.name).second)
+                        throw std::runtime_error("duplicate sealed actor local");
+                }
                 for (const auto& write : loan.writes) {
                     if (!fields.count(write.field))
                         throw std::runtime_error(
@@ -4855,10 +4904,12 @@ private:
                 }
                 validate_state_expression(*loan.result);
                 if (reads_state &&
-                        !method.declared_effects.has(FunctionEffect::StateRead))
+                        !method.declared_effects.has(FunctionEffect::StateRead) &&
+                        !method.declared_effects.has(FunctionEffect::StateWrite))
                     throw std::runtime_error(
                         "state callback reads state but with bound omits state.read");
             } else {
+
             if (!fields.insert(parameter).second)
                 throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
             // Validate in declaration order. An owned actor-handler local

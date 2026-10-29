@@ -607,6 +607,11 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->last_result, 0);
 
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* Only test builds record a bounded, heap-ABI-origin access ledger.
+     * Never enable this in shipping runtime or claim uncovered reads/writes. */
+    ensure(ores_actor_i64_heap_trace_enable(instance->heap, 512));
+#endif
     group.actors[slot] = instance;
     instance->ref =
         ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
@@ -924,6 +929,50 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(terminal.processed_user_messages
         == atomic_load_explicit(&instance->processed, memory_order_acquire));
     ensure(terminal.abandoned_control_messages == 0);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* The VM terminal fence guarantees there is no active user turn; only
+     * now take a complete snapshot of this *same* compiler-allocated heap.
+     * This post-hoc ledger establishes ABI provenance, not event timing or
+     * borrow/cancellation completeness. No guest owns these test buffers. */
+    OresActorHeapAccessEvent events[512];
+    OresActorHeapAccessSummary access = {0};
+    ensure(ores_actor_i64_heap_trace_snapshot(
+        instance->heap, events, 512, &access));
+    ensure(access.enabled == 1 && access.capacity == 512
+        && access.dropped == 0 && access.stored <= access.capacity);
+    uint64_t access_domain = 0;
+    uint32_t field_inits = 0, field_reads = 0, field_writes = 0;
+    uint32_t scoped_allocs = 0, scoped_drops = 0, other_accesses = 0;
+    for (uint32_t index = 0; index < access.stored; ++index) {
+        const OresActorHeapAccessEvent* event = &events[index];
+        ensure(event->domain && event->actor_id == instance->id
+            && event->incarnation == 1 && event->turn_epoch > 0
+            && event->slot_generation > 0);
+        if (!access_domain) access_domain = event->domain;
+        ensure(event->domain == access_domain);
+        switch (event->kind) {
+        case ORES_ACTOR_HEAP_ACCESS_FIELD_INIT: ++field_inits; break;
+        case ORES_ACTOR_HEAP_ACCESS_FIELD_READ: ++field_reads; break;
+        case ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE: ++field_writes; break;
+        case ORES_ACTOR_HEAP_ACCESS_ALLOC: ++scoped_allocs; break;
+        case ORES_ACTOR_HEAP_ACCESS_DROP: ++scoped_drops; break;
+        case ORES_ACTOR_HEAP_ACCESS_READ:
+        case ORES_ACTOR_HEAP_ACCESS_WRITE:
+            ++other_accesses; break;
+        default: ensure(0);
+        }
+    }
+    fprintf(stderr,
+        "SOURCE_ACTOR_HEAP_ACCESS_SUMMARY slot=%zu owner=%llu domain=%llu "
+        "events=%u field_inits=%u field_reads=%u field_writes=%u "
+        "scoped_allocs=%u scoped_drops=%u other=%u dropped=%llu\n",
+        slot, (unsigned long long)instance->id,
+        (unsigned long long)access_domain, access.stored,
+        field_inits, field_reads, field_writes,
+        scoped_allocs, scoped_drops, other_accesses,
+        (unsigned long long)access.dropped);
+#endif
 
     /*
      * get_done parity requires physical quiescence, not a logical stop bit.

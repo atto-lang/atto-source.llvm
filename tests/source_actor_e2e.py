@@ -28,7 +28,8 @@ def expected_prefix_last(name, actor_index, processed):
             value = 2 * (value + n)
         return value
     if name in {"source-actor-two-owned-heaps.ores",
-                "source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}:
+                "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores"}:
         value = 0
         start = 1 if actor_index == 0 else 5
         for n in range(start, start + processed):
@@ -77,21 +78,24 @@ def main():
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
-    # This is a legacy v1 guest regression, NOT the active sealed-state
-    # canonical source from platform-conformance #211.
+    # This *pre-sealed* source actor fixture is an LLVM lowering precursor,
+    # NOT the current canonical conformance #211 v2 sealed actor fixture.
+    # Keep both pinned to make this backend gap explicit, not a false pass.
     shared_file = fixtures / "source-actor-shared-heap-contract-v1.ores"
     shared_bytes = shared_file.read_bytes()
     shared_blob = hashlib.sha1(b"blob " + str(len(shared_bytes)).encode("ascii")
                                + b"\0" + shared_bytes).hexdigest()
     assert shared_blob == "016733b1fbc8bdfbde7414a15b877a190dd92806", (
-        "legacy v1 guest fixture bytes drifted", shared_blob)
-    canonical_file = fixtures / "source-actor-canonical-sealed-v2.ores"
-    canonical_bytes = canonical_file.read_bytes()
+        "legacy pre-sealed source actor fixture bytes drifted", shared_blob)
+    canonical_v2 = fixtures / "source-actor-sealed-state-contract-v2.ores"
+    canonical_bytes = canonical_v2.read_bytes()
     canonical_blob = hashlib.sha1(
         b"blob " + str(len(canonical_bytes)).encode("ascii")
         + b"\0" + canonical_bytes).hexdigest()
     assert canonical_blob == "430565092d8a4ff114f601a54b771ef3d42eae58", (
-        "canonical v2 sealed-state guest fixture bytes drifted", canonical_blob)
+        "canonical sealed-state v2 fixture bytes drifted", canonical_blob)
+    assert shared_blob != canonical_blob, "pre-sealed guest is not v2 parity"
+    print("SEALED_GUEST_V2_PINNED_NATIVE_EXECUTION_REQUIRED", flush=True)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
@@ -110,12 +114,11 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
-        # Exact shared .ores input. Full A/B handler delivery and physical
-        # loan ownership are NOT inferred from a launched native executable.
+        # Pre-sealed LLVM lowering precursor. Do NOT promote to v2 conformance
+        # even when these handler/lifecycle checks execute successfully.
         ("source-actor-shared-heap-contract-v1.ores", 2, None, None),
-        # Exact sealed guest input, required even if the new language syntax
-        # currently fails. Never substitute v1 as canonical v2 evidence.
-        ("source-actor-canonical-sealed-v2.ores", 2, None, None),
+        # Identical canonical sealed v2 bytes from conformance #211.
+        ("source-actor-sealed-state-contract-v2.ores", 2, None, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -190,12 +193,43 @@ def main():
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
+    # These two mutations are derived from the *exact* sealed v2 source.
+    # Both must reach semantic state-loan checking and emit zero LLVM IR,
+    # rather than passing merely because the frontend lacks the grammar.
+    canonical_text = canonical_bytes.decode("utf-8")
+    semantic_mutations = (
+        ("write-through-read-loan",
+         "using state.write", "using state.read",
+         "critical-write", "critical-read",
+         "read-only actor state loan cannot mutate state"),
+        ("foreign-state-projection",
+         "const previous: owned int = s.total + n;",
+         "const previous: owned int = foreign.total + n;",
+         None, None,
+         "actor state projection requires lexical callback binding"),
+    )
+    with tempfile.TemporaryDirectory(prefix="oreslang-sealed-negative-") as tmp:
+        for case, before, after, second_before, second_after, diagnostic in semantic_mutations:
+            assert canonical_text.count(before) == 1, (case, "source mutation drift")
+            source = canonical_text.replace(before, after)
+            if second_before is not None:
+                assert source.count(second_before) == 1, (case, "mode mutation drift")
+                source = source.replace(second_before, second_after)
+            candidate = pathlib.Path(tmp, case + ".ores")
+            candidate.write_text(source, encoding="utf-8")
+            rejected = run([args.compiler, "--experimental-owned-int", str(candidate)])
+            assert rejected.returncode != 0 and diagnostic in rejected.stderr, (
+                case, "expected semantic compiler rejection", rejected.stderr)
+            assert not rejected.stdout.strip(), (
+                case, "rejected sealed actor emitted LLVM IR")
+    print("PASS sealed v2-derived semantic read-loan and foreign-projection no-IR", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
             flags = ["--experimental-owned-int"] if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
-                "source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores",
+                "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores",
             } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
@@ -211,6 +245,7 @@ def main():
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
                 "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores",
             }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
@@ -238,11 +273,12 @@ def main():
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
             if name in {"source-actor-interleaved-stop.ores",
-                        "source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}:
+                        "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores"}:
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
                 first_stop = (guest.stdout.find("call void @oreslang_source_actor_graceful_stop")
-                              if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}
+                              if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-sealed-state-contract-v2.ores"}
                               else guest.stdout.find("call void @oreslang_source_actor_stop"))
                 final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
                 assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
@@ -297,7 +333,7 @@ def main():
                 observed_last = receipt["last"]
                 expected_accepted = (
                     [1, 2][i] if name == "source-actor-interleaved-stop.ores"
-                    else [4, 5][i] if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}
+                    else [4, 5][i] if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-sealed-state-contract-v2.ores"}
                     else count)
                 assert accepted == expected_accepted, (
                     name, i, accepted, expected_accepted)
@@ -308,12 +344,13 @@ def main():
                     name, i, processed), (
                     name, i, processed, observed_last)
             if name in {"source-actor-two-owned-heaps.ores",
-                        "source-actor-shared-heap-contract-v1.ores"}:
+                        "source-actor-shared-heap-contract-v1.ores",
+                "source-actor-sealed-state-contract-v2.ores"}:
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
-            if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-canonical-sealed-v2.ores"}:
+            if name in {"source-actor-shared-heap-contract-v1.ores", "source-actor-sealed-state-contract-v2.ores"}:
                 assert guest.stdout.count(
                     "call void @oreslang_source_actor_graceful_stop(") == 2, (
                     name, "guest must invoke graceful drain and physical join")
@@ -364,6 +401,31 @@ def main():
                 assert actual_a == [(1, 2), (2, 8), (3, 22), (4, 52)], actual_a
                 assert actual_b == [(5, 10), (6, 32), (7, 78),
                                     (8, 172), (9, 362)], actual_b
+                summary_pattern = re.compile(
+                    r"SOURCE_ACTOR_HEAP_ACCESS_SUMMARY slot=([0-9]+) "
+                    r"owner=([0-9]+) domain=([0-9]+) events=([0-9]+) "
+                    r"field_inits=([0-9]+) field_reads=([0-9]+) "
+                    r"field_writes=([0-9]+) scoped_allocs=([0-9]+) "
+                    r"scoped_drops=([0-9]+) other=([0-9]+) dropped=([0-9]+)")
+                heap_summaries = []
+                for line in stderr_lines:
+                    if line.startswith("SOURCE_ACTOR_HEAP_ACCESS_SUMMARY "):
+                        match = summary_pattern.fullmatch(line)
+                        assert match, ("malformed source heap access receipt", line)
+                        heap_summaries.append(tuple(map(int, match.groups())))
+                assert len(heap_summaries) == 2, ("missing heap access proofs", heap_summaries)
+                assert [row[0] for row in heap_summaries] == [0, 1], heap_summaries
+                assert len({row[2] for row in heap_summaries}) == 2, (
+                    "same-kind actors must have distinct heap domains", heap_summaries)
+                for slot, owner, domain, events, inits, reads, writes, allocs, drops, others, lost in heap_summaries:
+                    messages = [4, 5][slot]
+                    assert owner == owners[slot] and domain > 0, heap_summaries
+                    assert lost == 0 and events == inits + reads + writes + allocs + drops + others, (
+                        "heap access ledger inconsistent", heap_summaries)
+                    assert inits >= 1 and reads >= messages and writes >= messages, (
+                        "generated guest field operations missing", heap_summaries)
+                    assert allocs >= messages * 2 and drops == allocs, (
+                        "generated owned-temporary construction/drop absent", heap_summaries)
                 assert [slot for _, slot, _ in reclaims] == [0, 1], reclaims
                 assert all(owners[slot] == owner for _, slot, owner in reclaims), reclaims
                 # The message after A's graceful_stop is a real compiled
@@ -372,10 +434,11 @@ def main():
                                     if slot == 1 and p == 9)
                 assert reclaims[0][0] < final_b_line < reclaims[1][0], (
                     "B must execute after A physical reclaim", reclaims, handlers)
-                print("SHARED_ACTOR_GUEST_ALL_MESSAGES_PROCESSED "
+                flavor = "SEALED_V2" if name.endswith("-v2.ores") else "PRE_SEALED_V1"
+                print("LLVM_" + flavor + "_GUEST_ALL_MESSAGES_PROCESSED "
                       "A=4 B=5 A_LAST=52 B_LAST=362 "
-                      "OBSERVED_GENERATED_HANDLER_AND_RECLAIM_ORDER "
-                      "NOT_PHYSICAL_LOAN_PARITY", flush=True)
+                      "OBSERVED_GENERATED_HANDLER_RECLAIM_AND_HEAP_LEDGER "
+                      "NOT_FULL_23_EVENT_PHYSICAL_LOAN_PARITY", flush=True)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 

@@ -1443,8 +1443,10 @@ if(BUILD_TESTING)
         --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_using_write sealed-state-using-write-positive.ores
         --ir "call void @ores_actor_i64_heap_field_write")
-    oreslang_contract_test(native_sealed_state_signature_using_reject sealed-state-signature-using-reject.ores
-        --diagnostic "actor effect declarations use with; using is lexical state acquisition")
+    # The canonical v2 guest admits signature-level using state.write.
+    # Preserve a positive test rather than the superseded 'using' rejection.
+    oreslang_contract_test(native_sealed_state_signature_using_accept sealed-state-signature-using-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_read_upgrade_reject sealed-state-using-read-upgrade-reject.ores
         --diagnostic "using state.read cannot request a critical write loan")
     oreslang_contract_test(native_sealed_state_write_downgrade_reject sealed-state-using-write-downgrade-reject.ores
@@ -1499,7 +1501,7 @@ if(BUILD_TESTING)
     # Exact cross-backend canonical sealed-state contract v2 from conformance #211.
     # Fail closed: no generic unsupported-grammar rejection is a semantic PASS.
     oreslang_contract_test(native_canonical_sealed_two_actor_guest
-        source-actor-canonical-sealed-v2.ores
+        source-actor-sealed-state-contract-v2.ores
         --ir "call void @oreslang_source_actor_graceful_stop")
     oreslang_contract_test(native_canonical_foreign_state_semantic_denial
         source-actor-canonical-foreign-state-reject-v2.ores

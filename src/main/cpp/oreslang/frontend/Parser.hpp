@@ -283,9 +283,11 @@ struct ActorStateLoan {
     Mode mode = Mode::Read;
     std::string binder;
     std::vector<ActorFieldWrite> writes;
+    std::vector<LocalBinding> locals; // synchronous owned temporary values, lexical to loan
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
 };
+
 
 struct Statement {
     enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
@@ -367,8 +369,6 @@ struct Function {
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
-    // Present only for canonical sealed state { } actors. Legacy actor fields
-    // continue to use actor_field_writes until their migration is complete.
     std::unique_ptr<ActorStateLoan> actor_state_loan;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
@@ -393,11 +393,8 @@ enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct ActorDecl {
     std::string name;
-    // Canonical actors declare at most one sealed state { } schema. During
-    // migration, legacy scalar actor fields remain representable only when
-    // sealed_state is false.
     bool sealed_state = false;
-    std::vector<LocalBinding> fields; // bounded actor-owned integer state slots
+    std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;

@@ -1170,7 +1170,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
                 llvm::ConstantInt::get(i64,
-                    std::max<std::size_t>(1, actor->fields.size() + actor->on_message.locals.size()))},
+                    std::max<std::size_t>(1,
+                        actor->fields.size() + actor->on_message.locals.size() +
+                        (actor->on_message.actor_state_loan
+                            ? actor->on_message.actor_state_loan->locals.size()
+                            : 0)))},
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
@@ -2840,15 +2844,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     }
                 };
             bool readsState = false;
+            std::unordered_set<std::string> visibleOwnedLocals;
             const auto verifyStateExpression =
                 [&](const auto& self, const Expression& expr) -> void {
                     switch (expr.kind) {
                         case Expression::Kind::Integer:
                             return;
                         case Expression::Kind::Variable:
-                            if (expr.name != param)
+                            if (expr.name != param &&
+                                    !visibleOwnedLocals.count(expr.name))
                                 throw std::runtime_error(
-                                    "state codegen rejected non-message capture");
+                                    "state codegen rejected foreign or forward-owned capture");
                             return;
                         case Expression::Kind::Field:
                             if (!expr.left ||
@@ -2876,6 +2882,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                 "state codegen rejected call/ownership/escape expression");
                     }
                 };
+            for (const auto& local : loan.locals) {
+                if (!local.heap_owned || local.owner_mutable ||
+                        local.name.empty() || !local.initializer ||
+                        local.name == param || local.name == loan.binder ||
+                        stateNames.count(local.name) ||
+                        visibleOwnedLocals.count(local.name))
+                    throw std::runtime_error(
+                        "sealed callback has invalid owned-local authority");
+                if (!canonicalStateExpression(
+                        canonicalStateExpression, *local.initializer))
+                    throw std::runtime_error(
+                        "noncanonical sealed owned-local initializer");
+                verifyStateExpression(verifyStateExpression, *local.initializer);
+                visibleOwnedLocals.insert(local.name);
+            }
             for (const auto& write : loan.writes) {
                 if (!stateNames.count(write.field) || !write.expression)
                     throw std::runtime_error("invalid sealed actor state write");
@@ -2887,7 +2908,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 throw std::runtime_error("noncanonical sealed actor state result expression");
             verifyStateExpression(verifyStateExpression, *loan.result);
             if (readsState &&
-                    !actor.on_message.declared_effects.has(FunctionEffect::StateRead))
+                    !actor.on_message.declared_effects.has(FunctionEffect::StateRead) &&
+                    !actor.on_message.declared_effects.has(FunctionEffect::StateWrite))
                 throw std::runtime_error(
                     "state codegen read exceeds declared state.read authority");
 
@@ -2910,6 +2932,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     for (const auto& argument : expr.arguments)
                         self(self, *argument);
                 };
+            for (const auto& local : loan.locals)
+                collectInitialReads(collectInitialReads, *local.initializer);
             for (const auto& write : loan.writes) {
                 collectInitialReads(collectInitialReads, *write.expression);
                 writtenKeys.insert(field_key(loan.binder, write.field));
@@ -2932,6 +2956,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 stateFields.emplace(key, slot);
             }
 
+            // Synchronous lexical owned values share the actor's real native
+            // heap, but are inaccessible outside this handler turn.
+            // Compute their values before the first state mutation and drop
+            // every scoped slot before relinquishing the scheduler carrier.
+            std::vector<llvm::Value*> sealedOwnedTokens;
+            for (const auto& local : loan.locals) {
+                llvm::Value* initial = lower(
+                    *local.initializer, builder, i64,
+                    values, stateFields, declarations);
+                llvm::Value* token = builder.CreateAlloca(
+                    llvm::ArrayType::get(i64, 3), nullptr,
+                    local.name + ".sealed.owned.token");
+                builder.CreateCall(actorScopedNew,
+                    {actorHeap, currentDomain, currentEpoch, initial, token});
+                llvm::Value* cached = builder.CreateAlloca(
+                    i64, nullptr, local.name + ".sealed.owned.cached");
+                builder.CreateStore(initial, cached);
+                values.emplace(local.name, cached);
+                sealedOwnedTokens.push_back(token);
+            }
             for (const auto& write : loan.writes) {
                 auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
                     [&](const LocalBinding& f) { return f.name == write.field; });
@@ -2949,6 +2993,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
             llvm::Value* result = lower(*loan.result, builder, i64,
                 values, stateFields, declarations);
+            for (auto it = sealedOwnedTokens.rbegin();
+                    it != sealedOwnedTokens.rend(); ++it)
+                builder.CreateCall(actorScopedDrop,
+                    {actorHeap, currentDomain, currentEpoch, *it});
             builder.CreateRet(result);
         } else {
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
