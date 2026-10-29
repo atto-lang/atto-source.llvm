@@ -204,6 +204,18 @@ int main() {
     reject_signature("sum_result", [](Function& fn) {
         fn.return_sum = "OptionInt";
     }, "non-scalar return");
+    // 9. Unknown scalar enum tags must not be interpreted as valid i64 ABI.
+    reject_signature("invalid_param_tag", [](Function& fn) {
+        fn.parameters.emplace_back();
+        fn.parameters.back().scalar_type = static_cast<ScalarType>(255);
+    }, "non-scalar parameter");
+    reject_signature("invalid_return_tag", [](Function& fn) {
+        fn.return_type = static_cast<ScalarType>(255);
+    }, "non-scalar return");
+    // 10. Async source functions return a task/future boundary, not plain i64.
+    reject_signature("async_export", [](Function& fn) {
+        fn.async_source_i64 = true;
+    }, "async export");
 
-    std::cout << "native package namespace source-only graph: 23/23 cases passed\n";
+    std::cout << "native package namespace source-only graph: 26/26 cases passed\n";
 }

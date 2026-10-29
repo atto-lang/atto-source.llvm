@@ -125,13 +125,16 @@ inline PackageNamespaceGraph link_package_namespaces(
             // unresolved-alias, String or void ABI behind a scalar signature.
             // Bool and i64 value parameters/results are the only admitted
             // typed shapes in this host-only inventory.
-            if (fn.returns_void || fn.return_type == ScalarType::String
+            if (fn.async_source_i64)
+                throw std::invalid_argument("native namespace async export requires checked ABI lowering");
+            if (fn.returns_void
+                    || (fn.return_type != ScalarType::I64 && fn.return_type != ScalarType::Bool)
                     || !fn.return_class.empty() || !fn.return_sum.empty()
                     || !fn.pending_return_type_alias.empty())
                 throw std::invalid_argument("native namespace non-scalar return signature requires checked ABI lowering");
             for (const auto& param : fn.parameters) {
                 if (param.mode != Parameter::Mode::Value
-                        || param.scalar_type == ScalarType::String
+                        || (param.scalar_type != ScalarType::I64 && param.scalar_type != ScalarType::Bool)
                         || !param.class_name.empty() || !param.generic_type.empty()
                         || !param.pending_type_alias.empty() || !param.sum_type.empty())
                     throw std::invalid_argument("native namespace non-scalar parameter signature requires checked ABI lowering");
