@@ -88,8 +88,9 @@ public:
         auto turn = gate_.enter_turn(target);
         Received received(gate_, turn, gate_.receive(turn));
         using Result = std::invoke_result_t<F, Received&>;
-        static_assert(!std::is_reference<Result>::value,
-                      "DATA handler may not return a reference to scoped payload");
+        static_assert(std::is_void<Result>::value || std::is_integral<Result>::value ||
+                      std::is_enum<Result>::value,
+                      "typed DATA handler may return only a scalar value, not borrowed pointers");
         if constexpr (std::is_void<Result>::value) {
             std::forward<F>(handler)(received);
             received.release();
