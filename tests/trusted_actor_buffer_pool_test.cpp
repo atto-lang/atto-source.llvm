@@ -58,6 +58,9 @@ int main() {
     auto loan2 = pool.borrow_read(original, a, b_new);
     assert(loan1.read(b, 0) == 37);
     assert(loan2.read(b_new, 95) == 99);
+    assert(rejects([&] { pool.require_actor_quiescent(b); }));
+    assert(rejects([&] { pool.require_actor_quiescent(b_new); }));
+    assert(rejects([&] { pool.require_actor_quiescent(a); }));
     assert(rejects([&] { loan2.read(b, 0); }));
     assert(rejects([&] { pool.write(original, a, 0, 99); }));
     assert(rejects([&] { pool.take(original, a, b); }));
