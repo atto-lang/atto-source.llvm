@@ -8,6 +8,13 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   exit 2
 fi
 head="$(git rev-parse --verify HEAD)"
+# Optional externally pinned source HEAD is mandatory for a future
+# authorized private carrier. Never equate a clean but wrong checkout
+# with the intended PR head.
+if [[ -n "${EXPECTED_SOURCE_HEAD:-}" && "$head" != "$EXPECTED_SOURCE_HEAD" ]]; then
+  echo "FAIL: checkout HEAD $head differs from expected $EXPECTED_SOURCE_HEAD" >&2
+  exit 2
+fi
 echo "SOURCE_HEAD=$head"
 paths=(
   src/main/cpp/oreslang/runtime/TrustedActorBufferPool.hpp
