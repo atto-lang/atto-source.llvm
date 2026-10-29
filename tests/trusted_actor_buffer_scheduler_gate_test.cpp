@@ -50,7 +50,10 @@ int main() {
     assert(gate.read(tb,from_a,0)==41);
     auto loan = pool->borrow_read(from_a,b,a);
     tb.release();
-    assert(rejects([&] {gate.retire_actor(b); })); // immutable loan pin
+    assert(rejects([&] {gate.retire_actor(b); })); // owner loan pin
+    assert(rejects([&] {gate.retire_actor(a); })); // reader loan pin
+    // Refuse actor reincarnation while its old borrower loan is live.
+    assert(rejects([&] {gate.register_actor({1,2},1); }));
     loan.release();
     gate.retire_actor(b);
     assert(pool->used_bytes()==16); // reclaim delivered but unread
