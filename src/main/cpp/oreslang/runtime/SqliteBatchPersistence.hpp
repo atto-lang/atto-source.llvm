@@ -32,6 +32,7 @@ class SqliteStore final : public Store {
             if (bytes.size() > INT_MAX) throw std::length_error("blob too large");
             check(sqlite3_bind_blob(p,n,bytes.empty()?static_cast<const void*>(""):static_cast<const void*>(bytes.data()),static_cast<int>(bytes.size()),SQLITE_TRANSIENT));
         }
+        void null(int n) { check(sqlite3_bind_null(p,n)); }
         int step() { int rc=sqlite3_step(p); check(rc); return rc; }
     };
     void sql(const char* statement) { check(sqlite3_exec(db_,statement,nullptr,nullptr,nullptr)); }
@@ -130,7 +131,8 @@ public:
                 }
                 auto next=current+1;
                 Statement state(db_,"INSERT INTO state(tenant,actor,slot,version,snapshot_version,snapshot_schema,snapshot) VALUES(?,?,?,?,?,?,?) ON CONFLICT(tenant,actor,slot) DO UPDATE SET version=excluded.version,snapshot_version=CASE WHEN ?=1 THEN excluded.snapshot_version ELSE state.snapshot_version END,snapshot_schema=CASE WHEN ?=1 THEN excluded.snapshot_schema ELSE state.snapshot_schema END,snapshot=CASE WHEN ?=1 THEN excluded.snapshot ELSE state.snapshot END");
-                bind_identity(state,w.id);state.integer(4,next);state.integer(5,next);state.integer(6,w.schema_version);state.blob(7,w.payload);
+                bind_identity(state,w.id);state.integer(4,next);state.integer(5,w.kind==WriteKind::Snapshot?next:0);state.integer(6,w.kind==WriteKind::Snapshot?w.schema_version:0);
+                if(w.kind==WriteKind::Snapshot)state.blob(7,w.payload);else state.null(7);
                 const auto is_snapshot=w.kind==WriteKind::Snapshot?1:0;
                 state.integer(8,is_snapshot);state.integer(9,is_snapshot);state.integer(10,is_snapshot);state.step();
                 if(w.kind==WriteKind::Event) {
