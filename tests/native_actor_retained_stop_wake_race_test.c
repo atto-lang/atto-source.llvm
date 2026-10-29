@@ -221,6 +221,50 @@ static void test_target_stop_before_transfer(void) {
     ores_native_actor_scheduler_retire(f.scheduler);
     CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
 }
+/* A target may retire BEFORE the transfer boundary too. TRANSFER then
+ * fails without publishing anything; the caller must cancel the old escrow
+ * and separately schedule an authenticated local cancellation on A. */
+static void test_target_stop_before_transfer_with_retained_frame(void) {
+    TargetStopFixture f={0};
+    f.scheduler=ores_native_actor_scheduler_open_with_wakes(
+        2,2,2,target_stop_data,NULL,NULL,target_stop_wake,&f);
+    CHECK(f.scheduler);
+    f.actors[0]=ores_native_actor_scheduler_spawn(f.scheduler,0);
+    f.actors[1]=ores_native_actor_scheduler_spawn(f.scheduler,1);
+    CHECK(ores_native_actor_scheduler_send(f.scheduler,f.actors[0],42));
+    wait_for(&f.retained_ready);
+    OresNativeWakeTicket old=f.ticket;
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler,f.actors[1]));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actors[1]));
+    CHECK(!ores_native_actor_scheduler_transfer_wake(f.scheduler,old));
+    CHECK(ores_native_actor_scheduler_cancel_wake(f.scheduler,old));
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actors[0])==0);
+    /* No forged target acceptance: the caller explicitly creates a fresh,
+     * self-targeted, pre-reserved cancellation wake on the producer lane. */
+    CHECK(ores_native_actor_scheduler_reserve_wake(
+        f.scheduler,f.actors[0],f.actors[0],1,2,1,2,&f.ticket));
+    CHECK(!ores_native_actor_scheduler_transfer_wake(f.scheduler,old));
+    CHECK(!ores_native_actor_scheduler_cancel_wake(f.scheduler,old));
+    CHECK(ores_native_actor_scheduler_transfer_wake(f.scheduler,f.ticket));
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,f.ticket,ORES_NATIVE_WAKE_CANCELLED)
+        == ORES_NATIVE_WAKE_PUBLISHED);
+    wait_for(&f.cancelled);
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(atomic_load_explicit(&f.wake_count,memory_order_acquire)==1);
+    CHECK(ores_native_actor_scheduler_retained_data_count(
+        f.scheduler,f.actors[0])==0);
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actors[0])==0);
+    CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==2);
+    CHECK(ores_native_actor_scheduler_completed(f.scheduler)==2);
+    CHECK(ores_native_actor_scheduler_wakes_completed(f.scheduler)==1);
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler,f.actors[0]));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler,f.actors[0]));
+    ores_native_actor_scheduler_retire(f.scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
+}
 static void test_producer_stop_after_transfer(void) {
     TargetStopFixture f={0};
     f.scheduler=ores_native_actor_scheduler_open_with_wakes(
@@ -296,7 +340,8 @@ int main(void) {
     }
     test_target_stop_before_transfer();
     test_target_stop_after_transfer();
+    test_target_stop_before_transfer_with_retained_frame();
     test_producer_stop_after_transfer();
-    puts("NATIVE_RETAINED_STOP_WAKE_RACE_PASS iterations=80 orderings=4 target_cases=3");
+    puts("NATIVE_RETAINED_STOP_WAKE_RACE_PASS iterations=80 orderings=4 target_cases=4");
     return 0;
 }
