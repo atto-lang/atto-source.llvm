@@ -31,7 +31,9 @@ struct Receipt {
     std::string operation_id;
     Status status;
     std::uint64_t version;
-    bool durable() const { return status == Status::Committed || status == Status::Duplicate; }
+    bool provider_confirmed_durable = false;
+    bool applied() const { return status == Status::Committed || status == Status::Duplicate; }
+    bool durable() const { return applied() && provider_confirmed_durable; }
 };
 inline bool valid_id(const std::string& s) { return !s.empty() && s.size() <= 128; }
 
@@ -108,6 +110,7 @@ class BatchSidecar final {
     std::size_t max_entries_, max_queue_bytes_, max_payload_bytes_, batch_entries_, batch_bytes_;
     std::deque<Write> queue_;
     std::size_t queued_bytes_ = 0;
+    std::size_t outstanding_entries_ = 0;
     std::mutex mu_;
 public:
     BatchSidecar(std::string tenant, MemoryStore& store, std::size_t max_entries,
@@ -129,26 +132,38 @@ public:
         if (w.payload.size() > max_payload_bytes_) throw std::length_error("PAYLOAD_TOO_LARGE");
         const std::size_t charge = w.payload.size() + 128; // empty writes still consume quota
         std::lock_guard<std::mutex> lock(mu_);
-        if (queue_.size() >= max_entries_ || charge > max_queue_bytes_ - queued_bytes_)
+        if (outstanding_entries_ >= max_entries_ || charge > max_queue_bytes_ - queued_bytes_)
             throw std::length_error("BACKPRESSURE");
         queue_.push_back(w); // copies owned payload, never keeps guest pointer
-        queued_bytes_ += charge;
+        queued_bytes_ += charge; ++outstanding_entries_;
     }
     std::vector<Receipt> flush() {
         std::vector<Write> batch;
+        std::size_t charge_total = 0;
         {
             std::lock_guard<std::mutex> lock(mu_);
             std::size_t bytes = 0;
             while (!queue_.empty() && batch.size() < batch_entries_ &&
                    queue_.front().payload.size() <= batch_bytes_ - bytes) {
                 bytes += queue_.front().payload.size();
+                charge_total += queue_.front().payload.size() + 128;
                 batch.push_back(std::move(queue_.front()));
                 queue_.pop_front();
-                queued_bytes_ -= batch.back().payload.size() + 128;
             }
         }
         if (batch.empty()) return {};
-        return store_.commit(batch);
+        std::vector<Receipt> receipts;
+        try { receipts = store_.commit(batch); }
+        catch (...) {
+            std::lock_guard<std::mutex> lock(mu_);
+            queued_bytes_ -= charge_total; outstanding_entries_ -= batch.size();
+            throw; // unknown commit outcome; caller must retry same op-id
+        }
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            queued_bytes_ -= charge_total; outstanding_entries_ -= batch.size();
+        }
+        return receipts;
     }
     std::size_t queued_count() { std::lock_guard<std::mutex> lock(mu_); return queue_.size(); }
 };
