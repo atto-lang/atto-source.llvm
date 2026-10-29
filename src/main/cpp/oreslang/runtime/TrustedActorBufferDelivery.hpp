@@ -71,6 +71,14 @@ public:
                std::size_t offset, std::uint8_t byte) {
         gate_.write(sender, h, offset, byte);
     }
+    // Typed admission reports backpressure and receiver retirement without
+    // consuming sender ownership. A compiler-generated Result should be
+    // constructed from this status, never from an ambiguous void send.
+    using SendStatus = Gate::SendStatus;
+    SendStatus try_send(const Gate::Turn& sender, TrustedBufferActor target,
+                        const Handle& h) {
+        return gate_.try_send(sender, target, h);
+    }
     void send(const Gate::Turn& sender, TrustedBufferActor target, const Handle& h) {
         gate_.send(sender, target, h);
     }
