@@ -40,7 +40,7 @@ def verify_execution(manifest: object, report: bytes, *, min_tests: int = MIN_TE
     try:
         xml = ET.fromstring(report)
     except ET.ParseError as exc:
-        raise ExecutionFailure("invalid CTest JUnit XML")
+        raise ExecutionFailure("invalid CTest JUnit XML") from exc
     if xml.tag == "testsuite":
         suites = [xml]
     elif xml.tag == "testsuites":
