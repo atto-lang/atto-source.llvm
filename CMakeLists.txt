@@ -4485,3 +4485,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-trusted-actor-buffer-pool-test)
     set_tests_properties(native_trusted_actor_buffer_pool PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only bounded same-tenant buffer DATA queue. Send admission must reserve
+# capacity before moving ownership; source-level actor lowering is a later gate.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-trusted-actor-buffer-mailbox-test
+        tests/trusted_actor_buffer_mailbox_test.cpp)
+    target_include_directories(oreslang-trusted-actor-buffer-mailbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-trusted-actor-buffer-mailbox-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-trusted-actor-buffer-mailbox-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-actor-buffer-mailbox-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_trusted_actor_buffer_mailbox
+        COMMAND oreslang-trusted-actor-buffer-mailbox-test)
+    set_tests_properties(native_trusted_actor_buffer_mailbox PROPERTIES TIMEOUT 60)
+endif()
