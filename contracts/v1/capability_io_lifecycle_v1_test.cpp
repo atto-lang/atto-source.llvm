@@ -1,8 +1,14 @@
 #include "capability_io_lifecycle_v1.hpp"
 #include <cassert>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
 using oreslang::capability_io::HostLifecycleGate;
 int main() {
+    bool refusedOversize = false;
+    try { HostLifecycleGate invalid(std::numeric_limits<std::size_t>::max()); }
+    catch (const std::invalid_argument&) { refusedOversize = true; }
+    assert(refusedOversize);
     HostLifecycleGate gate(1,2);
     assert(gate.reserve(false,true,true,42,1,55).nonce == 0);
     assert(gate.reserve(true,false,true,42,1,55).nonce == 0);
