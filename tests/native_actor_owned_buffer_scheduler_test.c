@@ -15,7 +15,7 @@ typedef struct {
     atomic_int delivered;
     atomic_int discarded;
     atomic_int commits;
-    atomic_int invalid;
+    atomic_int validations;
     atomic_int result;
     atomic_int errors;
 } Fixture;
@@ -27,6 +27,17 @@ static void wait_for(atomic_int* value, int target) {
         sched_yield();
     }
     abort();
+}
+static int validate_buffer(void* ctx, OresNativeActorRef sender,
+                           OresNativeOwnedBufferTicket ticket) {
+    Fixture* s = (Fixture*)ctx;
+    atomic_fetch_add(&s->validations, 1);
+    return sender.scheduler_domain == s->refs[0].scheduler_domain
+        && sender.actor_slot == 0
+        && sender.generation == s->refs[0].generation
+        && ticket.tenant_epoch == 7 && ticket.type_schema == 29
+        && ticket.buffer_generation == 1
+        && ticket.buffer_id >= 1 && ticket.buffer_id <= 4;
 }
 static int commit_buffer(void* ctx, OresNativeActorRef sender,
                          OresNativeActorRef target,
@@ -88,13 +99,13 @@ int main(void) {
     s.vm = ores_native_actor_scheduler_open(3, 2, 3, on_scalar, &s);
     check(s.vm != NULL);
     check(ores_native_actor_scheduler_configure_owned_buffer(
-        s.vm, commit_buffer, deliver_buffer, discard_buffer));
+        s.vm, validate_buffer, commit_buffer, deliver_buffer, discard_buffer));
     for (size_t i = 0; i < 3; ++i) {
         s.refs[i] = ores_native_actor_scheduler_spawn(s.vm, i);
         check(s.refs[i].scheduler_domain != 0);
     }
     check(!ores_native_actor_scheduler_configure_owned_buffer(
-        s.vm, commit_buffer, deliver_buffer, discard_buffer));
+        s.vm, validate_buffer, commit_buffer, deliver_buffer, discard_buffer));
     const OresNativeOwnedBufferTicket ticket = {7,29,99,1};
     check(ores_native_actor_scheduler_try_send_owned_buffer(
         s.vm, s.refs[0], s.refs[1], ticket) == ORES_NATIVE_SEND_INVALID_REF);
@@ -115,13 +126,21 @@ int main(void) {
     check(atomic_load(&s.result) == ORES_NATIVE_SEND_MAILBOX_FULL);
     check(atomic_load(&s.commits) == 1);
 
+    /* A forged ticket during backpressure is an ownership rejection,
+     * not a mailbox-full result or a transferred owner. */
+    check(ores_native_actor_scheduler_try_send(
+        s.vm,s.refs[0],5) == ORES_NATIVE_SEND_ACCEPTED);
+    wait_for(&s.messages,3);
+    check(atomic_load(&s.result) == ORES_NATIVE_SEND_OWNERSHIP_REJECTED);
+    check(atomic_load(&s.commits) == 1);
+
     /* Sealed STOP drops the accepted buffer once, outside scheduler lock. */
     check(ores_native_actor_scheduler_stop_sealed(s.vm,s.refs[1]));
     check(atomic_load(&s.discarded) == 1);
     check(atomic_load(&s.delivered) == 0);
     check(ores_native_actor_scheduler_try_send(
         s.vm,s.refs[0],3) == ORES_NATIVE_SEND_ACCEPTED);
-    wait_for(&s.messages,3);
+    wait_for(&s.messages,4);
     check(atomic_load(&s.result) == ORES_NATIVE_SEND_TERMINATED);
     check(atomic_load(&s.commits) == 1);
     atomic_store(&s.unblock,1);
@@ -136,7 +155,7 @@ int main(void) {
     /* Same FIFO handles typed delivery with a distinct non-scalar callback. */
     check(ores_native_actor_scheduler_try_send(
         s.vm,s.refs[0],2) == ORES_NATIVE_SEND_ACCEPTED);
-    wait_for(&s.messages,4);
+    wait_for(&s.messages,5);
     check(atomic_load(&s.result) == ORES_NATIVE_SEND_ACCEPTED);
     wait_for(&s.delivered,1);
     check(atomic_load(&s.commits) == 2);
@@ -144,9 +163,10 @@ int main(void) {
     /* Failed host ownership commit cannot enqueue or change admission state. */
     check(ores_native_actor_scheduler_try_send(
         s.vm,s.refs[0],4) == ORES_NATIVE_SEND_ACCEPTED);
-    wait_for(&s.messages,5);
+    wait_for(&s.messages,6);
     check(atomic_load(&s.result) == ORES_NATIVE_SEND_OWNERSHIP_REJECTED);
     check(atomic_load(&s.commits) == 2);
+    check(atomic_load(&s.validations) == 6);
     check(atomic_load(&s.errors) == 0);
 
     ores_native_actor_scheduler_retire(s.vm);
