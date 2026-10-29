@@ -29,22 +29,26 @@ pub fnc main(): int {
   independent.values.add(17);
   independent.values.add(19);
 
-  if (valid_span(first.values.size, 1, 2, 2) != 1) { return 1; } fi
-  if (first.values.get(1) != 5) { return 2; } fi
-  if (first.values.get(3) != 11) { return 3; } fi
-
+  // Capture pre-transfer reads before moving the whole owning class.
+  let int pre_span = valid_span(first.values.size, 1, 2, 2);
+  let int pre_left = first.values.get(1);
+  let int pre_right = first.values.get(3);
   let mut TensorOwner moved = rt take(first);
   moved.values.set(1, 23);
   moved.values.set(3, 29);
-  if (moved.values.get(1) != 23) { return 4; } fi
-  if (moved.values.get(3) != 29) { return 5; } fi
-  if (moved.values.get(0) != 3) { return 6; } fi
-  if (moved.values.get(2) != 7) { return 7; } fi
-  if (moved.values.get(4) != 13) { return 8; } fi
-  if (independent.values.size != 2) { return 9; } fi
-  if (independent.values.get(0) != 17) { return 10; } fi
-  if (independent.values.get(1) != 19) { return 11; } fi
-  if (valid_span(moved.values.size, 4, 2, 2) != 0) { return 12; } fi
-  return moved.values.get(1) + moved.values.get(3)
-       - independent.values.get(0) - independent.values.get(1) + 26;
+  // Every assertion is part of the compiled guest final expression;
+  // no guarded early-return may strand required source cleanup.
+  return (
+    pre_span == 1 &&
+    pre_left == 5 && pre_right == 11 &&
+    moved.values.get(1) == 23 &&
+    moved.values.get(3) == 29 &&
+    moved.values.get(0) == 3 &&
+    moved.values.get(2) == 7 &&
+    moved.values.get(4) == 13 &&
+    independent.values.size == 2 &&
+    independent.values.get(0) == 17 &&
+    independent.values.get(1) == 19 &&
+    valid_span(moved.values.size, 4, 2, 2) == 0
+  ) ? 42 : 1;
 }
