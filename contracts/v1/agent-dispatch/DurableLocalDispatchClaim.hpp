@@ -46,7 +46,7 @@ inline int open_local_claim_directory(const std::string& absolute) {
     const std::size_t end = absolute.find('/', start);
     const std::string component = absolute.substr(start, end - start);
     if (component.empty() || component == "." || component == ".." ||
-        component.find('\\0') != std::string::npos) {
+        component.find('\0') != std::string::npos) {
       ::close(current);
       return -1;
     }
