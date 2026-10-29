@@ -36,6 +36,29 @@ def triggered(path, triggers):
     )
 
 
+def reject_symlink_ancestors(root, path):
+    """Reject source-bearing paths crossing any intermediate symlink.
+
+    Git blob attestation on the target file alone cannot attest an aliasing
+    directory symlink. This also applies when the target stays within root.
+    Direct leaf symlinks are rejected separately by the caller.
+    """
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError as exc:
+        raise AssertionError(f"source path outside repository: {path}") from exc
+    cursor = root
+    for component in parts[:-1]:
+        if component == "..":
+            cursor = cursor.parent
+        elif component != ".":
+            cursor = cursor / component
+        if not cursor.is_relative_to(root):
+            raise AssertionError(f"source path traverses repository root: {path}")
+        if cursor.is_symlink():
+            raise AssertionError(f"symlink path ancestor: {path}")
+
+
 def local_header_closure(root, paths):
     """Return recursive repository-owned quoted C/C++ header dependencies.
 
@@ -57,6 +80,7 @@ def local_header_closure(root, paths):
         source_file = root / item
         if not source_file.resolve().is_relative_to(root):
             raise AssertionError(f"escaped source path {item}")
+        reject_symlink_ancestors(root, source_file)
         if not source_file.is_file() or source_file.is_symlink():
             raise AssertionError(f"missing or symlink source input: {item}")
         source = source_file.read_text(encoding="utf-8")
@@ -69,6 +93,7 @@ def local_header_closure(root, paths):
             resolved = candidate.resolve()
             if not resolved.is_relative_to(root):
                 raise AssertionError(f"quoted include escapes repository: {include}")
+            reject_symlink_ancestors(root, candidate)
             if candidate.is_symlink():
                 raise AssertionError(f"symlink local include: {include}")
             if not candidate.exists():
@@ -154,10 +179,36 @@ def audit_selftest():
             assert "symlink local include" in str(exc)
         else:
             raise AssertionError("dangling local symlink not blocked")
+        # A symlinked directory aliases a regular source file and would
+        # bypass an is_symlink() check on that file alone.
+        alias = root / "src/main/cpp/oreslang/demo-alias"
+        alias.symlink_to("demo", target_is_directory=True)
+        try:
+            local_header_closure(
+                root, {"src/main/cpp/oreslang/demo-alias/entry.cpp"}
+            )
+        except AssertionError as exc:
+            assert "symlink path ancestor" in str(exc)
+        else:
+            raise AssertionError("symlinked source directory not blocked")
+
+        # Likewise reject relative includes through an intermediate alias,
+        # even if the symlink points to a file inside the same repository.
+        shadow = root / "src/main/cpp/oreslang/demo/shadow"
+        shadow.symlink_to("../nested", target_is_directory=True)
+        (root / main).write_text(
+            '#include "shadow/detail.h"\n', encoding="utf-8"
+        )
+        try:
+            local_header_closure(root, {main})
+        except AssertionError as exc:
+            assert "symlink path ancestor" in str(exc)
+        else:
+            raise AssertionError("symlinked local include directory not blocked")
     print(
         "ACTOR_CI_HEADER_CLOSURE_SELFTEST_PASS "
         "wildcard=6 relative_cycle=1 transitive_omission=1 "
-        "traversal=1 missing_owned=1"
+        "traversal=1 missing_owned=1 symlink_ancestors=2"
     )
 
 
