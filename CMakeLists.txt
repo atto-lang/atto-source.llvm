@@ -46,6 +46,21 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Compile-time sealed-state AST gate, executable without a running guest.
+    # Root CI also runs it; tests/standalone permits use without an LLVM SDK.
+    # This is source-free admission evidence, NOT compiled-guest loan parity.
+    add_executable(oreslang-sealed-state-admission-source-free-test
+        tests/sealed_state_admission_source_free_test.cpp)
+    target_compile_features(oreslang-sealed-state-admission-source-free-test
+        PRIVATE cxx_std_17)
+    target_include_directories(oreslang-sealed-state-admission-source-free-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-sealed-state-admission-source-free-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_sealed_state_admission_source_free
+        COMMAND oreslang-sealed-state-admission-source-free-test)
+    set_tests_properties(native_sealed_state_admission_source_free PROPERTIES TIMEOUT 30)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
