@@ -3,12 +3,18 @@
 #include <cstdint>
 #include <thread>
 #include <vector>
-extern "C" std::int64_t ores_guest_entry(OresIsolateContext*, std::int64_t);
+extern "C" std::int32_t ores_guest_entry(OresIsolateContext*, std::int64_t, std::int64_t*);
 int main() {
     oreslang::runtime::OresVM vm;
     auto a = vm.create_isolate({"tenant-a", 4096, 3});
     auto b = vm.create_isolate({"tenant-b", 4096, 3});
     vm.start(a); vm.start(b);
+    // -1 and -2 are valid signed scalar results, not transport errors.
+    assert(vm.invoke_guest(a, ores_guest_entry, -1) == -1);
+    assert(vm.invoke_guest(a, ores_guest_entry, -2) == -3);
+    assert(vm.invoke_guest(a, ores_guest_entry, 3) == 0);
+    const auto zero = vm.invoke_guest_result(a, ores_guest_entry, 0);
+    assert(zero.status == ORES_GUEST_OK && zero.value == 0);
     assert(vm.invoke_guest(a, ores_guest_entry, 5) == 5);
     assert(vm.invoke_guest(b, ores_guest_entry, 100) == 100);
     assert(vm.invoke_guest(a, ores_guest_entry, 4) == 9);
