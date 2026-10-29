@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <thread>
 
 using oreslang::runtime::IsolateMode;
@@ -41,6 +42,13 @@ int main() {
     assert(rejects([] { OresVM invalid(OresVmLimits{0, 32, 2}); }));
     assert(rejects([] { OresVM invalid(OresVmLimits{2, 0, 2}); }));
     assert(rejects([] { OresVM invalid(OresVmLimits{2, 32, 0}); }));
+    // Uncharged tenant ID memory and control bytes must not bypass admission.
+    OresVM ids;
+    assert(rejects([&] { ids.create_isolate({std::string(257, 'x'), 1, 1}); }));
+    assert(rejects([&] { ids.create_isolate({std::string("a\\0b", 3), 1, 1}); }));
+    assert(rejects([&] { ids.create_isolate({"control\\n", 1, 1}); }));
+    assert(rejects([&] { ids.create_isolate({std::string("a\\x7f", 2), 1, 1}); }));
+
 
     // An aggregate heap budget is independent of the tenant count limit.
     OresVM heap_budget(OresVmLimits{3, 32, 1});
