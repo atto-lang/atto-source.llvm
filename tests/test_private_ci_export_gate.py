@@ -190,6 +190,42 @@ class ExportGateTest(unittest.TestCase):
         self.write_contract()
         self.check_rejected()
 
+    def test_empty_basename_rejected(self):
+        self.check_rejected(DEST, 1234, A, ".github/workflows/.yml", B, ARGS[5], C, 1123)
+        self.check_rejected(DEST, 1234, A, ARGS[3], B,
+                            "ci/test-plans/.json", C, 1123)
+
+    def test_hidden_git_directory_variants_rejected(self):
+        self.check_rejected(DEST, 1234, A,
+                            ".github/workflows/.GIT/carrier.yml", B, ARGS[5], C, 1123)
+        self.check_rejected(DEST, 1234, A, ARGS[3], B,
+                            "ci/test-plans/.Git/llvm-pr1123.json", C, 1123)
+
+    def test_extra_root_policy_key_rejected(self):
+        self.data["unapproved_fallback"] = True
+        self.write_contract()
+        self.check_rejected()
+
+    def test_carrier_unknown_field_rejected(self):
+        self.data["carriers"][DEST]["allow_any_pr"] = True
+        self.write_contract()
+        self.check_rejected()
+
+    def test_test_plan_unknown_field_rejected(self):
+        self.data["carriers"][DEST]["test_plans"][ARGS[5]]["allow_fallback"] = True
+        self.write_contract()
+        self.check_rejected()
+
+    def test_review_pr_requires_positive_integer(self):
+        for value in (True, "42", 0, -2, 1.5):
+            with self.subTest(value=value):
+                self.data["carriers"][DEST]["review_pr"] = value
+                self.write_contract()
+                self.check_rejected()
+        self.data["carriers"][DEST]["review_pr"] = 42
+        self.write_contract()
+        authorize(self.root, *ARGS)
+
     def test_control_character_path_rejected(self):
         self.check_rejected(DEST, 1234, A, ".github/workflows/carrier.yml\nextra",
                             B, ARGS[5], C, 1123)
