@@ -97,10 +97,9 @@ int main() {
             // Physical scheduler-turn authority belongs to this carrier.
             auto source_turn = pipe.enter_turn(sender);
             while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
-            try {
-                pipe.send(source_turn, dying, h);
-                accepted.store(true, std::memory_order_release);
-            } catch (const std::logic_error&) {}
+            const auto outcome = pipe.try_send(source_turn, dying, h);
+            assert(outcome == Send::Accepted || outcome == Send::RecipientStopped);
+            accepted.store(outcome == Send::Accepted, std::memory_order_release);
         });
         std::thread stop([&] {
             while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
