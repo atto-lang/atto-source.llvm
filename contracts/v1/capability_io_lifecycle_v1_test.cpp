@@ -1,6 +1,9 @@
 #include "capability_io_lifecycle_v1.hpp"
 #include <cassert>
 #include <iostream>
+#include <atomic>
+#include <thread>
+#include <vector>
 #include <limits>
 #include <stdexcept>
 using oreslang::capability_io::HostLifecycleGate;
@@ -58,5 +61,23 @@ int main() {
     assert(shutdown_gate.retire(started,77,1,true));
     assert(shutdown_gate.retire(queued,78,1,true));
     assert(shutdown_gate.in_flight() == 0);
+    // Concurrent identical dispatches must linearize at one admitted start.
+    HostLifecycleGate racing(1, 1);
+    const auto r = racing.reserve(true,true,true,99,1,100);
+    assert(r.nonce != 0);
+    std::atomic<int> successful_dispatches{0};
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 16; ++i) {
+        workers.emplace_back([&] {
+            if (racing.dispatch(r,99,1,100)) successful_dispatches.fetch_add(1);
+        });
+    }
+    for (auto& t : workers) t.join();
+    assert(successful_dispatches.load() == 1);
+    assert(racing.in_flight() == 1);
+    assert(racing.cancel(r,99,1));
+    assert(!racing.retire(r,99,1,false));
+    assert(racing.retire(r,99,1,true));
+    assert(racing.in_flight() == 0);
     std::cout << "CAPABILITY_IO_HOST_LIFECYCLE_REFERENCE_PASS\n";
 }
