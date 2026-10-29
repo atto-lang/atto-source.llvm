@@ -46,9 +46,9 @@ jobs:
         run: bash scripts/cgl-native-smoke.sh
       - name: Existing native scalar source regression
         run: |
-          # Run each named proof separately: a combined regex can silently pass
-          # with just one registered test while the other was never added.
+          set -euo pipefail
+          # Run each required test separately; --no-tests=error refuses missing tests.
           ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^native_cgl_linux_host_admission
+            -R '^native_cgl_linux_host_admission$'
           ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^native_source_i64_os_exit_subset
+            -R '^native_source_i64_os_exit_subset$'
