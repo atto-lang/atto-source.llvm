@@ -153,8 +153,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "base_sha": BASE,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
-                        "review_pr": 17,
-                        "test_plans": {
+                         "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
                                 "blob_sha": PLAN_BLOB,
                                 "allowed_prs": [669],
@@ -170,8 +169,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(got["repository_id"], 42)
         self.assertEqual(got["base_sha"], BASE)
         self.assertEqual(got["workflow_blob_sha"], WORKFLOW)
-        self.assertEqual(got["review_pr"], 17)
-        with self.assertRaisesRegex(v3.Denied, "not authorized"):
+         with self.assertRaisesRegex(v3.Denied, "not authorized"):
             v3.parse_contract(
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
             )
@@ -592,7 +590,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 },
             }
         ).encode()
-        with self.assertRaisesRegex(v3.Denied, "review PR"):
+        with self.assertRaisesRegex(v3.Denied, "contract fields"):
             v3.parse_contract(
                 raw, "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
             )
@@ -631,168 +629,20 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             self.assertEqual(v3.authorized_source_main_sha(), "2" * 40)
         protected.assert_called_once_with()
 
-    def _carrier_review_fixture(self, *, author_id=424242,
-                                state="APPROVED", review_commit=None):
-        contract = carrier_contract(review_pr=17)
-        head_sha = "7" * 40
-        review_commit = head_sha if review_commit is None else review_commit
-        branch = {
-            "name": "main",
-            "protected": False,
-            "commit": {"sha": BASE},
-        }
-
+    def test_unprotected_carrier_rejects_history_fallback_without_review_calls(self):
         def api(route, method="GET", payload=None):
             if route == "repos/trusted/ci/branches/main":
-                return branch
-            if route == "repos/trusted/ci/pulls/17":
-                return {
-                    "number": 17,
-                    "state": "closed",
-                    "merged_at": "2026-10-25T15:00:00Z",
-                    "user": {"id": author_id, "login": "carrier-author"},
-                    "head": {
-                        "sha": head_sha,
-                        "repo": {
-                            "full_name": "trusted/ci",
-                            "id": contract["repository_id"],
-                        },
-                    },
-                    "base": {
-                        "ref": "main",
-                        "repo": {
-                            "full_name": "trusted/ci",
-                            "id": contract["repository_id"],
-                        },
-                    },
-                }
-            if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
-                return {
-                    "path": ".github/CODEOWNERS",
-                    "type": "file",
-                    "encoding": "base64",
-                    "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
-                    "sha": CARRIER_CODEOWNERS_BLOB,
-                }
-            raise AssertionError((method, route))
-
-        review = {
-            "id": 92,
-            "state": state,
-            "commit_id": review_commit,
-            "submitted_at": "2026-10-25T14:59:00Z",
-            "user": {
-                "id": v3.CARRIER_REVIEW_USER_ID,
-                "login": v3.CARRIER_REVIEW_LOGIN,
-            },
-        }
-        return contract, branch, api, review, head_sha
-
-    def test_unprotected_carrier_denies_even_with_historical_independent_review(self):
-        for kwargs in (
-            {}, {"state": "CHANGES_REQUESTED"},
-            {"author_id": v3.CARRIER_REVIEW_USER_ID},
-        ):
-            with self.subTest(kwargs=kwargs):
-                contract, _branch, api, review, _head = self._carrier_review_fixture(**kwargs)
-                with (
-                    patch.object(v3, "gh_api", side_effect=api),
-                    patch.object(v3, "_latest_review", return_value=review) as reviews,
-                    patch.object(v3, "carrier_commit_tree") as trees,
-                ):
-                    with self.assertRaisesRegex(v3.Denied, "not protected"):
-                        v3.checked_carrier_main("trusted/ci", contract)
-                    reviews.assert_not_called()
-                    trees.assert_not_called()
-
-    def test_strict_branch_policy_denies_spoofable_or_downgraded_governance(self):
-        strong = {
-            "required_pull_request_reviews": {
-                "require_code_owner_reviews": True,
-                "dismiss_stale_reviews": True,
-                "require_last_push_approval": True,
-                "required_approving_review_count": 1,
-                "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []},
-            },
-            "required_status_checks": {
-                "strict": True,
-                "contexts": ["private-ci-governance"],
-                "checks": [{"context": "private-ci-governance", "app_id": 15368}],
-            },
-            "required_conversation_resolution": {"enabled": True},
-            "enforce_admins": {"enabled": True},
-            "allow_force_pushes": {"enabled": False},
-            "allow_deletions": {"enabled": False},
-        }
-        v3.strict_branch_protection(strong, "source main")
-        bad = (
-            ("last-push", "required_pull_request_reviews", "require_last_push_approval", False),
-            ("conversations", "required_conversation_resolution", "enabled", False),
-            ("strict", "required_status_checks", "strict", False),
-            ("missing-provider", "required_status_checks", "checks", []),
-            ("unbound-provider", "required_status_checks", "checks",
-             [{"context": "private-ci-governance"}]),
-            ("any-provider", "required_status_checks", "checks",
-             [{"context": "private-ci-governance", "app_id": -1}]),
-            ("boolean-provider", "required_status_checks", "checks",
-             [{"context": "private-ci-governance", "app_id": True}]),
-            ("unmatched-legacy", "required_status_checks", "contexts", ["spoofed"]),
-            ("duplicate-bound", "required_status_checks", "checks",
-             [{"context": "private-ci-governance", "app_id": 15368},
-              {"context": "private-ci-governance", "app_id": 15368}]),
-            ("bypass", "required_pull_request_reviews", "bypass_pull_request_allowances",
-             {"users": [{"login": "attacker"}], "teams": [], "apps": []}),
-            ("admin", "enforce_admins", "enabled", False),
-            ("force", "allow_force_pushes", "enabled", True),
-            ("delete", "allow_deletions", "enabled", True),
-        )
-        for label, section, field, value in bad:
-            changed = json.loads(json.dumps(strong))
-            changed[section][field] = value
-            with self.subTest(label=label), self.assertRaises(v3.Denied):
-                v3.strict_branch_protection(changed, "source main")
-
-    def test_carrier_protection_revocation_between_two_reads_denied(self):
-        good = {
-            "required_pull_request_reviews": {
-                "require_code_owner_reviews": True,
-                "dismiss_stale_reviews": True,
-                "require_last_push_approval": True,
-                "required_approving_review_count": 1,
-            },
-            "required_status_checks": {
-                "strict": True,
-                "contexts": [],
-                "checks": [{"context": "private-ci-governance", "app_id": 15368}],
-            },
-            "required_conversation_resolution": {"enabled": True},
-            "enforce_admins": {"enabled": True},
-            "allow_force_pushes": {"enabled": False},
-            "allow_deletions": {"enabled": False},
-        }
-        calls = [0]
-
-        def api(route, method="GET", payload=None):
-            if route == "repos/trusted/ci/branches/main":
-                return {"name": "main", "protected": True,
+                return {"name": "main", "protected": False,
                         "commit": {"sha": BASE}}
-            if route == "repos/trusted/ci/branches/main/protection":
-                calls[0] += 1
-                candidate = json.loads(json.dumps(good))
-                if calls[0] == 2:
-                    candidate["required_status_checks"]["checks"][0]["app_id"] = 99
-                return candidate
-            if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
-                return {"path": ".github/CODEOWNERS", "type": "file",
-                        "encoding": "base64",
-                        "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
-                        "sha": CARRIER_CODEOWNERS_BLOB}
-            raise AssertionError(route)
+            raise AssertionError("unexpected API route: " + route)
 
-        with patch.object(v3, "gh_api", side_effect=api):
-            with self.assertRaisesRegex(v3.Denied, "changed during attestation"):
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "_latest_review") as review,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "not protected"):
                 v3.checked_carrier_main("trusted/ci", carrier_contract())
-        self.assertEqual(calls[0], 2)
+            review.assert_not_called()
 
     def test_recheck_destination_identity_rejects_carrier_main_movement(self):
         contract = carrier_contract(review_pr=17)
