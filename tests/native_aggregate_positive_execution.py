@@ -168,10 +168,14 @@ def main():
             src.write_text(source, encoding="utf-8")
             original = src.read_bytes()
             rejected = run([str(compiler), str(src)], case_dir)
-            require(rejected.returncode > 0 and rejected.stdout == b"" and
-                    diagnostic.encode() in rejected.stderr,
-                    name + ": missing exact pre-IR rejection: " +
-                    repr((rejected.returncode, rejected.stdout[:300], rejected.stderr[:700])))
+            try:
+                verify_negative_rejection(rejected, diagnostic)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    name + ": missing exact pre-IR rejection: " + str(exc) +
+                    "; result=" + repr((rejected.returncode,
+                                        rejected.stdout[:300],
+                                        rejected.stderr[:700]))) from exc
             require(set(p.name for p in case_dir.iterdir()) == {"case.ores"} and
                     src.read_bytes() == original and not src.is_symlink(),
                     name + ": negative compiler run published files or mutated source")
