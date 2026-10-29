@@ -186,11 +186,14 @@ def main():
             require(set(p.name for p in case_dir.iterdir()) == {"case.ores"} and
                     src.read_bytes() == original and not src.is_symlink(),
                     name + ": negative compiler run published files or mutated source")
+    require(sha256(compiler.read_bytes()) == compiler_digest and
+            sha256(clang.read_bytes()) == clang_digest,
+            "compiler or Clang binary changed while guest tests executed")
     print(json.dumps({
         "contract": "native-stack-exact-struct-v1",
         "scope": "immutable-int-bool-local-no-aggregate-call-abi",
-        "compiler_sha256": sha256(compiler.read_bytes()),
-        "clang_sha256": sha256(clang.read_bytes()),
+        "compiler_sha256": compiler_digest,
+        "clang_sha256": clang_digest,
         "positive_executed": len(observations),
         "negative_rejected": len(NEGATIVE),
         "skipped": 0,
