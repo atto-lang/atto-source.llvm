@@ -15,8 +15,9 @@ pub fnc browser_native_abi_v1(): int {
 
 The compiler emits TWO independent functions:
 
-- the existing Oreslang guest `i64 @browser_native_abi_v1()`,
-  using the current native guest `int` convention;
+- the internal-linkage Oreslang guest `i64 @browser_native_abi_v1()`,
+  using the current native guest `int` convention, never exposed through
+  the ELF dynamic symbol table;
 - a generated `i32 @ores_browser_abi_version()` external C function,
   which calls that guest function, independently checks the unsigned
   `uint32_t` range and truncates only after the check.
@@ -47,12 +48,14 @@ checkout and an identified native `oreslang-llvmc` binary:
 1. Require checkout SHA and compiler SHA256 matches, compiler native ELF,
    and a clean working tree.
 2. Compile the positive source with **real** `oreslang-llvmc` to verified
-   LLVM IR. Assert exactly one exported i32 C symbol and one i64 guest symbol.
+   LLVM IR. Assert exactly one exported i32 C symbol and one **internal** i64
+   guest definition.
 3. Clang links the generated IR into an ELF shared library with eager,
    defined-symbol, RELRO and NOW linker options.
 4. Inspect actual dynamic symbols, then execute a strict C11 `dlopen` host
-   that calls **both** signatures and confirms each returns 1. The host
-   refuses an accidentally present open/dispatch/snapshot/close export.
+   that calls **only the i32 C entrypoint**. It confirms the private i64 guest
+   is not accessible through `dlsym` and refuses an accidentally present
+   open/dispatch/snapshot/close export.
 5. Compile eight negative fixtures. All must fail and emit **zero LLVM IR**:
    wrong symbol, private function, out-of-range literal, parameter,
    wrong return type, colliding unannotated symbol, nonliteral/effectful
