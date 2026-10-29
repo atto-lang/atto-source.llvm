@@ -69,10 +69,14 @@ def local_header_closure(root, paths):
             resolved = candidate.resolve()
             if not resolved.is_relative_to(root):
                 raise AssertionError(f"quoted include escapes repository: {include}")
+            if candidate.is_symlink():
+                raise AssertionError(f"symlink local include: {include}")
             if not candidate.exists():
-                if owned:
-                    raise AssertionError(f"missing oreslang local include: {include}")
-                continue
+                if include.startswith("llvm/"):
+                    continue  # SDK headers are not private repository inputs.
+                raise AssertionError(
+                    f"missing repository-local quoted include: {include}"
+                )
             if not candidate.is_file() or candidate.is_symlink():
                 raise AssertionError(f"non-file or symlink local include: {include}")
             dependency = resolved.relative_to(root).as_posix()
@@ -91,6 +95,7 @@ def audit_selftest():
     assert not triggered(f"{directory}2/new.hpp", [f"{directory}/**"])
     assert triggered("tests/some_test.cpp", ["tests/**"])
     assert not triggered("tests-fake/some_test.cpp", ["tests/**"])
+    assert not triggered("tests/new/helper.hpp", ["tests/test_actor_ledger_workflow_inputs.py"])
     assert triggered("src/main/cpp/main.cpp", ["src/main/cpp/main.cpp"])
     with tempfile.TemporaryDirectory(prefix="actor-ci-closure-") as temp:
         root = pathlib.Path(temp)
@@ -130,6 +135,25 @@ def audit_selftest():
             assert "missing oreslang" in str(exc)
         else:
             raise AssertionError("missing mandatory local header not blocked")
+        (root / main).write_text(
+            '#include "missing-local.hpp"\n', encoding="utf-8"
+        )
+        try:
+            local_header_closure(root, {main})
+        except AssertionError as exc:
+            assert "missing repository-local quoted include" in str(exc)
+        else:
+            raise AssertionError("missing relative local header not blocked")
+        (root / main).write_text(
+            '#include "dangling.hpp"\n', encoding="utf-8"
+        )
+        (root / "src/main/cpp/oreslang/demo/dangling.hpp").symlink_to("absent.hpp")
+        try:
+            local_header_closure(root, {main})
+        except AssertionError as exc:
+            assert "symlink local include" in str(exc)
+        else:
+            raise AssertionError("dangling local symlink not blocked")
     print(
         "ACTOR_CI_HEADER_CLOSURE_SELFTEST_PASS "
         "wildcard=6 relative_cycle=1 transitive_omission=1 "
@@ -146,6 +170,7 @@ def check():
     trigger_paths = TRIGGER.findall(header)
     trigger_set = set(trigger_paths)
     assert len(trigger_paths) == len(trigger_set), "duplicate PR path trigger"
+    assert "tests/**" in trigger_set, "missing broad tests/** CI trigger"
 
     boundaries = list(JOB.finditer(body))
     sections = {
