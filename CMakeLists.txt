@@ -4520,3 +4520,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-trusted-actor-buffer-scheduler-gate-test)
     set_tests_properties(native_trusted_actor_buffer_scheduler_gate PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only typed DATA delivery adapter. This is not yet a compiler-generated
+# .ores actor-send conformance test; it must not count as such.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-trusted-actor-buffer-delivery-test
+        tests/trusted_actor_buffer_delivery_test.cpp)
+    target_include_directories(oreslang-trusted-actor-buffer-delivery-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-trusted-actor-buffer-delivery-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-trusted-actor-buffer-delivery-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-actor-buffer-delivery-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_trusted_actor_buffer_delivery
+        COMMAND oreslang-trusted-actor-buffer-delivery-test)
+    set_tests_properties(native_trusted_actor_buffer_delivery PROPERTIES TIMEOUT 60)
+endif()
