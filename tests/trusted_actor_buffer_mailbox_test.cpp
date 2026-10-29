@@ -64,8 +64,9 @@ int main() {
     assert(pool->read(back, a, 0) == 19);
     borrow.release();
 
-    // A live borrow of a receiver-owned buffer fences receiver mailbox
-    // retirement. An unrelated actor's borrowed buffer must not block it.
+    // A live borrow of another actor's owned buffer does not block an
+    // unrelated inbox. A delivered owner buffer also must not pin the
+    // mailbox: the actor retirement gate independently fences that owner.
     TrustedActorBufferMailbox borrowed_queue(pool, b, 1);
     auto pinned = pool->allocate(a, 5);
     borrowed_queue.send(pinned, a);
@@ -77,7 +78,7 @@ int main() {
     to_b_queue.send(to_b, a);
     auto owned_by_b = to_b_queue.receive(b);
     auto own_loan = pool->borrow_read(owned_by_b, b, a);
-    assert(!to_b_queue.close());
+    assert(to_b_queue.close()); // delivered payload no longer belongs to queue
     assert(to_b_queue.pending() == 0);
     assert(pool->used_bytes() == 193);
     own_loan.release();
