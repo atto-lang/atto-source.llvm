@@ -577,7 +577,7 @@ def parse_contract(raw, repository, source_pr, test_plan):
         "repository_id", "base_sha", "workflow_path",
         "workflow_blob_sha", "test_plans"
     }
-    allowed_carrier_fields = required_carrier_fields | {"review_pr"}
+    allowed_carrier_fields = required_carrier_fields
     if (not required_carrier_fields.issubset(carrier)
             or not set(carrier).issubset(allowed_carrier_fields)):
         raise Denied("carrier contract fields")
@@ -585,11 +585,6 @@ def parse_contract(raw, repository, source_pr, test_plan):
     if not isinstance(repo_id, int) or isinstance(repo_id, bool) or repo_id <= 0:
         raise Denied("carrier repository id")
     base_sha = valid_sha(carrier.get("base_sha"), "carrier base SHA")
-    review_pr = carrier.get("review_pr")
-    if (review_pr is not None
-            and (not isinstance(review_pr, int) or isinstance(review_pr, bool)
-                 or review_pr <= 0)):
-        raise Denied("carrier review PR invalid")
     workflow_path = safe_path(
         carrier.get("workflow_path"), ".github/workflows/", ".yml"
     )
@@ -616,7 +611,6 @@ def parse_contract(raw, repository, source_pr, test_plan):
         "workflow_blob_sha": workflow_blob,
         "test_plan_path": plan_path,
         "test_plan_blob_sha": blob_sha,
-        "review_pr": review_pr,
     }
 
 
@@ -855,75 +849,6 @@ def carrier_commit_tree(repository, commit_sha):
     return valid_sha(
         commit.get("tree", {}).get("sha"), "carrier root tree SHA invalid"
     )
-
-
-def review_attested_carrier_main(repository, contract, branch):
-    review_pr = contract.get("review_pr")
-    if not isinstance(review_pr, int) or isinstance(review_pr, bool) or review_pr <= 0:
-        raise Denied("unprotected carrier requires reviewed carrier PR")
-    base_sha = valid_sha(
-        branch.get("commit", {}).get("sha"), "carrier main SHA"
-    )
-    if base_sha != contract["base_sha"]:
-        raise Denied("carrier main advanced beyond reviewed base")
-
-    pr = gh_api(f"repos/{repository}/pulls/{review_pr}")
-    head = pr.get("head")
-    base = pr.get("base")
-    author = pr.get("user")
-    if (pr.get("number") != review_pr
-            or pr.get("state") != "closed"
-            or pr.get("merged_at") is None
-            or not isinstance(author, dict)
-            or not isinstance(author.get("id"), int)
-            or isinstance(author.get("id"), bool)
-            or author.get("id") <= 0
-            or author.get("id") == CARRIER_REVIEW_USER_ID
-            or not isinstance(head, dict)
-            or not isinstance(head.get("repo"), dict)
-            or head["repo"].get("full_name") != repository
-            or head["repo"].get("id") != contract["repository_id"]
-            or not isinstance(base, dict)
-            or base.get("ref") != "main"
-            or not isinstance(base.get("repo"), dict)
-            or base["repo"].get("full_name") != repository
-            or base["repo"].get("id") != contract["repository_id"]):
-        raise Denied(
-            "carrier review PR is not an independent merged same-repo main review"
-        )
-
-    reviewed_head = valid_sha(
-        head.get("sha"), "carrier review PR head SHA invalid"
-    )
-    review = _latest_review(
-        repository, review_pr,
-        CARRIER_REVIEW_USER_ID, CARRIER_REVIEW_LOGIN,
-        "carrier",
-    )
-    submitted_at = github_timestamp(
-        review.get("submitted_at"), "carrier review timestamp invalid"
-    )
-    merged_at = github_timestamp(
-        pr.get("merged_at"), "carrier merge timestamp invalid"
-    )
-    if (review.get("state") != "APPROVED"
-            or review.get("commit_id") != reviewed_head
-            or submitted_at > merged_at):
-        raise Denied("independent carrier review is stale, late, or not approved")
-
-    reviewed_tree = carrier_commit_tree(repository, reviewed_head)
-    main_tree = carrier_commit_tree(repository, base_sha)
-    if reviewed_tree != main_tree:
-        raise Denied("carrier main tree differs from independently reviewed PR head")
-
-    codeowners = gh_api(
-        f"repos/{repository}/contents/{CODEOWNERS_PATH}?ref={base_sha}"
-    )
-    carrier_codeowners = decode_contents(
-        codeowners, CODEOWNERS_PATH, MAX_GOVERNANCE_FILE
-    )
-    require_carrier_security_codeowners(carrier_codeowners)
-    return base_sha
 
 
 def checked_carrier_main(repository, contract):
