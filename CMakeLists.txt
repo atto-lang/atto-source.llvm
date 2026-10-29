@@ -4558,3 +4558,18 @@ if(BUILD_TESTING)
         endif()
     endif()
 endif()
+
+
+# Fail closed on invalid native source-isolate entries. Never emit partial IR.
+# These checks exercise the actual source compiler, not a handcrafted LLVM fixture.
+if(BUILD_TESTING)
+    foreach(ores_isolate_bad_case private extra arity)
+        add_test(NAME native_oresvm_isolate_reject_${ores_isolate_bad_case}
+            COMMAND "${CMAKE_COMMAND}"
+                "-DORES_LLVM_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DORES_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/oresvm-isolate-entry-${ores_isolate_bad_case}.ores"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/RejectIsolateSource.cmake")
+        set_tests_properties(native_oresvm_isolate_reject_${ores_isolate_bad_case}
+            PROPERTIES TIMEOUT 30)
+    endforeach()
+endif()
