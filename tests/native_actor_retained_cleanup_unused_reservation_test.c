@@ -65,6 +65,27 @@ int main(void) {
         f.scheduler,cleanup));
     f.actor=ores_native_actor_scheduler_spawn(f.scheduler,0);
     CHECK(f.actor.scheduler_domain);
+    /* This scheduler has no authenticated cross-scheduler bridge: foreign
+     * domains must fail at RESERVE, before minting any escrow credit. */
+    OresNativeActorRef foreign=f.actor;
+    foreign.scheduler_domain=(f.actor.scheduler_domain==1) ? 2 : 1;
+    OresNativeWakeTicket invalid={0};
+    invalid.slot_generation=UINT64_C(123);
+    CHECK(!ores_native_actor_scheduler_reserve_wake(
+        f.scheduler,f.actor,foreign,1,1,1,1,&invalid));
+    CHECK(invalid.slot_generation==0 && invalid.producer.scheduler_domain==0);
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actor)==0);
+    CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==0);
+    /* Also reject an otherwise well-formed local target with a forged
+     * generation, without consuming a reservation or starting a turn. */
+    OresNativeActorRef stale=f.actor;
+    ++stale.generation;
+    CHECK(stale.generation!=0);
+    CHECK(!ores_native_actor_scheduler_reserve_wake(
+        f.scheduler,f.actor,stale,1,1,1,1,&invalid));
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actor)==0);
     CHECK(ores_native_actor_scheduler_send(f.scheduler,f.actor,100));
     wait_until(&f.suspended);
     CHECK(ores_native_actor_scheduler_retained_data_count(
@@ -74,6 +95,12 @@ int main(void) {
         f.scheduler,f.wake,ORES_NATIVE_WAKE_READY)==ORES_NATIVE_WAKE_PUBLISHED);
     wait_until(&f.completed);
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    /* A completed wake ticket is not reusable as a new transfer, publish,
+     * cancel or escrow release of any later-generation slot. */
+    CHECK(!ores_native_actor_scheduler_transfer_wake(f.scheduler,f.wake));
+    CHECK(!ores_native_actor_scheduler_cancel_wake(f.scheduler,f.wake));
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,f.wake,ORES_NATIVE_WAKE_READY)==ORES_NATIVE_WAKE_INVALID);
     CHECK(!ores_native_actor_scheduler_retained_data_count(
         f.scheduler,f.actor));
     CHECK(atomic_load(&f.cleanup_calls)==0);
