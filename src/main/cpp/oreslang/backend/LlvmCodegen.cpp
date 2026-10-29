@@ -2978,12 +2978,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
 
     if (!isolate_entry.empty()) {
-        // AOT code is shared; tenant state is loaded/stored only through the
-        // versioned, pinned host context. No native mutable process global.
+        // Isolate guest entry ABI v2: status is distinct from signed i64 output.
+        // Tenant mutable state is accessed only through context callbacks.
+        // No writable process-global guest state is emitted by this wrapper.
         auto* ctx_type = llvm::StructType::get(context,
             {i32, i32, i64, native_ptr, native_ptr, native_ptr});
         auto* wrapper = llvm::Function::Create(
-            llvm::FunctionType::get(i64, {native_ptr, i64}, false),
+            llvm::FunctionType::get(i32, {native_ptr, i64, native_ptr}, false),
             llvm::Function::ExternalLinkage, "ores_guest_entry", module);
         auto* entry = llvm::BasicBlock::Create(context, "entry", wrapper);
         auto* validate = llvm::BasicBlock::Create(context, "validate", wrapper);
@@ -2996,20 +2997,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::IRBuilder<> b(entry);
         auto* ctx = wrapper->getArg(0);
         auto* input = wrapper->getArg(1);
-        b.CreateCondBr(b.CreateIsNotNull(ctx), validate, bad_context);
+        auto* out = wrapper->getArg(2);
+        auto* pointers_valid = b.CreateAnd(b.CreateIsNotNull(ctx),
+                                           b.CreateIsNotNull(out));
+        b.CreateCondBr(pointers_valid, validate, bad_context);
         b.SetInsertPoint(validate);
         auto* typed_ctx = b.CreateBitCast(ctx, ctx_type->getPointerTo());
         auto* version = b.CreateLoad(i32, b.CreateStructGEP(ctx_type, typed_ctx, 0));
         auto* slots = b.CreateLoad(i32, b.CreateStructGEP(ctx_type, typed_ctx, 1));
+        auto* data = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 3));
         auto* load_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 4));
         auto* store_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 5));
         auto* compatible = b.CreateAnd(
-            b.CreateAnd(b.CreateICmpEQ(version, llvm::ConstantInt::get(i32, 1)),
+            b.CreateAnd(b.CreateICmpEQ(version, llvm::ConstantInt::get(i32, 2)),
                         b.CreateICmpEQ(slots, llvm::ConstantInt::get(i32, 16))),
-            b.CreateAnd(b.CreateIsNotNull(load_fn), b.CreateIsNotNull(store_fn)));
+            b.CreateAnd(b.CreateIsNotNull(data),
+                b.CreateAnd(b.CreateIsNotNull(load_fn), b.CreateIsNotNull(store_fn))));
         b.CreateCondBr(compatible, read, bad_context);
         b.SetInsertPoint(read);
-        auto* data = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 3));
         auto* old_slot = b.CreateAlloca(i64, nullptr, "tenant.old");
         auto* load_type = llvm::FunctionType::get(i32, {native_ptr, i32, native_ptr}, false);
         auto* load_ok = b.CreateCall(load_type, load_fn,
@@ -3025,13 +3030,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             {data, llvm::ConstantInt::get(i32, 0), next});
         b.CreateCondBr(b.CreateICmpEQ(saved, llvm::ConstantInt::get(i32, 1)),
                        success, bad_store);
-        b.SetInsertPoint(success); b.CreateRet(next);
+        b.SetInsertPoint(success);
+        b.CreateStore(next, out);
+        b.CreateRet(llvm::ConstantInt::get(i32, 0));
         b.SetInsertPoint(bad_context);
-        b.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
+        b.CreateRet(llvm::ConstantInt::get(i32, 1));
         b.SetInsertPoint(bad_load);
-        b.CreateRet(llvm::ConstantInt::getSigned(i64, -2));
+        b.CreateRet(llvm::ConstantInt::get(i32, 2));
         b.SetInsertPoint(bad_store);
-        b.CreateRet(llvm::ConstantInt::getSigned(i64, -3));
+        b.CreateRet(llvm::ConstantInt::get(i32, 3));
     }
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
