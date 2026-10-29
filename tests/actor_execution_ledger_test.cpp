@@ -79,6 +79,34 @@ int main() {
     assert(stopping.finish(urgent_after_stop) == Status::Ok);
     assert(stopping.physically_retired());
 
+    // A mandatory supervisor CONTROL that was already running/suspended
+    // before STOP must still accept its wake, re-enter on an authenticated
+    // actor lease, and physically retire. Ordinary queued DATA is revoked;
+    // a late or cross-generation notification must never revive it.
+    Ledger suspended_control(91, 5, 17);
+    Ledger::EventId cleanup{}, queued{}, old_cleanup{};
+    assert(suspended_control.admit(Kind::Control, cleanup) == Status::Ok);
+    assert(suspended_control.claim(cleanup, true) == Status::Ok);
+    assert(suspended_control.suspend(cleanup) == Status::Ok);
+    assert(suspended_control.admit(Kind::Message, queued) == Status::Ok);
+    assert(suspended_control.stop() == 1);
+    assert(!suspended_control.physically_retired());
+    assert(suspended_control.notify_ready(queued) == Status::Stale);
+    assert(suspended_control.select(pick) == Status::Blocked ||
+           suspended_control.select(pick) == Status::Idle);
+    old_cleanup = cleanup;
+    ++old_cleanup.actor_generation;
+    assert(suspended_control.notify_ready(old_cleanup) == Status::Stale);
+    assert(suspended_control.notify_ready(cleanup) == Status::Ok);
+    assert(suspended_control.notify_ready(cleanup) == Status::AlreadyReady);
+    assert(suspended_control.select(pick) == Status::Ok &&
+           pick.sequence == cleanup.sequence);
+    assert(suspended_control.claim(cleanup, false) == Status::Unauthorized);
+    assert(suspended_control.claim(cleanup, true) == Status::Ok);
+    assert(suspended_control.finish(cleanup) == Status::Ok);
+    assert(suspended_control.physically_retired());
+    assert(suspended_control.notify_ready(cleanup) == Status::Stale);
+
     // A timer registration is not a logical mailbox barrier until expiry.
     Ledger timer_first(5, 3);
     assert(timer_first.admit(Kind::Timer, timer) == Status::Ok);

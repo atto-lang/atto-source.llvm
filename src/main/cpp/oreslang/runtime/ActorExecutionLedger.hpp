@@ -68,7 +68,11 @@ public:
     Status notify_ready(EventId id) noexcept {
         auto* slot = find(id);
         if (!slot) return Status::Stale;
-        if (closed_) return Status::Closed;
+        // STOP revokes ordinary work, but a previously reserved mandatory
+        // supervisor CONTROL may still be suspended. Its READY notice must
+        // remain deliverable so it can physically retire under the actor
+        // carrier's authenticated exclusive lease. Never resurrect DATA.
+        if (closed_ && slot->kind != Kind::Control) return Status::Closed;
         if (slot->phase == Phase::Ready) return Status::AlreadyReady;
         if (slot->phase != Phase::Pending && slot->phase != Phase::Suspended)
             return Status::NotReady;
