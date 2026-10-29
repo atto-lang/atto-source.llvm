@@ -93,7 +93,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raise AssertionError((method, route))
             return api
 
-        with patch.object(v3, "gh_api", side_effect=api_for(good)):
+        with patch.object(v3, "INCIDENT_GATES", tuple(g for g in v3.INCIDENT_GATES if g[0] != 212)), \
+                patch.object(v3, "gh_api", side_effect=api_for(good)):
             self.assertTrue(v3.require_incident_closure())
 
         cases = []
@@ -115,9 +116,27 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
 
         for values in cases:
             with self.subTest(values=values):
-                with patch.object(v3, "gh_api", side_effect=api_for(values)):
+                with patch.object(v3, "INCIDENT_GATES", tuple(g for g in v3.INCIDENT_GATES if g[0] != 212)), \
+                    patch.object(v3, "gh_api", side_effect=api_for(values)):
                     with self.assertRaisesRegex(v3.Denied, "not independently completed"):
                         v3.require_incident_closure()
+
+    def test_incident_212_unpinned_identity_fails_closed(self):
+        # A completed GitHub response is insufficient until an independent
+        # security review pins #212's immutable GitHub numeric issue ID.
+        pending = [gate for gate in v3.INCIDENT_GATES if gate[0] == 212]
+        self.assertEqual(len(pending), 1)
+        self.assertIsNone(pending[0][1])
+        fake_completed = {
+            "id": 123456789,
+            "number": 212,
+            "html_url": pending[0][2],
+            "state": "closed",
+            "state_reason": "completed",
+        }
+        with patch.object(v3, "gh_api", return_value=fake_completed):
+            with self.assertRaisesRegex(v3.Denied, "incident #212"):
+                v3.require_incident_closure()
 
     def test_allowlist_is_exact_and_fail_closed(self):
         v3.parse_allowlist(b"# x\ntrusted/ci\n", "trusted/ci")
