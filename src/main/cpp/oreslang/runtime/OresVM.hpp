@@ -171,8 +171,13 @@ public:
     // Invoke precompiled native guest code with this isolate's pinned state.
     // The call's stack-owned context must not escape to asynchronous callbacks.
     // This is NOT a sandbox: arbitrary native code can still escape isolation.
-    std::int64_t invoke_guest(const IsolateHandle& handle, OresGuestEntry guest,
-                              std::int64_t input) {
+    struct GuestOutcome {
+        std::int32_t status = ORES_GUEST_FAILED;
+        std::int64_t value = 0;
+    };
+
+    GuestOutcome invoke_guest_result(const IsolateHandle& handle, OresGuestEntry guest,
+                                    std::int64_t input) {
         if (!guest) throw std::invalid_argument("guest entry is null");
         std::shared_ptr<IsolateVM> state;
         {
@@ -210,7 +215,19 @@ public:
         GuestCall call{this, state, state->generation};
         OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
                               state->generation, &call, &guest_load_i64, &guest_store_i64};
-        return guest(&ctx, input);
+        std::int64_t value = 0;
+        const auto status = guest(&ctx, input, &value);
+        if (status != ORES_GUEST_OK) return {status, 0};
+        return {ORES_GUEST_OK, value};
+    }
+
+    std::int64_t invoke_guest(const IsolateHandle& handle, OresGuestEntry guest,
+                              std::int64_t input) {
+        const auto outcome = invoke_guest_result(handle, guest, input);
+        if (outcome.status != ORES_GUEST_OK)
+            throw std::runtime_error("guest failed (status=" +
+                std::to_string(outcome.status) + ")");
+        return outcome.value;
     }
 
     void begin_shutdown(const IsolateHandle& handle) {
