@@ -191,7 +191,7 @@ its own compiled guest step. Before WAKE, the bridge requires global accepted
 = 3 and completed = 1 (C only), A retained = 1 and B not executed. An
 authenticated WAKE executes compiled `guest_resume`, settles the original
 ticket exactly once, then the scheduler dispatches B to another authenticated
-DATA turn. Expected independent physical actor-state results: A = 1256, C = 9.
+DATA turn. Expected independent actor-indexed host scalar results: A = 1256, C = 9.
 After drain accepted = completed = 4; both actor terminal receipts reconcile.
 
 A native C test runner cannot implement the Oreslang compiler's missing
