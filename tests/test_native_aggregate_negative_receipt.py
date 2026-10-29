@@ -43,7 +43,7 @@ class NegativeReceiptTest(unittest.TestCase):
 
     def test_diagnostic_with_ir_on_stderr_rejected(self):
         with self.assertRaisesRegex(AssertionError, "LLVM IR"):
-            self.verify(stderr="AGGREGATE_SHAPE_DUPLICATE_FIELD\ndefine i64 @main() {}")
+            self.verify(stderr="AGGREGATE_SHAPE_DUPLICATE_FIELD\ndefine i64 @__oreslang_guest_main() {}")
 
     def test_object_file_leak_rejected(self):
         (self.source.parent / "case.o").write_bytes(b"not permitted")
@@ -84,7 +84,7 @@ class ScalarPositiveControlTest(unittest.TestCase):
         self.original = b"pub fnc main(): int { return 42; }" + bytes([10])
         self.source.write_bytes(self.original)
 
-    def verify(self, rc=0, stdout="; ModuleID = 'scalar'\ndefine i64 @main() {\n  ret i64 42\n}\n",
+    def verify(self, rc=0, stdout="; ModuleID = 'scalar'\ndefine i64 @__oreslang_guest_main() {\n  ret i64 42\n}\ndefine i32 @main() {\n  ret i32 42\n}\n",
                stderr=""):
         result = subprocess.CompletedProcess(["compiler"], rc, stdout, stderr)
         verify_scalar_positive_control("scalar", self.source, self.original, result)
@@ -102,7 +102,7 @@ class ScalarPositiveControlTest(unittest.TestCase):
 
     def test_wrong_result_does_not_pass(self):
         with self.assertRaisesRegex(AssertionError, "expected 42 IR"):
-            self.verify(stdout="; ModuleID = 'scalar'\ndefine i64 @main() {\n  ret i64 7\n}\n")
+            self.verify(stdout="; ModuleID = 'scalar'\ndefine i64 @__oreslang_guest_main() {\n  ret i64 7\n}\ndefine i32 @main() {\n  ret i32 42\n}\n")
 
     def test_stderr_does_not_pass(self):
         with self.assertRaisesRegex(AssertionError, "emitted stderr"):
