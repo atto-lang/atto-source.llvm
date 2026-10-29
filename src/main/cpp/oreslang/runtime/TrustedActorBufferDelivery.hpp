@@ -74,6 +74,12 @@ public:
     void send(const Gate::Turn& sender, TrustedBufferActor target, const Handle& h) {
         gate_.send(sender, target, h);
     }
+    // The sender can explicitly reclaim a rejected message. An accepted
+    // transfer invalidates the old sender alias, so this also rejects
+    // accidental double drop after successful publication.
+    void drop(const Gate::Turn& sender, const Handle& h) {
+        gate_.drop(sender, h);
+    }
 
     template <typename F>
     decltype(auto) deliver_one(TrustedBufferActor target, F&& handler) {
