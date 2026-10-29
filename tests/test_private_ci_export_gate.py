@@ -26,7 +26,7 @@ class ExportGateTest(unittest.TestCase):
             "repository_id": 1234, "base_sha": A,
             "workflow_path": ".github/workflows/carrier.yml", "workflow_blob_sha": B,
             "test_plans": {"ci/test-plans/llvm-pr1123.json": {
-                "blob_sha": C, "allowed_prs": [1123]}}}}
+                "blob_sha": C, "allowed_prs": [1123]}}}}}
         self.write_contract()
 
     def write_contract(self):
