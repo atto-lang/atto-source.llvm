@@ -14,11 +14,11 @@ Java repository approvals do not authorize LLVM source exports.
 
 Before the publisher may read or export private source bytes, it must query the
 immutable platform-conformance incident identities for #22, #77, #127,
-#171, #172, and #212 and
+#171, #172, #198, #200, #212, and #222 and
 require each issue to be exactly `closed` with `state_reason=completed`.
 Open incidents, alternate close reasons, issue-ID/URL drift, or a pull request
 masquerading as an issue all fail closed. The gate is rechecked **before each source-bearing Git write**, as well as
-immediately before executable carrier authorization. All six incident IDs
+immediately before executable carrier authorization. All nine incident IDs
 must have independently verified, completed dispositions.
 
 ## Transfer requirements
@@ -133,7 +133,7 @@ enforcement, and no bypass/force-push/deletion allowances. It checks main
 SHA and protection metadata twice during carrier attestation. A
 historical merged/reviewed carrier PR cannot replace these controls.
 Before **every source-bearing Git blob/tree/commit write**, the publisher
-re-attests carrier-main protection, source-main authority, all six incident
+re-attests carrier-main protection, source-main authority, all nine incident
 dispositions, the immutable policy contract, and independent source-PR approval.
 Carrier-main movement, protection weakening, workflow/plan change, PR review
 revocation, or unresolved containment incident must deny source export.
