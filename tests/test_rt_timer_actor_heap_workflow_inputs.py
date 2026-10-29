@@ -92,7 +92,42 @@ def local_header_closure(root, paths):
     return headers
 
 
+def reject_optional_timer_gate(section):
+    """Fail closed if timer acceptance has conditional or nonfatal YAML keys."""
+    for field in ("if", "continue-on-error"):
+        normal = r"(?m)^ {4,}(?:-[ \t]+)?" + re.escape(field) + r"[ \t]*:"
+        inline = r"(?m)^ {4,}-[ \t]*\{[^\n}]*\b" + re.escape(field) + r"[ \t]*:"
+        assert not (re.search(normal, section) or re.search(inline, section)), (
+            f"conditional/nonfatal RT timer gate forbidden: {field}"
+        )
+
+
+def optional_gate_selftest():
+    valid = "    runs-on: ubuntu-24.04\n      - name: Execute\n        run: ./unit\n"
+    reject_optional_timer_gate(valid)
+    reject_optional_timer_gate(valid + '        run: echo "if: is text"\n')
+    denied = 0
+    for field in ("if", "continue-on-error"):
+        for line in (
+            f"    {field}: always()\n",
+            f"      - {field}: false\n",
+            f"        {field}: true\n",
+            f"          {field} : always()\n",
+            f"      - {{ name: Gate, {field}: false, run: ./unit }}\n",
+        ):
+            try:
+                reject_optional_timer_gate(valid + line)
+            except AssertionError as exc:
+                assert "forbidden" in str(exc)
+                denied += 1
+            else:
+                raise AssertionError("unsafe optional timer CI gate accepted: " + line)
+    assert denied == 10, f"optional gate mutants not all rejected: {denied}"
+    print(f"RT_TIMER_OPTIONAL_GATE_SELFTEST_PASS allowed=2 denied={denied}")
+
+
 def audit_selftest():
+    optional_gate_selftest()
     """Source-free negative tests, no private-source export."""
     with tempfile.TemporaryDirectory() as td:
         root = pathlib.Path(td).resolve()
@@ -172,6 +207,7 @@ def check():
     job_marker = f"  {JOB}:\n"
     assert job_marker in body, "missing focused RT job"
     section = body.split(job_marker, 1)[1]
+    reject_optional_timer_gate(section)
     loops = BLOB_LOOP.findall(section)
     assert len(loops) == 1, "expected one exact-blob loop"
     loop_text = loops[0]
