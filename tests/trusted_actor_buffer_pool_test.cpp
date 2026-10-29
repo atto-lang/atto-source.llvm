@@ -59,7 +59,7 @@ int main() {
     assert(rejects([&] { pool.drop(original, a); }));
     assert(rejects([&] { loan1.read(b, 96); }));
     std::atomic<bool> go{false};
-    std::thread reader([lease = std::move(loan2), &go]() mutable {
+    std::thread reader([lease = std::move(loan2), &go, b_new]() mutable {
         while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
         assert(lease.read(b_new, 0) == 37);
         lease.release();
