@@ -24,7 +24,7 @@ typedef struct {
     OresNativeActorRef actors[2];
     OresNativeWakeTicket wake;
     OresNativeRetainedDataTicket retained;
-    int64_t guest_state[2]; /* actor-owned physical state, one slot per lane */
+    int64_t guest_state[2]; /* distinct host test cells; NOT actor-owned heaps */
     atomic_int inside[2];   /* detect physical guest re-entrancy per actor */
     atomic_int suspended;
     atomic_int resumed;
