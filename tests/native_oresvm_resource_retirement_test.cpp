@@ -9,8 +9,8 @@ using oreslang::runtime::IsolateResourceKind;
 template<class F> bool denied(F&& fn) { try { fn(); } catch (const std::exception&) { return true; } return false; }
 int main() {
     OresVM vm;
-    auto a=vm.create_isolate({"tenant-a", 64, 2, oreslang::runtime::IsolateMode::TrustedInProcess, 2});
-    auto b=vm.create_isolate({"tenant-b", 64, 2, oreslang::runtime::IsolateMode::TrustedInProcess, 2});
+    auto a=vm.create_isolate({"tenant-a", 64, 2, oreslang::runtime::IsolateMode::TrustedInProcess, 64, 2});
+    auto b=vm.create_isolate({"tenant-b", 64, 2, oreslang::runtime::IsolateMode::TrustedInProcess, 64, 2});
     vm.start(a); vm.start(b);
     const auto actor_a=vm.register_actor(a, 1);
     const auto actor_a2=vm.register_actor(a, 2);
