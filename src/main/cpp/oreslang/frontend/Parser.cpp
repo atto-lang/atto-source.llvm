@@ -312,7 +312,6 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply ||
             expr.kind == Expression::Kind::Remainder ||
-            expr.kind == Expression::Kind::CheckedDiv ||
             expr.kind == Expression::Kind::Equal ||
             expr.kind == Expression::Kind::NotEqual ||
             expr.kind == Expression::Kind::Less ||
@@ -440,7 +439,6 @@ bool native_constructor_scalar_tree(const Expression& expr,
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
             expr.kind == Kind::Multiply || expr.kind == Kind::Remainder ||
-            expr.kind == Kind::CheckedDiv ||
             expr.kind == Kind::Equal ||
             expr.kind == Kind::NotEqual || expr.kind == Kind::Less ||
             expr.kind == Kind::LessEqual || expr.kind == Kind::Greater ||
@@ -3292,20 +3290,6 @@ private:
                 operation = "borrow";
                 mutable_borrow = true;
             }
-            // Internal compiler-checked signed-64 quotient, deliberately
-            // distinct from source '/', which produces float. Native v1
-            // traps on invalid divisors; a typed Result effect is a future
-            // contract and must not be represented as a successful value.
-            if (operation == "div_trunc_checked") {
-                advance();
-                require("(");
-                auto quotient = make_expression(Expression::Kind::CheckedDiv, offset);
-                quotient->left = expression();
-                require(",");
-                quotient->right = expression();
-                require(")");
-                return quotient;
-            }
             if (operation == "cooperate") {
                 throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
@@ -4183,7 +4167,6 @@ private:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
             case Expression::Kind::Remainder:
-            case Expression::Kind::CheckedDiv:
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual:
             case Expression::Kind::Less:
@@ -4363,8 +4346,7 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-            case Expression::Kind::Remainder:
-            case Expression::Kind::CheckedDiv: {
+            case Expression::Kind::Remainder: {
                 ScalarType left = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
