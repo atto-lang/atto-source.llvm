@@ -176,8 +176,8 @@ interleavings or a hard-real-time WCET bound. The implementation remains draft.
 
 ## Compiled native guest-segment bridge (intermediate, not actor-await lowering)
 
-`tests/fixtures/native-retained-guest-steps.ores` now contains three real
-Oreslang functions (`guest_step`, `guest_resume`, `main`). The CTest
+`tests/fixtures/native-retained-guest-steps.ores` contains four real
+Oreslang functions (`guest_step`, `guest_resume`, `guest_cleanup`, `main`). The CTest
 `source_actor_compiled_native_retained_guest_bridge` and its sanitizer variant
 run `oreslang-llvmc` on these exact source bytes, verify that the generated
 LLVM IR defines executable `i64` symbols and no tracing-GC calls, rename only
@@ -193,6 +193,22 @@ authenticated WAKE executes compiled `guest_resume`, settles the original
 ticket exactly once, then the scheduler dispatches B to another authenticated
 DATA turn. Expected independent actor-indexed host scalar results: A = 1256, C = 9.
 After drain accepted = completed = 4; both actor terminal receipts reconcile.
+
+A second isolated scheduler fixture also exercises **STOP without any prior
+WAKE**. The host DATA handler allocates a pinned C frame and retains its
+original DATA receipt. A supervisor seals STOP; the pre-reserved cleanup turn
+executes *compiled* Oreslang `guest_cleanup` under the authenticated actor
+lease, and the trusted host explicitly frees the pinned frame before
+returning a successful acknowledgement. The test checks the physical
+release flag, exact ticket and actor generation, one abandoned user message,
+zero processed messages, accepted=2, completed=1, no phantom supervisor
+CONTROL receipt and actual terminal/quiescence. Both paths run under the
+existing release and sanitizer CTest/Actions gate.
+
+The pinned frame and its drop are **host-managed** in this test. Calling
+a compiled guest function from trusted cleanup is not proof of compiler
+lowered defer/drop glue, actor heap segregation or source-level `suspends`.
+Those remain separate mandatory acceptance tests.
 
 A native C test runner cannot implement the Oreslang compiler's missing
 source-level actor continuation lowering. This gate therefore exercises
