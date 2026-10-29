@@ -4,6 +4,69 @@ A nonzero process exit is insufficient: require the exact diagnostic and no
 published compiler product in the isolated case directory. Source-free helper.
 """
 from pathlib import Path
+import hashlib
+import re
+
+
+def git_blob_sha1(contents: bytes) -> str:
+    """Hash the exact source bytes as a Git blob, not an ordinary SHA-1."""
+    return hashlib.sha1(b"blob " + str(len(contents)).encode("ascii") +
+                        bytes([0]) + contents).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def result_digest(output: str) -> str:
+    return hashlib.sha256(output.encode("utf-8")).hexdigest()
+
+
+def complete_negative_receipt(compiler_sha256: str, control: dict,
+                              cases: list[dict], expected: list[str]) -> dict:
+    """Construct a negative-only receipt, never a guest/CI provenance claim.
+
+    Call this ONLY after verifying every subprocess and its clean workspace.
+    Reject incomplete, reordered, duplicated, or unexpected fixture records.
+    A trusted CI job must independently bind exact Git source/tree and toolchain
+    identities; caller-supplied hashes are not such an attestation.
+    """
+    hexdigest = re.compile(r"[a-f0-9]{64}", re.ASCII)
+    blob = re.compile(r"[a-f0-9]{40}", re.ASCII)
+    if not hexdigest.fullmatch(compiler_sha256):
+        raise AssertionError("receipt: invalid compiler SHA-256")
+    if not expected or len(expected) != len(set(expected)):
+        raise AssertionError("receipt: duplicate/empty fixture registry")
+    if len(cases) != len(expected) or [case.get("id") for case in cases] != expected:
+        raise AssertionError("receipt: incomplete/reordered fixture executions")
+    if control.get("id") != "scalar-positive" or control.get("returnCode") != 0:
+        raise AssertionError("receipt: missing successful scalar compiler control")
+    if control.get("verified") is not True or not blob.fullmatch(
+            str(control.get("sourceGitBlobSha1", ""))) or not hexdigest.fullmatch(
+            str(control.get("stdoutSha256", ""))):
+        raise AssertionError("receipt: invalid scalar control digest")
+    for case in cases:
+        if (case.get("verified") is not True or type(case.get("returnCode")) is not int or
+                case["returnCode"] <= 0 or
+                not re.fullmatch(r"[A-Z][A-Z0-9_]+", str(case.get("diagnostic", ""))) or
+                not blob.fullmatch(str(case.get("sourceGitBlobSha1", ""))) or
+                not hexdigest.fullmatch(str(case.get("stderrSha256", "")))):
+            raise AssertionError("receipt: unverified compiler case " + str(case.get("id")))
+    return {
+        "schemaVersion": 1,
+        "scope": "aggregate-kind-native-compiler-negative-only",
+        "guestAggregateLoweringVerified": False,
+        "exactSourceProvenanceVerified": False,
+        "compilerSha256": compiler_sha256,
+        "scalarControl": control,
+        "expectedNegativeCaseCount": len(expected),
+        "executedNegativeCaseCount": len(cases),
+        "cases": cases,
+    }
 
 IR_MARKERS = ("; ModuleID", "source_filename =", "target triple =", "define ")
 
