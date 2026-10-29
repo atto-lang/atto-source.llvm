@@ -126,7 +126,7 @@ def check():
                 step,
             ), f"{step_name}: missing {binary} build output"
             assert re.search(
-                r"(?m)^\s*" + re.escape(binary_path) + r"\s*$", step
+                r"(?m)^\s*(?:(?:ASAN_OPTIONS|UBSAN_OPTIONS)=[^\s]+\s+)*"\n                + re.escape(binary_path) + r"\s*$", step
             ), f"{step_name}: {binary} never executed"
 
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
