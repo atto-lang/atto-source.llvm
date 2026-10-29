@@ -32,6 +32,9 @@ def verify(run, jobs_data, *, expected_sha, expected_run_id, expected_attempt,
     if not required_steps or any(not isinstance(s, str) or not s.strip() or s != s.strip()
                                  for s in required_steps) or len(set(required_steps)) != len(required_steps):
         raise EvidenceError("required step names must be explicit, unique and canonical")
+    if any(s in ("Set up job", "Complete job") or s.startswith("Post ")
+           for s in required_steps):
+        raise EvidenceError("setup and cleanup steps are not test execution evidence")
     if (run.get("id") != expected_run_id or run.get("head_sha") != expected_sha
             or run.get("run_attempt") != expected_attempt):
         raise EvidenceError("run identity, attempt, or head SHA mismatch")
