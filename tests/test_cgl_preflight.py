@@ -165,6 +165,38 @@ class CGLAdmissionTests(unittest.TestCase):
                     self.assertIs(probe.read_preempt_rt(path), expected)
             self.assertIsNone(probe.read_preempt_rt(path / "missing"))
 
+    def test_rt_flag_rejects_whitespace_and_oversized_inputs(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rt"
+            for data, expected in ((b"1", True), (b"0", False),
+                                   (b" 1\n", None), (b"1 \n", None),
+                                   (b"1\n\n", None), (b"1" * 4096, None)):
+                with self.subTest(data_len=len(data), data_head=data[:8]):
+                    path.write_bytes(data)
+                    self.assertIs(probe.read_preempt_rt(path), expected)
+
+    def test_rt_flag_rejects_symlink_and_nonblocking_fifo(self):
+        with tempfile.TemporaryDirectory() as td:
+            valid = Path(td) / "valid"
+            valid.write_bytes(b"1\n")
+            link = Path(td) / "link"
+            link.symlink_to(valid)
+            self.assertIsNone(probe.read_preempt_rt(link))
+            if hasattr(os, "mkfifo"):
+                fifo = Path(td) / "fifo"
+                os.mkfifo(fifo)
+                code = (
+                    "import importlib.util,sys\n"
+                    "spec=importlib.util.spec_from_file_location('cgl',sys.argv[1])\n"
+                    "mod=importlib.util.module_from_spec(spec)\n"
+                    "spec.loader.exec_module(mod)\n"
+                    "assert mod.read_preempt_rt(sys.argv[2]) is None\n"
+                )
+                completed = subprocess.run(
+                    [sys.executable, "-c", code, str(SCRIPT), str(fifo)],
+                    capture_output=True, text=True, timeout=5, check=False)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_no_fake_certification_and_rt_fail_closed(self):
         ordinary = probe.preflight()
         self.assertFalse(ordinary["carrier_grade_qualified"])
