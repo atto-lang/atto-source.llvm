@@ -4144,7 +4144,14 @@ private:
         require_expression_depth(depth, expr.offset);
         switch (expr.kind) {
             case Expression::Kind::AggregateConstruct:
-                throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source aggregate constructor cannot enter scalar validation");
+                // Validate source initializers in lexical order, retaining
+                // aggregate type identity through later native typechecking.
+                if (!expr.aggregate_type ||
+                        expr.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct)
+                    throw std::runtime_error("AGGREGATE_CONSTRUCTOR_KIND_UNVERIFIED");
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions, depth + 1);
+                return;
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
@@ -5179,6 +5186,38 @@ private:
             };
 
             for (const auto& binding : fn.locals) {
+                if (binding.aggregate_type) {
+                    // Stack-only immutable exact structs: no aggregate ABI,
+                    // implicit scalar conversion or mutable aliasing.
+                    if (!binding.initializer ||
+                            binding.initializer->kind != Expression::Kind::AggregateConstruct ||
+                            !binding.initializer->aggregate_type ||
+                            !binding.aggregate_type->same_type_as(*binding.initializer->aggregate_type))
+                        throw std::runtime_error("AGGREGATE_LOCAL_INITIALIZER_UNVERIFIED");
+                    if (binding.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct)
+                        throw std::runtime_error("AGGREGATE_RECORD_LOWERING_UNVERIFIED");
+                    for (std::size_t i = 0; i < binding.initializer->arguments.size(); ++i) {
+                        const auto& field_name = binding.initializer->argument_names.at(i);
+                        const auto field = std::find_if(
+                            binding.aggregate_type->fields.begin(), binding.aggregate_type->fields.end(),
+                            [&](const types::NativeAggregateShape::Field& member) {
+                                return member.name == field_name;
+                            });
+                        if (field == binding.aggregate_type->fields.end() ||
+                                (field->type != "int" && field->type != "bool"))
+                            throw std::runtime_error("AGGREGATE_NATIVE_FIELD_UNVERIFIED");
+                        require_scalar(*binding.initializer->arguments[i],
+                            field->type == "bool" ? ScalarType::Bool : ScalarType::I64,
+                            "AGGREGATE_CONSTRUCTOR_FIELD_TYPE_MISMATCH", scalar_types);
+                    }
+                    for (const auto& field : binding.aggregate_type->fields)
+                        scalar_types.emplace(binding.name + "." + field.name,
+                            field.type == "bool" ? ScalarType::Bool : ScalarType::I64);
+                    // The base name is never an i64 source value: ownership
+                    // requires an explicit checked scalar field projection.
+                    scalar_types.emplace(binding.name, ScalarType::I64);
+                    continue;
+                }
                 if (binding.int_array || binding.new_class || binding.move_class) {
                     scalar_types.emplace(binding.name, ScalarType::I64);
                     if (binding.int_array)
@@ -5931,8 +5970,8 @@ void resolve_and_validate_program(Program& program) {
     // in signatures, but runtime/ownership ABI and executable literals are not
     // certified. Never turn a source aggregate into a default scalar i64 slot.
     for (const auto& fn : program.functions) {
-        if (!fn.local_aggregate_aliases.empty())
-            throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: callable-local aggregate aliases cannot enter native lowering");
+        // Transparent local aliases have no runtime identity. The only
+        // executable use is a checked, immutable ExactStruct stack local.
         if (fn.return_aggregate)
             throw std::runtime_error("AGGREGATE_LOWERING_UNVERIFIED: source return kind is preserved but native LLVM return ABI is not certified");
         for (const auto& parameter : fn.parameters)
