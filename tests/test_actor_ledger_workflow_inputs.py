@@ -181,7 +181,66 @@ def reject_conditional_gate_bypass(sections):
                 f"{job}: conditional/non-fatal CI gate forbidden: {field}"
             )
 
+REQUIRED_EXECUTED_COMMANDS = {
+    "actor-ledger-contract": (
+        "python3 -B tests/test_actor_ledger_workflow_inputs.py",
+        '"build/actor-ledger-gate/test-${cxx//+/p}"',
+        '"build/actor-ledger-gate/stress-${cxx//+/p}"',
+        "build/actor-ledger-gate/test-sanitized",
+        "build/actor-ledger-gate/stress-sanitized",
+    ),
+    "compiled-ores-guest": (
+        "cmake --build build/actor-ledger-guest --target oreslang-llvmc -j 2",
+        "python3 tests/native_actor_compiled_guest_ledger.py",
+        '--clang clang --root "$PWD" --sanitize',
+    ),
+}
+
+def verify_executable_acceptance_steps(sections):
+    """Reject deletion or echo-only replacement of required test invocations.
+
+    Required lines must occur in a workflow shell run body (not a comment,
+    metadata path list, or an echo containing a test command). This is an
+    admission guard, not proof that hosted runners actually executed them.
+    """
+    for job, required in REQUIRED_EXECUTED_COMMANDS.items():
+        section = sections[job]
+        shell_lines = [
+            line.strip().rstrip("\\").rstrip()
+            for line in section.splitlines()
+            if re.match(r"^ {10,}", line) and not line.lstrip().startswith("#")
+        ]
+        for command in required:
+            count = shell_lines.count(command)
+            minimum = (2 if (job == "compiled-ores-guest" and
+                            command == "python3 tests/native_actor_compiled_guest_ledger.py")
+                       else 1)
+            assert count >= minimum, (
+                f"{job}: required executable test command missing: {command}"
+            )
+
 def audit_selftest():
+    # If test commands are removed, commented or replaced with echo, a
+    # passing blob manifest must not produce a green acceptance job.
+    commands_fixture = {
+        job: '\n'.join('          ' + item for item in commands) + '\n'
+        for job, commands in REQUIRED_EXECUTED_COMMANDS.items()
+    }
+    commands_fixture["compiled-ores-guest"] += (
+        "          python3 tests/native_actor_compiled_guest_ledger.py\n"
+    )
+    verify_executable_acceptance_steps(commands_fixture)
+    for job, commands in REQUIRED_EXECUTED_COMMANDS.items():
+        for cmd in commands:
+            damaged = dict(commands_fixture)
+            damaged[job] = damaged[job].replace("          " + cmd,
+                "          echo " + cmd, 2)
+            try:
+                verify_executable_acceptance_steps(damaged)
+            except AssertionError as exc:
+                assert "required executable test command missing" in str(exc)
+            else:
+                raise AssertionError(f"echo-only acceptance command accepted: {job} {cmd}")
     valid = {
         "actor-ledger-contract": "    runs-on: ubuntu-24.04\n      - name: Gate\n        run: echo gate\n",
         "compiled-ores-guest": "    needs: actor-ledger-contract\n      - name: Guest\n        run: echo guest\n",
@@ -385,6 +444,7 @@ def check():
     assert set(REQUIRED_JOBS) <= sections.keys(), "missing mandatory jobs"
     require_guest_gate_dependency(sections["compiled-ores-guest"])
     reject_conditional_gate_bypass(sections)
+    verify_executable_acceptance_steps(sections)
     all_inputs = set()
     for name in REQUIRED_JOBS:
         section = sections[name]
