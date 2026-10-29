@@ -1,0 +1,5 @@
+// Must compile, then trap before LLVM sdiv signed overflow poison.
+pub fnc main(): int {
+  let int negative_one = -1;
+  return rt div_trunc_checked(-9223372036854775808, negative_one);
+}
