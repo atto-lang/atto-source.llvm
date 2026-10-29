@@ -9,6 +9,8 @@ on:
       - 'docs/security/CI_PRIVATE_SOURCE_MIRRORING.md'
       - 'scripts/audit-private-ci-governance.py'
       - 'scripts/test-audit-private-ci-governance.py'
+      - 'scripts/check-actions-execution-evidence.py'
+      - 'scripts/test-check-actions-execution-evidence.py'
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
       - 'scripts/run-in-private-ci-destination.sh'
@@ -24,6 +26,8 @@ on:
       - 'docs/security/CI_PRIVATE_SOURCE_MIRRORING.md'
       - 'scripts/audit-private-ci-governance.py'
       - 'scripts/test-audit-private-ci-governance.py'
+      - 'scripts/check-actions-execution-evidence.py'
+      - 'scripts/test-check-actions-execution-evidence.py'
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
       - 'scripts/run-in-private-ci-destination.sh'
@@ -43,6 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --offline --manifest-path tools/private-ci-policy/Cargo.toml
+      - name: Offline exact-head run evidence regression suite
+        run: python3 scripts/test-check-actions-execution-evidence.py
       - name: Offline governance regression suite
         run: python3 scripts/test-audit-private-ci-governance.py
       - name: LLVM v3 private publisher regression suite
