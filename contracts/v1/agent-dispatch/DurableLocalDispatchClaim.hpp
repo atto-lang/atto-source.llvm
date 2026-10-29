@@ -34,14 +34,44 @@ inline std::string local_claim_filename(const Scope& s) {
   }
   return name + ".claim";
 }
+// Walk from a root directory descriptor, never following a symlink in ANY
+// component. O_NOFOLLOW on the final path alone is insufficient.
+inline int open_local_claim_directory(const std::string& absolute) {
+  if (absolute.empty() || absolute.front() != '/' || absolute.size() == 1)
+    return -1;
+  int current = ::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (current < 0) return -1;
+  std::size_t start = 1;
+  while (start < absolute.size()) {
+    const std::size_t end = absolute.find('/', start);
+    const std::string component = absolute.substr(start, end - start);
+    if (component.empty() || component == "." || component == ".." ||
+        component.find('\\0') != std::string::npos) {
+      ::close(current);
+      return -1;
+    }
+    const int next = ::openat(current, component.c_str(),
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    ::close(current);
+    if (next < 0) return -1;
+    current = next;
+    if (end == std::string::npos) break;
+    start = end + 1;
+    if (start == absolute.size()) {
+      ::close(current);
+      return -1;
+    }
+  }
+  return current;
+}
 class DurableLocalDispatchClaim final {
  public:
   explicit DurableLocalDispatchClaim(std::string private_directory)
       : directory_(std::move(private_directory)) {}
   bool claim_once(const Scope& s) const {
     const auto name = local_claim_filename(s);
-    if (name.empty() || directory_.empty() || directory_.front() != '/') return false;
-    const int dir = ::open(directory_.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (name.empty()) return false;
+    const int dir = open_local_claim_directory(directory_);
     if (dir < 0) return false;
     struct stat st {};
     const bool private_dir = ::fstat(dir, &st) == 0 && S_ISDIR(st.st_mode) &&
