@@ -152,6 +152,21 @@ class ExportGateTest(unittest.TestCase):
                                "--pr", "1123"]), 1)
 
 
+    def test_excessive_json_nesting_rejected(self):
+        # A deeply nested JSON document must deny instead of raising an
+        # uncaught RecursionError in the authorization CLI.
+        policy = self.root / ".github/private-ci-carrier-contracts.json"
+        policy.write_text("[" * 1500 + "0" + "]" * 1500, encoding="utf-8")
+        self.check_rejected()
+
+    def test_excessive_json_integer_digits_rejected(self):
+        # Python 3.11+ limits JSON integer conversion to prevent CPU abuse.
+        # That ValueError must also be mapped to an authorization denial.
+        policy = self.root / ".github/private-ci-carrier-contracts.json"
+        policy.write_text('{"schema":' + ("9" * 8000)
+                          + ',"carriers":{}}', encoding="utf-8")
+        self.check_rejected()
+
     def test_nonobject_policy_rejected(self):
         (self.root / ".github/private-ci-carrier-contracts.json").write_text(
             "[]", encoding="utf-8")
