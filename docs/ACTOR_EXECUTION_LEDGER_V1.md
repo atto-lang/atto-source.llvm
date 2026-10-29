@@ -191,8 +191,22 @@ its own compiled guest step. Before WAKE, the bridge requires global accepted
 = 3 and completed = 1 (C only), A retained = 1 and B not executed. An
 authenticated WAKE executes compiled `guest_resume`, settles the original
 ticket exactly once, then the scheduler dispatches B to another authenticated
-DATA turn. Expected independent actor-indexed host scalar results: A = 1256, C = 9.
-After drain accepted = completed = 4; both actor terminal receipts reconcile.
+DATA turn. The bridge now uses **two distinct physically allocated**
+`OresActorI64Heap` instances, not actor-indexed scalar fields in a shared
+host fixture. Each compiled guest function operates on an i64 loaded from
+its authenticated actor's own native heap. Actor A's heap slot is
+shared-read-loan pinned before the first retained DATA callback returns;
+the loan persists across the native suspension, and only the authenticated
+WAKE releases it before writing A's resumed value. Actor C's independent
+native heap progresses while A remains pinned. Expected diagnostic
+snapshots: A = 1256 and C = 9. After initial drain, accepted=completed=4.
+
+The test then STOPs A, verifies terminal quiescence, and **physically
+destroys A's actor-owned heap** while actor C's scheduler lane and separate
+heap stay alive. It dispatches a second compiled guest message to C and
+requires its state to advance from 9 to 108, with global
+accepted=completed=5. Only after C's own STOP does it retire C's heap.
+This is stronger than mere logical actor-indexed state separation.
 
 A second isolated scheduler fixture also exercises **STOP without any prior
 WAKE**. The host DATA handler allocates a pinned C frame and retains its
@@ -215,6 +229,10 @@ source-level actor continuation lowering. This gate therefore exercises
 **actual compiled guest scalar code under trusted host DATA/WAKE control**, not
 a compiled `suspends on_message` state machine, source-level suspension
 frame ownership, or native actor heap allocation by the language compiler.
+Heap opening, actor-ID mapping, retain/loan handoff, and heap teardown
+remain performed by the **trusted host test bridge**. These native heaps
+are independent allocations, **not** separate process address spaces,
+OS sandboxes or independently tracing JVM heaps.
 The test explicitly checks that
 `source-actor-suspend-method-reject.ores` still fails closed with the existing
 unsupported-continuation diagnostic. When guest continuation lowering is
