@@ -500,6 +500,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             b"/.github/workflows/* @ORESoftware\n"
             b"/.github/private-ci-approved-repositories.txt @ORESoftware\n"
             b"/.github/private-ci-carrier-contracts.json @ORESoftware\n"
+            b"/.github/private-ci-incident-dispositions.json @ORESoftware\n"
             b"/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md @ORESoftware\n"
             b"/scripts/run-in-private-ci-destination.sh @ORESoftware\n"
             b"/scripts/publish-private-ci-source.py @ORESoftware\n"
