@@ -1,0 +1,36 @@
+// Source-free policy semantics projection; never an export authorization.
+// Exact GitHub evidence and immutable incident IDs are checked in Rust and by
+// the live publisher, not by this scalar fixture.
+fnc policy_admits(
+    int source_protected,
+    int carrier_protected,
+    int app_checks_pinned,
+    int last_push_reviewed,
+    int source_pr_exact,
+    int incidents_completed,
+    int destination_approved
+): int {
+    if (source_protected eq 0) { return 0; } fi
+    if (carrier_protected eq 0) { return 0; } fi
+    if (app_checks_pinned eq 0) { return 0; } fi
+    if (last_push_reviewed eq 0) { return 0; } fi
+    if (source_pr_exact eq 0) { return 0; } fi
+    if (incidents_completed eq 0) { return 0; } fi
+    if (destination_approved eq 0) { return 0; } fi
+    return 1;
+}
+
+pub fnc main(): int {
+    // Synthetic positive probe proves only the scalar decision rule.
+    if (policy_admits(1, 1, 1, 1, 1, 1, 1) eq 0) { return 1; } fi
+
+    // Every missing security prerequisite must deny admission.
+    if (policy_admits(0, 1, 1, 1, 1, 1, 1) eq 1) { return 2; } fi
+    if (policy_admits(1, 0, 1, 1, 1, 1, 1) eq 1) { return 3; } fi
+    if (policy_admits(1, 1, 0, 1, 1, 1, 1) eq 1) { return 4; } fi
+    if (policy_admits(1, 1, 1, 0, 1, 1, 1) eq 1) { return 5; } fi
+    if (policy_admits(1, 1, 1, 1, 0, 1, 1) eq 1) { return 6; } fi
+    if (policy_admits(1, 1, 1, 1, 1, 0, 1) eq 1) { return 7; } fi
+    if (policy_admits(1, 1, 1, 1, 1, 1, 0) eq 1) { return 8; } fi
+    return 42;
+}
