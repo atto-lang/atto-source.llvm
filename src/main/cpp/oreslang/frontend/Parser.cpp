@@ -1393,7 +1393,7 @@ private:
             // Formatter may insert 'mtd', but method identity and receiver
             // erasure must remain unchanged. Never consume it as a class field.
             const bool method_marker = accept("mtd");
-            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
+            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && token_.text != "initialize" && (!reserved(token_.text) || token_.text == "pattern")
                 && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
             if (method_marker && !method_ahead)
                 fail("native mtd marker must precede a method signature");
@@ -1411,9 +1411,11 @@ private:
                 methods_.push_back(std::move(method));
                 continue;
             }
-            if (accept("constructor")) {
+            if (token_.text == "constructor" || token_.text == "initialize") {
+                const bool typed_initialize = token_.text == "initialize";
+                advance();
                 if (result.explicit_constructor)
-                    fail("native class may declare only one scalar constructor");
+                    fail("native class may declare only one scalar constructor/initialize");
                 result.explicit_constructor = true;
                 result.constructor_exported = publicly_visible;
                 require("(");
@@ -1433,11 +1435,75 @@ private:
                     } while (accept(","));
                     require(")");
                 }
-                require("{");
-                if (accept("return")) require(";");
-                if (token_.text != "}")
-                    fail("native scalar constructor body must be empty or contain only 'return;'");
-                require("}");
+                if (typed_initialize) {
+                    if (!accept("->") && !accept(":"))
+                        fail("initialize(...) requires an explicit '-> void' or ': void'");
+                    if (token_.text != "void")
+                        fail("initialize(...) must return void");
+                    const auto return_type_end = token_.offset + token_.text.size();
+                    advance();
+                    // Bare end-delimited bodies must start on a new physical
+                    // source line; otherwise a following class member can be
+                    // incorrectly consumed as an initializer statement.
+                    const bool delimited = accept("::");
+                    const bool braced = !delimited && accept("{");
+                    if (!braced && !delimited) {
+                        if (token_.text == "as")
+                            fail("callable bodies cannot use 'as'");
+                        if (source_.substr(return_type_end,
+                                token_.offset - return_type_end).find('\n') == std::string_view::npos)
+                            fail("initialize body requires '::', '{', or a newline after void");
+                    }
+                    const auto closer = braced ? "}" : "end";
+                    std::unordered_set<std::string> initialized;
+                    while (token_.text != closer) {
+                        if (token_.kind == Kind::End)
+                            fail("unterminated initialize body");
+                        if (accept("return")) {
+                            require(";");
+                            if (token_.text != closer)
+                                fail("initialize may return only after the complete field assignment sequence");
+                            break;
+                        }
+                        // First native subset: exactly one direct scalar
+                        // assignment per uninitialized fixed slot. Reject
+                        // aliases, calls, loops, callbacks and nested CFG
+                        // rather than claim an unproven no-self-escape check.
+                        require("self");
+                        require(".");
+                        const std::string field_name = identifier();
+                        require("=");
+                        const std::string arg_name = identifier();
+                        require(";");
+                        if (!params.contains(arg_name))
+                            fail("initialize fixed-field assignment requires an int constructor parameter");
+                        if (!initialized.insert(field_name).second)
+                            fail("initialize writes a fixed field more than once");
+                        auto field = std::find_if(result.fields.begin(), result.fields.end(),
+                            [&](const ClassField& f) { return f.name == field_name; });
+                        if (field == result.fields.end())
+                            fail("initialize assigns an unknown class field");
+                        if (!field->final_field || !field->constructor_argument ||
+                                field->initializer_expression ||
+                                field->int_array || !field->class_name.empty() ||
+                                !field->sum_type.empty() || field->scalar_type != ScalarType::I64)
+                            fail("initialize may fill only uninitialized fixed int slots");
+                        field->initializer_expression = std::make_unique<Expression>();
+                        field->initializer_expression->kind = Expression::Kind::Variable;
+                        field->initializer_expression->name = arg_name;
+                        field->constructor_argument = false;
+                    }
+                    require(closer);
+                    for (const auto& field : result.fields)
+                        if (field.constructor_argument)
+                            fail("initialize must assign every uninitialized fixed class field exactly once");
+                } else {
+                    require("{");
+                    if (accept("return")) require(";");
+                    if (token_.text != "}")
+                        fail("native scalar constructor body must be empty or contain only 'return;'");
+                    require("}");
+                }
                 continue;
             }
             if (result.explicit_constructor)
@@ -1449,15 +1515,22 @@ private:
             field.public_member = publicly_visible;
             bool literal_const = false;
             bool val_alias = false;
+            bool explicit_final = false;
             if (!legacy_let) {
-                field.final_field = accept("final");
-                if (field.final_field) literal_const = accept("const");
+                explicit_final = accept("final");
+                field.final_field = explicit_final;
+                if (explicit_final) literal_const = accept("const");
                 else if (accept("const")) literal_const = field.final_field = true;
                 else field.final_field = val_alias = accept("val");
             }
             const bool explicit_mut = accept("mut");
             if (val_alias && explicit_mut) fail("duplicate mut class field qualifier");
-            const bool mutable_referent = val_alias || explicit_mut;
+            // A bare type-first class field is VAL: one fixed slot and a
+            // mutable referent. LET, CONST and FINAL retain distinct meanings.
+            const bool implicit_val = !legacy_let && !literal_const &&
+                !explicit_final && !val_alias;
+            if (implicit_val) field.final_field = true;
+            const bool mutable_referent = val_alias || implicit_val || explicit_mut;
             field.mutable_referent = mutable_referent;
             if (mutable_referent && accept("Array")) {
                 // 'mut Array<int>' is canonical: mut is the referent
