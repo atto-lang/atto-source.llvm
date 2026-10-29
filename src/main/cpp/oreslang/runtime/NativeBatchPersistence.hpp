@@ -41,8 +41,16 @@ inline bool valid_id(const std::string& s) {
         [](unsigned char c){ return c < 32 || c == 127; });
 }
 
-/** In-memory mock provider. Commit admission/epoch must be enforced by the real durable provider. */
-class MemoryStore final {
+/** A provider must atomically combine state, fencing, and dedup at its commit boundary. */
+class Store {
+public:
+    virtual ~Store() = default;
+    virtual void grant_epoch(const std::string&, const std::string&, std::uint64_t) = 0;
+    virtual std::vector<Receipt> commit(const std::vector<Write>&) = 0;
+};
+
+/** In-memory mock provider: never returns a durable receipt. */
+class MemoryStore final : public Store {
     using Actor = std::pair<std::string, std::string>;
     using State = std::tuple<std::string, std::string, std::string>;
     using Operation = std::tuple<std::string, std::string, std::string, std::string>;
@@ -111,7 +119,7 @@ public:
 /** Bounded tenant-scoped writer. flush() runs ONLY on a dedicated host I/O worker. */
 class BatchSidecar final {
     std::string tenant_;
-    MemoryStore& store_;
+    Store& store_;
     std::size_t max_entries_, max_queue_bytes_, max_payload_bytes_, batch_entries_, batch_bytes_;
     std::deque<Write> queue_;
     std::size_t queued_bytes_ = 0;
@@ -119,7 +127,7 @@ class BatchSidecar final {
     std::mutex mu_;
     std::mutex flush_mu_; // serializes provider writes in dequeue order
 public:
-    BatchSidecar(std::string tenant, MemoryStore& store, std::size_t max_entries,
+    BatchSidecar(std::string tenant, Store& store, std::size_t max_entries,
                  std::size_t max_queue_bytes, std::size_t max_payload_bytes,
                  std::size_t batch_entries, std::size_t batch_bytes)
         : tenant_(std::move(tenant)), store_(store), max_entries_(max_entries),
