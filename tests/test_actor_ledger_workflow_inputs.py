@@ -182,6 +182,24 @@ def audit_selftest():
     verify_executed_blob_comparison(
         prefix + direct + 'done\n', 'selftest-direct'
     )
+    staged = (
+        '  expected="$(git rev-parse "HEAD:$path")"\n'
+        '  actual="$(git hash-object "$path")"\n'
+        '  test "$actual" = "$expected"\n'
+    )
+    verify_executed_blob_comparison(
+        prefix + staged + 'done\n', 'selftest-staged'
+    )
+    try:
+        verify_executed_blob_comparison(
+            prefix.replace("set -euo pipefail", "set +e")
+            + direct + 'done\n',
+            'selftest-nonfailfast',
+        )
+    except AssertionError as exc:
+        assert "non-fail-fast" in str(exc)
+    else:
+        raise AssertionError("non-fail-fast blob verification not rejected")
     try:
         verify_executed_blob_comparison(
             prefix + '  echo "EXACT_BLOB $path"\n' + 'done\n',
