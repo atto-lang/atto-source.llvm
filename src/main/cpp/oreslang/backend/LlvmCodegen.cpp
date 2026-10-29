@@ -2864,6 +2864,62 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         finish.CreateStore(two, lifecycle);
         finish.CreateRetVoid();
     }
+    // P0 browser FFI foundation: an annotated, public, constant-returning
+    // guest Oreslang function is the ONLY source of the version value. Its
+    // i64 guest ABI stays unchanged. Generate a distinct, exactly i32 C
+    // entrypoint so hosts never cast a 64-bit function to a 32-bit ABI.
+    // There is intentionally no opaque-handle/tab/renderer ABI here.
+    for (const auto& fn : source.functions) {
+        if (fn.c_export_u32_symbol.empty()) continue;
+        if (wasm32_target || cortex_m_target || !source.module.empty() ||
+            fn.c_export_u32_symbol != "ores_browser_abi_version" ||
+            fn.name == fn.c_export_u32_symbol || fn.name == "main" ||
+            !fn.exported || fn.native_internal || fn.async_source_i64 ||
+            !fn.method_owner.empty() || !fn.parameters.empty() ||
+            !fn.generic_parameters.empty() || fn.returns_void ||
+            fn.return_type != ScalarType::I64 || !fn.return_class.empty() ||
+            !fn.return_sum.empty() || !fn.pending_return_type_alias.empty() ||
+            fn.has_declared_effects || !fn.result ||
+            fn.result->kind != Expression::Kind::Integer ||
+            fn.result->integer != 1 || !fn.locals.empty() ||
+            !fn.statements.empty() || !fn.early_returns.empty() ||
+            !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+            !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+            !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+            fn.scalar_while || fn.caught_throw_value ||
+            !fn.caught_throw_defers.empty())
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: forged or unsupported browser host ABI declaration");
+        if (module.getFunction(fn.c_export_u32_symbol))
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: C ABI symbol collision");
+        llvm::Function* guest =
+            declarations.at(native_function_slot(fn.name, 0));
+        if (guest->getReturnType() != i64 || guest->arg_size() != 0 ||
+            guest->getLinkage() != llvm::GlobalValue::ExternalLinkage)
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: guest ABI does not match checked i64() contract");
+        auto* host = llvm::Function::Create(
+            llvm::FunctionType::get(i32, false),
+            llvm::Function::ExternalLinkage,
+            fn.c_export_u32_symbol, module);
+        auto* entry = llvm::BasicBlock::Create(context, "entry", host);
+        auto* accepted = llvm::BasicBlock::Create(context, "u32.valid", host);
+        auto* rejected = llvm::BasicBlock::Create(context, "u32.trap", host);
+        llvm::IRBuilder<> b(entry);
+        llvm::Value* value = b.CreateCall(guest);
+        // Treat negative i64 as unsigned > UINT32_MAX; reject rather than
+        // silently truncating a forged guest result.
+        llvm::Value* in_range = b.CreateICmpULE(
+            value, llvm::ConstantInt::get(i64, UINT32_MAX));
+        b.CreateCondBr(in_range, accepted, rejected);
+        b.SetInsertPoint(rejected);
+        b.CreateCall(llvm::Intrinsic::getDeclaration(
+            &module, llvm::Intrinsic::trap));
+        b.CreateUnreachable();
+        b.SetInsertPoint(accepted);
+        b.CreateRet(b.CreateTrunc(value, i32));
+    }
     if (native_main) {
         // OS/process ABI boundary: never expose i64/void Oreslang main as C main.
         // Reject invalid statuses without Unix low-byte truncation (256 -> 0).
