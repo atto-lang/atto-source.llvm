@@ -35,12 +35,15 @@ The adapter cannot perform such reconciliation by itself.
   the final directory), relative paths, dot-dot traversal, and insecure
   directory permissions fail closed. Native LLVM uses a root-anchored
   O_NOFOLLOW openat walk so another pathname cannot redirect an already
-  opened directory descriptor. Java rejects symlink ancestors and
-  noncanonical paths but still uses pathname-based FileChannel.open;
-  concurrent replacement of directories by an adversary with filesystem
-  rename authority is NOT fully excluded by these checks. For such a
-  threat model use an anchored native directory-handle provider / vetted
-  transactional store, not this Java reference.
+  opened directory descriptor. Java now uses the JDK
+  SecureDirectoryStream for component-by-component nofollow traversal,
+  CREATE_NEW relative to the pinned handle, and directory fsync through
+  that same handle. Filesystems/providers without these capabilities
+  fail closed. Java compares directory ownership to the OS-provided
+  UnixSystem username, not mutable JVM user.home/user.name properties.
+  This does not defend against a hostile process with the **same OS
+  identity** replacing the entire initial trusted namespace before
+  it is opened; host provisioning and trust separation remain required.
 - Claim creation is exclusive and atomic on an appropriate local filesystem,
   mode 0600, with file and parent directory fsync before returning true.
 - The callback is bound through the trusted HostGate, preserving independent
@@ -56,7 +59,9 @@ The adapter cannot perform such reconciliation by itself.
 
 Java 21: independent JVM processes race on a shared private directory;
 one winner. Replays, changed digests, restarted generations, changed Git
-revision, symlink ancestors, relative/noncanonical paths and insecure directories are denied.
+revision, symlink ancestors, relative/noncanonical paths, property-spoofed
+owner references, and insecure directories are denied. A concurrent rename /
+symlink-swap stress test executed 800 swaps with no decoy-directory claims.
 
 LLVM POSIX host: GCC and Clang ASan/UBSan pass. Twelve forked claimants
 yield one winner; SIGKILL after claim leaves later claims refused. The
