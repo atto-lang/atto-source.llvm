@@ -174,5 +174,45 @@ int main() {
     reused = saved;
     assert(receipt.arm_after(54, 0, 314, 1, 0, reused) == Status::Closed);
     assert(reused.domain == 0);
+    // Reserve an explicitly nonzero claim-to-guest-entry bound, failing
+    // before guest entry if its worst-case remainder exceeds the deadline.
+    Queue bounded;
+    Queue::Handle bounded_h{};
+    Queue::Expired bounded_due{};
+    Queue::Start bounded_start{};
+    assert(bounded.arm_after(100, 5, 999, 1, 2, bounded_h) == Status::Ok);
+    assert(bounded.poll_due(105, bounded_due) == Status::Ok);
+    assert(bounded.claim_start_with_dispatch_bound(
+               bounded_h, 999, 1, 105, 0, bounded_start) == Status::Invalid);
+    assert(bounded.outstanding() == 1);
+    assert(bounded_start.deadline_ns == 0);
+    assert(bounded.claim_start_with_dispatch_bound(
+               bounded_h, 999, 1, 106, 1, bounded_start) == Status::Ok);
+    assert(bounded_start.dispatch_bound_applied);
+    assert(bounded_start.dispatch_bound_ns == 1);
+    assert(bounded_start.lateness_ns == 1);
+    assert(bounded.outstanding() == 0);
+
+    Queue insufficient;
+    Queue::Handle insufficient_h{};
+    assert(insufficient.arm_after(200, 0, 999, 1, 2, insufficient_h)
+           == Status::Ok);
+    assert(insufficient.poll_due(200, bounded_due) == Status::Ok);
+    assert(insufficient.claim_start_with_dispatch_bound(
+               insufficient_h, 999, 1, 201, 2, bounded_start)
+           == Status::DeadlineMissed);
+    assert(insufficient.outstanding() == 0);
+    assert(bounded_start.dispatch_bound_ns == 2);
+
+    // UINT64_MAX lateness plus a positive reserve must miss, not wrap.
+    Queue overflow_reserve;
+    Queue::Handle overflow_h{};
+    assert(overflow_reserve.arm_after(0, 0, 999, 1, UINT64_MAX, overflow_h)
+           == Status::Ok);
+    assert(overflow_reserve.poll_due(0, bounded_due) == Status::Ok);
+    assert(overflow_reserve.claim_start_with_dispatch_bound(
+               overflow_h, 999, 1, UINT64_MAX, 1, bounded_start)
+           == Status::DeadlineMissed);
+    assert(bounded_start.lateness_ns == UINT64_MAX);
     return 0;
 }

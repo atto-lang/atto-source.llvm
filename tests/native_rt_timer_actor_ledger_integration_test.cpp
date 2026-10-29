@@ -57,7 +57,8 @@ static void deadline_miss_is_not_guest_start() {
     CHECK(actor.claim_under_lease(selected) == Ledger::Status::Ok);
     CHECK(selected.kind == Ledger::Kind::Timer);
     std::uint32_t timer_guest_starts = 0;
-    const auto start_status = timers.claim_start(timer, 42, 7, 108, start);
+    const auto start_status = timers.claim_start_with_dispatch_bound(
+        timer, 42, 7, 108, 1, start);
     if (start_status == Pool::Status::Ok) {
         // This models the only legal branch into the timer guest body. A
         // mutation that accidentally admits the late start now causes an
@@ -198,8 +199,12 @@ extern "C" void rt_wake(void* raw, std::size_t actor,
 
     // This is the trusted seam immediately before the resumed guest segment.
     // The timestamp is deterministic test input, not hardware timing proof.
-    CHECK(f.timers.claim_start(f.timer, 1234, f.refs[0].generation, 106, f.start)
+    // Deterministic 1ns reserve models bound-aware admission, not a
+    // measured or qualified native first-instruction latency.
+    CHECK(f.timers.claim_start_with_dispatch_bound(
+        f.timer, 1234, f.refs[0].generation, 106, 1, f.start)
           == Pool::Status::Ok);
+    CHECK(f.start.dispatch_bound_applied && f.start.dispatch_bound_ns == 1);
     CHECK(f.start.deadline_ns == 105);
     CHECK(f.start.maximum_lateness_ns == 2);
     CHECK(f.start.lateness_ns == 1);

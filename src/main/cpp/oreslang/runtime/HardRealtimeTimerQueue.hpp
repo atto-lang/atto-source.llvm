@@ -54,6 +54,10 @@ public:
         std::uint64_t claimed_at_ns = 0;
         std::uint64_t maximum_lateness_ns = 0;
         std::uint64_t lateness_ns = 0;
+        // Conservative scheduler-claim-to-guest-entry reserve. Zero indicates
+        // an unqualified legacy claim, NOT proof of hard-RT guest entry.
+        std::uint64_t dispatch_bound_ns = 0;
+        bool dispatch_bound_applied = false;
     };
 
     HardRealtimeTimerQueue() noexcept : domain_(detail::next_realtime_timer_domain()) {}
@@ -157,28 +161,28 @@ public:
         return found ? Status::Ok : Status::NotReady;
     }
 
-    // Call immediately before guest instructions, AFTER actor lease/generation
-    // validation. DeadlineMissed MUST be reported to the supervisor, not ignored.
+    // Legacy claim is an actor-carrier claim timestamp, NOT a verified guest
+    // first-instruction timestamp. It must never qualify a hard-RT timer.
     Status claim_start(Handle h, std::uint64_t actor_id,
                        std::uint64_t actor_generation, std::uint64_t now_ns,
                        Start& out) noexcept {
-        // A stale, revoked or early claim is not a guest-start receipt.
+        return claim_start_internal(h, actor_id, actor_generation, now_ns,
+                                    0, false, out);
+    }
+
+    // Conservative admission before guest entry: reserve a nonzero *qualified*
+    // upper bound for scheduler-claim-to-first-guest-instruction latency.
+    // The caller must prove this upper bound from its actual code path and
+    // separately sample the real guest prologue. No hard-RT guarantee follows
+    // from this helper or a test-supplied clock alone.
+    Status claim_start_with_dispatch_bound(
+            Handle h, std::uint64_t actor_id,
+            std::uint64_t actor_generation, std::uint64_t now_ns,
+            std::uint64_t dispatch_bound_ns, Start& out) noexcept {
         out = Start{};
-        if (closed_) return Status::Closed;
-        // Reject invalid/cancelled generations BEFORE touching clock state:
-        // forged or stale UINT64_MAX claims must not poison future deadlines.
-        Slot* s = locate(h);
-        if (!s || s->phase != Phase::Ready || s->actor_id != actor_id ||
-            s->actor_generation != actor_generation) return Status::Stale;
-        if (!observe_clock(now_ns)) return Status::ClockBackwards;
-        if (now_ns < s->deadline_ns) return Status::ClockBackwards;
-        out.deadline_ns = s->deadline_ns;
-        out.claimed_at_ns = now_ns;
-        out.maximum_lateness_ns = s->maximum_lateness_ns;
-        out.lateness_ns = now_ns - s->deadline_ns;
-        const bool missed = out.lateness_ns > s->maximum_lateness_ns;
-        retire(*s);
-        return missed ? Status::DeadlineMissed : Status::Ok;
+        if (dispatch_bound_ns == 0) return Status::Invalid;
+        return claim_start_internal(h, actor_id, actor_generation, now_ns,
+                                    dispatch_bound_ns, true, out);
     }
 
     void close() noexcept {
@@ -191,6 +195,35 @@ public:
     static constexpr std::size_t capacity() noexcept { return Capacity; }
 
 private:
+    Status claim_start_internal(
+            Handle h, std::uint64_t actor_id,
+            std::uint64_t actor_generation, std::uint64_t now_ns,
+            std::uint64_t dispatch_bound_ns, bool bound_applied,
+            Start& out) noexcept {
+        // Invalid/stale start attempts cannot expose old output receipts.
+        out = Start{};
+        if (closed_) return Status::Closed;
+        Slot* s = locate(h);
+        if (!s || s->phase != Phase::Ready || s->actor_id != actor_id ||
+            s->actor_generation != actor_generation) return Status::Stale;
+        if (!observe_clock(now_ns)) return Status::ClockBackwards;
+        if (now_ns < s->deadline_ns) return Status::ClockBackwards;
+        out.deadline_ns = s->deadline_ns;
+        out.claimed_at_ns = now_ns;
+        out.maximum_lateness_ns = s->maximum_lateness_ns;
+        out.lateness_ns = now_ns - s->deadline_ns;
+        out.dispatch_bound_ns = dispatch_bound_ns;
+        out.dispatch_bound_applied = bound_applied;
+        // Subtract remaining budget instead of adding timestamps; this
+        // prevents UINT64_MAX rollover from turning a miss into a pass.
+        const bool missed =
+            out.lateness_ns > s->maximum_lateness_ns ||
+            (bound_applied &&
+             dispatch_bound_ns > s->maximum_lateness_ns - out.lateness_ns);
+        retire(*s);
+        return missed ? Status::DeadlineMissed : Status::Ok;
+    }
+
     enum class Phase : std::uint8_t { Free, Armed, Ready };
     struct Slot {
         std::uint64_t generation = 0;
