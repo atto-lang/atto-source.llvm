@@ -4468,3 +4468,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
 endif()
+
+# OresVM tenant-isolate host-only admission substrate. Neither a sandbox nor
+# guest-source/LLVM lowering; process mode currently fails closed.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-oresvm-isolate-test
+        tests/native_oresvm_isolate_test.cpp)
+    target_include_directories(oreslang-native-oresvm-isolate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-oresvm-isolate-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-oresvm-isolate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-oresvm-isolate-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_oresvm_tenant_isolate_admission
+        COMMAND oreslang-native-oresvm-isolate-test)
+    set_tests_properties(native_oresvm_tenant_isolate_admission PROPERTIES TIMEOUT 30)
+endif()
