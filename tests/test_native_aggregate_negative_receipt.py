@@ -38,6 +38,14 @@ class NegativeReceiptTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "expected diagnostic"):
             self.verify(stdout="AGGREGATE_SHAPE_DUPLICATE_FIELD", stderr="")
 
+    def test_prefixed_diagnostic_token_rejected(self):
+        with self.assertRaisesRegex(AssertionError, "expected diagnostic"):
+            self.verify(stderr="PREFIX_AGGREGATE_SHAPE_DUPLICATE_FIELD")
+
+    def test_suffixed_diagnostic_token_rejected(self):
+        with self.assertRaisesRegex(AssertionError, "expected diagnostic"):
+            self.verify(stderr="AGGREGATE_SHAPE_DUPLICATE_FIELD_WRONG")
+
     def test_diagnostic_with_ir_on_stdout_rejected(self):
         with self.assertRaisesRegex(AssertionError, "stdout"):
             self.verify(stdout="; ModuleID = 'illicit'\n")
