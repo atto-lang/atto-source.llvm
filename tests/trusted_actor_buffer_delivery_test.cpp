@@ -41,7 +41,10 @@ int main() {
     const int out = pipe.deliver_one(receiver, [&](auto& data) {
         assert(data.read(31) == 7);
         assert(fails([&] {pipe.retire(receiver);}));
-        return static_cast<int>(data.read(0));
+        const int result = static_cast<int>(data.read(0));
+        data.release();
+        assert(fails([&] {(void)data.read(0); })); // consumed payload cannot be re-read
+        return result;
     });
     assert(out == 42);
     assert(pipe.pending(receiver) == 0);
