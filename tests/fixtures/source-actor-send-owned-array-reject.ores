@@ -1,0 +1,14 @@
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  let mut Array<int> bytes = new Array<int>();
+  worker.send(rt take bytes);
+  stop worker;
+  return 43;
+}
