@@ -9,6 +9,8 @@ fail() { printf 'NOT_EXECUTED_BROWSER_AOT_SCALAR_EXPORT: %s\n' "$*" >&2; exit 1;
 command -v git >/dev/null || fail "git unavailable"
 command -v clang >/dev/null || fail "clang unavailable"
 command -v cc >/dev/null || fail "C compiler unavailable"
+command -v nm >/dev/null || fail "native dynamic-symbol inspection unavailable"
+[[ "$(uname -s)" == "Linux" ]] || fail "this ELF/Clang AOT smoke requires Linux"
 limiter="$(command -v timeout || command -v gtimeout || true)"
 [[ -n "$limiter" ]] || fail "timeout unavailable"
 head="$(git rev-parse --verify HEAD)" || fail "no source commit"
@@ -42,9 +44,24 @@ grep -Eq '^define (dso_local )?i64 @ores_browser_aot_scalar_probe\(' "$tmp/probe
     fail "compiler did not emit exact i64 guest export signature"
 ! grep -Eq '^define .*@ores_browser_(abi_version|open|dispatch|snapshot|close)\(' "$tmp/probe.ll" ||
     fail "canary illegally emits browser C ABI"
-"$limiter" --kill-after=5s 30s clang -O2 -fPIC -shared -x ir \
+"$limiter" --kill-after=5s 30s clang -O2 -fPIC -shared \
+    -Wl,-z,defs -Wl,-z,relro,-z,now -x ir \
     "$tmp/probe.ll" -o "$tmp/probe.so" ||
     fail "native LLVM IR shared library link failed"
+nm -D --defined-only "$tmp/probe.so" > "$tmp/exports" ||
+    fail "could not inspect native dynamic exports"
+awk '$2 == "T" && $3 == "ores_browser_aot_scalar_probe" { n++ }
+     END { exit n == 1 ? 0 : 1 }' "$tmp/exports" ||
+    fail "probe not defined as exactly one shared-library text export"
+! grep -Eq '[[:space:]]ores_browser_(abi_version|open|dispatch|snapshot|close)
+cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+    tests/browser_aot_scalar_export_host.c -ldl -o "$tmp/host"
+"$limiter" --kill-after=5s 10s "$tmp/host" "$tmp/probe.so" ||
+    fail "real compiled scalar export failed"
+printf 'NATIVE_BROWSER_AOT_SCALAR_EXPORT_ACCEPTANCE source_sha=%s source_tree=%s compiler_sha256=%s\n' \
+    "$head" "$tree" "$digest"
+ "$tmp/exports" ||
+    fail "canary falsely defines browser ABI symbols"
 cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
     tests/browser_aot_scalar_export_host.c -ldl -o "$tmp/host"
 "$limiter" --kill-after=5s 10s "$tmp/host" "$tmp/probe.so" ||
