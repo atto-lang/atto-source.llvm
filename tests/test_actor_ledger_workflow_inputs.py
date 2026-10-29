@@ -145,7 +145,7 @@ def audit_selftest():
         else:
             raise AssertionError("missing relative local header not blocked")
         (root / main).write_text(
-            '#include "dangling.hpp"\\n', encoding="utf-8"
+            '#include "dangling.hpp"\n', encoding="utf-8"
         )
         (root / "src/main/cpp/oreslang/demo/dangling.hpp").symlink_to("absent.hpp")
         try:
