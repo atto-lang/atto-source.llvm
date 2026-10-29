@@ -1722,6 +1722,36 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_ledger_authenticated_scheduler_bridge
         PROPERTIES TIMEOUT 25)
 
+    # Hard-RT timer integration: expiry is producer readiness only. The same
+    # suspended actor turn may resume only under the authenticated actor lease,
+    # and a missed start budget must not be counted as guest execution.
+    add_executable(oreslang-realtime-timer-queue-test
+        tests/native_realtime_timer_queue_test.cpp)
+    target_include_directories(oreslang-realtime-timer-queue-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-realtime-timer-queue-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-realtime-timer-queue-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_realtime_timer_queue_contract
+        COMMAND oreslang-realtime-timer-queue-test)
+    set_tests_properties(native_realtime_timer_queue_contract
+        PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-rt-timer-actor-ledger-integration-test
+        tests/native_rt_timer_actor_ledger_integration_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-rt-timer-actor-ledger-integration-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-rt-timer-actor-ledger-integration-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-rt-timer-actor-ledger-integration-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-rt-timer-actor-ledger-integration-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_rt_timer_actor_ledger_start_authority
+        COMMAND oreslang-rt-timer-actor-ledger-integration-test)
+    set_tests_properties(native_rt_timer_actor_ledger_start_authority
+        PROPERTIES TIMEOUT 30)
+
     # A retained unfinished logical DATA turn must prevent later DATA
     # overtaking, while separately admitted WAKE and other actor lanes run.
     add_executable(oreslang-native-retained-data-order-test
