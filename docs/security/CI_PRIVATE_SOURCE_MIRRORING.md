@@ -84,6 +84,20 @@ this exact-head evidence.
 
 ## V3 exact source-API publisher
 
+> **Fail-closed V3 activation hold (draft security PR #1146; issue #1154):**
+> The V3 publisher now unconditionally denies source-bearing publication via
+> `require_atomic_ref_rollback()`, **before reading private source or writing
+> any destination Git object**. Its name-based REST ref deletion is disabled;
+> a read-back SHA plus REST DELETE is not an atomic compare-and-delete. This
+> hold is independent of Actions capacity, source/destination approvals and
+> allowlist entries. Do not bypass the guard to run exact-tree CI. Restore
+> activation only after an independently reviewed, actually executed atomic
+> ref cleanup implementation and the separate incident/protection approvals.
+> A Git `--force-with-lease=<ref>:<sha>` based design is a candidate,
+> not an already approved GitHub production cleanup path.
+>
+
+
 The source-side v3 publisher is `scripts/publish-private-ci-source-v3.py`,
 invoked only through `scripts/run-in-private-ci-destination.sh`. It does not
 trust a caller-provided working-tree snapshot. Instead, it requires the exact
