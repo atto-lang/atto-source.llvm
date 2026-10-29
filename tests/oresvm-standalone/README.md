@@ -22,7 +22,8 @@ ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build/oresvm-asan --output-on-failu
 ```
 
 The suite builds isolate lifecycle/admission, synchronous guest-call
-lifetime, aggregate resource limits, and (when `clang` is on PATH and
+lifetime, aggregate resource limits, **queued shutdown cancellation with
+independent other-tenant progress**, and (when `clang` is on PATH and
 the host is 64-bit) the test-only hand-written LLVM AOT fixture.
 
 **Not included:** the source-generated `.ores` entrypoint, which requires
