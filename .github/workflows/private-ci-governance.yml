@@ -12,6 +12,10 @@ on:
       - 'scripts/test-audit-private-ci-governance.py'
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
+      - 'contracts/private-ci-authority-v1.json'
+      - 'scripts/private_ci_authorization_oracle.py'
+      - 'scripts/test_private_ci_authorization_oracle.py'
+      - 'scripts/test_private_ci_publisher_authority_alignment.py'
       - 'scripts/run-in-private-ci-destination.sh'
       - 'tools/private-ci-policy/**'
       - 'tests/fixtures/private-ci-admission-projection.ores'
@@ -58,6 +62,12 @@ jobs:
           done
       - name: Fail-closed policy structure audit
         run: python3 scripts/audit-private-ci-governance.py
+      - name: Canonical authority parity suite
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/private_ci_authorization_oracle.py scripts/test_private_ci_authorization_oracle.py scripts/test_private_ci_publisher_authority_alignment.py
+          python3 scripts/test_private_ci_authorization_oracle.py
+          python3 scripts/test_private_ci_publisher_authority_alignment.py
       - name: Scope
         run: |
           echo "This check validates policy structure only."
