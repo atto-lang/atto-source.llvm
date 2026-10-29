@@ -367,7 +367,7 @@ static void* carrier(void* raw) {
         else if (kind == 1) s->wake_callback(s->context, i, wake_ticket, wake_outcome);
         else if (data_envelope.kind == 1) {
             if (!s->buffer_delivery) abort();
-            s->buffer_delivery(s->context, i, data_envelope.data.buffer);
+            s->buffer_delivery(s->context, executing_actor, data_envelope.data.buffer);
         } else s->callback(s->context, i, payload);
         executing_wake_valid = 0;
         executing_wake = (OresNativeWakeTicket){0};
@@ -791,11 +791,22 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_owned_buffer(
             const int new_lane = !lane->active && !lane_has_work(lane);
             if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
                 status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
-            } else if (!s->buffer_commit(s->context, sender, recipient, &ticket)) {
-                /* Rejected commit MUST NOT mutate ownership or generation. */
-                status = ORES_NATIVE_SEND_OWNERSHIP_REJECTED;
             } else {
-                /* All operations after commit are no-throw, allocation-free
+                const OresNativeOwnedBufferTicket prior = ticket;
+                if (!s->buffer_commit(s->context, sender, recipient, &ticket)) {
+                    /* Rejected commit MUST leave sender's owner unchanged. */
+                    status = ORES_NATIVE_SEND_OWNERSHIP_REJECTED;
+                } else {
+                    /* Committed ticket cannot silently change tenant, type or
+                     * allocation identity; generation must strictly advance.
+                     * A broken trusted callback is a fatal ABI violation, not
+                     * an ordinary message rejection after ownership moved. */
+                    if (ticket.tenant_epoch != prior.tenant_epoch
+                            || ticket.type_schema != prior.type_schema
+                            || ticket.buffer_id != prior.buffer_id
+                            || ticket.buffer_generation <= prior.buffer_generation)
+                        abort();
+                    /* All operations after commit are no-throw, allocation-free
                  * and cannot fail. STOP and transfer share scheduler lock. */
                 if (new_lane) ++s->runnable_lanes;
                 lane->messages[lane->tail] = (NativeDataEnvelope){
@@ -809,6 +820,7 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_owned_buffer(
                 ++s->outstanding;
                 pthread_cond_signal(&s->ready);
                 status = ORES_NATIVE_SEND_ACCEPTED;
+                }
             }
         }
     }
@@ -1168,7 +1180,7 @@ static void flush_abandoned_data(
 
         if (envelope.kind == 1) {
             if (!s->buffer_discard) abort();
-            s->buffer_discard(s->context, i, envelope.data.buffer);
+            s->buffer_discard(s->context, actor, envelope.data.buffer);
         }
 
         lock(s);
