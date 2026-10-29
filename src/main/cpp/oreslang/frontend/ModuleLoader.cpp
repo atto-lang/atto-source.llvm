@@ -151,6 +151,11 @@ private:
             auto& arities = unit->functions[fn.name];
             arities.emplace(fn.parameters.size(), fn.exported);
         }
+        // The native compiler has no once-only startup barrier. Reject the
+        // reserved lifecycle hook even for a standalone source file, before
+        // the no-import fast path can compile it as an ordinary callable.
+        if (unit->functions.count("init"))
+            fail(*unit, "native module init hook requires once-only reachable initialization lowering");
         for (const auto& cls : unit->program.classes) {
             unit->classes.insert(cls.name); unit->class_exports.emplace(cls.name, cls.exported);
             unit->constructor_exports.emplace(cls.name, !cls.explicit_constructor || cls.constructor_exported);

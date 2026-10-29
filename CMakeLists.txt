@@ -4468,3 +4468,13 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
 endif()
+
+# Compile-time namespace/lifecycle admission parity with Java #2263.
+if(BUILD_TESTING)
+    add_test(NAME native_namespace_lifecycle_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/namespace-parity"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/namespace_lifecycle_parity.cmake")
+    set_tests_properties(native_namespace_lifecycle_fail_closed PROPERTIES TIMEOUT 60)
+endif()

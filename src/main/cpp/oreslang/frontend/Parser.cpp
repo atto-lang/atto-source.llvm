@@ -557,6 +557,8 @@ public:
         Program program;
         while (token_.text == "import") {
             advance();
+            if (token_.text == "namespace")
+                fail("native import namespace requires a verified manifest package index and per-provider linker");
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
             ModuleImport imported;
