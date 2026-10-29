@@ -74,7 +74,20 @@ public:
     bool close() noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) return true;
-        if (pool_->has_borrowed_buffers_owned_by(recipient_)) return false;
+        if (!pool_->is_retired()) {
+            // A successfully published, unread DATA slot must remain owned
+            // by this queue. Never strand its handle on a failed drop.
+            for (std::size_t i = 0; i < count_; ++i) {
+                const auto& h = entries_[(head_ + i) % entries_.size()];
+                try {
+                    if (pool_->has_active_loans_for_handle(h, recipient_))
+                        return false;
+                } catch (...) {
+                    if (!pool_->is_retired()) std::terminate();
+                    break;
+                }
+            }
+        }
         closed_ = true;
         while (count_) {
             Handle abandoned = std::move(entries_[head_]);
