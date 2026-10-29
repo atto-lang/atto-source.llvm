@@ -68,11 +68,19 @@ public:
         --in_flight_;
         return true;
     }
+    // Close admission and dispatch authority without pretending that pending
+    // transport resources have been physically retired.
+    bool shutdown() {
+        std::lock_guard<std::mutex> hold(mu_);
+        if (closed_) return false;
+        close_all_locked();
+        return true;
+    }
     bool revoke_actor(std::uint64_t actor, std::uint64_t incarnation) {
         std::lock_guard<std::mutex> hold(mu_);
         if (!actor || !incarnation || is_revoked(actor, incarnation)) return false;
         if (revocation_count_ >= revoked_.size()) {
-            closed_ = true; // Fail all future admission on exhausted fence storage.
+            close_all_locked(); // Fail closed without abandoning physical credits.
         } else {
             revoked_[revocation_count_++] = {actor, incarnation};
         }
@@ -88,6 +96,13 @@ public:
         return in_flight_;
     }
 private:
+    void close_all_locked() {
+        closed_ = true;
+        for (Slot& s : slots_) {
+            if (s.phase == Phase::reserved || s.phase == Phase::dispatched)
+                s.phase = Phase::cancel_requested;
+        }
+    }
     // Reject hostile oversized requests BEFORE allocating either vector.
     static std::size_t bounded_count(std::size_t n) {
         if (n == 0 || n > 65536)
