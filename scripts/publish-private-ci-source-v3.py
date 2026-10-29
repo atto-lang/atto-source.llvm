@@ -1222,6 +1222,19 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     branch = "ci/oreslang-" + source_tree
     plan_sha256 = plan_meta["sha256"]
 
+    # The source snapshot can take significant time to read and authenticate.
+    # Re-attest protected source MAIN, incident closures, exact publisher bytes,
+    # allowlist, contract and the live destination IMMEDIATELY before the first
+    # source-bearing Git blob POST. CI minutes, successful canaries, and a
+    # reviewed-but-unmerged policy are never sufficient export authority.
+    prewrite_sha, prewrite_contract = protected_authority(
+        repository, source_pr, test_plan
+    )
+    if prewrite_sha != protected_sha or prewrite_contract != contract:
+        raise Denied("protected source authority changed before first destination write")
+    checked_destination(repository, contract)
+    verify_source_pr(source_pr, source_commit)
+
     elements = []
     for path, mode, sha, data in files:
         recheck_destination_identity(repository, contract)
