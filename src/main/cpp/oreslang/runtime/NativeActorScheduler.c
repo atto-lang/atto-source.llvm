@@ -661,6 +661,25 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     pthread_cond_signal(&s->ready);
     return 1;
 }
+int ores_native_actor_scheduler_configure_owned_buffer(
+        OresNativeActorScheduler* s, OresNativeBufferCommitFn on_commit,
+        OresNativeBufferDeliverFn on_delivery,
+        OresNativeBufferDiscardFn on_discard) {
+    if (!s || !on_commit || !on_delivery || !on_discard) return 0;
+    lock(s);
+    /* No callback can execute until all three ownership hooks are installed.
+     * Callbacks are immutable after carrier/admission startup. */
+    const int ok = !s->retired && !s->started_workers
+        && !s->accepted && !s->outstanding && !s->buffer_delivery;
+    if (ok) {
+        s->buffer_commit = on_commit;
+        s->buffer_delivery = on_delivery;
+        s->buffer_discard = on_discard;
+    }
+    unlock(s);
+    return ok;
+}
+
 int ores_native_actor_scheduler_configure_turn_gate(
         OresNativeActorScheduler* s, OresNativePhysicalTurnGate* gate) {
     if (!s || (gate && gate->maximum == 0)) return 0;
@@ -739,6 +758,66 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
     unlock(s);
     return status;
 }
+OresNativeSendStatus ores_native_actor_scheduler_try_send_owned_buffer(
+        OresNativeActorScheduler* s, OresNativeActorRef sender,
+        OresNativeActorRef recipient, OresNativeOwnedBufferTicket ticket) {
+    if (!s) return ORES_NATIVE_SEND_INVALID_REF;
+    lock(s);
+    OresNativeSendStatus status = ORES_NATIVE_SEND_INVALID_REF;
+    /* A sender capability is NOT enough; only a scheduler-admitted physical
+     * turn may initiate this trusted actor-to-actor ownership transfer.
+     * In particular a guest-supplied numeric actor id cannot authorize it. */
+    if (executing != s || !executing_claim.carrier
+            || executing_actor.scheduler_domain != sender.scheduler_domain
+            || executing_actor.actor_slot != sender.actor_slot
+            || executing_actor.generation != sender.generation
+            || !matching(s, sender) || sender.actor_slot == recipient.actor_slot
+            || !s->buffer_commit || !s->buffer_delivery || !s->buffer_discard
+            || !ticket.tenant_epoch || !ticket.type_schema
+            || !ticket.buffer_id || !ticket.buffer_generation
+            || !matching(s, recipient)) {
+        status = ORES_NATIVE_SEND_INVALID_REF;
+    } else {
+        ActorLane* lane = &s->actors[recipient.actor_slot];
+        if (s->retired || lane->retired) {
+            status = ORES_NATIVE_SEND_TERMINATED;
+        } else if (lane->queued + lane->active >= s->per_actor_capacity) {
+            status = ORES_NATIVE_SEND_MAILBOX_FULL;
+        } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
+                || lane->accepted_user_messages == UINT64_MAX
+                || !execution_slot_available_locked(s)) {
+            status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        } else {
+            const int new_lane = !lane->active && !lane_has_work(lane);
+            if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
+                status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+            } else if (!s->buffer_commit(s->context, sender, recipient, &ticket)) {
+                /* Rejected commit MUST NOT mutate ownership or generation. */
+                status = ORES_NATIVE_SEND_INVALID_REF;
+            } else {
+                /* All operations after commit are no-throw, allocation-free
+                 * and cannot fail. STOP and transfer share scheduler lock. */
+                if (new_lane) ++s->runnable_lanes;
+                lane->messages[lane->tail] = (NativeDataEnvelope){
+                    .kind = 1, .data.buffer = ticket
+                };
+                lane->tail = (lane->tail + 1) % s->per_actor_capacity;
+                ++lane->queued;
+                ++lane->accepted_user_messages;
+                ++s->reserved_executions;
+                ++s->accepted;
+                ++s->outstanding;
+                pthread_cond_signal(&s->ready);
+                status = ORES_NATIVE_SEND_ACCEPTED;
+            }
+        }
+    }
+    if (status != ORES_NATIVE_SEND_ACCEPTED && s->rejected != UINT64_MAX)
+        ++s->rejected;
+    unlock(s);
+    return status;
+}
+
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {
     return ores_native_actor_scheduler_try_send(s, actor, payload)
@@ -1063,6 +1142,46 @@ static int stop_locked(
         pthread_cond_broadcast(&s->drained);
     }
     return 1;
+}
+
+/* STOP seals the DATA ring under the scheduler lock and removes queued
+ * work from delivery accounting. Accepted typed buffers must still be
+ * reclaimed exactly once; execute the trusted drop outside scheduler lock
+ * to avoid scheduler/pool lock inversion. This loop owns the cleanup cursor,
+ * since only the first successful stop_sealed may begin it.
+ */
+static void flush_abandoned_data(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    const size_t i = (size_t)actor.actor_slot;
+    for (;;) {
+        lock(s);
+        ActorLane* lane = &s->actors[i];
+        if (!matching(s, actor) || !lane->retired) abort();
+        if (!lane->cleanup_pending) {
+            unlock(s);
+            return;
+        }
+        const size_t index = lane->cleanup_cursor;
+        NativeDataEnvelope envelope = lane->messages[index];
+        if (envelope.kind > 1) abort();
+        unlock(s);
+
+        if (envelope.kind == 1) {
+            if (!s->buffer_discard) abort();
+            s->buffer_discard(s->context, i, envelope.data.buffer);
+        }
+
+        lock(s);
+        if (!lane->cleanup_pending || !s->pending_abandoned_cleanup
+                || index != lane->cleanup_cursor) abort();
+        lane->messages[index] = (NativeDataEnvelope){0};
+        lane->cleanup_cursor = (index + 1) % s->per_actor_capacity;
+        --lane->cleanup_pending;
+        --s->pending_abandoned_cleanup;
+        maybe_finish_stopped_locked(s, i);
+        pthread_cond_broadcast(&s->drained);
+        unlock(s);
+    }
 }
 
 int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
