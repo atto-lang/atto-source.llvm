@@ -121,6 +121,21 @@ inline PackageNamespaceGraph link_package_namespaces(
             if (!fn.exported) continue;
             if (!fn.generic_parameters.empty() || !fn.method_owner.empty())
                 throw std::invalid_argument("native namespace generic/method exports require checked lowering");
+            // An arity-only export cannot hide a borrowed, nominal, sum,
+            // unresolved-alias, String or void ABI behind a scalar signature.
+            // Bool and i64 value parameters/results are the only admitted
+            // typed shapes in this host-only inventory.
+            if (fn.returns_void || fn.return_type == ScalarType::String
+                    || !fn.return_class.empty() || !fn.return_sum.empty()
+                    || !fn.pending_return_type_alias.empty())
+                throw std::invalid_argument("native namespace non-scalar return signature requires checked ABI lowering");
+            for (const auto& param : fn.parameters) {
+                if (param.mode != Parameter::Mode::Value
+                        || param.scalar_type == ScalarType::String
+                        || !param.class_name.empty() || !param.generic_type.empty()
+                        || !param.pending_type_alias.empty() || !param.sum_type.empty())
+                    throw std::invalid_argument("native namespace non-scalar parameter signature requires checked ABI lowering");
+            }
             const auto signature = std::make_pair(fn.name, fn.parameters.size());
             if (!signatures[key].insert(signature).second)
                 throw std::invalid_argument("duplicate public namespace function/arity in same package instance");

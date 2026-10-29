@@ -139,5 +139,71 @@ int main() {
                     "non-scalar declarations");
     }
 
-    std::cout << "native package namespace source-only graph: 10/10 cases passed\n";
+    // 8. i64/bool value signatures are admissible, but no non-scalar ABI
+    // may be smuggled into a public namespace as merely (name, arity).
+    Program bool_signature = make_source("a", "bool_value");
+    bool_signature.functions.front().return_type = ScalarType::Bool;
+    Parameter bool_param;
+    bool_param.name = "flag";
+    bool_param.scalar_type = ScalarType::Bool;
+    bool_signature.functions.front().parameters.push_back(bool_param);
+    another = units;
+    another.push_back({"foo/bool_value", "foo@1", &bool_signature});
+    const auto scalar_graph = link_package_namespaces(another, pins, {request});
+    assert(scalar_graph.namespaces.at({"foo@1", "a"}).exports.size() == 4);
+
+    const auto reject_signature = [&](const std::string& name,
+                                      const auto& mutate, const std::string& reason) {
+        Program bad = make_source("a", name);
+        mutate(bad.functions.front());
+        auto modified = units;
+        modified.push_back({"foo/" + name, "foo@1", &bad});
+        must_reject([&] { (void)link_package_namespaces(modified, pins, {request}); },
+                    reason);
+    };
+    reject_signature("borrow_value", [](Function& fn) {
+        fn.parameters.emplace_back();
+        fn.parameters.back().mode = Parameter::Mode::Borrow;
+    }, "non-scalar parameter");
+    reject_signature("borrow_mut_value", [](Function& fn) {
+        fn.parameters.emplace_back();
+        fn.parameters.back().mode = Parameter::Mode::BorrowMut;
+    }, "non-scalar parameter");
+    reject_signature("string_param", [](Function& fn) {
+        fn.parameters.emplace_back();
+        fn.parameters.back().scalar_type = ScalarType::String;
+    }, "non-scalar parameter");
+    reject_signature("nominal_param", [](Function& fn) {
+        fn.parameters.emplace_back();
+        fn.parameters.back().class_name = "Record";
+    }, "non-scalar parameter");
+    reject_signature("generic_param", [](Function& fn) {
+        fn.parameters.emplace_back();
+        fn.parameters.back().generic_type = "T";
+    }, "non-scalar parameter");
+    reject_signature("alias_param", [](Function& fn) {
+        fn.parameters.emplace_back();
+        fn.parameters.back().pending_type_alias = "Alias";
+    }, "non-scalar parameter");
+    reject_signature("sum_param", [](Function& fn) {
+        fn.parameters.emplace_back();
+        fn.parameters.back().sum_type = "OptionInt";
+    }, "non-scalar parameter");
+    reject_signature("void_result", [](Function& fn) {
+        fn.returns_void = true;
+    }, "non-scalar return");
+    reject_signature("string_result", [](Function& fn) {
+        fn.return_type = ScalarType::String;
+    }, "non-scalar return");
+    reject_signature("nominal_result", [](Function& fn) {
+        fn.return_class = "Record";
+    }, "non-scalar return");
+    reject_signature("alias_result", [](Function& fn) {
+        fn.pending_return_type_alias = "Alias";
+    }, "non-scalar return");
+    reject_signature("sum_result", [](Function& fn) {
+        fn.return_sum = "OptionInt";
+    }, "non-scalar return");
+
+    std::cout << "native package namespace source-only graph: 23/23 cases passed\n";
 }
