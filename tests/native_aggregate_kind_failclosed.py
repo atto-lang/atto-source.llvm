@@ -140,11 +140,19 @@ def main():
             original = (source + "\n" +
                         "pub fnc main(): int { return 0; }\n").encode("utf-8")
             path.write_bytes(original)
-            result = subprocess.run([args.compiler, str(path)], cwd=directory,
+            result = subprocess.run([str(compiler), str(path)], cwd=directory,
                                     capture_output=True, text=True, timeout=30)
             verify_negative_case(name, path, original, expected, result)
             workspace_sources[name] = (path, original)
             verify_isolated_workspace(root, workspace_sources)
+            case_receipts.append({
+                "id": name,
+                "diagnostic": expected,
+                "verified": True,
+                "returnCode": result.returncode,
+                "sourceGitBlobSha1": git_blob_sha1(original),
+                "stderrSha256": result_digest(result.stderr),
+            })
     print(f"native aggregate kind: 1 positive scalar IR control and {len(CASES)} fail-closed compiler source checks passed")
 
 if __name__ == "__main__":
