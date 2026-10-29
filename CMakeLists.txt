@@ -4484,3 +4484,22 @@ if(BUILD_TESTING)
     COMMAND ores_agent_host_dispatch_parity_v1)
   set_tests_properties(agent_model_dispatch_host_fencing_v1 PROPERTIES TIMEOUT 15)
 endif()
+
+# Trusted POSIX single-host claim v1. OpenSSL is only required for this test
+# target; this does NOT assert multi-host CAS, provider receipt, or guest execution.
+if(BUILD_TESTING AND UNIX)
+  find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+  add_executable(ores_agent_durable_local_claim_v1
+    contracts/v1/agent-dispatch/agent_durable_claim_test.cpp)
+  target_include_directories(ores_agent_durable_local_claim_v1 PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/agent-dispatch")
+  target_link_libraries(ores_agent_durable_local_claim_v1 PRIVATE OpenSSL::Crypto)
+  target_compile_features(ores_agent_durable_local_claim_v1 PRIVATE cxx_std_17)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(ores_agent_durable_local_claim_v1 PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  endif()
+  add_test(NAME agent_durable_local_process_claim_v1
+    COMMAND ores_agent_durable_local_claim_v1)
+  set_tests_properties(agent_durable_local_process_claim_v1 PROPERTIES TIMEOUT 30)
+endif()
