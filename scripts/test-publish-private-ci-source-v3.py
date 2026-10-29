@@ -629,6 +629,94 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             self.assertEqual(v3.authorized_source_main_sha(), "2" * 40)
         protected.assert_called_once_with()
 
+    def test_app_pinned_strict_protection_rejects_downgrades(self):
+        strong = {
+            "required_pull_request_reviews": {
+                "require_code_owner_reviews": True,
+                "dismiss_stale_reviews": True,
+                "require_last_push_approval": True,
+                "required_approving_review_count": 1,
+                "bypass_pull_request_allowances": {
+                    "users": [], "teams": [], "apps": [],
+                },
+            },
+            "required_status_checks": {
+                "strict": True, "contexts": ["private-ci-governance"],
+                "checks": [{"context": "private-ci-governance", "app_id": 15368}],
+            },
+            "required_conversation_resolution": {"enabled": True},
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+        }
+        assert v3.strict_branch_protection(strong, "carrier main")
+        mutations = (
+            ("required_pull_request_reviews", "require_last_push_approval", False),
+            ("required_pull_request_reviews", "dismiss_stale_reviews", False),
+            ("required_conversation_resolution", "enabled", False),
+            ("required_status_checks", "strict", False),
+            ("required_status_checks", "checks", []),
+            ("required_status_checks", "checks", [
+                {"context": "private-ci-governance"}]),
+            ("required_status_checks", "checks", [
+                {"context": "private-ci-governance", "app_id": -1}]),
+            ("required_status_checks", "checks", [
+                {"context": "private-ci-governance", "app_id": True}]),
+            ("required_status_checks", "contexts", ["spoofable"]),
+            ("required_status_checks", "checks", [
+                {"context": "private-ci-governance", "app_id": 15368},
+                {"context": "private-ci-governance", "app_id": 42}]),
+            ("enforce_admins", "enabled", False),
+            ("allow_force_pushes", "enabled", True),
+            ("allow_deletions", "enabled", True),
+        )
+        for section, key, value in mutations:
+            broken = json.loads(json.dumps(strong))
+            broken[section][key] = value
+            with self.subTest(section=section, key=key, value=value):
+                with self.assertRaises(v3.Denied):
+                    v3.strict_branch_protection(broken, "carrier main")
+
+    def test_carrier_rejects_protection_drift_between_two_reads(self):
+        guard = {
+            "required_pull_request_reviews": {
+                "require_code_owner_reviews": True,
+                "dismiss_stale_reviews": True,
+                "require_last_push_approval": True,
+                "required_approving_review_count": 1,
+            },
+            "required_status_checks": {
+                "strict": True, "contexts": [],
+                "checks": [{"context": "private-ci-governance", "app_id": 15368}],
+            },
+            "required_conversation_resolution": {"enabled": True},
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+        }
+        reads = [0]
+
+        def api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {"name": "main", "protected": True, "commit": {"sha": BASE}}
+            if route == "repos/trusted/ci/branches/main/protection":
+                reads[0] += 1
+                result = json.loads(json.dumps(guard))
+                if reads[0] == 2:
+                    result["required_status_checks"]["checks"][0]["app_id"] = 99
+                return result
+            if route == "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE:
+                return {"path": ".github/CODEOWNERS", "type": "file",
+                        "encoding": "base64",
+                        "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
+                        "sha": CARRIER_CODEOWNERS_BLOB}
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "changed during attestation"):
+                v3.checked_carrier_main("trusted/ci", carrier_contract())
+        self.assertEqual(reads[0], 2)
+
     def test_unprotected_carrier_rejects_history_fallback_without_review_calls(self):
         def api(route, method="GET", payload=None):
             if route == "repos/trusted/ci/branches/main":
