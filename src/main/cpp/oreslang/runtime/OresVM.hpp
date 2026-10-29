@@ -184,6 +184,8 @@ public:
             actor.state_.lock() != state || it == state->actors.end() ||
             it->second != actor.actor_generation_)
             throw std::logic_error("stale or foreign actor ticket");
+        if (state->durable_queues.has_actor({actor.id_, actor.actor_generation_}))
+            throw std::logic_error("cannot retire actor with outstanding durable work");
         state->actors.erase(it);
     }
 
@@ -254,26 +256,45 @@ public:
         return outcome.value;
     }
 
-    // Host-only durable-object lock admission for this exact tenant incarnation.
-    // A guest cannot call this until actor authentication and source lowering
-    // have been implemented; the root alone authorizes these operations.
+    // Host-only admission: actor identity is verified against this isolate's
+    // live actor registry before binding to a queue ticket. No guest ABI.
     DurableLockQueues::Admission enqueue_durable(const IsolateHandle& handle,
-            std::uint64_t lock_id, std::uint64_t operation_id, std::size_t bytes) {
+            const ActorTicket& actor, std::uint64_t lock_id,
+            std::uint64_t operation_id, std::size_t bytes) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Running)
-            throw std::logic_error("isolate is not accepting durable work");
-        return state->durable_queues.enqueue(lock_id, operation_id, bytes);
+            throw std::logic_error("isolate does not admit durable work");
+        auto key = checked_actor_ticket(state, actor);
+        return state->durable_queues.enqueue(key, lock_id, operation_id, bytes);
     }
 
-    std::optional<DurableLockQueues::Ticket> release_durable(
+    bool claim_durable(const IsolateHandle& handle, DurableLockQueues::Ticket ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("cannot start a durable turn in quiescence");
+        return state->durable_queues.claim(ticket);
+    }
+
+    std::optional<DurableLockQueues::Ticket> finish_durable(
             const IsolateHandle& handle, DurableLockQueues::Ticket ticket) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Running &&
             state->phase != IsolatePhase::Quiescing)
-            throw std::logic_error("isolate is not draining durable work");
-        return state->durable_queues.release(ticket);
+            throw std::logic_error("cannot finish a durable turn in this phase");
+        return state->durable_queues.finish(ticket);
+    }
+
+    std::optional<DurableLockQueues::Ticket> cancel_durable_unstarted_head(
+            const IsolateHandle& handle, DurableLockQueues::Ticket ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("durable admission is not draining");
+        return state->durable_queues.cancel_unstarted_head(ticket);
     }
 
     void cancel_durable_waiter(const IsolateHandle& handle,
@@ -282,8 +303,16 @@ public:
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Running &&
             state->phase != IsolatePhase::Quiescing)
-            throw std::logic_error("isolate is not draining durable work");
+            throw std::logic_error("durable admission is not draining");
         state->durable_queues.cancel_waiter(ticket);
+    }
+
+    std::vector<DurableLockQueues::Ticket> durable_ready_heads(
+            const IsolateHandle& handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running) return {};
+        return state->durable_queues.ready_heads();
     }
 
     DurableLockQueues::Snapshot durable_snapshot(const IsolateHandle& handle) const {
@@ -331,6 +360,16 @@ public:
     }
 
 private:
+    static DurableLockQueues::ActorKey checked_actor_ticket(
+            const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor) {
+        auto it = state->actors.find(actor.id_);
+        if (actor.generation_ != state->generation ||
+            actor.state_.lock() != state || it == state->actors.end() ||
+            it->second != actor.actor_generation_)
+            throw std::logic_error("stale or foreign actor ticket");
+        return {actor.id_, actor.actor_generation_};
+    }
+
     struct GuestCall final {
         OresVM* vm;
         std::shared_ptr<IsolateVM> state;
