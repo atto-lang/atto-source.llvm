@@ -173,15 +173,17 @@ static void admit_second(Fixture* f) {
     fputs("COMPILED_GUEST_LEDGER B admission timeout\n", stderr);
     abort();
 }
-/* Separate STOP-only bridge case. A host-owned malloc frame represents
- * pinned continuation state, but the scalar cleanup *function* really comes
- * from Oreslang-generated LLVM IR. This does not imply that the compiler
- * generated the continuation, its drop glue, or language-level suspension. */
+/* Separate STOP-only bridge: real compiled .ores scalar guest functions,
+ * native actor-owned physical heap, cross-suspension loan, and trusted
+ * cleanup on an exclusive actor scheduler lease. The host still owns the
+ * continuation and its drop protocol: no source suspends lowering claim. */
 typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef actor;
     OresNativeRetainedDataTicket retained;
-    int64_t* pinned_frame;
+    OresActorI64Heap* heap;
+    OresActorSlot slot;
+    OresActorLoan loan;
     atomic_int suspended, released, cleanup_turns;
 } CompiledStopFixture;
 
@@ -189,13 +191,17 @@ static void compiled_stop_data(void* raw, size_t index, uint64_t payload) {
     CompiledStopFixture* f = (CompiledStopFixture*)raw;
     CHECK(index == 0 && payload == 5);
     CHECK(ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor));
-    CHECK(!f->pinned_frame);
-    f->pinned_frame = (int64_t*)malloc(sizeof(*f->pinned_frame));
-    CHECK(f->pinned_frame);
-    *f->pinned_frame = guest_step(0, (int64_t)payload);
-    CHECK(*f->pinned_frame == 5);
+    CHECK(f->heap && !f->loan.nonce);
+    OresActorTurn turn = ores_actor_i64_heap_enter(
+        f->heap, 91, f->actor.generation);
+    const int64_t initial = guest_step(0, (int64_t)payload);
+    CHECK(initial == 5);
+    f->slot = ores_actor_i64_heap_new(f->heap, turn, initial);
+    f->loan = ores_actor_i64_heap_borrow(f->heap, turn, f->slot);
+    CHECK(f->loan.nonce && f->loan.domain == f->slot.domain);
     CHECK(ores_native_actor_scheduler_retain_current_data(
         f->scheduler, &f->retained));
+    ores_actor_i64_heap_leave(f->heap, turn);
     atomic_store_explicit(&f->suspended, 1, memory_order_release);
 }
 static int compiled_stop_cleanup(
@@ -207,15 +213,26 @@ static int compiled_stop_cleanup(
     CHECK(ticket.actor.generation == f->retained.actor.generation);
     CHECK(ticket.slot_generation == f->retained.slot_generation);
     CHECK(ticket.execution_id == f->retained.execution_id);
-    CHECK(f->pinned_frame && *f->pinned_frame == 5);
-    /* Generated .ores function executes inside the exclusive trusted cleanup
-     * turn. A host has to certify actual physical frame release. */
-    CHECK(guest_cleanup(*f->pinned_frame, 3) == 1058);
-    free(f->pinned_frame);
-    f->pinned_frame = NULL;
+    CHECK(f->heap && f->loan.nonce);
+    OresActorTurn turn = ores_actor_i64_heap_enter(
+        f->heap, 91, f->actor.generation);
+    const int64_t retained_value = ores_actor_i64_heap_read(
+        f->heap, turn, f->slot);
+    CHECK(retained_value == 5);
+    CHECK(guest_cleanup(retained_value, 3) == 1058);
+    /* The compiled scalar guest callback has physically returned. On this
+     * exclusive trusted actor cleanup turn, release its native read loan,
+     * leave the arena, and physically destroy the actor-owned allocation.
+     * A terminal acknowledgement MUST follow this successful teardown. */
+    ores_actor_i64_heap_release(f->heap, f->loan);
+    f->loan = (OresActorLoan){0};
+    ores_actor_i64_heap_leave(f->heap, turn);
+    ores_actor_i64_heap_retire(f->heap);
+    CHECK(ores_actor_i64_heap_try_destroy(f->heap));
+    f->heap = NULL;
     atomic_store_explicit(&f->released, 1, memory_order_release);
     atomic_fetch_add_explicit(&f->cleanup_turns, 1, memory_order_relaxed);
-    return 1; /* physical host frame has been released */
+    return 1; /* host certified physical native heap reclamation */
 }
 static void run_compiled_guest_stop_cleanup(void) {
     CompiledStopFixture f = {0};
@@ -226,13 +243,16 @@ static void run_compiled_guest_stop_cleanup(void) {
         f.scheduler, compiled_stop_cleanup));
     f.actor = ores_native_actor_scheduler_spawn(f.scheduler, 0);
     CHECK(f.actor.scheduler_domain);
+    f.heap = ores_actor_i64_heap_open(91, f.actor.generation, 2);
+    CHECK(f.heap);
     CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 5));
     until(&f.suspended);
+    CHECK(f.loan.nonce && f.heap);
     CHECK(ores_native_actor_scheduler_stop_sealed(f.scheduler, f.actor));
     CHECK(ores_native_actor_scheduler_wait_done(f.scheduler, f.actor));
     CHECK(atomic_load_explicit(&f.released, memory_order_acquire) == 1);
     CHECK(atomic_load_explicit(&f.cleanup_turns, memory_order_acquire) == 1);
-    CHECK(!f.pinned_frame);
+    CHECK(!f.heap && !f.loan.nonce);
     CHECK(ores_native_actor_scheduler_retained_data_count(
         f.scheduler, f.actor) == 0);
     CHECK(ores_native_actor_scheduler_accepted(f.scheduler) == 2);
