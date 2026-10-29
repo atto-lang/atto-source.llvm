@@ -56,16 +56,71 @@ static void deadline_miss_is_not_guest_start() {
 
     CHECK(actor.claim_under_lease(selected) == Ledger::Status::Ok);
     CHECK(selected.kind == Ledger::Kind::Timer);
-    bool timer_guest_started = false;
-    CHECK(timers.claim_start(timer, 42, 7, 108, start)
-          == Pool::Status::DeadlineMissed);
+    std::uint32_t timer_guest_starts = 0;
+    const auto start_status = timers.claim_start(timer, 42, 7, 108, start);
+    if (start_status == Pool::Status::Ok) {
+        // This models the only legal branch into the timer guest body. A
+        // mutation that accidentally admits the late start now causes an
+        // observable execution, rather than passing a constant-false sentinel.
+        ++timer_guest_starts;
+    }
+    CHECK(start_status == Pool::Status::DeadlineMissed);
     CHECK(start.deadline_ns == 105);
     CHECK(start.maximum_lateness_ns == 1);
     CHECK(start.lateness_ns == 3);
-    CHECK(!timer_guest_started);
+    CHECK(timer_guest_starts == 0);
     // Retire only the authenticated dispatch wrapper. No timer guest body ran.
     CHECK(actor.cancel(timer_event) == Ledger::Status::Ok);
     CHECK(actor.finish_after_exit(timer_event) == Ledger::Status::Ok);
+    CHECK(timers.outstanding() == 0);
+}
+
+static void stop_revokes_timer_and_fences_generation() {
+    Ledger actor(55, 9);
+    Pool timers;
+    Ledger::Token a{};
+    Ledger::Selection selected{};
+    Pool::Handle old_timer{}, replacement_timer{};
+    Pool::Expired due{};
+    Pool::Start start{};
+    std::size_t revoked = 0;
+
+    CHECK(actor.admit(Ledger::Kind::Mail, a) == Ledger::Status::Ok);
+    CHECK(actor.claim_under_lease(selected) == Ledger::Status::Ok);
+    CHECK(selected.token.sequence == a.sequence);
+    CHECK(actor.prepare_await(a) == Ledger::Status::Ok);
+    CHECK(timers.arm_after(200, 5, 55, 9, 2, old_timer)
+          == Pool::Status::Ok);
+    CHECK(actor.suspend(a) == Ledger::Status::Ok);
+
+    // STOP/hot-reload revokes both sides of the old incarnation. The actor's
+    // suspended frame becomes cleanup-only and the scheduler-owned timer loses
+    // its ARMED/READY reservation before any late expiry can publish readiness.
+    CHECK(actor.stop_and_request_cleanup() == Ledger::Status::Ok);
+    CHECK(timers.revoke_actor(55, 9, revoked) == Pool::Status::Ok);
+    CHECK(revoked == 1);
+    CHECK(timers.outstanding() == 0);
+    CHECK(timers.poll_due(205, due) == Pool::Status::NotReady);
+    CHECK(timers.claim_start(old_timer, 55, 9, 205, start)
+          == Pool::Status::Stale);
+    CHECK(actor.wake(a) == Ledger::Status::AlreadyCancelled);
+
+    CHECK(actor.claim_under_lease(selected) == Ledger::Status::Ok);
+    CHECK(selected.token.sequence == a.sequence);
+    CHECK(selected.dispatch == Ledger::Dispatch::CancelCleanup);
+    CHECK(actor.finish_after_exit(a) == Ledger::Status::Ok);
+    CHECK(actor.physically_retired());
+
+    // A replacement incarnation may reuse the timer pool, but the old actor
+    // generation can neither claim nor poison the replacement timer.
+    CHECK(timers.arm_after(205, 0, 55, 10, 0, replacement_timer)
+          == Pool::Status::Ok);
+    CHECK(timers.poll_due(205, due) == Pool::Status::Ok);
+    CHECK(due.actor_id == 55 && due.actor_generation == 10);
+    CHECK(timers.claim_start(replacement_timer, 55, 9, 205, start)
+          == Pool::Status::Stale);
+    CHECK(timers.claim_start(replacement_timer, 55, 10, 205, start)
+          == Pool::Status::Ok);
     CHECK(timers.outstanding() == 0);
 }
 
@@ -213,6 +268,7 @@ static void authenticated_timer_wake_starts_same_turn() {
 
 int main() {
     deadline_miss_is_not_guest_start();
+    stop_revokes_timer_and_fences_generation();
     authenticated_timer_wake_starts_same_turn();
     std::puts("RT_TIMER_ACTOR_LEDGER_INTEGRATION_PASS");
     return 0;
