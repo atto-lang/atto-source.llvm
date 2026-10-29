@@ -1206,6 +1206,22 @@ def delete_exact_ref(repository, ref_name, expected_sha, expected_repository_id)
     return True
 
 
+def require_atomic_ref_rollback():
+    """Fail closed until the publisher has reviewed atomic ref deletion.
+
+    The current GitHub REST DELETE-by-name API cannot atomically bind deletion
+    to an expected old ref SHA. A GET followed by DELETE is not a lease: a
+    concurrent writer can move the ref between those calls. An eventual cleanup
+    or post-delete GET cannot restore a concurrently deleted third-party ref.
+
+    Keep ALL source-bearing export writes disabled until #1154 ships a
+    separately reviewed, executed compare-and-delete implementation with
+    appropriate credentials, test coverage, and incident-policy signoffs.
+    Environment variables and caller-provided flags must never bypass this.
+    """
+    raise Denied("private CI export disabled: atomic ref rollback is unimplemented (issue #1154)")
+
+
 def publish(repository, source_pr, source_commit, test_plan, now=None):
     if not NAME.fullmatch(repository):
         raise Denied("invalid destination repository")
@@ -1219,6 +1235,11 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         raise Denied("publisher clock must be timezone-aware")
     now = now or dt.datetime.now(dt.timezone.utc)
     expires = (now.astimezone(dt.timezone.utc) + TTL).replace(microsecond=0)
+
+    # This check must remain BEFORE any authenticated private-source reads or
+    # source-bearing destination writes. Never allow an unresolved rollback
+    # race to be implicitly enabled by future allowlist/branch-policy changes.
+    require_atomic_ref_rollback()
 
     protected_sha, contract = protected_authority(
         repository, source_pr, test_plan
