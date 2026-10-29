@@ -53,7 +53,8 @@ nm -D --defined-only "$tmp/probe.so" > "$tmp/exports" ||
 awk '$2 == "T" && $3 == "ores_browser_aot_scalar_probe" { n++ }
      END { exit n == 1 ? 0 : 1 }' "$tmp/exports" ||
     fail "probe not defined as exactly one shared-library text export"
-! grep -Eq '[[:space:]]ores_browser_(abi_version|open|dispatch|snapshot|close)
+! grep -Eq '[[:space:]]ores_browser_(abi_version|open|dispatch|snapshot|close)$' "$tmp/exports" ||
+    fail "canary falsely defines browser ABI symbols"
 cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
     tests/browser_aot_scalar_export_host.c -ldl -o "$tmp/host"
 "$limiter" --kill-after=5s 10s "$tmp/host" "$tmp/probe.so" ||
