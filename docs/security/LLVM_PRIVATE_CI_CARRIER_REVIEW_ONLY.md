@@ -17,7 +17,8 @@ an independently approved carrier have been established.
 | GitHub source numeric repo ID | `1410897874` (verify live again before every write) |
 | Visibility | Private (verify live before every write) |
 | Source PR | `#1126`, draft until executed CI and independent review |
-| Source PR head at proposal creation | `0bc88d079d78e15e3abfc946a8eb6f87d078e151` |
+| Source PR head at proposal creation | `0bc88d079d78e15e3abfc946a8eb6f87d078e151` (historical, **not** current authorization) |
+| Latest reviewed-candidate actor head (2026-10-28/29) | `40ae15ac5fdfb52f3e83dd16aa5e92eb23832d9e` (**new head requires fresh immutable root-tree evidence and review**) |
 | Latest observed source PR head (2026-10-29 Git API; NOT approved) | `4517875ae1ce34ca4c2fc1d809c30daebb681ce2` |
 | Latest observed source root Git tree (2026-10-29 Git API; NOT approved) | `4e5c55bc00f4dbfddbd370a0b7e6cf1829724a44` |
 | Source root Git tree independently approved | **NO — observed identity requires reviewer attestation and live recheck before export** |
@@ -170,6 +171,82 @@ or on the **approved** private carrier only after the above authorization.
   The canonical [private source policy](https://github.com/ores-truffle-oreslang/oreslang-source.java/blob/main/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md)
   explicitly denies transfers until independently authenticated approvals
   exist.
+
+## 7. Administrator decision and evidence runbook (source-free)
+
+### A. Diagnose source-org runner admission first
+
+An org/repository Actions administrator should inspect the GitHub Actions
+job annotations and corresponding billing/runner entitlement and policy,
+and record the *actual GitHub error string* in
+[LLVM #159](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/159).
+A job that completes with no runner and `steps=[]` does not identify whether
+the cause is spending cap, Actions policy, private-repository plan allowance,
+runner-group restrictions, or another admission constraint.
+
+1. Inspect exact-head actor run
+   [#40817865185](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40817865185):
+   `actor-ledger-contract` job `123263107747` and
+   `compiled-ores-guest` job `123263108064` each ended before any steps.
+2. Compare the independent source-free gate
+   [#40814139647](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40814139647)
+   (job `123251144798`, no checkout/secrets or source compilation).
+3. Validate current organization/repository Actions permissions, budget and
+   spending limits, availability of `ubuntu-24.04` runners, and any runner
+   group, allowlisted-action or branch-workflow restrictions. Obtain the
+   original job/check-run annotation rather than inferring "minutes exhausted."
+4. Rerun a **source-free**, no-credentials, no-artifacts canary only after
+   correcting the diagnosed policy/capacity blocker. Record a positive
+   runner assignment, nonempty executed step list, actual job log and
+   run-attempt ID. A green synthetic test is not yet LLVM application evidence.
+
+### B. Independent approval for an alternate private carrier
+
+A security owner independent of the actor PR author must record, in a
+protected source control plane, the exact destination full name, numeric
+repository ID, owner approval, private visibility, GitHub branch-protection
+proof, immutable carrier base/workflow/test-plan commit or blob identities,
+per-run source/export scope, source retention risk, and disposition of all
+open source-transfer security incidents. Approval **must not** be inferred
+from the user's request, a previous source-free probe or an author-authored
+PR comment. No source-bearing GitHub connector writes before that authority
+is both reviewed and effective.
+
+The current funded source-free comparison, private
+`honeypot-r-us-test/hnpt-infra`
+[run #40813194544](https://github.com/honeypot-r-us-test/hnpt-infra/actions/runs/40813194544),
+executed 6/6 synthetic GCC/Clang C/C++/sanitizer steps; it is an unrelated
+repository and is **NOT** an authorized Oreslang carrier. Prefer a new
+dedicated private carrier with restricted membership.
+
+### C. Immutable execution evidence to request
+
+For each *authorized* run, preserve a non-source receipt containing:
+
+- Original immutable source repository ID, current PR number/head commit,
+  original root-tree Git SHA and source manifest digest (not only file names)
+- Independently approved destination repository ID, private visibility,
+  trusted control-plane commit, workflow blob and test-plan digest
+- Carrier source-subtree Git-tree read-back proving exact identity before
+  executable refs, followed by approved receipt and cleanup/retention proof
+- Actual Actions run ID, run attempt, job IDs, runner assignment, executed
+  steps, compiler versions, GCC/Clang/native and Clang ASan/UBSan verdicts
+- Real `oreslang-llvmc` guest compile and host bridge WAKE/STOP results,
+  independent physical actor-heap isolation/loan teardown, and rejection
+  cases with a terminal and mailbox accounting matrix
+
+A passing test on a **different** source head or a job with zero steps
+cannot be reused. The workflow's compiler-path CI gap is now statically
+repaired on actor head `40ae15ac5fdfb52f3e83dd16aa5e92eb23832d9e`:
+the gate has `main.cpp`, `frontend/**`, `types/**`, `backend/**`
+triggers and immutable Git-blob checks for all eight compiler translation
+units. [LLVM #1151](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1151)
+still requires **executed** compiler-only trigger acceptance; source-level
+read-back by itself is not a substitute.
+
+All three stages remain **DENIED or UNVERIFIED** as appropriate until
+their independent receipts are recorded. This runbook is documentation,
+not an executable authorization gate.
 
 **Decision requested from independent security/organization administrators:**
 restore source-organization runner admission, OR establish a dedicated private
