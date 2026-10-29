@@ -41,19 +41,23 @@ static int commit_buffer(void* ctx, OresNativeActorRef sender,
     atomic_fetch_add(&s->commits, 1);
     return 1;
 }
-static void deliver_buffer(void* ctx, size_t receiver,
+static void deliver_buffer(void* ctx, OresNativeActorRef receiver,
                            OresNativeOwnedBufferTicket ticket) {
     Fixture* s = (Fixture*)ctx;
-    if (!ores_native_actor_scheduler_is_current_actor(s->vm, s->refs[receiver])
-            || receiver != 2 || ticket.buffer_generation != 2
+    if (!ores_native_actor_scheduler_is_current_actor(s->vm, s->refs[receiver.actor_slot])
+            || receiver.actor_slot != 2
+            || receiver.generation != s->refs[2].generation
+            || ticket.buffer_generation != 2
             || ticket.buffer_id != 2)
         atomic_fetch_add(&s->errors, 1);
     atomic_fetch_add(&s->delivered, 1);
 }
-static void discard_buffer(void* ctx, size_t receiver,
+static void discard_buffer(void* ctx, OresNativeActorRef receiver,
                            OresNativeOwnedBufferTicket ticket) {
     Fixture* s = (Fixture*)ctx;
-    if (receiver != 1 || ticket.buffer_id != 1
+    if (receiver.actor_slot != 1
+            || receiver.generation != s->refs[1].generation
+            || ticket.buffer_id != 1
             || ticket.buffer_generation != 2
             || ores_native_actor_scheduler_is_current_carrier(s->vm))
         atomic_fetch_add(&s->errors, 1);
