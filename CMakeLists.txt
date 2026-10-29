@@ -4468,3 +4468,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
 endif()
+
+# Trusted same-tenant actor buffer ownership moves; host-only, not guest
+# source lowering, serialized DATA transport, or a multi-tenant sandbox.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-trusted-actor-buffer-pool-test
+        tests/trusted_actor_buffer_pool_test.cpp)
+    target_include_directories(oreslang-trusted-actor-buffer-pool-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-trusted-actor-buffer-pool-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-trusted-actor-buffer-pool-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-actor-buffer-pool-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_trusted_actor_buffer_pool
+        COMMAND oreslang-trusted-actor-buffer-pool-test)
+    set_tests_properties(native_trusted_actor_buffer_pool PROPERTIES TIMEOUT 60)
+endif()
