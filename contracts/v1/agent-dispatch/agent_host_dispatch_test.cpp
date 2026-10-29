@@ -54,6 +54,14 @@ int main() {
    bad.now_ms=[&](){return clock;};
    bad.submit_data_only=[&](const Scope&){sends++;return true;};
    assert(!h.dispatch(req,bad,9000));assert(sends==0);}
+  {auto h=gate(); TrustedHost bad=host; bad.now_ms=[](){return std::uint64_t{0};};
+   assert(!h.dispatch(req,bad,9000));}
+  {auto h=gate(); std::uint64_t ticks[2]={9000,8999}; int n=0; int sent=0;
+   TrustedHost bad=host;
+   bad.now_ms=[&](){return ticks[n++ < 1 ? 0 : 1];};
+   bad.claim_once=[](const Scope&){return true;};
+   bad.submit_data_only=[&](const Scope&){sent++;return true;};
+   assert(!h.dispatch(req,bad,9000));assert(sent==0);}
   {auto h=gate(); TrustedHost bad=host; bad.now_ms={};
    assert(!h.dispatch(req,bad,9000));}
   {auto h=gate(); TrustedHost bad=host;
