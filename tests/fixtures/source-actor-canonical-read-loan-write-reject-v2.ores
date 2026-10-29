@@ -5,7 +5,7 @@ define actor Worker as
         total: int = 0;
     }
 
-    pub illegal(int n): int using state.read {
+    pub on_message(int n): int using state.read {
         return self.handle_state(critical-read |s| -> {
             s.total = s.total + n;
             return s.total;
