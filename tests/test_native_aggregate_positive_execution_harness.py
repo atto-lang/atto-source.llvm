@@ -37,7 +37,7 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
 
     def test_ir_on_stderr_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "leaked LLVM IR"):
-            self.check_result(err=b"AGGREGATE_FIELD_TYPE_UNVERIFIED\\ndefine i64 @main() {}")
+            self.check_result(err=b"AGGREGATE_FIELD_TYPE_UNVERIFIED\ndefine i64 @main() {}")
 
     def test_zero_exit_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "normally"):
