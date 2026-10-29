@@ -15,7 +15,8 @@ int main() {
     [&](const Scope&){ ++current; return true; },
     [&](const Scope&){ ++auth; return true; },
     [&](const Scope&){ ++claimed; return claimed == 1; },
-    [&](const Scope&){ ++submitted; return true; }
+    [&](const Scope&){ ++submitted; return true; },
+    [](){return std::uint64_t{9000};}
   };
   auto g=gate();
   assert(g.dispatch(req,host,9000)); assert(!g.dispatch(req,host,9000));
@@ -47,5 +48,16 @@ int main() {
    bad.claim_once=[](const Scope&){return true;};
    bad.submit_data_only=[&](const Scope&){sends++;throw std::runtime_error("unknown outcome");return true;};
    assert(!h.dispatch(req,bad,9000));assert(!h.dispatch(req,bad,9000));assert(sends==1);}
+  {auto h=gate(); std::uint64_t clock=9000; int sends=0;
+   TrustedHost bad=host;
+   bad.claim_once=[&](const Scope&){clock=10000;return true;};
+   bad.now_ms=[&](){return clock;};
+   bad.submit_data_only=[&](const Scope&){sends++;return true;};
+   assert(!h.dispatch(req,bad,9000));assert(sends==0);}
+  {auto h=gate(); TrustedHost bad=host; bad.now_ms={};
+   assert(!h.dispatch(req,bad,9000));}
+  {auto h=gate(); TrustedHost bad=host;
+   bad.now_ms=[]()->std::uint64_t {throw std::runtime_error("clock unavailable");};
+   assert(!h.dispatch(req,bad,9000));}
   return 0;
 }
