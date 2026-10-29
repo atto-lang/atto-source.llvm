@@ -47,6 +47,22 @@ inline constexpr std::size_t kMaxNativeTemplateBraceNesting = 256;
 inline constexpr std::size_t kMaxNativeTemplateInterpolations = 1024;
 inline constexpr std::size_t kMaxNativeBlockCommentDepth = 128;
 
+bool reserved_unsafe_stdlib_import(std::string_view path) {
+    // Import spellings are not authority. At G0 no native-host stdlib is
+    // available; reject the exact segment before graph resolution or LLVM IR.
+    for (const std::string_view root : {
+            "ores.std/unsafe", "std/unsafe", "ores.std.unsafe",
+            "std.unsafe", "ores.std:unsafe", "std:unsafe"}) {
+        if (path == root ||
+            (path.size() > root.size() &&
+             path.substr(0, root.size()) == root &&
+             (path[root.size()] == '/' || path[root.size()] == '.')))
+            return true;
+    }
+    return false;
+}
+
+
 [[noreturn]] void template_error(std::string_view detail, std::size_t offset) {
     throw std::runtime_error("native template " + std::string(detail) +
                              " at byte " + std::to_string(offset));
@@ -596,6 +612,8 @@ public:
             imported.path = std::string(token_.text);
             if (imported.path.empty() || imported.path.size() > 4096)
                 fail("native import path must contain 1..4096 bytes");
+            if (reserved_unsafe_stdlib_import(imported.path))
+                fail("native unsafe standard-library import unavailable in guest domains");
             for (unsigned char ch : imported.path)
                 if (ch < 32 || ch == 127 || ch == '\\')
                     fail("native import path escapes/control characters unsupported");
