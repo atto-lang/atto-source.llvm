@@ -46,5 +46,6 @@ jobs:
         run: bash scripts/cgl-native-smoke.sh
       - name: Existing native scalar source regression
         run: |
-          ctest --test-dir build --output-on-failure \
+          # Fail closed when the selected tests were not registered or built.
+          ctest --test-dir build --output-on-failure --no-tests=error \
             -R '^(native_cgl_linux_host_admission|native_source_i64_os_exit_subset)$'
