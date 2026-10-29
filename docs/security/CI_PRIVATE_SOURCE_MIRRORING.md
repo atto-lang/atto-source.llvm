@@ -54,11 +54,13 @@ python3 scripts/test-audit-private-ci-governance.py
 python3 scripts/audit-private-ci-governance.py
 ```
 
-The opt-in `--live` preflight diagnoses the mandatory source protected-main
-gate by reading source repository metadata, `branches/main`, and branch
-protection with a read-capable `GITHUB_TOKEN`. Carrier review/tree attestation
-is enforced separately by V3 when the destination carrier itself is
-unprotected. Neither check is a source-export grant.
+The opt-in `--live` preflight diagnoses mandatory source protected-main
+governance (including latest-push approval, resolved conversations, and
+app-pinned required checks) using a read-capable `GITHUB_TOKEN`. The V3
+publisher separately attests **enforced protected carrier main**, with the
+same rules before and after verifying carrier CODEOWNERS. A historical
+reviewed PR cannot substitute for branch protection. Neither check grants
+source export in the absence of independently approved source policy.
 
 **Observed governance blocker (2026-10-19):** GitHub returned
 `protected=false` for source `main`. Ruleset reads also returned a
@@ -93,8 +95,10 @@ destination write.
 Before reading or exporting source, the publisher self-attests its governance
 bytes against the exact source `main` commit and requires source `main` to
 be protected. Source `main` must enforce CODEOWNER review, stale-review
-dismissal, at least one approval, administrator enforcement, no force
-pushes/deletions, and no PR-review bypass actors. If GitHub reports
+dismissal, latest-push approval, resolved conversations, strict required
+checks bound to positive GitHub App IDs, at least one approval,
+administrator enforcement, no force pushes/deletions, and no PR-review
+bypass actors. If GitHub reports
 `protected=false` or the required protection cannot be verified, private
 source export is denied.
 
@@ -116,21 +120,16 @@ The reviewed carrier base must contain neither
 `main` advance, delete/recreate, workflow change, or test-plan change fails
 closed until the source contract is independently reviewed again.
 
-Carrier `main` is also a live authorization boundary. Protected-main mode
-requires CODEOWNER review, stale-review dismissal, at least one approval,
-administrator enforcement, force-push/deletion disabled, and no review bypass
-actors.
-
-When carrier branch protection is unavailable, the protected source carrier
-contract must additionally pin a positive `review_pr`. That PR must be a
-same-repository PR merged to carrier `main`, independently approved by
-immutable reviewer ID `11139560` / login `ORESoftware` on its exact head
-before merge, and authored by a different valid account. The final carrier
-`main` root-tree SHA must equal the reviewed PR head root-tree SHA, and the
-carrier must contain the exact security CODEOWNERS file. The contract still
-pins the exact final carrier-main commit SHA, workflow blob, plan blob, and
-allowed source PR. Carrier `main` SHA is rechecked before every source-bearing
-write; movement during transfer fails closed.
+Carrier `main` is also a live authorization boundary. Source-bearing Git
+objects must never enter a carrier whose `main` is unprotected. The
+publisher requires a pinned immutable carrier commit, CODEOWNER review,
+latest-push approval, stale-review dismissal, conversation resolution,
+strict required checks pinned to positive GitHub App IDs, administrator
+enforcement, and no bypass/force-push/deletion allowances. It checks main
+SHA and protection metadata twice during carrier attestation. A
+historical merged/reviewed carrier PR cannot replace these controls.
+Carrier-main movement, protection weakening, workflow/plan change, or
+unresolved containment incident must deny source export.
 
 The carrier workflow keeps the source-test job at `contents: read`. Cleanup is
 performed by a separate no-checkout job with `contents: write` that validates
