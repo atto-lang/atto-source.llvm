@@ -322,10 +322,19 @@ int main(void) {
     f.heaps[0] = NULL;
     CHECK(f.heaps[1] != NULL);
     CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actors[1], 9));
-    until_completed(&f, 5);
+    /* Observe B's *own* callback, not a global completion threshold that
+     * may include an unrelated actor's lifecycle/control turn. A completed
+     * scheduler receipt alone does not prove the guest code executed. */
+    for (int retry = 0; retry < 8000; ++retry) {
+        if (atomic_load_explicit(&f.independent_ran,
+                memory_order_acquire) == 2) break;
+        const struct timespec pause = {0, 1000000};
+        nanosleep(&pause, NULL);
+    }
     CHECK(atomic_load_explicit(&f.independent_ran, memory_order_acquire) == 2);
     CHECK(atomic_load_explicit(&f.observed_state[1], memory_order_acquire) == 108);
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(ores_native_actor_scheduler_completed(f.scheduler) == 5);
     CHECK(ores_native_actor_scheduler_stop(f.scheduler, f.actors[1]));
     CHECK(ores_native_actor_scheduler_wait_done(f.scheduler, f.actors[1]));
     OresNativeActorTerminalState result = {0};
