@@ -97,5 +97,31 @@ class ExportGateTest(unittest.TestCase):
                                "--pr", "1123"]), 1)
 
 
+    def test_boolean_schema_rejected(self):
+        self.data["schema"] = True  # bool == 1 in Python, but never a schema version
+        self.write_contract()
+        self.check_rejected()
+
+    def test_duplicate_allowed_pr_rejected(self):
+        self.data["carriers"][DEST]["test_plans"][ARGS[5]]["allowed_prs"] = [1123, 1123]
+        self.write_contract()
+        self.check_rejected()
+
+    def test_nonfinite_json_rejected(self):
+        self.data["unexpected"] = float("nan")
+        self.write_contract()
+        self.check_rejected()
+
+    def test_control_character_path_rejected(self):
+        self.check_rejected(DEST, 1234, A, ".github/workflows/carrier.yml\\nextra",
+                            B, ARGS[5], C, 1123)
+
+    def test_oversized_policy_file_rejected(self):
+        (self.root / ".github/private-ci-approved-repositories.txt").write_text(
+            "#" + ("x" * (1024 * 1024)) + "\\n" + DEST + "\\n",
+            encoding="utf-8")
+        self.check_rejected()
+
+
 if __name__ == "__main__":
     unittest.main()
