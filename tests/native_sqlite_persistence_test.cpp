@@ -59,6 +59,14 @@ int main(){
         auto after=store.commit({write("child","not-flushed",1,1)});
         assert(after[0].status==Status::Committed&&after[0].version==2);
     }
+    { // Event-only actor starts with no snapshot, and replays its first event.
+        SqliteStore store(path);store.grant_epoch("tenant-a","event-only",1);
+        auto committed=store.commit({write("event-only","e0",1,0,WriteKind::Event,99)});
+        assert(committed[0].durable());
+        const auto restored=store.load({"tenant-a","event-only","main"});
+        assert(restored.version==1 && restored.snapshot_version==0 && restored.snapshot.empty());
+        assert(restored.events.size()==1 && restored.events[0].version==1 && restored.events[0].payload[0]==99);
+    }
     { // Version CAS within one batch: actor A conflict does not poison actor B.
         SqliteStore store(path);
         store.grant_epoch("tenant-a","mixed-a",1);store.grant_epoch("tenant-a","mixed-b",1);
