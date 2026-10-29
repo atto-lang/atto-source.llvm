@@ -248,6 +248,15 @@ public:
         }
     }
 
+    // Called by scheduler shutdown before retiring the pool. A live loan
+    // pins both its owner and reader, even when neither has an active turn.
+    bool has_active_loans() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        for (const auto& entry : state_->slots)
+            if (entry.second->read_loans) return true;
+        return false;
+    }
+
     std::size_t used_bytes() const {
         std::lock_guard<std::mutex> guard(state_->mutex);
         return state_->used;
