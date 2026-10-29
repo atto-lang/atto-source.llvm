@@ -25,6 +25,8 @@ def read_preempt_rt(path="/sys/kernel/realtime"):
     try:
         fd = os.open(path, flags)
         try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
             raw = os.read(fd, 8)
         finally:
             os.close(fd)
