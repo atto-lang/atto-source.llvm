@@ -1,0 +1,6 @@
+// Genuine LLVM guest scalar export canary. This is NOT a browser backend.
+// int is i64 in the current LLVM native guest ABI. Never cast this symbol
+// to the browser's uint32_t version function: full C ABI lowering is pending.
+pub fnc ores_browser_aot_scalar_probe(): int {
+    return 20261029;
+}
