@@ -793,7 +793,7 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_owned_buffer(
                 status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
             } else if (!s->buffer_commit(s->context, sender, recipient, &ticket)) {
                 /* Rejected commit MUST NOT mutate ownership or generation. */
-                status = ORES_NATIVE_SEND_INVALID_REF;
+                status = ORES_NATIVE_SEND_OWNERSHIP_REJECTED;
             } else {
                 /* All operations after commit are no-throw, allocation-free
                  * and cannot fail. STOP and transfer share scheduler lock. */
