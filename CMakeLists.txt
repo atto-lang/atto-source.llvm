@@ -359,8 +359,8 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_aggregate_kind_failclosed.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     # One positive scalar IR control followed by 33 isolated compiler
-    # negatives. Each child has a 30-second cap. Per-case digest receipt
-    # integration remains separately gated; this is not guest certification.
+    # negatives. Each child has a 30-second cap; only complete results
+    # publish a digest-bound negative-only receipt (not guest certification).
     set_tests_properties(native_aggregate_shape_compiler_failclosed PROPERTIES TIMEOUT 360)
     # Independent source-free adversarial proof of the compiler-negative
     # evidence admission harness. Never substitute this for native compiler run.
