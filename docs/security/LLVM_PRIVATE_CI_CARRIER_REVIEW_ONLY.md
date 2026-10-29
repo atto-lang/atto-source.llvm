@@ -18,11 +18,21 @@ an independently approved carrier have been established.
 | Visibility | Private (verify live before every write) |
 | Source PR | `#1126`, draft until executed CI and independent review |
 | Source PR head at proposal creation | `0bc88d079d78e15e3abfc946a8eb6f87d078e151` |
-| Source root Git tree | **UNVERIFIED — must retrieve authoritatively before approval** |
+| Latest observed source PR head (2026-10-29 Git API; NOT approved) | `4517875ae1ce34ca4c2fc1d809c30daebb681ce2` |
+| Latest observed source root Git tree (2026-10-29 Git API; NOT approved) | `4e5c55bc00f4dbfddbd370a0b7e6cf1829724a44` |
+| Source root Git tree independently approved | **NO — observed identity requires reviewer attestation and live recheck before export** |
 | Source `main` protection/ruleset proof | **UNVERIFIED — independently verify effective enforcement** |
 | Source main allowlist | **EMPTY — zero active destinations** |
 | Security owner | `@ORESoftware` (independent decision required) |
 | Approval state | **DENY** |
+
+The latest observed head/tree were read from GitHub's immutable git-commit
+metadata endpoint, not inferred from filenames or a check-run. They establish
+the identity of that particular snapshot only; they are NOT an independent
+security approval, destination approval, signed publisher permit, runtime
+test result or authorization to transfer source. An authorized publisher
+must re-read the current PR head and exact root tree under an approved
+protected-source policy and reject drift before any API write.
 
 The source PR SHA above is only a review snapshot. If the PR changes, the
 source head, root tree, file inventory, and reviewed test plan must be rebound,
