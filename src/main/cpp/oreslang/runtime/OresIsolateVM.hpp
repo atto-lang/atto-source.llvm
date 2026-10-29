@@ -31,10 +31,11 @@ struct IsolateConfig {
     std::uint32_t heap_limit_bytes = 0;
     std::uint32_t max_actors = 0;
     IsolateMode mode = IsolateMode::TrustedInProcess;
-    std::uint32_t max_resource_pins = 1024;
     // Includes queued and currently executing trusted guest invocations.
     // Bounded independently of actor admission; it is not a CPU-time limit.
     std::size_t max_inflight_guest_calls = 64;
+    // Append after existing fields to preserve positional IsolateConfig callers.
+    std::uint32_t max_resource_pins = 1024;
 };
 
 // OresVM host-level reservation and queue budgets. The heap budget charges
