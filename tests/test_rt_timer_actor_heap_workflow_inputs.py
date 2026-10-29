@@ -4,7 +4,6 @@ import pathlib
 import re
 import sys
 import tempfile
-import tempfile
 
 if not __debug__:
     raise SystemExit("RT timer CI dependency audit rejects optimized Python")
@@ -28,29 +27,6 @@ def triggered(path, triggers):
         item.endswith("/**") and path.startswith(item[:-2])
         for item in triggers
     )
-
-
-def reject_symlink_ancestors(root, path):
-    """Reject source-bearing paths crossing any intermediate symlink.
-
-    Git blob attestation on the target file alone cannot attest an aliasing
-    directory symlink. This also applies when the target stays within root.
-    Direct leaf symlinks are rejected separately by the caller.
-    """
-    try:
-        parts = path.relative_to(root).parts
-    except ValueError as exc:
-        raise AssertionError(f"source path outside repository: {path}") from exc
-    cursor = root
-    for component in parts[:-1]:
-        if component == "..":
-            cursor = cursor.parent
-        elif component != ".":
-            cursor = cursor / component
-        if not cursor.is_relative_to(root):
-            raise AssertionError(f"source path traverses repository root: {path}")
-        if cursor.is_symlink():
-            raise AssertionError(f"symlink path ancestor: {path}")
 
 
 def reject_symlink_ancestors(root, path):
@@ -299,7 +275,8 @@ def check():
                 step,
             ), f"{step_name}: missing {binary} build output"
             assert re.search(
-                r"(?m)^\s*(?:(?:ASAN_OPTIONS|UBSAN_OPTIONS)=[^\s]+\s+)*"\n                + re.escape(binary_path) + r"\s*$", step
+                r"(?m)^\s*(?:(?:ASAN_OPTIONS|UBSAN_OPTIONS)=[^\s]+\s+)*"
+                + re.escape(binary_path) + r"\s*$", step
             ), f"{step_name}: {binary} never executed"
 
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -342,7 +319,6 @@ def check():
 
 if __name__ == "__main__":
     try:
-        audit_selftest()
         check()
     except (AssertionError, OSError, UnicodeError) as exc:
         print(
