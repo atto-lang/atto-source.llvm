@@ -1,5 +1,7 @@
 #include "oreslang/runtime/TrustedActorBufferDelivery.hpp"
+#include <atomic>
 #include <cassert>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -65,6 +67,39 @@ int main() {
     pipe.retire(receiver);
     assert(pool->used_bytes() == 0);
     assert(fails([&] {pipe.deliver_one(receiver, [](auto&) {});}));
+    // Concurrent DATA admission versus terminal STOP is linearized by the
+    // underlying gate: either the destination reclaims accepted DATA or the
+    // source retains the rejected buffer. Neither path leaks/double-drops.
+    for (std::uint64_t i=0;i<64;++i) {
+        const TrustedBufferActor dying{100+i, 1};
+        pipe.admit(dying, 1);
+        auto source_turn = pipe.enter_turn(sender);
+        auto h = pipe.allocate(source_turn, 2);
+        pipe.write(source_turn, h, 0, 77);
+        std::atomic<bool> go{false}, accepted{false};
+        std::thread producer([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            try {
+                pipe.send(source_turn, dying, h);
+                accepted.store(true, std::memory_order_release);
+            } catch (const std::logic_error&) {}
+        });
+        std::thread stop([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            pipe.retire(dying);
+        });
+        go.store(true, std::memory_order_release);
+        producer.join();
+        stop.join();
+        if (accepted.load(std::memory_order_acquire)) {
+            assert(fails([&] { pipe.drop(source_turn,h); }));
+        } else {
+            pipe.write(source_turn,h,0,78);
+            pipe.drop(source_turn,h);
+        }
+        source_turn.release();
+        assert(pool->used_bytes() == 0);
+    }
     pipe.retire(sender);
     assert(pipe.close());
     assert(pipe.close());
