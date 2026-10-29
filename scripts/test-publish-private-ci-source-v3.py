@@ -82,6 +82,13 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(len({_id for _number, _id, _url in expected}), len(expected))
         self.assertEqual(len({_url for _number, _id, _url in expected}), len(expected))
 
+    def test_incident_gate_rejects_duplicate_runtime_configuration(self):
+        original = v3.INCIDENT_GATES
+        duplicate = original + (original[-1],)
+        with patch.object(v3, "INCIDENT_GATES", duplicate):
+            with self.assertRaisesRegex(v3.Denied, "configuration is invalid"):
+                v3.require_incident_closure()
+
     def test_incident_gate_requires_exact_completed_identity(self):
         def issue(number, issue_id, state="closed", reason="completed", url=None):
             return {
