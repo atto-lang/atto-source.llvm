@@ -7,7 +7,8 @@ import subprocess
 import unittest
 
 from native_aggregate_positive_execution import (
-    POSITIVE, NEGATIVE, verify_guest_process, verify_negative_rejection,
+    POSITIVE, NEGATIVE, verify_guest_process, verify_native_entry_linkage,
+    verify_negative_rejection,
 )
 
 
@@ -25,6 +26,37 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
         self.assertEqual(len(POSITIVE), 4)
         self.assertEqual(len(NEGATIVE), 4)
         self.assertEqual(set(status for _, _, _, status in POSITIVE), {7, 19, 42, 73})
+
+    def test_native_main_calls_guest_and_uses_result(self):
+        ir = (b"; ModuleID = 'fixture'\n"
+              b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i32 @main() {\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %status = trunc i64 %r to i32\n"
+              b" ret i32 %status\n}\n")
+        verify_native_entry_linkage(ir)
+
+    def test_native_main_constant_return_rejected(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i32 @main() {\n ret i32 19\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "does not call guest"):
+            verify_native_entry_linkage(ir)
+
+    def test_native_guest_call_in_helper_does_not_count(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i64 @helper() {\n"
+              b" %r = call i64 @__oreslang_guest_main()\n ret i64 %r\n}\n"
+              b"define i32 @main() {\n ret i32 19\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "does not call guest"):
+            verify_native_entry_linkage(ir)
+
+    def test_guest_called_but_disconnected_exit_rejected(self):
+        ir = (b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
+              b"define i32 @main() {\n"
+              b" %r = call i64 @__oreslang_guest_main()\n"
+              b" ret i32 19\n}\n")
+        with self.assertRaisesRegex(RuntimeError, "does not convert"):
+            verify_native_entry_linkage(ir)
 
     def test_real_guest_status_accepted(self):
         observed = subprocess.CompletedProcess(["guest"], 19, b"", b"")
