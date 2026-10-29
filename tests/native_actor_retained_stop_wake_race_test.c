@@ -168,6 +168,22 @@ static void test_target_stop_after_transfer(void) {
     CHECK(ores_native_actor_scheduler_accepted(f.scheduler)==2);
     CHECK(ores_native_actor_scheduler_completed(f.scheduler)==2);
     CHECK(ores_native_actor_scheduler_wakes_completed(f.scheduler)==1);
+    /* Reuse the empty producer escrow slot with a NEW generation. The old
+     * cancelled target ticket must not mutate or reclaim this new credit. */
+    OresNativeWakeTicket replacement={0};
+    CHECK(ores_native_actor_scheduler_reserve_wake(
+        f.scheduler,f.actors[0],f.actors[0],1,2,1,2,&replacement));
+    CHECK(replacement.slot_generation!=f.ticket.slot_generation);
+    CHECK(!ores_native_actor_scheduler_transfer_wake(f.scheduler,f.ticket));
+    CHECK(!ores_native_actor_scheduler_cancel_wake(f.scheduler,f.ticket));
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler,f.ticket,ORES_NATIVE_WAKE_READY)
+        == ORES_NATIVE_WAKE_INVALID);
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actors[0])==1);
+    CHECK(ores_native_actor_scheduler_cancel_wake(f.scheduler,replacement));
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler,f.actors[0])==0);
     OresNativeActorTerminalState terminal={0};
     CHECK(ores_native_actor_scheduler_terminal_state(
         f.scheduler,f.actors[1],&terminal));
