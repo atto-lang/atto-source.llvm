@@ -75,6 +75,21 @@ int main() {
   assert(::symlink(dir.c_str(),link.c_str())==0);
   assert(!DurableLocalDispatchClaim(link).claim_once(request("symlink-dir")));
   assert(::unlink(link.c_str())==0);
+  // A symlink in an ancestor directory must be rejected too.
+  const std::string actual_parent = dir + "/real";
+  const std::string inner = actual_parent + "/private";
+  assert(::mkdir(actual_parent.c_str(), 0700) == 0);
+  assert(::mkdir(inner.c_str(), 0700) == 0);
+  const std::string parent_link = dir + "/linked-parent";
+  assert(::symlink(actual_parent.c_str(), parent_link.c_str()) == 0);
+  assert(!DurableLocalDispatchClaim(parent_link + "/private")
+      .claim_once(request("ancestor-link")));
+  assert(!DurableLocalDispatchClaim(inner + "/../private")
+      .claim_once(request("dotdot-path")));
+  assert(!DurableLocalDispatchClaim("relative-private")
+      .claim_once(request("relative-path")));
+  assert(!DurableLocalDispatchClaim(inner + "/")
+      .claim_once(request("trailing-slash")));
   std::filesystem::remove_all(dir);
   return 0;
 }
