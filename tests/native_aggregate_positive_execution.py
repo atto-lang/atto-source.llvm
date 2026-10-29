@@ -127,8 +127,29 @@ def verify_native_entry_linkage(ir):
         rb"@__oreslang_guest_main\s*\(", body)
     require(call is not None, "native main does not call guest entrypoint")
     result_name = re.escape(call.group(1))
-    require(re.search(rb"\btrunc\s+i64\s+" + result_name + rb"\s+to\s+i32\b", body)
-            is not None, "native main does not convert guest result to OS status")
+    narrowed = re.search(
+        rb"(?m)^\s*(%[A-Za-z0-9_.$-]+)\s*=\s*trunc\s+i64\s+" +
+        result_name + rb"\s+to\s+i32\b", body)
+    require(narrowed is not None,
+            "native main does not convert guest result to OS status")
+    # For these four bounded, synchronous stack-only fixtures the native
+    # wrapper must check the *guest* result against the 0..255 OS-exit
+    # budget. All optional runtime shutdown guards are compile-time true.
+    range_guard = re.search(
+        rb"(?m)^\s*(%[A-Za-z0-9_.$-]+)\s*=\s*icmp\s+ule\s+i64\s+" +
+        result_name + rb"\s*,\s*255\b", body)
+    require(range_guard is not None,
+            "native main lacks a guest-bound exit status range check")
+    checked = re.search(
+        rb"(?m)^\s*(%[A-Za-z0-9_.$-]+)\s*=\s*select\s+i1\s+" +
+        re.escape(range_guard.group(1)) + rb"\s*,\s*i32\s+" +
+        re.escape(narrowed.group(1)) + rb"\s*,\s*i32\s+1\b", body)
+    require(checked is not None,
+            "native main does not select checked guest exit status")
+    require(re.search(
+        rb"(?m)^\s*ret\s+i32\s+" + re.escape(checked.group(1)) + rb"\s*$",
+        body) is not None,
+        "native main does not return checked guest exit status")
 
 
 def verify_guest_process(name, result, expected_exit):
