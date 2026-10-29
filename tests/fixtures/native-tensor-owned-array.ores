@@ -20,20 +20,20 @@ fnc valid_span(int capacity, int start, int count, int stride): int {
 
 pub fnc main(): int {
   let mut TensorOwner first = new TensorOwner();
+  let mut TensorOwner moved = rt take(first);
   let mut TensorOwner independent = new TensorOwner();
-  first.values.add(3);
-  first.values.add(5);
-  first.values.add(7);
-  first.values.add(11);
-  first.values.add(13);
+  moved.values.add(3);
+  moved.values.add(5);
+  moved.values.add(7);
+  moved.values.add(11);
+  moved.values.add(13);
   independent.values.add(17);
   independent.values.add(19);
 
-  // Capture pre-transfer reads before moving the whole owning class.
-  let int pre_span = valid_span(first.values.size, 1, 2, 2);
-  let int pre_left = first.values.get(1);
-  let int pre_right = first.values.get(3);
-  let mut TensorOwner moved = rt take(first);
+  // Capture pre-write reads after transfer of the whole owning class.
+  let int pre_span = valid_span(moved.values.size, 1, 2, 2);
+  let int pre_left = moved.values.get(1);
+  let int pre_right = moved.values.get(3);
   moved.values.set(1, 23);
   moved.values.set(3, 29);
   // Every assertion is part of the compiled guest final expression;
