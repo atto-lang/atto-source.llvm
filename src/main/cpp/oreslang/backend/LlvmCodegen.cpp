@@ -1122,7 +1122,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            (fn.native_internal || fn.async_source_i64)
+            (fn.native_internal || fn.async_source_i64 || !isolate_entry.empty())
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
@@ -2995,6 +2995,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* bad_context = llvm::BasicBlock::Create(context, "bad.context", wrapper);
         auto* bad_load = llvm::BasicBlock::Create(context, "bad.load", wrapper);
         auto* bad_store = llvm::BasicBlock::Create(context, "bad.store", wrapper);
+        auto* bad_arithmetic = llvm::BasicBlock::Create(context, "bad.arithmetic", wrapper);
         llvm::IRBuilder<> b(entry);
         auto* ctx = wrapper->getArg(0);
         auto* input = wrapper->getArg(1);
@@ -3027,8 +3028,56 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                        execute, bad_load);
         b.SetInsertPoint(execute);
         auto* old = b.CreateLoad(i64, old_slot);
-        auto* next = b.CreateCall(declarations.at(native_function_slot(isolate_entry, 2)),
-                                  {old, input});
+        // In isolate-entry mode, lower the already-validated pure Oreslang AST
+        // directly into the status-producing guest wrapper. Calling the
+        // ordinary i64 function would use llvm.trap on signed overflow and
+        // terminate the entire in-process OresVM, not just this tenant.
+        // Each arithmetic operation branches to a recoverable ABI failure
+        // before any state store. The ordinary function is internal-only.
+        const auto& source_step = source.functions.front();
+        const auto emit_checked_pure = [&](const auto& self,
+                                           const Expression& expr) -> llvm::Value* {
+            using K = Expression::Kind;
+            switch (expr.kind) {
+                case K::Integer:
+                    return llvm::ConstantInt::getSigned(i64, expr.integer);
+                case K::Variable:
+                    if (expr.name == source_step.parameters[0].name) return old;
+                    if (expr.name == source_step.parameters[1].name) return input;
+                    throw std::logic_error("invalid isolate scalar parameter");
+                case K::Negate:
+                case K::Add:
+                case K::Subtract:
+                case K::Multiply: {
+                    const bool negative = expr.kind == K::Negate;
+                    auto* lhs = negative
+                        ? static_cast<llvm::Value*>(llvm::ConstantInt::get(i64, 0))
+                        : self(self, *expr.left);
+                    auto* rhs = negative
+                        ? self(self, *expr.left)
+                        : self(self, *expr.right);
+                    const auto op = (negative || expr.kind == K::Subtract)
+                        ? llvm::Intrinsic::ssub_with_overflow
+                        : (expr.kind == K::Multiply)
+                            ? llvm::Intrinsic::smul_with_overflow
+                            : llvm::Intrinsic::sadd_with_overflow;
+                    auto* intrinsic = llvm::Intrinsic::getDeclaration(
+                        &module, op, {i64});
+                    auto* pair = b.CreateCall(intrinsic, {lhs, rhs},
+                                               "isolate.arithmetic.checked");
+                    auto* value = b.CreateExtractValue(pair, {0}, "isolate.arithmetic.value");
+                    auto* overflow = b.CreateExtractValue(pair, {1}, "isolate.arithmetic.overflow");
+                    auto* proceed = llvm::BasicBlock::Create(
+                        context, "isolate.arithmetic.ok", wrapper);
+                    b.CreateCondBr(overflow, bad_arithmetic, proceed);
+                    b.SetInsertPoint(proceed);
+                    return value;
+                }
+                default:
+                    throw std::logic_error("unvalidated isolate expression");
+            }
+        };
+        auto* next = emit_checked_pure(emit_checked_pure, *source_step.result);
         auto* store_type = llvm::FunctionType::get(i32, {native_ptr, i32, i64}, false);
         auto* store_callee = b.CreateBitCast(store_fn, store_type->getPointerTo());
         auto* saved = b.CreateCall(store_type, store_callee,
@@ -3043,7 +3092,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         b.SetInsertPoint(bad_load);
         b.CreateRet(llvm::ConstantInt::get(i32, 2));
         b.SetInsertPoint(bad_store);
-        b.CreateRet(llvm::ConstantInt::get(i32, 3));
+        b.CreateRet(llvm::ConstantInt::get(i32, ORES_GUEST_STORE_DENIED));
+        b.SetInsertPoint(bad_arithmetic);
+        b.CreateRet(llvm::ConstantInt::get(i32, ORES_GUEST_OVERFLOW));
     }
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
