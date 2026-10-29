@@ -32,8 +32,10 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
               b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
               b"define i32 @main() {\n"
               b" %r = call i64 @__oreslang_guest_main()\n"
+              b" %valid = icmp ule i64 %r, 255\n"
               b" %status = trunc i64 %r to i32\n"
-              b" ret i32 %status\n}\n")
+              b" %checked = select i1 %valid, i32 %status, i32 1\n"
+              b" ret i32 %checked\n}\n")
         verify_native_entry_linkage(ir)
 
     def test_native_main_constant_return_rejected(self):
