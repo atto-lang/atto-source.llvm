@@ -14,6 +14,9 @@ SPEC = importlib.util.spec_from_file_location("llvm_private_ci_v3", SCRIPT)
 v3 = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(v3)
 
+# Preserve the real, production fail-closed guard before mocked publisher cases.
+REAL_ATOMIC_ROLLBACK_GUARD = v3.require_atomic_ref_rollback
+
 SOURCE_TREE = "a" * 40
 BASE_TREE = "b" * 40
 CARRIER_COMMIT = "c" * 40
@@ -66,6 +69,47 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def setUp(self):
+        # Existing publish fixtures model a future authorized implementation.
+        # Production export MUST still deny by default, independently proven
+        # below. A local fixture cannot turn on the real publisher in GitHub.
+        self._mock_future_rollback = patch.object(
+            v3, "require_atomic_ref_rollback", return_value=None
+        )
+        self._mock_future_rollback.start()
+        self.addCleanup(self._mock_future_rollback.stop)
+
+    def test_production_publish_denied_before_source_access_or_writes(self):
+        with (
+            patch.object(v3, "require_atomic_ref_rollback",
+                         side_effect=REAL_ATOMIC_ROLLBACK_GUARD),
+            patch.object(v3, "protected_authority") as authority,
+            patch.object(v3, "exact_source_tree") as source,
+            patch.object(v3, "gh_api") as api,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "atomic ref rollback is unimplemented"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                    now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
+                )
+            authority.assert_not_called()
+            source.assert_not_called()
+            api.assert_not_called()
+
+    def test_matching_ref_never_triggers_unconditional_rest_delete(self):
+        with (
+            patch.object(v3, "live_ref_sha", return_value=CARRIER_COMMIT),
+            patch.object(v3, "_gh_ref_request") as request,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "atomic compare-and-delete"):
+                v3.delete_exact_ref(
+                    "trusted/ci",
+                    "ci/oreslang-" + SOURCE_TREE,
+                    CARRIER_COMMIT, 1323598177,
+                )
+            request.assert_not_called()
+
     def test_incident_gate_requires_exact_completed_identity(self):
         def issue(number, issue_id, state="closed", reason="completed", url=None):
             return {
