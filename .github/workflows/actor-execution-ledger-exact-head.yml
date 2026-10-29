@@ -6,6 +6,8 @@ on:
       - src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
       - src/main/cpp/oreslang/runtime/NativeActorScheduler.h
+      - src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h
+      - src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
       - tests/native_actor_ledger_scheduler_bridge_test.cpp
       - tests/native_actor_retained_data_stop_test.c
       - tests/native_actor_retained_data_ordering_test.c
@@ -269,7 +271,9 @@ jobs:
               tests/fixtures/native-retained-guest-steps.ores \
               tests/native_actor_compiled_guest_ledger.py \
               tests/native_actor_compiled_guest_ledger_bridge_test.c \
-              src/main/cpp/oreslang/runtime/NativeActorScheduler.c; do
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
           done
       - name: Build real Oreslang LLVM compiler against installed LLVM
