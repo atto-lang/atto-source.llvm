@@ -1,5 +1,6 @@
 """Source-free negative acceptance for a private CI transfer authorization gate."""
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,6 +86,37 @@ class ExportGateTest(unittest.TestCase):
         file.unlink()
         file.symlink_to("private-ci-carrier-contracts.json")
         self.check_rejected()
+
+    def test_policy_directory_symlink_rejected(self):
+        directory = self.root / ".github"
+        renamed = self.root / "real_policy"
+        directory.rename(renamed)
+        directory.symlink_to(renamed, target_is_directory=True)
+        self.check_rejected()
+
+    def test_policy_root_symlink_rejected(self):
+        alias = self.root.parent / (self.root.name + "-alias")
+        alias.symlink_to(self.root, target_is_directory=True)
+        self.addCleanup(alias.unlink)
+        with self.assertRaises((GateRejected, OSError)):
+            authorize(alias, *ARGS)
+
+    def test_policy_fifo_rejected_without_blocking(self):
+        policy = self.root / ".github/private-ci-carrier-contracts.json"
+        policy.unlink()
+        os.mkfifo(policy)
+        self.check_rejected()
+
+    def test_workflow_path_must_be_under_workflows(self):
+        self.data["carriers"][DEST]["workflow_path"] = "README.md"
+        self.write_contract()
+        self.check_rejected(DEST, 1234, A, "README.md", B, ARGS[5], C, 1123)
+
+    def test_plan_path_must_be_under_test_plans(self):
+        current_plan = self.data["carriers"][DEST]["test_plans"].pop(ARGS[5])
+        self.data["carriers"][DEST]["test_plans"]["plan.json"] = current_plan
+        self.write_contract()
+        self.check_rejected(DEST, 1234, A, ARGS[3], B, "plan.json", C, 1123)
 
     def test_path_traversal(self):
         self.check_rejected(DEST, 1234, A, "../bad.yml", B, ARGS[5], C, 1123)
