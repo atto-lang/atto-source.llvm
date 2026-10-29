@@ -103,7 +103,7 @@ def check():
             f"{step_name}: missing ledger build output"
         )
         assert re.search(
-            r"(?m)^\\s*" + re.escape(binary_path) + r"\\s*$", step
+            r"(?m)^\s*" + re.escape(binary_path) + r"\s*$", step
         ), f"{step_name}: ledger binary never executed"
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME native_rt_timer_actor_ledger_start_authority" in cmake, (
