@@ -431,41 +431,94 @@ def authorized_source_main_sha():
     return source_protection()
 
 
+def strict_branch_protection(protection, label):
+    """Attest non-bypassable classic branch protection with app-bound CI."""
+    if not isinstance(protection, dict):
+        raise Denied(label + " protection metadata invalid")
+    reviews = protection.get("required_pull_request_reviews")
+    checks = protection.get("required_status_checks")
+    conversations = protection.get("required_conversation_resolution")
+    admin = protection.get("enforce_admins")
+    force = protection.get("allow_force_pushes")
+    deletion = protection.get("allow_deletions")
+    if (not isinstance(reviews, dict)
+            or reviews.get("require_code_owner_reviews") is not True
+            or reviews.get("dismiss_stale_reviews") is not True
+            or reviews.get("require_last_push_approval") is not True
+            or type(reviews.get("required_approving_review_count")) is not int
+            or reviews["required_approving_review_count"] < 1):
+        raise Denied(label + " CODEOWNER, stale-review or latest-push approval missing")
+    if (not isinstance(conversations, dict)
+            or conversations.get("enabled") is not True):
+        raise Denied(label + " conversation resolution not required")
+    if not isinstance(checks, dict) or checks.get("strict") is not True:
+        raise Denied(label + " strict required CI is absent")
+    contexts = checks.get("contexts")
+    bound = checks.get("checks")
+    if (not isinstance(contexts, list) or not isinstance(bound, list)
+            or not bound
+            or any(not isinstance(value, str) or not value.strip()
+                   for value in contexts)
+            or any(not isinstance(item, dict)
+                   or not isinstance(item.get("context"), str)
+                   or not item["context"].strip()
+                   or type(item.get("app_id")) is not int
+                   or item["app_id"] <= 0 for item in bound)
+            or len(contexts) != len(set(contexts))
+            or len(bound) != len({item["context"] for item in bound})
+            or not set(contexts).issubset(
+                {item["context"] for item in bound})):
+        raise Denied(label + " strict required CI lacks app-pinned unique checks")
+    if (not isinstance(admin, dict) or admin.get("enabled") is not True
+            or not isinstance(force, dict) or force.get("enabled") is not False
+            or not isinstance(deletion, dict) or deletion.get("enabled") is not False):
+        raise Denied(label + " administrator/force/delete protection incomplete")
+    bypass = reviews.get("bypass_pull_request_allowances")
+    if bypass is not None and (
+            not isinstance(bypass, dict)
+            or any(not isinstance(bypass.get(key, []), list)
+                   or bypass.get(key)
+                   for key in ("users", "teams", "apps"))):
+        raise Denied(label + " review bypasses are not empty")
+    return (
+        reviews["required_approving_review_count"],
+        reviews["require_last_push_approval"],
+        reviews["require_code_owner_reviews"],
+        reviews["dismiss_stale_reviews"],
+        conversations["enabled"], checks["strict"],
+        tuple(sorted(contexts)),
+        tuple(sorted((item["context"], item["app_id"]) for item in bound)),
+        admin["enabled"], force["enabled"], deletion["enabled"],
+    )
+
+
 def source_protection():
     repo = gh_api(f"repos/{SOURCE_REPO}")
     if (repo.get("id") != SOURCE_REPO_ID
             or repo.get("full_name") != SOURCE_REPO
-            or repo.get("private") is not True):
+            or repo.get("private") is not True
+            or repo.get("visibility") != "private"
+            or repo.get("archived") is not False
+            or repo.get("disabled") is not False
+            or repo.get("fork") is not False):
         raise Denied("source repository identity/privacy mismatch")
-    branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
+    route = f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}"
+    branch = gh_api(route)
     if (branch.get("name") != SOURCE_BRANCH
             or branch.get("protected") is not True):
         raise Denied("source main is not protected")
-    protection = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}/protection")
-    reviews = protection.get("required_pull_request_reviews")
-    if (not isinstance(reviews, dict)
-            or reviews.get("require_code_owner_reviews") is not True
-            or reviews.get("dismiss_stale_reviews") is not True
-            or not isinstance(reviews.get("required_approving_review_count"), int)
-            or isinstance(reviews.get("required_approving_review_count"), bool)
-            or reviews.get("required_approving_review_count", 0) < 1):
-        raise Denied("source main does not enforce independent CODEOWNER review")
-    admins = protection.get("enforce_admins")
-    force = protection.get("allow_force_pushes")
-    delete = protection.get("allow_deletions")
-    if (not isinstance(admins, dict) or admins.get("enabled") is not True
-            or not isinstance(force, dict) or force.get("enabled") is not False
-            or not isinstance(delete, dict) or delete.get("enabled") is not False):
-        raise Denied("source main admin/force/delete protection incomplete")
-    bypasses = reviews.get("bypass_pull_request_allowances")
-    if bypasses is not None:
-        if (not isinstance(bypasses, dict)
-                or any(not isinstance(bypasses.get(k, []), list)
-                       or bypasses.get(k) for k in ("users", "teams", "apps"))):
-            raise Denied("source main has pull-request review bypasses")
-    return valid_sha(branch.get("commit", {}).get("sha"),
+    head = valid_sha(branch.get("commit", {}).get("sha"),
                      "source protected-main SHA invalid")
-
+    protection_route = route + "/protection"
+    policy = strict_branch_protection(gh_api(protection_route), "source main")
+    final = gh_api(route)
+    if (final.get("name") != SOURCE_BRANCH
+            or final.get("protected") is not True
+            or final.get("commit", {}).get("sha") != head):
+        raise Denied("source main changed during protection attestation")
+    if strict_branch_protection(gh_api(protection_route), "source main") != policy:
+        raise Denied("source main protection changed during attestation")
+    return head
 
 def remote_source_file(path, main_sha, max_bytes):
     item = gh_api(f"repos/{SOURCE_REPO}/contents/{path}?ref={main_sha}")
@@ -868,49 +921,33 @@ def review_attested_carrier_main(repository, contract, branch):
 
 
 def checked_carrier_main(repository, contract):
-    branch = gh_api(f"repos/{repository}/branches/main")
+    """Reject unprotected carriers even when a historical PR was reviewed."""
+    route = f"repos/{repository}/branches/main"
+    branch = gh_api(route)
     if branch.get("name") != "main":
         raise Denied("carrier main branch identity changed")
-    base_sha = valid_sha(
-        branch.get("commit", {}).get("sha"), "carrier main SHA"
-    )
+    base_sha = valid_sha(branch.get("commit", {}).get("sha"), "carrier main SHA")
     if base_sha != contract["base_sha"]:
         raise Denied("carrier main advanced beyond reviewed base")
-
     if branch.get("protected") is not True:
-        return review_attested_carrier_main(repository, contract, branch)
+        raise Denied("carrier main is not protected; source transfer denied")
 
-    protection = gh_api(f"repos/{repository}/branches/main/protection")
-    reviews = protection.get("required_pull_request_reviews")
-    if (not isinstance(reviews, dict)
-            or reviews.get("require_code_owner_reviews") is not True
-            or reviews.get("dismiss_stale_reviews") is not True
-            or not isinstance(reviews.get("required_approving_review_count"), int)
-            or isinstance(reviews.get("required_approving_review_count"), bool)
-            or reviews.get("required_approving_review_count", 0) < 1):
-        raise Denied("carrier main does not enforce independent CODEOWNER review")
-    admins = protection.get("enforce_admins")
-    force = protection.get("allow_force_pushes")
-    delete = protection.get("allow_deletions")
-    if (not isinstance(admins, dict) or admins.get("enabled") is not True
-            or not isinstance(force, dict) or force.get("enabled") is not False
-            or not isinstance(delete, dict) or delete.get("enabled") is not False):
-        raise Denied("carrier main admin/force/delete protection incomplete")
-    bypasses = reviews.get("bypass_pull_request_allowances")
-    if bypasses is not None:
-        if (not isinstance(bypasses, dict)
-                or any(not isinstance(bypasses.get(k, []), list)
-                       or bypasses.get(k) for k in ("users", "teams", "apps"))):
-            raise Denied("carrier main has pull-request review bypasses")
+    protection_route = route + "/protection"
+    policy = strict_branch_protection(gh_api(protection_route), "carrier main")
     codeowners = gh_api(
         f"repos/{repository}/contents/{CODEOWNERS_PATH}?ref={base_sha}"
     )
-    carrier_codeowners = decode_contents(
-        codeowners, CODEOWNERS_PATH, MAX_GOVERNANCE_FILE
+    require_carrier_security_codeowners(
+        decode_contents(codeowners, CODEOWNERS_PATH, MAX_GOVERNANCE_FILE)
     )
-    require_carrier_security_codeowners(carrier_codeowners)
+    final = gh_api(route)
+    if (final.get("name") != "main"
+            or final.get("protected") is not True
+            or final.get("commit", {}).get("sha") != base_sha):
+        raise Denied("carrier main changed during protection attestation")
+    if strict_branch_protection(gh_api(protection_route), "carrier main") != policy:
+        raise Denied("carrier main protection changed during attestation")
     return base_sha
-
 
 def checked_destination(repository, contract):
     repo = gh_api(f"repos/{repository}")
