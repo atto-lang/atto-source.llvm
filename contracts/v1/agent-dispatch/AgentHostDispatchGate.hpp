@@ -68,6 +68,6 @@ class HostGate final {
  private:
   std::string tenant_, actor_, revision_;
   std::uint64_t generation_, epoch_, token_cap_;
-  std::atomic<bool> used_{false}; // never shared across concurrent threads
+  std::atomic<bool> used_{false}; // one-shot even with concurrent callers
 };
 } // namespace oreslang::agent_dispatch
