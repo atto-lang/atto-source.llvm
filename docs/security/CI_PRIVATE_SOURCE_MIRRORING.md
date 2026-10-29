@@ -14,9 +14,11 @@ Java repository approvals do not authorize LLVM source exports.
 
 Before the publisher may read or export private source bytes, it must query the
 immutable platform-conformance incident identities for #22, #77, #127, #212, and #222 and
-require each issue to be exactly `closed` with `state_reason=completed`.
-Open incidents, alternate close reasons, issue-ID/URL drift, or a pull request
-masquerading as an issue all fail closed. The gate is rechecked every time
+require each issue to be exactly `closed` with `state_reason=completed`
+and GitHub's immutable `closed_by` identity equal to reviewer
+`ORESoftware` (user ID `11139560`). Open incidents, alternate close reasons,
+issue-ID/URL drift, closure by another account, missing closure identity, or a
+pull request masquerading as an issue all fail closed. The gate is rechecked every time
 protected authority is re-attested, including immediately before executable
 carrier authorization.
 
