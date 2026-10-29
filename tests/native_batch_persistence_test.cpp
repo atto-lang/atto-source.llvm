@@ -2,6 +2,8 @@
 #include "oreslang/runtime/NativeBatchPersistence.hpp"
 #include <cassert>
 #include <iostream>
+#include <thread>
+#include <atomic>
 using namespace oreslang::runtime::persistence;
 
 static Write write(std::string actor, std::string op, std::uint64_t epoch = 1,
@@ -88,5 +90,32 @@ int main() {
         catch (const std::invalid_argument&) { rejected=true; }
         assert(rejected);
     }
-    std::cout << "PASS LLVM host-only persistence sidecar contract (7 groups)\n";
+    { // Concurrent flush calls must preserve per-actor FIFO and CAS order.
+        MemoryStore store;
+        BatchSidecar sidecar("tenant-a",store,600,100000,16,1,64);
+        for (unsigned i=0; i<200; ++i) {
+            const auto actor="concurrent-"+std::to_string(i);
+            store.grant_epoch("tenant-a",actor,1);
+            sidecar.enqueue(write(actor,"first",1,0));
+            sidecar.enqueue(write(actor,"second",1,1));
+        }
+        std::atomic<bool> go{false};
+        std::atomic<unsigned> committed{0}, rejected{0};
+        auto consumer=[&] {
+            while (!go.load()) std::this_thread::yield();
+            while (sidecar.queued_count()) {
+                for (const auto& receipt : sidecar.flush()) {
+                    if (receipt.status == Status::Committed) ++committed;
+                    else ++rejected;
+                }
+            }
+        };
+        std::thread first(consumer), second(consumer);
+        go.store(true);
+        first.join(); second.join();
+        assert(committed == 400 && rejected == 0);
+        for (unsigned i=0; i<200; ++i)
+            assert(store.version({"tenant-a","concurrent-"+std::to_string(i),"main"}) == 2);
+    }
+    std::cout << "PASS LLVM host-only persistence sidecar contract (8 groups)\n";
 }
