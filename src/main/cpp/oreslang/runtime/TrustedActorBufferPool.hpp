@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -36,6 +37,9 @@ class TrustedActorBufferPool final {
         std::uint64_t id = 0;
         std::uint64_t generation = 1;
         std::size_t read_loans = 0;
+        // Pin both the owner and EACH reader's actor incarnation until release.
+        // Retiring a reader early must not leave its old ticket usable.
+        std::map<std::pair<std::uint64_t, std::uint64_t>, std::size_t> reader_pins;
     };
     struct State final {
         State(std::uint64_t epoch, std::size_t bytes, std::size_t slots)
@@ -97,6 +101,10 @@ public:
         void release() noexcept {
             if (!active_) return;
             std::lock_guard<std::mutex> guard(state_->mutex);
+            const auto it = slot_->reader_pins.find({reader_.id, reader_.incarnation});
+            if (it != slot_->reader_pins.end()) {
+                if (--it->second == 0) slot_->reader_pins.erase(it);
+            }
             --slot_->read_loans;
             active_ = false;
         }
@@ -185,6 +193,15 @@ public:
         const auto slot = checked(h, owner);
         if (slot->read_loans == std::numeric_limits<std::size_t>::max())
             throw std::overflow_error("read loan counter exhausted");
+        const auto key = std::make_pair(reader.id, reader.incarnation);
+        auto pin = slot->reader_pins.find(key);
+        if (pin == slot->reader_pins.end())
+            slot->reader_pins.emplace(key, 1);
+        else {
+            if (pin->second == std::numeric_limits<std::size_t>::max())
+                throw std::overflow_error("reader loan counter exhausted");
+            ++pin->second;
+        }
         ++slot->read_loans;
         return ReadLoan(state_, slot, reader);
     }
@@ -207,7 +224,8 @@ public:
         std::lock_guard<std::mutex> guard(state_->mutex);
         require_live(*state_);
         for (const auto& entry : state_->slots)
-            if (entry.second->owner == actor && entry.second->read_loans)
+            if ((entry.second->owner == actor && entry.second->read_loans) ||
+                entry.second->reader_pins.count({actor.id, actor.incarnation}))
                 throw std::logic_error("actor still has immutable buffer loans");
     }
 
@@ -218,7 +236,8 @@ public:
         std::lock_guard<std::mutex> guard(state_->mutex);
         require_live(*state_);
         for (const auto& entry : state_->slots)
-            if (entry.second->owner == actor && entry.second->read_loans)
+            if ((entry.second->owner == actor && entry.second->read_loans) ||
+                entry.second->reader_pins.count({actor.id, actor.incarnation}))
                 throw std::logic_error("actor still has immutable buffer loans");
         for (auto it = state_->slots.begin(); it != state_->slots.end();) {
             const auto& slot = it->second;
