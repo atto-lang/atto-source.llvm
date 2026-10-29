@@ -887,8 +887,10 @@ int ores_native_actor_scheduler_reserve_wake(
         return 0;
     lock(s);
     int ok = !s->retired && s->wake_callback && matching(s, producer)
-        && (target.scheduler_domain != s->domain
-            || (matching(s, target) && !s->actors[target.actor_slot].retired))
+        /* This scheduler has no authenticated cross-scheduler mailbox
+         * bridge. Never mint a transferable credit for a foreign target;
+         * the producer-side credit alone is NOT target admission. */
+        && matching(s, target) && !s->actors[target.actor_slot].retired
         && !s->actors[producer.actor_slot].retired
         && s->reserved_wakes < UINT64_MAX
         && accepted_capacity_available(s)
@@ -936,11 +938,11 @@ int ores_native_actor_scheduler_transfer_wake(
     WakeCredit* w = matching_wake_locked(s, ticket);
     int ok = w && w->state == WAKE_RESERVED && !s->retired
         && !s->actors[ticket.producer.actor_slot].retired;
-    /* For a same-scheduler target, transfer is the irreversible mailbox-credit
-     * handoff boundary. Revalidate the target incarnation here so a STOP that
-     * won after reservation cannot be converted into a fabricated admission.
-     * Cross-scheduler targets require their separate verified bridge authority. */
-    if (ok && ticket.target.scheduler_domain == s->domain)
+    /* TRANSFER is the irrevocable mailbox-credit handoff boundary.
+     * Revalidate the exact target incarnation on every transfer. A future
+     * cross-scheduler bridge needs a separate authenticated API and cannot
+     * turn this local credit into a fabricated foreign target admission. */
+    if (ok)
         ok = matching(s, ticket.target)
             && !s->actors[ticket.target.actor_slot].retired;
     if (ok) w->state = WAKE_TRANSFERRED;
