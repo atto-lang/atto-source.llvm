@@ -1,10 +1,13 @@
 import copy
+import hashlib
+import tempfile
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from require_compiled_actor_ctest import RegistrationFailure, verify_registration, NAME
+from require_compiled_actor_ctest import (RegistrationFailure, verify_registration,
+                                          verify_guest_inputs, NAME, PINNED_GUEST_BLOBS)
 
 SRC = Path('/source')
 BUILD = SRC / 'build'
@@ -65,6 +68,65 @@ class RegistrationTests(unittest.TestCase):
 
     def test_nonabsolute_executable(self):
         doc = good(); doc['tests'][0]['command'][7] = 'node'; self.reject(doc)
+
+ 
+class GuestInputPinsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / 'tests').mkdir()
+        self.target = self.root / 'tests/wasm32_source_actor_guest.py'
+        self.data = b'compiled guest harness fixture for source-free tests\n'
+        self.target.write_bytes(self.data)
+        self.pin = hashlib.sha1(b'blob ' + str(len(self.data)).encode() +
+                                b'\x00' + self.data).hexdigest()
+        self.pins = {'tests/wasm32_source_actor_guest.py': self.pin}
+
+    def test_valid_synthetic_git_blob(self):
+        verify_guest_inputs(self.root, self.pins)
+
+    def test_mutated_guest_harness_blob_rejected(self):
+        self.target.write_bytes(b'pass\n')
+        with self.assertRaisesRegex(RegistrationFailure, 'blob mismatch'):
+            verify_guest_inputs(self.root, self.pins)
+
+    def test_missing_guest_harness_rejected(self):
+        self.target.unlink()
+        with self.assertRaisesRegex(RegistrationFailure, 'unavailable'):
+            verify_guest_inputs(self.root, self.pins)
+
+    def test_symlinked_guest_harness_rejected(self):
+        other = self.root / 'replacement'
+        other.write_bytes(self.data)
+        self.target.unlink()
+        self.target.symlink_to(other)
+        with self.assertRaisesRegex(RegistrationFailure, 'symlink'):
+            verify_guest_inputs(self.root, self.pins)
+
+    def test_parent_directory_symlink_rejected(self):
+        (self.root / 'tests').rename(self.root / 'actual_tests')
+        (self.root / 'tests').symlink_to(self.root / 'actual_tests')
+        with self.assertRaisesRegex(RegistrationFailure, 'parent directory'):
+            verify_guest_inputs(self.root, self.pins)
+
+    def test_oversized_guest_harness_rejected(self):
+        self.target.write_bytes(b'x' * 65537)
+        with self.assertRaisesRegex(RegistrationFailure, 'bounded regular file'):
+            verify_guest_inputs(self.root, self.pins)
+
+    def test_invalid_pin_and_parent_traversal_rejected(self):
+        for bad in ({'tests/wasm32_source_actor_guest.py': 'not-sha1'},
+                    {'../outside.py': self.pin}):
+            with self.subTest(bad=bad), self.assertRaises(RegistrationFailure):
+                verify_guest_inputs(self.root, bad)
+
+    def test_current_repository_harness_and_negative_fixtures_pinned(self):
+        # This test deliberately needs the real source checkout; it is not a
+        # synthetic success receipt or a substitute for compiled guest execution.
+        self.assertEqual(len(PINNED_GUEST_BLOBS), 4)
+        verify_guest_inputs(Path(__file__).resolve().parents[1])
+
 
 
 if __name__ == '__main__':
