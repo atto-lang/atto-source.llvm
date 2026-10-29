@@ -149,6 +149,24 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(v3.Denied):
                 v3.parse_allowlist(raw, "trusted/ci")
 
+    def test_quarantined_destination_and_id_are_rejected(self):
+        for name in v3.QUARANTINED_DESTINATIONS:
+            with self.subTest(name=name), self.assertRaisesRegex(v3.Denied, "quarantined"):
+                v3.require_not_quarantined(name)
+        for repo_id in v3.QUARANTINED_DESTINATION_IDS:
+            with self.subTest(repo_id=repo_id), self.assertRaisesRegex(v3.Denied, "quarantined"):
+                v3.require_not_quarantined("trusted/ci", repo_id)
+
+    def test_incident_disposition_registry_requires_exact_nine_hold_set(self):
+        raw = "{\n  \"schema\": 1,\n  \"incident_repository\": \"ores-truffle-oreslang/oreslang-platform-conformance\",\n  \"incident_repository_id\": 1413795502,\n  \"incidents\": {\n    \"22\": {\n      \"issue_id\": 5832921751,\n      \"status\": \"hold\"\n    },\n    \"77\": {\n      \"issue_id\": 5904679716,\n      \"status\": \"hold\"\n    },\n    \"127\": {\n      \"issue_id\": 5935338521,\n      \"status\": \"hold\"\n    },\n    \"171\": {\n      \"issue_id\": 6042555082,\n      \"status\": \"hold\"\n    },\n    \"172\": {\n      \"issue_id\": 6042602777,\n      \"status\": \"hold\"\n    },\n    \"198\": {\n      \"issue_id\": 6070465058,\n      \"status\": \"hold\"\n    },\n    \"200\": {\n      \"issue_id\": 6071264936,\n      \"status\": \"hold\"\n    },\n    \"212\": {\n      \"issue_id\": 6087989978,\n      \"status\": \"hold\"\n    },\n    \"222\": {\n      \"issue_id\": 6092501448,\n      \"status\": \"hold\"\n    }\n  }\n}\n".encode()
+        parsed = v3.parse_incident_dispositions(raw)
+        self.assertEqual(set(parsed), {22,77,127,171,172,198,200,212,222})
+        self.assertTrue(all(entry["status"] == "hold" for entry in parsed.values()))
+        with self.assertRaisesRegex(v3.Denied, "lacks protected independent disposition"):
+            with patch.object(v3, "remote_source_file", return_value=(raw, "a" * 40)), \
+                 patch.object(v3, "read_local_regular", return_value=raw):
+                v3.checked_incident_dispositions("1" * 40)
+
     def test_contract_pins_repo_base_workflow_plan_and_allowed_prs(self):
         raw = json.dumps(
             {
