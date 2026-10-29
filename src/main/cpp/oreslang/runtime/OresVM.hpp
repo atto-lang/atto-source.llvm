@@ -1,6 +1,9 @@
 #pragma once
 
+#include "oreslang/runtime/OresIsolateAbi.h"
+
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -33,6 +36,7 @@ struct IsolateSnapshot {
     IsolatePhase phase = IsolatePhase::Created;
     std::uint32_t used_bytes = 0;
     std::size_t active_actors = 0;
+    std::size_t active_guest_calls = 0;
 };
 
 // OresVM is the host's isolate registry and admission boundary. It owns no
@@ -48,6 +52,8 @@ class OresVM final {
         std::vector<std::uint8_t> heap;  // bounded logical bump arena
         std::unordered_map<std::uint64_t, std::uint64_t> actors;
         std::uint64_t next_actor_generation = 1;
+        std::size_t active_guest_calls = 0;
+        std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> guest_globals{};
     };
 
 public:
@@ -193,6 +199,36 @@ public:
         state->actors.erase(it);
     }
 
+    // Invoke precompiled native guest code with this isolate's pinned state.
+    // The call's stack-owned context must not escape to asynchronous callbacks.
+    // This is NOT a sandbox: arbitrary native code can still escape isolation.
+    std::int64_t invoke_guest(const IsolateHandle& handle, OresGuestEntry guest,
+                              std::int64_t input) {
+        if (!guest) throw std::invalid_argument("guest entry is null");
+        std::shared_ptr<State> state;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            state = checked(handle);
+            if (state->phase != IsolatePhase::Running)
+                throw std::logic_error("guest admission is closed");
+            if (state->active_guest_calls == std::numeric_limits<std::size_t>::max())
+                throw std::overflow_error("too many pinned guest invocations");
+            ++state->active_guest_calls;
+        }
+        struct GuestPin final {
+            OresVM* vm;
+            std::shared_ptr<State> state;
+            ~GuestPin() noexcept {
+                std::lock_guard<std::mutex> lock(vm->mutex_);
+                --state->active_guest_calls;
+            }
+        } pin{this, state};
+        GuestCall call{this, state, state->generation};
+        OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
+                              state->generation, &call, &guest_load_i64, &guest_store_i64};
+        return guest(&ctx, input);
+    }
+
     void begin_shutdown(const IsolateHandle& handle) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
@@ -205,8 +241,9 @@ public:
     void complete_shutdown(const IsolateHandle& handle) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
-        if (state->phase != IsolatePhase::Quiescing || !state->actors.empty())
-            throw std::logic_error("isolate still running or actor leases outstanding");
+        if (state->phase != IsolatePhase::Quiescing || !state->actors.empty() ||
+            state->active_guest_calls != 0)
+            throw std::logic_error("actor or guest invocation still active");
         state->phase = IsolatePhase::Stopped;
     }
 
@@ -217,6 +254,7 @@ public:
             throw std::logic_error("isolate must stop before destruction");
         // Best-effort zeroing, not a guarantee of secure secret erasure.
         std::fill(state->heap.begin(), state->heap.end(), 0);
+        state->guest_globals.fill(0);
         isolates_.erase(state->config.tenant_id);
     }
 
@@ -225,10 +263,42 @@ public:
         auto state = checked(handle);
         return {state->config.tenant_id, state->generation, state->phase,
                 static_cast<std::uint32_t>(state->heap.size()),
-                state->actors.size()};
+                state->actors.size(), state->active_guest_calls};
     }
 
 private:
+    struct GuestCall final {
+        OresVM* vm;
+        std::shared_ptr<State> state;
+        std::uint64_t generation;
+    };
+
+    static int guest_load_i64(void* raw, std::uint32_t slot, std::int64_t* out) noexcept {
+        if (!raw || !out || slot >= ORES_ISOLATE_I64_SLOTS) return 0;
+        auto* call = static_cast<GuestCall*>(raw);
+        std::lock_guard<std::mutex> lock(call->vm->mutex_);
+        const auto& state = call->state;
+        if (call->generation != state->generation ||
+            (state->phase != IsolatePhase::Running &&
+             state->phase != IsolatePhase::Quiescing) ||
+            state->active_guest_calls == 0) return 0;
+        *out = state->guest_globals[slot];
+        return 1;
+    }
+
+    static int guest_store_i64(void* raw, std::uint32_t slot, std::int64_t value) noexcept {
+        if (!raw || slot >= ORES_ISOLATE_I64_SLOTS) return 0;
+        auto* call = static_cast<GuestCall*>(raw);
+        std::lock_guard<std::mutex> lock(call->vm->mutex_);
+        const auto& state = call->state;
+        if (call->generation != state->generation ||
+            (state->phase != IsolatePhase::Running &&
+             state->phase != IsolatePhase::Quiescing) ||
+            state->active_guest_calls == 0) return 0;
+        state->guest_globals[slot] = value;
+        return 1;
+    }
+
     std::shared_ptr<State> checked(const IsolateHandle& handle) const {
         auto state = handle.state_.lock();
         if (!state || handle.generation_ != state->generation)
