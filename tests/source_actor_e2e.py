@@ -36,6 +36,7 @@ def main():
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-interleaved-stop.ores", 2, None, None),
+        ("source-actor-heap-turnover.ores", 3, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
@@ -127,6 +128,13 @@ def main():
                 assert "constructor_on_worker=1 released=1" in line, line
                 if name == "source-actor-interleaved-stop.ores":
                     expected = [(1, 1), (2, 7)][i]
+                    assert f"processed={expected[0]}" in line, line
+                    assert f"last={expected[1]}" in line, line
+                elif name == "source-actor-heap-turnover.ores":
+                    # A is physically retired while B is still live. C must
+                    # initialize independently; neither B nor C can inherit A's
+                    # native actor-owned state.
+                    expected = [(2, 10), (2, 102), (1, 5)][i]
                     assert f"processed={expected[0]}" in line, line
                     assert f"last={expected[1]}" in line, line
                 else:
