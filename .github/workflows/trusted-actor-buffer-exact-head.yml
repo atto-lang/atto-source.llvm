@@ -33,7 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/trusted-buffer"
-          for name in trusted_actor_buffer_pool trusted_actor_buffer_mailbox trusted_actor_buffer_scheduler_gate; do
+          for name in trusted_actor_buffer_pool trusted_actor_buffer_mailbox trusted_actor_buffer_scheduler_gate trusted_actor_buffer_delivery; do
             "${CXX}" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
               -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
               -Isrc/main/cpp "tests/${name}_test.cpp" -o "${RUNNER_TEMP}/trusted-buffer/${name}"
