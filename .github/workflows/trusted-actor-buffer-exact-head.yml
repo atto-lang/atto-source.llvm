@@ -5,6 +5,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/TrustedActorBuffer*.hpp'
       - 'tests/trusted_actor_buffer_*_test.cpp'
       - '.github/workflows/trusted-actor-buffer-exact-head.yml'
+      - 'tests/verify_trusted_actor_buffers.sh'
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,6 +25,19 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact source head and clean checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          for path in src/main/cpp/oreslang/runtime/TrustedActorBuffer{Pool,Mailbox,SchedulerGate,Delivery}.hpp tests/trusted_actor_buffer_{pool,mailbox,scheduler_gate,delivery}_test.cpp; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+          done
+          echo "EXACT_SOURCE_HEAD=$EXPECTED_HEAD"
       - name: Compile and execute every host-only buffer test
         env:
           CXX: ${{ matrix.compiler }}
@@ -47,6 +61,19 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact source head and clean checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          for path in src/main/cpp/oreslang/runtime/TrustedActorBuffer{Pool,Mailbox,SchedulerGate,Delivery}.hpp tests/trusted_actor_buffer_{pool,mailbox,scheduler_gate,delivery}_test.cpp; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+          done
+          echo "EXACT_SOURCE_HEAD=$EXPECTED_HEAD"
       - name: Compile and run scheduler/send retirement race test under TSan
         env:
           TSAN_OPTIONS: halt_on_error=1
