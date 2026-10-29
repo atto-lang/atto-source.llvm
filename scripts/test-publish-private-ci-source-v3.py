@@ -29,6 +29,8 @@ PLAN = (
             "schema": "ores-private-ci-test-plan-v1",
             "source_repo": v3.SOURCE_REPO,
             "allowed_prs": [669],
+            "required_source_head_sha": "9" * 40,
+            "required_source_root_tree_sha": SOURCE_TREE,
             "commands": [
                 {
                     "argv": ["python3", "-c", "print('ok')"],
@@ -191,8 +193,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(meta["sha256"], hashlib.sha256(PLAN).hexdigest())
         self.assertFalse(meta["uses_maven"])
         self.assertEqual(meta["required_source_blobs"], {})
-        self.assertIsNone(meta["required_source_head_sha"])
-        self.assertIsNone(meta["required_source_root_tree_sha"])
+        self.assertEqual(meta["required_source_head_sha"], "9" * 40)
+        self.assertEqual(meta["required_source_root_tree_sha"], SOURCE_TREE)
 
         malformed = json.loads(PLAN)
         malformed["commands"][0]["argv"] = ["bash", "-lc", "cat /etc/passwd"]
@@ -201,6 +203,17 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             v3.validate_test_plan(raw, 669)
 
     def test_reviewed_plan_snapshot_pins_are_paired_and_exact(self):
+        no_pins = json.loads(PLAN)
+        del no_pins["required_source_head_sha"]
+        del no_pins["required_source_root_tree_sha"]
+        with self.assertRaisesRegex(v3.Denied, "snapshot pins required"):
+            v3.validate_test_plan((json.dumps(no_pins) + "\n").encode(), 669)
+        with self.assertRaisesRegex(v3.Denied, "snapshot pins are incomplete"):
+            v3.verify_required_source_snapshot(
+                {"required_source_head_sha": None,
+                 "required_source_root_tree_sha": None}, "9" * 40
+            )
+
         doc = json.loads(PLAN)
         doc["required_source_head_sha"] = "9" * 40
         doc["required_source_root_tree_sha"] = SOURCE_TREE

@@ -688,15 +688,16 @@ def validate_test_plan(plan_bytes, source_pr):
 
     required_head = plan.get("required_source_head_sha")
     required_tree = plan.get("required_source_root_tree_sha")
+    if required_head is None and required_tree is None:
+        raise Denied("reviewed test plan source snapshot pins required")
     if (required_head is None) != (required_tree is None):
         raise Denied("reviewed test plan source snapshot pins must be paired")
-    if required_head is not None:
-        required_head = valid_sha(
-            required_head, "reviewed test plan source head pin invalid"
-        )
-        required_tree = valid_sha(
-            required_tree, "reviewed test plan source root tree pin invalid"
-        )
+    required_head = valid_sha(
+        required_head, "reviewed test plan source head pin invalid"
+    )
+    required_tree = valid_sha(
+        required_tree, "reviewed test plan source root tree pin invalid"
+    )
 
     required = plan.get("required_source_blobs", {})
     if not isinstance(required, dict):
@@ -774,8 +775,6 @@ def validate_test_plan(plan_bytes, source_pr):
 def verify_required_source_snapshot(plan_meta, source_commit, source_tree=None):
     required_head = plan_meta.get("required_source_head_sha")
     required_tree = plan_meta.get("required_source_root_tree_sha")
-    if required_head is None and required_tree is None:
-        return
     if required_head is None or required_tree is None:
         raise Denied("reviewed test plan source snapshot pins are incomplete")
     if source_commit != required_head:
