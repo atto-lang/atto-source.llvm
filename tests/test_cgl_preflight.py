@@ -52,6 +52,16 @@ class CGLAdmissionTests(unittest.TestCase):
             with self.subTest(machine=machine):
                 self.assertEqual(self.inspect(elf(machine=machine))["machine"], machine)
 
+    def test_reject_unsupported_machine_even_without_preflight_wrapper(self):
+        # Direct inspect_elf callers must not accidentally admit foreign ABIs.
+        for machine in (0, 3, 40, 0xffff):
+            with self.subTest(machine=machine):
+                with self.assertRaisesRegex(ValueError, "unsupported ELF machine"):
+                    self.inspect(elf(machine=machine))
+        for machine in (62, 183):
+            with self.subTest(supported_machine=machine):
+                self.assertEqual(self.inspect(elf(machine=machine))["machine"], machine)
+
     def test_reject_truncated_non_elf(self):
         for data in (b"#!/bin/sh", b"", elf()[:20], b"\0" * 64):
             with self.subTest(data=data[:10]), self.assertRaises(ValueError):
