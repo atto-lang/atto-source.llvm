@@ -1,0 +1,3 @@
+fnc tenant_step(int old, int delta): int {
+    return old + delta;
+}
