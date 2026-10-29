@@ -18,17 +18,23 @@ template <class F> bool rejects(F&& fn) {
 static std::atomic<bool> entered{false};
 static std::atomic<bool> release_guest{false};
 
-extern "C" std::int64_t waiting_guest(OresIsolateContext* ctx, std::int64_t value) {
-    assert(ctx && ctx->abi_version == ORES_ISOLATE_ABI_VERSION);
+extern "C" std::int32_t waiting_guest(OresIsolateContext* ctx, std::int64_t value,
+                                         std::int64_t* out) {
+    if (!ctx || !out || ctx->abi_version != ORES_ISOLATE_ABI_VERSION)
+        return ORES_GUEST_BAD_CONTEXT;
     entered.store(true, std::memory_order_release);
     while (!release_guest.load(std::memory_order_acquire))
         std::this_thread::yield();
-    return value;
+    *out = value;
+    return ORES_GUEST_OK;
 }
 
-extern "C" std::int64_t echo_guest(OresIsolateContext* ctx, std::int64_t value) {
-    assert(ctx && ctx->abi_version == ORES_ISOLATE_ABI_VERSION);
-    return value;
+extern "C" std::int32_t echo_guest(OresIsolateContext* ctx, std::int64_t value,
+                                      std::int64_t* out) {
+    if (!ctx || !out || ctx->abi_version != ORES_ISOLATE_ABI_VERSION)
+        return ORES_GUEST_BAD_CONTEXT;
+    *out = value;
+    return ORES_GUEST_OK;
 }
 
 int main() {
