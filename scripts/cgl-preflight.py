@@ -16,12 +16,21 @@ MAX_INTERPRETER = 4096
 
 
 def read_preempt_rt(path="/sys/kernel/realtime"):
-    """True/False only for exactly valid sysfs 1/0; anything else is unknown."""
-    try:
-        value = Path(path).read_text(encoding="ascii").strip()
-    except (OSError, UnicodeError, ValueError):
+    """Accept only the kernel sysfs 0/1 format; fail closed on other sources."""
+    if not hasattr(os, "O_NOFOLLOW"):
         return None
-    return {"1": True, "0": False}.get(value)
+    # A host preflight must not wait for a named pipe, follow a symlink, or
+    # allocate unbounded memory for an attacker-controlled pseudo-sysfs path.
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+        try:
+            raw = os.read(fd, 8)
+        finally:
+            os.close(fd)
+    except (OSError, TypeError, ValueError):
+        return None
+    return {b"1": True, b"1\n": True, b"0": False, b"0\n": False}.get(raw)
 
 
 def inspect_elf(path):
