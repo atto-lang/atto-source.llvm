@@ -34,6 +34,7 @@ int main() {
     assert(pipe.try_send(producer, {999,1}, first) == Send::UnknownRecipient);
     pipe.write(producer, first, 0, 42); // invalid target did not take ownership
     assert(pipe.try_send(producer, receiver, first) == Send::Accepted);
+    assert(fails([&] {(void)pipe.try_send(producer, {999,1}, first); }));
     // A stale alias and a borrowed source are invalid ownership, not FULL.
     assert(fails([&] {(void)pipe.try_send(producer, receiver, first); }));
     auto loan = pool->borrow_read(rejected, sender, receiver);
