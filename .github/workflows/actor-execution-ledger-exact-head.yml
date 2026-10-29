@@ -72,7 +72,8 @@ jobs:
             tests/source_actor_await_trace_runtime_test.c \
             tests/native_actor_compiled_guest_ledger_bridge_test.c \
             tests/native_actor_compiled_guest_ledger.py \
-            tests/fixtures/native-retained-guest-steps.ores; do
+            tests/fixtures/native-retained-guest-steps.ores \
+            tests/fixtures/source-actor-suspend-method-reject.ores; do
             expected="$(git rev-parse "HEAD:$path")"
             actual="$(git hash-object "$path")"
             test "$actual" = "$expected"
