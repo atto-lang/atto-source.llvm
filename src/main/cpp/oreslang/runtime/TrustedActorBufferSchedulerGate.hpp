@@ -69,6 +69,7 @@ public:
             std::shared_ptr<TrustedActorBufferPool> pool)
         : state_(std::make_shared<State>(std::move(pool))) {
         if (!state_->pool) throw std::invalid_argument("missing trusted buffer pool");
+        state_->pool->claim_scheduler_owner();
     }
     TrustedActorBufferSchedulerGate(const TrustedActorBufferSchedulerGate&) = delete;
     TrustedActorBufferSchedulerGate& operator=(const TrustedActorBufferSchedulerGate&) = delete;
