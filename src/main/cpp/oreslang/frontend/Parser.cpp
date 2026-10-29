@@ -1475,7 +1475,7 @@ private:
                         require("=");
                         const std::string arg_name = identifier();
                         require(";");
-                        if (!params.contains(arg_name))
+                        if (params.find(arg_name) == params.end())
                             fail("initialize fixed-field assignment requires an int constructor parameter");
                         if (!initialized.insert(field_name).second)
                             fail("initialize writes a fixed field more than once");
