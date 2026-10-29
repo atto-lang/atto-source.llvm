@@ -105,6 +105,10 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
  * The C++ owned-buffer pool remains the allocation authority.
  * This API is NOT exposed to arbitrary Oreslang guest code.
  *
+ * on_validate: checks exact current owner and generation, without mutation,
+ * before receiver existence, stop and capacity results are exposed. It must
+ * obey the same nonblocking, no-allocation and no-reentrancy constraints.
+ *
  * on_commit: called synchronously under the scheduler admission lock ONLY
  * after live receiver and capacity validation. It must be nonblocking,
  * allocation-free, exception-free and must not call back into the scheduler.
@@ -122,6 +126,8 @@ typedef struct {
     uint64_t buffer_id;
     uint64_t buffer_generation;
 } OresNativeOwnedBufferTicket;
+typedef int (*OresNativeBufferValidateFn)(
+    void* context, OresNativeActorRef sender, OresNativeOwnedBufferTicket ticket);
 typedef int (*OresNativeBufferCommitFn)(
     void* context, OresNativeActorRef sender, OresNativeActorRef recipient,
     OresNativeOwnedBufferTicket* inout_ticket);
@@ -132,6 +138,7 @@ typedef void (*OresNativeBufferDiscardFn)(
 /* Bootstrap-only; reject configuration after worker or DATA admission. */
 int ores_native_actor_scheduler_configure_owned_buffer(
     OresNativeActorScheduler* scheduler,
+    OresNativeBufferValidateFn on_validate,
     OresNativeBufferCommitFn on_commit,
     OresNativeBufferDeliverFn on_delivery,
     OresNativeBufferDiscardFn on_discard);
