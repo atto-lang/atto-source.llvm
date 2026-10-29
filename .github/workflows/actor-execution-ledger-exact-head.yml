@@ -64,6 +64,9 @@ jobs:
             src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionContext.h \
+            src/main/cpp/oreslang/runtime/NativePhysicalTurnGate.h \
             tests/native_actor_execution_ledger_test.cpp \
             tests/native_actor_ledger_scheduler_bridge_test.cpp \
             tests/native_actor_retained_data_stop_test.c \
