@@ -92,3 +92,22 @@ source SHA/tree provenance. Zero-step GitHub failures remain runner admission
 failures, not compiler test outcomes. Private-source mirroring remains blocked
 until the source policy explicitly approves an immutable private destination
 repository ID through independent security review.
+
+## Direct-parser native ELF admission (2026-10-29 follow-up)
+
+`inspect_elf` now rejects any `e_machine` outside the supported x86-64 and
+AArch64 pilot even when called directly, without the top-level host preflight.
+Every admitted ELF must also contain at least one loadable segment with the
+execute bit set; data-only load maps cannot pass executable-image admission.
+Both controls have negative tests and positive x86-64/AArch64 RX fixtures.
+
+GraalVM's JVM compatibility workflow runs `mvn -B -ntp verify` before the
+actual Oreslang guest-source execution; a `-DskipTests package` is not a JVM
+regression pass. LLVM's workflow requires both named CTests independently.
+All jobs bind checkout to the PR's immutable head SHA and report the Git tree.
+
+The new checks were exercised with focused local synthetic ELF admission
+cases and native GCC/Clang C executables. This does **not** mean the committed
+full unittest matrix, Maven/GraalVM, LLVM compiler AOT, or carrier-grade
+runtime test suites have executed. Zero-step GitHub Actions failures are
+infrastructure/admission evidence only, not test failure evidence.
