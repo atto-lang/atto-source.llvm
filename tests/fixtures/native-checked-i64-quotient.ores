@@ -1,0 +1,15 @@
+// Verified source-language truncating signed division (not '/' floating division).
+// Both runtime operands are signed 64-bit ints; this fixture must exit 42.
+pub fnc main(): int {
+  if (rt div_trunc_checked(7, 3) != 2) { return 1; } fi
+  if (rt div_trunc_checked(-7, 3) != -2) { return 2; } fi
+  if (rt div_trunc_checked(7, -3) != -2) { return 3; } fi
+  if (rt div_trunc_checked(-7, -3) != 2) { return 4; } fi
+  if (rt div_trunc_checked(9223372036854775807, 9223372036854775807) != 1) { return 5; } fi
+  if (rt div_trunc_checked(-9223372036854775808, 1) != -9223372036854775808) { return 6; } fi
+  if (rt div_trunc_checked(-9223372036854775808, -2) != 4611686018427387904) { return 7; } fi
+  if (rt div_trunc_checked(0, -2) != 0) { return 8; } fi
+  if (rt div_trunc_checked(9223372036854775807, 3) != 3074457345618258602) { return 9; } fi
+  if (rt div_trunc_checked(-9223372036854775808, 3) != -3074457345618258602) { return 10; } fi
+  return 42;
+}
