@@ -39,6 +39,7 @@ def main():
     guest_source = root / "tests/fixtures/native-retained-guest-steps.ores"
     harness = root / "tests/native_actor_compiled_guest_ledger_bridge_test.c"
     native = root / "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+    actor_heap = root / "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
     rejected = root / "tests/fixtures/source-actor-suspend-method-reject.ores"
 
     # The old compiler must not turn unsupported guest suspension into a
@@ -85,6 +86,7 @@ def main():
             "-Wno-error=override-module", *options,
             "-I", str(root / "src/main/cpp"),
             "-x", "ir", str(ll), "-x", "c", str(harness), str(native),
+            str(actor_heap),
             "-o", str(binary),
         ])
         env = os.environ.copy()
