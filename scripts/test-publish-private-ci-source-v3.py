@@ -66,6 +66,22 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def test_incident_gate_contract_is_complete_and_unique(self):
+        expected = (
+            (22, 5832921751,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22"),
+            (77, 5904679716,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/77"),
+            (127, 5935338521,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/127"),
+            (212, 6087989978,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/212"),
+        )
+        self.assertEqual(v3.INCIDENT_GATES, expected)
+        self.assertEqual(len({number for number, _id, _url in expected}), len(expected))
+        self.assertEqual(len({_id for _number, _id, _url in expected}), len(expected))
+        self.assertEqual(len({_url for _number, _id, _url in expected}), len(expected))
+
     def test_incident_gate_requires_exact_completed_identity(self):
         def issue(number, issue_id, state="closed", reason="completed", url=None):
             return {
