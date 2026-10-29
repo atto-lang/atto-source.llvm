@@ -5,11 +5,15 @@ This does NOT certify struct or record code generation; each source must fail
 before any LLVM IR is published until tagged lowering is implemented.
 """
 import argparse
+import json
 from pathlib import Path
 import subprocess
 import tempfile
 
-from native_aggregate_negative_receipt import (verify_negative_case, verify_scalar_positive_control, verify_isolated_workspace)
+from native_aggregate_negative_receipt import (
+    complete_negative_receipt, git_blob_sha1, result_digest, sha256_file,
+    verify_negative_case, verify_scalar_positive_control, verify_isolated_workspace,
+)
 
 CASES = (
     # The diagnostic must prove a type rejection, not merely the generic
