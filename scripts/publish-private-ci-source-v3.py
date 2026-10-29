@@ -1010,22 +1010,29 @@ def exact_source_tree(source_pr, source_commit):
     # base64 blob response.
     declared = []
     declared_total = 0
+    seen_paths = set()
     for entry in entries:
         if not isinstance(entry, dict):
             raise Denied("malformed source tree entry")
         kind = entry.get("type")
-        if kind == "tree":
-            continue
         mode = entry.get("mode")
         path = entry.get("path")
-        if kind != "blob" or mode not in ("100644", "100755"):
-            raise Denied("source tree contains symlink/submodule/unsupported mode")
         if not isinstance(path, str) or not path:
             raise Denied("source tree path invalid")
         parts = PurePosixPath(path).parts
-        if (path.startswith("/") or ".." in parts or ".git" in parts
-                or "\\" in path or any(ord(c) < 32 or ord(c) == 127 for c in path)):
-            raise Denied("source tree path unsafe")
+        if (path.startswith("/") or str(PurePosixPath(path)) != path
+                or ".." in parts or any(part.casefold() == ".git" for part in parts)
+                or "\\" in path or any(ord(c) < 32 or ord(c) == 127 for c in path)
+                or path in seen_paths):
+            raise Denied("source tree path unsafe or duplicated")
+        seen_paths.add(path)
+        if kind == "tree":
+            if mode != "040000":
+                raise Denied("source tree entry has invalid directory mode")
+            valid_sha(entry.get("sha"), "source directory SHA")
+            continue
+        if kind != "blob" or mode not in ("100644", "100755"):
+            raise Denied("source tree contains symlink/submodule/unsupported mode")
         sha = valid_sha(entry.get("sha"), "source blob SHA")
         size = entry.get("size")
         if (not isinstance(size, int) or isinstance(size, bool)
