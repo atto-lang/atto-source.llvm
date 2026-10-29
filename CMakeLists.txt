@@ -46,6 +46,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Source-only package-local multi-file namespace identity proof.
+    # This does NOT accept, link or execute Oreslang import ns guest code.
+    add_executable(oreslang-native-namespace-package-index-test
+        tests/native_package_namespace_graph_test.cpp)
+    target_include_directories(oreslang-native-namespace-package-index-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-namespace-package-index-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_namespace_package_identity_source_only
+        COMMAND oreslang-native-namespace-package-index-test)
+    set_tests_properties(native_namespace_package_identity_source_only PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
