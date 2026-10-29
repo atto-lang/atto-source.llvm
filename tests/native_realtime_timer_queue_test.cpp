@@ -45,12 +45,14 @@ int main() {
     assert(q.arm_after(UINT64_MAX, 0, 0, 2, 1, z) == Status::Invalid);
     Queue q2;
     assert(q2.arm_after(0, 0, 9, 1, 1, z) == Status::Ok);
+    const Queue::Handle q2_ticket = z;  // Preserve owner ticket before z is reused.
     assert(q.cancel(z) == Status::Stale);  // Cross-scheduler domain.
     q.close();
     assert(q.outstanding() == 0);
     assert(q.poll_due(UINT64_MAX, expiry) == Status::Closed);
     assert(q.arm_after(UINT64_MAX, 0, 7, 2, 1, z) == Status::Closed);
-    assert(q2.cancel(z) == Status::Ok);
+    assert(q2.cancel(z) == Status::Stale);  // Closed q cleared reused output.
+    assert(q2.cancel(q2_ticket) == Status::Ok);
 
     // STOP of one actor generation retires READY and ARMED reservations,
     // leaving the replacement generation intact. Tie order is stable.
