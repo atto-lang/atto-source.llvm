@@ -91,6 +91,13 @@ class CGLAdmissionTests(unittest.TestCase):
         self.assertEqual(self.inspect(elf(stack_flags=6))["machine"], 62)
         self.assertEqual(self.inspect(elf(load_flags=5))["machine"], 62)
 
+    def test_reject_loads_without_executable_segment(self):
+        for flags in (0, 2, 4, 6):
+            with self.subTest(load_flags=flags):
+                with self.assertRaisesRegex(ValueError, "executable PT_LOAD"):
+                    self.inspect(elf(load_flags=flags))
+        self.assertEqual(self.inspect(elf(load_flags=5))["machine"], 62)
+
     def test_reject_missing_load_and_overlong_load(self):
         for data in (elf(load=False), elf(load_filesz=100000)):
             with self.assertRaises(ValueError):
