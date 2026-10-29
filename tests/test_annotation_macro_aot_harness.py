@@ -5,10 +5,18 @@ import sys
 import tempfile
 import unittest
 
-from annotation_macro_aot_admission_matrix import BASE, invoke
+from annotation_macro_aot_admission_matrix import BASE, invoke, common_annotation_vectors
 
 
 class AnnotationAotHarnessTest(unittest.TestCase):
+    def test_shared_corpus_is_complete_and_closed(self):
+        denied, allowed = common_annotation_vectors()
+        self.assertGreaterEqual(len(denied) + len(allowed), 12)
+        self.assertIn("parity_caller_role", denied)
+        self.assertIn("parity_unknown_annotation", denied)
+        self.assertIn("parity_leading_comment", allowed)
+        self.assertEqual(len(set(denied) & set(allowed)), 0)
+
     def test_rejected_compile_records_sidecar_even_without_stdout(self):
         with tempfile.TemporaryDirectory(prefix="oreslang-aot-harness-test-") as tmp:
             compiler = pathlib.Path(tmp) / "fake_compiler"
