@@ -17,25 +17,24 @@ fnc valid_tensor_span(int backing_elements, int start_element,
   return 1;
 }
 
+// One final result avoids the native guarded-return budget while checking
+// every vector in compiled source. These checks must not be constant host tests.
 pub fnc main(): int {
-  if (valid_tensor_span(8, 0, 8, 1) != 1) { return 1; } fi
-  if (valid_tensor_span(8, 1, 3, 3) != 1) { return 2; } fi
-  if (valid_tensor_span(8, 8, 0, 3) != 1) { return 3; } fi
-  if (valid_tensor_span(0, 0, 0, 1) != 1) { return 4; } fi
-  if (valid_tensor_span(9223372036854775807, 9223372036854775806, 1, 1) != 1) {
-    return 5;
-  } fi
-  if (valid_tensor_span(8, 7, 2, 1) != 0) { return 6; } fi
-  if (valid_tensor_span(8, 8, 1, 1) != 0) { return 7; } fi
-  if (valid_tensor_span(8, 1, 2, 0) != 0) { return 8; } fi
-  if (valid_tensor_span(8, 1, 2, -2) != 0) { return 9; } fi
-  if (valid_tensor_span(9223372036854775807, 1, 9223372036854775807, 2) != 0) {
-    return 10;
-  } fi
-  if (valid_tensor_span(-1, 0, 0, 1) != 0) { return 11; } fi
-  if (valid_tensor_span(8, -1, 1, 1) != 0) { return 12; } fi
-  if (valid_tensor_span(8, 0, -1, 1) != 0) { return 13; } fi
-  if (valid_tensor_span(8, 9, 0, 1) != 0) { return 14; } fi
-  if (valid_tensor_span(8, 0, 3, 4) != 0) { return 15; } fi
-  return 42;
+  return (
+    valid_tensor_span(8, 0, 8, 1) == 1 &&
+    valid_tensor_span(8, 1, 3, 3) == 1 &&
+    valid_tensor_span(8, 8, 0, 3) == 1 &&
+    valid_tensor_span(0, 0, 0, 1) == 1 &&
+    valid_tensor_span(9223372036854775807, 9223372036854775806, 1, 1) == 1 &&
+    valid_tensor_span(8, 7, 2, 1) == 0 &&
+    valid_tensor_span(8, 8, 1, 1) == 0 &&
+    valid_tensor_span(8, 1, 2, 0) == 0 &&
+    valid_tensor_span(8, 1, 2, -2) == 0 &&
+    valid_tensor_span(9223372036854775807, 1, 9223372036854775807, 2) == 0 &&
+    valid_tensor_span(-1, 0, 0, 1) == 0 &&
+    valid_tensor_span(8, -1, 1, 1) == 0 &&
+    valid_tensor_span(8, 0, -1, 1) == 0 &&
+    valid_tensor_span(8, 9, 0, 1) == 0 &&
+    valid_tensor_span(8, 0, 3, 4) == 0
+  ) ? 42 : 1;
 }
