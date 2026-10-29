@@ -392,6 +392,15 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_java_signed_remainder_source_parity
         PROPERTIES TIMEOUT 120)
+    # Rust harness compiles and executes an actual Oreslang fail-closed
+    # scalar projection. No GitHub API access and no source-export permission.
+    add_test(NAME native_private_ci_oreslang_admission_projection
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" private-ci-ores-projection
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/private-ci-admission-projection.ores")
+    set_tests_properties(native_private_ci_oreslang_admission_projection
+        PROPERTIES TIMEOUT 90)
+
     # Exact source alias-extension proof: compiler-owned static receiver dispatch,
     # LLVM IR emission, Clang link and native process execution.
     add_test(NAME native_alias_extension_method_aot
