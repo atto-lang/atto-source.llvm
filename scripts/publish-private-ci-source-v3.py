@@ -939,18 +939,40 @@ def checked_destination(repository, contract):
 
 
 def verify_source_pr(source_pr, source_commit):
+    """Pin the live open source PR and latest independent approval to one SHA."""
+    if type(source_pr) is not int or source_pr <= 0:
+        raise Denied("invalid source PR number")
+    source_commit = valid_sha(source_commit, "invalid source commit")
     pr = gh_api(f"repos/{SOURCE_REPO}/pulls/{source_pr}")
     head = pr.get("head")
     base = pr.get("base")
+    author = pr.get("user")
     if (pr.get("number") != source_pr
             or pr.get("state") != "open"
+            or pr.get("draft") is not False
+            or not isinstance(author, dict)
+            or type(author.get("id")) is not int
+            or author["id"] <= 0
+            or author["id"] == CARRIER_REVIEW_USER_ID
             or not isinstance(head, dict)
             or head.get("sha") != source_commit
             or not isinstance(head.get("repo"), dict)
             or head["repo"].get("full_name") != SOURCE_REPO
+            or head["repo"].get("id") != SOURCE_REPO_ID
             or not isinstance(base, dict)
-            or base.get("ref") != SOURCE_BRANCH):
-        raise Denied("source commit is not exact open PR head against main")
+            or base.get("ref") != SOURCE_BRANCH
+            or not isinstance(base.get("repo"), dict)
+            or base["repo"].get("full_name") != SOURCE_REPO
+            or base["repo"].get("id") != SOURCE_REPO_ID):
+        raise Denied("source commit is not exact independently reviewable open PR head")
+
+    review = _latest_review(
+        SOURCE_REPO, source_pr, CARRIER_REVIEW_USER_ID,
+        CARRIER_REVIEW_LOGIN, "source PR",
+    )
+    if (review.get("state") != "APPROVED"
+            or review.get("commit_id") != source_commit):
+        raise Denied("source PR security owner approval is stale or revoked")
     return SOURCE_REPO_ID
 
 
