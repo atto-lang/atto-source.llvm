@@ -1,6 +1,6 @@
 # Nested Option and Future extraction: proposed cross-backend contract
 
-Status: design and conformance specification; **not an implementation claim**. Existing single-level operations remain unchanged. Both GraalVM and LLVM must pass executable conformance before any new intrinsic is advertised.
+Status: design and conformance specification; **not an implementation claim**. Existing single-level operations remain unchanged. Both GraalVM and LLVM must pass executable conformance before any new intrinsic is advertised.\n\n**Current language decision (2026-10-27): nested `Future` and `Option` types are never implicitly canonicalized or adopted.** This document supersedes older recursive-Future-adoption proposals: ordinary `await` and `unwrap` remove exactly one layer, while any `flatten` operation is explicit and removes exactly one statically proven layer.
 
 ## Semantics and types
 
