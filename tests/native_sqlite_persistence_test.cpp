@@ -40,7 +40,11 @@ int main(){
         assert(conflict[0].status==Status::OperationConflict);
         auto journal=store.commit({write("a999","journal",2,1,WriteKind::Event,65)});
         assert(journal[0].status==Status::Committed&&journal[0].durable());
-        auto x=store.load({"tenant-a","a999","main"});
+        bool stale_read_denied=false;
+        try { (void)store.load_fenced({"tenant-a","a999","main"},1); }
+        catch(const std::logic_error&){stale_read_denied=true;}
+        assert(stale_read_denied && "old activation must not restore after fencing");
+        auto x=store.load_fenced({"tenant-a","a999","main"},2);
         assert(x.version==2&&x.snapshot_version==1&&x.events.size()==1&&x.events[0].payload[0]==65);
     }
     { // Child's completed SQLite commit survives abrupt _exit; unfinished queued write does not.
