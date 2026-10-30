@@ -2325,11 +2325,41 @@ private:
                     } else if (accept("Future")) {
                         require("<");
                         declared_type.kind = SourceType::Kind::Future;
+                        if (accept("Future")) {
+                            require("<");
+                            if (accept("int")) {
+                                // The native scalar backend has no general nested
+                                // Future representation yet, but the source type is
+                                // still semantically Future<Future<int>>. Never
+                                // canonicalize it to Future<int> as a parser side
+                                // effect or host-runtime convenience.
+                            } else {
+                                (void)identifier();
+                            }
+                            require(">");
+                            require(">");
+                            fail("nested Future remains nested; implicit Future flatten is forbidden; native nested Future continuation lowering is unavailable");
+                        }
                         if (accept("int")) declared_type.argument = "int";
                         else declared_type.argument = identifier();
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        if (token_.text == "Option") {
+                            Lexer look = lexer_;
+                            const Token open = look.next();
+                            const Token nested = look.next();
+                            if (open.text == "<" && nested.text == "Option") {
+                                require("Option");
+                                require("<");
+                                require("Option");
+                                require("<");
+                                if (!accept("int")) (void)identifier();
+                                require(">");
+                                require(">");
+                                fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
+                            }
+                        }
                         if (token_.text == "Entry")
                             reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)
