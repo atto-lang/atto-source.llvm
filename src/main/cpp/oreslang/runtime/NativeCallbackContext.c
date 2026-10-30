@@ -17,6 +17,12 @@ static int boundary_valid(OresNativeCallbackBoundary boundary) {
         && boundary <= ORES_CALLBACK_BOUNDARY_SPAWN;
 }
 
+static int context_zero(const OresNativeCallbackContext* context) {
+    if (!context) return 0;
+    static const OresNativeCallbackContext zero = {0};
+    return memcmp(context, &zero, sizeof(*context)) == 0;
+}
+
 int ores_native_callback_context_capture(
         OresNativeExecutionContextStore* executions,
         OresNativeContinuationStore* continuations,
@@ -25,7 +31,8 @@ int ores_native_callback_context_capture(
         OresNativeCallbackBoundary boundary,
         OresNativeCallbackContext* out) {
     if (!executions || !continuations || !out || !boundary_valid(boundary)
-            || !ores_native_store_handle_valid(source_execution))
+            || !ores_native_store_handle_valid(source_execution)
+            || !context_zero(out))
         return 0;
 
     OresNativeExecutionContext execution = {0};
@@ -70,8 +77,10 @@ int ores_native_callback_context_snapshot(
         OresNativeContinuationStore* continuations,
         const OresNativeCallbackContext* context,
         OresNativeCallbackProvenance* out) {
-    if (!executions || !continuations || !context || !out
-            || !boundary_valid((OresNativeCallbackBoundary)context->boundary)
+    if (!executions || !continuations || !context || !out)
+        return 0;
+    memset(out, 0, sizeof(*out));
+    if (!boundary_valid((OresNativeCallbackBoundary)context->boundary)
             || context->flags != 0
             || !ores_native_store_handle_valid(context->source_execution))
         return 0;
@@ -107,12 +116,7 @@ int ores_native_callback_context_release(
         OresNativeCallbackContext* context) {
     if (!executions || !continuations || !context) return 0;
     if (!ores_native_store_handle_valid(context->source_execution)) {
-        const int empty = context->source_execution.slot == 0
-            && context->source_execution.generation == 0
-            && context->source_continuation.slot == 0
-            && context->source_continuation.generation == 0;
-        if (empty) return 1;
-        return 0;
+        return context_zero(context);
     }
 
     const OresNativeExecutionHandle execution = context->source_execution;
