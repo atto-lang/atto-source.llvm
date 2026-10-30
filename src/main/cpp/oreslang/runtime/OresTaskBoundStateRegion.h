@@ -275,6 +275,25 @@ static inline ores_std_sync_result ores_state_region_release(
     return out;
 }
 
+/*
+ * Trusted lifetime owner query. GRANTED means the exact ticket no longer has
+ * a live binding and therefore cannot access the state region. EXECUTING means
+ * some admitted/queued/running binding still exists. A pin created from a real
+ * request ticket may use this to gate actor-resource-loan release.
+ */
+static inline ores_std_sync_code ores_state_region_ticket_retired(
+        ores_task_bound_state_region* region,
+        ores_std_ticket ticket) {
+    if (!ores_state_region_valid(region) || !ticket.sequence ||
+            ticket.scope != &region->gate ||
+            ticket.scope_generation != region->generation)
+        return ORES_STD_SYNC_INVALID;
+    if (!ores_state_region_enter_metadata(region)) return ORES_STD_SYNC_RETRY;
+    const bool live = ores_state_region_find_binding(region, ticket) != NULL;
+    ores_state_region_leave_metadata(region);
+    return live ? ORES_STD_SYNC_EXECUTING : ORES_STD_SYNC_GRANTED;
+}
+
 static inline ores_std_sync_code ores_state_region_ready_to_suspend(
         ores_task_bound_state_region* region,
         ores_state_task_identity owner,
