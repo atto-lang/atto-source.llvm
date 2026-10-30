@@ -210,36 +210,57 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
                 value.possible = static_cast<ValueMask>(
                     (value.possible & static_cast<ValueMask>(~kOwned)) | kDropped);
             return;
-        case Operation::Kind::BorrowShared:
+        case Operation::Kind::BorrowShared: {
             // The zero token denotes a pre-existing entry loan. A new CFG
             // borrow must never impersonate that identity.
             if (op.loan_id == 0) violation(op.place, "reserved entry loan identity");
             if (!op.loan_id && !site_id)
                 violation(op.place, "borrow requires compiler site provenance");
+            if (op.region_provenance &&
+                    !valid_region_loan_provenance(*op.region_provenance))
+                violation(op.place, "invalid region/task loan provenance");
             require_owned(op.place, value);
             if (value.exclusive_loan) violation(op.place, "shared borrow overlaps mutable loan");
             if (value.shared_loans == 65535) violation(op.place, "shared loan count exceeds bound");
-            if (!value.shared_loan_ids.insert(op.loan_id.value_or(site_id)).second)
+            const auto token = op.loan_id.value_or(site_id);
+            if (!value.shared_loan_ids.insert(token).second)
                 violation(op.place, "shared loan identity already live");
+            if (op.region_provenance)
+                value.shared_loan_regions.emplace(token, *op.region_provenance);
             ++value.shared_loans;
             return;
+        }
         case Operation::Kind::BorrowExclusive:
             if (op.loan_id == 0) violation(op.place, "reserved entry loan identity");
             if (!op.loan_id && !site_id)
                 violation(op.place, "borrow requires compiler site provenance");
+            if (op.region_provenance &&
+                    !valid_region_loan_provenance(*op.region_provenance))
+                violation(op.place, "invalid region/task loan provenance");
             require_owned(op.place, value);
             if (value.exclusive_loan || value.shared_loans)
                 violation(op.place, "overlapping exclusive loans");
             value.exclusive_loan = true;
             value.exclusive_loan_id = op.loan_id.value_or(site_id);
+            value.exclusive_loan_region = op.region_provenance;
             return;
         case Operation::Kind::ReleaseShared: {
             if (!value.shared_loans) violation(op.place, "unmatched shared loan release");
             if (!op.loan_id && value.shared_loan_ids.size() != 1)
                 violation(op.place, "shared loan release requires unambiguous provenance");
             const auto to_release = op.loan_id.value_or(*value.shared_loan_ids.begin());
-            if (!value.shared_loan_ids.erase(to_release))
+            if (!value.shared_loan_ids.count(to_release))
                 violation(op.place, "shared loan release has foreign provenance");
+            const auto region = value.shared_loan_regions.find(to_release);
+            if (region != value.shared_loan_regions.end()) {
+                if (!op.region_provenance ||
+                        *op.region_provenance != region->second)
+                    violation(op.place, "shared region loan release has foreign task provenance");
+                value.shared_loan_regions.erase(region);
+            } else if (op.region_provenance) {
+                violation(op.place, "local shared loan cannot be released as region loan");
+            }
+            value.shared_loan_ids.erase(to_release);
             --value.shared_loans;
             return;
         }
@@ -247,8 +268,16 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             if (!value.exclusive_loan) violation(op.place, "unmatched exclusive loan release");
             if (op.loan_id && op.loan_id != value.exclusive_loan_id)
                 violation(op.place, "exclusive loan release has foreign provenance");
+            if (value.exclusive_loan_region) {
+                if (!op.region_provenance ||
+                        *op.region_provenance != *value.exclusive_loan_region)
+                    violation(op.place, "exclusive region loan release has foreign task provenance");
+            } else if (op.region_provenance) {
+                violation(op.place, "local exclusive loan cannot be released as region loan");
+            }
             value.exclusive_loan = false;
             value.exclusive_loan_id.reset();
+            value.exclusive_loan_region.reset();
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
@@ -270,7 +299,9 @@ inline bool join_into(State& target, const State& incoming) {
         if (pair.second.shared_loans != other->second.shared_loans ||
                 pair.second.exclusive_loan != other->second.exclusive_loan ||
                 pair.second.shared_loan_ids != other->second.shared_loan_ids ||
-                pair.second.exclusive_loan_id != other->second.exclusive_loan_id)
+                pair.second.exclusive_loan_id != other->second.exclusive_loan_id ||
+                pair.second.shared_loan_regions != other->second.shared_loan_regions ||
+                pair.second.exclusive_loan_region != other->second.exclusive_loan_region)
             violation(pair.first, "different live loan provenance at CFG join");
         ValueMask merged = static_cast<ValueMask>(pair.second.possible | other->second.possible);
         if (merged != pair.second.possible) {
@@ -340,6 +371,16 @@ inline Analysis verify(const Graph& graph) {
         if (place.shared_loans != place.shared_loan_ids.size() ||
                 place.exclusive_loan != place.exclusive_loan_id.has_value())
             violation(name, "unproven initial loan identity");
+        for (const auto& region : place.shared_loan_regions) {
+            if (!place.shared_loan_ids.count(region.first) ||
+                    !valid_region_loan_provenance(region.second))
+                violation(name, "unproven initial shared region loan provenance");
+        }
+        if (place.exclusive_loan_region) {
+            if (!place.exclusive_loan ||
+                    !valid_region_loan_provenance(*place.exclusive_loan_region))
+                violation(name, "unproven initial exclusive region loan provenance");
+        }
     }
     // Entry identities are just as authoritative as lexical CFG borrow
     // sites. A borrowed parameter and a local borrow must not reuse an ID
