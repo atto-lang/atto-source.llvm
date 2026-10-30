@@ -195,6 +195,10 @@ class PolicyAuditTest(unittest.TestCase):
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
                 audit.check_live_metadata(r, b, p)
 
+    def test_actual_checked_in_policy_files_pass_structure_gate(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual((), audit.check_policy_files(root))
+
     def test_source_codeowner_tail_matches_publisher_and_denies_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
