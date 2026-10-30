@@ -22,7 +22,7 @@ Environment: Debian GCC 14.2.0, Swift LLVM Clang/Clang++ 17.0.0, hosted x86-64 L
 | Positive 1: exact .ores -> header source compiler -> textual LLVM IR -> Clang native -> process | PASS, exit `42` |
 | Positive 2: exact .ores -> header source compiler -> textual LLVM IR -> Clang native -> process | PASS, exit `42` |
 | Negative runtime: exact .ores -> compiler -> Clang native -> out-of-bounds read | PASS, `llvm.trap`, exit `132` (illegal instruction on tested x86-64) |
-| 11 unsupported .ores source-negative cases (same programs as checked-in Python regression) | PASS, 11/11 specific expected rejections |
+| 18 unsupported .ores source-negative cases (same programs as checked-in Python regression) | PASS, 18/18 specific expected rejections |
 | GCC `-fsanitize=address,undefined -fno-omit-frame-pointer` header driver on both positive source programs | PASS, no reported ASan/UBSan errors |
 | Clang++ driver -> Clang generated LLVM IR -> both positive native guest binaries | PASS, exit `42` each |
 | Clang 17 -O1 with ASan/UBSan instrumentation of both generated LLVM-IR guest binaries | PASS, both exit `42`, no sanitizer reports |
