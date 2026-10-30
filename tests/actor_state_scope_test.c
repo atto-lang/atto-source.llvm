@@ -11,7 +11,11 @@ int main(void) {
     uint64_t outer = 0, inner = 0, other = 0;
     require(ores_actor_state_enter_continuation(&a, 18, 101, &outer) == ORES_ACTOR_STATE_WRONG_OWNER);
     require(ores_actor_state_enter_continuation(&a, 17, 0, &outer) == ORES_ACTOR_STATE_WRONG_OWNER);
+    require(ores_actor_state_ready_to_suspend(&a, 0) == ORES_ACTOR_STATE_WRONG_OWNER);
+    require(ores_actor_state_ready_to_suspend(&a, 18) == ORES_ACTOR_STATE_WRONG_OWNER);
+    require(ores_actor_state_ready_to_suspend(&a, 17) == ORES_ACTOR_STATE_OK);
     require(ores_actor_state_enter_continuation(&a, 17, 101, &outer) == ORES_ACTOR_STATE_OK);
+    require(ores_actor_state_ready_to_suspend(&a, 17) == ORES_ACTOR_STATE_BUSY_LOAN);
     require(ores_actor_state_enter_continuation(&a, 17, 101, &inner) == ORES_ACTOR_STATE_OK);
     require(inner != outer && a.depth == 2);
     require(ores_actor_state_enter_continuation(&a, 17, 202, &other) == ORES_ACTOR_STATE_REENTRANT);
@@ -26,7 +30,10 @@ int main(void) {
     require(ores_actor_state_check_continuation(&a, 17, 101, outer) == ORES_ACTOR_STATE_OK);
     require(ores_actor_state_leave_continuation(&a, 17, 101, outer) == ORES_ACTOR_STATE_OK);
     require(!a.active && a.depth == 0);
+    require(ores_actor_state_ready_to_suspend(&a, 17) == ORES_ACTOR_STATE_OK);
     require(ores_actor_state_leave_continuation(&a, 17, 101, outer) == ORES_ACTOR_STATE_STALE);
+    // This host-only state fence does not mint/validate the scheduler lane;
+    // a suspended actor's later callback must still be rejected by the ledger.
     require(ores_actor_state_enter_continuation(&a, 17, 202, &other) == ORES_ACTOR_STATE_OK);
     require(other != outer && other != inner);
     require(ores_actor_state_leave_continuation(&a, 17, 202, other) == ORES_ACTOR_STATE_OK);
@@ -41,6 +48,7 @@ int main(void) {
     for (uint32_t i = ORES_ACTOR_STATE_MAX_NESTING; i > 0; --i)
         require(ores_actor_state_leave_continuation(&a, 17, 101, tokens[i - 1]) == ORES_ACTOR_STATE_OK);
     require(a.depth == 0 && !a.active);
+    require(ores_actor_state_ready_to_suspend(&a, 17) == ORES_ACTOR_STATE_OK);
 
     a.generation = UINT64_MAX;
     require(ores_actor_state_enter_continuation(&a, 17, 101, &other) == ORES_ACTOR_STATE_LIMIT);
