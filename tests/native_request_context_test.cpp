@@ -210,6 +210,7 @@ struct Suite {
             const auto token=pins[i]->token();
             CHECK(exchanges[i].complete(token));
             CHECK(exchanges[i].reclaim(token));
+            CHECK(!exchanges[i].enqueue(actors[i])); // physical pin still active
             if(!revoke_on_turn){
                 CHECK(contexts.close(requests[i],actors[i]));
                 CHECK(buffers.close(bodies[i],i+1));
