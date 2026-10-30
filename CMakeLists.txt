@@ -46,6 +46,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only receiver-erased method selector. No LLVM guest execution is
+    # implied by this standalone C++ contract test.
+    add_executable(oreslang-native-receiver-slot-test
+        tests/native_receiver_slot_test.cpp)
+    target_include_directories(oreslang-native-receiver-slot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-receiver-slot-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_receiver_erased_slot_host_contract
+        COMMAND oreslang-native-receiver-slot-test)
+    set_tests_properties(native_receiver_erased_slot_host_contract PROPERTIES TIMEOUT 10)
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
