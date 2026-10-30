@@ -29,6 +29,8 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  auto unbound = request("native-unbound");unbound.tenant_id="unbound-tenant";
+  assert(!db.claim_once(unbound));
   auto stale = request("native-stale");stale.generation=8;
   assert(!db.claim_once(stale));
   auto expired = request("native-expired");expired.expires_at_ms=1;
