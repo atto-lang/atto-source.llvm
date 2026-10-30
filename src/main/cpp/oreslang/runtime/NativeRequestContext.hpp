@@ -5,6 +5,7 @@
 // install the temporary carrier TLS lookup hint (not an authorization token).
 #include "oreslang/runtime/NativeHttpExchange.hpp"
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -15,6 +16,14 @@
 #include <utility>
 
 namespace oreslang::runtime {
+// Per-process monotonic identity. Independent context registries must never
+// confuse identical compact slot/generation values across registry boundaries.
+inline std::uint64_t next_request_registry_id() noexcept {
+    static std::atomic<std::uint64_t> next{1};
+    const auto n=next.fetch_add(1,std::memory_order_relaxed);
+    if(!n || n==UINT64_MAX)std::terminate();
+    return n;
+}
 template <std::size_t Capacity>
 class NativeRequestContext final {
     static_assert(Capacity > 0 && Capacity <= UINT32_MAX, "bounded context capacity");
@@ -42,6 +51,7 @@ private:
         Frame* previous;
     };
     inline static thread_local Frame* current_frame_ = nullptr;
+    const std::uint64_t registry_id_ = next_request_registry_id();
     mutable std::mutex mutex_;
     std::array<Slot, Capacity> slots_{};
     static bool same(OresNativeActorRef a, OresNativeActorRef b) noexcept {
@@ -119,13 +129,15 @@ public:
             const NativeHttpExchange& exchange, NativeHttpExchange::Token token) {
         Frame* f=current_frame_;
         if (!f || f->table!=this || !same(f->owner,token.actor)
-                || f->handle.value!=token.request_context || !token.generation
+                || f->handle.value!=token.request_context
+                || token.request_registry!=registry_id_ || !token.generation
                 || exchange.phase()!=NativeHttpExchange::Phase::actor)
             return std::nullopt;
         const auto observed=exchange.token();
         if(observed.generation!=token.generation
                 || !same(observed.actor,token.actor)
-                || observed.request_context!=token.request_context)return std::nullopt;
+                || observed.request_context!=token.request_context
+                || observed.request_registry!=registry_id_)return std::nullopt;
         auto pin=retain(f->handle,f->owner);
         if(!pin)return std::nullopt;
         return Suspension(f->handle,f->owner,token.generation,std::move(*pin));
@@ -135,11 +147,13 @@ public:
             NativeHttpExchange::Token token, const Suspension& suspended, Fn&& fn) {
         if(!suspended.pin || suspended.context.value!=suspended.pin.handle().value
                 || suspended.context.value!=token.request_context
+                || token.request_registry!=registry_id_
                 || suspended.exchange_generation!=token.generation
                 || !same(suspended.owner,token.actor))return false;
         return with_admitted_turn(exchange,token,suspended.context,suspended.owner,
                                   std::forward<Fn>(fn));
     }
+    std::uint64_t registry_id() const noexcept {return registry_id_;}
     NativeRequestContext()=default;
     NativeRequestContext(const NativeRequestContext&)=delete;
     NativeRequestContext& operator=(const NativeRequestContext&)=delete;
@@ -207,10 +221,12 @@ public:
             "carrier binding must not return an escaped resource or awaitable");
         if(!token.generation || !valid(owner) || !same(token.actor,owner)
                 || token.request_context!=handle.value
+                || token.request_registry!=registry_id_
                 || exchange.phase()!=NativeHttpExchange::Phase::actor)return false;
         const auto observed=exchange.token();
         if(observed.generation!=token.generation || !same(observed.actor,owner)
-                || observed.request_context!=handle.value)return false;
+                || observed.request_context!=handle.value
+                || observed.request_registry!=registry_id_)return false;
         auto lease=retain(handle,owner);
         if(!lease)return false;
         // Store lease prevents reuse; close revokes current() immediately.
