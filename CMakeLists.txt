@@ -2224,6 +2224,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_execution_continuation_aosoa_trace
         PROPERTIES TIMEOUT 30)
 
+    # Host callback provenance pins logical ancestry across foreign completion
+    # carriers without creating a guest execution/allocation capability.
+    add_executable(oreslang-native-callback-context-test
+        tests/native_callback_context_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeCallbackContext.c)
+    target_include_directories(oreslang-native-callback-context-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-callback-context-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-callback-context-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_callback_context_provenance
+        COMMAND oreslang-native-callback-context-test)
+    set_tests_properties(native_callback_context_provenance
+        PROPERTIES TIMEOUT 30)
+
     # Stop one child without waiting for an unrelated actor's busy turn.
     add_executable(oreslang-native-child-wait-test
         tests/native_actor_group_wait_done_test.c
