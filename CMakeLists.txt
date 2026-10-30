@@ -1600,6 +1600,24 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
     if(ORE_CLANG)
+        # Compile the ACTUAL isolated actor source (no guest main), link its
+        # LLVM-generated constructor/handler with an actor-owned heap, assert
+        # exact state results over two separate trusted turns. Source scheduler
+        # E2E remains a separate integration gate; suspension stays rejected.
+        add_test(NAME native_sealed_state_compiled_guest_release
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_isolated_sealed_state_compiled_guest.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_sealed_state_compiled_guest_release PROPERTIES TIMEOUT 180)
+        add_test(NAME native_sealed_state_compiled_guest_sanitized
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_isolated_sealed_state_compiled_guest.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
+        set_tests_properties(native_sealed_state_compiled_guest_sanitized PROPERTIES TIMEOUT 180)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
