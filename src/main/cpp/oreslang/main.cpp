@@ -542,6 +542,9 @@ int main(int argc, char** argv) {
                         start.actor_sends.size() + start.actor_stops.size())
                     throw std::runtime_error("cortex-m actor action plan inconsistent");
                 for (const auto& actor : ast.actors) {
+                    if (actor.has_state_schema)
+                        throw std::runtime_error(
+                            "native sealed actor-state guest v1 requires host scheduler; wasm32/cortex-m target lowering is unverified");
                     if (actor.fields.empty() || actor.fields.size() > 8 ||
                         actor.on_message.actor_field_writes.size() > 16 ||
                         !actor.on_message.result)
