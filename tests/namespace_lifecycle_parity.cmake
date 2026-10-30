@@ -31,6 +31,20 @@ expect_rejection(lifecycle-init
   "define module App as pub fnc init(): int { return 1; } pub fnc main(): int { return 0; } end\n"
   "once-only reachable initialization lowering")
 
+
+# A private init is still a once-only lifecycle hook, not an ordinary helper.
+expect_rejection(lifecycle-private-init
+  "define module App as fnc init(): int { return 1; } pub fnc main(): int { return 0; } end\n"
+  "once-only reachable initialization lowering")
+
+# Every reachable provider must be checked before the root's no-import/linked
+# compiler paths can emit IR. The imported module's init must fail closed.
+file(WRITE "${WORK_DIR}/provider-with-init.ores"
+  "define module Provider as pub fnc init(): int { return 1; } end\n")
+expect_rejection(lifecycle-imported-init
+  "import module Provider from \"provider-with-init.ores\";\ndefine module App as pub fnc main(): int { return 0; } end\n"
+  "once-only reachable initialization lowering")
+
 # A source file in the same directory but not reached by an import must
 # not enter the native compile graph or run an init hook.
 file(WRITE "${WORK_DIR}/unrelated.ores"
