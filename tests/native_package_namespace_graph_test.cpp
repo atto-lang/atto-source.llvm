@@ -571,6 +571,38 @@ int main() {
     REQUIRE(link_package_namespaces(another, pins, {request})
                 .namespaces.at({"foo@1", "a"}).exports.size() == 4);
 
+    // A shallow, branching tree can stay within the depth cap while
+    // exceeding the total node budget. Reject the larger graph before it
+    // can turn namespace admission into an unbounded CPU traversal.
+    const auto scalar_wide_tree = [](std::size_t expanded_nodes) {
+        auto root = std::make_unique<Expression>();
+        root->kind = Expression::Kind::Integer;
+        std::vector<Expression*> pending{root.get()};
+        for (std::size_t i = 0; i < expanded_nodes; ++i) {
+            Expression* node = pending[i];
+            node->kind = Expression::Kind::Add;
+            node->left = std::make_unique<Expression>();
+            node->right = std::make_unique<Expression>();
+            node->left->kind = Expression::Kind::Integer;
+            node->right->kind = Expression::Kind::Integer;
+            pending.push_back(node->left.get());
+            pending.push_back(node->right.get());
+        }
+        return root;
+    };
+    // Full binary trees have odd node counts: 511 expansions => 1023
+    // nodes (admitted); 512 expansions => 1025 (rejected at budget 1024).
+    Program bounded_nodes = make_source("a", "bounded_nodes");
+    bounded_nodes.functions.front().result =
+        scalar_wide_tree(kMaxNamespaceScalarExpressionNodes / 2 - 1);
+    another = units;
+    another.push_back({"foo/bounded_nodes", "foo@1", &bounded_nodes});
+    REQUIRE(link_package_namespaces(another, pins, {request})
+                .namespaces.at({"foo@1", "a"}).exports.size() == 4);
+    reject_signature("scalar_expression_excess_nodes", [&](Function& fn) {
+        fn.result = scalar_wide_tree(kMaxNamespaceScalarExpressionNodes / 2);
+    }, "body expression");
+
     // 12. Lifecycle suspension, task/Future pipelines and continuation
     // metadata are not ordinary synchronous scalar namespace exports.
     reject_signature("ready_await_export", [](Function& fn) {

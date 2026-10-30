@@ -80,10 +80,14 @@ inline bool valid_flat_namespace_name(const std::string& name) {
 // Bounded admission prevents a malformed/host-injected scalar AST from
 // exhausting the linker stack before a verified native lowering exists.
 inline constexpr std::size_t kMaxNamespaceScalarExpressionDepth = 128;
+// Depth alone does not bound a shallow branching AST's validation cost.
+inline constexpr std::size_t kMaxNamespaceScalarExpressionNodes = 1024;
 inline bool namespace_pure_scalar_expression_at_depth(
-        const Expression* expression, std::size_t depth) {
+        const Expression* expression, std::size_t depth,
+        std::size_t& remaining_nodes) {
     if (!expression) return true;
-    if (depth >= kMaxNamespaceScalarExpressionDepth) return false;
+    if (depth >= kMaxNamespaceScalarExpressionDepth || remaining_nodes == 0) return false;
+    --remaining_nodes;
     // A scalar tag is not proof that a forged/unresolved AST is well formed.
     // Require complete operands, and refuse surplus children which could hide
     // unvalidated evaluation paths. The legacy equality-ternary representation
@@ -188,17 +192,18 @@ inline bool namespace_pure_scalar_expression_at_depth(
             || !expression->arguments.empty() || !expression->argument_names.empty()
             || !expression->type_arguments.empty() || expression->type_arguments_present)
         return false;
-    return namespace_pure_scalar_expression_at_depth(expression->left.get(), depth + 1)
-        && namespace_pure_scalar_expression_at_depth(expression->right.get(), depth + 1)
-        && namespace_pure_scalar_expression_at_depth(expression->condition.get(), depth + 1)
-        && namespace_pure_scalar_expression_at_depth(expression->condition_lhs.get(), depth + 1)
-        && namespace_pure_scalar_expression_at_depth(expression->condition_rhs.get(), depth + 1)
-        && namespace_pure_scalar_expression_at_depth(expression->when_true.get(), depth + 1)
-        && namespace_pure_scalar_expression_at_depth(expression->when_false.get(), depth + 1);
+    return namespace_pure_scalar_expression_at_depth(expression->left.get(), depth + 1, remaining_nodes)
+        && namespace_pure_scalar_expression_at_depth(expression->right.get(), depth + 1, remaining_nodes)
+        && namespace_pure_scalar_expression_at_depth(expression->condition.get(), depth + 1, remaining_nodes)
+        && namespace_pure_scalar_expression_at_depth(expression->condition_lhs.get(), depth + 1, remaining_nodes)
+        && namespace_pure_scalar_expression_at_depth(expression->condition_rhs.get(), depth + 1, remaining_nodes)
+        && namespace_pure_scalar_expression_at_depth(expression->when_true.get(), depth + 1, remaining_nodes)
+        && namespace_pure_scalar_expression_at_depth(expression->when_false.get(), depth + 1, remaining_nodes);
 }
 
 inline bool namespace_pure_scalar_expression(const Expression* expression) {
-    return namespace_pure_scalar_expression_at_depth(expression, 0);
+    std::size_t remaining_nodes = kMaxNamespaceScalarExpressionNodes;
+    return namespace_pure_scalar_expression_at_depth(expression, 0, remaining_nodes);
 }
 
 // A scalar Variable is not a verified lexical binding: each reference must
