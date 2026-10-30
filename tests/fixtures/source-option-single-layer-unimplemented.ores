@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Option<int> maybe = 42;
+  return 42;
+}
