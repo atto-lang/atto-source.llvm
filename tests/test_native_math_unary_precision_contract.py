@@ -57,5 +57,29 @@ class NativeMathUnaryPrecisionContractTest(unittest.TestCase):
             self.assertEqual(case["expect"], str(result), case["id"])
 
 
+
+class BigIntExactReferenceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = ROOT / "contracts/v1/bigint-exact-v1.json"
+        raw = path.read_bytes()
+        assert git_blob(raw) == "b49c7a7d9395f7298e5534c4a6e5b90d4a2a518c"
+        cls.contract = json.loads(raw)
+
+    def test_div_rem_contract(self):
+        self.assertEqual("oreslang.bigint-exact.v1", self.contract["contract"])
+        for item in self.contract["division_cases"]:
+            a, b = int(item["left"]), int(item["right"])
+            if item.get("error"):
+                self.assertEqual(0, b)
+                continue
+            q = abs(a) // abs(b)
+            if (a < 0) != (b < 0):
+                q = -q
+            r = a - q * b
+            self.assertEqual(item["quot"], str(q), item["id"])
+            self.assertEqual(item["rem"], str(r), item["id"])
+            self.assertEqual(a, q * b + r, item["id"])
+
 if __name__ == "__main__":
     unittest.main()
