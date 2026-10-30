@@ -45,9 +45,10 @@ int main() {
     // A valid critical callback does not prove trusted scheduler ownership.
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::ScopeDenied);
+    c.callback_critical = false;
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::MissingCallbackCritical);
     c.callback_critical = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
-            == CriticalStateAdmission::ScopeDenied);
     CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::Accept);
 
