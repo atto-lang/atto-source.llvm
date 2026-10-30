@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-spec = importlib.util.spec_from_file_location("checker", ROOT / "check_actions_execution_evidence.py")
+spec = importlib.util.spec_from_file_location("checker", ROOT / "check-actions-execution-evidence.py")
 checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
 SHA = "a" * 40
@@ -177,7 +177,7 @@ class ExecutionEvidenceTests(unittest.TestCase):
             rp, jp = Path(d) / "run.json", Path(d) / "jobs.json"
             rp.write_text(json.dumps(run))
             jp.write_text(json.dumps(jobs))
-            cmd = [sys.executable, str(ROOT / "check_actions_execution_evidence.py"),
+            cmd = [sys.executable, str(ROOT / "check-actions-execution-evidence.py"),
                    "--run-json", str(rp), "--jobs-json", str(jp),
                    "--sha", SHA, "--run-id", str(RUN_ID), "--attempt", "1",
                    "--expected-jobs", "1", "--required-step", STEP]
