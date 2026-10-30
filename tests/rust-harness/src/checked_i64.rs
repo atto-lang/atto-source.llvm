@@ -22,6 +22,49 @@ fn expected_llvm_trap_signal() -> Result<i32, String> {
     ))
 }
 
+// Fail closed if a compiled guest hangs. The guest exit status is the entire
+// checked-i64 oracle; inherited pipes are unnecessary and could otherwise
+// deadlock when a broken guest writes more than the pipe buffer.
+#[cfg(unix)]
+fn run_bounded_guest(binary: &Path, cwd: &Path) -> Result<std::process::ExitStatus, String> {
+    use std::{
+        process::{Command, Stdio},
+        thread,
+        time::{Duration, Instant},
+    };
+    const TIMEOUT: Duration = Duration::from_secs(30);
+    let mut child = Command::new(binary)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn native guest {}: {e}", binary.display()))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if started.elapsed() < TIMEOUT => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait(); // reap the child before failing the test
+                return Err(format!(
+                    "native guest {} exceeded {}s timeout",
+                    binary.display(),
+                    TIMEOUT.as_secs()
+                ));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("poll native guest {}: {e}", binary.display()));
+            }
+        }
+    }
+}
+
 /// Execute compiler-produced native code, including genuine signal traps.
 /// This is not a host arithmetic simulation or a typed actor-error contract.
 #[cfg(unix)]
@@ -32,7 +75,7 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         include_str!("../../fixtures/numeric-v1/math-i64-abs-min.ores");
     const SHARED_MATH_NEG_MIN: &str =
         include_str!("../../fixtures/numeric-v1/math-i64-neg-min.ores");
-    use std::{ffi::OsStr, fs, os::unix::process::ExitStatusExt, process::Command};
+    use std::{ffi::OsStr, fs, os::unix::process::ExitStatusExt};
     let temp = TempDir::new("ores-checked-i64-").map_err(|e| e.to_string())?;
     fs::write(temp.path.join("math-shadow.ores"),
         "define module Math as pub fnc abs(int value):int{return 7;} end\n")
@@ -119,17 +162,17 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             let linked = run(clang, [OsStr::new("-x"), OsStr::new("ir"), OsStr::new(optimization),
                 ir.as_os_str(), OsStr::new("-o"), binary.as_os_str()])?;
             require(linked.status.success(), format!("{name}: {}", stderr(&linked)))?;
-            let observed = Command::new(&binary).current_dir(&temp.path).output()
-                .map_err(|e| e.to_string())?;
+            let observed = run_bounded_guest(&binary, &temp.path)
+                .map_err(|e| format!("{name} {optimization}: {e}"))?;
             if let Some(expected) = expected {
-                require(observed.status.code() == Some(expected),
-                    format!("{name} {optimization}: expected {expected}, got {:?}", observed.status))?;
+                require(observed.code() == Some(expected),
+                    format!("{name} {optimization}: expected {expected}, got {:?}", observed))?;
             } else {
                 // Match the target's precise LLVM trap signal; normal exits,
                 // unrelated fatal signals, and unqualified architectures fail.
                 let signal = expected_llvm_trap_signal()?;
-                require(observed.status.signal() == Some(signal),
-                    format!("{name} {optimization}: expected trap signal {signal}, got {:?}", observed.status))?;
+                require(observed.signal() == Some(signal),
+                    format!("{name} {optimization}: expected trap signal {signal}, got {:?}", observed))?;
             }
             executions += 1;
         }
