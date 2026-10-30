@@ -145,6 +145,47 @@ public:
         return checked_add(segments_.at(location.segment).base, location.byte_offset);
     }
 
+    // Checked, non-throwing lookup for admitted RT kernels. The plan and its
+    // metadata must be constructed before the critical execution window.
+    // It returns an OFFSET, never a pointer or an authority to cross actors.
+    // No vectors grow and no exception path is entered on invalid indices.
+    bool try_absolute_address(std::uint64_t row,
+                              std::uint32_t field,
+                              std::uint64_t* out) const noexcept {
+        if (!out || row >= rows_ || field >= fields_.size()) return false;
+        const auto& loc = locations_[field];
+        if (loc.segment >= segments_.size()) return false;
+        const auto& segment = segments_[loc.segment];
+        constexpr auto max = std::numeric_limits<std::uint64_t>::max();
+        const auto add = [](std::uint64_t a, std::uint64_t b,
+                            std::uint64_t* result) noexcept {
+            if (b > std::numeric_limits<std::uint64_t>::max() - a) return false;
+            *result = a + b;
+            return true;
+        };
+        const auto mul = [](std::uint64_t a, std::uint64_t b,
+                            std::uint64_t* result) noexcept {
+            if (a && b > std::numeric_limits<std::uint64_t>::max() / a) return false;
+            *result = a * b;
+            return true;
+        };
+        std::uint64_t base = 0, lane_bytes = 0, relative = 0;
+        if (layout_ == HeterogeneousLayout::AoSoA) {
+            if (!mul(row / lanes_, segment.stride, &base) ||
+                !mul(row % lanes_, loc.row_stride, &lane_bytes) ||
+                !add(base, loc.offset, &relative) ||
+                !add(relative, lane_bytes, &relative)) return false;
+        } else {
+            if (!mul(row, loc.row_stride, &base) ||
+                !add(base, loc.offset, &relative)) return false;
+        }
+        if (relative > segment.bytes ||
+            fields_[field].bytes > segment.bytes - relative ||
+            segment.base > max - relative) return false;
+        *out = segment.base + relative;
+        return true;
+    }
+
     CellAddress address(std::uint64_t row, std::uint32_t field) const {
         if (row >= rows_ || field >= fields_.size())
             throw std::out_of_range("heterogeneous row/field out of bounds");
