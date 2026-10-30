@@ -67,6 +67,9 @@ jobs:
           } | psql -U postgres -v ON_ERROR_STOP=1
           owner=$(psql -U postgres -tAc "SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname='ores_dispatch'")
           test "$owner" = 'ores_dispatch_migration_owner'
+          test "$(psql -U postgres -tAc "SELECT rolsuper FROM pg_roles WHERE rolname='ores_dispatch_migration_owner'")" = 'f'
+          function_owner=$(psql -U postgres -tAc "SELECT proowner::regrole::text FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='ores_dispatch' AND p.proname='claim_once_v1'")
+          test "$function_owner" = 'ores_dispatch_migration_owner'
           # Reapplying an initial schema migration must fail, not replace objects.
           if {
             printf 'SET ROLE ores_dispatch_migration_owner;\n'
@@ -93,6 +96,12 @@ jobs:
             -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
             contracts/v1/agent-dispatch/pg_dispatch_integration_test.cpp \
             -lpq -o "$RUNNER_TEMP/pg_dispatch_native"
+          # Function must reject asynchronous-commit sessions and not
+          # allocate a claim key while the durability precondition fails.
+          verdict=$(PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD" psql -U ores_dispatch_test_runtime -tA -v ON_ERROR_STOP=1 -c "SET synchronous_commit=off; SELECT ores_dispatch.claim_once_v1('tenant','worker','async-durability-denied',repeat('b',64),7,9,repeat('a',40),9223372036854775807,1024,24)")
+          test "$(printf '%s\n' "$verdict" | tail -n 1)" = 'f'
+          rows=$(psql -U postgres -tAc "SELECT count(*) FROM ores_dispatch.claim_v1 WHERE dispatch_id='async-durability-denied'")
+          test "$rows" -eq 0
           "$RUNNER_TEMP/pg_dispatch_native"
           # Independent native processes compete on a shared database key.
           pids=()
