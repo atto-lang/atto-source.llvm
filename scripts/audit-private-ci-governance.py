@@ -21,26 +21,27 @@ SOURCE_ID = 1410897874
 APPROVAL_PATH = Path(".github/private-ci-approved-repositories.txt")
 OWNERS_PATH = Path(".github/CODEOWNERS")
 DOC_PATH = Path("docs/security/CI_PRIVATE_SOURCE_MIRRORING.md")
-REQUIRED_OWNERS = {
+SECURITY_OWNER_TAIL = (
     "/.github/CODEOWNERS",
     "/.github/workflows/*",
     "/.github/private-ci-approved-repositories.txt",
     "/.github/private-ci-carrier-contracts.json",
     "/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md",
-    "/scripts/audit-private-ci-governance.py",
-    "/scripts/test-audit-private-ci-governance.py",
     "/scripts/run-in-private-ci-destination.sh",
     "/scripts/publish-private-ci-source.py",
     "/scripts/publish-private-ci-source-v3.py",
     "/scripts/test-publish-private-ci-source-v3.py",
     "/scripts/test-private-ci-destination.sh",
     "/scripts/test-publish-private-ci-source.py",
+    "/scripts/audit-private-ci-governance.py",
+    "/scripts/test-audit-private-ci-governance.py",
     "/tools/private-ci-policy/",
     "/scripts/check-actions-execution-evidence.py",
     "/scripts/test-check-actions-execution-evidence.py",
     "/scripts/verify_ci_run.py",
     "/scripts/test_verify_ci_run.py",
-}
+)
+REQUIRED_OWNERS = frozenset(SECURITY_OWNER_TAIL)
 DESTINATION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z", re.ASCII)
 SHA40 = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 
@@ -81,6 +82,11 @@ def check_policy_files(root: Path) -> tuple[str, ...]:
     for path in REQUIRED_OWNERS:
         if "@ORESoftware" not in rules.get(path, []):
             raise GovernanceError(f"missing exact CODEOWNER: {path}")
+    ordered_rules = [line.strip() for line in owners_text.splitlines()
+                     if line.strip() and not line.lstrip().startswith("#")]
+    expected_tail = [f"{path} @ORESoftware" for path in SECURITY_OWNER_TAIL]
+    if ordered_rules[-len(expected_tail):] != expected_tail:
+        raise GovernanceError("protected source CODEOWNERS lacks terminal security-owner rules")
     doc = (root / DOC_PATH).read_text(encoding="utf-8")
     for phrase in (
         "protected", "private", "tree", "canary",
