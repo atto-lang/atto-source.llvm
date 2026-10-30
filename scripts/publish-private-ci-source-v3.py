@@ -1228,7 +1228,10 @@ def _is_http_status(stderr, status):
 
 def live_ref_sha(repository, ref_name, expected_repository_id):
     repo = gh_api(f"repos/{repository}")
-    if (repo.get("id") != expected_repository_id
+    if (not isinstance(repo, dict)
+            or type(expected_repository_id) is not int
+            or type(repo.get("id")) is not int
+            or repo.get("id") != expected_repository_id
             or repo.get("full_name") != repository
             or repo.get("private") is not True
             or repo.get("visibility") != "private"
@@ -1246,12 +1249,15 @@ def live_ref_sha(repository, ref_name, expected_repository_id):
         )
     except json.JSONDecodeError as exc:
         raise Denied("carrier ref lookup returned invalid JSON") from exc
+    # GitHub's ref object is untrusted JSON. A null/list/string "object"
+    # must return a controlled denial rather than escaping AttributeError.
     if (not isinstance(payload, dict)
             or payload.get("ref") != "refs/heads/" + ref_name
-            or payload.get("object", {}).get("type") != "commit"):
+            or not isinstance(payload.get("object"), dict)
+            or payload["object"].get("type") != "commit"):
         raise Denied("carrier ref lookup returned unexpected identity")
     return valid_sha(
-        payload.get("object", {}).get("sha"),
+        payload["object"].get("sha"),
         "carrier ref lookup returned invalid SHA",
     )
 
@@ -1361,10 +1367,13 @@ def delete_handoff_refs_atomic(
     authorization_after = live_ref_sha(
         repository, authorization, expected_repository_id
     )
-    if branch_after is None and authorization_after is None:
-        return True
+    # A failed atomic push must NEVER be reclassified as successful simply
+    # because another actor removed both refs between our push and readback.
+    # An absent ref is not an authenticated witness of who removed it.
     if push.returncode != 0:
         raise Denied("atomic carrier ref cleanup failed or remained ambiguous")
+    if branch_after is None and authorization_after is None:
+        return True
     raise Denied("atomic carrier ref cleanup did not remove exact generation refs")
 
 
