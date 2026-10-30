@@ -15,20 +15,36 @@ permissions:
   contents: read
 jobs:
   compiled-oreslang-c-u32:
+    # No fork PR source or cross-org tokens; exact PR HEAD (never synthetic merge).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Native toolchain dependencies
+      - name: Verify immutable source head and record Git tree
+        id: identity
+        shell: bash
+        env:
+          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse --verify HEAD)" = "$SOURCE_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
+          printf 'source_sha=%s\nsource_tree=%s\n' "$SOURCE_HEAD_SHA" "$tree"
+          printf 'tree=%s\n' "$tree" >> "$GITHUB_OUTPUT"
+      - name: Install native LLVM toolchain dependencies
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y llvm-dev clang cmake ninja-build binutils
-      - name: Build genuine LLVM compiler outside Git checkout
+      - name: Build real compiler outside the clean source checkout
         shell: bash
         run: |
           set -euo pipefail
@@ -36,12 +52,13 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           cmake --build "$RUNNER_TEMP/browser-u32-compiler" \
             --target oreslang-llvmc --parallel 2
-      - name: Compile guest and run exact-width u32 host and negatives
+      - name: Execute real Oreslang ABI version and negative guest fixtures
         shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_SOURCE_TREE: ${{ steps.identity.outputs.tree }}
         run: |
           set -euo pipefail
-          export EXPECTED_SOURCE_SHA="$GITHUB_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           export ORESLANG_LLVMC="$RUNNER_TEMP/browser-u32-compiler/oreslang-llvmc"
           export ORESLANG_COMPILER_SHA256="$(sha256sum "$ORESLANG_LLVMC" | cut -d ' ' -f1)"
           bash -n scripts/verify-browser-c-abi-u32.sh
