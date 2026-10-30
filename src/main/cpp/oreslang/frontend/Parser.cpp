@@ -1352,7 +1352,7 @@ private:
                 LocalBinding slot;
                 slot.name = field.name;
                 slot.offset = field.offset;
-                slot.field_mutable = true; // only the sealed write callback can mutate it
+                slot.field_mutable = access == "write"; // read callbacks get immutable native slots
                 slot.initializer = std::make_unique<Expression>();
                 slot.initializer->kind = Expression::Kind::Integer;
                 slot.initializer->integer = field.initial_i64;
