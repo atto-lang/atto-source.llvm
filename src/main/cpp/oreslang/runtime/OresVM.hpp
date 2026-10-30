@@ -212,69 +212,10 @@ public:
         std::int64_t value = 0;
     };
 
+    // Backwards-compatible direct scalar entrypoint: tenant-global slots.
     GuestOutcome invoke_guest_result(const IsolateHandle& handle, OresGuestEntry guest,
                                     std::int64_t input) {
-        if (!guest) throw std::invalid_argument("guest entry is null");
-        std::shared_ptr<IsolateVM> state;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            state = checked(handle);
-            if (state->phase != IsolatePhase::Running)
-                throw std::logic_error("guest admission is closed");
-            // Includes invocations waiting on guest_turn_mutex. Bound both
-            // per-tenant queues and the aggregate VM workload before pinning.
-            if (state->active_guest_calls >= state->config.max_inflight_guest_calls ||
-                pinned_guest_calls_ >= limits_.max_inflight_guest_calls)
-                throw std::logic_error("OresVM guest invocation budget exhausted");
-            ++state->active_guest_calls;
-            ++pinned_guest_calls_;
-        }
-        struct GuestPin final {
-            OresVM* vm;
-            std::shared_ptr<IsolateVM> state;
-            ~GuestPin() noexcept {
-                std::lock_guard<std::mutex> lock(vm->mutex_);
-                --state->active_guest_calls;
-                --vm->pinned_guest_calls_;
-            }
-        } pin{this, state};
-        // Pin queued turns, and recheck admission after waiting for the tenant.
-        // A shutdown closes admission even for already-waiting calls.
-        static thread_local bool guest_active = false;
-        if (guest_active) throw std::logic_error("nested guest entry forbidden");
-        std::unique_lock<std::mutex> tenant_turn(state->guest_turn_mutex);
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (state->phase != IsolatePhase::Running)
-                throw std::logic_error("guest invocation cancelled during shutdown");
-        }
-        guest_active = true;
-        struct GuestThreadGuard {
-            bool& active;
-            ~GuestThreadGuard() noexcept { active = false; }
-        } thread_guard{guest_active};
-        GuestCall call{this, state, state->generation};
-        OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
-                              state->generation, &call, &guest_load_i64, &guest_store_i64};
-        std::int64_t value = 0;
-        std::int32_t status = ORES_GUEST_FAILED;
-        try {
-            status = guest(&ctx, input, &value);
-        } catch (...) {
-            // A thrown native guest may have partially changed isolate globals.
-            // Quarantine the tenant, preserve execution pins, and prevent future
-            // durable claims. Trusted-only; not a memory safety sandbox.
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                state->durable_queues.quiesce();
-                if (state->phase == IsolatePhase::Running)
-                    state->phase = IsolatePhase::Quiescing;
-            }
-            throw;
-        }
-        // Typed guest failures (e.g. overflow) are not native exceptions.
-        if (status != ORES_GUEST_OK) return {status, 0};
-        return {ORES_GUEST_OK, value};
+        return invoke_guest_result_impl(handle, guest, input, std::nullopt);
     }
 
     std::int64_t invoke_guest(const IsolateHandle& handle, OresGuestEntry guest,
@@ -357,7 +298,7 @@ public:
             return state->durable_queues.finish(ticket);
         };
         try {
-            const auto outcome = invoke_guest_result(handle, guest, input);
+            const auto outcome = invoke_guest_result_impl(handle, guest, input, ticket.actor);
             return DurableGuestReceipt{outcome, retire()};
         } catch (...) {
             retire(); // synchronous execution has exited via exception
@@ -438,6 +379,72 @@ public:
     }
 
 private:
+    GuestOutcome invoke_guest_result_impl(const IsolateHandle& handle,
+                                    OresGuestEntry guest, std::int64_t input,
+                                    std::optional<DurableLockQueues::ActorKey> actor) {
+        if (!guest) throw std::invalid_argument("guest entry is null");
+        std::shared_ptr<IsolateVM> state;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            state = checked(handle);
+            if (state->phase != IsolatePhase::Running)
+                throw std::logic_error("guest admission is closed");
+            // Includes invocations waiting on guest_turn_mutex. Bound both
+            // per-tenant queues and the aggregate VM workload before pinning.
+            if (state->active_guest_calls >= state->config.max_inflight_guest_calls ||
+                pinned_guest_calls_ >= limits_.max_inflight_guest_calls)
+                throw std::logic_error("OresVM guest invocation budget exhausted");
+            ++state->active_guest_calls;
+            ++pinned_guest_calls_;
+        }
+        struct GuestPin final {
+            OresVM* vm;
+            std::shared_ptr<IsolateVM> state;
+            ~GuestPin() noexcept {
+                std::lock_guard<std::mutex> lock(vm->mutex_);
+                --state->active_guest_calls;
+                --vm->pinned_guest_calls_;
+            }
+        } pin{this, state};
+        // Pin queued turns, and recheck admission after waiting for the tenant.
+        // A shutdown closes admission even for already-waiting calls.
+        static thread_local bool guest_active = false;
+        if (guest_active) throw std::logic_error("nested guest entry forbidden");
+        std::unique_lock<std::mutex> tenant_turn(state->guest_turn_mutex);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (state->phase != IsolatePhase::Running)
+                throw std::logic_error("guest invocation cancelled during shutdown");
+        }
+        guest_active = true;
+        struct GuestThreadGuard {
+            bool& active;
+            ~GuestThreadGuard() noexcept { active = false; }
+        } thread_guard{guest_active};
+        GuestCall call{this, state, state->generation, actor};
+        OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
+                              state->generation, &call, &guest_load_i64, &guest_store_i64};
+        std::int64_t value = 0;
+        std::int32_t status = ORES_GUEST_FAILED;
+        try {
+            status = guest(&ctx, input, &value);
+        } catch (...) {
+            // A thrown native guest may have partially changed isolate globals.
+            // Quarantine the tenant, preserve execution pins, and prevent future
+            // durable claims. Trusted-only; not a memory safety sandbox.
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                state->durable_queues.quiesce();
+                if (state->phase == IsolatePhase::Running)
+                    state->phase = IsolatePhase::Quiescing;
+            }
+            throw;
+        }
+        // Typed guest failures (e.g. overflow) are not native exceptions.
+        if (status != ORES_GUEST_OK) return {status, 0};
+        return {ORES_GUEST_OK, value};
+    }
+
     static DurableLockQueues::ActorKey checked_actor_ticket(
             const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor) {
         auto it = state->actors.find(actor.id_);
@@ -452,6 +459,7 @@ private:
         OresVM* vm;
         std::shared_ptr<IsolateVM> state;
         std::uint64_t generation;
+        std::optional<DurableLockQueues::ActorKey> actor;
     };
 
     static int guest_load_i64(void* raw, std::uint32_t slot, std::int64_t* out) noexcept {
