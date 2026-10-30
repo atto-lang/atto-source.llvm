@@ -26,13 +26,16 @@ fn expected_llvm_trap_signal() -> Result<i32, String> {
 // checked-i64 oracle; inherited pipes are unnecessary and could otherwise
 // deadlock when a broken guest writes more than the pipe buffer.
 #[cfg(unix)]
-fn run_bounded_guest(binary: &Path, cwd: &Path) -> Result<std::process::ExitStatus, String> {
+fn run_bounded_guest(
+    binary: &Path,
+    cwd: &Path,
+    timeout: std::time::Duration,
+) -> Result<std::process::ExitStatus, String> {
     use std::{
         process::{Command, Stdio},
         thread,
         time::{Duration, Instant},
     };
-    const TIMEOUT: Duration = Duration::from_secs(30);
     let mut child = Command::new(binary)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -44,7 +47,7 @@ fn run_bounded_guest(binary: &Path, cwd: &Path) -> Result<std::process::ExitStat
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
-            Ok(None) if started.elapsed() < TIMEOUT => {
+            Ok(None) if started.elapsed() < timeout => {
                 thread::sleep(Duration::from_millis(10));
             }
             Ok(None) => {
@@ -53,7 +56,7 @@ fn run_bounded_guest(binary: &Path, cwd: &Path) -> Result<std::process::ExitStat
                 return Err(format!(
                     "native guest {} exceeded {}s timeout",
                     binary.display(),
-                    TIMEOUT.as_secs()
+                    timeout.as_secs()
                 ));
             }
             Err(e) => {
@@ -62,6 +65,48 @@ fn run_bounded_guest(binary: &Path, cwd: &Path) -> Result<std::process::ExitStat
                 return Err(format!("poll native guest {}: {e}", binary.display()));
             }
         }
+    }
+}
+
+// These source-free unit tests do not require an Oreslang compiler or Clang.
+// They prove both exit-status preservation and the bounded kill/reap path.
+#[cfg(all(test, unix))]
+mod bounded_guest_tests {
+    use super::run_bounded_guest;
+    use crate::TempDir;
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        path::{Path, PathBuf},
+        time::Duration,
+    };
+
+    fn executable_script(root: &Path, name: &str, source: &str) -> PathBuf {
+        let path = root.join(name);
+        fs::write(&path, source).expect("write synthetic guest");
+        let mut permissions = fs::metadata(&path).expect("guest metadata").permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions).expect("make guest executable");
+        path
+    }
+
+    #[test]
+    fn preserves_normal_exit_status() {
+        let temp = TempDir::new("ores-bounded-guest-exit-").unwrap();
+        let guest = executable_script(&temp.path, "exit.sh", "#!/bin/sh\nexit 42\n");
+        let status = run_bounded_guest(&guest, &temp.path, Duration::from_secs(5))
+            .expect("guest should exit normally");
+        assert_eq!(status.code(), Some(42));
+    }
+
+    #[test]
+    fn terminates_nonexiting_guest() {
+        let temp = TempDir::new("ores-bounded-guest-timeout-").unwrap();
+        let guest = executable_script(
+            &temp.path, "spin.sh", "#!/bin/sh\nwhile :; do :; done\n");
+        let error = run_bounded_guest(&guest, &temp.path, Duration::from_millis(100))
+            .expect_err("nonexiting guest must time out");
+        assert!(error.contains("timeout"), "{error}");
     }
 }
 
@@ -162,7 +207,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             let linked = run(clang, [OsStr::new("-x"), OsStr::new("ir"), OsStr::new(optimization),
                 ir.as_os_str(), OsStr::new("-o"), binary.as_os_str()])?;
             require(linked.status.success(), format!("{name}: {}", stderr(&linked)))?;
-            let observed = run_bounded_guest(&binary, &temp.path)
+            let observed = run_bounded_guest(
+                &binary, &temp.path, std::time::Duration::from_secs(30))
                 .map_err(|e| format!("{name} {optimization}: {e}"))?;
             if let Some(expected) = expected {
                 require(observed.code() == Some(expected),
