@@ -33,6 +33,14 @@ typedef struct {
     OresNativeCallbackBoundary boundary;
 } OresNativeCallbackProvenance;
 
+/*
+ * Captures one retained callback-provenance token.
+ *
+ * out must point to an all-zero OresNativeCallbackContext. Capture fails rather
+ * than overwriting a live token, because overwriting would leak the retained
+ * execution/continuation lineage. Release is idempotent only for the canonical
+ * all-zero state produced by initialization or a successful release.
+ */
 int ores_native_callback_context_capture(
     OresNativeExecutionContextStore* executions,
     OresNativeContinuationStore* continuations,
