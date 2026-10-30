@@ -37,6 +37,22 @@ struct StrictSigned64Arithmetic {
         return {0, f};
     }
 
+    // Checked arithmetic negation. MIN_VALUE has no positive i64 counterpart.
+    static constexpr StrictIntegerResult neg(I value) noexcept {
+        if (value == std::numeric_limits<I>::min()) {
+            return error(StrictIntegerFailure::overflow);
+        }
+        return {-value, StrictIntegerFailure::none};
+    }
+
+    // Checked absolute value. Never evaluate signed -MIN_VALUE.
+    static constexpr StrictIntegerResult abs(I value) noexcept {
+        if (value == std::numeric_limits<I>::min()) {
+            return error(StrictIntegerFailure::overflow);
+        }
+        return {value < 0 ? -value : value, StrictIntegerFailure::none};
+    }
+
     // Truncating remainder. Avoid MIN/-1 hardware div trap/undefined behavior.
     static constexpr StrictIntegerResult rem(I dividend, I divisor) noexcept {
         if (divisor == 0) return error(StrictIntegerFailure::divisor_zero);
