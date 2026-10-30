@@ -74,6 +74,25 @@ if(BUILD_TESTING)
         set_tests_properties(native_cgl_timer_to_user_start_evidence PROPERTIES TIMEOUT 15)
     endif()
 
+    # Opt-in native actor-slice timestamps from the actual carrier callback.
+    # This does not attest timer expiry or first compiled guest instruction.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(Threads REQUIRED)
+        add_executable(oreslang-native-cgl-carrier-slice-trace-test
+            tests/native_cgl_carrier_slice_trace_test.cpp
+            src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp)
+        target_include_directories(oreslang-native-cgl-carrier-slice-trace-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-cgl-carrier-slice-trace-test PRIVATE
+            Threads::Threads)
+        target_compile_options(oreslang-native-cgl-carrier-slice-trace-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_cgl_carrier_slice_timestamp_provenance
+            COMMAND oreslang-native-cgl-carrier-slice-trace-test)
+        set_tests_properties(native_cgl_carrier_slice_timestamp_provenance
+            PROPERTIES TIMEOUT 20)
+    endif()
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
