@@ -16,7 +16,9 @@ namespace oreslang::runtime {
 // owner of T. Graph links are non-owning (domain, slot, generation) identities:
 // cycles cannot form reference-count ownership cycles.
 //
-// All calls must be serialized on the owning actor's execution lane. A lease
+// All calls must be serialized on the owning actor's execution lane. Read
+// leases expose const T only; with_mut requires no live lease and disallows
+// nested arena access during the mutation callback. A lease
 // blocks deletion/retirement even across a carrier migration; the runtime must
 // ensure all suspended continuations and FFI leases have ended before teardown.
 //
@@ -56,6 +58,7 @@ private:
     std::size_t leases_ = 0;
     bool closed_ = false;
     bool retiring_ = false;
+    bool mutating_ = false; // exclusive stack-only write capability
 
     static std::uint64_t unique_domain() noexcept {
         const auto id = next_domain_.fetch_add(1, std::memory_order_relaxed);
@@ -65,7 +68,7 @@ private:
     }
 
     bool live(Handle h) const noexcept {
-        return !closed_ && !retiring_ && h.domain == domain_
+        return !closed_ && !retiring_ && !mutating_ && h.domain == domain_
                && h.slot < Capacity && slots_[h.slot].value.has_value()
                && slots_[h.slot].generation == h.generation;
     }
@@ -81,8 +84,8 @@ private:
 public:
     class Lease final {
         DeterministicGraphArena* owner_ = nullptr;
-        T* value_ = nullptr;
-        Lease(DeterministicGraphArena& owner, T& value) noexcept
+        const T* value_ = nullptr;
+        Lease(DeterministicGraphArena& owner, const T& value) noexcept
             : owner_(&owner), value_(&value) { ++owner.leases_; }
         friend class DeterministicGraphArena;
     public:
@@ -93,9 +96,9 @@ public:
               value_(std::exchange(other.value_, nullptr)) {}
         Lease& operator=(Lease&&) = delete;
         ~Lease() noexcept { if (owner_) --owner_->leases_; }
-        T& get() const noexcept { return *value_; }
-        T* operator->() const noexcept { return value_; }
-        T& operator*() const noexcept { return *value_; }
+        const T& get() const noexcept { return *value_; }
+        const T* operator->() const noexcept { return value_; }
+        const T& operator*() const noexcept { return *value_; }
     };
 
     DeterministicGraphArena() noexcept : domain_(unique_domain()) {}
@@ -115,7 +118,7 @@ public:
 
     template<class... Args>
     std::optional<Handle> emplace(Args&&... args) {
-        if (closed_ || retiring_ || size_ == Capacity) return std::nullopt;
+        if (closed_ || retiring_ || mutating_ || size_ == Capacity) return std::nullopt;
         for (std::size_t i = 0; i < Capacity; ++i) {
             auto& slot = slots_[i];
             if (slot.value || slot.generation == std::numeric_limits<std::uint64_t>::max())
@@ -133,6 +136,26 @@ public:
     std::optional<Lease> borrow(Handle h) noexcept {
         if (!live(h)) return std::nullopt;
         return std::optional<Lease>(Lease(*this, *slots_[h.slot].value));
+    }
+
+    // Exclusive in-place mutation: no heap guard, no snapshot, no element copy.
+    // A read lease, retiring domain or nested callback prevents admission.
+    // Callback borrows must remain lexical; source-level escape checking is
+    // still required before exposing this primitive to Oreslang guest code.
+    template<class Fn>
+    bool with_mut(Handle h, Fn&& action) {
+        static_assert(std::is_invocable_v<Fn&, T&>,
+                      "with_mut requires a callable accepting T&");
+        static_assert(std::is_void_v<std::invoke_result_t<Fn&, T&>>,
+                      "with_mut must not return an escaping reference or value");
+        if (!live(h) || leases_ != 0) return false;
+        mutating_ = true;
+        struct WriteScope {
+            bool& flag;
+            ~WriteScope() noexcept { flag = false; }
+        } guard{mutating_};
+        std::forward<Fn>(action)(*slots_[h.slot].value);
+        return true;
     }
 
     bool connect(Handle source, Handle target) noexcept {
@@ -180,7 +203,7 @@ public:
     // lease count enforces one necessary condition, not the full scheduler proof.
     bool close() noexcept {
         if (closed_) return true;
-        if (retiring_ || leases_ != 0) return false;
+        if (retiring_ || mutating_ || leases_ != 0) return false;
         retiring_ = true;
         // Reverse slot order gives deterministic teardown independent of
         // cycles in the non-owning adjacency graph.
