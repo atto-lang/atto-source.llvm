@@ -103,6 +103,11 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
          "return rows.get(0,unknown);}", "unknown inverted field"),
         ("define inverted struct P as x:int;end\nfnc main():int{"
          "let rows=InvertedArray<P>.with_capacity(2);rows.push(1);"
+         "rows.set(0,x,42);return rows.get(0,x);}",
+         "immutable inverted field cannot be written after initialization"),
+
+        ("define inverted struct P as x:int;end\nfnc main():int{"
+         "let rows=InvertedArray<P>.with_capacity(2);rows.push(1);"
          "rows.erase_swap(0);return rows.get(0,x);}",
          "only push and set supported"),
         ("define inverted struct P as x:int;end\nfnc main():int{"
@@ -120,5 +125,5 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
             raise AssertionError("unsupported inverted source published executable IR")
         if expected not in result.stderr:
             raise AssertionError(f"wrong compiler diagnostic {idx}: {result.stderr!r}")
-    print("PASS: 10 unsupported source programs fail closed with compiler-owned diagnostics")
+    print("PASS: 11 unsupported source programs fail closed with compiler-owned diagnostics")
     print("PASS: checked out-of-bounds guest runtime trap")
