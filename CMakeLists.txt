@@ -4426,6 +4426,27 @@ if(BUILD_TESTING)
     set_tests_properties(async_io_actor_done_physical_retirement PROPERTIES TIMEOUT 60)
 endif()
 
+# State-region lifecycle integration: a live reader/writer ticket owns an exact
+# actor resource loan, so logical stop cannot physically reclaim the actor arena
+# until the ticket retires from the nonparking admission gate.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-state-region-actor-lifetime-pin-test
+        tests/state_region_actor_lifetime_pin_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-state-region-actor-lifetime-pin-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-state-region-actor-lifetime-pin-test PRIVATE cxx_std_20)
+    target_link_libraries(oreslang-state-region-actor-lifetime-pin-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-state-region-actor-lifetime-pin-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    add_test(NAME native_state_region_blocks_actor_arena_reclamation
+        COMMAND oreslang-state-region-actor-lifetime-pin-test)
+    set_tests_properties(native_state_region_blocks_actor_arena_reclamation
+        PROPERTIES TIMEOUT 60)
+endif()
+
 # Host/runtime select linearization substrate. This proves exactly-one winner,
 # late-arm loser revocation and Task cancellation integration only; source
 # select syntax remains fail-closed until Channel/Future lowering is wired.
