@@ -126,7 +126,63 @@ def optional_gate_selftest():
     print(f"RT_TIMER_OPTIONAL_GATE_SELFTEST_PASS allowed=2 denied={denied}")
 
 
+# Safety prerequisite for this stacked timer PR: a CMake restack must not
+# erase the parent ledger stress, lease-authority or STOP-cleanup targets.
+ACTOR_CTEST_INPUTS = (
+    ("native_actor_execution_ledger_serialization",
+     "tests/native_actor_execution_ledger_test.cpp"),
+    ("native_actor_execution_ledger_deterministic_stress",
+     "tests/native_actor_execution_ledger_state_stress_test.cpp"),
+    ("native_actor_ledger_stop_wake_fencing_interleavings",
+     "tests/native_actor_ledger_fencing_interleavings_test.cpp"),
+    ("native_actor_ledger_lease_authority_boundary",
+     "tests/native_actor_ledger_lease_authority_test.cpp"),
+    ("native_actor_ledger_authenticated_scheduler_bridge",
+     "tests/native_actor_ledger_scheduler_bridge_test.cpp"),
+    ("native_actor_ledger_scheduler_stop_retained_cleanup",
+     "tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp"),
+)
+
+
+def require_actor_ctest_registrations(cmake):
+    for test_name, fixture in ACTOR_CTEST_INPUTS:
+        pattern = (r"(?m)^[ \t]*add_test\([ \t]*NAME[ \t]+"
+                   + re.escape(test_name) + r"(?=\s|\))")
+        count = len(re.findall(pattern, cmake))
+        assert count == 1, (
+            f"actor dependency CTest missing or duplicated: {test_name}"
+        )
+        assert fixture in cmake, f"actor dependency fixture omitted: {fixture}"
+
+
+def actor_ctest_selftest():
+    good = "".join(
+        f"add_executable(stub_{i}\n    {fixture})\n"
+        f"add_test(NAME {test_name} COMMAND stub_{i})\n"
+        for i, (test_name, fixture) in enumerate(ACTOR_CTEST_INPUTS)
+    )
+    require_actor_ctest_registrations(good)
+    denied = 0
+    for test_name, fixture in ACTOR_CTEST_INPUTS:
+        for mutant in (
+            good.replace(f"add_test(NAME {test_name}",
+                         f"# add_test(NAME {test_name}"),
+            good.replace(fixture, "tests/omitted_stub.cpp"),
+        ):
+            try:
+                require_actor_ctest_registrations(mutant)
+            except AssertionError:
+                denied += 1
+            else:
+                raise AssertionError(
+                    f"lost actor CTest dependency not blocked: {test_name}"
+                )
+    assert denied == 12, f"actor CTest mutants escaped: {denied}"
+    print("RT_TIMER_PARENT_ACTOR_CTEST_SELFTEST_PASS allowed=1 denied=12")
+
+
 def audit_selftest():
+    actor_ctest_selftest()
     optional_gate_selftest()
     """Source-free negative tests, no private-source export."""
     with tempfile.TemporaryDirectory() as td:
@@ -316,6 +372,7 @@ def check():
             ), f"{step_name}: {binary} never executed"
 
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+    require_actor_ctest_registrations(cmake)
     for test_name, fixture in (
         ("native_realtime_timer_queue_contract",
          "tests/native_realtime_timer_queue_test.cpp"),
