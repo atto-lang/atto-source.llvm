@@ -96,6 +96,9 @@ struct DirectFacts {
     bool bounded_cleanup = true;
     bool bounded_calls = true;
     bool unsupported_runtime = false;
+    // Explicit copy/share needs a verified scalar-vs-buffer and ownership/
+    // refcount lowering proof. Do not presume these are free register moves.
+    bool unqualified_copy_or_share = false;
     bool call_budget_exceeded = false;
     std::size_t call_limit = 0;
     std::uint64_t loop_iterations = 0;
@@ -201,6 +204,11 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::Conditional:
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
+            // Until the typed MIR proves a register-only copy or a bounded
+            // zero-allocation share, these operations cannot enter strict RT
+            // just because a shallow AST expression has no Alloc effect.
+            facts.unqualified_copy_or_share = true;
+            break;
         case Expression::Kind::Borrow:
             break;
     }
@@ -503,6 +511,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     bool bounded_cleanup = true;
     bool bounded_calls = true;
     bool unsupported_runtime = false;
+    bool unqualified_copy_or_share = false;
     std::string failure;
     std::string failure_diagnostic;
 
@@ -538,6 +547,8 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         bounded_cleanup = bounded_cleanup && facts.bounded_cleanup;
         bounded_calls = bounded_calls && facts.bounded_calls;
         unsupported_runtime = unsupported_runtime || facts.unsupported_runtime;
+        unqualified_copy_or_share =
+            unqualified_copy_or_share || facts.unqualified_copy_or_share;
 
         for (const auto& child : facts.calls) {
             const FunctionEffects child_effects = visit(child);
@@ -608,6 +619,11 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     if (!report.bounded_cleanup) {
         report.diagnostic = "RT006_UNBOUNDED_CLEANUP";
         report.reason = "defer/exception cleanup bound is not proven";
+        return report;
+    }
+    if (unqualified_copy_or_share) {
+        report.diagnostic = "RT014_ZERO_COPY_UNPROVEN";
+        report.reason = "reachable explicit copy/share lacks verified bounded, allocation-free native lowering";
         return report;
     }
     if (unsupported_runtime) {
