@@ -114,6 +114,8 @@ def main():
             "expected 'critical'",
         "source-isolated-actor-sealed-bool-gate-reject.ores":
             "native sealed-state guest v1 supports only int fields",
+        "source-isolated-actor-sealed-suspend-reject.ores":
+            "native sealed state callback suspend requires generation-fenced continuation lowering",
         "source-isolated-actor-sealed-direct-read-reject.ores":
             "expected 'self'",
         "source-actor-owned-unknown-initializer-reject.ores":
