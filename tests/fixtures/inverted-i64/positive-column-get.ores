@@ -1,5 +1,5 @@
 define inverted struct Position as
-    x: int;
+    let x: int;
     y: int;
 end
 
