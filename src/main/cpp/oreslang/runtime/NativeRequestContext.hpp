@@ -53,6 +53,7 @@ private:
         OresNativeActorRef owner;
         OresNativeActorScheduler* scheduler;
         const NativeHttpExchange* exchange;
+        std::uint64_t exchange_generation;
         Frame* previous;
     };
     inline static thread_local Frame* current_frame_ = nullptr;
@@ -220,7 +221,9 @@ public:
     std::optional<Suspension> suspend_current(
             const NativeHttpExchange& exchange, NativeHttpExchange::Token token) {
         Frame* f=current_frame_;
-        if (!f || f->table!=this || !admitted(f->scheduler,f->owner)
+        if (!f || f->table!=this || f->exchange!=&exchange
+                || f->exchange_generation!=token.generation
+                || !admitted(f->scheduler,f->owner)
                 || !same(f->owner,token.actor)
                 || f->handle.value!=token.request_context
                 || token.request_registry!=registry_id_ || !token.generation
@@ -327,7 +330,7 @@ public:
         if(!lease)return false;
         // Store lease prevents reuse; close revokes current() immediately.
         if(!lookup(handle,owner))return false;
-        Frame frame{this,handle,owner,scheduler,&exchange,current_frame_};
+        Frame frame{this,handle,owner,scheduler,&exchange,token.generation,current_frame_};
         current_frame_=&frame;
         const auto carrier=std::this_thread::get_id();
         struct Restore {
@@ -354,6 +357,8 @@ public:
         const auto token=bound.token();
         if(!frame || frame->table!=this ||
             frame->exchange!=bound.exchange_pin_.exchange_ ||
+            frame->exchange_generation!=token.generation ||
+            frame->exchange->phase()!=NativeHttpExchange::Phase::actor ||
             !admitted(frame->scheduler,frame->owner) ||
             frame->handle.value!=token.request_context ||
             token.request_registry!=registry_id_ ||
@@ -366,6 +371,8 @@ public:
     static std::optional<Metadata> current() noexcept {
         auto* frame=current_frame_;
         return frame && admitted(frame->scheduler,frame->owner)
+            && frame->exchange->phase()==NativeHttpExchange::Phase::actor
+            && frame->exchange->token().generation==frame->exchange_generation
             ? frame->table->lookup(frame->handle,frame->owner) : std::nullopt;
     }
 };
