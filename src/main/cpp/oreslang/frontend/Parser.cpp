@@ -6,6 +6,7 @@
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/InvertedTypedPlan.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 
 #include <algorithm>
@@ -5850,9 +5851,29 @@ void resolve_and_validate_program(Program& program) {
     // This AST is intentionally NOT an authorization for LLVM emission.
     // The experimental i64-only guest adapter remains behind its explicit
     // CLI flag until common nominal layouts and ownership HIR/MIR are wired.
-    if (!program.inverted_structs.empty())
+    if (!program.inverted_structs.empty()) {
+        // Produce a compiler-owned, immutable one-level column plan from
+        // the *production AST* first. This is not guest codegen authority.
+        // Collision checks prevent nominal inverted values from shadowing
+        // class, actor and type-only identities across source categories.
+        for (const auto& decl : program.inverted_structs) {
+            const auto layout = dop::hir::Layout::from_decl(decl);
+            for (const auto& cls : program.classes)
+                if (cls.name == layout.name())
+                    throw std::runtime_error(
+                        "inverted struct nominal collides with class declaration");
+            for (const auto& actor : program.actors)
+                if (actor.name == layout.name())
+                    throw std::runtime_error(
+                        "inverted struct nominal collides with actor declaration");
+            for (const auto& type_only : program.type_only_declarations)
+                if (type_only.name == layout.name())
+                    throw std::runtime_error(
+                        "inverted struct nominal collides with type-only declaration");
+        }
         throw std::runtime_error(
             "native inverted struct schema parsed but typed SoA HIR/MIR ownership lowering is not implemented");
+    }
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
