@@ -404,6 +404,7 @@ struct ActorDecl {
     // Compiler-owned proof: the parser admitted exactly one synchronous
     // nonescaping critical-read/write callback. A schema alone is insufficient.
     bool sealed_state_synchronous_v1 = false;
+    bool sealed_state_write_v1 = false; // trusted lexical callback access mode
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.
