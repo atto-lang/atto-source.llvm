@@ -79,6 +79,28 @@ def main():
                 receipt = f"COMPILED_SEALED_{kind.upper()}_GUEST_PASS"
                 if receipt not in result.stdout:
                     raise RuntimeError(f"run {index}: missing {kind} guest receipt")
+            # In addition to the deterministic actor-owned-heap turn bridge,
+            # run the same compiled Oreslang handler on the real native DATA
+            # scheduler. The trusted host waits for two executed callbacks
+            # before requesting STOP; abandoned messages cannot count as pass.
+            scheduled = directory / f"actor-scheduler-{kind}"
+            checked([
+                args.clang, "-std=c11", "-pthread", "-UNDEBUG", "-Wall",
+                "-Wextra", "-Wpedantic", "-Werror",
+                "-Wno-error=override-module", *flags,
+                "-I", str(root / "src/main/cpp"),
+                "-x", "ir", str(ll), "-x", "c",
+                str(root / "tests/native_isolated_sealed_state_scheduler_guest_test.c"),
+                str(root / "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
+                str(root / "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
+                "-o", str(scheduled)
+            ])
+            for index in range(3 if args.sanitize else 12):
+                result = checked([str(scheduled), kind], env=env)
+                receipt = f"COMPILED_SEALED_SCHEDULER_{kind.upper()}_PASS processed=2 abandoned=0"
+                if receipt not in result.stdout:
+                    raise RuntimeError(
+                        f"run {index}: missing genuine scheduler receipt")
     print("COMPILED_SEALED_STATE_GUEST_PASS "
           f"mode={'ASAN_UBSAN' if args.sanitize else 'RELEASE'}")
 
