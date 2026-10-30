@@ -2896,6 +2896,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             !fn.caught_throw_defers.empty())
             throw std::runtime_error(
                 "C_EXPORT_U32_REJECT: forged or unsupported browser host ABI declaration");
+        // A companion plain guest i64 function must never impersonate one
+        // of the browser's unimplemented C ABI entrypoints. A linker can
+        // otherwise export an incorrect same-name symbol even while the
+        // version trampoline is properly typed.
+        for (const auto& other : source.functions) {
+            if (other.name == "ores_browser_open" ||
+                other.name == "ores_browser_dispatch" ||
+                other.name == "ores_browser_snapshot" ||
+                other.name == "ores_browser_close")
+                throw std::runtime_error(
+                    "C_EXPORT_U32_REJECT: unimplemented browser C symbol shadowed by guest");
+        }
         if (module.getNamedValue(fn.c_export_u32_symbol))
             throw std::runtime_error(
                 "C_EXPORT_U32_REJECT: C ABI symbol collision");
