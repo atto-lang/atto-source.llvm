@@ -2337,11 +2337,19 @@ private:
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
-                        // Same rule for Option: the outer/inner wrapper pair is
-                        // sufficient to establish the forbidden implicit
-                        // flatten case; do not parse or normalize the payload.
-                        if (token_.text == "Option" && peek_next().text == "<")
-                            fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
+                        // Same rule for Option, but distinguish a single
+                        // Option<T> from Option<Option<T>> without consuming
+                        // either wrapper. The wrapper pair alone is sufficient
+                        // to establish the no-auto-flatten diagnostic.
+                        if (token_.text == "Option") {
+                            Lexer look = lexer_;
+                            const Token open = look.next();
+                            const Token nested = look.next();
+                            const Token nested_open = look.next();
+                            if (open.text == "<" && nested.text == "Option"
+                                    && nested_open.text == "<")
+                                fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
+                        }
                         if (token_.text == "Entry")
                             reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)
