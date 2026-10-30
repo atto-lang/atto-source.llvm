@@ -25,12 +25,18 @@ runs without GC, or that actor/Task quiescence is already verified end-to-end.
    Native callbacks and destructors must not access the domain reentrantly
    during retirement. The primitive remains single-execution-lane; it is not
    a concurrent read/write lock or safe cross-carrier transport on its own.
-5. **Cycles cannot keep regions alive.** The graph links are non-owning
+5. **Retirement is a monotonic admission fence.** `begin_retire()`
+   permanently rejects new borrows, mutations and allocations. An existing
+   read lease remains valid until it is released. `close()` returns pending
+   while a lease/write is active and succeeds only after drain. The
+   supervisor must separately fence producers and await physical callbacks;
+   `begin_retire()` is not a cancellation acknowledgement.
+6. **Cycles cannot keep regions alive.** The graph links are non-owning
    generational identities. `close` drops each live node exactly once in a
    deterministic order regardless of self-links or cycles; stale handles
    cannot be reused. The owners of resources inside `T` must still implement
    appropriate nonthrowing destruction.
-6. **Quiescence precedes physical destruction.** First close admission and
+7. **Quiescence precedes physical destruction.** First close admission and
    fence producer generations; then ensure all admitted turns, scheduled
    callbacks, FFI operations, I/O completions, continuation resumes, device
    fences and read/write loans have physically drained. A cancellation request
@@ -55,7 +61,7 @@ runs without GC, or that actor/Task quiescence is already verified end-to-end.
 ## Evidence and release gates
 
 The `native_deterministic_graph_arena` host test checks immutable read
-access types at compile time, read/write exclusion, nested callback denial,
+access types at compile time, read/write exclusion, monotonic retirement admission, nested callback denial,
 exception restoration, self/cross node cycles, stale-handle invalidation,
 exact-once drops and the absence of C++ `operator new` / `new[]` calls for
 the chosen fixed-size payload across its hot path. It does **not** observe
