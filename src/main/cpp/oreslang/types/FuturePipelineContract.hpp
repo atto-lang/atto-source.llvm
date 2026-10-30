@@ -12,8 +12,9 @@
 namespace oreslang::types {
 
 /**
- * Exact LLVM-side counterpart of the Java/Graal checked Future-pipeline
- * ownership edge. This is compiler proof metadata, not a runtime capability.
+ * LLVM Future-pipeline ownership edge. This is compiler proof metadata, not a
+ * runtime capability. The 2026-10-27 strict language decision supersedes the
+ * older implicit-flatten behavior: value pipelines preserve Future nesting.
  */
 enum class PipelineInputOwnership : std::uint8_t {
     BorrowedUpstreamSharedPayload,
@@ -32,10 +33,11 @@ enum class PipelineStageFutureOwnership : std::uint8_t {
 };
 
 /**
- * A flattened Future may receive cancellation ownership only when the checker
- * proved that this exact stage creates fresh deferred work. Forwarding an
- * existing/borrowed Future never becomes owned because a surrounding root was
- * consumed.
+ * Legacy metadata retained while explicit flatten lowering is redesigned.
+ * A value-pipeline stage may not set these fields: `|>` never implicitly
+ * removes a Future layer. A future explicit flatten/flat_map operation needs
+ * a distinct checked source-plan boundary before cancellation ownership is
+ * admitted.
  */
 enum class PipelineStageFutureProvenance : std::uint8_t {
     None,
@@ -185,19 +187,14 @@ inline void validate_future_pipeline_plan(const FuturePipelinePlan& plan) {
     const bool owns_stage_future =
         plan.produced_future_ownership ==
             PipelineStageFutureOwnership::OwnedStageResult;
-    if (!plan.flattens_future) {
-        if (owns_stage_future
-                || plan.produced_future_provenance !=
-                    PipelineStageFutureProvenance::None)
-            throw std::invalid_argument(
-                "scalar Future pipeline stage cannot own deferred Future work");
-    } else {
-        if (!owns_stage_future
-                || plan.produced_future_provenance !=
-                    PipelineStageFutureProvenance::FreshCheckedProducer)
-            throw std::invalid_argument(
-                "Future flattening requires one fresh checked stage-created Future");
-    }
+    if (plan.flattens_future)
+        throw std::invalid_argument(
+            "implicit Future pipeline flattening is forbidden; explicit flatten requires a distinct checked source operation");
+    if (owns_stage_future
+            || plan.produced_future_provenance !=
+                PipelineStageFutureProvenance::None)
+        throw std::invalid_argument(
+            "non-flattening Future pipeline stage cannot own deferred Future work");
 }
 
 /**
