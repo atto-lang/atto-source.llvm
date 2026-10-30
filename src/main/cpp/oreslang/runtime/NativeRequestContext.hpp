@@ -240,17 +240,22 @@ public:
             const BoundExchange<Slots,MaxBytes>& bound) noexcept {
         const auto token=bound.token();
         auto* exchange=bound.exchange_pin_.exchange_;
-        if(!scheduler || !exchange || !token.dispatch_ticket ||
-                !token.request_context || token.request_registry!=registry_id_
-                || exchange->phase()!=NativeHttpExchange::Phase::queued)
+        if(!exchange || exchange->phase()!=NativeHttpExchange::Phase::queued)
             return ORES_NATIVE_SEND_INVALID_REF;
         const auto observed=exchange->token();
-        if(observed.generation!=token.generation ||
+        // BoundExchange is constructed exclusively by the registry, but
+        // close/cancellation can invalidate the metadata before submission.
+        if(!scheduler || !token.dispatch_ticket || !token.request_context ||
+                token.request_registry!=registry_id_ ||
+                observed.generation!=token.generation ||
                 observed.dispatch_ticket!=token.dispatch_ticket ||
                 observed.request_registry!=token.request_registry ||
                 observed.request_context!=token.request_context ||
-                !same(observed.actor,token.actor))
+                !same(observed.actor,token.actor) ||
+                !lookup(Handle{token.request_context},token.actor)) {
+            if(!exchange->rollback(token)) std::terminate();
             return ORES_NATIVE_SEND_INVALID_REF;
+        }
         const auto result=ores_native_actor_scheduler_try_send(
                 scheduler,token.actor,token.dispatch_ticket);
         if(result!=ORES_NATIVE_SEND_ACCEPTED && !exchange->rollback(token))
