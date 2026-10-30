@@ -82,6 +82,7 @@ class Compiler {
     std::size_t at_ = 0;
     std::string type_, owner_;
     std::vector<std::string> fields_;
+    std::vector<bool> mutable_fields_;
     std::size_t capacity_ = 0;
     std::string instructions_;
     std::size_t serial_ = 0;
@@ -173,6 +174,7 @@ class Compiler {
         std::unordered_set<std::string> names;
         while (cur().text != "end") {
             if (fields_.size() == 8) fail("inverted i64 field budget exceeded");
+            const bool is_mutable = accept("let");
             const auto name = identifier();
             if (!names.insert(name).second) fail("duplicate inverted field");
             need(":");
@@ -181,6 +183,7 @@ class Compiler {
             need("int");
             need(";");
             fields_.push_back(name);
+            mutable_fields_.push_back(is_mutable);
         }
         if (fields_.empty()) fail("empty inverted struct");
         need("end");
@@ -235,6 +238,8 @@ class Compiler {
             const auto idx = index();
             need(",");
             const auto col = field();
+            if (!mutable_fields_[col])
+                fail("immutable inverted field cannot be written after initialization");
             need(",");
             const auto value = integer();
             need(")"); need(";");
