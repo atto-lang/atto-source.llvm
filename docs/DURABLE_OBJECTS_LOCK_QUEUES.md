@@ -14,7 +14,8 @@ This draft is stacked on [LLVM IsolateVM #1158](https://github.com/ores-truffle-
 ## Threat model / limitations
 
 - A guest ticket is a trusted host-only value; this is NOT a guest-provided, serializable, network-authenticated capability.
-- Current scalar `guest_globals` are per **tenant**, not per durable actor, and the `guest_turn_mutex` still serializes native guest execution at tenant scope. Independent runnable locks are **not proof of parallel actor execution**. This milestone validates **host-to-source-generated scalar dispatch**, not a general Oreslang actor compiler or `handle_state` / `critical` lowering.
+- Compiled durable scalar calls now select host-owned scalar slots for a specific **actor incarnation** within the tenant, while direct legacy guest calls retain tenant-global `guest_globals` and their serialized `guest_turn_mutex`. Actor-specific turn locks permit physical execution overlap for distinct actors and preserve same-actor serialization through queue claim fencing. Independent runnable locks are **not proof of parallel actor execution**. This milestone validates **host-to-source-generated scalar dispatch**, not a general Oreslang actor compiler or `handle_state` / `critical` lowering.
+- These actor scalar slots are **not actor-owned native/off-heap heaps or memory arenas**, and do not implement full ownership or borrow checking. No native `define isolated actor` lowering, actor-bound storage, async continuations, or durable restart has been proven. Tenant isolation remains host-logical for trusted native machine code.
 - No durable queue persistence, transactional inbox/outbox, actor scheduler-owned asynchronous continuation, post-crash idempotency, OS sandbox, trusted lease authority or distributed durability is provided.
 - Native `TrustedInProcess` does not contain arbitrary memory corruption.
 
@@ -23,12 +24,13 @@ This draft is stacked on [LLVM IsolateVM #1158](https://github.com/ores-truffle-
 New/expanded C++ tests:
 1. `native_durable_lock_queues_test.cpp` — cross-VM *same generation* issuer replay, quotas, FIFO, cancellation, actor non-reentrancy.
 2. `native_oresvm_durable_queues_test.cpp` — actor retirement, lifecycle, same-generation foreign OresVM ticket, *physically executing* guest cannot be finished externally, shutdown pin, native guest-exception quarantine/drain.
+4. The host suite now includes actor-incarnation scalar slots (two actors inside one tenant, distinct state, retirement/recreate resets state) and a two-actor physical execution overlap test with a bounded deadline.
 3. `native_oresvm_source_durable_dispatch_test.cpp` — source-generated LLVM AOT scalar dispatch through the durable queue bridge, two tenants, overflow and shutdown.
 4. Existing `native_oresvm_guest_call_test.cpp` from latest #1158 retained to ensure native-guest partial-write quarantine is not lost.
 
 The compiler-generated fixture **requires the full LLVM CMake build and Clang**. It is wired into the compiler-enabled CTest target. The standalone OresVM CMake suite executes the first two queue tests without building the LLVM compiler.
 
-**Execution status:** a local C++17 ticket identity/copy smoke succeeded. All new exact-branch full CMake/CTest and compiler-generated source tests are **not yet executed** here. Exact-head Actions workflow [41006466511](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41006466511) (`llvm-smoke`) and [41006466391](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41006466391) (`conformance`) both have **0 recorded steps**, so they are runner-admission evidence, not test results.
+**Execution status:** a local C++17 ticket identity/copy smoke succeeded. A separate **C++17 model of the new actor-state/actor-mutex types** passed GCC, Clang and Clang ASan+UBSan. This model does not compile the exact OresVM repository sources, and it cannot certify the integrated code. All new exact-branch full CMake/CTest and compiler-generated source tests are **not yet executed** here. Exact-head Actions workflow [41006466511](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41006466511) (`llvm-smoke`) and [41006466391](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41006466391) (`conformance`) both have **0 recorded steps**, so they are runner-admission evidence, not test results.
 
 Recommended commands on an authorized same-source private runner:
 
