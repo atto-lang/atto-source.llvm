@@ -68,11 +68,27 @@ int main() {
     cfg.tenant_id = "tenant-A";
     cfg.heap_limit_bytes = 1024;
     cfg.max_actors = 3;
+    cfg.actor_arena_bytes = 256;
     cfg.durable_queues = {2, 4, 3, 16};
     auto a = vm.create_isolate(cfg);
     vm.start(a);
     auto actor_a1 = vm.register_actor(a, 1);
     auto actor_a2 = vm.register_actor(a, 2);
+    // Each isolated actor owns a separate native allocation, even when the
+    // offsets are numerically equal. Guest code never receives raw pointers.
+    auto mem1 = vm.allocate_actor(a, actor_a1, 32, 16);
+    auto mem2 = vm.allocate_actor(a, actor_a2, 32, 16);
+    assert(mem1.offset() == mem2.offset());
+    vm.write_actor_byte(a, actor_a1, mem1, 3, 0xa1);
+    vm.write_actor_byte(a, actor_a2, mem2, 3, 0xb2);
+    assert(vm.read_actor_byte(a, actor_a1, mem1, 3) == 0xa1);
+    assert(vm.read_actor_byte(a, actor_a2, mem2, 3) == 0xb2);
+    rejects<std::logic_error>([&] { vm.read_actor_byte(a, actor_a2, mem1, 3); });
+    rejects<std::logic_error>([&] { vm.write_actor_byte(a, actor_a1, mem2, 3, 0xff); });
+    rejects<std::out_of_range>([&] { vm.read_actor_byte(a, actor_a1, mem1, 32); });
+    rejects<std::invalid_argument>([&] { vm.allocate_actor(a, actor_a1, 0); });
+    rejects<std::invalid_argument>([&] { vm.allocate_actor(a, actor_a1, 1, 3); });
+    rejects<std::bad_alloc>([&] { vm.allocate_actor(a, actor_a1, 256); });
     cfg.tenant_id = "tenant-B";
     auto b = vm.create_isolate(cfg);
     vm.start(b);
@@ -199,8 +215,15 @@ int main() {
     assert(scalar_vm.try_invoke_durable_guest_result(scalar_tenant,
         read_second.ticket, actor_scalar_guest, 0)->outcome.value == 2);
     assert(scalar_vm.invoke_guest(scalar_tenant, actor_scalar_guest, 0) == 0);
+    auto stale_arena_ref = scalar_vm.allocate_actor(scalar_tenant, second, 4, 4);
     scalar_vm.retire_actor(scalar_tenant, second);
     auto second_again = scalar_vm.register_actor(scalar_tenant, 2);
+    rejects<std::logic_error>([&] {
+        scalar_vm.read_actor_byte(scalar_tenant, second_again, stale_arena_ref, 0);
+    });
+    rejects<std::logic_error>([&] {
+        scalar_vm.read_actor_byte(scalar_tenant, second, stale_arena_ref, 0);
+    });
     auto new_turn = scalar_vm.enqueue_durable(scalar_tenant, second_again, 19, 5, 1);
     assert(scalar_vm.try_invoke_durable_guest_result(scalar_tenant,
         new_turn.ticket, actor_scalar_guest, 0)->outcome.value == 0);
