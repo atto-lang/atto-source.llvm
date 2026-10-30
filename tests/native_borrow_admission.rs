@@ -1,4 +1,4 @@
-//! Real compiler admission: eight denials and three genuine IR controls.
+//! Real compiler admission: nine denials and four genuine IR controls.
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -113,6 +113,7 @@ fn main() {
     let compiler = fs::canonicalize(&args[1]).expect("compiler path");
     let root = Scratch::new();
     let negatives = [
+        ("immutable-local-write", "pub fnc main(): int { val int count = 1; count = 2; return count; }\n", "assignment requires an unloaned mutable scalar slot"),
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
@@ -126,6 +127,7 @@ fn main() {
         check_case(&compiler, &root.0, name, source, Some(expected));
     }
     for (name, source) in [
+        ("valid-local-in-place-mutation", "pub fnc main(): int { let int count = 1; count = count + 1; return count; }\n"),
         ("valid-shared-borrow", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt borrow v); }\n"),
         ("valid-owned-scalar-call", "fnc consume(int x): int { return x; }\npub fnc main(): int { return consume(42); }\n"),
         ("valid-owned-constructor", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let Box box = new Box(42); return box.read(); }\n"),
@@ -133,7 +135,7 @@ fn main() {
         check_case(&compiler, &root.0, name, source, None);
     }
     println!(
-        "PASS native borrow admission: eight no-IR/no-artifact denials, three real IR controls"
+        "PASS native borrow admission: nine no-IR/no-artifact denials, four real IR controls"
     );
 }
 
