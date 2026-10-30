@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 extern void oreslang_actor_Counter_init(
     OresActorI64Heap*, uint64_t, uint64_t);
@@ -16,8 +17,8 @@ static void require(int ok) { if (!ok) abort(); }
 
 int main(int argc, char** argv) {
     require(argc == 2);
-    const int writing = argv[1][0] == 'w' && argv[1][1] == '\0';
-    const int reading = argv[1][0] == 'r' && argv[1][1] == '\0';
+    const int writing = strcmp(argv[1], "write") == 0;
+    const int reading = strcmp(argv[1], "read") == 0;
     require(writing || reading);
 
     OresActorI64Heap* heap = ores_actor_i64_heap_open(912, 1, 1);
