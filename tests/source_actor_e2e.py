@@ -84,7 +84,7 @@ def require_canonical_actor_guest_blobs(fixtures):
             "source actor guest fixture must be a regular file", name)
         source = path.read_bytes()
         assert 0 < len(source) < 16384, ("invalid fixture size", name)
-        marker = b"blob " + str(len(source)).encode("ascii") + b"\\0"
+        marker = b"blob " + str(len(source)).encode("ascii") + bytes([0])
         actual = hashlib.sha1(marker + source).hexdigest()
         assert actual == expected_blob, (
             "portable actor fixture drift; update conformance review first",
