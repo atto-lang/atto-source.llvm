@@ -83,6 +83,14 @@ int main() {
     CHECK(admit_critical_handle_state(c, row(READ | IO), true)
             == CriticalStateAdmission::Accept);
 
+    c.inferred = row(READ);
+    c.state_loan_live_across_suspend = true;
+    CHECK(admit_critical_handle_state(c, row(READ), true)
+            == CriticalStateAdmission::LoanAcrossSuspension);
+    c.state_loan_live_across_suspend = false;
+    CHECK(admit_critical_handle_state(c, row(READ), true)
+            == CriticalStateAdmission::Accept);
+
     c.inferred = row(READ | SUSPEND);
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND), true)
             == CriticalStateAdmission::MissingLogicalTurnRetention);
