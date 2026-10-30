@@ -242,6 +242,10 @@ public:
         auto* exchange=bound.exchange_pin_.exchange_;
         if(!exchange || exchange->phase()!=NativeHttpExchange::Phase::queued)
             return ORES_NATIVE_SEND_INVALID_REF;
+        // Losing producers must not rollback another producer's valid send.
+        // Reserve before any validation branch that can rollback the exchange.
+        if(!exchange->reserve_submission(token))
+            return ORES_NATIVE_SEND_INVALID_REF;
         const auto observed=exchange->token();
         // BoundExchange is constructed exclusively by the registry, but
         // close/cancellation can invalidate the metadata before submission.
