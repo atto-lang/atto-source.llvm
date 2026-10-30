@@ -216,6 +216,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_state_rw_critical_using_admission
         PROPERTIES TIMEOUT 60)
 
+    # Task-bound shared-state regions: exact logical execution + generation
+    # must own every read/write ticket. Fixed-capacity/nonparking; no heap.
+    add_executable(oreslang-native-task-bound-state-region-test
+        tests/native_task_bound_state_region_test.c)
+    set_target_properties(oreslang-native-task-bound-state-region-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-task-bound-state-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-task-bound-state-region-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-task-bound-state-region-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_task_bound_state_region_admission
+        COMMAND oreslang-native-task-bound-state-region-test)
+    set_tests_properties(native_task_bound_state_region_admission
+        PROPERTIES TIMEOUT 60)
+
     add_executable(oreslang-native-http-exchange-test tests/native_http_exchange_test.cpp)
     target_include_directories(oreslang-native-http-exchange-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-http-exchange-test PRIVATE Threads::Threads)
