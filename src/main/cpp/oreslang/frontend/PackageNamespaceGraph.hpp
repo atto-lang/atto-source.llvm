@@ -73,6 +73,51 @@ inline bool valid_flat_namespace_name(const std::string& name) {
     });
 }
 
+// Until an effect-aware cross-unit body checker exists, only scalar,
+ // call-free expression trees can enter the host namespace export inventory.
+ // An apparently scalar result can still hide Console/Call/borrow/nominal
+ // operations in a nested expression or local initializer.
+inline bool namespace_pure_scalar_expression(const Expression* expression) {
+    if (!expression) return true;
+    switch (expression->kind) {
+        case Expression::Kind::Integer:
+        case Expression::Kind::Boolean:
+        case Expression::Kind::Variable:
+        case Expression::Kind::Negate:
+        case Expression::Kind::LogicalNot:
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual:
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
+        case Expression::Kind::Conditional:
+            break;
+        default:
+            return false;
+    }
+    if (expression->resolved_type != ScalarType::I64
+            && expression->resolved_type != ScalarType::Bool) return false;
+    if (!expression->resolved_class.empty() || !expression->sum_type.empty()
+            || !expression->arguments.empty() || !expression->argument_names.empty()
+            || !expression->type_arguments.empty() || expression->type_arguments_present)
+        return false;
+    return namespace_pure_scalar_expression(expression->left.get())
+        && namespace_pure_scalar_expression(expression->right.get())
+        && namespace_pure_scalar_expression(expression->condition.get())
+        && namespace_pure_scalar_expression(expression->condition_lhs.get())
+        && namespace_pure_scalar_expression(expression->condition_rhs.get())
+        && namespace_pure_scalar_expression(expression->when_true.get())
+        && namespace_pure_scalar_expression(expression->when_false.get());
+}
+
 // This API cannot invent package ownership from a namespace header, pathname,
 // compilation directory or globally shared namespace. It deliberately deals
 // only with native scalar public function signatures; richer signatures and
@@ -101,6 +146,8 @@ inline PackageNamespaceGraph link_package_namespaces(
         // manufacture an empty importable namespace from a module-owned file.
         if (!program.module.empty())
             throw std::invalid_argument("module wrapper cannot declare a file namespace");
+        if (!program.imports.empty())
+            throw std::invalid_argument("native namespace unresolved module imports require checked dependency lowering");
 
         // Reject unlowered top-level declarations before registering the
         // namespace; no nominal/constraint/loop ABI can enter this scalar graph.
@@ -125,6 +172,12 @@ inline PackageNamespaceGraph link_package_namespaces(
                 throw std::invalid_argument("private native implementation cannot be a namespace export");
             if (!valid_flat_namespace_name(fn.name))
                 throw std::invalid_argument("invalid public namespace export name");
+            if (fn.name == "init")
+                throw std::invalid_argument("native namespace init lifecycle requires checked lowering");
+            if (!fn.statements.empty() || !fn.early_returns.empty())
+                throw std::invalid_argument("native namespace body control flow requires checked lowering");
+            if (!namespace_pure_scalar_expression(fn.result.get()))
+                throw std::invalid_argument("native namespace body expression requires checked effect lowering");
             if (!fn.generic_parameters.empty() || !fn.method_owner.empty())
                 throw std::invalid_argument("native namespace generic/method exports require checked lowering");
             // An arity-only export cannot hide a borrowed, nominal, sum,
@@ -146,6 +199,8 @@ inline PackageNamespaceGraph link_package_namespaces(
             // even when no producer or pipeline metadata is present. The
             // scalar export inventory cannot erase these scheduler effects.
             for (const auto& local : fn.locals) {
+                if (!namespace_pure_scalar_expression(local.initializer.get()))
+                    throw std::invalid_argument("native namespace local initializer requires checked effect lowering");
                 if (!local.task_await_name.empty() || !local.future_await_name.empty())
                     throw std::invalid_argument("native namespace suspension export requires checked ABI lowering");
             }

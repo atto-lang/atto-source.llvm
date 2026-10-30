@@ -107,6 +107,17 @@ int main() {
     REQUIRE(private_graph.namespaces.at({"foo@1", "a"}).source_units.size() == 4);
     REQUIRE(private_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
+    // Namespace module imports have no manifest/lockfile binding in this
+    // phase-one host inventory; a pinned namespace alias is not a module pin.
+    {
+        Program unverified = make_source("a", "with_unverified_module");
+        unverified.imports.emplace_back();
+        another = units;
+        another.push_back({"foo/unverified_module", "foo@1", &unverified});
+        must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                    "unresolved module imports");
+    }
+
     // 7. Unlowered top-level AST families must never enter the scalar graph.
     {
         Program unsupported = make_source("a", "with_sum");
@@ -233,6 +244,45 @@ int main() {
     reject_signature("reserved_export_name", [](Function& fn) {
         fn.name = "__root__";
     }, "invalid public namespace export name");
+
+    // Namespace exports must not invent a callable init lifecycle or
+    // erase unchecked body control flow and nested expression effects.
+    reject_signature("init_lifecycle_export", [](Function& fn) {
+        fn.name = "init";
+    }, "init lifecycle");
+    reject_signature("body_statement_export", [](Function& fn) {
+        fn.statements.emplace_back();
+    }, "body control flow");
+    reject_signature("early_return_export", [](Function& fn) {
+        fn.early_returns.emplace_back();
+    }, "body control flow");
+    reject_signature("console_result_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Console;
+    }, "body expression");
+    reject_signature("nested_call_result_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Add;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Call;
+    }, "body expression");
+    reject_signature("call_local_initializer_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().initializer = std::make_unique<Expression>();
+        fn.locals.back().initializer->kind = Expression::Kind::Call;
+    }, "local initializer");
+    Program pure_expression = make_source("a", "pure_scalar_expression");
+    pure_expression.functions.front().result = std::make_unique<Expression>();
+    pure_expression.functions.front().result->kind = Expression::Kind::Add;
+    pure_expression.functions.front().result->left = std::make_unique<Expression>();
+    pure_expression.functions.front().result->left->kind = Expression::Kind::Integer;
+    pure_expression.functions.front().locals.emplace_back();
+    pure_expression.functions.front().locals.back().initializer = std::make_unique<Expression>();
+    pure_expression.functions.front().locals.back().initializer->kind = Expression::Kind::Boolean;
+    another = units;
+    another.push_back({"foo/pure_scalar_expression", "foo@1", &pure_expression});
+    const auto pure_graph = link_package_namespaces(another, pins, {request});
+    REQUIRE(pure_graph.namespaces.at({"foo@1", "a"}).exports.size() == 4);
 
     // 12. Lifecycle suspension, task/Future pipelines and continuation
     // metadata are not ordinary synchronous scalar namespace exports.
@@ -385,5 +435,5 @@ int main() {
     const auto internal_graph = link_package_namespaces(internal_units, pins, {request});
     REQUIRE(internal_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
-    std::cout << "native package namespace source-only graph: 67/67 cases passed\n";
+    std::cout << "native package namespace source-only graph: 75/75 cases passed\n";
 }
