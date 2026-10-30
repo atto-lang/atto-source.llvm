@@ -141,6 +141,19 @@ inline PackageNamespaceGraph link_package_namespaces(
                     || fn.ready_await_form != NativeAwaitForm::None
                     || !fn.ready_future_name.empty() || !fn.ready_future_actor.empty())
                 throw std::invalid_argument("native namespace suspension export requires checked ABI lowering");
+            // A (name, arity) inventory has no effect row, actor capability
+            // or exception/cleanup ABI. Reject these unlowered boundaries
+            // rather than silently exporting an apparently pure scalar call.
+            // Even an explicitly empty declared row requires validation by
+            // the future effect-aware cross-unit linker.
+            if (fn.has_declared_effects || fn.declared_effects.bits != 0)
+                throw std::invalid_argument("native namespace effect row requires checked ABI lowering");
+            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
+                    || !fn.actor_stops.empty() || !fn.actor_actions.empty()
+                    || !fn.actor_field_writes.empty()
+                    || fn.caught_throw_value != nullptr
+                    || !fn.catch_binding.empty() || !fn.caught_throw_defers.empty())
+                throw std::invalid_argument("native namespace actor/exception effects require checked lowering");
             if (fn.returns_void
                     || (fn.return_type != ScalarType::I64 && fn.return_type != ScalarType::Bool)
                     || !fn.return_class.empty() || !fn.return_sum.empty()

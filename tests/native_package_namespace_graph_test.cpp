@@ -3,6 +3,7 @@
 #define REQUIRE(expr) do { if (!(expr)) throw std::runtime_error("namespace graph test failed: " #expr); } while (false)
 #include <iostream>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -257,6 +258,44 @@ int main() {
         fn.future_pipelines.emplace_back();
     }, "suspension export");
 
+    // 13. The host-only (name, arity) export inventory cannot erase
+    // declared effect rows, actor authority or exception/cleanup effects.
+    // A future typed linker must validate these before enabling exports.
+    reject_signature("declared_io_effect", [](Function& fn) {
+        fn.has_declared_effects = true;
+        fn.declared_effects.bits = static_cast<std::uint32_t>(FunctionEffect::Io);
+    }, "effect row");
+    reject_signature("unresolved_effect_bit", [](Function& fn) {
+        fn.declared_effects.bits = FunctionEffects::UnresolvedCallBit;
+    }, "effect row");
+    reject_signature("explicit_empty_effect_row", [](Function& fn) {
+        fn.has_declared_effects = true;
+    }, "effect row");
+    reject_signature("actor_spawn_export", [](Function& fn) {
+        fn.actor_spawns.emplace_back();
+    }, "actor/exception effects");
+    reject_signature("actor_send_export", [](Function& fn) {
+        fn.actor_sends.emplace_back();
+    }, "actor/exception effects");
+    reject_signature("actor_stop_export", [](Function& fn) {
+        fn.actor_stops.emplace_back("worker");
+    }, "actor/exception effects");
+    reject_signature("actor_action_export", [](Function& fn) {
+        fn.actor_actions.emplace_back();
+    }, "actor/exception effects");
+    reject_signature("actor_write_export", [](Function& fn) {
+        fn.actor_field_writes.emplace_back();
+    }, "actor/exception effects");
+    reject_signature("caught_throw_export", [](Function& fn) {
+        fn.caught_throw_value = std::make_unique<Expression>();
+    }, "actor/exception effects");
+    reject_signature("catch_binding_export", [](Function& fn) {
+        fn.catch_binding = "err";
+    }, "actor/exception effects");
+    reject_signature("throw_cleanup_export", [](Function& fn) {
+        fn.caught_throw_defers.emplace_back();
+    }, "actor/exception effects");
+
     // Private internal implementation remains invisible and is not rejected.
     Program private_internal = make_source("a", "native_internal_helper", false);
     private_internal.functions.front().native_internal = true;
@@ -265,5 +304,5 @@ int main() {
     const auto internal_graph = link_package_namespaces(internal_units, pins, {request});
     REQUIRE(internal_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
-    std::cout << "native package namespace source-only graph: 38/38 cases passed\n";
+    std::cout << "native package namespace source-only graph: 49/49 cases passed\n";
 }
