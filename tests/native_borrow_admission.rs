@@ -104,6 +104,18 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
             status.success() && has_definition(&stdout),
             "{name}: missing real IR: {stderr}"
         );
+        if name == "valid-local-in-place-mutation" {
+            // Local i64 updates must not silently acquire a managed/heap
+            // allocator dependency. SSA/stack alloca remain allowed. This
+            // is an IR smoke gate, NOT proof of whole-program zero GC.
+            const ALLOCATORS: [&str; 6] =
+                ["@malloc(", "@calloc(", "@realloc(", "@GC_malloc(", "@ores_gc_alloc(", "@_Znwm("];
+            for line in stdout.lines() {
+                if line.contains("call") && ALLOCATORS.iter().any(|symbol| line.contains(symbol)) {
+                    panic!("{name}: scalar-only source emitted a heap/GC allocation call: {line}");
+                }
+            }
+        }
     }
 }
 
