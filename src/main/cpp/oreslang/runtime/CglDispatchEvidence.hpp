@@ -7,7 +7,7 @@
 namespace ores::cgl {
 
 enum class EvidenceFailure : std::uint8_t {
-    none, no_coverage, invalid_config, invalid_identity, invalid_timestamp,
+    none, no_coverage, trace_loss, invalid_config, invalid_identity, invalid_timestamp,
     invalid_cancellation, duplicate_ticket, queue_limit, start_delay, due_to_start, deadline_miss
 };
 
@@ -33,6 +33,8 @@ struct EvidenceLimits {
     std::uint64_t max_due_to_start_ns;
     std::uint32_t max_queue_depth;
     std::size_t min_completed;
+    std::uint64_t dropped_records;
+    bool capture_complete;
 };
 
 struct EvidenceSummary {
@@ -63,6 +65,10 @@ struct EvidenceSummary {
         limits.max_queue_depth == 0 ||
         limits.min_completed == 0) {
         result.failure = EvidenceFailure::invalid_config;
+        return result;
+    }
+    if (!limits.capture_complete || limits.dropped_records != 0) {
+        result.failure = EvidenceFailure::trace_loss;
         return result;
     }
     if (traces == nullptr || count < limits.min_completed) {
