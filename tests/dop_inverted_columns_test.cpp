@@ -16,6 +16,9 @@ using Store = oreslang::dop::InvertedColumns<float, std::int64_t, bool>;
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().span()), std::span<const float>>);
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().span()), std::span<float>>);
 static_assert(!std::is_copy_constructible_v<Store::Loan<0, true>>);
+static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().read_at(0)), float>);
+static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().size_checked()), std::size_t>);
+static_assert(!requires(Store::Loan<0, false>& r) { r.write_at(0, 1.0f); });
 static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
 static_assert(!std::is_default_constructible_v<Store::Handle>);
@@ -49,7 +52,11 @@ int main() {
         auto r2 = a.borrow_read<0>();
         auto w = a.borrow_write<1>();
         check(r.span().size() == 3 && r.span()[1] == 2.5f);
-        w.span()[1] = 999;
+        check(r.size_checked() == 3 && r.read_at(1) == 2.5f);
+        expect<std::out_of_range>([&] { (void)r.read_at(3); });
+        expect<std::out_of_range>([&] { w.write_at(100, 123); });
+        w.write_at(1, 999);
+        check(w.read_at(1) == 999);
         check(r2.span()[0] == 1.5f);
         expect<std::logic_error>([&] { (void)a.borrow_write<0>(); });
         expect<std::logic_error>([&] { (void)a.borrow_read<1>(); });
@@ -61,6 +68,13 @@ int main() {
         expect<std::logic_error>([&] { a.erase_swap(h0); });
     }
     check(a.get<1>(h1) == 999);
+    {
+        auto loan = a.borrow_read<0>();
+        check(loan.read_at(0) == 1.5f);
+        loan.release();
+        expect<std::logic_error>([&] { (void)loan.read_at(0); });
+        expect<std::logic_error>([&] { (void)loan.size_checked(); });
+    }
     check(a.get<2>(h0) && !a.get<2>(h1));
     { auto bools = a.borrow_read<2>();
       check(bools.span().size() == 3 && bools.span()[0] == 1 && bools.span()[1] == 0); }
@@ -131,6 +145,8 @@ int main() {
         carried.emplace(owner->borrow_read<0>());
         owner.reset();
         expect<std::logic_error>([&] { (void)carried->span(); });
+        expect<std::logic_error>([&] { (void)carried->read_at(0); });
+        expect<std::logic_error>([&] { (void)carried->size_checked(); });
     }
     carried.reset();
     // Owner IDs are shared across distinct template instantiations.
