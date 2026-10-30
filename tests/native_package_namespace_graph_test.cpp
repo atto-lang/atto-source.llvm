@@ -1,5 +1,6 @@
 #include "oreslang/frontend/PackageNamespaceGraph.hpp"
-#include <cassert>
+// Never let -DNDEBUG turn acceptance checks into no-ops.
+#define REQUIRE(expr) do { if (!(expr)) throw std::runtime_error("namespace graph test failed: " #expr); } while (false)
 #include <iostream>
 #include <map>
 #include <stdexcept>
@@ -24,10 +25,10 @@ static void must_reject(F&& op, const std::string& message) {
     try {
         op();
     } catch (const std::invalid_argument& error) {
-        assert(std::string(error.what()).find(message) != std::string::npos);
+        REQUIRE(std::string(error.what()).find(message) != std::string::npos);
         return;
     }
-    assert(false && "expected namespace package linker to reject invalid graph");
+    REQUIRE(false && "expected namespace package linker to reject invalid graph");
 }
 
 int main() {
@@ -55,21 +56,21 @@ int main() {
 
     // 1. Ten source units split into three package-local namespaces.
     auto graph = link_package_namespaces(units, pins, {request});
-    assert(graph.namespaces.size() == 3);
-    assert(graph.namespaces.at({"foo@1", "a"}).source_units.size() == 3);
-    assert(graph.namespaces.at({"foo@1", "b"}).source_units.size() == 4);
-    assert(graph.namespaces.at({"foo@1", "c"}).source_units.size() == 3);
-    assert(graph.imports.at({"app/main", "a"}).package_instance_id == "foo@1");
-    assert(graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
+    REQUIRE(graph.namespaces.size() == 3);
+    REQUIRE(graph.namespaces.at({"foo@1", "a"}).source_units.size() == 3);
+    REQUIRE(graph.namespaces.at({"foo@1", "b"}).source_units.size() == 4);
+    REQUIRE(graph.namespaces.at({"foo@1", "c"}).source_units.size() == 3);
+    REQUIRE(graph.imports.at({"app/main", "a"}).package_instance_id == "foo@1");
+    REQUIRE(graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
     // 2. Source declarations in a second package sharing "a" cannot merge.
     Program other = make_source("a", "foreign");
     auto another = units;
     another.push_back({"other/a", "other@1", &other});
     auto separate = link_package_namespaces(another, pins, {request});
-    assert(separate.namespaces.size() == 4);
-    assert(separate.namespaces.at({"foo@1", "a"}).exports.size() == 3);
-    assert(separate.namespaces.at({"other@1", "a"}).exports.size() == 1);
+    REQUIRE(separate.namespaces.size() == 4);
+    REQUIRE(separate.namespaces.at({"foo@1", "a"}).exports.size() == 3);
+    REQUIRE(separate.namespaces.at({"other@1", "a"}).exports.size() == 1);
 
     // 3. Duplicate public symbol/signature inside same package fails closed.
     Program duplicate = make_source("a", "add");
@@ -102,8 +103,8 @@ int main() {
     another = units;
     another.push_back({"foo/private", "foo@1", &private_helper});
     auto private_graph = link_package_namespaces(another, pins, {request});
-    assert(private_graph.namespaces.at({"foo@1", "a"}).source_units.size() == 4);
-    assert(private_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
+    REQUIRE(private_graph.namespaces.at({"foo@1", "a"}).source_units.size() == 4);
+    REQUIRE(private_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
     // 7. Unlowered top-level AST families must never enter the scalar graph.
     {
@@ -150,7 +151,7 @@ int main() {
     another = units;
     another.push_back({"foo/bool_value", "foo@1", &bool_signature});
     const auto scalar_graph = link_package_namespaces(another, pins, {request});
-    assert(scalar_graph.namespaces.at({"foo@1", "a"}).exports.size() == 4);
+    REQUIRE(scalar_graph.namespaces.at({"foo@1", "a"}).exports.size() == 4);
 
     const auto reject_signature = [&](const std::string& name,
                                       const auto& mutate, const std::string& reason) {
@@ -232,13 +233,37 @@ int main() {
         fn.name = "__root__";
     }, "invalid public namespace export name");
 
+    // 12. Lifecycle suspension, task/Future pipelines and continuation
+    // metadata are not ordinary synchronous scalar namespace exports.
+    reject_signature("ready_await_export", [](Function& fn) {
+        fn.ready_await_actor = "worker";
+    }, "suspension export");
+    reject_signature("done_await_export", [](Function& fn) {
+        fn.done_await_actor = "worker";
+    }, "suspension export");
+    reject_signature("ready_form_export", [](Function& fn) {
+        fn.ready_await_form = static_cast<NativeAwaitForm>(255);
+    }, "suspension export");
+    reject_signature("ready_future_export", [](Function& fn) {
+        fn.ready_future_name = "pending";
+    }, "suspension export");
+    reject_signature("ready_future_actor_export", [](Function& fn) {
+        fn.ready_future_actor = "worker";
+    }, "suspension export");
+    reject_signature("task_export", [](Function& fn) {
+        fn.source_tasks.emplace_back();
+    }, "suspension export");
+    reject_signature("pipeline_export", [](Function& fn) {
+        fn.future_pipelines.emplace_back();
+    }, "suspension export");
+
     // Private internal implementation remains invisible and is not rejected.
     Program private_internal = make_source("a", "native_internal_helper", false);
     private_internal.functions.front().native_internal = true;
     auto internal_units = units;
     internal_units.push_back({"foo/native_internal_helper", "foo@1", &private_internal});
     const auto internal_graph = link_package_namespaces(internal_units, pins, {request});
-    assert(internal_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
+    REQUIRE(internal_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
-    std::cout << "native package namespace source-only graph: 31/31 cases passed\n";
+    std::cout << "native package namespace source-only graph: 38/38 cases passed\n";
 }

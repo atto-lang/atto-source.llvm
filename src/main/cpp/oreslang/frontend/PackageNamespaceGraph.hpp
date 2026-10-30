@@ -133,6 +133,14 @@ inline PackageNamespaceGraph link_package_namespaces(
             // typed shapes in this host-only inventory.
             if (fn.async_source_i64)
                 throw std::invalid_argument("native namespace async export requires checked ABI lowering");
+            // The scalar return type alone cannot certify an executable
+            // suspension boundary. Await, task and Future pipeline metadata
+            // require a separately checked cross-unit continuation ABI.
+            if (!fn.source_tasks.empty() || !fn.future_pipelines.empty()
+                    || !fn.ready_await_actor.empty() || !fn.done_await_actor.empty()
+                    || fn.ready_await_form != NativeAwaitForm::None
+                    || !fn.ready_future_name.empty() || !fn.ready_future_actor.empty())
+                throw std::invalid_argument("native namespace suspension export requires checked ABI lowering");
             if (fn.returns_void
                     || (fn.return_type != ScalarType::I64 && fn.return_type != ScalarType::Bool)
                     || !fn.return_class.empty() || !fn.return_sum.empty()
