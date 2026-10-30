@@ -1,6 +1,6 @@
 # LLVM Future-aware pipeline ownership contract (v1)
 
-This file pins the **compiler proof contract** required for parity with Java/Graal PR #2048. It is intentionally not a claim that general source Future pipelines already execute on LLVM.
+This file pins the **compiler proof contract** for LLVM Future-aware value pipelines. The 2026-10-27 strict language decision in Java/Graal PR #2193 supersedes the older implicit-flatten behavior proposed by #2048: `|>` preserves wrapper nesting and is not an implicit `Future.flatten()`. It is intentionally not a claim that general source Future pipelines already execute on LLVM.
 
 ## Per-edge ownership
 
@@ -20,9 +20,11 @@ Ownership and effect provenance are orthogonal. `rt take` cannot turn an opaque 
 
 Source exceptional effect execution remains fail-closed until native throw/raise/panic continuation unwinding exists. Executable admission checks the **cumulative** effect row so an exceptional effect from an earlier stage cannot be overlooked by a later pure stage.
 
-## Future flattening
+## Future nesting and explicit flattening
 
-A stage that flattens one Future layer must own exactly that stage-created Future for cancellation **and** carry `FreshCheckedProducer` provenance. A forwarded/borrowed Future cannot be relabelled as owned merely because the surrounding pipeline root was consumed. A scalar stage carries neither child-Future ownership nor Future provenance.
+A value-pipeline stage never removes a `Future` layer implicitly. If an async stage returns `Future<B>`, mapping it over a Future produces a nested Future shape; the current scalar LLVM pipeline cannot represent that shape and therefore rejects the stage before IR emission.
+
+The retained child-Future ownership/provenance metadata is not executable authority for `|>`. A future explicit `flatten()` or `flat_map` implementation must have a distinct checked source-plan boundary, preserve one-layer semantics, and establish cancellation ownership separately.
 
 ## Proof identity and publication
 
@@ -47,7 +49,7 @@ The branch now contains a deliberately narrow first source path built on the exi
 - the producer plus stages execute on the native scheduler carrier and trusted host `main` observes the final result;
 - executable lowering requires the post-ownership `ownership_admitted` mark. Type/shape staging alone is not codegen authority.
 
-This does **not** yet implement the general Java/Graal Future pipeline contract. In particular, borrowed-root execution, named Future bindings with canonical use-after-`rt take` / repeated-take tracking, pipeline cancellation, async stages, one-level Future flattening, nested `await`, captures/loans, exceptional effects, generic payloads, and actor affinity remain fail-closed.
+This does **not** yet implement the general Future pipeline contract. In particular, borrowed-root execution, named Future bindings with canonical use-after-`rt take` / repeated-take tracking, pipeline cancellation, async stages, explicit one-level Future flattening, nested `await`, captures/loans, exceptional effects, generic payloads, and actor affinity remain fail-closed. Async stages are specifically rejected because silently fusing their returned Future would violate the no-auto-flatten rule.
 
 The direct `rt take source()` spelling in this first slice records consuming root shape but does not pretend that a named Future binding has passed the ordinary lexical move checker. That parity step must land before named consuming roots are admitted.
 
