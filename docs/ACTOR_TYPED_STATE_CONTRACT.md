@@ -136,8 +136,11 @@ do not ban it at the language level. `*_blocking` call effects must come
 from trusted function signatures, not from guessing based on method names.
 In an actor, blocking on a carrier must obey scheduler isolation rules;
 strict RT admission may reject unbounded blocking/FFI. Each admitted slice
-remains logically exclusive; yielding can allow another actor continuation
-to enter, so callback-wide atomicity across `await` is NOT implied.
+remains logically exclusive. Yielding may release the physical carrier so
+**other actors** can run, but the same logical handler retains this actor's
+user lane until completion/cancellation. A different user continuation may
+queue but cannot enter actor state. State-backed loans are revoked before
+the yield and reacquired only by the same generation-fenced logical turn.
 
 `from` is a proposed contextual actor interface/trait conformance
 spelling. Existing Java parser recognizes `from` at actor declarations,
