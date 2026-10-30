@@ -385,6 +385,9 @@ struct ActorStateField {
     std::string name;
     ScalarType type = ScalarType::I64;
     std::size_t offset = 0;
+    // Exact signed i64 / bool literal defaults. This is schema metadata,
+    // never a public ordinary actor field or a guest-mintable capability.
+    std::int64_t initial_i64 = 0;
 };
 
 struct ActorDecl {
