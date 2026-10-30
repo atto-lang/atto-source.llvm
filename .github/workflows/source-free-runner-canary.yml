@@ -1,5 +1,9 @@
 name: Source-free runner admission canary
 
+# Security diagnostic: PR changes to this file trigger this self-contained probe.
+# No checkout, private source, artifact upload, or repository permissions.
+# A completed failure with runner_id=0 and steps=[] means no job body executed;
+# it does NOT independently establish an Actions billing/minutes root cause.
 on:
   pull_request:
     branches:
