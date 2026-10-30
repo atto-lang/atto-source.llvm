@@ -32,6 +32,32 @@ struct DropTracked {
   ~DropTracked() noexcept { ++*drops; }
 };
 using Graph = oreslang::runtime::DeterministicGraphArena<DropTracked, 3, 2>;
+struct ConstructProbe {
+  using Hook = void (*)(void*);
+  int* drops;
+  explicit ConstructProbe(int* d, void* ctx = nullptr, Hook hook = nullptr,
+                          bool fail = false) : drops(d) {
+    if (hook) hook(ctx);
+    if (fail) throw 7;
+  }
+  ConstructProbe(const ConstructProbe&) = delete;
+  ConstructProbe& operator=(const ConstructProbe&) = delete;
+  ~ConstructProbe() noexcept { ++*drops; }
+};
+using ReentryArena = oreslang::runtime::DeterministicGraphArena<ConstructProbe, 3, 1>;
+struct ReentryState {
+  ReentryArena* arena;
+  ReentryArena::Handle known;
+  bool nested_emplace = true;
+  bool nested_borrow = true;
+  bool nested_close = true;
+};
+void try_constructor_reentry(void* context) {
+  auto& s = *static_cast<ReentryState*>(context);
+  s.nested_emplace = s.arena->emplace(nullptr).has_value();
+  s.nested_borrow = s.arena->borrow(s.known).has_value();
+  s.nested_close = s.arena->close();
+}
 #define VERIFY(expr) do { if (!(expr)) { std::fprintf(stderr, "FAIL %d\n", __LINE__); return 1; } } while (false)
 static_assert(!std::is_copy_constructible_v<Graph>, "unique arena owner");
 static_assert(!std::is_move_constructible_v<Graph>, "stable arena");
@@ -112,6 +138,38 @@ int main() {
   VERIFY(drops == 5);
   // Domain construction, scoped reads, exclusive writes, cyclic links and
   // region reclamation allocate no C++ heap blocks for this fixed-width T.
+  // Construction must not publish uninitialized slots or recursively close
+  // other live objects. Throwing constructors restore the construction gate.
+  int ctor_drops = 0;
+  ReentryArena ctor_arena;
+  auto first = ctor_arena.emplace(&ctor_drops);
+  VERIFY(first.has_value());
+  ReentryState reentry{&ctor_arena, *first};
+  auto second = ctor_arena.emplace(&ctor_drops, &reentry, try_constructor_reentry);
+  VERIFY(second.has_value());
+  VERIFY(!reentry.nested_emplace && !reentry.nested_borrow && !reentry.nested_close);
+  VERIFY(ctor_arena.size() == 2);
+  bool ctor_threw = false;
+  try {
+    ctor_arena.emplace(&ctor_drops, nullptr, nullptr, true);
+  } catch (int code) {
+    ctor_threw = code == 7;
+  }
+  VERIFY(ctor_threw && ctor_arena.size() == 2 && ctor_drops == 0);
+  auto after_throw = ctor_arena.emplace(&ctor_drops);
+  VERIFY(after_throw.has_value() && ctor_arena.size() == 3);
+  VERIFY(ctor_arena.close());
+  VERIFY(ctor_drops == 3);
+
+  // Retirement initiated during a constructor must roll back its unpublished
+  // value; source payload destruction remains exact once.
+  ReentryArena stop_arena;
+  auto stop_result = stop_arena.emplace(&ctor_drops, &stop_arena, +[](void* ptr) {
+    static_cast<ReentryArena*>(ptr)->begin_retire();
+  });
+  VERIFY(!stop_result.has_value() && stop_arena.size() == 0);
+  VERIFY(stop_arena.retirement_requested() && ctor_drops == 4);
+  VERIFY(stop_arena.close());
   VERIFY(heap_news.load(std::memory_order_relaxed) == initial_news);
   return 0;
 }
