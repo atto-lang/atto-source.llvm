@@ -42,6 +42,7 @@ struct Suite {
     bool reject_resume=false;
     unsigned mode=0;
     std::atomic<unsigned> rejected{0};
+    std::atomic<bool> hold_turn{false},turn_entered{false};
     static Registry::Metadata info(unsigned n) noexcept {
         return {1000+n,2000+n,3000,987654321};
     }
@@ -54,6 +55,15 @@ struct Suite {
             OresNativeExecutionContext ctx{};
             CHECK(ores_native_actor_scheduler_current_execution_context(s.scheduler,&ctx));
             CHECK(ctx.allocation.owner==slot);
+            if(s.hold_turn.load()) {
+                s.turn_entered.store(true);
+                const auto deadline=std::chrono::steady_clock::now()+
+                                    std::chrono::seconds(8);
+                while(s.hold_turn.load() &&
+                      std::chrono::steady_clock::now()<deadline)
+                    std::this_thread::yield();
+                CHECK(!s.hold_turn.load());
+            }
             auto& exchange=s.exchanges[slot];
             const auto token=exchange.token();
             CHECK(!Registry::current()); // carrier callback does not inherit stale TLS
@@ -190,9 +200,10 @@ struct Suite {
             CHECK(!Registry::current());
         }catch(...){s.bad.fetch_add(1);}
     }
-    void begin(unsigned n,bool concurrent=false,bool await=false,bool revoke=false){
+    void begin(unsigned n,bool concurrent=false,bool await=false,
+               bool revoke=false,unsigned queue_capacity=4){
         count=n;barrier=concurrent;await_mode=await;revoke_on_turn=revoke;
-        scheduler=ores_native_actor_scheduler_open(n,4,n,dispatch,this);
+        scheduler=ores_native_actor_scheduler_open(n,queue_capacity,n,dispatch,this);
         CHECK(scheduler);
         CHECK(ores_native_actor_scheduler_prestart_carriers(scheduler));
         CHECK(ores_native_actor_scheduler_all_carriers_started(scheduler));
@@ -215,10 +226,13 @@ struct Suite {
     }
     void send_all(unsigned next_mode=0){
         mode=next_mode;
-        for(unsigned i=0;i<count;++i)
-            CHECK(ores_native_actor_scheduler_try_send(
-                scheduler,actors[i],pins[i]->token().dispatch_ticket)
-                ==ORES_NATIVE_SEND_ACCEPTED);
+        for(unsigned i=0;i<count;++i) {
+            const auto ticket=pins[i]->token().dispatch_ticket;
+            const auto status=exchanges[i].phase()==NativeHttpExchange::Phase::queued
+                ? contexts.submit_bound_exchange(scheduler,*pins[i])
+                : ores_native_actor_scheduler_try_send(scheduler,actors[i],ticket);
+            CHECK(status==ORES_NATIVE_SEND_ACCEPTED);
+        }
         CHECK(ores_native_actor_scheduler_drain(scheduler));
         CHECK(bad.load()==0);
     }
@@ -297,10 +311,10 @@ int main(){
         const auto second_ticket=s.second_pin->token().dispatch_ticket;
         CHECK(first_ticket!=second_ticket);
         CHECK(!s.second_exchange.claim(s.second_pin->token()));
-        CHECK(ores_native_actor_scheduler_try_send(s.scheduler,s.actors[0],
-              first_ticket)==ORES_NATIVE_SEND_ACCEPTED);
-        CHECK(ores_native_actor_scheduler_try_send(s.scheduler,s.actors[0],
-              second_ticket)==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(s.contexts.submit_bound_exchange(
+              s.scheduler,*s.pins[0])==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(s.contexts.submit_bound_exchange(
+              s.scheduler,*s.second_pin)==ORES_NATIVE_SEND_ACCEPTED);
         CHECK(ores_native_actor_scheduler_drain(s.scheduler));
         CHECK(s.observed==2 && s.bad==0 && s.rejected==0);
         const auto t=s.second_pin->token();
@@ -345,6 +359,54 @@ int main(){
         CHECK(s.buffers.available()==16);
         CHECK(!s.contexts.retain(s.requests[0],s.actors[0]));
         s.end();
+    }
+    // Mailbox-full denial: a rejected second HTTP request rolls back to
+    // reactor without executing an actor callback, and cleanup drains both
+    // transport and metadata pins even while the first accepted turn runs.
+    {
+        Suite s;s.begin(1,false,false,false,1);
+        s.hold_turn.store(true);
+        CHECK(s.contexts.submit_bound_exchange(
+            s.scheduler,*s.pins[0])==ORES_NATIVE_SEND_ACCEPTED);
+        const auto deadline=std::chrono::steady_clock::now()+
+                            std::chrono::seconds(8);
+        while(!s.turn_entered.load() &&
+              std::chrono::steady_clock::now()<deadline)
+            std::this_thread::yield();
+        CHECK(s.turn_entered.load());
+        auto second=s.contexts.open(s.actors[0],Suite::info(99));CHECK(second);
+        auto ingress=s.buffers.begin(1);CHECK(ingress);
+        std::memcpy(ingress->data(),"GET /actor",10);
+        const auto bytes=ingress->publish(10);CHECK(bytes.value);
+        auto pending=s.contexts.attach_exchange_with_buffer(
+            s.second_exchange,*second,s.actors[0],s.buffers,bytes,1);
+        CHECK(pending);
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*pending)
+              ==ORES_NATIVE_SEND_MAILBOX_FULL);
+        CHECK(s.second_exchange.phase()==NativeHttpExchange::Phase::reactor);
+        CHECK(s.contexts.close(*second,s.actors[0]));
+        CHECK(s.buffers.close(bytes,1));
+        pending.reset();
+        CHECK(s.contexts.available()==15 && s.buffers.available()==15);
+        s.hold_turn.store(false);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.bad==0 && s.observed==1);
+        s.end();
+    }
+    // Stopped actor rejects a request and likewise rolls it back safely.
+    {
+        Suite s;s.begin(1);
+        CHECK(ores_native_actor_scheduler_stop(s.scheduler,s.actors[0]));
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.pins[0])
+              ==ORES_NATIVE_SEND_TERMINATED);
+        CHECK(s.exchanges[0].phase()==NativeHttpExchange::Phase::reactor);
+        CHECK(s.contexts.close(s.requests[0],s.actors[0]));
+        CHECK(s.buffers.close(s.bodies[0],1));
+        s.pins[0].reset();
+        CHECK(s.contexts.available()==16 && s.buffers.available()==16);
+        ores_native_actor_scheduler_retire(s.scheduler);
+        CHECK(ores_native_actor_scheduler_try_destroy(s.scheduler));
+        s.scheduler=nullptr;
     }
     // Stale handle cannot alias a later actor incarnation or request.
     {
