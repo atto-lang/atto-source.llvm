@@ -4585,6 +4585,28 @@ if(BUILD_TESTING)
     endforeach()
 endif()
 
+# Native Durable Objects queue and physical actor-owned arena contracts.
+# The compiler-generated .ores source fixture is registered above; these run
+# with or without source compiler lowering and require no separate test carrier.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    foreach(ores_native_fixture IN ITEMS
+            native_actor_arena_test
+            native_durable_lock_queues_test
+            native_oresvm_durable_queues_test)
+        add_executable("oreslang-${ores_native_fixture}"
+            "tests/${ores_native_fixture}.cpp")
+        target_include_directories("oreslang-${ores_native_fixture}" PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features("oreslang-${ores_native_fixture}" PRIVATE cxx_std_17)
+        target_link_libraries("oreslang-${ores_native_fixture}" PRIVATE Threads::Threads)
+        target_compile_options("oreslang-${ores_native_fixture}" PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME "${ores_native_fixture}" COMMAND "oreslang-${ores_native_fixture}")
+        set_tests_properties("${ores_native_fixture}" PROPERTIES TIMEOUT 30)
+    endforeach()
+endif()
+
 # Hierarchical tenant and OresVM resource-admission adversarial checks.
 # This is host-side quota verification, NOT hostile-native-code sandboxing.
 if(BUILD_TESTING)
