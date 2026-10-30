@@ -73,6 +73,20 @@ static void sweep_dispatch_budget_invariants() {
             assert(receipt.deadline_ns == 0);
         }
         assert(timer.outstanding() == 0);
+        // A new tenant can immediately reuse the physical slot without
+        // inheriting an old ticket, actor generation or deadline authority.
+        Queue::Handle next_tenant{};
+        std::size_t revoked = 77;
+        assert(timer.arm_after(observed, 0, actor_id + 10000,
+                               generation + 1, 0, next_tenant) == Status::Ok);
+        assert(next_tenant.domain == ticket.domain);
+        assert(next_tenant.slot == ticket.slot);
+        assert(next_tenant.generation != ticket.generation);
+        assert(timer.cancel(ticket) == Status::Stale);
+        assert(timer.revoke_actor(actor_id, generation, revoked) == Status::Ok);
+        assert(revoked == 0 && timer.outstanding() == 1);
+        assert(timer.cancel(next_tenant) == Status::Ok);
+        assert(timer.outstanding() == 0);
     }
 }
 

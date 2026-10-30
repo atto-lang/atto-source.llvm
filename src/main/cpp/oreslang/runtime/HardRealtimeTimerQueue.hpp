@@ -247,9 +247,13 @@ private:
         return s.phase != Phase::Free && s.generation == h.generation ? &s : nullptr;
     }
     void retire(Slot& s) noexcept {
-        s.phase = Phase::Free;
-        s.actor_id = 0;
-        s.actor_generation = 0;
+        // Tenant-owned timer metadata must not survive cancellation, STOP,
+        // deadline rejection or successful claim in a scheduler-owned slot.
+        // Keep the high-water generation: resetting it would reauthorize a
+        // previously retired handle when another tenant reuses this slot.
+        const auto generation = s.generation;
+        s = Slot{};
+        s.generation = generation;
         --outstanding_;
     }
     std::array<Slot, Capacity> slots_{};
