@@ -13,6 +13,7 @@
  * this API directly or construct identities/tickets; the scheduler supplies
  * authenticated OresNativeExecutionId + generation-checked store handles.
  */
+#include "oreslang/runtime/ActorArena.h"
 #include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativeExecutionContextStore.h"
 #include "oreslang/runtime/OresStdSyncAdmission.h"
@@ -43,6 +44,8 @@ typedef struct ores_task_bound_state_region {
 #define ORES_TASK_BOUND_STATE_REGION_INIT(REGION_ID, GENERATION) { \
     .region_id=(REGION_ID), .generation=(GENERATION), .metadata=ATOMIC_FLAG_INIT, \
     .gate=ORES_STD_RW_INIT_SCOPE(GENERATION) }
+#define ORES_TASK_BOUND_STATE_REGION_UNBOUND_INIT { \
+    .metadata=ATOMIC_FLAG_INIT, .gate=ORES_STD_RW_INIT }
 
 static inline bool ores_state_task_identity_valid(ores_state_task_identity owner) {
     return owner.logical.runtime_domain != 0 && owner.logical.execution != 0 &&
@@ -127,6 +130,49 @@ static inline void ores_state_region_clear_binding(
     binding->occupied = false;
     binding->ticket = (ores_std_ticket){0};
     binding->owner = (ores_state_task_identity){0};
+}
+
+/*
+ * Bind an unbound state-region gate to the actual actor-arena incarnation.
+ * The arena exposes only an opaque identity; no raw storage pointer or guest
+ * address crosses this boundary. Rebinding to a foreign arena fails closed.
+ */
+static inline ores_std_sync_code ores_state_region_bind_actor_arena(
+        ores_task_bound_state_region* region,
+        OresActorArena* arena) {
+    if (!region || !arena || region->gate.kind != ORES_STD_RW)
+        return ORES_STD_SYNC_INVALID;
+
+    OresArenaIdentity identity = {0};
+    if (!ores_actor_arena_identity(arena, &identity))
+        return ORES_STD_SYNC_INVALID;
+
+    if (!ores_state_region_enter_metadata(region))
+        return ORES_STD_SYNC_RETRY;
+
+    ores_std_sync_code out = ORES_STD_SYNC_INVALID;
+    if (region->region_id == 0 && region->generation == 0) {
+        region->region_id = identity.domain;
+        region->generation = identity.incarnation;
+        out = ORES_STD_SYNC_GRANTED;
+    } else if (region->region_id == identity.domain &&
+               region->generation == identity.incarnation) {
+        out = ORES_STD_SYNC_GRANTED;
+    }
+    ores_state_region_leave_metadata(region);
+    if (out != ORES_STD_SYNC_GRANTED) return out;
+
+    return ores_std_bind_scope(&region->gate, identity.incarnation);
+}
+
+static inline bool ores_state_region_matches_actor_arena(
+        const ores_task_bound_state_region* region,
+        OresActorArena* arena) {
+    if (!region || !arena || !ores_state_region_valid(region)) return false;
+    OresArenaIdentity identity = {0};
+    return ores_actor_arena_identity(arena, &identity) &&
+        region->region_id == identity.domain &&
+        region->generation == identity.incarnation;
 }
 
 static inline bool ores_state_region_valid(
