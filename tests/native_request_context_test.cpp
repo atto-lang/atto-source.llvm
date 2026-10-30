@@ -35,6 +35,7 @@ struct Suite {
     bool barrier=false;
     bool await_mode=false;
     bool revoke_on_turn=false;
+    bool reject_resume=false;
     static Registry::Metadata info(unsigned n) noexcept {
         return {1000+n,2000+n,3000,987654321};
     }
@@ -52,10 +53,12 @@ struct Suite {
             CHECK(!Registry::current()); // carrier callback does not inherit stale TLS
             if(s.await_mode && message==2) {
                 CHECK(s.suspension);
-                CHECK(s.contexts.resume_admitted(s.scheduler,exchange,token,*s.suspension,[&]{
+                const bool resumed=s.contexts.resume_admitted(
+                    s.scheduler,exchange,token,*s.suspension,[&]{
                     CHECK(Registry::current()->request_id==1000+slot);
                     s.observed.fetch_add(1);
-                }));
+                });
+                CHECK(resumed!=s.reject_resume);
             } else {
                 CHECK(s.contexts.with_admitted_turn(s.scheduler,exchange,token,
                        s.requests[slot],owner,[&]{
@@ -73,6 +76,40 @@ struct Suite {
                             CHECK(s.buffers.available()==15);
                         }
                     }));
+                    if(message==3){
+                        // Nested request on the SAME admitted actor turn:
+                        // throw in inner scope, then restore exact outer context.
+                        NativeHttpExchange inner;
+                        auto inner_handle=s.contexts.open(owner,info(99));
+                        CHECK(inner_handle);
+                        auto ingress=s.buffers.begin(slot+1);CHECK(ingress);
+                        std::memcpy(ingress->data(),"GET /actor",10);
+                        const auto inner_body=ingress->publish(10);
+                        auto inner_pin=s.contexts.attach_exchange_with_buffer(
+                            inner,*inner_handle,owner,s.buffers,inner_body,slot+1);
+                        CHECK(inner_pin);
+                        const auto inner_token=inner_pin->token();
+                        CHECK(inner.claim(inner_token));
+                        bool caught=false;
+                        try{
+                            CHECK(s.contexts.with_admitted_turn(
+                                s.scheduler,inner,inner_token,*inner_handle,owner,[&]{
+                                CHECK(Registry::current()->request_id==1099);
+                                CHECK(s.contexts.with_request_bytes(*inner_pin,
+                                      [&](std::string_view bytes){CHECK(bytes=="GET /actor");}));
+                                throw std::runtime_error("inner failure");
+                            }));
+                        }catch(const std::runtime_error& e){
+                            caught=std::string_view(e.what())=="inner failure";
+                        }
+                        CHECK(caught);
+                        CHECK(Registry::current()->request_id==1000+slot);
+                        CHECK(inner.complete(inner_token));
+                        CHECK(inner.reclaim(inner_token));
+                        CHECK(s.contexts.close(*inner_handle,owner));
+                        CHECK(s.buffers.close(inner_body,slot+1));
+                        inner_pin.reset();
+                    }
                     if(s.await_mode && message==1){
                         s.suspension=s.contexts.suspend_current(exchange,token);
                         CHECK(s.suspension.has_value());
@@ -96,6 +133,8 @@ struct Suite {
         count=n;barrier=concurrent;await_mode=await;revoke_on_turn=revoke;
         scheduler=ores_native_actor_scheduler_open(n,4,n,dispatch,this);
         CHECK(scheduler);
+        CHECK(ores_native_actor_scheduler_prestart_carriers(scheduler));
+        CHECK(ores_native_actor_scheduler_all_carriers_started(scheduler));
         for(unsigned i=0;i<n;++i){
             actors[i]=ores_native_actor_scheduler_spawn(scheduler,i);
             CHECK(actors[i].scheduler_domain && actors[i].generation);
@@ -167,6 +206,9 @@ int main(){
         Suite s;s.begin(n,true);s.send_all();
         CHECK(s.observed==n);s.end();
     }
+    // Exception unwinding restores the parent's current request on the same
+    // scheduler-authorized carrier; no nested metadata bleeds to next turn.
+    { Suite s;s.begin(1);s.send_all(3);CHECK(s.observed==1);s.end(); }
     // Suspension token is created on actor turn, remains live after carrier
     // return, and resumes via fresh scheduler admission (not callback thread).
     {
@@ -175,6 +217,18 @@ int main(){
         CHECK(!s.contexts.resume_admitted(s.scheduler,s.exchanges[0],
                     s.pins[0]->token(),*s.suspension,[]{}));
         s.send_all(2);CHECK(s.observed==2);s.end();
+    }
+    // A suspended request cancelled before resumption cannot be resurrected
+    // by even a correctly admitted replacement scheduler turn.
+    {
+        Suite s;s.begin(1,false,true);s.send_all(1);
+        CHECK(s.suspension && s.contexts.available()==15);
+        CHECK(s.contexts.close(s.requests[0],s.actors[0]));
+        s.reject_resume=true;
+        s.send_all(2);CHECK(s.observed==1 && s.bad==0);
+        // Body is still pinned until exchange/continuation terminal reclamation.
+        CHECK(s.buffers.close(s.bodies[0],1));
+        s.revoke_on_turn=true;s.end();
     }
     // Cancel while a transport borrow is live: old read view survives,
     // subsequent context lookups and new borrows reject, both slots stay
