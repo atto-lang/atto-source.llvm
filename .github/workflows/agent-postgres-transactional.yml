@@ -1,0 +1,76 @@
+name: LLVM PostgreSQL durable actor claim (HOST ONLY)
+on:
+  pull_request:
+  push:
+    branches: [feat/agent-dispatch-host-gate-parity-20261029]
+permissions:
+  contents: read
+jobs:
+  native-pg-claim:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ores_dispatch_test
+          POSTGRES_HOST_AUTH_METHOD: trust # Test data only, bound to loopback.
+        ports:
+          - '127.0.0.1:5432:5432'
+        options: >-
+          --health-cmd='pg_isready -U postgres -d ores_dispatch_test'
+          --health-interval=5s --health-timeout=3s --health-retries=12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGDATABASE: ores_dispatch_test
+      ORES_TEST_PG_CONNINFO: host=127.0.0.1 port=5432 dbname=ores_dispatch_test user=ores_dispatch_test_runtime connect_timeout=3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Install PostgreSQL native headers and psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpq-dev postgresql-client
+      - name: Apply schema and least-privileged fixture
+        run: |
+          set -euo pipefail
+          psql -U postgres -v ON_ERROR_STOP=1 -f contracts/v1/agent-dispatch/postgresql/001_actor_dispatch_v1.sql
+          psql -U postgres -v ON_ERROR_STOP=1 -f contracts/v1/agent-dispatch/postgresql/002_test_fixture.sql
+          psql -U postgres -v ON_ERROR_STOP=1 -c 'ALTER ROLE ores_dispatch_test_runtime LOGIN'
+          if psql -U ores_dispatch_test_runtime -tAc 'SELECT count(*) FROM ores_dispatch.claim_v1' >/dev/null 2>&1; then
+            echo 'SECURITY_FAILURE direct claim table access'; exit 2
+          fi
+      - name: Build and execute PostgreSQL native host contract
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
+            contracts/v1/agent-dispatch/pg_dispatch_integration_test.cpp \
+            -lpq -o "$RUNNER_TEMP/pg_dispatch_native"
+          "$RUNNER_TEMP/pg_dispatch_native"
+          "$RUNNER_TEMP/pg_dispatch_native" probe-hold native-killed > "$RUNNER_TEMP/native-claim.log" 2>&1 &
+          pid=$!
+          seen=0
+          for i in {1..60}; do
+            if grep -q '^CLAIM_COMMITTED$' "$RUNNER_TEMP/native-claim.log"; then seen=1; break; fi
+            sleep 0.25
+          done
+          test "$seen" -eq 1
+          kill -9 "$pid"
+          wait "$pid" || true
+          rc=0
+          "$RUNNER_TEMP/pg_dispatch_native" probe native-killed || rc=$?
+          test "$rc" -eq 2
+          psql -U postgres -v ON_ERROR_STOP=1 -c "UPDATE ores_dispatch.actor_fence_v1 SET actor_generation=8, activation_epoch=10, exact_revision=repeat('c',40) WHERE tenant_id='tenant' AND actor_id='worker'"
+          rc=0
+          "$RUNNER_TEMP/pg_dispatch_native" probe native-after-fence || rc=$?
+          test "$rc" -eq 2
+          echo "PG_NATIVE_REAL_DB_CLAIM_PASS host_only=true native_guest=false"
