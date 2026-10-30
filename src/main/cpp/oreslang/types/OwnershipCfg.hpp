@@ -151,6 +151,24 @@ inline void validate_disjoint_place_layout(const State& state) {
     }
 }
 
+inline void validate_region_loan_state(const State& state) {
+    for (const auto& [name, value] : state) {
+        for (const auto& [loan_id, provenance] : value.shared_loan_regions) {
+            if (!loan_id || !value.shared_loan_ids.count(loan_id) ||
+                    !valid_region_loan_provenance(provenance))
+                violation(name, "malformed shared region loan provenance");
+        }
+        if (value.exclusive_loan_region) {
+            if (!value.exclusive_loan || !value.exclusive_loan_id ||
+                    !valid_region_loan_provenance(*value.exclusive_loan_region))
+                violation(name, "malformed exclusive region loan provenance");
+        }
+        if (!value.exclusive_loan && value.exclusive_loan_region)
+            violation(name, "region provenance without exclusive loan");
+    }
+}
+
+
 inline void require_owned(const std::string& key, const PlaceState& value) {
     if (value.possible != kOwned)
         violation(key, "not definitely initialized on every CFG predecessor");
@@ -159,6 +177,7 @@ inline void require_owned(const std::string& key, const PlaceState& value) {
 inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
+    validate_region_loan_state(state);
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -290,6 +309,8 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
 }
 
 inline bool join_into(State& target, const State& incoming) {
+    validate_region_loan_state(target);
+    validate_region_loan_state(incoming);
     if (target.size() != incoming.size())
         throw std::runtime_error("ownership violation: inconsistent CFG place sets");
     bool changed = false;
