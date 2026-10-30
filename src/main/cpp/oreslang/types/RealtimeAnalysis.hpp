@@ -99,6 +99,7 @@ struct DirectFacts {
     // Explicit copy/share needs a verified scalar-vs-buffer and ownership/
     // refcount lowering proof. Do not presume these are free register moves.
     bool unqualified_copy_or_share = false;
+    bool unmodeled_expression = false;
     bool call_budget_exceeded = false;
     std::size_t call_limit = 0;
     std::uint64_t loop_iterations = 0;
@@ -213,6 +214,11 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             facts.unqualified_copy_or_share = true;
             break;
         case Expression::Kind::Borrow:
+            break;
+        default:
+            // Newly introduced or corrupted AST kinds are not pure by default.
+            // The strict profile must explicitly classify every expression.
+            facts.unmodeled_expression = true;
             break;
     }
 }
@@ -515,6 +521,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     bool bounded_calls = true;
     bool unsupported_runtime = false;
     bool unqualified_copy_or_share = false;
+    bool unmodeled_expression = false;
     std::string failure;
     std::string failure_diagnostic;
 
@@ -552,6 +559,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         unsupported_runtime = unsupported_runtime || facts.unsupported_runtime;
         unqualified_copy_or_share =
             unqualified_copy_or_share || facts.unqualified_copy_or_share;
+        unmodeled_expression = unmodeled_expression || facts.unmodeled_expression;
 
         for (const auto& child : facts.calls) {
             const FunctionEffects child_effects = visit(child);
@@ -622,6 +630,11 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     if (!report.bounded_cleanup) {
         report.diagnostic = "RT006_UNBOUNDED_CLEANUP";
         report.reason = "defer/exception cleanup bound is not proven";
+        return report;
+    }
+    if (unmodeled_expression) {
+        report.diagnostic = "RT015_UNMODELED_EXPRESSION";
+        report.reason = "reachable AST expression kind lacks strict RT effect classification";
         return report;
     }
     if (unqualified_copy_or_share) {
