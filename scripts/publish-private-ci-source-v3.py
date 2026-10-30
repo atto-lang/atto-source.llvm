@@ -217,6 +217,27 @@ def trusted_github_cli():
     return target
 
 
+def trusted_git_cli():
+    """Resolve Git transport only through a root-controlled OS binary."""
+    target = "/usr/bin/git"
+    for directory in ("/", "/usr", "/usr/bin"):
+        try:
+            info = os.lstat(directory)
+        except OSError as exc:
+            raise Denied("trusted Git directory is unavailable") from exc
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                or info.st_mode & 0o022):
+            raise Denied("trusted Git directory is not root-controlled")
+    try:
+        info = os.lstat(target)
+    except OSError as exc:
+        raise Denied("trusted Git executable is unavailable") from exc
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+            or info.st_mode & 0o6022 or not info.st_mode & 0o111):
+        raise Denied("trusted Git executable is not root-controlled")
+    return target
+
+
 def github_api_environment():
     """Use only one explicit token and a minimal deterministic environment."""
     provided = [
@@ -233,6 +254,28 @@ def github_api_environment():
         "HOME": "/",
         "XDG_CONFIG_HOME": "/nonexistent",
         "LC_ALL": "C.UTF-8",
+    }
+
+
+def git_transport_environment(home):
+    """Build a minimal non-interactive Git/gh environment with one explicit token."""
+    provided = [
+        name for name in ("GH_TOKEN", "GITHUB_TOKEN")
+        if os.environ.get(name)
+    ]
+    if len(provided) != 1:
+        raise Denied("exactly one explicit Git transport token is required")
+    home = str(home)
+    return {
+        provided[0]: os.environ[provided[0]],
+        "GH_HOST": "github.com",
+        "GH_PROMPT_DISABLED": "1",
+        "PATH": "/usr/bin:/bin",
+        "HOME": home,
+        "XDG_CONFIG_HOME": home + "/xdg",
+        "LC_ALL": "C.UTF-8",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
     }
 
 
@@ -1236,6 +1279,95 @@ def delete_exact_ref(repository, ref_name, expected_sha, expected_repository_id)
     )
 
 
+def delete_handoff_refs_atomic(
+        repository, branch, authorization, expected_sha, expected_repository_id):
+    """Atomically delete the generation's source+authorization refs under leases.
+
+    A pre-read determines whether each ref is expected at expected_sha or absent.
+    Both refspecs are still sent in one atomic push. If an absent ref appears
+    before the push, its empty expected-old lease fails and GitHub must reject
+    the whole transaction rather than partially deleting the other ref.
+    """
+    if not isinstance(repository, str) or not NAME.fullmatch(repository):
+        raise Denied("carrier ref repository is invalid")
+    if (not isinstance(branch, str) or not HANDOFF_REF.fullmatch(branch)
+            or not branch.startswith("ci/oreslang-v4-")):
+        raise Denied("carrier source ref is invalid")
+    if (not isinstance(authorization, str) or not HANDOFF_REF.fullmatch(authorization)
+            or not authorization.startswith("ci/authorized-v4-")
+            or authorization[len("ci/authorized-v4-"):]
+               != branch[len("ci/oreslang-v4-"):]):
+        raise Denied("carrier authorization ref is invalid")
+    expected_sha = valid_sha(expected_sha, "invalid rollback commit SHA")
+
+    branch_live = live_ref_sha(
+        repository, branch, expected_repository_id
+    )
+    authorization_live = live_ref_sha(
+        repository, authorization, expected_repository_id
+    )
+    for live in (branch_live, authorization_live):
+        if live is not None and live != expected_sha:
+            raise Denied("carrier generation ref moved; refusing rollback")
+    if branch_live is None and authorization_live is None:
+        return False
+
+    with tempfile.TemporaryDirectory(prefix="oreslang-ref-cleanup-") as temp:
+        home = Path(temp) / "home"
+        work = Path(temp) / "repo"
+        home.mkdir(mode=0o700)
+        (home / "xdg").mkdir(mode=0o700)
+        env = git_transport_environment(home)
+
+        setup = run_bounded_gh(
+            [
+                trusted_github_cli(), "auth", "setup-git",
+                "--hostname", "github.com",
+            ],
+            env=env,
+            timeout=30,
+        )
+        if setup.returncode != 0:
+            raise Denied("trusted GitHub credential helper setup failed")
+
+        init = run_bounded_gh(
+            [trusted_git_cli(), "init", "-q", str(work)],
+            env=env,
+            timeout=30,
+        )
+        if init.returncode != 0:
+            raise Denied("temporary Git transport repository initialization failed")
+
+        branch_old = branch_live or ""
+        authorization_old = authorization_live or ""
+        remote = "https://github.com/" + repository + ".git"
+        push = run_bounded_gh(
+            [
+                trusted_git_cli(), "-C", str(work), "push",
+                "--atomic", "--porcelain",
+                f"--force-with-lease=refs/heads/{branch}:{branch_old}",
+                f"--force-with-lease=refs/heads/{authorization}:{authorization_old}",
+                remote,
+                ":refs/heads/" + branch,
+                ":refs/heads/" + authorization,
+            ],
+            env=env,
+            timeout=45,
+        )
+
+    branch_after = live_ref_sha(
+        repository, branch, expected_repository_id
+    )
+    authorization_after = live_ref_sha(
+        repository, authorization, expected_repository_id
+    )
+    if branch_after is None and authorization_after is None:
+        return True
+    if push.returncode != 0:
+        raise Denied("atomic carrier ref cleanup failed or remained ambiguous")
+    raise Denied("atomic carrier ref cleanup did not remove exact generation refs")
+
+
 def require_atomic_ref_rollback():
     """Fail closed until the publisher has reviewed atomic ref deletion.
 
@@ -1244,12 +1376,15 @@ def require_atomic_ref_rollback():
     concurrent writer can move the ref between those calls. An eventual cleanup
     or post-delete GET cannot restore a concurrently deleted third-party ref.
 
-    Keep ALL source-bearing export writes disabled until #1154 ships a
-    separately reviewed, executed compare-and-delete implementation with
-    appropriate credentials, test coverage, and incident-policy signoffs.
-    Environment variables and caller-provided flags must never bypass this.
+    The compare-and-delete implementation is now staged below the production
+    deny gate, but remains disabled until the generation fence, credentials,
+    provider behavior, governance and incident-policy signoffs are independently
+    reviewed. Environment variables and caller-provided flags must never bypass
+    this gate.
     """
-    raise Denied("private CI export disabled: atomic ref rollback is unimplemented (issue #1154)")
+    raise Denied(
+        "private CI export disabled: atomic generation cleanup is staged but not independently approved (issue #1154)"
+    )
 
 
 def publish(repository, source_pr, source_commit, test_plan, now=None):
@@ -1424,7 +1559,6 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         repository, branch, authorization, contract["repository_id"]
     )
     payload_attempted = False
-    authorization_attempted = False
     try:
         payload_attempted = True
         branch_ref = gh_api(
@@ -1455,7 +1589,6 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         # the carrier becomes executable.
         verify_source_pr(source_pr, source_commit)
 
-        authorization_attempted = True
         auth_ref = gh_api(
             f"repos/{repository}/git/refs",
             method="POST",
@@ -1478,22 +1611,14 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         )
     except BaseException:
         rollback_error = None
-        if authorization_attempted:
+        if payload_attempted:
             try:
-                delete_exact_ref(
-                    repository, authorization, carrier_commit,
+                delete_handoff_refs_atomic(
+                    repository, branch, authorization, carrier_commit,
                     contract["repository_id"],
                 )
             except BaseException as rollback_exc:
                 rollback_error = rollback_exc
-        if payload_attempted:
-            try:
-                delete_exact_ref(
-                    repository, branch, carrier_commit,
-                    contract["repository_id"],
-                )
-            except BaseException as rollback_exc:
-                rollback_error = rollback_error or rollback_exc
         if rollback_error is not None:
             raise Denied(
                 "private CI handoff failed and carrier ref rollback was incomplete"

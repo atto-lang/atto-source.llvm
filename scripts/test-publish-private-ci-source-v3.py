@@ -135,7 +135,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patch.object(v3, "exact_source_tree") as source,
             patch.object(v3, "gh_api") as api,
         ):
-            with self.assertRaisesRegex(v3.Denied, "atomic ref rollback is unimplemented"):
+            with self.assertRaisesRegex(v3.Denied, "atomic generation cleanup is staged"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
                     "ci/test-plans/llvm-pr669.json",
@@ -175,6 +175,82 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     CARRIER_COMMIT, 1323598177,
                 )
             request.assert_not_called()
+
+    def test_atomic_generation_cleanup_uses_two_ref_leases(self):
+        completed = v3.subprocess.CompletedProcess(["git"], 0, "", "")
+        live = [
+            CARRIER_COMMIT, CARRIER_COMMIT,
+            None, None,
+        ]
+        calls = []
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return completed
+        with (
+            patch.object(v3, "live_ref_sha", side_effect=live),
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "trusted_git_cli", return_value="/usr/bin/git"),
+            patch.object(v3, "git_transport_environment", return_value={"GH_TOKEN":"x"}),
+            patch.object(v3, "run_bounded_gh", side_effect=run),
+        ):
+            self.assertTrue(v3.delete_handoff_refs_atomic(
+                "trusted/ci", SOURCE_REF, AUTH_REF,
+                CARRIER_COMMIT, 1323598177,
+            ))
+        push = next(argv for argv, _kwargs in calls if "push" in argv)
+        self.assertIn("--atomic", push)
+        self.assertIn(
+            "--force-with-lease=refs/heads/" + SOURCE_REF + ":" + CARRIER_COMMIT,
+            push,
+        )
+        self.assertIn(
+            "--force-with-lease=refs/heads/" + AUTH_REF + ":" + CARRIER_COMMIT,
+            push,
+        )
+        self.assertIn(":refs/heads/" + SOURCE_REF, push)
+        self.assertIn(":refs/heads/" + AUTH_REF, push)
+
+    def test_atomic_generation_cleanup_fences_ref_created_after_absent_preread(self):
+        completed = v3.subprocess.CompletedProcess(["git"], 1, "", "stale info")
+        live = [
+            CARRIER_COMMIT, None,
+            CARRIER_COMMIT, CARRIER_COMMIT,
+        ]
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            if "push" in argv:
+                return completed
+            return v3.subprocess.CompletedProcess(argv, 0, "", "")
+        with (
+            patch.object(v3, "live_ref_sha", side_effect=live),
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "trusted_git_cli", return_value="/usr/bin/git"),
+            patch.object(v3, "git_transport_environment", return_value={"GH_TOKEN":"x"}),
+            patch.object(v3, "run_bounded_gh", side_effect=run),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "failed or remained ambiguous"):
+                v3.delete_handoff_refs_atomic(
+                    "trusted/ci", SOURCE_REF, AUTH_REF,
+                    CARRIER_COMMIT, 1323598177,
+                )
+        push = next(argv for argv in calls if "push" in argv)
+        self.assertIn(
+            "--force-with-lease=refs/heads/" + AUTH_REF + ":",
+            push,
+        )
+
+    def test_atomic_generation_cleanup_refuses_moved_ref_before_transport(self):
+        with (
+            patch.object(v3, "live_ref_sha", side_effect=["9"*40, CARRIER_COMMIT]),
+            patch.object(v3, "run_bounded_gh") as run,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "moved"):
+                v3.delete_handoff_refs_atomic(
+                    "trusted/ci", SOURCE_REF, AUTH_REF,
+                    CARRIER_COMMIT, 1323598177,
+                )
+            run.assert_not_called()
 
     def test_incident_gate_requires_exact_completed_identity(self):
         def issue(number, issue_id, state="closed", reason="completed", url=None):
@@ -1389,7 +1465,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 )
 
     def _publish_fixture(self, api, verify_source_pr=None, require_exact_ref=None,
-                         delete_exact_ref=None):
+                         delete_handoff_refs_atomic=None):
         contract = carrier_contract()
         rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
         manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
@@ -1420,8 +1496,11 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patches.append(patch.object(v3, "require_exact_ref", side_effect=require_exact_ref))
         else:
             patches.append(patch.object(v3, "require_exact_ref"))
-        if delete_exact_ref is not None:
-            patches.append(patch.object(v3, "delete_exact_ref", side_effect=delete_exact_ref))
+        if delete_handoff_refs_atomic is not None:
+            patches.append(patch.object(
+                v3, "delete_handoff_refs_atomic",
+                side_effect=delete_handoff_refs_atomic,
+            ))
         return contract, patches
 
     def test_publish_rolls_back_payload_if_pr_head_moves_before_authorization(self):
@@ -1450,7 +1529,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 v3.SOURCE_REPO_ID,
                 v3.Denied("PR head moved"),
             ],
-            delete_exact_ref=lambda *args: deleted.append(args) or True,
+            delete_handoff_refs_atomic=lambda *args: deleted.append(args) or True,
         )
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
             with self.assertRaisesRegex(v3.Denied, "PR head moved"):
@@ -1462,7 +1541,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(
             deleted,
             [(
-                "trusted/ci", SOURCE_REF,
+                "trusted/ci", SOURCE_REF, AUTH_REF,
                 CARRIER_COMMIT, contract["repository_id"],
             )],
         )
@@ -1483,7 +1562,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         deleted = []
         contract, patches = self._publish_fixture(
             api,
-            delete_exact_ref=lambda *args: deleted.append(args) or False,
+            delete_handoff_refs_atomic=lambda *args: deleted.append(args) or False,
         )
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
             with self.assertRaisesRegex(v3.Denied, "ambiguous ref transport failure"):
@@ -1495,7 +1574,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(
             deleted,
             [(
-                "trusted/ci", SOURCE_REF,
+                "trusted/ci", SOURCE_REF, AUTH_REF,
                 CARRIER_COMMIT, contract["repository_id"],
             )],
         )
@@ -1518,7 +1597,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         deleted = []
         contract, patches = self._publish_fixture(
             api,
-            delete_exact_ref=lambda *args: deleted.append(args) or True,
+            delete_handoff_refs_atomic=lambda *args: deleted.append(args) or True,
         )
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
             with self.assertRaisesRegex(v3.Denied, "authorization ref"):
@@ -1529,16 +1608,10 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 )
         self.assertEqual(
             deleted,
-            [
-                (
-                    "trusted/ci", AUTH_REF,
-                    CARRIER_COMMIT, contract["repository_id"],
-                ),
-                (
-                    "trusted/ci", SOURCE_REF,
-                    CARRIER_COMMIT, contract["repository_id"],
-                ),
-            ],
+            [(
+                "trusted/ci", SOURCE_REF, AUTH_REF,
+                CARRIER_COMMIT, contract["repository_id"],
+            )],
         )
 
 
