@@ -102,13 +102,32 @@ int ores_native_logical_trace_snapshot_callback(
             executions, continuations, callback, &out->callback))
         return 0;
 
-    return ores_native_logical_trace_snapshot(
-        executions,
-        continuations,
-        out->callback.source_execution,
-        execution_frames,
-        execution_capacity,
-        continuation_frames,
-        continuation_capacity,
-        &out->logical);
+    if (!ores_native_logical_trace_snapshot(
+            executions,
+            continuations,
+            out->callback.source_execution,
+            execution_frames,
+            execution_capacity,
+            continuation_frames,
+            continuation_capacity,
+            &out->logical))
+        return 0;
+
+    /*
+     * Callback diagnostics are provenance only. Never copy allocation-domain
+     * authority into a foreign callback snapshot, and erase continuation
+     * lifecycle state because it may change after callback registration.
+     * The causal identity/boundary/source fields remain immutable while the
+     * retained generation-checked lineage is live.
+     */
+    for (size_t i = 0; i < out->logical.execution_count; ++i) {
+        execution_frames[i].context.allocation =
+            (OresNativeAllocationDomainRef){0};
+    }
+    for (size_t i = 0; i < out->logical.continuation_count; ++i) {
+        continuation_frames[i].record.allocation =
+            (OresNativeAllocationDomainRef){0};
+        continuation_frames[i].record.state = (OresNativeContinuationState)0;
+    }
+    return 1;
 }
