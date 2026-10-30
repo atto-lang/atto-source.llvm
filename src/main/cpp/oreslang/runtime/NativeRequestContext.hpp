@@ -23,9 +23,24 @@ namespace oreslang::runtime {
 // confuse identical compact slot/generation values across registry boundaries.
 inline std::uint64_t next_request_registry_id() noexcept {
     static std::atomic<std::uint64_t> next{1};
-    const auto n=next.fetch_add(1,std::memory_order_relaxed);
-    if(!n || n==UINT64_MAX)std::terminate();
-    return n;
+    auto n=next.load(std::memory_order_relaxed);
+    while(n && n!=UINT64_MAX) {
+        if(next.compare_exchange_weak(n,n+1,std::memory_order_relaxed))
+            return n;
+    }
+    std::terminate();
+}
+// Trusted ingress-generated, nonreused DATA-envelope identity. The underlying
+// payload is not a guest capability; source code must not call the scheduler
+// directly or choose another request's dispatch ticket.
+inline std::uint64_t next_request_dispatch_ticket() noexcept {
+    static std::atomic<std::uint64_t> next{1};
+    auto n=next.load(std::memory_order_relaxed);
+    while(n && n!=UINT64_MAX) {
+        if(next.compare_exchange_weak(n,n+1,std::memory_order_relaxed))
+            return n;
+    }
+    return 0; // exhaustion denies HTTP admission, never wraps to stale ticket
 }
 template <std::size_t Capacity>
 class NativeRequestContext final {
@@ -54,6 +69,7 @@ private:
         OresNativeActorScheduler* scheduler;
         const NativeHttpExchange* exchange;
         std::uint64_t exchange_generation;
+        std::uint64_t dispatch_ticket;
         Frame* previous;
     };
     inline static thread_local Frame* current_frame_ = nullptr;
@@ -81,6 +97,15 @@ private:
             && ctx.allocation.domain == owner.scheduler_domain
             && ctx.allocation.owner == owner.actor_slot
             && ctx.allocation.generation == owner.generation;
+    }
+    static bool admitted_for(OresNativeActorScheduler* scheduler,
+                             OresNativeActorRef owner,
+                             std::uint64_t ticket) noexcept {
+        std::uint64_t delivered = 0;
+        return ticket != 0 && admitted(scheduler,owner)
+            && ores_native_actor_scheduler_current_data_payload(
+                    scheduler,owner,&delivered)
+            && delivered == ticket;
     }
     static bool valid(Metadata m) noexcept {
         return m.request_id && m.trace_id && m.tenant_id && m.deadline_tick;
@@ -155,7 +180,9 @@ public:
             Handle handle, OresNativeActorRef owner) noexcept {
         auto pin=retain(handle,owner);
         if(!pin)return std::nullopt;
-        if(!exchange.enqueue(owner,handle.value,registry_id_))return std::nullopt;
+        const auto ticket=next_request_dispatch_ticket();
+        if(!ticket || !exchange.enqueue(owner,handle.value,registry_id_,ticket))
+            return std::nullopt;
         return ExchangePin(exchange,exchange.token(),std::move(*pin));
     }
     // A request's transport buffer is physically retained from the time
@@ -223,7 +250,8 @@ public:
         Frame* f=current_frame_;
         if (!f || f->table!=this || f->exchange!=&exchange
                 || f->exchange_generation!=token.generation
-                || !admitted(f->scheduler,f->owner)
+                || !admitted_for(f->scheduler,f->owner,f->dispatch_ticket)
+                || f->dispatch_ticket!=token.dispatch_ticket
                 || !same(f->owner,token.actor)
                 || f->handle.value!=token.request_context
                 || token.request_registry!=registry_id_ || !token.generation
@@ -233,7 +261,9 @@ public:
         if(observed.generation!=token.generation
                 || !same(observed.actor,token.actor)
                 || observed.request_context!=token.request_context
-                || observed.request_registry!=registry_id_)return std::nullopt;
+                || observed.request_registry!=registry_id_
+                || observed.dispatch_ticket!=token.dispatch_ticket)
+            return std::nullopt;
         auto pin=retain(f->handle,f->owner);
         if(!pin)return std::nullopt;
         return Suspension(f->handle,f->owner,token.generation,std::move(*pin));
@@ -245,6 +275,7 @@ public:
         if(!suspended.pin || suspended.context.value!=suspended.pin.handle().value
                 || suspended.context.value!=token.request_context
                 || token.request_registry!=registry_id_
+                || !token.dispatch_ticket
                 || suspended.exchange_generation!=token.generation
                 || !same(suspended.owner,token.actor))return false;
         return with_admitted_turn(scheduler,exchange,token,suspended.context,suspended.owner,
@@ -317,7 +348,8 @@ public:
             OresNativeActorRef owner, Fn&& callback) {
         static_assert(std::is_void_v<std::invoke_result_t<Fn&>>,
             "carrier binding must not return an escaped resource or awaitable");
-        if(!admitted(scheduler,owner) || !token.generation
+        if(!admitted_for(scheduler,owner,token.dispatch_ticket) ||
+                !token.generation
                 || !valid(owner) || !same(token.actor,owner)
                 || token.request_context!=handle.value
                 || token.request_registry!=registry_id_
@@ -325,12 +357,14 @@ public:
         const auto observed=exchange.token();
         if(observed.generation!=token.generation || !same(observed.actor,owner)
                 || observed.request_context!=handle.value
-                || observed.request_registry!=registry_id_)return false;
+                || observed.request_registry!=registry_id_
+                || observed.dispatch_ticket!=token.dispatch_ticket)return false;
         auto lease=retain(handle,owner);
         if(!lease)return false;
         // Store lease prevents reuse; close revokes current() immediately.
         if(!lookup(handle,owner))return false;
-        Frame frame{this,handle,owner,scheduler,&exchange,token.generation,current_frame_};
+        Frame frame{this,handle,owner,scheduler,&exchange,
+                    token.generation,token.dispatch_ticket,current_frame_};
         current_frame_=&frame;
         const auto carrier=std::this_thread::get_id();
         struct Restore {
@@ -341,7 +375,7 @@ public:
                 current_frame_=frame->previous;
             }
         } restore{&frame,carrier};
-        if(!admitted(scheduler,owner))return false; // scheduler authority lost before guest invocation
+        if(!admitted_for(scheduler,owner,token.dispatch_ticket))return false;
         callback();
         return true;
     }
@@ -359,7 +393,9 @@ public:
             frame->exchange!=bound.exchange_pin_.exchange_ ||
             frame->exchange_generation!=token.generation ||
             frame->exchange->phase()!=NativeHttpExchange::Phase::actor ||
-            !admitted(frame->scheduler,frame->owner) ||
+            !admitted_for(frame->scheduler,frame->owner,
+                          frame->dispatch_ticket) ||
+            frame->dispatch_ticket!=token.dispatch_ticket ||
             frame->handle.value!=token.request_context ||
             token.request_registry!=registry_id_ ||
             !same(frame->owner,token.actor) ||
@@ -370,9 +406,11 @@ public:
     // Convenience only, never an actor, heap or permissions accessor.
     static std::optional<Metadata> current() noexcept {
         auto* frame=current_frame_;
-        return frame && admitted(frame->scheduler,frame->owner)
+        return frame && admitted_for(frame->scheduler,frame->owner,
+                                         frame->dispatch_ticket)
             && frame->exchange->phase()==NativeHttpExchange::Phase::actor
             && frame->exchange->token().generation==frame->exchange_generation
+            && frame->exchange->token().dispatch_ticket==frame->dispatch_ticket
             ? frame->table->lookup(frame->handle,frame->owner) : std::nullopt;
     }
 };
