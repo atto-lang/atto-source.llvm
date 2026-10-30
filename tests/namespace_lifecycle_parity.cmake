@@ -20,6 +20,9 @@ function(expect_rejection name source_text diagnostic)
   # Snapshot the entire work tree, not only known LLVM output suffixes.
   # A rejected compiler must not create, delete, or mutate any file here.
   file(GLOB_RECURSE pre_files LIST_DIRECTORIES false RELATIVE "${WORK_DIR}" "${WORK_DIR}/*")
+  # Include empty directories: a file-only snapshot cannot detect mkdir/rmdir.
+  file(GLOB_RECURSE pre_entries LIST_DIRECTORIES true RELATIVE "${WORK_DIR}" "${WORK_DIR}/*")
+  list(SORT pre_entries)
   set(pre_hashes)
   foreach(entry IN LISTS pre_files)
     file(SHA256 "${WORK_DIR}/${entry}" digest)
@@ -49,6 +52,11 @@ function(expect_rejection name source_text diagnostic)
   # Detect unexpected filenames (including compiler-default a.out/IR names),
   # as well as mutation or deletion of existing source/provider fixtures.
   file(GLOB_RECURSE post_files LIST_DIRECTORIES false RELATIVE "${WORK_DIR}" "${WORK_DIR}/*")
+  file(GLOB_RECURSE post_entries LIST_DIRECTORIES true RELATIVE "${WORK_DIR}" "${WORK_DIR}/*")
+  list(SORT post_entries)
+  if(NOT "${pre_entries}" STREQUAL "${post_entries}")
+    message(FATAL_ERROR "${name} changed directory/file entries on rejection: before=[${pre_entries}], after=[${post_entries}]")
+  endif()
   foreach(entry IN LISTS pre_files)
     if(NOT EXISTS "${WORK_DIR}/${entry}")
       message(FATAL_ERROR "${name} removed pre-existing ${entry} on rejection")
