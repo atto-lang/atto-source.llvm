@@ -168,7 +168,10 @@ static inline ores_std_sync_code ores_state_region_bind_actor_arena(
 static inline bool ores_state_region_matches_actor_arena(
         const ores_task_bound_state_region* region,
         OresActorArena* arena) {
-    if (!region || !arena || !ores_state_region_valid(region)) return false;
+    if (!region || !arena || region->region_id == 0 ||
+            region->generation == 0 ||
+            region->gate.scope_generation != region->generation ||
+            region->gate.kind != ORES_STD_RW) return false;
     OresArenaIdentity identity = {0};
     return ores_actor_arena_identity(arena, &identity) &&
         region->region_id == identity.domain &&
