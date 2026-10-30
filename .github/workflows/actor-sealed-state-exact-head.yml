@@ -171,7 +171,7 @@ jobs:
         run: |
           set -euo pipefail
           compiler="$PWD/build/actor-state-schema/oreslang-llvmc"
-          python3 -m py_compile tests/source_actor_e2e.py
+          python3 -m py_compile tests/source_actor_e2e.py tests/native_isolated_sealed_state_compiled_guest.py
           python3 tests/source_actor_e2e.py \
             --compiler "$compiler" --clang clang --root "$PWD"
           python3 tests/source_actor_e2e.py \
