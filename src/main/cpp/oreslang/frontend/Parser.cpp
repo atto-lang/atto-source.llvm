@@ -3658,7 +3658,7 @@ private:
         }
         // Native scalar Math operations are compiler intrinsics, not host-lib
         // calls. Keep them single-evaluation and checked at the i64 boundary.
-        if (token_.text == "Math" && peek_next().text == ".") {
+        if (token_.text == "Math" && peek_next().text == "." && module_names_.count("Math") == 0) {
             advance();
             require(".");
             const std::string operation = identifier();
