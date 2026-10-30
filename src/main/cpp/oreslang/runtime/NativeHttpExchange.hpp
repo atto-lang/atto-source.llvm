@@ -68,7 +68,9 @@ public:
     // actor tuple or a thread-local lookup. Never invoked on a producer thread.
     bool claim_admitted(OresNativeActorScheduler* scheduler, Token token) noexcept {
         if (!token.request_context || !token.request_registry ||
-            !token.dispatch_ticket || !scheduler ||
+            !token.dispatch_ticket ||
+            pin_generation_.load(std::memory_order_acquire)!=token.generation ||
+            !scheduler ||
             !ores_native_actor_scheduler_is_current_actor(scheduler,token.actor))
             return false;
         std::uint64_t delivered=0;
@@ -82,6 +84,7 @@ public:
     // separately validated continuation uses its own one-shot resume path.
     bool enter_initial(Token token) const noexcept {
         if (!token.generation || !token.dispatch_ticket ||
+            pin_generation_.load(std::memory_order_acquire)!=token.generation ||
             phase()!=Phase::actor) return false;
         const auto actual=this->token();
         if (actual.generation!=token.generation ||
