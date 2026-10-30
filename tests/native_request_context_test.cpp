@@ -59,6 +59,9 @@ struct Suite {
             CHECK(!Registry::current()); // carrier callback does not inherit stale TLS
             if(s.second_pin && message==s.second_pin->token().dispatch_ticket) {
                 const auto second=s.second_pin->token();
+                CHECK(s.second_exchange.phase()==NativeHttpExchange::Phase::queued);
+                CHECK(!s.second_exchange.claim(second)); // no reactor-side claim
+                CHECK(s.second_exchange.claim_admitted(s.scheduler,second));
                 CHECK(!s.contexts.with_admitted_turn(s.scheduler,exchange,token,
                        s.requests[slot],owner,[]{throw std::runtime_error("wrong request");}));
                 CHECK(s.contexts.with_admitted_turn(s.scheduler,s.second_exchange,
@@ -74,9 +77,20 @@ struct Suite {
                 return;
             }
             if(message!=token.dispatch_ticket) {
+                CHECK(!exchange.claim_admitted(s.scheduler,token));
                 CHECK(!s.contexts.with_admitted_turn(s.scheduler,exchange,token,
                       s.requests[slot],owner,[]{throw std::runtime_error("wrong ticket admitted");}));
                 CHECK(!Registry::current());
+                ++s.rejected;
+                return;
+            }
+            if(exchange.phase()==NativeHttpExchange::Phase::queued){
+                CHECK(!exchange.claim(token)); // source HTTP requires live DATA
+                CHECK(exchange.claim_admitted(s.scheduler,token));
+            }
+            if(s.mode==4) {
+                CHECK(!s.contexts.with_admitted_turn(s.scheduler,exchange,token,
+                        s.requests[slot],owner,[]{throw std::runtime_error("initial replay");}));
                 ++s.rejected;
                 return;
             }
@@ -128,7 +142,8 @@ struct Suite {
                             inner,*inner_handle,owner,s.buffers,inner_body,slot+1);
                         CHECK(inner_pin);
                         const auto inner_token=inner_pin->token();
-                        CHECK(inner.claim(inner_token));
+                        CHECK(!inner.claim(inner_token));
+                        CHECK(!inner.claim_admitted(s.scheduler,inner_token));
                         CHECK(inner_token.dispatch_ticket!=token.dispatch_ticket);
                         CHECK(!s.contexts.with_admitted_turn(
                             s.scheduler,inner,inner_token,*inner_handle,owner,[&]{
@@ -151,8 +166,7 @@ struct Suite {
                         }
                         CHECK(caught);
                         CHECK(Registry::current()->request_id==1000+slot);
-                        CHECK(inner.complete(inner_token));
-                        CHECK(inner.reclaim(inner_token));
+                        CHECK(inner.rollback(inner_token));
                         CHECK(s.contexts.close(*inner_handle,owner));
                         CHECK(s.buffers.close(inner_body,slot+1));
                         inner_pin.reset();
@@ -196,7 +210,7 @@ struct Suite {
             CHECK(pin);
             pins[i].emplace(std::move(*pin));
             CHECK(pins[i]->token().request_registry==contexts.registry_id());
-            CHECK(exchanges[i].claim(pins[i]->token()));
+            CHECK(!exchanges[i].claim(pins[i]->token())); // no early claim
         }
     }
     void send_all(unsigned next_mode=0){
@@ -253,7 +267,9 @@ int main(){
              ==ORES_NATIVE_SEND_ACCEPTED);
         CHECK(ores_native_actor_scheduler_drain(s.scheduler));
         CHECK(s.observed==0 && s.rejected==1 && s.bad==0);
-        s.send_all();CHECK(s.observed==1);s.end();
+        s.send_all();CHECK(s.observed==1);
+        s.send_all(4);CHECK(s.observed==1 && s.rejected==2);
+        s.end();
     }
     // Real native scheduler DATA callbacks on 3, 8 and 15 worker carriers;
     // distinct actor owners, never illicit parallel DATA on one serial actor.
@@ -280,7 +296,7 @@ int main(){
         const auto first_ticket=s.pins[0]->token().dispatch_ticket;
         const auto second_ticket=s.second_pin->token().dispatch_ticket;
         CHECK(first_ticket!=second_ticket);
-        CHECK(s.second_exchange.claim(s.second_pin->token()));
+        CHECK(!s.second_exchange.claim(s.second_pin->token()));
         CHECK(ores_native_actor_scheduler_try_send(s.scheduler,s.actors[0],
               first_ticket)==ORES_NATIVE_SEND_ACCEPTED);
         CHECK(ores_native_actor_scheduler_try_send(s.scheduler,s.actors[0],
