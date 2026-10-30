@@ -401,6 +401,9 @@ struct ActorDecl {
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
     bool isolated = false;
     bool has_state_schema = false;
+    // Compiler-owned proof: the parser admitted exactly one synchronous
+    // nonescaping critical-read/write callback. A schema alone is insufficient.
+    bool sealed_state_synchronous_v1 = false;
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.
