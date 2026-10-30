@@ -108,6 +108,28 @@ public:
         return transition(token, Phase::completed, Phase::reactor);
     }
 
+    // Only one trusted producer can reserve this request's initial DATA send.
+    // The reservation is never released within this exchange generation.
+    bool reserve_submission(Token request) noexcept {
+        if (!request.generation || !request.dispatch_ticket ||
+            !request.request_context || !request.request_registry ||
+            phase()!=Phase::queued ||
+            pin_generation_.load(std::memory_order_acquire)!=request.generation)
+            return false;
+        const auto actual=token();
+        if(actual.generation!=request.generation ||
+           actual.request_context!=request.request_context ||
+           actual.request_registry!=request.request_registry ||
+           actual.dispatch_ticket!=request.dispatch_ticket ||
+           actual.actor.scheduler_domain!=request.actor.scheduler_domain ||
+           actual.actor.actor_slot!=request.actor.actor_slot ||
+           actual.actor.generation!=request.actor.generation)
+            return false;
+        std::uint64_t expected=0;
+        return submission_generation_.compare_exchange_strong(
+            expected,request.generation,std::memory_order_acq_rel);
+    }
+
     // A trusted physical context/body owner registers its generation before
     // releasing the reactor's dispatch ownership. Until that pin retires,
     // enqueue() cannot reuse this exchange even after complete/reclaim.
