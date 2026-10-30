@@ -1110,6 +1110,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_isolated_actor_state_type_rejected
         source-isolated-actor-state-type-reject.ores
         --diagnostic "native actor state schema admits only int/bool fields in this metadata slice")
+    oreslang_contract_test(native_isolated_actor_state_i64_overflow_rejected
+        source-isolated-actor-state-i64-overflow-reject.ores
+        --diagnostic "integer literal overflows signed 64-bit result")
     oreslang_contract_test(native_isolated_actor_requires_state
         source-isolated-actor-missing-state-reject.ores
         --diagnostic "native isolated actor requires sealed state { ... } before methods")
