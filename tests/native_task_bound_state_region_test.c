@@ -271,12 +271,17 @@ typedef struct stress_arg {
     uint64_t* value;
     atomic_uint* active_readers;
     atomic_uint* active_writers;
+    atomic_uint* ready;
+    atomic_bool* start;
     unsigned int iterations;
     bool writer;
 } stress_arg;
 
 static void* stress_worker(void* payload) {
     stress_arg* arg = (stress_arg*)payload;
+    atomic_fetch_add_explicit(arg->ready, 1u, memory_order_release);
+    while (!atomic_load_explicit(arg->start, memory_order_acquire))
+        sched_yield();
     for (unsigned int n = 0; n < arg->iterations; ++n) {
         const ores_std_access access =
             arg->writer ? ORES_STD_WRITE : ORES_STD_READ;
@@ -328,6 +333,8 @@ static void test_concurrent_task_bound_stress_matrix(void) {
         uint64_t protected_value = 0u;
         atomic_uint active_readers = ATOMIC_VAR_INIT(0u);
         atomic_uint active_writers = ATOMIC_VAR_INIT(0u);
+        atomic_uint ready = ATOMIC_VAR_INIT(0u);
+        atomic_bool start = ATOMIC_VAR_INIT(false);
         pthread_t threads[15];
         stress_arg args[15];
         for (unsigned int i = 0; i < count; ++i) {
@@ -336,10 +343,15 @@ static void test_concurrent_task_bound_stress_matrix(void) {
             args[i].value = &protected_value;
             args[i].active_readers = &active_readers;
             args[i].active_writers = &active_writers;
+            args[i].ready = &ready;
+            args[i].start = &start;
             args[i].iterations = iterations;
             args[i].writer = i < writer_count;
             CHECK(pthread_create(&threads[i], NULL, stress_worker, &args[i]) == 0);
         }
+        while (atomic_load_explicit(&ready, memory_order_acquire) != count)
+            sched_yield();
+        atomic_store_explicit(&start, true, memory_order_release);
         for (unsigned int i = 0; i < count; ++i)
             CHECK(pthread_join(threads[i], NULL) == 0);
         CHECK(protected_value == (uint64_t) writer_count * iterations);
