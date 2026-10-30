@@ -8,4 +8,11 @@ GRANT EXECUTE ON FUNCTION ores_dispatch.claim_once_v1(
 INSERT INTO ores_dispatch.actor_fence_v1
   (tenant_id, actor_id, actor_generation, activation_epoch, exact_revision)
 VALUES ('tenant', 'worker', 7, 9, repeat('a', 40));
--- The runtime is intentionally NOT granted direct table SELECT/INSERT/UPDATE.
+INSERT INTO ores_dispatch.runtime_binding_v1
+  (login_role, tenant_id, actor_id, enabled)
+VALUES ('ores_dispatch_test_runtime', 'tenant', 'worker', true);
+-- A current fence is insufficient without independent login authorization:
+INSERT INTO ores_dispatch.actor_fence_v1
+  (tenant_id, actor_id, actor_generation, activation_epoch, exact_revision)
+VALUES ('unbound-tenant', 'worker', 7, 9, repeat('a', 40));
+-- No direct runtime table SELECT/INSERT/UPDATE is granted.
