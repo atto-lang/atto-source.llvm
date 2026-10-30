@@ -59,6 +59,7 @@ private:
     bool closed_ = false;
     bool retiring_ = false;
     bool mutating_ = false; // exclusive stack-only write capability
+    bool constructing_ = false; // forbid constructor reentrancy before publish
     bool retire_requested_ = false; // monotonic fence for new access
 
     static std::uint64_t unique_domain() noexcept {
@@ -69,7 +70,7 @@ private:
     }
 
     bool live(Handle h) const noexcept {
-        return !closed_ && !retiring_ && !mutating_ && !retire_requested_ && h.domain == domain_
+        return !closed_ && !retiring_ && !mutating_ && !constructing_ && !retire_requested_ && h.domain == domain_
                && h.slot < Capacity && slots_[h.slot].value.has_value()
                && slots_[h.slot].generation == h.generation;
     }
@@ -124,7 +125,8 @@ public:
 
     template<class... Args>
     std::optional<Handle> emplace(Args&&... args) {
-        if (closed_ || retiring_ || mutating_ || retire_requested_ || size_ == Capacity)
+        if (closed_ || retiring_ || mutating_ || constructing_ || retire_requested_
+            || size_ == Capacity)
             return std::nullopt;
         for (std::size_t i = 0; i < Capacity; ++i) {
             auto& slot = slots_[i];
@@ -132,7 +134,18 @@ public:
                 continue;
             // Construct before publishing the slot. A throwing constructor
             // cannot expose a partially initialized or double-owned value.
+            constructing_ = true;
+            struct ConstructionScope {
+                bool& constructing;
+                ~ConstructionScope() noexcept { constructing = false; }
+            } guard{constructing_};
             slot.value.emplace(std::forward<Args>(args)...);
+            // A constructor may request STOP through the trusted supervisor;
+            // never publish its new slot after that retirement fence.
+            if (retire_requested_) {
+                slot.value.reset();
+                return std::nullopt;
+            }
             slot.degree = 0;
             ++size_;
             return Handle{domain_, static_cast<std::uint32_t>(i), slot.generation};
@@ -141,7 +154,8 @@ public:
     }
 
     std::optional<Lease> borrow(Handle h) noexcept {
-        if (!live(h)) return std::nullopt;
+        if (!live(h) || leases_ == std::numeric_limits<std::size_t>::max())
+            return std::nullopt;
         return std::optional<Lease>(Lease(*this, *slots_[h.slot].value));
     }
 
@@ -210,7 +224,7 @@ public:
     // lease count enforces one necessary condition, not the full scheduler proof.
     bool close() noexcept {
         if (closed_) return true;
-        if (retiring_ || mutating_ || leases_ != 0) return false;
+        if (retiring_ || mutating_ || constructing_ || leases_ != 0) return false;
         retiring_ = true;
         // Reverse slot order gives deterministic teardown independent of
         // cycles in the non-owning adjacency graph.
