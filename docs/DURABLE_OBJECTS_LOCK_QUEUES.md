@@ -1,16 +1,46 @@
 # Durable lock queues — LLVM host substrate (draft)
 
-This addition is stacked on LLVM [tenant isolate PR #1158](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1158); it is **not** an independently mergeable production feature.
+This draft is stacked on [LLVM IsolateVM #1158](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1158). The branch reconciles #1158 at commit `601f64c7abb9cd4f68adad9b5652bd5f08639bc1` in an explicit two-parent merge commit, preserving its latest native guest-exception quarantine behavior.
 
-Each private noncopyable tenant `IsolateVM` now owns its own `DurableLockQueues` instance with a fresh generation. The `OresVM` authority exposes generation-checked host-only enqueue/release/cancel/snapshot operations, with the queue fenced by isolate lifecycle.
+## Implemented host semantics
 
-- Queues are FIFO **per numeric LockId**, and separately bounded by live lock count, pending+running entries, entries per lock, and aggregate payload accounting.
-- Only an exact head ticket can release. Non-head/foreign/stale tickets cannot release; cancel may remove a waiter only.
-- Each distinct lock can be independently runnable. This is *not* evidence of simultaneous safe guest execution: current OresVM uses a single per-tenant guest mutex. An actor still must never execute reentrant turns even across distinct locks.
-- Quiescence closes new admissions. Shutdown refuses completion until all durable queue tickets retire; physical callbacks/continuations/IO will need separate scheduler pins.
-- The queue is **ephemeral in-memory lock scheduling**, not persisted durable message delivery or transactional data. Host operation IDs deduplicate only simultaneous outstanding operations, not post-crash retries.
-- No guest ABI has been exposed, no native guest code receives a C++ pointer, and there is no OS-process isolation. Untrusted native tenants remain prohibited until sandbox workers exist.
+- One `DurableLockQueues` instance per tenant IsolateVM incarnation. `Ticket` is host-created, contains actor incarnation and lock/sequence/operation fields, and has a private *queue-instance issuer identity*. This prevents an identically numbered ticket from another OresVM root being accepted as a local ticket. It does not authenticate remote network messages.
+- Bounded per-lock FIFO, tenant total entries/bytes/live locks/per-lock depth. Scheduler `claim` and `finish` are separate; the same actor incarnation cannot claim heads on two different locks concurrently.
+- Actor retirement rejects queued/claimed durable work; tenant quiescence fences new admission/claims and shutdown requires queue and guest-call drainage.
+- Synchronous `try_invoke_durable_guest_result` claims a FIFO head, runs an existing **source-compiled** `.ores` pure scalar `tenant_step` through the versioned `ores_guest_entry` ABI, and releases the queue ticket only after the native guest call returns or throws. An active dispatch pin denies concurrent manual `finish_durable` while that guest is physically executing.
+- A guest **C++ exception**, which may follow a partial write, quarantines its tenant and quiesces durable queues; a typed overflow status remains a recoverable result.
+- Source-generated integration target `native_oresvm_compiled_ores_durable_dispatch` invokes the real `oreslang-llvmc --isolate-entry=tenant_step` lowering and tests 1,000 operations against tenant A and 500 against tenant B with the *same LockId*, then checks typed overflow without partial counter commit.
 
-Verification: local standalone queue test passed with GCC C++17 and Clang ASan+UBSan; native OresVM queue integration test added to standalone CTest registration, but must be executed in an environment with the complete branch checkout. GitHub Actions source-org jobs had prior zero-step admission failures, which are not compiler test results.
+## Threat model / limitations
 
-Follow-up: authenticated actor scheduler binding, object-to-lock collision-free mapping, durable journal/transaction driver, migration epochs, persisted alarms, compiled `.ores` ABI, guest caps, limits on all native memory and I/O, real sandbox, conformance tests.
+- A guest ticket is a trusted host-only value; this is NOT a guest-provided, serializable, network-authenticated capability.
+- Current scalar `guest_globals` are per **tenant**, not per durable actor, and the `guest_turn_mutex` still serializes native guest execution at tenant scope. Independent runnable locks are **not proof of parallel actor execution**. This milestone validates **host-to-source-generated scalar dispatch**, not a general Oreslang actor compiler or `handle_state` / `critical` lowering.
+- No durable queue persistence, transactional inbox/outbox, actor scheduler-owned asynchronous continuation, post-crash idempotency, OS sandbox, trusted lease authority or distributed durability is provided.
+- Native `TrustedInProcess` does not contain arbitrary memory corruption.
+
+## Tests / verification boundaries
+
+New/expanded C++ tests:
+1. `native_durable_lock_queues_test.cpp` — cross-VM *same generation* issuer replay, quotas, FIFO, cancellation, actor non-reentrancy.
+2. `native_oresvm_durable_queues_test.cpp` — actor retirement, lifecycle, same-generation foreign OresVM ticket, *physically executing* guest cannot be finished externally, shutdown pin, native guest-exception quarantine/drain.
+3. `native_oresvm_source_durable_dispatch_test.cpp` — source-generated LLVM AOT scalar dispatch through the durable queue bridge, two tenants, overflow and shutdown.
+4. Existing `native_oresvm_guest_call_test.cpp` from latest #1158 retained to ensure native-guest partial-write quarantine is not lost.
+
+The compiler-generated fixture **requires the full LLVM CMake build and Clang**. It is wired into the compiler-enabled CTest target. The standalone OresVM CMake suite executes the first two queue tests without building the LLVM compiler.
+
+**Execution status:** a local C++17 ticket identity/copy smoke succeeded. All new exact-branch full CMake/CTest and compiler-generated source tests are **not yet executed** here. Exact-head Actions workflow [41006466511](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41006466511) (`llvm-smoke`) and [41006466391](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41006466391) (`conformance`) both have **0 recorded steps**, so they are runner-admission evidence, not test results.
+
+Recommended commands on an authorized same-source private runner:
+
+```sh
+cmake -S tests/oresvm-standalone -B build/oresvm-host -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/oresvm-host --parallel 2
+ctest --test-dir build/oresvm-host --output-on-failure
+
+# Full LLVM build using the repository's pinned LLVM/Clang toolchain:
+cmake -S . -B build/llvm -DBUILD_TESTING=ON
+cmake --build build/llvm --parallel 2
+ctest --test-dir build/llvm -R "native_oresvm_(compiled_ores_durable_dispatch|source_llvm_aot_context|guest_call|durable_queues)" --output-on-failure
+```
+
+No cross-organization private source mirroring is authorized while the [P0 private-source transfer incident](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22) remains open without independent approval.
