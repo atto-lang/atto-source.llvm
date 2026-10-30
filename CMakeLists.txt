@@ -3952,6 +3952,25 @@ endif()
 # independent of LLVM IR emission. LOW is executable; MEDIUM/HIGH fail closed
 # before codegen until safe per-turn actor frames and state loans exist.
 if(BUILD_TESTING)
+    # Compiler-owned nominal inverted struct schema parses into its own AST
+    # but cannot authorize guest lowering before typed SoA HIR/MIR exists.
+    add_executable(oreslang-native-inverted-struct-ast-test
+        tests/native_inverted_struct_ast_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-inverted-struct-ast-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-inverted-struct-ast-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-inverted-struct-ast-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-inverted-struct-ast-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-inverted-struct-ast-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_inverted_struct_schema_ast
+        COMMAND oreslang-native-inverted-struct-ast-test)
+    set_tests_properties(native_inverted_struct_schema_ast PROPERTIES TIMEOUT 30)
     add_executable(oreslang-native-actor-max-threads-admission-test
         tests/actor_max_threads_source_admission_test.cpp
         src/main/cpp/oreslang/frontend/Parser.cpp
