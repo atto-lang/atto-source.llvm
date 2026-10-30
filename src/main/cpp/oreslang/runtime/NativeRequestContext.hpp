@@ -52,6 +52,7 @@ private:
         Handle handle;
         OresNativeActorRef owner;
         OresNativeActorScheduler* scheduler;
+        const NativeHttpExchange* exchange;
         Frame* previous;
     };
     inline static thread_local Frame* current_frame_ = nullptr;
@@ -127,28 +128,74 @@ public:
         Handle handle() const noexcept {return table_ ? handle_ : Handle{};}
         explicit operator bool() const noexcept {return table_!=nullptr;}
     };
-    // Trusted reactor owns a physical lifetime pin from admission until
-    // the exchange is completed/rolled back and fully reclaimed.
+    // Physical ownership of an HTTP exchange, not merely a weak token.
+    // A pin may only retire after rollback/reclaim returns to reactor phase.
     struct ExchangePin final {
         NativeHttpExchange::Token token;
-        Lease pin;
     private:
         friend class NativeRequestContext;
-        ExchangePin(NativeHttpExchange::Token t, Lease&& p) noexcept:
-            token(t), pin(std::move(p)) {}
+        NativeHttpExchange* exchange_ = nullptr;
+        Lease pin_;
+        ExchangePin(NativeHttpExchange& exchange, NativeHttpExchange::Token t,
+                    Lease&& p) noexcept:token(t),exchange_(&exchange),pin_(std::move(p)){}
     public:
         ExchangePin(const ExchangePin&) = delete;
         ExchangePin& operator=(const ExchangePin&) = delete;
-        ExchangePin(ExchangePin&&) noexcept = default;
-        ExchangePin& operator=(ExchangePin&&) noexcept = default;
+        ExchangePin(ExchangePin&& src) noexcept:
+            token(src.token), exchange_(std::exchange(src.exchange_,nullptr)),
+            pin_(std::move(src.pin_)) {}
+        ExchangePin& operator=(ExchangePin&&) = delete;
+        ~ExchangePin(){
+            if(pin_ && (!exchange_ || exchange_->phase()!=NativeHttpExchange::Phase::reactor))
+                std::terminate(); // early release would permit storage ABA
+        }
     };
-    // Pin before publishing a weak context handle to the exchange.
     std::optional<ExchangePin> attach_exchange(NativeHttpExchange& exchange,
             Handle handle, OresNativeActorRef owner) noexcept {
         auto pin=retain(handle,owner);
         if(!pin)return std::nullopt;
         if(!exchange.enqueue(owner,handle.value,registry_id_))return std::nullopt;
-        return ExchangePin(exchange.token(),std::move(*pin));
+        return ExchangePin(exchange,exchange.token(),std::move(*pin));
+    }
+    // A request's transport buffer is physically retained from the time
+    // its exchange is published through terminal/reclaim. This lease is NOT
+    // exposed as a guest string_view and never crosses await as a guest borrow.
+    template<std::size_t Slots,std::size_t MaxBytes>
+    struct BoundExchange final {
+        using Table=RequestSlotTable<Slots,MaxBytes>;
+        using BodyHandle=typename Table::Handle;
+    private:
+        friend class NativeRequestContext;
+        ExchangePin exchange_pin_;
+        Table* table_;
+        BodyHandle body_;
+        std::uint64_t transport_owner_;
+        typename Table::ReadLease body_pin_;
+        BoundExchange(ExchangePin&& exchange, Table& table, BodyHandle body,
+                      std::uint64_t owner, typename Table::ReadLease&& loan) noexcept:
+            exchange_pin_(std::move(exchange)),table_(&table),body_(body),
+            transport_owner_(owner),body_pin_(std::move(loan)){}
+    public:
+        BoundExchange(const BoundExchange&) = delete;
+        BoundExchange& operator=(const BoundExchange&) = delete;
+        BoundExchange(BoundExchange&&) noexcept = default;
+        BoundExchange& operator=(BoundExchange&&) = delete;
+        NativeHttpExchange::Token token() const noexcept { return exchange_pin_.token; }
+    };
+    template<std::size_t Slots,std::size_t MaxBytes>
+    std::optional<BoundExchange<Slots,MaxBytes>> attach_exchange_with_buffer(
+            NativeHttpExchange& exchange, Handle handle, OresNativeActorRef owner,
+            RequestSlotTable<Slots,MaxBytes>& table,
+            typename RequestSlotTable<Slots,MaxBytes>::Handle body,
+            std::uint64_t transport_owner) noexcept {
+        // The transport owner comes from the trusted ingress/handoff. A guest
+        // cannot supply arbitrary numeric owners to this host-only factory.
+        auto read_pin=table.borrow(body,transport_owner);
+        if(!read_pin)return std::nullopt;
+        auto exchange_pin=attach_exchange(exchange,handle,owner);
+        if(!exchange_pin)return std::nullopt;
+        return BoundExchange<Slots,MaxBytes>(std::move(*exchange_pin),table,
+                    body,transport_owner,std::move(*read_pin));
     }
     // Durable move-only suspension link: stored in Task/continuation frame,
     // not worker TLS. Lease survives physical carrier exit.
@@ -280,7 +327,7 @@ public:
         if(!lease)return false;
         // Store lease prevents reuse; close revokes current() immediately.
         if(!lookup(handle,owner))return false;
-        Frame frame{this,handle,owner,scheduler,current_frame_};
+        Frame frame{this,handle,owner,scheduler,&exchange,current_frame_};
         current_frame_=&frame;
         const auto carrier=std::this_thread::get_id();
         struct Restore {
@@ -295,21 +342,25 @@ public:
         callback();
         return true;
     }
-    // Host-only request-byte loan: source compilation must prove the borrowed
-    // string_view cannot escape or remain live across await/suspend. A separate
-    // transport slot is validated on every use; never persist a raw pointer
-    // in the logical request context or continuation.
+    // No untrusted choice of transport handle/owner at lookup: use only the
+    // exchange's trusted ingress-bound buffer. The short guest borrow is
+    // lexical; the separate host-owned read pin survives suspension.
     template<std::size_t Slots,std::size_t MaxBytes,typename Visitor>
-    bool with_request_bytes(RequestSlotTable<Slots,MaxBytes>& table,
-            typename RequestSlotTable<Slots,MaxBytes>::Handle buffer,
-            std::uint64_t transport_owner, Visitor&& visitor) {
+    bool with_request_bytes(const BoundExchange<Slots,MaxBytes>& bound,
+                            Visitor&& visitor) {
         static_assert(std::is_void_v<std::invoke_result_t<Visitor&,std::string_view>>,
             "request borrowed bytes visitor must return void");
         Frame* frame=current_frame_;
+        const auto token=bound.token();
         if(!frame || frame->table!=this ||
-                !admitted(frame->scheduler,frame->owner) ||
-                !lookup(frame->handle,frame->owner))return false;
-        return table.with_borrow(buffer,transport_owner,std::forward<Visitor>(visitor));
+            frame->exchange!=bound.exchange_pin_.exchange_ ||
+            !admitted(frame->scheduler,frame->owner) ||
+            frame->handle.value!=token.request_context ||
+            token.request_registry!=registry_id_ ||
+            !same(frame->owner,token.actor) ||
+            !lookup(frame->handle,frame->owner))return false;
+        return bound.table_->with_borrow(bound.body_,bound.transport_owner_,
+                std::forward<Visitor>(visitor));
     }
     // Convenience only, never an actor, heap or permissions accessor.
     static std::optional<Metadata> current() noexcept {
