@@ -20,9 +20,15 @@ int main(int argc, char** argv) {
   assert(conninfo && *conninfo); // Test harness provides isolated DB credentials.
   PostgresActorDispatchClaim db(conninfo);
   if (argc > 1 && (std::string(argv[1]) == "probe" ||
-                   std::string(argv[1]) == "probe-hold")) {
+                   std::string(argv[1]) == "probe-hold" ||
+                   std::string(argv[1]) == "probe-newgen")) {
     assert(argc == 3);
-    if (!db.claim_once(request(argv[2]))) return 2;
+    auto candidate=request(argv[2]);
+    if (std::string(argv[1]) == "probe-newgen") {
+      candidate.generation=8;candidate.epoch=10;
+      candidate.exact_revision=std::string(40,'c');
+    }
+    if (!db.claim_once(candidate)) return 2;
     if (std::string(argv[1]) == "probe-hold") {
       std::cout << "CLAIM_COMMITTED\n" << std::flush;
       std::this_thread::sleep_for(std::chrono::seconds(30));
