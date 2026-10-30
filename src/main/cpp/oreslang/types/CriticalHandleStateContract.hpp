@@ -44,9 +44,12 @@ inline CriticalStateAdmission admit_critical_handle_state(
     // Scheduler-proven serial admission does not replace the mandatory
     // inline critical callback marker. Otherwise a serial actor could
     // silently authorize an unmarked state-capability callback.
-    (void)verified_serial_actor;  // Retained for source ABI compatibility.
     if (!callback.callback_critical)
         return CriticalStateAdmission::MissingCallbackCritical;
+    // Only a verified scheduler/compiler actor context may mint state access.
+    // Critical syntax by itself is not an authorization credential.
+    if (!verified_serial_actor)
+        return CriticalStateAdmission::ScopeDenied;
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
     }
