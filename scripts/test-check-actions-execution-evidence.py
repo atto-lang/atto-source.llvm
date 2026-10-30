@@ -92,6 +92,26 @@ class ExecutionEvidenceTests(unittest.TestCase):
         with self.assertRaises(checker.EvidenceError):
             validate(run, jobs)
 
+    def test_run_identity_rejects_boolean_and_float_equivalents(self):
+        for key, value in (("id", float(RUN_ID)),
+                           ("run_attempt", True),
+                           ("run_attempt", 1.0)):
+            with self.subTest(key=key, value=value):
+                run, jobs = fixture()
+                run[key] = value
+                with self.assertRaisesRegex(checker.EvidenceError, "identity"):
+                    validate(run, jobs)
+
+    def test_job_identity_rejects_boolean_and_float_equivalents(self):
+        for key, value in (("run_id", float(RUN_ID)),
+                           ("run_attempt", True),
+                           ("run_attempt", 1.0)):
+            with self.subTest(key=key, value=value):
+                run, jobs = fixture()
+                jobs["jobs"][0][key] = value
+                with self.assertRaisesRegex(checker.EvidenceError, "not pinned"):
+                    validate(run, jobs)
+
     def test_unfinished_or_failed_run_denied(self):
         for val in ["failure", "cancelled", "skipped", None]:
             run, jobs = fixture()
