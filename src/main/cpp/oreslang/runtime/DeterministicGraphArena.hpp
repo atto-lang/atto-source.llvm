@@ -59,6 +59,7 @@ private:
     bool closed_ = false;
     bool retiring_ = false;
     bool mutating_ = false; // exclusive stack-only write capability
+    bool retire_requested_ = false; // monotonic fence for new access
 
     static std::uint64_t unique_domain() noexcept {
         const auto id = next_domain_.fetch_add(1, std::memory_order_relaxed);
@@ -68,7 +69,7 @@ private:
     }
 
     bool live(Handle h) const noexcept {
-        return !closed_ && !retiring_ && !mutating_ && h.domain == domain_
+        return !closed_ && !retiring_ && !mutating_ && !retire_requested_ && h.domain == domain_
                && h.slot < Capacity && slots_[h.slot].value.has_value()
                && slots_[h.slot].generation == h.generation;
     }
@@ -115,10 +116,16 @@ public:
     std::size_t size() const noexcept { return size_; }
     std::size_t active_leases() const noexcept { return leases_; }
     bool closed() const noexcept { return closed_; }
+    bool retirement_requested() const noexcept { return retire_requested_; }
+    // Stop new borrows and mutations immediately. Existing loans are still
+    // valid until release; close() must retry after actual quiescence.
+    // A cancellation request is not itself a release/acknowledgement.
+    void begin_retire() noexcept { retire_requested_ = true; }
 
     template<class... Args>
     std::optional<Handle> emplace(Args&&... args) {
-        if (closed_ || retiring_ || mutating_ || size_ == Capacity) return std::nullopt;
+        if (closed_ || retiring_ || mutating_ || retire_requested_ || size_ == Capacity)
+            return std::nullopt;
         for (std::size_t i = 0; i < Capacity; ++i) {
             auto& slot = slots_[i];
             if (slot.value || slot.generation == std::numeric_limits<std::uint64_t>::max())
