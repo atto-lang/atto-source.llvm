@@ -67,9 +67,30 @@ public:
         ActorTicket() = default;
     };
 
+    class ActorAllocation final {
+        friend class OresVM;
+        std::weak_ptr<IsolateVM> state_;
+        std::uint64_t isolate_generation_ = 0;
+        std::uint64_t actor_id_ = 0;
+        std::uint64_t actor_generation_ = 0;
+        std::uint32_t offset_ = 0;
+        std::uint32_t size_ = 0;
+        ActorAllocation(const std::shared_ptr<IsolateVM>& state,
+                        DurableLockQueues::ActorKey actor,
+                        std::uint32_t offset, std::uint32_t size)
+            : state_(state), isolate_generation_(state->generation),
+              actor_id_(actor.id), actor_generation_(actor.generation),
+              offset_(offset), size_(size) {}
+    public:
+        ActorAllocation() = default;
+        std::uint32_t offset() const noexcept { return offset_; }
+        std::uint32_t size() const noexcept { return size_; }
+    };
+
     explicit OresVM(OresVmLimits limits = {}) : limits_(limits) {
         if (limits_.max_tenants == 0 || limits_.max_admitted_heap_bytes == 0 ||
-            limits_.max_inflight_guest_calls == 0)
+            limits_.max_inflight_guest_calls == 0 ||
+            limits_.max_admitted_actor_arena_bytes == 0)
             throw std::invalid_argument("OresVM requires positive aggregate quotas");
     }
     OresVM(const OresVM&) = delete;
@@ -84,7 +105,8 @@ public:
             std::any_of(config.tenant_id.begin(), config.tenant_id.end(),
                 [](unsigned char c) { return c < 0x20 || c == 0x7f; });
         if (unsafe_tenant_id || config.heap_limit_bytes == 0 ||
-            config.max_actors == 0 || config.max_inflight_guest_calls == 0)
+            config.max_actors == 0 || config.max_inflight_guest_calls == 0 ||
+            config.actor_arena_bytes < ActorArena::kScalarPrefix)
             throw std::invalid_argument("isolate requires a bounded ID and positive quotas");
         if (config.mode != IsolateMode::TrustedInProcess)
             throw std::logic_error("sandboxed-process isolation is not implemented");
@@ -93,6 +115,13 @@ public:
             throw std::logic_error("tenant already has an isolate");
         if (isolates_.size() >= limits_.max_tenants)
             throw std::logic_error("OresVM tenant quota exhausted");
+        // Reserve the full sum of physical actor arenas on tenant admission,
+        // independent of their lazily allocated native buffers.
+        const auto actor_reservation = std::uint64_t{config.max_actors} *
+                                       config.actor_arena_bytes;
+        if (actor_reservation > limits_.max_admitted_actor_arena_bytes -
+                                    admitted_actor_arena_bytes_)
+            throw std::bad_alloc();
         // Charge the entire declared logical heap limit at admission, not
         // only current committed vector bytes. Prevent tenant overcommit.
         if (config.heap_limit_bytes >
@@ -103,6 +132,7 @@ public:
         auto state = std::shared_ptr<IsolateVM>(new IsolateVM(std::move(config), next_generation_++));
         isolates_.emplace(state->config.tenant_id, state);
         admitted_heap_bytes_ += state->config.heap_limit_bytes;
+        admitted_actor_arena_bytes_ += actor_reservation;
         return IsolateHandle(state);
     }
 
@@ -172,17 +202,60 @@ public:
         const auto incarnation = state->next_actor_generation;
         state->actors.emplace(actor_id, incarnation);
         try {
-            state->actor_scalar_slots.emplace(actor_id,
-                IsolateVM::ActorScalarSlots{incarnation, {}});
+            state->actor_arenas.emplace(actor_id,
+                std::make_unique<ActorArena>(incarnation, state->config.actor_arena_bytes));
             state->actor_turn_mutexes.emplace(actor_id, std::make_shared<std::mutex>());
         } catch (...) {
             state->actor_turn_mutexes.erase(actor_id);
-            state->actor_scalar_slots.erase(actor_id);
+            state->actor_arenas.erase(actor_id);
             state->actors.erase(actor_id);
             throw;
         }
         ++state->next_actor_generation;
         return ActorTicket(state, actor_id, incarnation);
+    }
+
+    ActorAllocation allocate_actor(const IsolateHandle& handle,
+            const ActorTicket& actor, std::uint32_t bytes,
+            std::uint32_t alignment = 1) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("actor arena allocation closed");
+        const auto key = checked_actor_ticket(state, actor);
+        auto arena = state->actor_arenas.find(key.id);
+        if (arena == state->actor_arenas.end() ||
+            arena->second->generation() != key.generation)
+            throw std::logic_error("missing actor-owned native arena");
+        return ActorAllocation(state, key, arena->second->allocate(bytes, alignment), bytes);
+    }
+
+    void write_actor_byte(const IsolateHandle& handle, const ActorTicket& actor,
+            const ActorAllocation& allocation, std::uint32_t index,
+            std::uint8_t value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor arena access closed");
+        const auto key = checked_actor_ticket(state, actor);
+        check_actor_allocation(state, key, allocation);
+        state->actor_arenas.at(key.id)->write_byte(
+            allocation.offset_, allocation.size_, index, value);
+    }
+
+    std::uint8_t read_actor_byte(const IsolateHandle& handle,
+            const ActorTicket& actor, const ActorAllocation& allocation,
+            std::uint32_t index) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor arena access closed");
+        const auto key = checked_actor_ticket(state, actor);
+        check_actor_allocation(state, key, allocation);
+        return state->actor_arenas.at(key.id)->read_byte(
+            allocation.offset_, allocation.size_, index);
     }
 
     void retire_actor(const IsolateHandle& handle, const ActorTicket& actor) {
@@ -198,12 +271,12 @@ public:
             throw std::logic_error("stale or foreign actor ticket");
         if (state->durable_queues.has_actor({actor.id_, actor.actor_generation_}))
             throw std::logic_error("cannot retire actor with outstanding durable work");
-        auto scalar = state->actor_scalar_slots.find(actor.id_);
-        if (scalar == state->actor_scalar_slots.end() ||
-            scalar->second.generation != actor.actor_generation_)
-            throw std::logic_error("actor scalar-state incarnation mismatch");
-        scalar->second.slots.fill(0);
-        state->actor_scalar_slots.erase(scalar);
+        auto arena = state->actor_arenas.find(actor.id_);
+        if (arena == state->actor_arenas.end() ||
+            arena->second->generation() != actor.actor_generation_)
+            throw std::logic_error("actor arena incarnation mismatch");
+        // Erasure destroys and scrubs a dedicated native allocation.
+        state->actor_arenas.erase(arena);
         state->actor_turn_mutexes.erase(actor.id_);
         state->actors.erase(it);
     }
@@ -372,6 +445,8 @@ public:
         state->guest_globals.fill(0);
         isolates_.erase(state->config.tenant_id);
         admitted_heap_bytes_ -= state->config.heap_limit_bytes;
+        admitted_actor_arena_bytes_ -=
+            std::uint64_t{state->config.max_actors} * state->config.actor_arena_bytes;
     }
 
     IsolateSnapshot snapshot(const IsolateHandle& handle) const {
@@ -474,6 +549,23 @@ private:
         return {actor.id_, actor.actor_generation_};
     }
 
+    static void check_actor_allocation(
+            const std::shared_ptr<IsolateVM>& state,
+            DurableLockQueues::ActorKey actor, const ActorAllocation& ref) {
+        if (ref.state_.lock() != state ||
+            ref.isolate_generation_ != state->generation ||
+            ref.actor_id_ != actor.id || ref.actor_generation_ != actor.generation ||
+            ref.size_ == 0)
+            throw std::logic_error("stale or foreign actor arena allocation");
+        auto arena = state->actor_arenas.find(actor.id);
+        if (arena == state->actor_arenas.end() ||
+            arena->second->generation() != actor.generation ||
+            ref.offset_ < ActorArena::kScalarPrefix ||
+            ref.offset_ > arena->second->used_bytes() ||
+            ref.size_ > arena->second->used_bytes() - ref.offset_)
+            throw std::logic_error("actor arena allocation out of range");
+    }
+
     struct GuestCall final {
         OresVM* vm;
         std::shared_ptr<IsolateVM> state;
@@ -493,12 +585,12 @@ private:
         if (call->actor) {
             const auto actor = *call->actor;
             const auto current = state->actors.find(actor.id);
-            const auto scalar = state->actor_scalar_slots.find(actor.id);
+            const auto arena = state->actor_arenas.find(actor.id);
             if (current == state->actors.end() ||
                 current->second != actor.generation ||
-                scalar == state->actor_scalar_slots.end() ||
-                scalar->second.generation != actor.generation) return 0;
-            *out = scalar->second.slots[slot];
+                arena == state->actor_arenas.end() ||
+                arena->second->generation() != actor.generation) return 0;
+            *out = arena->second->load_scalar(slot);
         } else {
             *out = state->guest_globals[slot];
         }
@@ -517,12 +609,12 @@ private:
         if (call->actor) {
             const auto actor = *call->actor;
             const auto current = state->actors.find(actor.id);
-            const auto scalar = state->actor_scalar_slots.find(actor.id);
+            const auto arena = state->actor_arenas.find(actor.id);
             if (current == state->actors.end() ||
                 current->second != actor.generation ||
-                scalar == state->actor_scalar_slots.end() ||
-                scalar->second.generation != actor.generation) return 0;
-            scalar->second.slots[slot] = value;
+                arena == state->actor_arenas.end() ||
+                arena->second->generation() != actor.generation) return 0;
+            arena->second->store_scalar(slot, value);
         } else {
             state->guest_globals[slot] = value;
         }
@@ -549,6 +641,7 @@ private:
     mutable std::mutex mutex_;
     const OresVmLimits limits_;
     std::uint64_t admitted_heap_bytes_ = 0;
+    std::uint64_t admitted_actor_arena_bytes_ = 0;
     std::size_t pinned_guest_calls_ = 0;
     std::unordered_map<std::string, std::shared_ptr<IsolateVM>> isolates_;
     std::uint64_t next_generation_ = 1;
