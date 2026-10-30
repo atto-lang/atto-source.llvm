@@ -198,3 +198,50 @@ Source-free regression tests:
 python3 scripts/test-audit-private-ci-governance.py
 python3 scripts/test-publish-private-ci-source-v3.py
 ```
+
+
+## Source-free atomic ref deletion prototype (review only; issue #1154)
+
+The production V3 publisher is **not enabled**. Its
+`require_atomic_ref_rollback()` still raises `Denied` before it may read
+private source or write destination Git objects. This hold MUST NOT be bypassed
+by a successful local test, a green source-free Actions canary, or a new Git
+carrier. The remaining incident, immutable identity, protected-branch,
+allowlist and independent reviewer gates also remain separate requirements.
+
+`tests/test_atomic_ref_cleanup_local.py` creates only disposable **local
+bare Git repositories** and tests the Git protocol's expected-old-SHA
+deletion primitive:
+
+```text
+git push --force-with-lease=refs/heads/ci/TEST:<EXPECTED_SHA> LOCAL_REMOTE :refs/heads/ci/TEST
+```
+
+The six executed source-free local tests cover exact-SHA deletion; stale
+expected-SHA rejection; a competing update made in a `pre-receive` hook;
+remote-hook rejection; repeated-deletion refusal; and **ABA** (`A -> B -> A`).
+The ABA test intentionally demonstrates that the deletion can succeed after
+another writer has briefly controlled and restored the original SHA. Therefore
+an expected-SHA lease is **not** an ownership, authorization, or generation
+fence. A successful local bare-Git push is not proof of GitHub's actual ref
+policy, cleanup permissions, or concurrent provider behavior.
+
+Before any future activation, independent reviewers must establish an
+enforced, exclusive ref-namespace and generation/ownership protocol, verify
+the exact expected ref and destination repository identity on a dedicated,
+source-free, authorized GitHub test repository (including ambiguous transport
+failures), and review how rejected/ambiguous cleanup quarantines source-bearing
+objects without granting broader data access. Approval must also address
+provider object retention, Actions artifacts and logs, and incident closure.
+Deleting a Git ref alone does not remove retained Git objects. In every
+uncertain case, stop publication and escalate for independent containment;
+never report successful cleanup from a preliminary GET or bare 404.
+
+Source-free local regression command:
+
+```sh
+python3 -m unittest discover -s tests -p test_atomic_ref_cleanup_local.py -v
+```
+
+This test is part of the source-origin policy workflow, not any source-bearing
+alternate carrier workflow.
