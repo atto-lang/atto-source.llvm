@@ -58,7 +58,22 @@ jobs:
         run: |
           set -euo pipefail
           export PGPASSWORD="$ORES_PG_ADMIN_PASSWORD"
-          psql -U postgres -v ON_ERROR_STOP=1 -f contracts/v1/agent-dispatch/postgresql/001_actor_dispatch_v1.sql
+          # The SECURITY DEFINER function must not be owned by a superuser.
+          psql -U postgres -v ON_ERROR_STOP=1 -c 'CREATE ROLE ores_dispatch_migration_owner NOLOGIN'
+          psql -U postgres -v ON_ERROR_STOP=1 -c 'GRANT CREATE ON DATABASE ores_dispatch_test TO ores_dispatch_migration_owner'
+          {
+            printf 'SET ROLE ores_dispatch_migration_owner;\n'
+            cat contracts/v1/agent-dispatch/postgresql/001_actor_dispatch_v1.sql
+          } | psql -U postgres -v ON_ERROR_STOP=1
+          owner=$(psql -U postgres -tAc "SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname='ores_dispatch'")
+          test "$owner" = 'ores_dispatch_migration_owner'
+          # Reapplying an initial schema migration must fail, not replace objects.
+          if {
+            printf 'SET ROLE ores_dispatch_migration_owner;\n'
+            cat contracts/v1/agent-dispatch/postgresql/001_actor_dispatch_v1.sql
+          } | psql -U postgres -v ON_ERROR_STOP=1 >/dev/null 2>&1; then
+            echo 'SECURITY_FAILURE schema migration was silently reapplied'; exit 2
+          fi
           psql -U postgres -v ON_ERROR_STOP=1 -f contracts/v1/agent-dispatch/postgresql/002_test_fixture.sql
 
           printf "ALTER ROLE ores_dispatch_test_runtime LOGIN PASSWORD '%s';\n" "$ORES_PG_RUNTIME_PASSWORD" |
@@ -116,6 +131,7 @@ jobs:
           psql -U postgres -v ON_ERROR_STOP=1 -c "UPDATE ores_dispatch.actor_fence_v1 SET actor_generation=8, activation_epoch=10, exact_revision=repeat('c',40) WHERE tenant_id='tenant' AND actor_id='worker'"
           rc=0
           "$RUNNER_TEMP/pg_dispatch_native" probe native-after-fence || rc=$?
+          test "$rc" -eq 2
           # A new generation cannot recycle a previously committed effect.
           rc=0
           "$RUNNER_TEMP/pg_dispatch_native" probe-newgen native-killed || rc=$?
