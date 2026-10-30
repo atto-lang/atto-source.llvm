@@ -1,0 +1,72 @@
+name: Durable OresVM same-org native proof
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/DurableLockQueues.hpp'
+      - 'src/main/cpp/oreslang/runtime/OresVM.hpp'
+      - 'src/main/cpp/oreslang/runtime/OresIsolateVM.hpp'
+      - 'tests/native_oresvm_*'
+      - 'tests/native_durable_lock_queues_test.cpp'
+      - 'tests/oresvm-standalone/CMakeLists.txt'
+      - '.github/workflows/oresvm-durable-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oresvm-durable-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runner-admission-no-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Prove runner execution without checking out private source
+        run: |
+          set -euo pipefail
+          printf 'runner admitted for %s at %s\n' "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
+          test -n "${GITHUB_RUN_ID}"
+
+  native-standalone:
+    needs: runner-admission-no-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang-asan-ubsan]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Pin compiler and sanitizer mode
+        id: toolchain
+        run: |
+          set -euo pipefail
+          case "${{ matrix.compiler }}" in
+            gcc)
+              echo 'cxx=g++' >> "${GITHUB_OUTPUT}"
+              echo 'sanitizers=OFF' >> "${GITHUB_OUTPUT}" ;;
+            clang-asan-ubsan)
+              echo 'cxx=clang++' >> "${GITHUB_OUTPUT}"
+              echo 'sanitizers=ON' >> "${GITHUB_OUTPUT}" ;;
+            *) exit 2 ;;
+          esac
+      - name: Configure native source-local CMake
+        run: >
+          cmake -S tests/oresvm-standalone
+          -B build/oresvm-durable-${{ matrix.compiler }}
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=${{ steps.toolchain.outputs.cxx }}
+          -DORESVM_SANITIZERS=${{ steps.toolchain.outputs.sanitizers }}
+      - name: Build exact PR head standalone suite
+        run: cmake --build build/oresvm-durable-${{ matrix.compiler }} --parallel 2
+      - name: Run all standalone isolate and queue tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: >
+          ctest --test-dir build/oresvm-durable-${{ matrix.compiler }}
+          --output-on-failure
