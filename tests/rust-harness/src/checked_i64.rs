@@ -8,6 +8,9 @@ use std::path::Path;
 pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
     use std::{ffi::OsStr, fs, os::unix::process::ExitStatusExt, process::Command};
     let temp = TempDir::new("ores-checked-i64-").map_err(|e| e.to_string())?;
+    fs::write(temp.path.join("math-shadow.ores"),
+        "define module Math as pub fnc abs(int value):int{return 7;} end\n")
+        .map_err(|e| e.to_string())?;
     let positives = [
         ("precedence", "pub fnc main():int{return 2+3*4;}", 14),
         ("parentheses", "pub fnc main():int{return (2+3)*4;}", 20),
@@ -18,6 +21,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("math-abs", "pub fnc main():int{return Math.abs(-42);}", 42),
         ("math-neg", "pub fnc main():int{return Math.neg(-42);}", 42),
         ("dynamic-math-abs", "fnc magnitude(int a):int{return Math.abs(a);} pub fnc main():int{return magnitude(-42);}", 42),
+        ("imported-math-shadows-intrinsic",
+         "import module Math from \"./math-shadow.ores\"; pub fnc main():int{return Math.abs(-42);}", 7),
         ("lazy-ternary", "pub fnc main():int{return false ? (9223372036854775807+1) : 42;}", 42),
         ("lazy-and", "pub fnc main():int{return (false && (9223372036854775807+1>0)) ? 0 : 42;}", 42),
         ("lazy-or", "pub fnc main():int{return (true || (9223372036854775807+1>0)) ? 42 : 0;}", 42),
