@@ -292,6 +292,11 @@ inline PackageNamespaceGraph link_package_namespaces(
                 throw std::invalid_argument("invalid public namespace export name");
             if (!fn.statements.empty() || !fn.early_returns.empty())
                 throw std::invalid_argument("native namespace body control flow requires checked lowering");
+            // A non-void public export must have a checked value-producing body.
+            // The recursive expression checker deliberately treats null child
+            // operands as absent; that must not admit an absent root result.
+            if (!fn.result)
+                throw std::invalid_argument("native namespace non-void export has no scalar result expression");
             if (!namespace_pure_scalar_expression(fn.result.get()))
                 throw std::invalid_argument("native namespace body expression requires checked effect lowering");
             if (!fn.generic_parameters.empty() || !fn.method_owner.empty())
