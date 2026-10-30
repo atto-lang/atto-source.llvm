@@ -89,6 +89,40 @@ int main(){
         catch(const std::runtime_error&){rejected=true;}
         assert(rejected && "missing journal event must abort reactivation");
     }
+    { // Durable snapshot must not be missing or oversized on restore.
+        SqliteStore store(path);store.grant_epoch("tenant-a","snapshot-null",1);
+        store.grant_epoch("tenant-a","snapshot-huge",1);
+        auto good=store.commit({write("snapshot-null","one"),write("snapshot-huge","one")});
+        assert(good[0].durable() && good[1].durable());
+    }
+    {
+        sqlite3* conn=nullptr;assert(sqlite3_open(path.c_str(),&conn)==SQLITE_OK);
+        assert(sqlite3_exec(conn,"UPDATE state SET snapshot=NULL WHERE actor='snapshot-null'",nullptr,nullptr,nullptr)==SQLITE_OK);
+        assert(sqlite3_exec(conn,"UPDATE state SET snapshot=zeroblob(1048577) WHERE actor='snapshot-huge'",nullptr,nullptr,nullptr)==SQLITE_OK);
+        sqlite3_close(conn);
+        SqliteStore store(path);
+        for(const std::string actor:{"snapshot-null","snapshot-huge"}) {
+            bool rejected=false;
+            try { (void)store.load_fenced({"tenant-a",actor,"main"},1); }
+            catch(const std::runtime_error& e){rejected=std::string(e.what())=="INVALID_ACTOR_SNAPSHOT";}
+            assert(rejected && "invalid durable snapshot must not publish actor state");
+        }
+    }
+    { // Event payloads are bounded even if the DB was externally tampered.
+        SqliteStore store(path);store.grant_epoch("tenant-a","event-huge",1);
+        auto result=store.commit({write("event-huge","one",1,0,WriteKind::Event,20)});
+        assert(result[0].durable());
+    }
+    {
+        sqlite3* conn=nullptr;assert(sqlite3_open(path.c_str(),&conn)==SQLITE_OK);
+        assert(sqlite3_exec(conn,"UPDATE events SET payload=zeroblob(1048577) WHERE actor='event-huge'",nullptr,nullptr,nullptr)==SQLITE_OK);
+        sqlite3_close(conn);
+        SqliteStore store(path);
+        bool rejected=false;
+        try { (void)store.load_fenced({"tenant-a","event-huge","main"},1); }
+        catch(const std::runtime_error& e){rejected=std::string(e.what())=="INVALID_ACTOR_EVENT";}
+        assert(rejected && "overlarge event payload must abort restore");
+    }
     { // Version CAS within one batch: actor A conflict does not poison actor B.
         SqliteStore store(path);
         store.grant_epoch("tenant-a","mixed-a",1);store.grant_epoch("tenant-a","mixed-b",1);
