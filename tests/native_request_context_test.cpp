@@ -328,6 +328,40 @@ int main(){
               ==ORES_NATIVE_SEND_INVALID_REF);
         s.end();
     }
+    // A recycled exchange uses a fresh generation and DATA ticket.
+    // The preceding generation's one-shot submission claim must not leak
+    // into a new legitimately admitted request after physical reclamation.
+    {
+        Suite s;s.begin(1);
+        const auto old=s.pins[0]->token();
+        s.send_all();
+        CHECK(s.observed==1);
+        CHECK(s.exchanges[0].complete(old));
+        CHECK(s.exchanges[0].reclaim(old));
+        CHECK(s.contexts.close(s.requests[0],s.actors[0]));
+        CHECK(s.buffers.close(s.bodies[0],1));
+        s.pins[0].reset();
+        CHECK(s.contexts.available()==16 && s.buffers.available()==16);
+        auto h=s.contexts.open(s.actors[0],Suite::info(0));CHECK(h);
+        s.requests[0]=*h;
+        auto ingress=s.buffers.begin(1);CHECK(ingress);
+        std::memcpy(ingress->data(),"GET /actor",10);
+        s.bodies[0]=ingress->publish(10);CHECK(s.bodies[0].value);
+        auto pin=s.contexts.attach_exchange_with_buffer(
+            s.exchanges[0],s.requests[0],s.actors[0],
+            s.buffers,s.bodies[0],1);
+        CHECK(pin);
+        s.pins[0].emplace(std::move(*pin));
+        const auto fresh=s.pins[0]->token();
+        CHECK(fresh.generation>old.generation);
+        CHECK(fresh.dispatch_ticket!=old.dispatch_ticket);
+        CHECK(!s.exchanges[0].claim(old));
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.pins[0])
+              ==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.observed==2 && s.bad==0);
+        s.end();
+    }
     // Real native scheduler DATA callbacks on 3, 8 and 15 worker carriers;
     // distinct actor owners, never illicit parallel DATA on one serial actor.
     for(unsigned n:{3u,8u,15u}){
