@@ -56,6 +56,27 @@ jobs:
             contracts/v1/agent-dispatch/pg_dispatch_integration_test.cpp \
             -lpq -o "$RUNNER_TEMP/pg_dispatch_native"
           "$RUNNER_TEMP/pg_dispatch_native"
+          # Independent native processes compete on a shared database key.
+          pids=()
+          for i in {1..12}; do
+            "$RUNNER_TEMP/pg_dispatch_native" probe native-process-race >"$RUNNER_TEMP/native-proc-$i.log" 2>&1 &
+            pids+=("$!")
+          done
+          winners=0; denied=0
+          for pid in "${pids[@]}"; do
+            rc=0
+            wait "$pid" || rc=$?
+            if [ "$rc" -eq 0 ]; then winners=$((winners+1))
+            elif [ "$rc" -eq 2 ]; then denied=$((denied+1))
+            else echo "unexpected native process status $rc"; exit 1; fi
+          done
+          test "$winners" -eq 1
+          test "$denied" -eq 11
+          rows=$(psql -U postgres -tAc "SELECT count(*) FROM ores_dispatch.claim_v1 WHERE tenant_id='tenant' AND actor_id='worker' AND dispatch_id='native-process-race'")
+          test "$rows" -eq 1
+          if psql -U ores_dispatch_test_runtime -tAc "SELECT count(*) FROM ores_dispatch.runtime_binding_v1" >/dev/null 2>&1; then
+            echo 'SECURITY_FAILURE runtime can read actor bindings'; exit 2
+          fi
           "$RUNNER_TEMP/pg_dispatch_native" probe-hold native-killed > "$RUNNER_TEMP/native-claim.log" 2>&1 &
           pid=$!
           seen=0
