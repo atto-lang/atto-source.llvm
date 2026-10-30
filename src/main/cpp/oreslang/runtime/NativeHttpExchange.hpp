@@ -46,6 +46,7 @@ public:
         request_context_.store(request_context, std::memory_order_relaxed);
         request_registry_.store(request_registry, std::memory_order_relaxed);
         dispatch_ticket_.store(dispatch_ticket, std::memory_order_relaxed);
+        submission_generation_.store(0, std::memory_order_relaxed);
         initial_entry_generation_.store(0, std::memory_order_relaxed);
         state_.store(
             (generation << 2) | static_cast<unsigned>(Phase::queued),
@@ -198,6 +199,7 @@ private:
     std::atomic<std::uint64_t> request_registry_{0};
     std::atomic<std::uint64_t> dispatch_ticket_{0};
     std::atomic<std::uint64_t> pin_generation_{0};
+    std::atomic<std::uint64_t> submission_generation_{0};
     mutable std::atomic<std::uint64_t> initial_entry_generation_{0};
 };
 } // namespace oreslang::runtime
