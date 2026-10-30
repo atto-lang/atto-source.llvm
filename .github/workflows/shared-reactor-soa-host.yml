@@ -1,0 +1,33 @@
+name: shared-reactor-soa-host
+on:
+  push:
+    branches: ["feat/shared-reactor-soa-*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: shared-reactor-soa-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        optimization: [-O1, -O2]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build and execute actual shared worker host component
+        run: |
+          ${{ matrix.compiler }} -std=c++17 ${{ matrix.optimization }} -pthread -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc/main/cpp/oreslang/runtime tests/shared_reactor_pool_test.cpp -o /tmp/shared-reactor-check
+          timeout 30 /tmp/shared-reactor-check
+      - name: Measure counter layouts without a noisy performance pass threshold
+        run: |
+          ${{ matrix.compiler }} -std=c++17 -O2 -pthread -Wall -Wextra -Wpedantic -Werror tests/shared_worker_layout_benchmark.cpp -o /tmp/shared-worker-layout-benchmark
+          timeout 30 /tmp/shared-worker-layout-benchmark
