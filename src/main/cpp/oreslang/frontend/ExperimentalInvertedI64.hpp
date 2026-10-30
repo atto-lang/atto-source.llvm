@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <unordered_set>
