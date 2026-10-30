@@ -71,6 +71,24 @@ int main(){
     CHECK(contexts.lookup(*h3,newer)->request_id==1);
     CHECK(contexts.close(*h3,newer));
     CHECK(contexts.available()==16);
+    // The exchange owns its own physical lifetime pin. Cancelling/revoking
+    // logical access cannot recycle the request while its exchange is active.
+    NativeHttpExchange attached_exchange;
+    const auto pinned_request=contexts.open(actor,info(90));CHECK(pinned_request);
+    auto attachment=contexts.attach_exchange(attached_exchange,*pinned_request,actor);
+    CHECK(attachment);
+    const auto attached_token=attachment->token;
+    CHECK(attached_token.request_registry==contexts.registry_id());
+    CHECK(attached_exchange.claim(attached_token));
+    CHECK(contexts.close(*pinned_request,actor));
+    CHECK(contexts.available()==15);
+    CHECK(!contexts.with_admitted_turn(attached_exchange,attached_token,
+                                      *pinned_request,actor,[]{}));
+    CHECK(attached_exchange.complete(attached_token));
+    CHECK(attached_exchange.reclaim(attached_token));
+    CHECK(contexts.available()==15);
+    attachment.reset();
+    CHECK(contexts.available()==16);
     // 3/8/15 REAL OS threads. Each acts for a separate actor; this does not
     // claim that one default serial actor permits 15 simultaneous DATA turns.
     for(unsigned concurrency:{3u,8u,15u}){
