@@ -67,6 +67,41 @@ static ores_std_sync_result release_retry(
     return out;
 }
 
+static void test_execution_store_authentication(void) {
+    OresNativeExecutionContextStore* store =
+        ores_native_execution_context_store_open(4u);
+    CHECK(store != NULL);
+
+    OresNativeExecutionContext context = {0};
+    context.id.runtime_domain = 44u;
+    context.id.execution = 7001u;
+    OresNativeExecutionHandle handle = {0};
+    CHECK(ores_native_execution_context_store_insert(
+        store, &context, &handle) != 0);
+
+    ores_state_task_identity authenticated = {0};
+    CHECK(ores_state_task_identity_from_store(
+        store, handle, context.id, &authenticated));
+    CHECK(authenticated.logical.runtime_domain == 44u);
+    CHECK(authenticated.logical.execution == 7001u);
+    CHECK(authenticated.handle.slot == handle.slot);
+    CHECK(authenticated.handle.generation == handle.generation);
+
+    OresNativeExecutionId wrong = {44u, 7002u};
+    CHECK(!ores_state_task_identity_from_store(
+        store, handle, wrong, &authenticated));
+
+    OresNativeExecutionHandle stale = handle;
+    ++stale.generation;
+    CHECK(!ores_state_task_identity_from_store(
+        store, stale, context.id, &authenticated));
+
+    CHECK(ores_native_execution_context_store_release(store, handle) != 0);
+    CHECK(!ores_state_task_identity_from_store(
+        store, handle, context.id, &authenticated));
+    CHECK(ores_native_execution_context_store_close(store) != 0);
+}
+
 static void test_identity_and_stale_release(void) {
     ores_task_bound_state_region region =
         ORES_TASK_BOUND_STATE_REGION_INIT(77u, 9001u);
@@ -240,6 +275,7 @@ static void test_concurrent_task_bound_stress(void) {
 }
 
 int main(void) {
+    test_execution_store_authentication();
     test_identity_and_stale_release();
     test_foreign_region_and_generation();
     test_reader_cohort_writer_fairness_and_owner_binding();
