@@ -17,14 +17,19 @@ spec.loader.exec_module(probe)
 
 def elf(*, machine=62, kind=2, elf_class=2, endian=1, osabi=0,
         version=1, load=True, interpreter=None, phoff=64, phentsize=56,
-        phnum=None, load_offset=0, load_filesz=0, load_memsz=0,
+        phnum=None, load_offset=0, load_filesz=None, load_memsz=None, entry=0,
         load_vaddr=0, load_align=4096, load_flags=5, stack_flags=None):
     count = (1 if load else 0) + (1 if interpreter is not None else 0) + (1 if stack_flags is not None else 0)
     if phnum is None:
         phnum = count
+    if load_filesz is None:
+        load_filesz = 64 + 56 * count + len(interpreter or b"")
+    if load_memsz is None:
+        load_memsz = load_filesz
     h = bytearray(64)
     h[:8] = b"\x7fELF" + bytes((elf_class, endian, 1, osabi))
     struct.pack_into("<HHI", h, 16, kind, machine, version)
+    struct.pack_into("<Q", h, 24, entry)
     struct.pack_into("<Q", h, 32, phoff)
     struct.pack_into("<HHH", h, 52, 64, phentsize, phnum)
     ph = bytearray()
@@ -91,6 +96,15 @@ class CGLAdmissionTests(unittest.TestCase):
         self.assertEqual(self.inspect(elf(stack_flags=6))["machine"], 62)
         self.assertEqual(self.inspect(elf(load_flags=5))["machine"], 62)
 
+    def test_reject_empty_executable_segment_and_unmapped_entry(self):
+        with self.assertRaisesRegex(ValueError, "no file-backed bytes"):
+            self.inspect(elf(load_filesz=0, load_memsz=0))
+        with self.assertRaisesRegex(ValueError, "entry point"):
+            self.inspect(elf(entry=0x8000))
+        with self.assertRaisesRegex(ValueError, "entry point"):
+            self.inspect(elf(entry=120))
+        self.assertEqual(self.inspect(elf(entry=119))["machine"], 62)
+
     def test_reject_loads_without_executable_segment(self):
         for flags in (0, 2, 4, 6):
             with self.subTest(load_flags=flags):
@@ -128,13 +142,14 @@ class CGLAdmissionTests(unittest.TestCase):
                              (last - 7, 8), (1, last)):
             with self.subTest(vaddr=vaddr, memsz=memsz):
                 with self.assertRaisesRegex(ValueError, "virtual address range"):
-                    self.inspect(elf(load_vaddr=vaddr, load_memsz=memsz,
-                                     load_align=1))
-        # Exact non-overflowing boundary, and an empty segment at UINT64_MAX.
+                    self.inspect(elf(load_vaddr=vaddr, load_filesz=1,
+                                     load_memsz=memsz, load_align=1))
+        # Even a non-overflowing high-address LOAD must contain the entry point.
         for vaddr, memsz in ((last - 1, 1), (last, 0)):
             with self.subTest(vaddr=vaddr, memsz=memsz):
-                self.assertEqual(self.inspect(elf(load_vaddr=vaddr,
-                    load_memsz=memsz, load_align=1))["machine"], 62)
+                with self.assertRaises(ValueError):
+                    self.inspect(elf(load_vaddr=vaddr, load_filesz=0,
+                                     load_memsz=memsz, load_align=1))
 
     def test_reject_shared_object_and_relative_interpreter(self):
         for data in (elf(kind=3), elf(kind=3, interpreter=b"relative/ld.so\0"),
