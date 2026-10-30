@@ -641,10 +641,6 @@ public:
                     require("actor");
                     program.actors.push_back(actor_declaration(true));
                 }
-                else if (accept("isolated")) {
-                    require("actor");
-                    program.actors.push_back(actor_declaration(true));
-                }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
