@@ -68,8 +68,8 @@ constexpr AdmissionResult admit_native_hard_rt(
         return {AdmissionFailure::MissingTimingBudget};
     if (budget.max_memory_bytes == 0)
         return {AdmissionFailure::MissingMemoryBudget};
-    if (budget.scheduler != SchedulingPolicy::FixedPriority &&
-        budget.scheduler != SchedulingPolicy::EarliestDeadlineFirst)
+    // EDF is reserved in the enum but lacks a qualified strict-RT executor.
+    if (budget.scheduler != SchedulingPolicy::FixedPriority)
         return {AdmissionFailure::UnsupportedSchedulingPolicy};
 
     if (effects.managed_heap)
