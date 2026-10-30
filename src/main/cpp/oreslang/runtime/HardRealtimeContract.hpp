@@ -23,6 +23,8 @@ enum class AdmissionFailure : std::uint8_t {
     UnboundedLoop,
     UnboundedCleanup,
     PageFaultRisk,
+    MissingMemoryBudget,
+    UnsupportedSchedulingPolicy,
 };
 
 struct Effects final {
@@ -55,12 +57,20 @@ struct AdmissionResult final {
     }
 };
 
+// Declared-bound structural gate only; no standalone WCET/hardware proof.
+// Never treat a successful result as hard-real-time certification.
 constexpr AdmissionResult admit_native_hard_rt(
     const Effects effects,
     const TimingBudget budget) noexcept {
 
-    if (budget.deadline_ns == 0 || budget.wcet_ns == 0)
+    if (budget.period_ns == 0 || budget.deadline_ns == 0 ||
+        budget.deadline_ns > budget.period_ns || budget.wcet_ns == 0)
         return {AdmissionFailure::MissingTimingBudget};
+    if (budget.max_memory_bytes == 0)
+        return {AdmissionFailure::MissingMemoryBudget};
+    if (budget.scheduler != SchedulingPolicy::FixedPriority &&
+        budget.scheduler != SchedulingPolicy::EarliestDeadlineFirst)
+        return {AdmissionFailure::UnsupportedSchedulingPolicy};
 
     if (effects.managed_heap)
         return {AdmissionFailure::ManagedHeap};
@@ -99,6 +109,8 @@ constexpr std::string_view diagnostic_code(
     const AdmissionFailure failure) noexcept {
     switch (failure) {
         case AdmissionFailure::None: return "OK";
+        case AdmissionFailure::MissingMemoryBudget: return "RT012_MEMORY_BUDGET_UNPROVEN";
+        case AdmissionFailure::UnsupportedSchedulingPolicy: return "RT013_UNSUPPORTED_SCHEDULER";
         case AdmissionFailure::MissingTimingBudget: return "RT003_WCET_UNPROVEN";
         case AdmissionFailure::ManagedHeap: return "RT004_MANAGED_HEAP_ESCAPE";
         case AdmissionFailure::TracingGc: return "RT011_COLLECTOR_INTERFERENCE";
