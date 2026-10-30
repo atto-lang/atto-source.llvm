@@ -92,6 +92,24 @@ int main() {
   VERIFY(drops == 3);
   VERIFY(other.close());
   VERIFY(drops == 4);
+
+  // Retirement fences future borrowers before existing async/FFI leases
+  // finish; a cancellation/stop request alone cannot free the region.
+  Graph draining;
+  auto final_node = draining.emplace(5, &drops);
+  VERIFY(final_node.has_value());
+  auto outstanding = draining.borrow(*final_node);
+  VERIFY(outstanding.has_value());
+  draining.begin_retire();
+  VERIFY(draining.retirement_requested());
+  VERIFY(!draining.borrow(*final_node).has_value());
+  VERIFY(!draining.with_mut(*final_node, [](DropTracked& v) { v.value = 99; }));
+  VERIFY(!draining.emplace(6, &drops).has_value());
+  VERIFY(!draining.close());
+  VERIFY(drops == 4);
+  outstanding.reset(); // physical completion/loan release, not just cancellation
+  VERIFY(draining.close() && draining.closed());
+  VERIFY(drops == 5);
   // Domain construction, scoped reads, exclusive writes, cyclic links and
   // region reclamation allocate no C++ heap blocks for this fixed-width T.
   VERIFY(heap_news.load(std::memory_order_relaxed) == initial_news);
