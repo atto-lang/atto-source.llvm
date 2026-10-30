@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -72,6 +73,9 @@ class IsolateVM final {
         std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> slots{};
     };
     std::unordered_map<std::uint64_t, ActorScalarSlots> actor_scalar_slots;
+    // A distinct actor execution mutex permits parallel scalar guest turns
+    // for independent actors without releasing same-actor nonreentrancy.
+    std::unordered_map<std::uint64_t, std::shared_ptr<std::mutex>> actor_turn_mutexes;
     std::uint64_t next_actor_generation = 1;
     std::size_t active_guest_calls = 0;
     // Temporary serialized entry for trusted synchronous scalar guests.
