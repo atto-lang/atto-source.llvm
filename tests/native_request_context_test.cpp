@@ -2,10 +2,15 @@
 #include <atomic>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <vector>
 using namespace oreslang::runtime;
 #define CHECK(x) do {if(!(x))throw std::runtime_error(#x);}while(false)
 using Registry=NativeRequestContext<16>;
+static_assert(!std::is_constructible_v<Registry::Suspension,
+    Registry::Handle,OresNativeActorRef,std::uint64_t,Registry::Lease&&>);
+static_assert(!std::is_constructible_v<Registry::ExchangePin,
+    NativeHttpExchange::Token,Registry::Lease&&>);
 static const OresNativeActorRef actor{21,7,3}, newer{21,7,4}, foreign{22,7,3};
 static Registry::Metadata info(unsigned n){return {n,n+100,1,987654321};}
 int main(){
