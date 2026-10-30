@@ -13,6 +13,8 @@ on:
       - 'tests/source_actor_e2e.py'
       - 'tests/native_isolated_sealed_state_compiled_guest.py'
       - 'tests/native_isolated_sealed_state_guest_bridge_test.c'
+      - 'tests/native_isolated_sealed_state_scheduler_guest_test.c'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
       - 'tests/critical_handle_state_contract_test.cpp'
       - 'tests/critical_state_loan_bridge_test.cpp'
@@ -117,14 +119,25 @@ jobs:
           echo "EXACT_ACTOR_SCHEMA_HEAD=$EXPECTED_HEAD"
           echo "EXACT_ACTOR_SCHEMA_TREE=$(git rev-parse 'HEAD^{tree}')"
           for path in CMakeLists.txt src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/frontend/Parser.hpp \
+            src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
             tests/contract.py tests/source_actor_e2e.py \
             tests/native_isolated_sealed_state_compiled_guest.py \
             tests/native_isolated_sealed_state_guest_bridge_test.c \
+            tests/native_isolated_sealed_state_scheduler_guest_test.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
             tests/fixtures/source-isolated-actor-sealed-write.ores \
             tests/fixtures/source-isolated-actor-sealed-read.ores \
             tests/fixtures/source-isolated-actor-sealed-write-actor-only.ores \
             tests/fixtures/source-isolated-actor-sealed-read-actor-only.ores \
+            tests/fixtures/source-isolated-actor-sealed-read-mutation-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-unknown-field-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-wrong-binding-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-unmarked-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-bool-gate-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-direct-read-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-suspend-reject.ores \
             tests/fixtures/source-isolated-actor-state-empty-reject.ores \
             tests/fixtures/source-isolated-actor-state-negative-overflow-reject.ores; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
