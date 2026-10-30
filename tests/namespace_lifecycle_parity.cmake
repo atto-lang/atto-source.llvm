@@ -42,7 +42,7 @@ expect_rejection(lifecycle-private-init
 file(WRITE "${WORK_DIR}/provider-with-init.ores"
   "define module Provider as pub fnc init(): int { return 1; } end\n")
 expect_rejection(lifecycle-imported-init
-  "import module Provider from \"provider-with-init.ores\";\ndefine module App as pub fnc main(): int { return 0; } end\n"
+  "import module Provider from \"./provider-with-init.ores\";\ndefine module App as pub fnc main(): int { return 0; } end\n"
   "once-only reachable initialization lowering")
 
 # A source file in the same directory but not reached by an import must
