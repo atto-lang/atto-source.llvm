@@ -54,6 +54,7 @@ int main() {
     assert(trace.recorded_after_join() == CglCarrierDispatchTrace::capacity);
     assert(trace.dropped_after_join() == 12);
     assert(!trace.complete_after_join());
+    assert(!trace.matches_expected_after_join(CglCarrierDispatchTrace::capacity));
     std::array<CglCarrierDispatchTrace::Sample, CglCarrierDispatchTrace::capacity> samples{};
     assert(trace.copy_after_join(samples.data(), samples.size()) == samples.size());
     for (std::size_t i = 0; i < samples.size(); ++i) {
@@ -79,6 +80,8 @@ int main() {
     assert(second_trace.complete_after_join());
     assert(second_trace.recorded_after_join() == 1);
     assert(second_trace.dropped_after_join() == 0);
+    assert(second_trace.matches_expected_after_join(1));
+    assert(!second_trace.matches_expected_after_join(2));
     CglCarrierDispatchTrace::Sample single{};
     assert(second_trace.copy_after_join(&single, 1) == 1);
     assert(single.actor_generation == next_actor.generation);
