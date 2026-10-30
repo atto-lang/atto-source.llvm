@@ -13,11 +13,14 @@ int main(){
     NativeHttpExchange exch;
     const auto h=contexts.open(actor,info(1));CHECK(h.has_value());
     CHECK(!contexts.open(actor,info(1))); // tenant/request duplicate
-    CHECK(exch.enqueue(actor,h->value));
+    CHECK(exch.enqueue(actor,h->value,contexts.registry_id()));
     const auto token=exch.token();
     CHECK(token.request_context==h->value);
-    CHECK(!exch.claim({token.generation,newer,token.request_context}));
-    CHECK(!exch.claim({token.generation,actor,token.request_context+1}));
+    CHECK(!exch.claim({token.generation,newer,token.request_context,token.request_registry}));
+    CHECK(!exch.claim({token.generation,actor,token.request_context+1,token.request_registry}));
+    Registry other_registry;
+    CHECK(other_registry.registry_id()!=contexts.registry_id());
+    CHECK(!exch.claim({token.generation,actor,token.request_context,other_registry.registry_id()}));
     CHECK(exch.claim(token));
     CHECK(!contexts.with_admitted_turn(exch,token,*h,newer,[]{}));
     CHECK(!contexts.with_admitted_turn(exch,token,*h,foreign,[]{}));
@@ -26,7 +29,7 @@ int main(){
         CHECK(Registry::current()->request_id==1);
         NativeHttpExchange nested;
         const auto h2=contexts.open(actor,info(2));CHECK(h2);
-        CHECK(nested.enqueue(actor,h2->value));const auto tok2=nested.token();
+        CHECK(nested.enqueue(actor,h2->value,contexts.registry_id()));const auto tok2=nested.token();
         CHECK(nested.claim(tok2));
         try {
             CHECK(contexts.with_admitted_turn(nested,tok2,*h2,actor,[&]{
@@ -80,7 +83,7 @@ int main(){
             const OresNativeActorRef owner{actor.scheduler_domain,actor.actor_slot+i,actor.generation};
             owners.push_back(owner);
             auto slot=contexts.open(owner,info(100+i));CHECK(slot);
-            handles.push_back(*slot);CHECK(exchanges[i].enqueue(owner,slot->value));
+            handles.push_back(*slot);CHECK(exchanges[i].enqueue(owner,slot->value,contexts.registry_id()));
             CHECK(exchanges[i].claim(exchanges[i].token()));
         }
         std::atomic<unsigned> ready{0},observed{0};
