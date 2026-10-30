@@ -136,6 +136,15 @@ int ores_actor_arena_is_prefaulted(OresActorArena* a) {
     leave_lock(a);
     return prefaulted;
 }
+int ores_actor_arena_identity(OresActorArena* a, OresArenaIdentity* out) {
+    if (!a || !out) return 0;
+    enter_lock(a);
+    out->domain = a->domain;
+    out->owner = a->owner;
+    out->incarnation = a->incarnation;
+    leave_lock(a);
+    return out->domain != 0 && out->owner != 0 && out->incarnation != 0;
+}
 static OresArenaTurn enter_impl(
         OresActorArena* a, uint64_t owner, uint64_t incarnation,
         int require_prefault) {
