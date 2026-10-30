@@ -2,6 +2,8 @@ import hashlib
 import json
 import struct
 import unittest
+from decimal import Decimal, Context, ROUND_HALF_EVEN, localcontext
+from fractions import Fraction
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +82,48 @@ class BigIntExactReferenceTest(unittest.TestCase):
             self.assertEqual(item["quot"], str(q), item["id"])
             self.assertEqual(item["rem"], str(r), item["id"])
             self.assertEqual(a, q * b + r, item["id"])
+
+
+class DecimalPrecisionReferenceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = ROOT / "contracts/v1/decimal-precision-v1.json"
+        raw = path.read_bytes()
+        assert git_blob(raw) == "3bbb44277f3816add53da40a1e161e466ab162b1"
+        cls.contract = json.loads(raw)
+
+    def test_exact_and_context_decimal_reference(self):
+        self.assertEqual("oreslang.decimal-precision.v1", self.contract["contract"])
+        for item in self.contract["exact_cases"]:
+            a, b = Decimal(item["left"]), Decimal(item["right"])
+            if item["operation"] == "add":
+                actual = a + b
+            elif item["operation"] == "sub":
+                actual = a - b
+            elif item["operation"] == "mul":
+                actual = a * b
+            else:
+                if b == 0:
+                    self.assertEqual("DIVISOR_ZERO", item["error"], item["id"])
+                    continue
+                fraction = Fraction(a) / Fraction(b)
+                denominator = fraction.denominator
+                while denominator % 2 == 0: denominator //= 2
+                while denominator % 5 == 0: denominator //= 5
+                if denominator != 1:
+                    self.assertEqual("NONTERMINATING_REQUIRES_CONTEXT",
+                                     item["error"], item["id"])
+                    continue
+                actual = a / b
+            self.assertEqual(Decimal(item["expect"]), actual, item["id"])
+
+        for item in self.contract["context_cases"]:
+            ctx = Context(prec=item["precision"], rounding=ROUND_HALF_EVEN)
+            with localcontext(ctx):
+                actual = (Decimal(item["left"]) / Decimal(item["right"])
+                          if item["operation"] == "div"
+                          else +Decimal(item["operand"]))
+            self.assertEqual(Decimal(item["expect"]), actual, item["id"])
 
 if __name__ == "__main__":
     unittest.main()
