@@ -27,7 +27,7 @@ struct Suite {
     std::array<OresNativeActorRef,15> actors{};
     std::array<Registry::Handle,15> requests{};
     std::array<Buffers::Handle,15> bodies{};
-    std::array<std::optional<Registry::ExchangePin>,15> pins{};
+    std::array<std::optional<Registry::BoundExchange<16,128>>,15> pins{};
     std::optional<Registry::Suspension> suspension;
     std::atomic<unsigned> ready{0},observed{0},bad{0};
     OresNativeActorScheduler* scheduler=nullptr;
@@ -62,8 +62,8 @@ struct Suite {
                     CHECK(Registry::current()->request_id==1000+slot);
                     CHECK(!s.contexts.with_admitted_turn(nullptr,exchange,token,
                                         s.requests[slot],owner,[]{}));
-                    CHECK(s.contexts.with_request_bytes(s.buffers,s.bodies[slot],
-                            std::uint64_t(slot+1),[&](std::string_view bytes){
+                    CHECK(s.contexts.with_request_bytes(*s.pins[slot],
+                            [&](std::string_view bytes){
                         CHECK(bytes=="GET /actor");
                         if(s.revoke_on_turn){
                             CHECK(s.buffers.close(s.bodies[slot],std::uint64_t(slot+1)));
@@ -105,9 +105,12 @@ struct Suite {
             std::memcpy(ingest->data(),"GET /actor",10);
             bodies[i]=ingest->publish(10);
             CHECK(bodies[i].value);
-            pins[i]=contexts.attach_exchange(exchanges[i],requests[i],actors[i]);
-            CHECK(pins[i] && pins[i]->token.request_registry==contexts.registry_id());
-            CHECK(exchanges[i].claim(pins[i]->token));
+            auto pin=contexts.attach_exchange_with_buffer(exchanges[i],
+                       requests[i],actors[i],buffers,bodies[i],i+1);
+            CHECK(pin);
+            pins[i].emplace(std::move(*pin));
+            CHECK(pins[i]->token().request_registry==contexts.registry_id());
+            CHECK(exchanges[i].claim(pins[i]->token()));
         }
     }
     void send_all(unsigned message=0){
@@ -120,7 +123,7 @@ struct Suite {
     void end(){
         if(suspension)suspension.reset();
         for(unsigned i=0;i<count;++i){
-            const auto token=pins[i]->token;
+            const auto token=pins[i]->token();
             CHECK(exchanges[i].complete(token));
             CHECK(exchanges[i].reclaim(token));
             if(!revoke_on_turn){
@@ -128,8 +131,10 @@ struct Suite {
                 CHECK(buffers.close(bodies[i],i+1));
             }
             CHECK(contexts.available()==16-count+i);
+            CHECK(buffers.available()==16-count+i);
             pins[i].reset(); // only legal once exchange returned to reactor phase
             CHECK(contexts.available()==16-count+i+1);
+            CHECK(buffers.available()==16-count+i+1);
         }
         CHECK(buffers.available()==16);
         for(unsigned i=0;i<count;++i)CHECK(ores_native_actor_scheduler_stop(scheduler,actors[i]));
@@ -142,7 +147,7 @@ int main(){
     // A raw matching token never confers current execution authority.
     {
         Suite s;s.begin(1);
-        auto tok=s.pins[0]->token;
+        auto tok=s.pins[0]->token();
         CHECK(!s.contexts.with_admitted_turn(s.scheduler,s.exchanges[0],tok,
                s.requests[0],s.actors[0],[]{}));
         CHECK(!s.contexts.with_admitted_turn(nullptr,s.exchanges[0],tok,
@@ -168,7 +173,7 @@ int main(){
         Suite s;s.begin(1,false,true);s.send_all(1);
         CHECK(s.suspension && !Registry::current());
         CHECK(!s.contexts.resume_admitted(s.scheduler,s.exchanges[0],
-                    s.pins[0]->token,*s.suspension,[]{}));
+                    s.pins[0]->token(),*s.suspension,[]{}));
         s.send_all(2);CHECK(s.observed==2);s.end();
     }
     // Cancel while a transport borrow is live: old read view survives,
