@@ -498,7 +498,9 @@ int main(){
         CHECK(s.contexts.submit_bound_exchange(s.scheduler,*pending)
               ==ORES_NATIVE_SEND_ACCEPTED);
         CHECK(!s.contexts.rollback_abandoned_exchange(s.scheduler,*pending));
-        CHECK(ores_native_actor_scheduler_stop(s.scheduler,s.actors[0]));
+        // Graceful stop drains queued DATA; sealed stop explicitly abandons
+        // queued DATA and issues a terminal physical-quiescence receipt.
+        CHECK(ores_native_actor_scheduler_stop_sealed(s.scheduler,s.actors[0]));
         s.hold_turn.store(false);
         CHECK(ores_native_actor_scheduler_drain(s.scheduler));
         CHECK(s.bad==0 && s.observed==1);
