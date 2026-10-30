@@ -202,6 +202,45 @@ REQUIRED_EXECUTED_COMMANDS = {
     ),
 }
 
+def shell_run_blocks(section, job):
+    """Extract only literal GitHub Actions shell run blocks.
+
+    YAML env/with fields and quoted comments are not executed shell code and
+    must never satisfy an executable acceptance-test requirement.
+    """
+    lines = section.splitlines()
+    blocks = []
+    index = 0
+    while index < len(lines):
+        if not re.fullmatch(r" {8}run: \|[ \t]*", lines[index]):
+            index += 1
+            continue
+        index += 1
+        body = []
+        while index < len(lines):
+            line = lines[index]
+            if line.strip() and not line.startswith("          "):
+                break
+            if line.strip():
+                body.append(line[10:])
+            index += 1
+        significant = [
+            line.strip() for line in body
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        assert significant, f"{job}: empty executable shell block"
+        assert significant[0] == "set -euo pipefail", (
+            f"{job}: shell step lacks initial fail-fast mode"
+        )
+        assert not any(re.search(r"(?<!\w)set\s+(?:\+e|\+u|\+o\s+pipefail)\b", line)
+                       for line in significant), (
+            f"{job}: shell step disables fail-fast mode"
+        )
+        blocks.append(body)
+    assert blocks, f"{job}: no executable shell run blocks"
+    return blocks
+
+
 def verify_executable_acceptance_steps(sections):
     """Reject deletion or echo-only replacement of required test invocations.
 
@@ -213,8 +252,9 @@ def verify_executable_acceptance_steps(sections):
         section = sections[job]
         shell_lines = [
             line.strip().rstrip("\\").rstrip()
-            for line in section.splitlines()
-            if re.match(r"^ {10,}", line) and not line.lstrip().startswith("#")
+            for block in shell_run_blocks(section, job)
+            for line in block
+            if line.strip() and not line.lstrip().startswith("#")
         ]
         for command in required:
             count = shell_lines.count(command)
@@ -229,13 +269,42 @@ def audit_selftest():
     # If test commands are removed, commented or replaced with echo, a
     # passing blob manifest must not produce a green acceptance job.
     commands_fixture = {
-        job: '\n'.join('          ' + item for item in commands) + '\n'
+        job: ('        run: |\n'
+              '          set -euo pipefail\n'
+              + '\n'.join('          ' + item for item in commands) + '\n')
         for job, commands in REQUIRED_EXECUTED_COMMANDS.items()
     }
     commands_fixture["compiled-ores-guest"] += (
         "          python3 tests/native_actor_compiled_guest_ledger.py\n"
     )
     verify_executable_acceptance_steps(commands_fixture)
+    # A copied command in YAML metadata must never count as execution.
+    command = REQUIRED_EXECUTED_COMMANDS["actor-ledger-contract"][0]
+    metadata_only = dict(commands_fixture)
+    metadata_only["actor-ledger-contract"] = (
+        metadata_only["actor-ledger-contract"].replace(
+            '          ' + command + '\n',
+            '        env:\n          DECOY: ' + repr(command) + '\n', 1
+        )
+    )
+    try:
+        verify_executable_acceptance_steps(metadata_only)
+    except AssertionError as exc:
+        assert "required executable test command missing" in str(exc)
+    else:
+        raise AssertionError("metadata-only test command accepted")
+    # Even a real shell command cannot qualify if it opts out of strict mode.
+    relaxed = dict(commands_fixture)
+    relaxed["actor-ledger-contract"] = relaxed["actor-ledger-contract"].replace(
+        '          set -euo pipefail\n',
+        '          set +e\n', 1
+    )
+    try:
+        verify_executable_acceptance_steps(relaxed)
+    except AssertionError as exc:
+        assert "initial fail-fast mode" in str(exc)
+    else:
+        raise AssertionError("non-failfast executable step accepted")
     for job, commands in REQUIRED_EXECUTED_COMMANDS.items():
         for cmd in commands:
             damaged = dict(commands_fixture)
