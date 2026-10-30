@@ -220,7 +220,8 @@ if(BUILD_TESTING)
     # must own every read/write ticket. Fixed-capacity/nonparking; no heap.
     add_executable(oreslang-native-task-bound-state-region-test
         tests/native_task_bound_state_region_test.c
-        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c)
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
     set_target_properties(oreslang-native-task-bound-state-region-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_include_directories(oreslang-native-task-bound-state-region-test PRIVATE
