@@ -84,3 +84,36 @@ provider, storage-enforced multi-host CAS, authenticated receipts, SIGKILL
 before/after remote commit, and real compiler/runtime actor messaging.
 Keep drafts unmerged pending independent review and exact-source CI.
 Private-source export remains prohibited under open conformance incident #22.
+
+## PostgreSQL transactional host-admission candidate (not yet source-executed)
+
+The prior migration was **malformed** and has been replaced entirely in Java
+and LLVM. The corrected migration `postgresql/001_actor_dispatch_v1.sql`
+has Git blob `429e89030fa0b07e9a9a03afac7355fb4f825d01` in both repositories.
+The matching credential-free role/fence/binding fixture
+`postgresql/002_test_fixture.sql` is Git blob
+`d80bbf5228f06eeba6c09c414c08bec4f8a5ca9c`.
+
+The transactional SECURITY DEFINER function validates the authenticated DB
+`session_user` against an independently maintained tenant/actor binding,
+locks that binding and the current generation/revision fence for the claim
+transaction, enforces synchronous_commit=on and requires server fsync=on,
+and uses a stable-identity unique constraint for one-shot admission.
+Runtime users must receive function EXECUTE only, no direct table access.
+
+Source-local test workflows now include PostgreSQL service startup, 100
+competing Java/LLVM host requests, twelve independent process claimants,
+an exact persistent-row count, negative cross-tenant checks, post-claim
+SIGKILL replay denial and post-restart generation fencing. **These are
+test scenarios committed to CI, not passed Postgres integration results.**
+Current source-org workflows fail without executing steps.
+
+An alternate private runner's **source-free generic PostgreSQL 17**
+service/transaction canary (honeypot-r-us-test/hnpt-e2e PR #20,
+run 41004508072) did execute the generic 12-client unique-constraint
+check. It contained no Oreslang source and does not prove this migration.
+Private-source export remains forbidden under open conformance incident #22.
+
+No cross-host production deployment, authenticated provider receipts, actual
+irreversible provider effects, or native Oreslang guest program was verified.
+Keep both PRs DRAFT pending real exact-head CI and independent review.
