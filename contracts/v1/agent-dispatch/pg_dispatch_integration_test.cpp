@@ -19,9 +19,15 @@ int main(int argc, char** argv) {
   const char* conninfo = std::getenv("ORES_TEST_PG_CONNINFO");
   assert(conninfo && *conninfo); // Test harness provides isolated DB credentials.
   PostgresActorDispatchClaim db(conninfo);
-  if (argc > 1 && std::string(argv[1]) == "probe") {
+  if (argc > 1 && (std::string(argv[1]) == "probe" ||
+                   std::string(argv[1]) == "probe-hold")) {
     assert(argc == 3);
-    return db.claim_once(request(argv[2])) ? 0 : 2;
+    if (!db.claim_once(request(argv[2]))) return 2;
+    if (std::string(argv[1]) == "probe-hold") {
+      std::cout << "CLAIM_COMMITTED\n" << std::flush;
+      std::this_thread::sleep_for(std::chrono::seconds(30));
+    }
+    return 0;
   }
   auto stale = request("native-stale");stale.generation=8;
   assert(!db.claim_once(stale));
