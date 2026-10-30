@@ -986,11 +986,11 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_auto_traits_and_logical_dop
         COMMAND oreslang-ownership-auto-traits-dop-test)
-    # Java/Graal #2048 parity proof for per-edge Future-pipeline ownership.
-    # The consumed Future<int> source slice below is intentionally narrower;
-    # general Future payloads and borrowed roots remain fail-closed. Pure,
-    # capture-free async unary stages are flattened inside the scheduler-owned
-    # pipeline task; suspending/effectful async stages remain unavailable.
+    # Future-pipeline ownership proof under the strict 2026-10-27
+    # no-auto-flatten decision. The consumed Future<int> source slice below is
+    # intentionally narrower; general Future payloads and borrowed roots remain
+    # fail-closed. An async unary stage returns another Future layer and is
+    # rejected until an explicit checked flatten/flat_map lowering exists.
     add_executable(oreslang-future-pipeline-ownership-contract-test
         tests/future_pipeline_ownership_contract_test.cpp)
     target_include_directories(oreslang-future-pipeline-ownership-contract-test PRIVATE
