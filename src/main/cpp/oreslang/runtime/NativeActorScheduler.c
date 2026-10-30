@@ -87,6 +87,8 @@ static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
 static _Thread_local OresNativeExecutionContext executing_context;
+static _Thread_local uint64_t executing_data_payload;
+static _Thread_local int executing_data_valid;
 static _Thread_local OresNativeWakeTicket executing_wake;
 static _Thread_local int executing_wake_valid;
 static _Thread_local int carrier_identity;
@@ -346,10 +348,14 @@ static void* carrier(void* raw) {
         executing = s;
         executing_wake_valid = kind == 1;
         executing_wake = wake_ticket;
+        executing_data_valid = !typed_failure && kind == 0;
+        executing_data_payload = executing_data_valid ? payload : 0;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (kind == 2) s->control_callback(s->context, i, payload);
         else if (kind == 1) s->wake_callback(s->context, i, wake_ticket, wake_outcome);
         else s->callback(s->context, i, payload);
+        executing_data_valid = 0;
+        executing_data_payload = 0;
         executing_wake_valid = 0;
         executing_wake = (OresNativeWakeTicket){0};
         executing_actor = (OresNativeActorRef){0, 0, 0};
@@ -1135,6 +1141,15 @@ int ores_native_actor_scheduler_is_current_actor(
     // An active callback pins its scheduler/lane; only the authority mutex
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
+}
+int ores_native_actor_scheduler_current_data_payload(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        uint64_t* out_payload) {
+    if (!out_payload || !executing_data_valid
+            || !ores_native_actor_scheduler_is_current_actor(s, actor))
+        return 0;
+    *out_payload = executing_data_payload;
+    return 1;
 }
 int ores_native_actor_scheduler_current_execution_context(
         OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
