@@ -17,7 +17,7 @@ c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
 The local baseline compile/run was PASS for 100,000 increments with zero counted
 C++ operator-new allocations, but the counter does not cover malloc, OS mappings,
 or every native allocation API. Assertions must remain enabled in this test.
-No sanitized run or GitHub Actions run is claimed.
+The same test was also executed locally with AddressSanitizer and UBSan and passed. No GitHub Actions run is claimed.
 
 The prototype is **not thread safe**. All acquire/release/pin/retire state
 transitions require external serialization by the actor runtime or lock;
