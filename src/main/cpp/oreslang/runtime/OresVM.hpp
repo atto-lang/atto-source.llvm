@@ -388,9 +388,21 @@ private:
                                     std::optional<DurableLockQueues::ActorKey> actor) {
         if (!guest) throw std::invalid_argument("guest entry is null");
         std::shared_ptr<IsolateVM> state;
+        std::shared_ptr<std::mutex> actor_turn;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             state = checked(handle);
+            if (actor) {
+                // The checked durable ticket already claimed this actor;
+                // verify the live registry and capture the incarnation mutex.
+                const auto current = state->actors.find(actor->id);
+                const auto turn = state->actor_turn_mutexes.find(actor->id);
+                if (current == state->actors.end() ||
+                    current->second != actor->generation ||
+                    turn == state->actor_turn_mutexes.end())
+                    throw std::logic_error("invalid actor turn incarnation");
+                actor_turn = turn->second;
+            }
             if (state->phase != IsolatePhase::Running)
                 throw std::logic_error("guest admission is closed");
             // Includes invocations waiting on guest_turn_mutex. Bound both
@@ -414,7 +426,10 @@ private:
         // A shutdown closes admission even for already-waiting calls.
         static thread_local bool guest_active = false;
         if (guest_active) throw std::logic_error("nested guest entry forbidden");
-        std::unique_lock<std::mutex> tenant_turn(state->guest_turn_mutex);
+        // Distinct actors can execute their compiled scalar callbacks
+        // concurrently. Direct legacy guest calls retain tenant-wide locking.
+        std::unique_lock<std::mutex> tenant_turn(
+            actor_turn ? *actor_turn : state->guest_turn_mutex);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (state->phase != IsolatePhase::Running)
