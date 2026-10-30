@@ -16,8 +16,12 @@ int main() {
 
     CHECK(ores_actor_state_ready_to_suspend(&state, 123) == ORES_ACTOR_STATE_OK);
     CHECK(ores_actor_state_ready_to_suspend(&state, 124) == ORES_ACTOR_STATE_WRONG_OWNER);
+    CriticalStateLoan unverified;
+    CHECK(unverified.begin(state, 123, 900, callback, declared, false)
+            == CriticalStateAdmission::ScopeDenied);
+    CHECK(!unverified.active());
     CriticalStateLoan outer;
-    CHECK(outer.begin(state, 123, 900, callback, declared)
+    CHECK(outer.begin(state, 123, 900, callback, declared, true)
             == CriticalStateAdmission::Accept);
     const auto outer_token = outer.token();
     CHECK(outer.check() == ORES_ACTOR_STATE_OK);
@@ -25,7 +29,7 @@ int main() {
             == ORES_ACTOR_STATE_BUSY_LOAN);
 
     CriticalStateLoan nested;
-    CHECK(nested.begin(state, 123, 900, callback, declared)
+    CHECK(nested.begin(state, 123, 900, callback, declared, true)
             == CriticalStateAdmission::Accept);
     CHECK(nested.token() != outer_token);
     CHECK(outer.check() == ORES_ACTOR_STATE_OUT_OF_ORDER);
@@ -35,7 +39,7 @@ int main() {
     CHECK(outer.check() == ORES_ACTOR_STATE_OK);
 
     CriticalStateLoan other_continuation;
-    CHECK(other_continuation.begin(state, 123, 901, callback, declared)
+    CHECK(other_continuation.begin(state, 123, 901, callback, declared, true)
             == CriticalStateAdmission::ScopeDenied);
     CHECK(other_continuation.last_scope_result() == ORES_ACTOR_STATE_REENTRANT);
     CHECK(!other_continuation.active());
@@ -47,7 +51,7 @@ int main() {
 
     // The exact same actor can next admit a *different* continuation.
     CriticalStateLoan resumed;
-    CHECK(resumed.begin(state, 123, 901, callback, declared)
+    CHECK(resumed.begin(state, 123, 901, callback, declared, true)
             == CriticalStateAdmission::Accept);
     CHECK(resumed.token() > outer_token);
     CHECK(resumed.end() == ORES_ACTOR_STATE_OK);
@@ -56,7 +60,7 @@ int main() {
     auto missing = callback;
     missing.callback_critical = false;
     CriticalStateLoan invalid;
-    CHECK(invalid.begin(state, 123, 901, missing, declared)
+    CHECK(invalid.begin(state, 123, 901, missing, declared, true)
             == CriticalStateAdmission::MissingCallbackCritical);
     CHECK(!invalid.active());
 
@@ -64,7 +68,7 @@ int main() {
     const auto previously_seen = state.generation;
     try {
         CriticalStateLoan unwound;
-        CHECK(unwound.begin(state, 123, 902, callback, declared)
+        CHECK(unwound.begin(state, 123, 902, callback, declared, true)
                 == CriticalStateAdmission::Accept);
         throw std::runtime_error("user callback");
     } catch (const std::runtime_error&) {
