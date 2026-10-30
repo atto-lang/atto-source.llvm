@@ -80,7 +80,7 @@ public:
     // Admit initial handler once per exact exchange generation. The runtime
     // checks live scheduler DATA authority before invoking this gate; a
     // separately validated continuation uses its own one-shot resume path.
-    bool enter_initial(Token token) noexcept {
+    bool enter_initial(Token token) const noexcept {
         if (!token.generation || !token.dispatch_ticket ||
             phase()!=Phase::actor) return false;
         const auto actual=this->token();
@@ -195,6 +195,6 @@ private:
     std::atomic<std::uint64_t> request_registry_{0};
     std::atomic<std::uint64_t> dispatch_ticket_{0};
     std::atomic<std::uint64_t> pin_generation_{0};
-    std::atomic<std::uint64_t> initial_entry_generation_{0};
+    mutable std::atomic<std::uint64_t> initial_entry_generation_{0};
 };
 } // namespace oreslang::runtime
