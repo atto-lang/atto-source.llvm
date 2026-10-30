@@ -2,10 +2,12 @@
 -- Apply in an isolated, trusted database with a separate migration owner.
 -- No Oreslang guest is allowed access to the schema or credentials.
 BEGIN;
-CREATE SCHEMA IF NOT EXISTS ores_dispatch;
+-- Fail closed on preexisting/unreviewed schemas or tables; this migration
+-- applies once under a dedicated non-superuser migration owner.
+CREATE SCHEMA ores_dispatch;
 REVOKE ALL ON SCHEMA ores_dispatch FROM PUBLIC;
 
-CREATE TABLE IF NOT EXISTS ores_dispatch.actor_fence_v1 (
+CREATE TABLE ores_dispatch.actor_fence_v1 (
     tenant_id varchar(128) COLLATE "C" NOT NULL
       CHECK (tenant_id ~ '^[A-Za-z0-9_.:@/-]{1,128}$'),
     actor_id varchar(128) COLLATE "C" NOT NULL
@@ -21,7 +23,7 @@ CREATE TABLE IF NOT EXISTS ores_dispatch.actor_fence_v1 (
 -- Independently administered authorization of an authenticated DB login.
 -- session_user (not current_user) is checked in the function because
 -- SECURITY DEFINER changes current_user to the function owner.
-CREATE TABLE IF NOT EXISTS ores_dispatch.runtime_binding_v1 (
+CREATE TABLE ores_dispatch.runtime_binding_v1 (
     login_role name NOT NULL,
     tenant_id varchar(128) COLLATE "C" NOT NULL
       CHECK (tenant_id ~ '^[A-Za-z0-9_.:@/-]{1,128}$'),
@@ -33,7 +35,7 @@ CREATE TABLE IF NOT EXISTS ores_dispatch.runtime_binding_v1 (
 
 -- No generation, activation epoch, revision or digest in this PK:
 -- changing actor incarnation or payload NEVER resets logical idempotency.
-CREATE TABLE IF NOT EXISTS ores_dispatch.claim_v1 (
+CREATE TABLE ores_dispatch.claim_v1 (
     tenant_id varchar(128) COLLATE "C" NOT NULL
       CHECK (tenant_id ~ '^[A-Za-z0-9_.:@/-]{1,128}$'),
     actor_id varchar(128) COLLATE "C" NOT NULL
@@ -54,7 +56,7 @@ CREATE TABLE IF NOT EXISTS ores_dispatch.claim_v1 (
 );
 REVOKE ALL ON ALL TABLES IN SCHEMA ores_dispatch FROM PUBLIC;
 
-CREATE OR REPLACE FUNCTION ores_dispatch.claim_once_v1(
+CREATE FUNCTION ores_dispatch.claim_once_v1(
     p_tenant text, p_actor text, p_dispatch text, p_digest text,
     p_generation bigint, p_epoch bigint, p_revision text,
     p_expires_ms bigint, p_utf8_bytes integer, p_measured_tokens integer
