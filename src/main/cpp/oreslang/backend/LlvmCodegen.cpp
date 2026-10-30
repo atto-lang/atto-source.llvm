@@ -671,7 +671,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 const auto& field = actor.state_schema[index];
                 const auto& slot = actor.fields[index];
                 if (field.type != ScalarType::I64 || field.name != slot.name ||
-                    !slot.field_mutable || !slot.initializer ||
+                    slot.field_mutable != actor.sealed_state_write_v1 ||
+                    !slot.initializer ||
                     slot.initializer->kind != Expression::Kind::Integer ||
                     slot.initializer->integer != field.initial_i64)
                     throw std::runtime_error("native sealed state layout does not match verified schema");
