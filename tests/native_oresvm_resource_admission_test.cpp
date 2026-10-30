@@ -8,6 +8,7 @@
 #include <thread>
 
 using oreslang::runtime::IsolateMode;
+using oreslang::runtime::IsolateConfig;
 using oreslang::runtime::OresVM;
 using oreslang::runtime::OresVmLimits;
 
@@ -60,6 +61,28 @@ int main() {
         heap_budget.complete_shutdown(h);
         heap_budget.destroy(h);
     }
+
+    // Native actor arenas are charged at tenant admission for every possible
+    // actor, not merely when an actor first registers. Destruction releases
+    // the full reserved amount; failed admission does not consume a slot.
+    OresVM arena_budget(OresVmLimits{3, 8192, 3, 512});
+    IsolateConfig arena_config;
+    arena_config.tenant_id = "arena-a";
+    arena_config.heap_limit_bytes = 512;
+    arena_config.max_actors = 2;
+    arena_config.actor_arena_bytes = 256;
+    auto arena_a = arena_budget.create_isolate(arena_config);
+    arena_config.tenant_id = "arena-b";
+    assert(rejects([&] { arena_budget.create_isolate(arena_config); }));
+    arena_budget.begin_shutdown(arena_a);
+    arena_budget.complete_shutdown(arena_a);
+    arena_budget.destroy(arena_a);
+    auto arena_b = arena_budget.create_isolate(arena_config);
+    arena_budget.begin_shutdown(arena_b);
+    arena_budget.complete_shutdown(arena_b);
+    arena_budget.destroy(arena_b);
+    arena_config.actor_arena_bytes = 64;
+    assert(rejects([&] { arena_budget.create_isolate(arena_config); }));
 
     // Root heap reservations are charged at create time, not on allocation.
     // Rejection leaves no tenant admitted and destruction returns the charge.
