@@ -67,6 +67,46 @@ int main() {
                 "compiler analysis must not certify final artifact");
     }
 
+    // Regression: the strict copy/share fence must NOT classify ordinary
+    // scalar arithmetic/comparison/logical AST operators as ownership copies.
+    // These are analyzer-level AST fixtures, not compiled guest programs.
+    for (auto kind : {Expression::Kind::Subtract,
+                      Expression::Kind::Multiply,
+                      Expression::Kind::Equal,
+                      Expression::Kind::NotEqual,
+                      Expression::Kind::Less,
+                      Expression::Kind::LessEqual,
+                      Expression::Kind::Greater,
+                      Expression::Kind::GreaterEqual,
+                      Expression::Kind::LogicalAnd,
+                      Expression::Kind::LogicalOr,
+                      Expression::Kind::LogicalXor}) {
+        auto binary = std::make_unique<Expression>();
+        binary->kind = kind;
+        binary->left = integer(7);
+        binary->right = integer(2);
+        Function entry = pure("main", std::move(binary));
+        const auto facts = realtime_detail::direct_facts(entry, 8);
+        require(!facts.unqualified_copy_or_share,
+                "ordinary scalar operator must not be a copy/share transfer");
+        Program program;
+        program.functions.push_back(std::move(entry));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted && !report.artifact_certified,
+                "pure scalar AST operation must remain structurally admitted only");
+    }
+    {
+        Function entry = pure("main", conditional(integer(7), integer(2)));
+        const auto facts = realtime_detail::direct_facts(entry, 8);
+        require(!facts.unqualified_copy_or_share,
+                "a pure conditional is not an explicit transfer");
+        Program program;
+        program.functions.push_back(std::move(entry));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted && !report.artifact_certified,
+                "pure conditional must remain source-admitted and never certified");
+    }
+
     // Strict RT must not silently certify rt copy or rt share before typed
     // MIR establishes the copy/share byte and lifetime effects. The accepted
     // scalar-shaped AST is deliberately also rejected: its lowering proof is
