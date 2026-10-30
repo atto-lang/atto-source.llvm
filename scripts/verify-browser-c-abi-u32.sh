@@ -74,6 +74,7 @@ for fixture in \
   browser-c-abi-version-u32-bad-type \
   browser-c-abi-version-u32-symbol-clash \
   browser-c-abi-version-u32-guest-spoof \
+  browser-c-abi-version-u32-overload \
   browser-c-abi-version-u32-effectful \
   browser-c-abi-version-u32-duplicate
 do
