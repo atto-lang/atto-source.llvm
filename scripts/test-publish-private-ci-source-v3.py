@@ -513,6 +513,10 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 source_codeowners + b"/scripts/publish-private-ci-source-v3.py @other\n"
             )
 
+    def test_checked_in_source_codeowners_matches_publisher_gate(self):
+        source = Path(__file__).resolve().parents[1] / ".github" / "CODEOWNERS"
+        v3.require_source_security_codeowners(source.read_bytes())
+
     def test_decode_contents_authenticates_blob_digest(self):
         raw = b"reviewed bytes\n"
         good = {
