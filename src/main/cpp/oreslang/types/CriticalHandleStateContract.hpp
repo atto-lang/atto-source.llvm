@@ -19,6 +19,7 @@ enum class CriticalStateAdmission : std::uint8_t {
     CallbackEscape,
     EffectExceedsUsing,
     LoanAcrossSuspension,
+    MissingLogicalTurnRetention,
     MissingContinuationFence,
     ScopeDenied
 };
@@ -30,6 +31,7 @@ struct CriticalStateCallback {
     bool one_state_parameter = false;
     bool escapes = false;
     bool state_loan_live_across_suspend = false;
+    bool logical_turn_retained_across_suspend = false;
     bool continuation_generation_fenced = false;
     FunctionEffects inferred{};
 };
@@ -55,6 +57,12 @@ inline CriticalStateAdmission admit_critical_handle_state(
         // The callback resumes only on a generation-fenced re-admitted turn.
         if (callback.state_loan_live_across_suspend) {
             return CriticalStateAdmission::LoanAcrossSuspension;
+        }
+        // Suspension releases only the physical carrier. The same logical
+        // actor handler must retain the actor-wide user lane; later mail or
+        // another user callback may be queued but cannot enter guest state.
+        if (!callback.logical_turn_retained_across_suspend) {
+            return CriticalStateAdmission::MissingLogicalTurnRetention;
         }
         if (!callback.continuation_generation_fenced) {
             return CriticalStateAdmission::MissingContinuationFence;
