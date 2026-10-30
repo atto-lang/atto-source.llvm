@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Synthetic negative tests for the CI identity and compiler-verification gate.
-# These must never be reported as genuine Oreslang guest execution.
+# Synthetic host-only negative tests inside the PRIVATE LLVM source checkout.
+# No guest execution, and NOT a source-free cross-organization transfer.
 set -euo pipefail
 export LC_ALL=C
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
@@ -41,4 +41,4 @@ expect_fail wrong_digest EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree
   ORESLANG_LLVMC="$tmp/fake-compiler" ORESLANG_COMPILER_SHA256="$bad_digest"
 expect_fail fake_native_compiler EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree" \
   ORESLANG_LLVMC="$tmp/fake-compiler" ORESLANG_COMPILER_SHA256="$sha"
-echo 'SOURCE_FREE_U32_CI_NEGATIVE_GATES_PASS_NOT_GUEST_EXECUTION'
+echo 'SYNTHETIC_HOST_ONLY_U32_CI_NEGATIVE_GATES_PASS_NOT_GUEST_EXECUTION'
