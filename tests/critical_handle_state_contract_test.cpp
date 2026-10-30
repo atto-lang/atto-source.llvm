@@ -17,6 +17,11 @@ int main() {
     const auto using_rw = row(READ | WRITE);
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
+    // Scheduler serial admission cannot override the required inline
+    // critical callback syntax or bypass the state capability boundary.
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.callback_critical = true;
     CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::Accept);
     c.intrinsic_critical = false;
