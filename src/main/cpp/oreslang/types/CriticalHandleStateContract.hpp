@@ -57,12 +57,13 @@ inline CriticalStateAdmission admit_critical_handle_state(
     if (!using_effects.permits(callback.inferred)) {
         return CriticalStateAdmission::EffectExceedsUsing;
     }
+    // An asserted cross-suspension state loan is illegal even if a forged or
+    // incomplete inferred row omitted Suspend. The effect row must not erase
+    // ownership evidence supplied by the compiler's lifetime checker.
+    if (callback.state_loan_live_across_suspend) {
+        return CriticalStateAdmission::LoanAcrossSuspension;
+    }
     if (callback.inferred.has(FunctionEffect::Suspend)) {
-        // A state-backed loan may not cross a yielding reduction boundary.
-        // The callback resumes only on a generation-fenced re-admitted turn.
-        if (callback.state_loan_live_across_suspend) {
-            return CriticalStateAdmission::LoanAcrossSuspension;
-        }
         // Suspension releases only the physical carrier. The same logical
         // actor handler must retain the actor-wide user lane; later mail or
         // another user callback may be queued but cannot enter guest state.
