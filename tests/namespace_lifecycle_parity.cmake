@@ -1,7 +1,8 @@
 # Source-only conformance gate: no ambient namespace package loading and no
 # ordinary invocation/emission of once-only init while native lowering lacks it.
-if(NOT DEFINED COMPILER OR NOT DEFINED WORK_DIR)
-  message(FATAL_ERROR "COMPILER and WORK_DIR are required")
+if(NOT DEFINED COMPILER OR NOT DEFINED WORK_DIR OR NOT DEFINED CLANG OR
+   NOT EXISTS "${CLANG}" OR IS_DIRECTORY "${CLANG}")
+  message(FATAL_ERROR "COMPILER, CLANG and WORK_DIR with a real Clang binary are required")
 endif()
 file(MAKE_DIRECTORY "${WORK_DIR}")
 
@@ -116,19 +117,48 @@ expect_rejection(lifecycle-transitive-init
   "import module Middle from \"./middle.ores\"; pub fnc main():int{return Middle.answer();}\n"
   "once-only reachable initialization lowering")
 
+# Positive cases must run real LLVM IR, not merely contain a matching
+# "define @main" substring. Verify the linked guest exits with the expected
+# observable value and produces no stdout/stderr.
+function(expect_native_exit name source_file expected_exit)
+  execute_process(
+    COMMAND "${COMPILER}" "${source_file}"
+    RESULT_VARIABLE compile_status OUTPUT_VARIABLE compiled_ir ERROR_VARIABLE compile_err
+    WORKING_DIRECTORY "${WORK_DIR}" TIMEOUT 15)
+  if(NOT "${compile_status}" STREQUAL "0" OR
+     NOT compiled_ir MATCHES "define i32 @main\\(")
+    message(FATAL_ERROR "${name} failed to emit native main: ${compile_status}: ${compile_err}")
+  endif()
+  set(ir_file "${WORK_DIR}/${name}.ll")
+  set(native_file "${WORK_DIR}/${name}-native")
+  if(WIN32)
+    string(APPEND native_file ".exe")
+  endif()
+  file(WRITE "${ir_file}" "${compiled_ir}")
+  execute_process(
+    COMMAND "${CLANG}" -O0 -x ir "${ir_file}" -o "${native_file}"
+    RESULT_VARIABLE clang_status OUTPUT_VARIABLE clang_out ERROR_VARIABLE clang_err
+    WORKING_DIRECTORY "${WORK_DIR}" TIMEOUT 20)
+  if(NOT "${clang_status}" STREQUAL "0" OR NOT EXISTS "${native_file}")
+    message(FATAL_ERROR "${name} failed native IR link: ${clang_status}: ${clang_err}")
+  endif()
+  execute_process(
+    COMMAND "${native_file}"
+    RESULT_VARIABLE guest_status OUTPUT_VARIABLE guest_out ERROR_VARIABLE guest_err
+    WORKING_DIRECTORY "${WORK_DIR}" TIMEOUT 10)
+  if(NOT "${guest_status}" STREQUAL "${expected_exit}" OR
+     NOT "${guest_out}" STREQUAL "" OR NOT "${guest_err}" STREQUAL "")
+    message(FATAL_ERROR "${name} native guest exit/output mismatch: ${guest_status}: ${guest_out}: ${guest_err}")
+  endif()
+endfunction()
+
 # A source file in the same directory but not reached by an import must
 # not enter the native compile graph or run an init hook.
 file(WRITE "${WORK_DIR}/unrelated.ores"
   "define module Unrelated as pub fnc init(): int { return 1; } end\n")
 file(WRITE "${WORK_DIR}/main.ores"
   "define module App as pub fnc main(): int { return 42; } end\n")
-execute_process(
-  COMMAND "${COMPILER}" "${WORK_DIR}/main.ores"
-  RESULT_VARIABLE status OUTPUT_VARIABLE ir ERROR_VARIABLE err
-  TIMEOUT 15)
-if(NOT "${status}" MATCHES "^[0-9]+$" OR NOT status EQUAL 0 OR NOT ir MATCHES "define i32 @main")
-  message(FATAL_ERROR "unreferenced namespace source contaminated native compilation: ${status}: ${err}")
-endif()
+expect_native_exit(unrelated-source "${WORK_DIR}/main.ores" 42)
 
 # A clean, explicitly imported provider must remain admitted; rejecting all
 # imports would incorrectly satisfy the negative-only lifecycle cases.
@@ -136,10 +166,4 @@ file(WRITE "${WORK_DIR}/clean-provider.ores"
   "define module Clean as pub fnc answer():int{return 42;} end\n")
 file(WRITE "${WORK_DIR}/clean-main.ores"
   "import module Clean from \"./clean-provider.ores\"; pub fnc main():int{return Clean.answer();}\n")
-execute_process(
-  COMMAND "${COMPILER}" "${WORK_DIR}/clean-main.ores"
-  RESULT_VARIABLE status OUTPUT_VARIABLE ir ERROR_VARIABLE err
-  TIMEOUT 15)
-if(NOT "${status}" MATCHES "^[0-9]+$" OR NOT status EQUAL 0 OR NOT ir MATCHES "define i32 @main")
-  message(FATAL_ERROR "valid explicit module import rejected: ${status}: ${err}")
-endif()
+expect_native_exit(explicit-import "${WORK_DIR}/clean-main.ores" 42)

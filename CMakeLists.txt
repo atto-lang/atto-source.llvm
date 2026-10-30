@@ -4474,6 +4474,7 @@ if(BUILD_TESTING)
     add_test(NAME native_namespace_lifecycle_fail_closed
         COMMAND "${CMAKE_COMMAND}"
             "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DCLANG=${ORE_SOURCE_I64_CLANG}"
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/namespace-parity"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/namespace_lifecycle_parity.cmake")
     set_tests_properties(native_namespace_lifecycle_fail_closed PROPERTIES TIMEOUT 60)
