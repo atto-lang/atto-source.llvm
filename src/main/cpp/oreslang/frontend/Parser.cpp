@@ -1875,6 +1875,10 @@ private:
                 if (accept(",")) {
                     if (token_.text == ")")
                         fail("native explicit self receiver must be followed by a parameter after ','");
+                } else if (token_.text == ")" && peek_next().text == "(") {
+                    // As with mut self, a standalone read-only receiver may
+                    // precede the ordinary value-parameter list.
+                    require(")"); require("(");
                 } else if (token_.text != ")") {
                     fail("native explicitly typed read self receiver unsupported");
                 }
