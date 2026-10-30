@@ -1053,6 +1053,78 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
         )
 
+    def test_exact_source_tree_current_compiler_blob_count_fits_bounded_limit(self):
+        # Metadata-only source inventory observed for PR #1177: 1305 blobs.
+        # Use synthetic content; never copy source to a public CI carrier.
+        count = 1305
+        self.assertLessEqual(count, v3.MAX_FILES)
+        self.assertLess(v3.MAX_FILES, v3.MAX_TREE_ENTRIES)
+        seen = []
+        def api(route, method="GET", payload=None):
+            seen.append(route)
+            if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                return {
+                    "sha": SOURCE_TREE,
+                    "truncated": False,
+                    "tree": [{
+                        "path": f"src/public-synthetic-{i:04d}.cpp",
+                        "type": "blob",
+                        "mode": "100644",
+                        "sha": BLOB,
+                        "size": len(DATA),
+                    } for i in range(count)],
+                }
+            if route == f"repos/{v3.SOURCE_REPO}/git/blobs/{BLOB}":
+                return {
+                    "sha": BLOB,
+                    "encoding": "base64",
+                    "content": base64.b64encode(DATA).decode(),
+                }
+            raise AssertionError(route)
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+        ):
+            tree, files, rows, digest = v3.exact_source_tree(669, "9" * 40)
+        self.assertEqual(tree, SOURCE_TREE)
+        self.assertEqual(len(files), count)
+        self.assertEqual(len(rows), count)
+        self.assertEqual(len({row[0] for row in rows}), count)
+        self.assertEqual(digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest())
+        self.assertEqual(len([x for x in seen if "/git/blobs/" in x]), count)
+
+    def test_exact_source_tree_over_file_cap_rejects_before_blob_fetch(self):
+        count = v3.MAX_FILES + 1
+        self.assertLessEqual(count, v3.MAX_TREE_ENTRIES)
+        blob_fetches = []
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                return {
+                    "sha": SOURCE_TREE,
+                    "truncated": False,
+                    "tree": [{
+                        "path": f"src/public-synthetic-{i:04d}.cpp",
+                        "type": "blob",
+                        "mode": "100644",
+                        "sha": BLOB,
+                        "size": len(DATA),
+                    } for i in range(count)],
+                }
+            if "/git/blobs/" in route:
+                blob_fetches.append(route)
+            raise AssertionError("unreviewed metadata endpoint " + route)
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "exceeds bounded capacity"):
+                v3.exact_source_tree(669, "9" * 40)
+        self.assertEqual(blob_fetches, [])
+
     def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
         seen = []
         def api(route, method="GET", payload=None):
