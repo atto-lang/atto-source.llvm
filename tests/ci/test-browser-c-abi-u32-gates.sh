@@ -41,4 +41,17 @@ expect_fail wrong_digest EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree
   ORESLANG_LLVMC="$tmp/fake-compiler" ORESLANG_COMPILER_SHA256="$bad_digest"
 expect_fail fake_native_compiler EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree" \
   ORESLANG_LLVMC="$tmp/fake-compiler" ORESLANG_COMPILER_SHA256="$sha"
+# The gate must reject scripts, paths that are not absolute, and symlinks.
+ln -s "$tmp/fake-compiler" "$tmp/symlink-compiler"
+expect_fail symlink_compiler EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree" \
+  ORESLANG_LLVMC="$tmp/symlink-compiler" ORESLANG_COMPILER_SHA256="$sha"
+expect_fail relative_compiler EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree" \
+  ORESLANG_LLVMC="fake-compiler" ORESLANG_COMPILER_SHA256="$sha"
+# A modified checkout must not be accepted even with matching HEAD/tree pins.
+dirty="$root/.ores-u32-negative-dirty.$"
+trap 'rm -f -- "$dirty"; rm -rf -- "$tmp"' EXIT HUP INT TERM
+printf '%s\n' 'untracked synthetic test artifact' > "$dirty"
+expect_fail dirty_checkout EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree" \
+  ORESLANG_LLVMC="$tmp/fake-compiler" ORESLANG_COMPILER_SHA256="$sha"
+rm -f -- "$dirty"
 echo 'SYNTHETIC_HOST_ONLY_U32_CI_NEGATIVE_GATES_PASS_NOT_GUEST_EXECUTION'
