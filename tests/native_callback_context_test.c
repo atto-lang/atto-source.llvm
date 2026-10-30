@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/NativeCallbackContext.h"
+#include "oreslang/runtime/NativeLogicalTrace.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -58,6 +59,8 @@ int main(void) {
         4,
         9001,
         &continuation));
+    check(ores_native_execution_context_store_bind_continuation(
+        executions, execution, continuation));
 
     OresNativeCallbackContext callback = {0};
     check(ores_native_callback_context_capture(
@@ -91,6 +94,26 @@ int main(void) {
     check(worker.provenance.source_execution_id.execution == 41);
     check(worker.provenance.boundary == ORES_CALLBACK_BOUNDARY_IO);
 
+    OresNativeExecutionTraceFrame execution_frames[2];
+    OresNativeContinuationTraceFrame continuation_frames[2];
+    OresNativeCallbackLogicalTraceResult callback_trace = {0};
+    check(ores_native_logical_trace_snapshot_callback(
+        executions,
+        continuations,
+        &callback,
+        execution_frames,
+        2,
+        continuation_frames,
+        2,
+        &callback_trace));
+    check(callback_trace.callback.boundary == ORES_CALLBACK_BOUNDARY_IO);
+    check(callback_trace.callback.source_execution_id.execution == 41);
+    check(callback_trace.logical.execution_count == 1);
+    check(callback_trace.logical.continuation_count == 1);
+    check(!callback_trace.logical.corrupt);
+    check(continuation_frames[0].record.boundary ==
+        ORES_CONTINUATION_BOUNDARY_AWAIT);
+
     OresNativeCallbackContext stale_copy = callback;
     check(ores_native_callback_context_release(
         executions, continuations, &callback));
@@ -102,6 +125,16 @@ int main(void) {
     OresNativeCallbackProvenance stale = {0};
     check(!ores_native_callback_context_snapshot(
         executions, continuations, &stale_copy, &stale));
+    OresNativeCallbackLogicalTraceResult stale_trace = {0};
+    check(!ores_native_logical_trace_snapshot_callback(
+        executions,
+        continuations,
+        &stale_copy,
+        execution_frames,
+        2,
+        continuation_frames,
+        2,
+        &stale_trace));
     check(ores_native_callback_context_release(
         executions, continuations, &callback));
 
