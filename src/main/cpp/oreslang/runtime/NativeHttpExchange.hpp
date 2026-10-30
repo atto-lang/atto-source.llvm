@@ -29,6 +29,7 @@ public:
                  std::uint64_t request_registry = 0,
                  std::uint64_t dispatch_ticket = 0) noexcept {
         if (phase() != Phase::reactor
+                || pin_generation_.load(std::memory_order_acquire) != 0
                 || bool(request_context) != bool(request_registry)
                 || bool(request_context) != bool(dispatch_ticket)
                 || !actor.scheduler_domain
@@ -69,6 +70,36 @@ public:
         return transition(token, Phase::completed, Phase::reactor);
     }
 
+    // A trusted physical context/body owner registers its generation before
+    // releasing the reactor's dispatch ownership. Until that pin retires,
+    // enqueue() cannot reuse this exchange even after complete/reclaim.
+    bool bind_physical_pin(Token token) noexcept {
+        if (!token.request_context || !token.request_registry
+                || !token.dispatch_ticket || !token.generation
+                || phase()!=Phase::queued)
+            return false;
+        const auto now=this->token();
+        if(now.generation!=token.generation ||
+                now.request_context!=token.request_context ||
+                now.request_registry!=token.request_registry ||
+                now.dispatch_ticket!=token.dispatch_ticket ||
+                now.actor.scheduler_domain!=token.actor.scheduler_domain ||
+                now.actor.actor_slot!=token.actor.actor_slot ||
+                now.actor.generation!=token.actor.generation)return false;
+        std::uint64_t empty=0;
+        return pin_generation_.compare_exchange_strong(
+            empty,token.generation,std::memory_order_acq_rel);
+    }
+    // Called only by the owning ExchangePin after the real completion/
+    // rollback phase reaches reactor. Exact generation prevents stale release.
+    bool release_physical_pin(Token token) noexcept {
+        if(!token.generation || phase()!=Phase::reactor ||
+                (state_.load(std::memory_order_acquire)>>2)!=token.generation)
+            return false;
+        std::uint64_t expected=token.generation;
+        return pin_generation_.compare_exchange_strong(
+            expected,0,std::memory_order_acq_rel);
+    }
     Phase phase() const noexcept {
         return static_cast<Phase>(
             state_.load(std::memory_order_acquire) & 3);
@@ -129,5 +160,6 @@ private:
     std::atomic<std::uint64_t> request_context_{0};
     std::atomic<std::uint64_t> request_registry_{0};
     std::atomic<std::uint64_t> dispatch_ticket_{0};
+    std::atomic<std::uint64_t> pin_generation_{0};
 };
 } // namespace oreslang::runtime
