@@ -1,0 +1,68 @@
+name: Checked i64 guest proof v1
+
+on:
+  pull_request:
+    paths:
+      - "contracts/parity/v1/checked-i64-42.ores"
+      - ".github/workflows/checked-i64-guest-proof-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Pin exact source and shared guest bytes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object contracts/parity/v1/checked-i64-42.ores)" = "8e4f76fa1e4752f4996d464cd02a86f609430118"
+          git diff --quiet --exit-code HEAD --
+      - name: Install native LLVM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build llvm-dev clang
+      - name: Build exact-head Oreslang LLVM compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/checked-i64 -G Ninja             -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release             -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build build/checked-i64 --target oreslang-llvmc -j 2
+          test -x build/checked-i64/oreslang-llvmc
+      - name: Compile and execute byte-identical checked-i64 guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/checked-i64-proof
+          ORESLANG_LLVMC="$PWD/build/checked-i64/oreslang-llvmc"             bash scripts/compile-aot.sh               contracts/parity/v1/checked-i64-42.ores               build/checked-i64-proof/guest
+          set +e
+          build/checked-i64-proof/guest
+          rc=$?
+          set -e
+          test "$rc" -eq 42
+          sha256sum build/checked-i64/oreslang-llvmc > build/checked-i64-proof/compiler-sha256.txt
+          sha256sum build/checked-i64-proof/guest > build/checked-i64-proof/guest-sha256.txt
+          sha256sum contracts/parity/v1/checked-i64-42.ores > build/checked-i64-proof/source-sha256.txt
+          git rev-parse HEAD > build/checked-i64-proof/head-sha.txt
+          git rev-parse 'HEAD^{tree}' > build/checked-i64-proof/tree-sha.txt
+          printf '%s
+' 42 > build/checked-i64-proof/guest-exit.txt
+      - name: Upload native compiler and guest proof receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: checked-i64-guest-llvm-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/checked-i64-proof/
+            build/checked-i64/oreslang-llvmc
+          if-no-files-found: error
+          retention-days: 14
