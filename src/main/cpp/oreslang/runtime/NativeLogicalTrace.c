@@ -83,3 +83,32 @@ int ores_native_logical_trace_snapshot(
         out->corrupt = 1; /* impossible without a cycle/corrupt parent chain */
     return 1;
 }
+
+
+int ores_native_logical_trace_snapshot_callback(
+        OresNativeExecutionContextStore* executions,
+        OresNativeContinuationStore* continuations,
+        const OresNativeCallbackContext* callback,
+        OresNativeExecutionTraceFrame* execution_frames,
+        size_t execution_capacity,
+        OresNativeContinuationTraceFrame* continuation_frames,
+        size_t continuation_capacity,
+        OresNativeCallbackLogicalTraceResult* out) {
+    if (!executions || !continuations || !callback || !out)
+        return 0;
+
+    memset(out, 0, sizeof(*out));
+    if (!ores_native_callback_context_snapshot(
+            executions, continuations, callback, &out->callback))
+        return 0;
+
+    return ores_native_logical_trace_snapshot(
+        executions,
+        continuations,
+        out->callback.source_execution,
+        execution_frames,
+        execution_capacity,
+        continuation_frames,
+        continuation_capacity,
+        &out->logical);
+}
