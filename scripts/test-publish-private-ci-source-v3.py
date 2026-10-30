@@ -176,6 +176,68 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 )
             request.assert_not_called()
 
+
+    def test_ref_lookup_rejects_malformed_repository_without_ref_request(self):
+        good = {
+            "id": 1323598177, "full_name": "trusted/ci",
+            "private": True, "visibility": "private",
+            "archived": False, "disabled": False,
+        }
+        for malformed in (None, [], "private", 0, True,
+                          {**good, "id": True},
+                          {**good, "id": float(1323598177)}):
+            with self.subTest(repository=repr(malformed)), (
+                patch.object(v3, "gh_api", return_value=malformed),
+                patch.object(v3, "_gh_ref_request") as request,
+            ):
+                with self.assertRaisesRegex(v3.Denied, "identity changed"):
+                    v3.live_ref_sha("trusted/ci", AUTH_REF, 1323598177)
+                request.assert_not_called()
+
+    def test_ref_lookup_rejects_malformed_object_without_python_exception(self):
+        good = {
+            "id": 1323598177, "full_name": "trusted/ci",
+            "private": True, "visibility": "private",
+            "archived": False, "disabled": False,
+        }
+        for malformed in (None, [], "not a commit", 8, True, {},
+                          {"type": "tree", "sha": CARRIER_COMMIT}):
+            payload = {
+                "ref": "refs/heads/" + AUTH_REF,
+                "object": malformed,
+            }
+            response = v3.subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps(payload), ""
+            )
+            with self.subTest(object=repr(malformed)), (
+                patch.object(v3, "gh_api", return_value=good),
+                patch.object(v3, "_gh_ref_request", return_value=response),
+            ):
+                with self.assertRaisesRegex(v3.Denied, "unexpected identity"):
+                    v3.live_ref_sha("trusted/ci", AUTH_REF, 1323598177)
+
+    def test_atomic_cleanup_failed_push_cannot_be_rescued_by_external_ref_deletion(self):
+        # A rejected push followed by absent refs does not prove this
+        # publisher deleted them; some unrelated actor may have done so.
+        failed_push = v3.subprocess.CompletedProcess(["git"], 1, "", "rejected")
+        def run(argv, **_kwargs):
+            return failed_push if "push" in argv else v3.subprocess.CompletedProcess(
+                argv, 0, "", ""
+            )
+        with (
+            patch.object(v3, "live_ref_sha",
+                         side_effect=[CARRIER_COMMIT, CARRIER_COMMIT, None, None]),
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "trusted_git_cli", return_value="/usr/bin/git"),
+            patch.object(v3, "git_transport_environment", return_value={}),
+            patch.object(v3, "run_bounded_gh", side_effect=run),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "failed or remained ambiguous"):
+                v3.delete_handoff_refs_atomic(
+                    "trusted/ci", SOURCE_REF, AUTH_REF,
+                    CARRIER_COMMIT, 1323598177,
+                )
+
     def test_atomic_generation_cleanup_uses_two_ref_leases(self):
         completed = v3.subprocess.CompletedProcess(["git"], 0, "", "")
         live = [
