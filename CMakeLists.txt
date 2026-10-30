@@ -147,6 +147,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-realtime-actor-arena-test)
     set_tests_properties(native_realtime_actor_arena_contract PROPERTIES TIMEOUT 15)
 
+    # Trusted native runtime: preallocated arena + four heterogeneous layouts.
+    # Proves only host in-place operation and C++ new-free iteration, NOT
+    # compiler-generated guest, malloc-free full image or hardware WCET.
+    add_executable(oreslang-realtime-four-layout-kernel-test
+        tests/realtime_four_layout_inplace_kernel_test.cpp
+        src/main/cpp/oreslang/runtime/RealtimeActorArena.c)
+    target_include_directories(oreslang-realtime-four-layout-kernel-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-realtime-four-layout-kernel-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-realtime-four-layout-kernel-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-realtime-four-layout-kernel-test PRIVATE Threads::Threads)
+    add_test(NAME native_realtime_four_layout_noalloc_inplace
+        COMMAND oreslang-realtime-four-layout-kernel-test)
+    set_tests_properties(native_realtime_four_layout_noalloc_inplace PROPERTIES TIMEOUT 20)
+
     # Experimental native compiler AST safety graph; not a full security proof.
     add_executable(oreslang-native-static-safety-test
         tests/native_static_safety_test.cpp)
