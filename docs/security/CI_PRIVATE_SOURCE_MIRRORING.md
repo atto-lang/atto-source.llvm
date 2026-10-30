@@ -217,9 +217,12 @@ deletion primitive:
 git push --force-with-lease=refs/heads/ci/TEST:<EXPECTED_SHA> LOCAL_REMOTE :refs/heads/ci/TEST
 ```
 
-The six executed source-free local tests cover exact-SHA deletion; stale
+The nine executed source-free local tests cover exact-SHA deletion; stale
 expected-SHA rejection; a competing update made in a `pre-receive` hook;
-remote-hook rejection; repeated-deletion refusal; and **ABA** (`A -> B -> A`).
+remote-hook rejection; repeated-deletion refusal; atomic deletion of both
+source and authorization refs; rejection of both deletions when one ref moves;
+denial when the receiver lacks atomic-push support (never fall back to sequential
+deletes); and **ABA** (`A -> B -> A`).
 The ABA test intentionally demonstrates that the deletion can succeed after
 another writer has briefly controlled and restored the original SHA. Therefore
 an expected-SHA lease is **not** an ownership, authorization, or generation
