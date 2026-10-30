@@ -2230,7 +2230,8 @@ if(BUILD_TESTING)
         tests/native_callback_context_test.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
-        src/main/cpp/oreslang/runtime/NativeCallbackContext.c)
+        src/main/cpp/oreslang/runtime/NativeCallbackContext.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
     target_include_directories(oreslang-native-callback-context-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-callback-context-test PRIVATE
