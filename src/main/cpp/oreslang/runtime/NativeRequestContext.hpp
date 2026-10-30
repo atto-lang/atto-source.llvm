@@ -172,8 +172,8 @@ public:
             pin_(std::move(src.pin_)) {}
         ExchangePin& operator=(ExchangePin&&) = delete;
         ~ExchangePin(){
-            if(pin_ && (!exchange_ || exchange_->phase()!=NativeHttpExchange::Phase::reactor))
-                std::terminate(); // early release would permit storage ABA
+            if(pin_ && (!exchange_ || !exchange_->release_physical_pin(token)))
+                std::terminate(); // early release or different generation
         }
     };
     std::optional<ExchangePin> attach_exchange(NativeHttpExchange& exchange,
@@ -183,7 +183,12 @@ public:
         const auto ticket=next_request_dispatch_ticket();
         if(!ticket || !exchange.enqueue(owner,handle.value,registry_id_,ticket))
             return std::nullopt;
-        return ExchangePin(exchange,exchange.token(),std::move(*pin));
+        const auto token=exchange.token();
+        if(!exchange.bind_physical_pin(token)){
+            if(!exchange.rollback(token))std::terminate();
+            return std::nullopt;
+        }
+        return ExchangePin(exchange,token,std::move(*pin));
     }
     // A request's transport buffer is physically retained from the time
     // its exchange is published through terminal/reclaim. This lease is NOT
