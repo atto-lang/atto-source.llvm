@@ -40,6 +40,7 @@ struct Suite {
     bool await_mode=false;
     bool revoke_on_turn=false;
     bool reject_resume=false;
+    bool cancel_queued_second=false;
     unsigned mode=0;
     std::atomic<unsigned> rejected{0};
     std::atomic<bool> hold_turn{false},turn_entered{false};
@@ -72,6 +73,16 @@ struct Suite {
                 CHECK(s.second_exchange.phase()==NativeHttpExchange::Phase::queued);
                 CHECK(!s.second_exchange.claim(second)); // no reactor-side claim
                 CHECK(s.second_exchange.claim_admitted(s.scheduler,second));
+                if(s.cancel_queued_second) {
+                    CHECK(!s.contexts.with_admitted_turn(s.scheduler,
+                            s.second_exchange,second,s.second_request,owner,
+                            []{throw std::runtime_error("cancelled guest ran");}));
+                    CHECK(!s.contexts.with_request_bytes(*s.second_pin,
+                            [](std::string_view){throw std::runtime_error("cancelled body");}));
+                    CHECK(!Registry::current());
+                    ++s.rejected;
+                    return;
+                }
                 CHECK(!s.contexts.with_admitted_turn(s.scheduler,exchange,token,
                        s.requests[slot],owner,[]{throw std::runtime_error("wrong request");}));
                 CHECK(s.contexts.with_admitted_turn(s.scheduler,s.second_exchange,
@@ -423,6 +434,46 @@ int main(){
         ores_native_actor_scheduler_retire(s.scheduler);
         CHECK(ores_native_actor_scheduler_try_destroy(s.scheduler));
         s.scheduler=nullptr;
+    }
+    // ACCEPTED is not a guarantee of handler execution. Cancellation after
+    // acceptance but before the second DATA turn must not revive metadata,
+    // expose the closing body, or leak the second exchange's physical pins.
+    {
+        Suite s;s.begin(1,false,false,false,2);
+        s.hold_turn.store(true);
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.pins[0])
+              ==ORES_NATIVE_SEND_ACCEPTED);
+        const auto deadline=std::chrono::steady_clock::now()+
+                            std::chrono::seconds(8);
+        while(!s.turn_entered.load() &&
+              std::chrono::steady_clock::now()<deadline)
+            std::this_thread::yield();
+        CHECK(s.turn_entered.load());
+        auto second=s.contexts.open(s.actors[0],Suite::info(99));CHECK(second);
+        s.second_request=*second;
+        auto ingress=s.buffers.begin(1);CHECK(ingress);
+        std::memcpy(ingress->data(),"GET /actor",10);
+        s.second_body=ingress->publish(10);CHECK(s.second_body.value);
+        auto pending=s.contexts.attach_exchange_with_buffer(
+            s.second_exchange,*second,s.actors[0],s.buffers,s.second_body,1);
+        CHECK(pending);
+        s.second_pin.emplace(std::move(*pending));
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.second_pin)
+              ==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(s.contexts.close(s.second_request,s.actors[0]));
+        CHECK(s.buffers.close(s.second_body,1));
+        CHECK(s.contexts.available()==14 && s.buffers.available()==14);
+        s.cancel_queued_second=true;
+        s.hold_turn.store(false);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.bad==0 && s.observed==1 && s.rejected==1);
+        const auto stale=s.second_pin->token();
+        CHECK(s.second_exchange.complete(stale));
+        CHECK(s.second_exchange.reclaim(stale));
+        CHECK(!s.contexts.lookup(s.second_request,s.actors[0]));
+        s.second_pin.reset();
+        CHECK(s.contexts.available()==15 && s.buffers.available()==15);
+        s.end();
     }
     // An ACCEPTED request may still be abandoned when the actor stops.
     // Quiescence, not successful mailbox admission, authorizes its rollback.
