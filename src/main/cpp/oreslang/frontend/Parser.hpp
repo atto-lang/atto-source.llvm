@@ -459,6 +459,23 @@ struct TypeConstraintDescriptor {
     bool validation_required = true;
 };
 
+// Distinct nominal *value-schema* declaration, never an inverted class
+// alias. This parser milestone records type/field/mutability intent only;
+// source lowering stays denied until owned SoA HIR/MIR is implemented.
+enum class InvertedScalarKind { I64, Bool, F64 };
+struct InvertedStructField {
+    std::string name;
+    InvertedScalarKind type = InvertedScalarKind::I64;
+    bool mutable_field = false; // unmarked fields are implicit immutable val
+    std::size_t offset = 0;
+};
+struct InvertedStructDecl {
+    std::string name;
+    std::vector<InvertedStructField> fields;
+    bool exported = false;
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
@@ -466,6 +483,7 @@ struct Program {
     std::string namespace_name;
     std::string module;
     std::vector<ClassDecl> classes;
+    std::vector<InvertedStructDecl> inverted_structs;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
