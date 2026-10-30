@@ -14,6 +14,7 @@
  * authenticated OresNativeExecutionId + generation-checked store handles.
  */
 #include "oreslang/runtime/NativeExecutionContext.h"
+#include "oreslang/runtime/NativeExecutionContextStore.h"
 #include "oreslang/runtime/OresStdSyncAdmission.h"
 
 #include <stdbool.h>
@@ -54,6 +55,31 @@ static inline bool ores_state_task_identity_equal(
            left.logical.execution == right.logical.execution &&
            left.handle.slot == right.handle.slot &&
            left.handle.generation == right.handle.generation;
+}
+
+/*
+ * Preferred trusted-runtime binder. It rejects a stale/foreign store handle
+ * and verifies that the generation-checked record carries the expected
+ * logical execution ID before producing state-region authority metadata.
+ */
+static inline bool ores_state_task_identity_from_store(
+        OresNativeExecutionContextStore* store,
+        OresNativeExecutionHandle handle,
+        OresNativeExecutionId expected,
+        ores_state_task_identity* out) {
+    if (!store || !out || !ores_native_store_handle_valid(handle) ||
+            expected.runtime_domain == 0 || expected.execution == 0)
+        return false;
+    OresNativeExecutionContext context = {0};
+    if (!ores_native_execution_context_store_get(store, handle, &context))
+        return false;
+    if (context.id.runtime_domain != expected.runtime_domain ||
+            context.id.execution != expected.execution)
+        return false;
+    ores_state_task_identity bound = {context.id, handle};
+    if (!ores_state_task_identity_valid(bound)) return false;
+    *out = bound;
+    return true;
 }
 
 static inline bool ores_state_region_enter_metadata(
