@@ -107,6 +107,14 @@ int main() {
     REQUIRE(private_graph.namespaces.at({"foo@1", "a"}).source_units.size() == 4);
     REQUIRE(private_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
+    // A private init is still a lifecycle hook, not an ordinary hidden helper.
+    // Reject it before the non-exported function filter can erase the effect.
+    Program private_init = make_source("a", "init", false);
+    another = units;
+    another.push_back({"foo/private_init", "foo@1", &private_init});
+    must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                "init lifecycle");
+
     // Namespace module imports have no manifest/lockfile binding in this
     // phase-one host inventory; a pinned namespace alias is not a module pin.
     {

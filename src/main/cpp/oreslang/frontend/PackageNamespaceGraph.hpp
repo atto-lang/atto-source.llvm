@@ -274,6 +274,10 @@ inline PackageNamespaceGraph link_package_namespaces(
         group.source_units.insert(unit.source_unit_id);
 
         for (const auto& fn : program.functions) {
+            // Lifecycle initialization is observable even when not exported.
+            // Do not silently omit private init before checked lowering exists.
+            if (fn.name == "init")
+                throw std::invalid_argument("native namespace init lifecycle requires checked lowering");
             if (!fn.exported) continue;
             // A linker-owned implementation is private even if a malformed AST
             // sets the public bit; public ABI names must be flat identifiers.
@@ -281,8 +285,6 @@ inline PackageNamespaceGraph link_package_namespaces(
                 throw std::invalid_argument("private native implementation cannot be a namespace export");
             if (!valid_flat_namespace_name(fn.name))
                 throw std::invalid_argument("invalid public namespace export name");
-            if (fn.name == "init")
-                throw std::invalid_argument("native namespace init lifecycle requires checked lowering");
             if (!fn.statements.empty() || !fn.early_returns.empty())
                 throw std::invalid_argument("native namespace body control flow requires checked lowering");
             if (!namespace_pure_scalar_expression(fn.result.get()))
