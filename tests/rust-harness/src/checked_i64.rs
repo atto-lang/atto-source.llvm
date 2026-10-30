@@ -48,6 +48,14 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("math-abs", "pub fnc main():int{return Math.abs(-42);}", 42),
         ("math-neg", "pub fnc main():int{return Math.neg(-42);}", 42),
         ("dynamic-math-abs", "fnc magnitude(int a):int{return Math.abs(a);} pub fnc main():int{return magnitude(-42);}", 42),
+        // A composition must not lose the checked nested Math call or
+        // perform eager trap-producing arithmetic in a skipped branch.
+        ("math-abs-nested", "pub fnc main():int{return Math.abs(Math.neg(-42));}", 42),
+        ("math-neg-of-abs", "pub fnc main():int{return Math.neg(Math.abs(-42))+84;}", 42),
+        ("math-abs-min-plus-one", "pub fnc main():int{return Math.abs(-9223372036854775807)-9223372036854775807+42;}", 42),
+        ("math-abs-skipped-ternary", "pub fnc main():int{return false ? Math.abs(-9223372036854775808) : 42;}", 42),
+        ("math-abs-skipped-and", "pub fnc main():int{return (false && Math.abs(-9223372036854775808)>0) ? 0 : 42;}", 42),
+        ("math-abs-skipped-or", "pub fnc main():int{return (true || Math.abs(-9223372036854775808)>0) ? 42 : 0;}", 42),
         // Boundary controls must return normally; checked negation in abs
         // may not spuriously trap on zero or the largest positive signed i64.
         ("math-abs-zero", "pub fnc main():int{return Math.abs(0)+42;}", 42),
@@ -97,6 +105,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("math-abs-min", "pub fnc main():int{return Math.abs(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
         ("math-neg-min", "pub fnc main():int{return Math.neg(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
         ("dynamic-math-abs-min", "fnc magnitude(int a):int{return Math.abs(a);} pub fnc main():int{return magnitude(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
+        ("dynamic-math-neg-min", "fnc negate(int a):int{return Math.neg(a);} pub fnc main():int{return negate(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
+        ("math-nested-abs-min", "pub fnc main():int{return Math.neg(Math.abs(-9223372036854775808));}", "llvm.ssub.with.overflow.i64"),
         ("dynamic-add", "fnc add(int a,int b):int{return a+b;} pub fnc main():int{return add(9223372036854775807,1);}", "llvm.sadd.with.overflow.i64"),
         ("dynamic-subtract", "fnc sub(int a,int b):int{return a-b;} pub fnc main():int{return sub(-9223372036854775808,1);}", "llvm.ssub.with.overflow.i64"),
         ("dynamic-multiply", "fnc mul(int a,int b):int{return a*b;} pub fnc main():int{return mul(3037000500,3037000500);}", "llvm.smul.with.overflow.i64"),
