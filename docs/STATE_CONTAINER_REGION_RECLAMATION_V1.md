@@ -26,11 +26,15 @@ runs without GC, or that actor/Task quiescence is already verified end-to-end.
    during retirement. The primitive remains single-execution-lane; it is not
    a concurrent read/write lock or safe cross-carrier transport on its own.
 5. **Retirement is a monotonic admission fence.** `begin_retire()`
-   permanently rejects new borrows, mutations and allocations. An existing
-   read lease remains valid until it is released. `close()` returns pending
-   while a lease/write is active and succeeds only after drain. The
-   supervisor must separately fence producers and await physical callbacks;
-   `begin_retire()` is not a cancellation acknowledgement.
+   permanently rejects new borrows, mutations, allocations and region
+   lifetime pins. An existing read lease remains valid until it is released.
+   The separate move-only `hold_region()` pin keeps arena storage alive
+   without granting read/write authority or preventing ordinary in-place
+   mutation. `close()` returns pending while a read lease, write callback,
+   construction, or region lifetime pin exists. The scheduler must retain
+   and release these pins only on the serialized owner lane, after fencing
+   producers and observing physical Task/FFI/I/O completion. A cancellation
+   request alone is not completion or a pin-release authorization.
 6. **Cycles cannot keep regions alive.** The graph links are non-owning
    generational identities. `close` drops each live node exactly once in a
    deterministic order regardless of self-links or cycles; stale handles
@@ -61,7 +65,7 @@ runs without GC, or that actor/Task quiescence is already verified end-to-end.
 ## Evidence and release gates
 
 The `native_deterministic_graph_arena` host test checks immutable read
-access types at compile time, read/write exclusion, monotonic retirement admission, nested callback denial,
+access types at compile time, read/write exclusion, lifetime pins and monotonic retirement admission, nested callback denial,
 exception restoration, self/cross node cycles, stale-handle invalidation,
 exact-once drops and the absence of C++ `operator new` / `new[]` calls for
 the chosen fixed-size payload across its hot path. It does **not** observe
