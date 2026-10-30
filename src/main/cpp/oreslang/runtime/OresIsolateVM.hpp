@@ -71,8 +71,9 @@ class IsolateVM final {
     IsolatePhase phase = IsolatePhase::Created;
     std::vector<std::uint8_t> heap; // logical bounded tenant region
     std::unordered_map<std::uint64_t, std::uint64_t> actors;
-    // Host-only scalar slots scoped to an actor incarnation, not the tenant.
-    // Native actor arenas and source-level actor state remain separate work.
+    // Each actor incarnation owns a physically independent native buffer.
+    // Compiled scalar guest ABI slots occupy the reserved prefix of that buffer.
+    // Full source-level actor ownership/effects and hostile OS isolation remain separate work.
     static_assert(ActorArena::kScalarSlots == ORES_ISOLATE_I64_SLOTS,
                   "native actor arena slot count must match compiler ABI");
     std::unordered_map<std::uint64_t, std::unique_ptr<ActorArena>> actor_arenas;
