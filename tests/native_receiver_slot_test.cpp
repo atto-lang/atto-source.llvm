@@ -1,6 +1,8 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include <iostream>
+#include <limits>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace {
 
@@ -40,6 +42,30 @@ int main() {
   }
   ok &= check(rejected_missing_receiver,
               "lowered method without hidden receiver was accepted");
+
+  // Bounded exhaustive sweep: erasing hidden self never changes a
+  // caller-visible slot, and distinct arities/names retain distinct keys.
+  std::unordered_set<std::string> observed_slots;
+  for (std::size_t arity = 0; arity <= 1024; ++arity) {
+    ok &= check(native_source_value_arity(arity, false) == arity,
+                "free function arity was unexpectedly changed");
+    ok &= check(native_source_value_arity(arity + 1, true) == arity,
+                "hidden instance receiver counted toward value arity");
+    const auto slot = native_function_slot("x", arity);
+    ok &= check(observed_slots.insert(slot).second,
+                "two different value arities collided in the selector");
+    ok &= check(slot == native_function_slot("x", native_source_value_arity(arity + 1, true)),
+                "explicit self spelling changed the method selector");
+    ok &= check(slot != native_function_slot("y", arity),
+                "different method names collided at same arity");
+  }
+  ok &= check(observed_slots.size() == 1025,
+              "receiver slot sweep lost an arity");
+  const auto highest = std::numeric_limits<std::size_t>::max();
+  ok &= check(native_source_value_arity(highest, true) == highest - 1,
+              "max lowered arity was not erased exactly once");
+  ok &= check(native_function_slot("x", highest) != native_function_slot("x", highest - 1),
+              "max arity selector collided with its predecessor");
 
   return ok ? 0 : 1;
 }
