@@ -599,6 +599,8 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            if (token_.text == "singleton")
+                fail("ORES-SINGLETON-UNSUPPORTED: native singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
             if (token_.text == "mtd") {
                 program.functions.push_back(extension_method(exported));
                 continue;
@@ -681,6 +683,8 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                if (token_.text == "singleton")
+                    fail("ORES-SINGLETON-UNSUPPORTED: native singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
                 if (token_.text == "mtd") {
                     program.functions.push_back(extension_method(public_class));
                     continue;
