@@ -174,7 +174,10 @@ public:
         try {
             state->actor_scalar_slots.emplace(actor_id,
                 IsolateVM::ActorScalarSlots{incarnation, {}});
+            state->actor_turn_mutexes.emplace(actor_id, std::make_shared<std::mutex>());
         } catch (...) {
+            state->actor_turn_mutexes.erase(actor_id);
+            state->actor_scalar_slots.erase(actor_id);
             state->actors.erase(actor_id);
             throw;
         }
@@ -201,6 +204,7 @@ public:
             throw std::logic_error("actor scalar-state incarnation mismatch");
         scalar->second.slots.fill(0);
         state->actor_scalar_slots.erase(scalar);
+        state->actor_turn_mutexes.erase(actor.id_);
         state->actors.erase(it);
     }
 
