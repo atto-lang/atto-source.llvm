@@ -36,6 +36,8 @@ struct Suite {
     bool await_mode=false;
     bool revoke_on_turn=false;
     bool reject_resume=false;
+    unsigned mode=0;
+    std::atomic<unsigned> rejected{0};
     static Registry::Metadata info(unsigned n) noexcept {
         return {1000+n,2000+n,3000,987654321};
     }
@@ -51,7 +53,14 @@ struct Suite {
             auto& exchange=s.exchanges[slot];
             const auto token=exchange.token();
             CHECK(!Registry::current()); // carrier callback does not inherit stale TLS
-            if(s.await_mode && message==2) {
+            if(message!=token.dispatch_ticket) {
+                CHECK(!s.contexts.with_admitted_turn(s.scheduler,exchange,token,
+                      s.requests[slot],owner,[]{throw std::runtime_error("wrong ticket admitted");}));
+                CHECK(!Registry::current());
+                ++s.rejected;
+                return;
+            }
+            if(s.await_mode && s.mode==2) {
                 CHECK(s.suspension);
                 const bool resumed=s.contexts.resume_admitted(
                     s.scheduler,exchange,token,*s.suspension,[&]{
@@ -82,9 +91,9 @@ struct Suite {
                             CHECK(s.buffers.available()==15);
                         }
                     }));
-                    if(message==3){
-                        // Nested request on the SAME admitted actor turn:
-                        // throw in inner scope, then restore exact outer context.
+                    if(s.mode==3){
+                        // A second HTTP request for the SAME actor must be
+                        // rejected on this message's scheduler DATA ticket.
                         NativeHttpExchange inner;
                         auto inner_handle=s.contexts.open(owner,info(99));
                         CHECK(inner_handle);
@@ -96,15 +105,21 @@ struct Suite {
                         CHECK(inner_pin);
                         const auto inner_token=inner_pin->token();
                         CHECK(inner.claim(inner_token));
+                        CHECK(inner_token.dispatch_ticket!=token.dispatch_ticket);
+                        CHECK(!s.contexts.with_admitted_turn(
+                            s.scheduler,inner,inner_token,*inner_handle,owner,[&]{
+                                throw std::runtime_error("other request entered");
+                            }));
+                        CHECK(!s.contexts.with_request_bytes(*inner_pin,
+                           [&](std::string_view){throw std::runtime_error("other request bytes");}));
+                        CHECK(Registry::current()->request_id==1000+slot);
+                        // Reentrant lexical scope for the SAME authenticated
+                        // request still restores properly on exception.
                         bool caught=false;
                         try{
                             CHECK(s.contexts.with_admitted_turn(
-                                s.scheduler,inner,inner_token,*inner_handle,owner,[&]{
-                                CHECK(Registry::current()->request_id==1099);
-                                CHECK(!s.contexts.with_request_bytes(*s.pins[slot],
-                                    [&](std::string_view){throw std::runtime_error("outer bytes escaped");}));
-                                CHECK(s.contexts.with_request_bytes(*inner_pin,
-                                      [&](std::string_view bytes){CHECK(bytes=="GET /actor");}));
+                                s.scheduler,exchange,token,s.requests[slot],owner,[&]{
+                                CHECK(Registry::current()->request_id==1000+slot);
                                 throw std::runtime_error("inner failure");
                             }));
                         }catch(const std::runtime_error& e){
@@ -118,7 +133,7 @@ struct Suite {
                         CHECK(s.buffers.close(inner_body,slot+1));
                         inner_pin.reset();
                     }
-                    if(s.await_mode && message==1){
+                    if(s.await_mode && s.mode==1){
                         s.suspension=s.contexts.suspend_current(exchange,token);
                         CHECK(s.suspension.has_value());
                     }
@@ -160,10 +175,12 @@ struct Suite {
             CHECK(exchanges[i].claim(pins[i]->token()));
         }
     }
-    void send_all(unsigned message=0){
+    void send_all(unsigned next_mode=0){
+        mode=next_mode;
         for(unsigned i=0;i<count;++i)
             CHECK(ores_native_actor_scheduler_try_send(
-                scheduler,actors[i],message)==ORES_NATIVE_SEND_ACCEPTED);
+                scheduler,actors[i],pins[i]->token().dispatch_ticket)
+                ==ORES_NATIVE_SEND_ACCEPTED);
         CHECK(ores_native_actor_scheduler_drain(scheduler));
         CHECK(bad.load()==0);
     }
@@ -206,6 +223,11 @@ int main(){
                s.requests[0],wrong,[]{}));
         CHECK(!s.exchanges[0].claim({tok.generation,tok.actor,
                 tok.request_context,tok.request_registry+1}));
+        CHECK(ores_native_actor_scheduler_try_send(
+             s.scheduler,s.actors[0],tok.dispatch_ticket+1)
+             ==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.observed==0 && s.rejected==1 && s.bad==0);
         s.send_all();CHECK(s.observed==1);s.end();
     }
     // Real native scheduler DATA callbacks on 3, 8 and 15 worker carriers;
