@@ -471,7 +471,18 @@ private:
             (state->phase != IsolatePhase::Running &&
              state->phase != IsolatePhase::Quiescing) ||
             state->active_guest_calls == 0) return 0;
-        *out = state->guest_globals[slot];
+        if (call->actor) {
+            const auto actor = *call->actor;
+            const auto current = state->actors.find(actor.id);
+            const auto scalar = state->actor_scalar_slots.find(actor.id);
+            if (current == state->actors.end() ||
+                current->second != actor.generation ||
+                scalar == state->actor_scalar_slots.end() ||
+                scalar->second.generation != actor.generation) return 0;
+            *out = scalar->second.slots[slot];
+        } else {
+            *out = state->guest_globals[slot];
+        }
         return 1;
     }
 
@@ -484,7 +495,18 @@ private:
             (state->phase != IsolatePhase::Running &&
              state->phase != IsolatePhase::Quiescing) ||
             state->active_guest_calls == 0) return 0;
-        state->guest_globals[slot] = value;
+        if (call->actor) {
+            const auto actor = *call->actor;
+            const auto current = state->actors.find(actor.id);
+            const auto scalar = state->actor_scalar_slots.find(actor.id);
+            if (current == state->actors.end() ||
+                current->second != actor.generation ||
+                scalar == state->actor_scalar_slots.end() ||
+                scalar->second.generation != actor.generation) return 0;
+            scalar->second.slots[slot] = value;
+        } else {
+            state->guest_globals[slot] = value;
+        }
         return 1;
     }
 
