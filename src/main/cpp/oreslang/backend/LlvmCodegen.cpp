@@ -2908,6 +2908,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 throw std::runtime_error(
                     "C_EXPORT_U32_REJECT: unimplemented browser C symbol shadowed by guest");
         }
+        // An overloaded guest family is subject to arity-based mangling.
+        // This initial C ABI admits a single stable guest definition only;
+        // never let adding an unrelated overload silently rename or redirect
+        // the implementation behind the exported host symbol.
+        if (family_sizes.at(fn.name) != 1)
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: overloaded guest export family forbidden");
         if (module.getNamedValue(fn.c_export_u32_symbol))
             throw std::runtime_error(
                 "C_EXPORT_U32_REJECT: C ABI symbol collision");
