@@ -34,6 +34,17 @@ static void run(void* raw, size_t actor, uint64_t msg) {
             || ores_native_store_handle_valid(execution.continuation)) {
         atomic_fetch_add(&s->errors, 1);
     } else {
+        OresNativeActorRef current_actor = {
+            execution.id.runtime_domain, (uint64_t)actor,
+            execution.allocation.generation
+        };
+        uint64_t delivered = UINT64_MAX;
+        if(!ores_native_actor_scheduler_current_data_payload(
+                s->scheduler,current_actor,&delivered) || delivered!=msg)
+            atomic_fetch_add(&s->errors,1);
+        if(ores_native_actor_scheduler_current_data_payload(
+                s->scheduler,(OresNativeActorRef){0,0,0},&delivered))
+            atomic_fetch_add(&s->errors,1);
         uint64_t previous = atomic_exchange(
                 &s->last_execution[actor], execution.id.execution);
         if (previous && execution.id.execution <= previous)
@@ -85,6 +96,9 @@ int main(void) {
     s.scheduler = scheduler;
     OresNativeExecutionContext outside = {0};
     check(!ores_native_actor_scheduler_current_execution_context(scheduler, &outside));
+    uint64_t external_payload=UINT64_MAX;
+    check(!ores_native_actor_scheduler_current_data_payload(
+        scheduler,(OresNativeActorRef){1,1,1},&external_payload));
     OresNativeActorRef refs[ACTORS];
     for (int a = 0; a < ACTORS; ++a) {
         refs[a] = ores_native_actor_scheduler_spawn(scheduler, (size_t)a);
