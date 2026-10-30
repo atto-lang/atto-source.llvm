@@ -1,0 +1,72 @@
+name: Inverted SoA typed HIR / native owner exact-head
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/types/InvertedTypedPlan.hpp'
+      - 'src/main/cpp/oreslang/runtime/DopInvertedColumns.hpp'
+      - 'src/main/cpp/oreslang/runtime/DopFixedRecord.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/ExperimentalInvertedI64.hpp'
+      - 'tests/native_inverted_typed_plan_test.cpp'
+      - 'tests/native_inverted_i64_guest.py'
+      - 'tests/inverted_i64_standalone_driver.cpp'
+      - 'tests/inverted-i64-standalone/**'
+      - 'tests/fixtures/inverted-i64/**'
+      - '.github/workflows/inverted-layout-typed-hir-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  typed-hir-and-guest:
+    name: ${{ matrix.compiler }} / ${{ matrix.sanitize }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cxx: g++
+            sanitize: none
+          - compiler: clang
+            cxx: clang++
+            sanitize: none
+          - compiler: gcc
+            cxx: g++
+            sanitize: asan-ubsan
+          - compiler: clang
+            cxx: clang++
+            sanitize: asan-ubsan
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Locate native toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --version
+          "${{ matrix.cxx }}" --version
+          clang --version
+          python3 --version
+      - name: Configure isolated source adapter and typed HIR
+        shell: bash
+        env:
+          CXX: ${{ matrix.cxx }}
+          SANITIZE: ${{ matrix.sanitize }}
+        run: |
+          set -euo pipefail
+          flags="-O1 -g"
+          if [ "$SANITIZE" = "asan-ubsan" ]; then
+            flags="$flags -fsanitize=address,undefined -fno-omit-frame-pointer"
+          fi
+          cmake -S tests/inverted-i64-standalone -B build/inverted-i64-standalone \
+            -DCMAKE_CXX_COMPILER="$CXX" -DCMAKE_CXX_FLAGS="$flags" \
+            -DCMAKE_EXE_LINKER_FLAGS="$flags" -DBUILD_TESTING=ON
+      - name: Build exact-head C++ targets
+        run: cmake --build build/inverted-i64-standalone --parallel 2
+      - name: Execute guest and checked owner tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          ctest --test-dir build/inverted-i64-standalone --output-on-failure --timeout 180
