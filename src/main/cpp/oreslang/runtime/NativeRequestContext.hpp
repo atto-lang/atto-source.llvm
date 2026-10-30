@@ -108,6 +108,26 @@ public:
         Handle handle() const noexcept {return table_ ? handle_ : Handle{};}
         explicit operator bool() const noexcept {return table_!=nullptr;}
     };
+    // Trusted reactor owns a physical lifetime pin from admission until
+    // the exchange is completed/rolled back and fully reclaimed.
+    struct ExchangePin final {
+        NativeHttpExchange::Token token;
+        Lease pin;
+        ExchangePin(NativeHttpExchange::Token t, Lease&& p) noexcept:
+            token(t), pin(std::move(p)) {}
+        ExchangePin(const ExchangePin&) = delete;
+        ExchangePin& operator=(const ExchangePin&) = delete;
+        ExchangePin(ExchangePin&&) noexcept = default;
+        ExchangePin& operator=(ExchangePin&&) noexcept = default;
+    };
+    // Pin before publishing a weak context handle to the exchange.
+    std::optional<ExchangePin> attach_exchange(NativeHttpExchange& exchange,
+            Handle handle, OresNativeActorRef owner) noexcept {
+        auto pin=retain(handle,owner);
+        if(!pin)return std::nullopt;
+        if(!exchange.enqueue(owner,handle.value,registry_id_))return std::nullopt;
+        return ExchangePin(exchange.token(),std::move(*pin));
+    }
     // Durable move-only suspension link: stored in Task/continuation frame,
     // not worker TLS. Lease survives physical carrier exit.
     struct Suspension final {
