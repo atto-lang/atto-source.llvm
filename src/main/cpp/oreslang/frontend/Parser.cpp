@@ -1332,10 +1332,20 @@ private:
             require("handle_state");
             require("(");
             require("critical");
-            require("-");
-            const std::string access = identifier();
+            std::string access;
+            if (accept("-")) {
+                access = identifier();
+            } else if (accept("[")) {
+                // The Java/Graal typed critical-mode spelling and the
+                // native hyphen spelling must mint the exact same checked
+                // parser-owned mode, never a user string or dynamic value.
+                access = identifier();
+                require("]");
+            } else {
+                fail("native sealed handle_state requires critical-read/write or critical[read/write]");
+            }
             if (access != "read" && access != "write")
-                fail("native sealed handle_state requires critical-read or critical-write");
+                fail("native sealed handle_state requires read or write mode");
             require("|");
             const std::string binding = identifier();
             if (binding == method.parameters.front().name || state_names.count(binding))
