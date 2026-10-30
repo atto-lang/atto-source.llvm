@@ -89,7 +89,7 @@ Private-source export remains prohibited under open conformance incident #22.
 
 The prior migration was **malformed** and has been replaced entirely in Java
 and LLVM. The corrected migration `postgresql/001_actor_dispatch_v1.sql`
-has Git blob `429e89030fa0b07e9a9a03afac7355fb4f825d01` in both repositories.
+has Git blob `c36d462ec9a627b9fc30121ccd0df75f0a340142` in both repositories.
 The matching credential-free role/fence/binding fixture
 `postgresql/002_test_fixture.sql` is Git blob
 `d80bbf5228f06eeba6c09c414c08bec4f8a5ca9c`.
@@ -97,7 +97,7 @@ The matching credential-free role/fence/binding fixture
 The transactional SECURITY DEFINER function validates the authenticated DB
 `session_user` against an independently maintained tenant/actor binding,
 locks that binding and the current generation/revision fence for the claim
-transaction, enforces synchronous_commit=on and requires server fsync=on,
+transaction, rejects asynchronous-commit sessions and server fsync=off,
 and uses a stable-identity unique constraint for one-shot admission.
 Runtime users must receive function EXECUTE only, no direct table access.
 
@@ -117,3 +117,31 @@ Private-source export remains forbidden under open conformance incident #22.
 No cross-host production deployment, authenticated provider receipts, actual
 irreversible provider effects, or native Oreslang guest program was verified.
 Keep both PRs DRAFT pending real exact-head CI and independent review.
+
+## October 30 hardening / executable-evidence limits
+
+- The initial migration now refuses pre-existing schemas and functions instead
+  of silently replacing arbitrary objects. A dedicated non-superuser role owns
+  the schema and SECURITY DEFINER function; migration recreation must fail.
+- CI now boots a loopback-only ephemeral PostgreSQL 17 container using
+  per-run random SCRAM credentials, not POSTGRES_HOST_AUTH_METHOD=trust.
+  It checks runtime credential cannot authenticate as the database owner,
+  and runtime roles cannot read claim or authorization tables.
+- A function-local SET synchronous_commit cannot by itself guarantee durable
+  COMMIT because the GUC setting can revert when the function returns. The
+  function instead requires synchronous_commit in (on, remote_apply), while
+  the trusted adapters submit a single autocommit statement. A client that
+  deliberately changes the setting before an outer COMMIT is outside this
+  trusted-adapter model. The integration workflow denies async-commit claims
+  and explicitly verifies the claim was not inserted.
+- Java and native CI now explicitly assert stale-generation exit status 2
+  after changing the supervisor fence, alongside the 100-request and
+  12-process atomic-claim tests.
+
+Static exact-blob/contract validation PASSED. The source-org Java and LLVM
+jobs and the latest source-free canaries in honeypot-r-us-test, benefactor-cc
+and voxletra all FAILED BEFORE RUNNER EXECUTION (zero job steps). Earlier
+source-free PostgreSQL run 41004508072 did pass on honeypot-r-us-test, but
+that historical result does not establish capacity at this moment. No private
+source was transferred to any alternate organization. The real Oreslang
+PostgreSQL migration and provider/actor effects remain unexecuted.
