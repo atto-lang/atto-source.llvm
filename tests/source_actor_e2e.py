@@ -3,6 +3,7 @@
 import argparse
 import pathlib
 import re
+import hashlib
 import subprocess
 import tempfile
 
@@ -66,6 +67,29 @@ def parse_actor_receipt(line):
         assert fields["ready"] == fields["processed"] == fields["last"] == 0, fields
     return fields
 
+
+# Canonical source bytes are also pinned in oreslang-platform-conformance
+# fixtures/mailbox-linearizability-v1/manifest.json. This pins the actual
+# guest fixture being compiled; do not replace it with a host-only simulation.
+_CANONICAL_ACTOR_GUEST_BLOBS = {
+    "source-actor-send.ores": "3050260bd65b019a2b00191fba9086971409511b",
+    "source-actor-interleaved-stop.ores": "c7488835f34e926dfa4c8766c8917301fe84da09",
+    "source-actor-send-after-stop.ores": "ba046cb355fd16d9b5f6f7b39ace45356ef497db",
+}
+
+def require_canonical_actor_guest_blobs(fixtures):
+    for name, expected_blob in _CANONICAL_ACTOR_GUEST_BLOBS.items():
+        path = fixtures / name
+        assert path.is_file() and not path.is_symlink(), (
+            "source actor guest fixture must be a regular file", name)
+        source = path.read_bytes()
+        assert 0 < len(source) < 16384, ("invalid fixture size", name)
+        marker = b"blob " + str(len(source)).encode("ascii") + b"\\0"
+        actual = hashlib.sha1(marker + source).hexdigest()
+        assert actual == expected_blob, (
+            "portable actor fixture drift; update conformance review first",
+            name, actual, expected_blob)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
@@ -75,6 +99,7 @@ def main():
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
+    require_canonical_actor_guest_blobs(fixtures)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
