@@ -31,22 +31,45 @@ int main() {
         assert(receipt && receipt->outcome.status == ORES_GUEST_OK);
         assert(receipt->outcome.value == i+1);
     }
-    assert(vm.invoke_guest(a, ores_guest_entry, 0) == 1000);
-    assert(vm.invoke_guest(b, ores_guest_entry, 0) == 500);
+    // Direct (non-durable) scalar invocation retains a separate tenant-global
+    // slot, while a durable turn uses its own actor-incarnation slot.
+    assert(vm.invoke_guest(a, ores_guest_entry, 0) == 0);
+    assert(vm.invoke_guest(b, ores_guest_entry, 0) == 0);
+    auto a_read = vm.enqueue_durable(a, a_actor, 7, 1003, 1);
+    auto b_read = vm.enqueue_durable(b, b_actor, 7, 501, 1);
+    assert(vm.try_invoke_durable_guest_result(a, a_read.ticket,
+        ores_guest_entry, 0)->outcome.value == 1000);
+    assert(vm.try_invoke_durable_guest_result(b, b_read.ticket,
+        ores_guest_entry, 0)->outcome.value == 500);
     // Compiler-generated overflow returns a typed failure, not a partially
     // committed state or a stuck durable ticket.
     auto overflow = vm.enqueue_durable(a, a_actor, 7, 1001, 1);
     auto result = vm.try_invoke_durable_guest_result(a, overflow.ticket, ores_guest_entry, INT64_MAX);
     assert(result && result->outcome.status == ORES_GUEST_OVERFLOW);
     assert(vm.durable_snapshot(a).entries == 0);
-    assert(vm.invoke_guest(a, ores_guest_entry, 0) == 1000);
+    auto post_overflow = vm.enqueue_durable(a, a_actor, 7, 1004, 1);
+    assert(vm.try_invoke_durable_guest_result(a, post_overflow.ticket,
+        ores_guest_entry, 0)->outcome.value == 1000);
     // A second lock admits another actor while preserving actor nonreentrancy.
     auto a_actor2 = vm.register_actor(a, 2);
     auto other = vm.enqueue_durable(a, a_actor2, 19, 1002, 1);
     auto other_result = vm.try_invoke_durable_guest_result(a, other.ticket, ores_guest_entry, 1);
-    assert(other_result && other_result->outcome.value == 1001);
-    vm.retire_actor(a, a_actor);
+    assert(other_result && other_result->outcome.value == 1);
+    // Actor 1 and Actor 2 in tenant A have independent source-generated
+    // scalar state even while sharing the compiled function body.
+    auto first_again = vm.enqueue_durable(a, a_actor, 7, 1005, 1);
+    auto second_again = vm.enqueue_durable(a, a_actor2, 19, 1006, 1);
+    assert(vm.try_invoke_durable_guest_result(a, first_again.ticket,
+        ores_guest_entry, 0)->outcome.value == 1000);
+    assert(vm.try_invoke_durable_guest_result(a, second_again.ticket,
+        ores_guest_entry, 0)->outcome.value == 1);
     vm.retire_actor(a, a_actor2);
+    auto restarted = vm.register_actor(a, 2);
+    auto restarted_turn = vm.enqueue_durable(a, restarted, 19, 1007, 1);
+    assert(vm.try_invoke_durable_guest_result(a, restarted_turn.ticket,
+        ores_guest_entry, 0)->outcome.value == 0);
+    vm.retire_actor(a, a_actor);
+    vm.retire_actor(a, restarted);
     vm.retire_actor(b, b_actor);
     vm.begin_shutdown(a); vm.complete_shutdown(a); vm.destroy(a);
     vm.begin_shutdown(b); vm.complete_shutdown(b); vm.destroy(b);
