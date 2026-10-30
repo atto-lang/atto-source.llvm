@@ -116,6 +116,30 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
         ("define inverted struct P as x:int;end\nfnc main():int{"
          "let rows=InvertedArray<P>.with_capacity(2);return rows.get(0,x);}"
          "\nfnc hidden():int{return 1;}", "trailing unsupported inverted code"),
+
+        ("define inverted struct P as x:Pointer<int>; end\n"
+         "fnc main():int{return 0;}", "expected 'int'"),
+        ("define inverted struct P as x:struct{y:int}; end\n"
+         "fnc main():int{return 0;}", "expected 'int'"),
+        ("define inverted struct P as x:int;end\nfnc main():int{"
+         "let rows=InvertedArray<P>.with_capacity(2);rows.push(-9223372036854775809);"
+         "return rows.get(0,x);}", "i64 integer literal overflow"),
+        ("define inverted struct P as x:int;end\nfnc main():int{"
+         "let rows=InvertedArray<P>.with_capacity(2);return rows.get(0,x);} /*",
+         "unterminated inverted block comment"),
+        ("define inverted struct P as x:int;end\nfnc main():int{"
+         "let rows=InvertedArray<P>.with_capacity(2);return rows.get(0,x);} "
+         + "/*" * 129 + "*/" * 129,
+         "inverted block comment too deep"),
+        ("define inverted struct P as x:int;end\nfnc main():int{"
+         "let rows=InvertedArray<P>.with_capacity(2);return rows.get(0,x);} "
+         + " " * 65536,
+         "experimental inverted i64 source exceeds 64 KiB"),
+        ("define inverted struct P as " +
+         "".join(f"f{i}:int;" for i in range(8)) +
+         "end\nfnc main():int{"
+         "let rows=InvertedArray<P>.with_capacity(256);return rows.get(0,f0);}",
+         "inverted row cell budget exceeded"),
     ]
     for idx, (source, expected) in enumerate(negative_sources):
         source_file = temp / f"reject-{idx}.ores"
@@ -125,5 +149,5 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
             raise AssertionError("unsupported inverted source published executable IR")
         if expected not in result.stderr:
             raise AssertionError(f"wrong compiler diagnostic {idx}: {result.stderr!r}")
-    print("PASS: 11 unsupported source programs fail closed with compiler-owned diagnostics")
+    print("PASS: 18 unsupported source programs fail closed with compiler-owned diagnostics")
     print("PASS: checked out-of-bounds guest runtime trap")
