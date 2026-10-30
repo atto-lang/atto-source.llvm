@@ -2706,6 +2706,8 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_epoch_deterministic_drop PROPERTIES TIMEOUT 20)
 
     oreslang_contract_test(reject_native_private_array_mutation class-private-array-mutation-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(reject_native_private_inventory_bypass
+        native-private-inventory-bypass-reject.ores --diagnostic "private class field")
     oreslang_contract_test(reject_native_private_filled_commit class-private-filled-array-commit-reject.ores --diagnostic "private class field")
 
     if(ORE_CLANG)
