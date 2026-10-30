@@ -69,6 +69,7 @@ def inspect_elf(path):
             # so direct consumers cannot treat unknown e_machine as admitted.
             if machine not in MACHINES.values():
                 raise ValueError("unsupported ELF machine architecture")
+            entry = struct.unpack_from("<Q", hdr, 24)[0]
             phoff = struct.unpack_from("<Q", hdr, 32)[0]
             ehsize, phentsize, phnum = struct.unpack_from("<HHH", hdr, 52)
             if ehsize != 64 or phentsize != 56 or not 1 <= phnum <= MAX_PROGRAM_HEADERS:
@@ -79,6 +80,7 @@ def inspect_elf(path):
             phdrs = f.read(phnum * phentsize)
             has_load = False
             has_executable_load = False
+            entry_in_executable_load = False
             interp = None
             for i in range(phnum):
                 p_type, p_flags, p_offset, p_vaddr, _, p_filesz, p_memsz, p_align = struct.unpack_from(
@@ -113,6 +115,14 @@ def inspect_elf(path):
                         raise ValueError("ELF PT_LOAD alignment is not a power of two")
                     if p_align > 1 and (p_vaddr % p_align) != (p_offset % p_align):
                         raise ValueError("ELF PT_LOAD alignment/offset mismatch")
+                    if p_flags & 1:
+                        if p_filesz == 0:
+                            raise ValueError("ELF executable PT_LOAD has no file-backed bytes")
+                        end = p_vaddr + p_filesz
+                        if end > (1 << 64):
+                            raise ValueError("ELF executable PT_LOAD virtual range overflows")
+                        if p_vaddr <= entry < end:
+                            entry_in_executable_load = True
                 if p_type == 3:
                     if interp is not None:
                         raise ValueError("ELF has multiple PT_INTERP segments")
@@ -134,6 +144,8 @@ def inspect_elf(path):
                 raise ValueError("ELF lacks loadable segments")
             if not has_executable_load:
                 raise ValueError("ELF lacks an executable PT_LOAD segment")
+            if not entry_in_executable_load:
+                raise ValueError("ELF entry point is outside file-backed executable PT_LOAD")
             if kind == 3 and interp is None:
                 raise ValueError("ET_DYN without interpreter is not admitted by pilot")
             if interp is not None and not os.path.isfile(interp):
