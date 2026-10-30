@@ -21,10 +21,13 @@ public:
         OresNativeActorRef actor;
         // Weak value, not a retention lease or actor authority.
         std::uint64_t request_context = 0;
+        std::uint64_t request_registry = 0; // generation-scoped table identity
     };
 
-    bool enqueue(OresNativeActorRef actor, std::uint64_t request_context = 0) noexcept {
+    bool enqueue(OresNativeActorRef actor, std::uint64_t request_context = 0,
+                 std::uint64_t request_registry = 0) noexcept {
         if (phase() != Phase::reactor
+                || bool(request_context) != bool(request_registry)
                 || !actor.scheduler_domain
                 || !actor.generation
                 || (state_.load(std::memory_order_relaxed) >> 2)
@@ -37,6 +40,7 @@ public:
         actor_slot_.store(actor.actor_slot, std::memory_order_relaxed);
         actor_generation_.store(actor.generation, std::memory_order_relaxed);
         request_context_.store(request_context, std::memory_order_relaxed);
+        request_registry_.store(request_registry, std::memory_order_relaxed);
         state_.store(
             (generation << 2) | static_cast<unsigned>(Phase::queued),
             std::memory_order_release);
@@ -74,7 +78,8 @@ public:
                 actor_domain_.load(std::memory_order_relaxed),
                 actor_slot_.load(std::memory_order_relaxed),
                 actor_generation_.load(std::memory_order_relaxed)},
-            request_context_.load(std::memory_order_relaxed)};
+            request_context_.load(std::memory_order_relaxed),
+            request_registry_.load(std::memory_order_relaxed)};
     }
 
 private:
@@ -98,7 +103,9 @@ private:
                 || token.actor.generation
                     != actor_generation_.load(std::memory_order_acquire)
                 || token.request_context
-                    != request_context_.load(std::memory_order_acquire))
+                    != request_context_.load(std::memory_order_acquire)
+                || token.request_registry
+                    != request_registry_.load(std::memory_order_acquire))
             return false;
 
         auto expected = expected_state;
@@ -113,5 +120,6 @@ private:
     std::atomic<std::uint64_t> actor_slot_{0};
     std::atomic<std::uint64_t> actor_generation_{0};
     std::atomic<std::uint64_t> request_context_{0};
+    std::atomic<std::uint64_t> request_registry_{0};
 };
 } // namespace oreslang::runtime
