@@ -1362,6 +1362,10 @@ if(BUILD_TESTING)
     # Proven-nonescaping integer-field classes are stack-only and emit no
     # malloc, tracing collector roots, or native heap calls.
     oreslang_contract_test(owned_stack_class owned-stack-class.ores --ir "alloca %Box")
+    # Nonescaping class state passed by exclusive scoped borrow must remain
+    # a direct stack-allocated aggregate, not a heap/GC-backed proxy.
+    oreslang_contract_test(native_owned_inventory_stack_allocation
+        native-owned-inventory-reservation.ores --ir "alloca %Inventory")
     oreslang_contract_test(reject_owned_stack_escape owned-stack-escape.ores --diagnostic "class is non-Copy")
     oreslang_contract_test(reject_owned_stack_unknown_field owned-stack-bad-field.ores --diagnostic "unknown class field")
     oreslang_contract_test(reject_owned_stack_duplicate_field owned-stack-double-field.ores --diagnostic "duplicate class field")
