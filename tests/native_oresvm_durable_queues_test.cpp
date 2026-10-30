@@ -12,6 +12,29 @@ template <typename E, typename F> static void rejects(F&& f) {
     assert(failed);
 }
 
+
+// Native guest boundary race fixture. A host-issued lock must not be released
+// while this synchronous guest is still physically executing.
+static std::atomic<bool> dispatch_entered{false};
+static std::atomic<bool> dispatch_release{false};
+extern "C" std::int32_t blocking_durable_guest(
+        OresIsolateContext*, std::int64_t delta, std::int64_t* result) {
+    dispatch_entered.store(true, std::memory_order_release);
+    while (!dispatch_release.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    *result = delta;
+    return ORES_GUEST_OK;
+}
+
+extern "C" std::int32_t throwing_durable_guest(
+        OresIsolateContext* context, std::int64_t, std::int64_t*) {
+    // An exception after modifying isolate-owned globals must quarantine
+    // the tenant and forbid further durable claims/admissions.
+    const auto written = context->store_i64(context->call_data, 0, 19);
+    if (!written) throw std::runtime_error("guest store failed");
+    throw std::runtime_error("guest exception after partial state write");
+}
+
 int main() {
     OresVM vm;
     IsolateConfig cfg;
@@ -92,4 +115,56 @@ int main() {
     second_root.retire_actor(second_iso, second_actor);
     first_root.begin_shutdown(first_iso); first_root.complete_shutdown(first_iso); first_root.destroy(first_iso);
     second_root.begin_shutdown(second_iso); second_root.complete_shutdown(second_iso); second_root.destroy(second_iso);
+
+    OresVM threaded;
+    auto t_iso=threaded.create_isolate({"threaded",1024,2});
+    threaded.start(t_iso);
+    auto t_actor=threaded.register_actor(t_iso,1);
+    auto t_work=threaded.enqueue_durable(t_iso,t_actor,5,1,1);
+    std::atomic<bool> completed{false};
+    std::thread worker([&] {
+        auto receipt=threaded.try_invoke_durable_guest_result(
+            t_iso,t_work.ticket,blocking_durable_guest,42);
+        assert(receipt && receipt->outcome.status==ORES_GUEST_OK);
+        assert(receipt->outcome.value==42);
+        completed.store(true,std::memory_order_release);
+    });
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while (!dispatch_entered.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now()<deadline)
+        std::this_thread::yield();
+    // Ensure the worker cannot remain blocked if assertion throws/aborts:
+    // release before the final join even if the admission check fails.
+    const bool did_enter=dispatch_entered.load(std::memory_order_acquire);
+    if (did_enter) {
+        rejects<std::logic_error>([&] { threaded.finish_durable(t_iso,t_work.ticket); });
+        rejects<std::logic_error>([&] { threaded.retire_actor(t_iso,t_actor); });
+        threaded.begin_shutdown(t_iso);
+        rejects<std::logic_error>([&] { threaded.complete_shutdown(t_iso); });
+    }
+    dispatch_release.store(true,std::memory_order_release);
+    worker.join();
+    assert(did_enter && completed.load(std::memory_order_acquire));
+    assert(threaded.durable_snapshot(t_iso).entries==0);
+    threaded.retire_actor(t_iso,t_actor);
+    threaded.complete_shutdown(t_iso);
+    threaded.destroy(t_iso);
+
+    OresVM quarantined;
+    auto q_iso=quarantined.create_isolate({"quarantined",1024,2});
+    quarantined.start(q_iso);
+    auto q_actor=quarantined.register_actor(q_iso,1);
+    auto q_work=quarantined.enqueue_durable(q_iso,q_actor,6,1,1);
+    rejects<std::runtime_error>([&] {
+        (void)quarantined.try_invoke_durable_guest_result(
+            q_iso,q_work.ticket,throwing_durable_guest,0);
+    });
+    assert(quarantined.snapshot(q_iso).phase==IsolatePhase::Quiescing);
+    assert(quarantined.durable_snapshot(q_iso).entries==0);
+    rejects<std::logic_error>([&] {
+        (void)quarantined.enqueue_durable(q_iso,q_actor,6,2,1);
+    });
+    quarantined.retire_actor(q_iso,q_actor);
+    quarantined.complete_shutdown(q_iso);
+    quarantined.destroy(q_iso);
 }
