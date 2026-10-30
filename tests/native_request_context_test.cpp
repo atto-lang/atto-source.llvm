@@ -393,6 +393,22 @@ int main(){
         CHECK(s.bad==0 && s.observed==1);
         s.end();
     }
+    // Cancellation before enqueue must deny admission, roll back the
+    // attached exchange and release context/body storage after pin drain.
+    {
+        Suite s;s.begin(1);
+        CHECK(s.contexts.close(s.requests[0],s.actors[0]));
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.pins[0])
+              ==ORES_NATIVE_SEND_INVALID_REF);
+        CHECK(s.exchanges[0].phase()==NativeHttpExchange::Phase::reactor);
+        CHECK(s.buffers.close(s.bodies[0],1));
+        s.pins[0].reset();
+        CHECK(s.contexts.available()==16 && s.buffers.available()==16);
+        CHECK(ores_native_actor_scheduler_stop(s.scheduler,s.actors[0]));
+        ores_native_actor_scheduler_retire(s.scheduler);
+        CHECK(ores_native_actor_scheduler_try_destroy(s.scheduler));
+        s.scheduler=nullptr;
+    }
     // Stopped actor rejects a request and likewise rolls it back safely.
     {
         Suite s;s.begin(1);
