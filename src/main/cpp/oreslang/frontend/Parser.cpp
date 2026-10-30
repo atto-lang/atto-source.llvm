@@ -2325,41 +2325,23 @@ private:
                     } else if (accept("Future")) {
                         require("<");
                         declared_type.kind = SourceType::Kind::Future;
-                        if (accept("Future")) {
-                            require("<");
-                            if (accept("int")) {
-                                // The native scalar backend has no general nested
-                                // Future representation yet, but the source type is
-                                // still semantically Future<Future<int>>. Never
-                                // canonicalize it to Future<int> as a parser side
-                                // effect or host-runtime convenience.
-                            } else {
-                                (void)identifier();
-                            }
-                            require(">");
-                            require(">");
+                        // Reject on the wrapper identity itself, before parsing
+                        // the inner payload. This keeps Future<Future<T>>,
+                        // Future<Future<Option<T>>> and deeper shapes on the
+                        // same semantic diagnostic instead of falling back to
+                        // incidental generic punctuation errors.
+                        if (token_.text == "Future")
                             fail("nested Future remains nested; implicit Future flatten is forbidden; native nested Future continuation lowering is unavailable");
-                        }
                         if (accept("int")) declared_type.argument = "int";
                         else declared_type.argument = identifier();
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
-                        if (token_.text == "Option") {
-                            Lexer look = lexer_;
-                            const Token open = look.next();
-                            const Token nested = look.next();
-                            if (open.text == "<" && nested.text == "Option") {
-                                require("Option");
-                                require("<");
-                                require("Option");
-                                require("<");
-                                if (!accept("int")) (void)identifier();
-                                require(">");
-                                require(">");
-                                fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
-                            }
-                        }
+                        // Same rule for Option: the outer/inner wrapper pair is
+                        // sufficient to establish the forbidden implicit
+                        // flatten case; do not parse or normalize the payload.
+                        if (token_.text == "Option" && peek_next().text == "<")
+                            fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
                         if (token_.text == "Entry")
                             reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)
