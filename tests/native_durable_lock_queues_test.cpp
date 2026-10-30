@@ -21,6 +21,12 @@ int main() {
     auto different=a.enqueue(aa,9,3,3);
     auto b1=b.enqueue(aa,7,1,3);
     assert(a1.lock_head && !a2.lock_head && different.lock_head && b1.lock_head);
+    // Equal numeric generation/actor/lock/operation/sequence in two VM roots
+    // must not authorize a ticket against the wrong queue instance.
+    DurableLockQueues another_vm_same_generation(11, {2, 5, 4, 20});
+    auto forged_equal = another_vm_same_generation.enqueue(aa, 10, 1, 3);
+    rejects<std::logic_error>([&]{ a.claim(forged_equal.ticket); });
+    rejects<std::logic_error>([&]{ a.cancel_unstarted_head(forged_equal.ticket); });
     rejects<std::logic_error>([&]{a.finish(a1.ticket);});
     rejects<std::logic_error>([&]{a.claim(b1.ticket);});
     rejects<std::logic_error>([&]{a.claim(a2.ticket);});

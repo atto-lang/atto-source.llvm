@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -71,6 +72,7 @@ class IsolateVM final {
     std::mutex guest_turn_mutex;
     std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> guest_globals{};
     DurableLockQueues durable_queues;
+    std::unordered_set<std::uint64_t> active_durable_dispatches; // host-only physical pin
 };
 
 } // namespace oreslang::runtime

@@ -1,6 +1,9 @@
 #include "oreslang/runtime/OresVM.hpp"
 #include <cassert>
 #include <stdexcept>
+#include <atomic>
+#include <thread>
+#include <chrono>
 using namespace oreslang::runtime;
 
 template <typename E, typename F> static void rejects(F&& f) {
@@ -70,4 +73,23 @@ int main() {
     vm.begin_shutdown(b);
     vm.complete_shutdown(b);
     vm.destroy(b);
+
+    // Two roots both start at isolate-generation 1: never accept each
+    // other's matching numeric ticket, including cancel and claim.
+    OresVM first_root, second_root;
+    auto first_iso = first_root.create_isolate({"tenant", 1024, 2});
+    auto second_iso = second_root.create_isolate({"tenant", 1024, 2});
+    first_root.start(first_iso); second_root.start(second_iso);
+    auto first_actor=first_root.register_actor(first_iso, 1);
+    auto second_actor=second_root.register_actor(second_iso, 1);
+    auto first_ticket=first_root.enqueue_durable(first_iso, first_actor, 7, 1, 1);
+    auto second_ticket=second_root.enqueue_durable(second_iso, second_actor, 7, 1, 1);
+    rejects<std::logic_error>([&] { first_root.claim_durable(first_iso, second_ticket.ticket); });
+    rejects<std::logic_error>([&] { first_root.cancel_durable_unstarted_head(first_iso, second_ticket.ticket); });
+    first_root.cancel_durable_unstarted_head(first_iso, first_ticket.ticket);
+    second_root.cancel_durable_unstarted_head(second_iso, second_ticket.ticket);
+    first_root.retire_actor(first_iso, first_actor);
+    second_root.retire_actor(second_iso, second_actor);
+    first_root.begin_shutdown(first_iso); first_root.complete_shutdown(first_iso); first_root.destroy(first_iso);
+    second_root.begin_shutdown(second_iso); second_root.complete_shutdown(second_iso); second_root.destroy(second_iso);
 }

@@ -4552,6 +4552,17 @@ if(BUILD_TESTING)
             target_link_libraries(oreslang-native-oresvm-source-guest-test PRIVATE Threads::Threads)
             target_compile_options(oreslang-native-oresvm-source-guest-test PRIVATE
                 $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+            add_executable(oreslang-native-oresvm-source-durable-dispatch-test
+                tests/native_oresvm_source_durable_dispatch_test.cpp "${ORES_ISOLATE_SOURCE_OBJ}")
+            target_include_directories(oreslang-native-oresvm-source-durable-dispatch-test PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_compile_features(oreslang-native-oresvm-source-durable-dispatch-test PRIVATE cxx_std_17)
+            target_link_libraries(oreslang-native-oresvm-source-durable-dispatch-test PRIVATE Threads::Threads)
+            target_compile_options(oreslang-native-oresvm-source-durable-dispatch-test PRIVATE
+                $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+            add_test(NAME native_oresvm_compiled_ores_durable_dispatch
+                COMMAND oreslang-native-oresvm-source-durable-dispatch-test)
+            set_tests_properties(native_oresvm_compiled_ores_durable_dispatch PROPERTIES TIMEOUT 40)
             add_test(NAME native_oresvm_source_llvm_aot_context
                 COMMAND oreslang-native-oresvm-source-guest-test)
             set_tests_properties(native_oresvm_source_llvm_aot_context PROPERTIES TIMEOUT 30)

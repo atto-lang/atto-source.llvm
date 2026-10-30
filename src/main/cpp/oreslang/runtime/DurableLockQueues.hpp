@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -38,11 +39,24 @@ public:
         std::uint64_t sequence = 0;
         std::uint64_t operation_id = 0;
         ActorKey actor{};
+
+        // A ticket is meaningful only to the exact queue instance that issued
+        // it, even across distinct OresVM roots with equal numeric generations.
+        // It is NOT a remote/network authentication capability.
         bool operator==(const Ticket& other) const noexcept {
-            return isolate_generation == other.isolate_generation &&
+            return issuer_ == other.issuer_ &&
+                   isolate_generation == other.isolate_generation &&
                    lock_id == other.lock_id && sequence == other.sequence &&
                    operation_id == other.operation_id && actor == other.actor;
         }
+    private:
+        friend class DurableLockQueues;
+        Ticket(std::uint64_t gen, std::uint64_t lock, std::uint64_t seq,
+               std::uint64_t operation, ActorKey owner,
+               std::shared_ptr<const void> issuer)
+            : isolate_generation(gen), lock_id(lock), sequence(seq),
+              operation_id(operation), actor(owner), issuer_(std::move(issuer)) {}
+        std::shared_ptr<const void> issuer_;
     };
     struct Admission { Ticket ticket; bool lock_head; };
     struct Snapshot {
@@ -88,7 +102,7 @@ public:
             auto pair = locks_.try_emplace(lock_id);
             it = pair.first;
             try {
-                Ticket ticket{generation_, lock_id, next_sequence_, operation_id, actor};
+                Ticket ticket{generation_, lock_id, next_sequence_, operation_id, actor, issuer_};
                 const bool head = it->second.empty();
                 it->second.push_back(Entry{ticket, bytes, false});
                 ++next_sequence_;
@@ -148,7 +162,7 @@ public:
     void cancel_waiter(Ticket ticket) {
         std::lock_guard<std::mutex> guard(mu_);
         auto it = locks_.find(ticket.lock_id);
-        if (ticket.isolate_generation != generation_ || it == locks_.end())
+        if (ticket.isolate_generation != generation_ || ticket.issuer_ != issuer_ || it == locks_.end())
             throw std::logic_error("foreign or stale queued ticket");
         // No empty entries are retained in locks_.
         for (auto pos = std::next(it->second.begin()); pos != it->second.end(); ++pos) {
@@ -209,7 +223,7 @@ private:
     using LockMap = std::unordered_map<std::uint64_t, std::deque<Entry>>;
     LockMap::iterator checked_front(const Ticket& ticket) {
         auto it = locks_.find(ticket.lock_id);
-        if (ticket.isolate_generation != generation_ || it == locks_.end() ||
+        if (ticket.isolate_generation != generation_ || ticket.issuer_ != issuer_ || it == locks_.end() ||
             it->second.empty() || !(it->second.front().ticket == ticket))
             throw std::logic_error("ticket is not this isolate's FIFO head");
         return it;
@@ -222,6 +236,8 @@ private:
         payload_bytes_ -= entry.payload_bytes;
     }
     const std::uint64_t generation_;
+    // Non-persistent, process-local identity. Prevent equal-number cross-VM tickets.
+    const std::shared_ptr<const void> issuer_ = std::make_shared<const int>(0);
     const Limits limits_;
     mutable std::mutex mu_;
     LockMap locks_;

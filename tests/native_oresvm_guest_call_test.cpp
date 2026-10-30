@@ -59,8 +59,23 @@ int main() {
     });
     for (auto& worker : parallel) worker.join();
     assert(vm.invoke_guest(b, guest_sum, 0) == 1019);
-    assert(rejects([&]{ vm.invoke_guest(a, guest_throw, 0); }));
-    assert(vm.snapshot(a).active_guest_calls == 0);
+    // Native exceptions are not ordinary returned guest error codes.
+    // Quarantine the possibly partially-mutated tenant and require a
+    // complete stop/destroy plus new generation before state is usable.
+    auto fault = vm.create_isolate({"fault-tenant", 1024, 1});
+    vm.start(fault);
+    assert(vm.invoke_guest(fault, guest_sum, 9) == 9);
+    assert(rejects([&]{ vm.invoke_guest(fault, guest_throw, 0); }));
+    assert(vm.snapshot(fault).active_guest_calls == 0);
+    assert(vm.snapshot(fault).phase == IsolatePhase::Quiescing);
+    assert(rejects([&]{ vm.invoke_guest(fault, guest_sum, 1); }));
+    vm.complete_shutdown(fault);
+    vm.destroy(fault);
+    auto fault2 = vm.create_isolate({"fault-tenant", 1024, 1});
+    vm.start(fault2);
+    assert(vm.invoke_guest(fault2, guest_sum, 1) == 1);
+    assert(rejects([&]{ vm.snapshot(fault); }));
+    vm.begin_shutdown(fault2); vm.complete_shutdown(fault2); vm.destroy(fault2);
     assert(rejects([&]{ vm.invoke_guest(a, nullptr, 0); }));
     std::thread worker([&] { assert(vm.invoke_guest(a, guest_wait, 3) == 14); });
     while(!entered.load(std::memory_order_acquire)) std::this_thread::yield();

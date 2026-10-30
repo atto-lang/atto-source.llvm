@@ -242,7 +242,22 @@ public:
         OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
                               state->generation, &call, &guest_load_i64, &guest_store_i64};
         std::int64_t value = 0;
-        const auto status = guest(&ctx, input, &value);
+        std::int32_t status = ORES_GUEST_FAILED;
+        try {
+            status = guest(&ctx, input, &value);
+        } catch (...) {
+            // A thrown native guest may have partially changed isolate globals.
+            // Quarantine the tenant, preserve execution pins, and prevent future
+            // durable claims. Trusted-only; not a memory safety sandbox.
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                state->durable_queues.quiesce();
+                if (state->phase == IsolatePhase::Running)
+                    state->phase = IsolatePhase::Quiescing;
+            }
+            throw;
+        }
+        // Typed guest failures (e.g. overflow) are not native exceptions.
         if (status != ORES_GUEST_OK) return {status, 0};
         return {ORES_GUEST_OK, value};
     }
@@ -284,7 +299,55 @@ public:
         if (state->phase != IsolatePhase::Running &&
             state->phase != IsolatePhase::Quiescing)
             throw std::logic_error("cannot finish a durable turn in this phase");
+        if (state->active_durable_dispatches.count(ticket.sequence))
+            throw std::logic_error("cannot finish physically executing durable guest");
         return state->durable_queues.finish(ticket);
+    }
+
+    struct DurableGuestReceipt {
+        GuestOutcome outcome;
+        std::optional<DurableLockQueues::Ticket> next_head;
+    };
+
+    // Experimental synchronous bridge: the source compiler generates the
+    // versioned ores_guest_entry from a pure .ores tenant_step function.
+    // Claims a host-issued actor ticket, executes that native guest to physical
+    // completion, then releases the lock. This is NOT actor source lowering,
+    // continuation scheduling, persistent data, or independent guest heaps.
+    std::optional<DurableGuestReceipt> try_invoke_durable_guest_result(
+            const IsolateHandle& handle, DurableLockQueues::Ticket ticket,
+            OresGuestEntry guest, std::int64_t input) {
+        if (!guest) throw std::invalid_argument("guest entry is null");
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto state = checked(handle);
+            if (state->phase != IsolatePhase::Running)
+                throw std::logic_error("durable execution admission closed");
+            if (!state->durable_queues.claim(ticket)) return std::nullopt;
+            try {
+                // This pin is not a scheduler-owned async lifetime.
+                state->active_durable_dispatches.insert(ticket.sequence);
+            } catch (...) {
+                state->durable_queues.finish(ticket); // no guest code started
+                throw;
+            }
+        }
+        // invoke_guest_result is synchronous and pins physical native execution
+        // until return/exception. Preserve the original guest failure where
+        // possible; the host cannot assert a release while still executing.
+        auto retire = [&]() {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto state = checked(handle);
+            state->active_durable_dispatches.erase(ticket.sequence);
+            return state->durable_queues.finish(ticket);
+        };
+        try {
+            const auto outcome = invoke_guest_result(handle, guest, input);
+            return DurableGuestReceipt{outcome, retire()};
+        } catch (...) {
+            retire(); // synchronous execution has exited via exception
+            throw;
+        }
     }
 
     std::optional<DurableLockQueues::Ticket> cancel_durable_unstarted_head(
