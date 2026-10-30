@@ -1,5 +1,7 @@
 # Carrier Grade Linux (CGL) / PREEMPT_RT: native pilot
 
+> **CGL Level 2 evidence:** [timer-due-to-actor-user-start contract](CGL_DISPATCH_EVIDENCE_V1.md). A timer firing on schedule is *not* a user-code start deadline pass. The current helper is offline-only; actual actor instrumentation, target-host timing and schedulability proof remain outstanding.
+
 Status: **draft compatibility pilot**, NOT a CGL-certified, PREEMPT_RT-qualified, or hard-real-time actor runtime.
 
 ## Scope of this PR
