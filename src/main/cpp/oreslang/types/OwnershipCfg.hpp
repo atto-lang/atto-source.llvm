@@ -36,6 +36,9 @@ struct RegionLoanProvenance {
             execution_slot == rhs.execution_slot &&
             execution_generation == rhs.execution_generation;
     }
+    bool operator!=(const RegionLoanProvenance& rhs) const {
+        return !(*this == rhs);
+    }
 };
 
 inline bool valid_region_loan_provenance(const RegionLoanProvenance& value) {
