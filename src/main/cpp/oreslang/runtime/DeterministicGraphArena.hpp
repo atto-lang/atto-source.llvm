@@ -18,8 +18,9 @@ namespace oreslang::runtime {
 //
 // All calls must be serialized on the owning actor's execution lane. Read
 // leases expose const T only; with_mut requires no live lease and disallows
-// nested arena access during the mutation callback. A lease
-// blocks deletion/retirement even across a carrier migration; the runtime must
+// nested arena access during the mutation callback. A read lease protects
+// its node, while a separate region pin delays domain teardown without
+// blocking ordinary writes. Both block retirement until released; the runtime must
 // ensure all suspended continuations and FFI leases have ended before teardown.
 //
 // This is an allocation-bounded C++ substrate, NOT source-to-native Oreslang
@@ -56,6 +57,7 @@ private:
     const std::uint64_t domain_;
     std::size_t size_ = 0;
     std::size_t leases_ = 0;
+    std::size_t lifetime_pins_ = 0; // region lifetime, not read authority
     bool closed_ = false;
     bool retiring_ = false;
     bool mutating_ = false; // exclusive stack-only write capability
@@ -103,6 +105,28 @@ public:
         const T& operator*() const noexcept { return *value_; }
     };
 
+    // The scheduler retains this stack-only/move-only lifetime hold in an
+    // admitted Task/FFI continuation frame until physical completion. It does
+    // not grant read/write authority to a node; a separate borrow is required.
+    // All acquisition and release run on the owning serialized execution lane.
+    class RegionPin final {
+        DeterministicGraphArena* owner_ = nullptr;
+        explicit RegionPin(DeterministicGraphArena& owner) noexcept
+            : owner_(&owner) { ++owner.lifetime_pins_; }
+        friend class DeterministicGraphArena;
+    public:
+        RegionPin(const RegionPin&) = delete;
+        RegionPin& operator=(const RegionPin&) = delete;
+        RegionPin(RegionPin&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)) {}
+        RegionPin& operator=(RegionPin&&) = delete;
+        ~RegionPin() noexcept { reset(); }
+        void reset() noexcept {
+            if (auto* owner = std::exchange(owner_, nullptr))
+                --owner->lifetime_pins_;
+        }
+    };
+
     DeterministicGraphArena() noexcept : domain_(unique_domain()) {}
     DeterministicGraphArena(const DeterministicGraphArena&) = delete;
     DeterministicGraphArena& operator=(const DeterministicGraphArena&) = delete;
@@ -116,12 +140,20 @@ public:
 
     std::size_t size() const noexcept { return size_; }
     std::size_t active_leases() const noexcept { return leases_; }
+    std::size_t active_lifetime_pins() const noexcept { return lifetime_pins_; }
     bool closed() const noexcept { return closed_; }
     bool retirement_requested() const noexcept { return retire_requested_; }
     // Stop new borrows and mutations immediately. Existing loans are still
     // valid until release; close() must retry after actual quiescence.
     // A cancellation request is not itself a release/acknowledgement.
     void begin_retire() noexcept { retire_requested_ = true; }
+
+    std::optional<RegionPin> hold_region() noexcept {
+        if (closed_ || retiring_ || mutating_ || constructing_
+            || retire_requested_ || lifetime_pins_ == std::numeric_limits<std::size_t>::max())
+            return std::nullopt;
+        return std::optional<RegionPin>(RegionPin(*this));
+    }
 
     template<class... Args>
     std::optional<Handle> emplace(Args&&... args) {
@@ -224,7 +256,8 @@ public:
     // lease count enforces one necessary condition, not the full scheduler proof.
     bool close() noexcept {
         if (closed_) return true;
-        if (retiring_ || mutating_ || constructing_ || leases_ != 0) return false;
+        if (retiring_ || mutating_ || constructing_ || leases_ != 0
+            || lifetime_pins_ != 0) return false;
         retiring_ = true;
         // Reverse slot order gives deterministic teardown independent of
         // cycles in the non-owning adjacency graph.
