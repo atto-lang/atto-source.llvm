@@ -149,6 +149,25 @@ inline PackageNamespaceGraph link_package_namespaces(
                 if (!local.task_await_name.empty() || !local.future_await_name.empty())
                     throw std::invalid_argument("native namespace suspension export requires checked ABI lowering");
             }
+            // The scalar signature alone also cannot certify a function's
+            // activation frame or local ownership. The experimental scalar
+            // loop has resumable state; owned arrays, nominal/record views,
+            // constructor/move metadata and unresolved aliases need checked
+            // cross-unit lifetime and representation lowering.
+            if (fn.scalar_while)
+                throw std::invalid_argument("native namespace scalar loop frame requires checked ABI lowering");
+            for (const auto& local : fn.locals) {
+                if (local.heap_owned || local.int_array || local.record_view
+                        || !local.class_name.empty() || local.new_class || local.move_class
+                        || !local.move_source.empty() || local.field_mutable
+                        || !local.array_record_class.empty()
+                        || !local.constructor_arguments.empty()
+                        || !local.pending_type_alias.empty() || !local.sum_type.empty()
+                        || (local.scalar_type != ScalarType::I64 && local.scalar_type != ScalarType::Bool)
+                        || (local.array_element_type != ScalarType::I64
+                            && local.array_element_type != ScalarType::Bool))
+                    throw std::invalid_argument("native namespace owned/nominal local requires checked lowering");
+            }
             // A (name, arity) inventory has no effect row, actor capability
             // or exception/cleanup ABI. Reject these unlowered boundaries
             // rather than silently exporting an apparently pure scalar call.

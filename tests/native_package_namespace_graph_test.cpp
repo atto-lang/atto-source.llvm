@@ -312,6 +312,71 @@ int main() {
         fn.caught_throw_defers.emplace_back();
     }, "actor/exception effects");
 
+    // 14. A scalar public signature cannot erase a resumable loop frame or
+    // owned/nominal local representations that require checked lifetime ABI.
+    // Ordinary mutable scalar/bool locals remain admissible in the inventory.
+    Program scalar_local = make_source("a", "scalar_local");
+    scalar_local.functions.front().locals.emplace_back();
+    scalar_local.functions.front().locals.back().scalar_type = ScalarType::Bool;
+    scalar_local.functions.front().locals.back().owner_mutable = true;
+    scalar_local.functions.front().locals.back().assignable = true;
+    another = units;
+    another.push_back({"foo/scalar_local", "foo@1", &scalar_local});
+    const auto scalar_local_graph = link_package_namespaces(another, pins, {request});
+    REQUIRE(scalar_local_graph.namespaces.at({"foo@1", "a"}).exports.size() == 4);
+
+    reject_signature("scalar_loop_export", [](Function& fn) {
+        fn.scalar_while = std::make_unique<ScalarWhileLoop>();
+    }, "scalar loop frame");
+    reject_signature("owned_heap_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().heap_owned = true;
+    }, "owned/nominal local");
+    reject_signature("owned_array_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().int_array = true;
+    }, "owned/nominal local");
+    reject_signature("record_view_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().record_view = true;
+    }, "owned/nominal local");
+    reject_signature("nominal_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().class_name = "Record";
+    }, "owned/nominal local");
+    reject_signature("constructor_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().new_class = true;
+    }, "owned/nominal local");
+    reject_signature("move_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().move_class = true;
+    }, "owned/nominal local");
+    reject_signature("constructor_args_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().constructor_arguments.emplace_back(std::make_unique<Expression>());
+    }, "owned/nominal local");
+    reject_signature("alias_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().pending_type_alias = "Alias";
+    }, "owned/nominal local");
+    reject_signature("sum_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().sum_type = "OptionInt";
+    }, "owned/nominal local");
+    reject_signature("string_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().scalar_type = ScalarType::String;
+    }, "owned/nominal local");
+    reject_signature("string_array_element_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().array_element_type = ScalarType::String;
+    }, "owned/nominal local");
+    reject_signature("invalid_scalar_local_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().scalar_type = static_cast<ScalarType>(255);
+    }, "owned/nominal local");
+
     // Private internal implementation remains invisible and is not rejected.
     Program private_internal = make_source("a", "native_internal_helper", false);
     private_internal.functions.front().native_internal = true;
@@ -320,5 +385,5 @@ int main() {
     const auto internal_graph = link_package_namespaces(internal_units, pins, {request});
     REQUIRE(internal_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
-    std::cout << "native package namespace source-only graph: 53/53 cases passed\n";
+    std::cout << "native package namespace source-only graph: 67/67 cases passed\n";
 }
