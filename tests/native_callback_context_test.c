@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void check_impl(int ok, const char* expression, int line) {
     if (!ok) {
@@ -75,6 +76,19 @@ int main(void) {
     check(callback.source_execution_id.execution == 41);
     check(callback.boundary == ORES_CALLBACK_BOUNDARY_IO);
 
+    OresNativeCallbackContext callback_before_overwrite = callback;
+    check(!ores_native_callback_context_capture(
+        executions,
+        continuations,
+        execution,
+        continuation,
+        ORES_CALLBACK_BOUNDARY_TIMER,
+        &callback));
+    check(memcmp(
+        &callback,
+        &callback_before_overwrite,
+        sizeof(callback)) == 0);
+
     check(ores_native_continuation_store_release(continuations, continuation));
     check(ores_native_execution_context_store_release(executions, execution));
     check(ores_native_execution_context_store_live(executions) == 1);
@@ -122,9 +136,12 @@ int main(void) {
     check(ores_native_execution_context_store_live(executions) == 0);
     check(ores_native_continuation_store_live(continuations) == 0);
 
-    OresNativeCallbackProvenance stale = {0};
+    OresNativeCallbackProvenance stale;
+    memset(&stale, 0xa5, sizeof(stale));
     check(!ores_native_callback_context_snapshot(
         executions, continuations, &stale_copy, &stale));
+    OresNativeCallbackProvenance zero_provenance = {0};
+    check(memcmp(&stale, &zero_provenance, sizeof(stale)) == 0);
     OresNativeCallbackLogicalTraceResult stale_trace = {0};
     check(!ores_native_logical_trace_snapshot_callback(
         executions,
@@ -153,6 +170,11 @@ int main(void) {
         (OresNativeContinuationHandle){0, 0},
         (OresNativeCallbackBoundary)99,
         &invalid));
+
+    OresNativeCallbackContext forged_empty = {0};
+    forged_empty.boundary = ORES_CALLBACK_BOUNDARY_HOST_CALLBACK;
+    check(!ores_native_callback_context_release(
+        executions, continuations, &forged_empty));
 
     check(ores_native_continuation_store_close(continuations));
     check(ores_native_execution_context_store_close(executions));
