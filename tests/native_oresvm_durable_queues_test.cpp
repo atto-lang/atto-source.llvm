@@ -35,6 +35,20 @@ extern "C" std::int32_t throwing_durable_guest(
     throw std::runtime_error("guest exception after partial state write");
 }
 
+extern "C" std::int32_t actor_scalar_guest(
+        OresIsolateContext* ctx, std::int64_t delta, std::int64_t* output) {
+    if (!ctx || !output || ctx->abi_version != ORES_ISOLATE_ABI_VERSION ||
+        ctx->slot_count != ORES_ISOLATE_I64_SLOTS) return ORES_GUEST_BAD_CONTEXT;
+    std::int64_t old = 0;
+    if (ctx->load_i64(ctx->call_data, 0, &old) != 1) return ORES_GUEST_LOAD_DENIED;
+    if ((delta > 0 && old > INT64_MAX - delta) ||
+        (delta < 0 && old < INT64_MIN - delta)) return ORES_GUEST_OVERFLOW;
+    const auto next = old + delta;
+    if (ctx->store_i64(ctx->call_data, 0, next) != 1) return ORES_GUEST_STORE_DENIED;
+    *output = next;
+    return ORES_GUEST_OK;
+}
+
 int main() {
     OresVM vm;
     IsolateConfig cfg;
@@ -149,6 +163,39 @@ int main() {
     threaded.retire_actor(t_iso,t_actor);
     threaded.complete_shutdown(t_iso);
     threaded.destroy(t_iso);
+
+    // Host-only actor state parity: two actors in one tenant must never
+    // share source-generated slot-zero state, even across different lock IDs.
+    OresVM scalar_vm;
+    auto scalar_tenant = scalar_vm.create_isolate({"actor-scalars", 1024, 3});
+    scalar_vm.start(scalar_tenant);
+    auto first = scalar_vm.register_actor(scalar_tenant, 1);
+    auto second = scalar_vm.register_actor(scalar_tenant, 2);
+    auto turn1 = scalar_vm.enqueue_durable(scalar_tenant, first, 7, 1, 1);
+    auto turn2 = scalar_vm.enqueue_durable(scalar_tenant, second, 19, 2, 1);
+    auto first_result = scalar_vm.try_invoke_durable_guest_result(
+        scalar_tenant, turn1.ticket, actor_scalar_guest, 9);
+    auto second_result = scalar_vm.try_invoke_durable_guest_result(
+        scalar_tenant, turn2.ticket, actor_scalar_guest, 2);
+    assert(first_result && first_result->outcome.value == 9);
+    assert(second_result && second_result->outcome.value == 2);
+    auto read_first = scalar_vm.enqueue_durable(scalar_tenant, first, 7, 3, 1);
+    auto read_second = scalar_vm.enqueue_durable(scalar_tenant, second, 19, 4, 1);
+    assert(scalar_vm.try_invoke_durable_guest_result(scalar_tenant,
+        read_first.ticket, actor_scalar_guest, 0)->outcome.value == 9);
+    assert(scalar_vm.try_invoke_durable_guest_result(scalar_tenant,
+        read_second.ticket, actor_scalar_guest, 0)->outcome.value == 2);
+    assert(scalar_vm.invoke_guest(scalar_tenant, actor_scalar_guest, 0) == 0);
+    scalar_vm.retire_actor(scalar_tenant, second);
+    auto second_again = scalar_vm.register_actor(scalar_tenant, 2);
+    auto new_turn = scalar_vm.enqueue_durable(scalar_tenant, second_again, 19, 5, 1);
+    assert(scalar_vm.try_invoke_durable_guest_result(scalar_tenant,
+        new_turn.ticket, actor_scalar_guest, 0)->outcome.value == 0);
+    scalar_vm.retire_actor(scalar_tenant, second_again);
+    scalar_vm.retire_actor(scalar_tenant, first);
+    scalar_vm.begin_shutdown(scalar_tenant);
+    scalar_vm.complete_shutdown(scalar_tenant);
+    scalar_vm.destroy(scalar_tenant);
 
     OresVM quarantined;
     auto q_iso=quarantined.create_isolate({"quarantined",1024,2});
