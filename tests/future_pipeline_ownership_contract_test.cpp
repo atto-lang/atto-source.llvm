@@ -153,28 +153,23 @@ int main() {
             true));
     }, "output requires Send");
 
-    // Flatten exactly one freshly-created checked Future.
-    auto flattened = plan(
+    // A value-pipeline stage is not an explicit flatten operation. Even a
+    // fresh checked child Future must preserve the wrapper and therefore cannot
+    // be admitted by this scalar pipeline plan.
+    auto implicit_flatten = plan(
         9,
         PipelineInputOwnership::ConsumedUpstreamOwnedPayload,
         scalar(),
         scalar(),
         true);
-    flattened.flattens_future = true;
-    flattened.produced_future_ownership =
+    implicit_flatten.flattens_future = true;
+    implicit_flatten.produced_future_ownership =
         PipelineStageFutureOwnership::OwnedStageResult;
-    flattened.produced_future_provenance =
+    implicit_flatten.produced_future_provenance =
         PipelineStageFutureProvenance::FreshCheckedProducer;
-    validate_future_pipeline_plan(flattened);
-
-    auto forwarded = flattened;
-    forwarded.declaration_identity = 10;
-    forwarded.pipeline_node_identity = 10010;
-    forwarded.produced_future_provenance =
-        PipelineStageFutureProvenance::BorrowedOrForwarded;
     rejected([&] {
-        validate_future_pipeline_plan(forwarded);
-    }, "fresh checked stage-created Future");
+        validate_future_pipeline_plan(implicit_flatten);
+    }, "implicit Future pipeline flattening is forbidden");
 
     auto scalar_claims_future = plan(
         11,
@@ -188,7 +183,7 @@ int main() {
         PipelineStageFutureProvenance::FreshCheckedProducer;
     rejected([&] {
         validate_future_pipeline_plan(scalar_claims_future);
-    }, "scalar Future pipeline stage cannot own");
+    }, "non-flattening Future pipeline stage cannot own");
 
     // Unknown upstream effect provenance survives both rt take and later edges.
     const FunctionEffects none{};
