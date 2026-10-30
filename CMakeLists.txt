@@ -1763,6 +1763,23 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_ledger_authenticated_scheduler_bridge
         PROPERTIES TIMEOUT 25)
 
+    # Real scheduler + ledger STOP integration: suspended A's retained DATA
+    # credit survives until an authenticated actor-owned cleanup turn finishes.
+    add_executable(oreslang-actor-ledger-scheduler-stop-cleanup-test
+        tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_ledger_scheduler_stop_retained_cleanup
+        COMMAND oreslang-actor-ledger-scheduler-stop-cleanup-test)
+    set_tests_properties(native_actor_ledger_scheduler_stop_retained_cleanup
+        PROPERTIES TIMEOUT 30)
+
     # A retained unfinished logical DATA turn must prevent later DATA
     # overtaking, while separately admitted WAKE and other actor lanes run.
     add_executable(oreslang-native-retained-data-order-test

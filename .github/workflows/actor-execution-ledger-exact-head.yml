@@ -9,6 +9,7 @@ on:
       - src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h
       - src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
       - tests/native_actor_ledger_scheduler_bridge_test.cpp
+      - tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp
       - tests/native_actor_retained_data_stop_test.c
       - tests/native_actor_retained_data_ordering_test.c
       - tests/native_actor_retained_cleanup_autoadmit_test.c
@@ -89,6 +90,7 @@ jobs:
             tests/native_actor_ledger_fencing_interleavings_test.cpp \
             tests/native_actor_ledger_lease_authority_test.cpp \
             tests/native_actor_ledger_scheduler_bridge_test.cpp \
+            tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp \
             tests/native_actor_retained_data_stop_test.c \
             tests/native_actor_retained_data_ordering_test.c \
             tests/native_actor_retained_cleanup_autoadmit_test.c \
@@ -267,6 +269,12 @@ jobs:
               "build/actor-ledger-gate/scheduler-$tool.o" \
               -o "build/actor-ledger-gate/bridge-$tool"
             "build/actor-ledger-gate/bridge-$tool"
+            "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp \
+              "build/actor-ledger-gate/scheduler-$tool.o" \
+              -o "build/actor-ledger-gate/bridge-stop-$tool"
+            "build/actor-ledger-gate/bridge-stop-$tool"
           done
       - name: Retained DATA mailbox quota, STOP and physical retirement
         shell: bash
@@ -345,6 +353,12 @@ jobs:
             build/actor-ledger-gate/scheduler-sanitized.o \
             -o build/actor-ledger-gate/bridge-sanitized
           build/actor-ledger-gate/bridge-sanitized
+          clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/bridge-stop-sanitized
+          build/actor-ledger-gate/bridge-stop-sanitized
           clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
             -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
             -Isrc/main/cpp \
