@@ -18,7 +18,9 @@ static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().span(
 static_assert(!std::is_copy_constructible_v<Store::Loan<0, true>>);
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().read_at(0)), float>);
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().size_checked()), std::size_t>);
-static_assert(!requires(Store::Loan<0, false>& r) { r.write_at(0, 1.0f); });
+template<class T> concept HasCheckedWrite = requires(T& loan) { loan.write_at(0, 1.0f); };
+static_assert(!HasCheckedWrite<Store::Loan<0, false>>);
+static_assert(HasCheckedWrite<Store::Loan<0, true>>);
 static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
 static_assert(!std::is_default_constructible_v<Store::Handle>);
