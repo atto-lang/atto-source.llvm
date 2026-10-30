@@ -16,6 +16,12 @@ using Kind = Operation::Kind;
 
 static Operation op(Kind kind, const char* place) { return {kind, place}; }
 static PlaceState cell(ValueMask state) { return {state, 0, false}; }
+static RegionLoanProvenance region_loan(
+        std::uint64_t region, std::uint64_t generation,
+        std::uint64_t domain, std::uint64_t execution,
+        std::uint32_t slot, std::uint32_t slot_generation) {
+    return {region, generation, domain, execution, slot, slot_generation};
+}
 
 static bool rejected(const std::function<void()>& fn) {
     try { fn(); } catch (const std::runtime_error& e) {
@@ -218,6 +224,72 @@ int main() {
     assert(rejected([&] { verify(foreign_release); }));
     foreign_release.blocks[0].operations[1].loan_id = 101;
     verify(foreign_release);
+
+    // Region-backed loans carry the exact runtime/task provenance that may
+    // retire the corresponding native ticket. Lexical loan identity alone
+    // must not authorize a different task, stale store generation, or region.
+    const RegionLoanProvenance owner_a = region_loan(9, 3, 7, 1001, 4, 8);
+    const RegionLoanProvenance owner_b = region_loan(9, 3, 7, 1002, 5, 8);
+    const RegionLoanProvenance stale_a = region_loan(9, 3, 7, 1001, 4, 7);
+    const RegionLoanProvenance other_region = region_loan(10, 3, 7, 1001, 4, 8);
+
+    Graph region_shared;
+    region_shared.entry = {{"x", cell(kOwned)}};
+    region_shared.blocks = {{
+        {{Kind::BorrowShared, "x", 501, owner_a},
+         {Kind::ReleaseShared, "x", 501, owner_a},
+         {Kind::Move, "x"}}, {}
+    }};
+    verify(region_shared);
+
+    Graph region_shared_wrong = region_shared;
+    region_shared_wrong.blocks[0].operations[1].region_provenance = owner_b;
+    assert(rejected([&] { verify(region_shared_wrong); }));
+    region_shared_wrong.blocks[0].operations[1].region_provenance = stale_a;
+    assert(rejected([&] { verify(region_shared_wrong); }));
+    region_shared_wrong.blocks[0].operations[1].region_provenance = other_region;
+    assert(rejected([&] { verify(region_shared_wrong); }));
+    region_shared_wrong.blocks[0].operations[1].region_provenance.reset();
+    assert(rejected([&] { verify(region_shared_wrong); }));
+
+    Graph local_as_region;
+    local_as_region.entry = {{"x", cell(kOwned)}};
+    local_as_region.blocks = {{
+        {{Kind::BorrowShared, "x", 502},
+         {Kind::ReleaseShared, "x", 502, owner_a}}, {}
+    }};
+    assert(rejected([&] { verify(local_as_region); }));
+
+    Graph region_exclusive;
+    region_exclusive.entry = {{"x", cell(kOwned)}};
+    region_exclusive.blocks = {{
+        {{Kind::BorrowExclusive, "x", 503, owner_a},
+         {Kind::ReleaseExclusive, "x", 503, owner_a},
+         {Kind::Move, "x"}}, {}
+    }};
+    verify(region_exclusive);
+    region_exclusive.blocks[0].operations[1].region_provenance = owner_b;
+    assert(rejected([&] { verify(region_exclusive); }));
+
+    Graph invalid_region_loan;
+    invalid_region_loan.entry = {{"x", cell(kOwned)}};
+    invalid_region_loan.blocks = {{
+        {{Kind::BorrowShared, "x", 504, RegionLoanProvenance{}},
+         {Kind::ReleaseShared, "x", 504, RegionLoanProvenance{}}}, {}
+    }};
+    assert(rejected([&] { verify(invalid_region_loan); }));
+
+    // Region provenance is part of CFG join identity too. Equal lexical loan
+    // IDs cannot hide different task identities on distinct predecessors.
+    Graph region_join;
+    region_join.entry = {{"x", cell(kOwned)}};
+    region_join.blocks = {
+        {{}, {1, 2}},
+        {{{Kind::BorrowShared, "x", 505, owner_a}}, {3}},
+        {{{Kind::BorrowShared, "x", 505, owner_b}}, {3}},
+        {{{Kind::ReleaseShared, "x", 505, owner_a}}, {}}
+    };
+    assert(rejected([&] { verify(region_join); }));
 
     // Token zero is the unique legacy entry-loan identity, not a value
     // that an independently executed branch may mint.
