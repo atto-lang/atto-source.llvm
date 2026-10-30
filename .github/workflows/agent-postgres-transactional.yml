@@ -91,7 +91,7 @@ jobs:
       - name: Build and execute PostgreSQL native host contract
         run: |
           set -euo pipefail
-          export PGPASSWORD="$ORES_PG_ADMIN_PASSWORD"
+          export PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD"
           g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
             -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
             contracts/v1/agent-dispatch/pg_dispatch_integration_test.cpp \
@@ -100,7 +100,7 @@ jobs:
           # allocate a claim key while the durability precondition fails.
           verdict=$(PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD" psql -U ores_dispatch_test_runtime -tA -v ON_ERROR_STOP=1 -c "SET synchronous_commit=off; SELECT ores_dispatch.claim_once_v1('tenant','worker','async-durability-denied',repeat('b',64),7,9,repeat('a',40),9223372036854775807,1024,24)")
           test "$(printf '%s\n' "$verdict" | tail -n 1)" = 'f'
-          rows=$(psql -U postgres -tAc "SELECT count(*) FROM ores_dispatch.claim_v1 WHERE dispatch_id='async-durability-denied'")
+          rows=$(PGPASSWORD="$ORES_PG_ADMIN_PASSWORD" psql -U postgres -tAc "SELECT count(*) FROM ores_dispatch.claim_v1 WHERE dispatch_id='async-durability-denied'")
           test "$rows" -eq 0
           "$RUNNER_TEMP/pg_dispatch_native"
           # Independent native processes compete on a shared database key.
@@ -119,7 +119,7 @@ jobs:
           done
           test "$winners" -eq 1
           test "$denied" -eq 11
-          rows=$(psql -U postgres -tAc "SELECT count(*) FROM ores_dispatch.claim_v1 WHERE tenant_id='tenant' AND actor_id='worker' AND dispatch_id='native-process-race'")
+          rows=$(PGPASSWORD="$ORES_PG_ADMIN_PASSWORD" psql -U postgres -tAc "SELECT count(*) FROM ores_dispatch.claim_v1 WHERE tenant_id='tenant' AND actor_id='worker' AND dispatch_id='native-process-race'")
           test "$rows" -eq 1
           if PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD" psql -U ores_dispatch_test_runtime -tAc "SELECT count(*) FROM ores_dispatch.runtime_binding_v1" >/dev/null 2>&1; then
             echo 'SECURITY_FAILURE runtime can read actor bindings'; exit 2
@@ -137,7 +137,7 @@ jobs:
           rc=0
           "$RUNNER_TEMP/pg_dispatch_native" probe native-killed || rc=$?
           test "$rc" -eq 2
-          psql -U postgres -v ON_ERROR_STOP=1 -c "UPDATE ores_dispatch.actor_fence_v1 SET actor_generation=8, activation_epoch=10, exact_revision=repeat('c',40) WHERE tenant_id='tenant' AND actor_id='worker'"
+          PGPASSWORD="$ORES_PG_ADMIN_PASSWORD" psql -U postgres -v ON_ERROR_STOP=1 -c "UPDATE ores_dispatch.actor_fence_v1 SET actor_generation=8, activation_epoch=10, exact_revision=repeat('c',40) WHERE tenant_id='tenant' AND actor_id='worker'"
           rc=0
           "$RUNNER_TEMP/pg_dispatch_native" probe native-after-fence || rc=$?
           test "$rc" -eq 2
