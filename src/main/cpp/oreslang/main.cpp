@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/ExperimentalInvertedI64.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -194,6 +195,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
+    bool experimental_inverted_i64 = false;
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
@@ -284,6 +286,11 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-inverted-i64") {
+            if (experimental_inverted_i64) {
+                std::cerr << "duplicate experimental inverted i64 option\n"; return 2;
+            }
+            experimental_inverted_i64 = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
@@ -363,6 +370,18 @@ int main(int argc, char** argv) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
     }
+    // An isolated, deliberately narrow physical-SoA guest compiler, NOT a
+    // general replacement for the checked source type/ownership pipeline.
+    // Never let the experiment inherit unrelated deployment guarantees.
+    if (experimental_inverted_i64 &&
+            (wasm32_target || cortex_m_target || native_hard_rt_profile ||
+             bounded_allocator_provider || experimental_owned_int ||
+             experimental_rt_scalar_loop || constraint_descriptors_only ||
+             tree_shake || !tree_shake_roots.empty() || rt_report_seen ||
+             rt_entry_seen)) {
+        std::cerr << "experimental inverted i64 requires standalone host codegen and no RT, tree-shake, arena or descriptor modes\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -382,7 +401,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-inverted-i64] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -415,6 +434,14 @@ int main(int argc, char** argv) {
             throw std::runtime_error("native-hard-rt profile currently requires the host target");
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
+
+        if (experimental_inverted_i64) {
+            const auto llvm_ir = oreslang::experimental_inverted_i64::compile(text);
+            std::cout << llvm_ir;
+            std::cout.flush();
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
+        }
 
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
