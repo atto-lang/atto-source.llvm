@@ -1537,6 +1537,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_nested_option_generic_payload_preserves_type_fail_closed
         source-nested-option-generic-payload-fail-closed.ores
         --diagnostic "nested Option remains nested; implicit Option flatten is forbidden")
+    oreslang_contract_test(source_option_single_layer_not_nested_diagnostic
+        source-option-single-layer-unimplemented.ores
+        --diagnostic "native scalar local requires int, bool or checked scalar alias")
 
 
     # Entry<K,V> is a compiler-owned nominal product in Java/GraalVM.
