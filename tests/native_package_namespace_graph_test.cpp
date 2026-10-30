@@ -17,6 +17,11 @@ static Program make_source(const std::string& ns, const std::string& name, bool 
     Function fn;
     fn.name = name;
     fn.exported = exported;
+    // Positive fixtures must contain an actual typed scalar result. A
+    // missing non-void result is not a valid callable namespace export.
+    fn.result = std::make_unique<Expression>();
+    fn.result->kind = Expression::Kind::Integer;
+    fn.result->resolved_type = ScalarType::I64;
     program.functions.push_back(std::move(fn));
     return program;
 }
@@ -164,6 +169,8 @@ int main() {
     // may be smuggled into a public namespace as merely (name, arity).
     Program bool_signature = make_source("a", "bool_value");
     bool_signature.functions.front().return_type = ScalarType::Bool;
+    bool_signature.functions.front().result->kind = Expression::Kind::Boolean;
+    bool_signature.functions.front().result->resolved_type = ScalarType::Bool;
     Parameter bool_param;
     bool_param.name = "flag";
     bool_param.scalar_type = ScalarType::Bool;
@@ -264,6 +271,15 @@ int main() {
     reject_signature("early_return_export", [](Function& fn) {
         fn.early_returns.emplace_back();
     }, "body control flow");
+    reject_signature("missing_result_export", [](Function& fn) {
+        fn.result.reset();
+    }, "no scalar result expression");
+    // A literal typed as a different scalar cannot stand in for the
+    // declared non-void return, even though its AST is otherwise pure.
+    reject_signature("mismatched_result_export", [](Function& fn) {
+        fn.result->resolved_type = ScalarType::Bool;
+        fn.result->kind = Expression::Kind::Boolean;
+    }, "unresolved scalar binding");
     reject_signature("console_result_export", [](Function& fn) {
         fn.result = std::make_unique<Expression>();
         fn.result->kind = Expression::Kind::Console;
