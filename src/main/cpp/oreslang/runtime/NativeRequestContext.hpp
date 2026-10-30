@@ -257,6 +257,21 @@ public:
             std::terminate(); // no accepted callback can own a rejected send
         return result;
     }
+    // Accepted-but-abandoned queued DATA is not a callback. Only the actor's
+    // terminal drained receipt permits cancelling that queued exchange.
+    // The caller then closes the request/body handles and releases BoundExchange.
+    template<std::size_t Slots,std::size_t MaxBytes>
+    bool rollback_abandoned_exchange(
+            OresNativeActorScheduler* scheduler,
+            const BoundExchange<Slots,MaxBytes>& bound) noexcept {
+        const auto token=bound.token();
+        auto* exchange=bound.exchange_pin_.exchange_;
+        if(!scheduler || !exchange ||
+            !ores_native_actor_scheduler_poll_done(scheduler,token.actor) ||
+            exchange->phase()!=NativeHttpExchange::Phase::queued)
+            return false;
+        return exchange->rollback(token);
+    }
     // Durable move-only suspension link: stored in Task/continuation frame,
     // not worker TLS. Lease survives physical carrier exit.
     struct Suspension final {
