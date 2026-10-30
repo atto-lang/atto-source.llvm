@@ -306,6 +306,7 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     if (nonthrowing_protected_read(expr)) return true;
     if (expr.kind == Expression::Kind::Negate ||
+            expr.kind == Expression::Kind::Abs ||
             expr.kind == Expression::Kind::LogicalNot)
         return expr.left && native_pure_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Expression::Kind::Add ||
@@ -341,7 +342,7 @@ bool native_capture_free_task_tree(
     require_expression_depth(depth, expr.offset);
     using K = Expression::Kind;
     if (expr.kind == K::Integer || expr.kind == K::Boolean) return true;
-    if ((expr.kind == K::Negate || expr.kind == K::LogicalNot) && expr.left)
+    if ((expr.kind == K::Negate || expr.kind == K::Abs || expr.kind == K::LogicalNot) && expr.left)
         return native_capture_free_task_tree(*expr.left, depth + 1);
     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
             expr.kind == K::Multiply || expr.kind == K::Equal ||
@@ -375,7 +376,7 @@ bool native_async_i64_tree(
     if (expr.kind == K::Variable)
         return allowed_parameter != nullptr &&
             expr.name == *allowed_parameter;
-    if ((expr.kind == K::Negate || expr.kind == K::LogicalNot) && expr.left)
+    if ((expr.kind == K::Negate || expr.kind == K::Abs || expr.kind == K::LogicalNot) && expr.left)
         return native_async_i64_tree(
             *expr.left, allowed_parameter, depth + 1);
     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
@@ -435,7 +436,7 @@ bool native_constructor_scalar_tree(const Expression& expr,
         });
     if (expr.kind == Kind::Field)
         return expr.left && expr.left->kind == Kind::Variable;
-    if (expr.kind == Kind::Negate || expr.kind == Kind::LogicalNot)
+    if (expr.kind == Kind::Negate || expr.kind == Kind::Abs || expr.kind == Kind::LogicalNot)
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
             expr.kind == Kind::Multiply || expr.kind == Kind::Remainder ||
@@ -3655,6 +3656,25 @@ private:
             if (lookahead.next().text == "{")
                 fail("native execution task lowering unsupported: scheduler-owned Task/Future continuation required; no implicit inline execution");
         }
+        // Native scalar Math operations are compiler intrinsics, not host-lib
+        // calls. Keep them single-evaluation and checked at the i64 boundary.
+        if (token_.text == "Math" && peek_next().text == ".") {
+            advance();
+            require(".");
+            const std::string operation = identifier();
+            if (operation != "abs" && operation != "neg")
+                fail("unsupported native Math intrinsic '" + operation + "'");
+            require("(");
+            auto argument = expression();
+            if (token_.text != ")")
+                fail("native Math intrinsic requires exactly one argument");
+            require(")");
+            auto intrinsic = make_expression(
+                operation == "abs" ? Expression::Kind::Abs : Expression::Kind::Negate,
+                offset);
+            intrinsic->left = std::move(argument);
+            return intrinsic;
+        }
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
         if (token_.text == "ActorGroup" ||
@@ -4155,6 +4175,7 @@ private:
                 return;
             }
             case Expression::Kind::Negate:
+            case Expression::Kind::Abs:
             case Expression::Kind::LogicalNot:
             case Expression::Kind::Copy:
             case Expression::Kind::Take:
@@ -4319,6 +4340,12 @@ private:
                 ScalarType operand = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 require_type(operand, ScalarType::I64, "unary '-'");
+                return ScalarType::I64;
+            }
+            case Expression::Kind::Abs: {
+                ScalarType operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                require_type(operand, ScalarType::I64, "Math.abs");
                 return ScalarType::I64;
             }
             case Expression::Kind::LogicalNot: {
