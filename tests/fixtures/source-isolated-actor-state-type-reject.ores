@@ -1,0 +1,5 @@
+define isolated actor Counter as
+    state {
+        label: string = "x";
+    }
+end
