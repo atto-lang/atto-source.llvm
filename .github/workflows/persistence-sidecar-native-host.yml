@@ -5,6 +5,8 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeBatchPersistence.hpp'
       - 'tests/native_batch_persistence_test.cpp'
       - 'tests/native_sqlite_persistence_test.cpp'
+      - 'tests/native_actor_arena_persistence_reactivation_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedHeap.hpp'
       - 'src/main/cpp/oreslang/runtime/SqliteBatchPersistence.hpp'
       - 'CMakeLists.txt'
       - '.github/workflows/persistence-sidecar-native-host.yml'
@@ -49,3 +51,18 @@ jobs:
             -Isrc/main/cpp/oreslang/runtime tests/native_sqlite_persistence_test.cpp \
             -lsqlite3 -o /tmp/oreslang-sqlite-recovery-clang
           /tmp/oreslang-sqlite-recovery-clang
+      - name: Actor-owned heap -> SQLite -> fresh heap (GCC sanitizers)
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_actor_arena_persistence_reactivation_test.cpp \
+            -lsqlite3 -o /tmp/oreslang-actor-arena-restore
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-actor-arena-restore
+      - name: Actor-owned heap -> SQLite -> fresh heap (Clang)
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O2 -pthread -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp tests/native_actor_arena_persistence_reactivation_test.cpp \
+            -lsqlite3 -o /tmp/oreslang-actor-arena-restore-clang
+          /tmp/oreslang-actor-arena-restore-clang
