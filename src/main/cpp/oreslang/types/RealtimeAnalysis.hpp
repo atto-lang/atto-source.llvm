@@ -202,6 +202,9 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::LogicalOr:
         case Expression::Kind::LogicalXor:
         case Expression::Kind::Conditional:
+            // These scalar operators are not explicit ownership transfers.
+            // Their operands and lazy conditional arms are scanned above.
+            break;
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             // Until the typed MIR proves a register-only copy or a bounded
