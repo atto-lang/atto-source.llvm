@@ -43,3 +43,10 @@ The recovery API returns the latest snapshot and subsequent journal events. For 
 The native provider also checks provider receipt cardinality/identity and caps direct writes at 1MiB. On ambiguous SQLite COMMIT exceptions callers must use the same operation ID for retries; no exactly-once external effects are promised. `CMakeLists.txt` has a dedicated host-only CTest target. The native host Actions workflow now adds real SQLite GCC sanitizer and Clang checks, but its source-org runner admission must be proven separately.
 
 Production blockers: secure tenant/activation directory, async source actor storage bridge, per-actor arena encoding, transaction I/O deadline and fair scheduling, CRC/bitflip storage injection, real power-failure recovery certification, verified native compiler guest execution, and backend conformance.
+
+
+## Authentic native ActorOwnedHeap + SQLite reactivation integration
+
+Added `tests/native_actor_arena_persistence_reactivation_test.cpp`, included in CMake/CTest and the native host CI workflow. This instantiates the repo's real `ActorOwnedHeap<256,4>` using `ActorHeapIdentity`, writes a POD state while the first heap owns it, serializes scalar bytes in a portable big-endian format, commits through the real on-disk `SqliteStore`, retires the first heap, reopens SQLite, advances the trusted activation epoch, and restores into a new heap generation. It checks that a stale heap handle does not resolve in the new heap, another actor heap cannot read its handle, and an old epoch cannot replay a successful operation.
+
+**Status NOT_EXECUTED on exact repo source:** the native integration test is committed and registered; a full actor-heap header build against the repo has not run because source-org Actions still fails at zero recorded steps and the local artifact snapshot lacks the native heap headers. The previously executed SQLite provider tests remain distinct evidence. This is a native runtime component integration test, **not** compiler-generated guest `.ores` actor execution or VM-isolate isolation.
