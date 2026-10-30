@@ -201,6 +201,32 @@ inline bool namespace_pure_scalar_expression(const Expression* expression) {
     return namespace_pure_scalar_expression_at_depth(expression, 0);
 }
 
+// A scalar Variable is not a verified lexical binding: each reference must
+// resolve to an already declared parameter/local of the same scalar type.
+inline bool namespace_scalar_expression_bindings_valid(
+        const Expression* expression,
+        const std::map<std::string, ScalarType>& bindings) {
+    std::vector<const Expression*> pending{expression};
+    while (!pending.empty()) {
+        const Expression* current = pending.back();
+        pending.pop_back();
+        if (!current) continue;
+        if (current->kind == Expression::Kind::Variable) {
+            const auto binding = bindings.find(current->name);
+            if (binding == bindings.end() || binding->second != current->resolved_type)
+                return false;
+        }
+        pending.push_back(current->left.get());
+        pending.push_back(current->right.get());
+        pending.push_back(current->condition.get());
+        pending.push_back(current->condition_lhs.get());
+        pending.push_back(current->condition_rhs.get());
+        pending.push_back(current->when_true.get());
+        pending.push_back(current->when_false.get());
+    }
+    return true;
+}
+
 // This API cannot invent package ownership from a namespace header, pathname,
 // compilation directory or globally shared namespace. It deliberately deals
 // only with native scalar public function signatures; richer signatures and
@@ -324,13 +350,34 @@ inline PackageNamespaceGraph link_package_namespaces(
                     || !fn.return_class.empty() || !fn.return_sum.empty()
                     || !fn.pending_return_type_alias.empty())
                 throw std::invalid_argument("native namespace non-scalar return signature requires checked ABI lowering");
+            std::map<std::string, ScalarType> lexical_types;
             for (const auto& param : fn.parameters) {
                 if (param.mode != Parameter::Mode::Value
                         || (param.scalar_type != ScalarType::I64 && param.scalar_type != ScalarType::Bool)
                         || !param.class_name.empty() || !param.generic_type.empty()
                         || !param.pending_type_alias.empty() || !param.sum_type.empty())
                     throw std::invalid_argument("native namespace non-scalar parameter signature requires checked ABI lowering");
+                if (!valid_flat_namespace_name(param.name)
+                        || !lexical_types.emplace(param.name, param.scalar_type).second)
+                    throw std::invalid_argument("native namespace invalid or duplicate scalar binding");
             }
+            // A local initializer may reference parameters and preceding
+            // locals, never itself or a later binding.
+            for (const auto& local : fn.locals) {
+                if (local.initializer
+                        && (local.initializer->resolved_type != local.scalar_type
+                            || !namespace_scalar_expression_bindings_valid(
+                                local.initializer.get(), lexical_types)))
+                    throw std::invalid_argument("native namespace local initializer has unresolved scalar binding");
+                if (!valid_flat_namespace_name(local.name)
+                        || !lexical_types.emplace(local.name, local.scalar_type).second)
+                    throw std::invalid_argument("native namespace invalid or duplicate scalar binding");
+            }
+            if (fn.result
+                    && (fn.result->resolved_type != fn.return_type
+                        || !namespace_scalar_expression_bindings_valid(
+                            fn.result.get(), lexical_types)))
+                throw std::invalid_argument("native namespace body expression has unresolved scalar binding");
             const auto signature = std::make_pair(fn.name, fn.parameters.size());
             if (!signatures[key].insert(signature).second)
                 throw std::invalid_argument("duplicate public namespace function/arity in same package instance");

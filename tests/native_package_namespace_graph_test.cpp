@@ -409,6 +409,8 @@ int main() {
     pure_expression.functions.front().result->right = std::make_unique<Expression>();
     pure_expression.functions.front().result->right->kind = Expression::Kind::Integer;
     pure_expression.functions.front().locals.emplace_back();
+    pure_expression.functions.front().locals.back().name = "local_flag";
+    pure_expression.functions.front().locals.back().scalar_type = ScalarType::Bool;
     pure_expression.functions.front().locals.back().initializer = std::make_unique<Expression>();
     pure_expression.functions.front().locals.back().initializer->kind = Expression::Kind::Boolean;
     pure_expression.functions.front().locals.back().initializer->resolved_type = ScalarType::Bool;
@@ -437,6 +439,10 @@ int main() {
     // Fully typed bool logic and a named bool variable remain admissible.
     Program typed_bool = make_source("a", "typed_bool");
     typed_bool.functions.front().return_type = ScalarType::Bool;
+    Parameter typed_bool_flag;
+    typed_bool_flag.name = "flag";
+    typed_bool_flag.scalar_type = ScalarType::Bool;
+    typed_bool.functions.front().parameters.push_back(typed_bool_flag);
     typed_bool.functions.front().result = std::make_unique<Expression>();
     auto& bool_result = typed_bool.functions.front().result;
     bool_result->kind = Expression::Kind::LogicalAnd;
@@ -450,6 +456,85 @@ int main() {
     bool_result->right->resolved_type = ScalarType::Bool;
     another = units;
     another.push_back({"foo/typed_bool", "foo@1", &typed_bool});
+    REQUIRE(link_package_namespaces(another, pins, {request})
+                .namespaces.at({"foo@1", "a"}).exports.size() == 4);
+
+    // A scalar tag cannot substitute for a verified lexical identity.
+    reject_signature("unbound_result_variable", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Variable;
+        fn.result->name = "missing";
+    }, "body expression");
+    reject_signature("mismatched_bound_variable", [](Function& fn) {
+        Parameter param;
+        param.name = "flag";
+        param.scalar_type = ScalarType::Bool;
+        fn.parameters.push_back(param);
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Variable;
+        fn.result->name = "flag";
+        fn.result->resolved_type = ScalarType::I64;
+    }, "body expression");
+    reject_signature("empty_scalar_parameter", [](Function& fn) {
+        fn.parameters.emplace_back();
+    }, "invalid or duplicate scalar binding");
+    reject_signature("duplicate_scalar_parameter", [](Function& fn) {
+        Parameter param;
+        param.name = "value";
+        fn.parameters.push_back(param);
+        fn.parameters.push_back(param);
+    }, "invalid or duplicate scalar binding");
+    reject_signature("dotted_scalar_local", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().name = "some.path";
+    }, "invalid or duplicate scalar binding");
+    reject_signature("duplicate_scalar_local", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().name = "value";
+        fn.locals.emplace_back();
+        fn.locals.back().name = "value";
+    }, "invalid or duplicate scalar binding");
+    reject_signature("shadowed_scalar_parameter", [](Function& fn) {
+        Parameter param;
+        param.name = "value";
+        fn.parameters.push_back(param);
+        fn.locals.emplace_back();
+        fn.locals.back().name = "value";
+    }, "invalid or duplicate scalar binding");
+    reject_signature("self_referential_scalar_local", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().name = "value";
+        fn.locals.back().initializer = std::make_unique<Expression>();
+        fn.locals.back().initializer->kind = Expression::Kind::Variable;
+        fn.locals.back().initializer->name = "value";
+    }, "local initializer");
+    reject_signature("forward_referenced_scalar_local", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().name = "first";
+        fn.locals.back().initializer = std::make_unique<Expression>();
+        fn.locals.back().initializer->kind = Expression::Kind::Variable;
+        fn.locals.back().initializer->name = "later";
+        fn.locals.emplace_back();
+        fn.locals.back().name = "later";
+    }, "local initializer");
+    reject_signature("wrong_scalar_local_initializer_type", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().name = "value";
+        fn.locals.back().initializer = std::make_unique<Expression>();
+        fn.locals.back().initializer->kind = Expression::Kind::Boolean;
+        fn.locals.back().initializer->resolved_type = ScalarType::Bool;
+    }, "local initializer");
+    Program bound_local = make_source("a", "bound_scalar_local");
+    auto& bound_fn = bound_local.functions.front();
+    bound_fn.locals.emplace_back();
+    bound_fn.locals.back().name = "value";
+    bound_fn.locals.back().initializer = std::make_unique<Expression>();
+    bound_fn.locals.back().initializer->kind = Expression::Kind::Integer;
+    bound_fn.result = std::make_unique<Expression>();
+    bound_fn.result->kind = Expression::Kind::Variable;
+    bound_fn.result->name = "value";
+    another = units;
+    another.push_back({"foo/bound_scalar_local", "foo@1", &bound_local});
     REQUIRE(link_package_namespaces(another, pins, {request})
                 .namespaces.at({"foo@1", "a"}).exports.size() == 4);
 
