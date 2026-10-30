@@ -4,6 +4,13 @@
 /scripts/ @ORESoftware
 /CMakeLists.txt @ORESoftware
 
+
+# Native frontend/runtime, ABI, and conformance trust boundaries.
+/src/ @ORESoftware
+/contracts/ @ORESoftware
+/tests/ @ORESoftware
+/.oreslang/ @ORESoftware
+
 # Security review for all changes that can authorize private-source exports.
 /.github/CODEOWNERS @ORESoftware
 /.github/workflows/* @ORESoftware
@@ -18,9 +25,8 @@
 /scripts/test-publish-private-ci-source.py @ORESoftware
 /scripts/audit-private-ci-governance.py @ORESoftware
 /scripts/test-audit-private-ci-governance.py @ORESoftware
-
-# Native frontend/runtime, ABI, and conformance trust boundaries.
-/src/ @ORESoftware
-/contracts/ @ORESoftware
-/tests/ @ORESoftware
-/.oreslang/ @ORESoftware
+/tools/private-ci-policy/ @ORESoftware
+/scripts/check-actions-execution-evidence.py @ORESoftware
+/scripts/test-check-actions-execution-evidence.py @ORESoftware
+/scripts/verify_ci_run.py @ORESoftware
+/scripts/test_verify_ci_run.py @ORESoftware
