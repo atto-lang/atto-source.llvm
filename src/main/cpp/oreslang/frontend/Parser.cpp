@@ -5750,17 +5750,13 @@ void resolve_future_pipeline_contracts(Program& program) {
                     : types::pipeline_internal_ownership();
                 plan.root_stage = i == 0;
                 if (stage.async_source_i64) {
-                    // This first async-stage slice is capture-free and cannot
-                    // suspend internally, so LLVM may fuse its freshly-created
-                    // ready Future into the already scheduler-owned pipeline
-                    // task. The checked semantic plan still records one-level
-                    // flattening and cancellation ownership before that
-                    // representation optimization.
-                    plan.flattens_future = true;
-                    plan.produced_future_ownership =
-                        types::PipelineStageFutureOwnership::OwnedStageResult;
-                    plan.produced_future_provenance =
-                        types::PipelineStageFutureProvenance::FreshCheckedProducer;
+                    // An async stage returns Future<int>. The value-pipeline
+                    // operator is not an explicit flatten operation, so its
+                    // result type must remain Future<Future<int>>. This scalar
+                    // v1 pipeline has no nested-Future representation yet;
+                    // reject rather than fusing away the wrapper.
+                    throw std::runtime_error(
+                        "async Future pipeline stage returns Future<int>; implicit |> Future flattening is forbidden; explicit flatten/flat_map lowering is required");
                 }
                 types::validate_executable_future_pipeline_plan(plan);
                 prior = plan.cumulative_effects;
