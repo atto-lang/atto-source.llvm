@@ -1286,10 +1286,7 @@ private:
                 if (accept("int")) {
                     field.type = ScalarType::I64;
                     require("=");
-                    accept("-");
-                    if (token_.kind != Kind::Integer)
-                        fail("native actor int state default must be a bounded integer literal");
-                    advance();
+                    (void)signed_integer_literal();
                 } else if (accept("bool")) {
                     field.type = ScalarType::Bool;
                     require("=");
