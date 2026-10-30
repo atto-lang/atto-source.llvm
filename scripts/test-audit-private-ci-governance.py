@@ -200,25 +200,25 @@ class PolicyAuditTest(unittest.TestCase):
             root = Path(tmp)
             for relative in (audit.APPROVAL_PATH, audit.OWNERS_PATH, audit.DOC_PATH):
                 (root / relative).parent.mkdir(parents=True, exist_ok=True)
-            (root / audit.APPROVAL_PATH).write_text("# empty\\n")
+            (root / audit.APPROVAL_PATH).write_text("# empty\n")
             (root / audit.DOC_PATH).write_text(
                 "protected private tree canary Direct GitHub connector app-pinned"
             )
             owners = (
-                "/src/ @ORESoftware\\n"
-                + "".join(path + " @ORESoftware\\n"
+                "/src/ @ORESoftware\n"
+                + "".join(path + " @ORESoftware\n"
                           for path in audit.SECURITY_OWNER_TAIL)
             )
             owner_file = root / audit.OWNERS_PATH
             owner_file.write_text(owners)
             self.assertEqual((), audit.check_policy_files(root))
             invalid = [
-                owners.replace("/tools/private-ci-policy/ @ORESoftware\\n", ""),
+                owners.replace("/tools/private-ci-policy/ @ORESoftware\n", ""),
                 owners.replace(
-                    "/scripts/check-actions-execution-evidence.py @ORESoftware\\n",
+                    "/scripts/check-actions-execution-evidence.py @ORESoftware\n",
                     ""),
-                owners + "/src/ @ORESoftware\\n",
-                owners + "/tools/private-ci-policy/ @other\\n",
+                owners + "/src/ @ORESoftware\n",
+                owners + "/tools/private-ci-policy/ @other\n",
             ]
             for source in invalid:
                 with self.subTest(source=source[-90:]):
