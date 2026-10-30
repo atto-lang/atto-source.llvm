@@ -371,6 +371,19 @@ llvm::Value* lower(const Expression& expr,
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
                 llvm::ConstantInt::get(i64, 0), value, "neg");
         }
+        case Expression::Kind::Abs: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            // Evaluate the operand exactly once. Checked negation traps only
+            // for INT64_MIN, exactly the value for which signed abs is not
+            // representable. All other values select the original or negated
+            // result without relying on host std::abs or LLVM nsw poison.
+            auto* negated = checked_signed_arithmetic(
+                builder, llvm::Intrinsic::ssub_with_overflow,
+                llvm::ConstantInt::get(i64, 0), value, "abs.neg");
+            auto* negative = builder.CreateICmpSLT(
+                value, llvm::ConstantInt::get(i64, 0), "abs.negative");
+            return builder.CreateSelect(negative, negated, value, "abs");
+        }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
