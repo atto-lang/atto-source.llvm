@@ -377,9 +377,11 @@ struct Function {
 enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 /**
- * Parsed actor-state schema metadata. This is deliberately not an ordinary
- * actor field: until sealed handle_state + ledger-backed lowering lands,
- * source state declarations are validated and then fail closed before codegen.
+ * Parsed actor-state schema metadata. This is not a source-visible ordinary
+ * actor field. A bounded synchronous, isolated actor can lower one lexical
+ * critical-read/write handle_state callback into the actor-owned i64 heap.
+ * Suspension, other state types, multiple callbacks and arbitrary methods
+ * still fail closed pending ledger-backed continuation lowering.
  */
 struct ActorStateField {
     std::string name;
