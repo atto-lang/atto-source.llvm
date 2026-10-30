@@ -1,5 +1,5 @@
 pub define inverted struct Sample as
-    measurement: int;
+    let measurement: int;
     valid: int;
 end
 
