@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 extern void oreslang_actor_Counter_init(OresActorI64Heap*, uint64_t, uint64_t);
@@ -55,8 +56,8 @@ static void on_data(void* raw, size_t actor_index, uint64_t payload) {
 
 int main(int argc, char** argv) {
     VERIFY(argc == 2);
-    const int writing = argv[1][0] == 'w' && argv[1][1] == '\0';
-    const int reading = argv[1][0] == 'r' && argv[1][1] == '\0';
+    const int writing = strcmp(argv[1], "write") == 0;
+    const int reading = strcmp(argv[1], "read") == 0;
     VERIFY(writing || reading);
     Fixture f = {0};
     f.writing = writing;
