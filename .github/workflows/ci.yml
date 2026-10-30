@@ -31,6 +31,7 @@ jobs:
           [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
           test -z "$(git ls-files --others --exclude-standard)"
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
       - name: Install LLVM toolchain and native linker
