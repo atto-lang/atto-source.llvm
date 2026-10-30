@@ -98,6 +98,24 @@ def main():
                 "source-actor-spawn-stop.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-retire-replacement.ores":
+                # The source program's precise actor effect trace must survive
+                # lowering. Grouping spawns/sends before stop breaks the
+                # lifetime boundary and can mask recycled-heap aliasing.
+                import re
+                operations = [
+                    match.group(1)
+                    for line in guest.stdout.splitlines()
+                    if (match := re.search(
+                        r"\\bcall\\b.*@oreslang_source_actor_(spawn|send|stop)\\(",
+                        line
+                    ))
+                ]
+                assert operations == [
+                    "spawn", "spawn", "send", "send", "stop",
+                    "spawn", "send", "send", "stop",
+                    "spawn", "send", "stop", "stop",
+                ], (name, "source effect order changed", operations)
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
