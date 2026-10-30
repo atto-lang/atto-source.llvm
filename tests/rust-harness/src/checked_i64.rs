@@ -48,6 +48,12 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("math-abs", "pub fnc main():int{return Math.abs(-42);}", 42),
         ("math-neg", "pub fnc main():int{return Math.neg(-42);}", 42),
         ("dynamic-math-abs", "fnc magnitude(int a):int{return Math.abs(a);} pub fnc main():int{return magnitude(-42);}", 42),
+        // Boundary controls must return normally; checked negation in abs
+        // may not spuriously trap on zero or the largest positive signed i64.
+        ("math-abs-zero", "pub fnc main():int{return Math.abs(0)+42;}", 42),
+        ("math-abs-max", "pub fnc main():int{return Math.abs(9223372036854775807)-9223372036854775807+42;}", 42),
+        ("math-neg-zero", "pub fnc main():int{return Math.neg(0)+42;}", 42),
+        ("math-neg-max", "pub fnc main():int{return Math.neg(9223372036854775807)+9223372036854775807+42;}", 42),
         ("imported-math-shadows-intrinsic",
          "import module Math from \"./math-shadow.ores\"; pub fnc main():int{return Math.abs(-42);}", 7),
         ("lazy-ternary", "pub fnc main():int{return false ? (9223372036854775807+1) : 42;}", 42),
@@ -61,6 +67,15 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("f32-type", "pub fnc main(f32 x):int{return 0;}"),
         ("f64-type", "pub fnc main(f64 x):int{return 0;}"),
         ("float-type", "pub fnc main(float x):int{return 0;}"),
+        // Intrinsic admission must fail closed on wrong types, arity and
+        // unknown names, without emitting even partial native LLVM IR.
+        ("math-abs-bool", "pub fnc main():int{return Math.abs(true);}"),
+        ("math-neg-bool", "pub fnc main():int{return Math.neg(false);}"),
+        ("math-abs-no-arg", "pub fnc main():int{return Math.abs();}"),
+        ("math-neg-no-arg", "pub fnc main():int{return Math.neg();}"),
+        ("math-abs-two-args", "pub fnc main():int{return Math.abs(1,2);}"),
+        ("math-neg-two-args", "pub fnc main():int{return Math.neg(1,2);}"),
+        ("math-unknown-intrinsic", "pub fnc main():int{return Math.pow(2);}"),
     ];
     for (name, source) in rejects {
         let input = temp.path.join(format!("{name}-reject.ores"));
