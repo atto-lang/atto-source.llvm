@@ -31,6 +31,7 @@ on:
       - tests/**
       - tests/native_actor_execution_ledger_test.cpp
       - tests/native_actor_execution_ledger_state_stress_test.cpp
+      - tests/native_actor_ledger_fencing_interleavings_test.cpp
       - tests/native_actor_compiled_guest_ledger_bridge_test.c
       - tests/native_actor_compiled_guest_ledger.py
       - tests/fixtures/native-retained-guest-steps.ores
@@ -84,6 +85,7 @@ jobs:
             src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
             tests/native_actor_execution_ledger_test.cpp \
             tests/native_actor_execution_ledger_state_stress_test.cpp \
+            tests/native_actor_ledger_fencing_interleavings_test.cpp \
             tests/native_actor_ledger_scheduler_bridge_test.cpp \
             tests/native_actor_retained_data_stop_test.c \
             tests/native_actor_retained_data_ordering_test.c \
@@ -145,6 +147,10 @@ jobs:
               -Isrc/main/cpp tests/native_actor_execution_ledger_state_stress_test.cpp \
               -o "build/actor-ledger-gate/stress-${cxx//+/p}"
             "build/actor-ledger-gate/stress-${cxx//+/p}"
+            "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -Isrc/main/cpp tests/native_actor_ledger_fencing_interleavings_test.cpp \
+              -o "build/actor-ledger-gate/fence-${cxx//+/p}"
+            "build/actor-ledger-gate/fence-${cxx//+/p}"
           done
       - name: Clang ASan and UBSan
         shell: bash
@@ -163,6 +169,11 @@ jobs:
             -Isrc/main/cpp tests/native_actor_execution_ledger_state_stress_test.cpp \
             -o build/actor-ledger-gate/stress-sanitized
           build/actor-ledger-gate/stress-sanitized
+          clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_actor_ledger_fencing_interleavings_test.cpp \
+            -o build/actor-ledger-gate/fence-sanitized
+          build/actor-ledger-gate/fence-sanitized
 
       - name: Exact-head actor-owned heap negative and pinned-loan regressions
         shell: bash

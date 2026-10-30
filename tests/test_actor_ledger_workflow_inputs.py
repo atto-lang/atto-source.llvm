@@ -186,8 +186,10 @@ REQUIRED_EXECUTED_COMMANDS = {
         "python3 -B tests/test_actor_ledger_workflow_inputs.py",
         '"build/actor-ledger-gate/test-${cxx//+/p}"',
         '"build/actor-ledger-gate/stress-${cxx//+/p}"',
+        '"build/actor-ledger-gate/fence-${cxx//+/p}"',
         "build/actor-ledger-gate/test-sanitized",
         "build/actor-ledger-gate/stress-sanitized",
+        "build/actor-ledger-gate/fence-sanitized",
     ),
     "compiled-ores-guest": (
         "cmake --build build/actor-ledger-guest --target oreslang-llvmc -j 2",
