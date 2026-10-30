@@ -187,9 +187,11 @@ REQUIRED_EXECUTED_COMMANDS = {
         '"build/actor-ledger-gate/test-${cxx//+/p}"',
         '"build/actor-ledger-gate/stress-${cxx//+/p}"',
         '"build/actor-ledger-gate/fence-${cxx//+/p}"',
+        '"build/actor-ledger-gate/lease-${cxx//+/p}"',
         "build/actor-ledger-gate/test-sanitized",
         "build/actor-ledger-gate/stress-sanitized",
         "build/actor-ledger-gate/fence-sanitized",
+        "build/actor-ledger-gate/lease-sanitized",
     ),
     "compiled-ores-guest": (
         "cmake --build build/actor-ledger-guest --target oreslang-llvmc -j 2",

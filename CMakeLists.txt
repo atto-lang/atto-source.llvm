@@ -1730,6 +1730,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_ledger_stop_wake_fencing_interleavings
         PROPERTIES TIMEOUT 25)
 
+    # Trusted actor lease adapter; synthetic authority oracle verifies
+    # fencing at the host boundary, NOT the real scheduler's thread isolation.
+    add_executable(oreslang-actor-ledger-lease-authority-test
+        tests/native_actor_ledger_lease_authority_test.cpp)
+    target_include_directories(oreslang-actor-ledger-lease-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-ledger-lease-authority-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-ledger-lease-authority-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-actor-ledger-lease-authority-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_ledger_lease_authority_boundary
+        COMMAND oreslang-actor-ledger-lease-authority-test)
+    set_tests_properties(native_actor_ledger_lease_authority_boundary
+        PROPERTIES TIMEOUT 30)
+
     # Lease-authenticated native scheduler DATA/WAKE callbacks interacting
     # with an actor-private ledger. Deliberately host-only: the legacy
     # scheduler's native "processed" receipt still precedes ledgered guest B.
