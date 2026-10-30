@@ -195,6 +195,37 @@ class PolicyAuditTest(unittest.TestCase):
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
                 audit.check_live_metadata(r, b, p)
 
+    def test_source_codeowner_tail_matches_publisher_and_denies_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for relative in (audit.APPROVAL_PATH, audit.OWNERS_PATH, audit.DOC_PATH):
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / audit.APPROVAL_PATH).write_text("# empty\\n")
+            (root / audit.DOC_PATH).write_text(
+                "protected private tree canary Direct GitHub connector app-pinned"
+            )
+            owners = (
+                "/src/ @ORESoftware\\n"
+                + "".join(path + " @ORESoftware\\n"
+                          for path in audit.SECURITY_OWNER_TAIL)
+            )
+            owner_file = root / audit.OWNERS_PATH
+            owner_file.write_text(owners)
+            self.assertEqual((), audit.check_policy_files(root))
+            invalid = [
+                owners.replace("/tools/private-ci-policy/ @ORESoftware\\n", ""),
+                owners.replace(
+                    "/scripts/check-actions-execution-evidence.py @ORESoftware\\n",
+                    ""),
+                owners + "/src/ @ORESoftware\\n",
+                owners + "/tools/private-ci-policy/ @other\\n",
+            ]
+            for source in invalid:
+                with self.subTest(source=source[-90:]):
+                    owner_file.write_text(source)
+                    with self.assertRaises(audit.GovernanceError):
+                        audit.check_policy_files(root)
+
     def test_missing_codeowner_rule_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
