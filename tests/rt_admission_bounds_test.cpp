@@ -33,7 +33,7 @@ static_assert(admit_native_hard_rt(no_effects,
 static_assert(admit_native_hard_rt(no_effects,
     TimingBudget{100, 60, 10, 10, 100, 4096,
                  SchedulingPolicy::EarliestDeadlineFirst}).failure ==
-    AdmissionFailure::None);
+    AdmissionFailure::UnsupportedSchedulingPolicy);
 static_assert(diagnostic_code(AdmissionFailure::MissingMemoryBudget) ==
               "RT012_MEMORY_BUDGET_UNPROVEN");
 static_assert(diagnostic_code(AdmissionFailure::UnsupportedSchedulingPolicy) ==
