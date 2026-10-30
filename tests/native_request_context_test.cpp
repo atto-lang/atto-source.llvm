@@ -296,6 +296,38 @@ int main(){
         s.send_all(4);CHECK(s.observed==1 && s.rejected==2);
         s.end();
     }
+    // Two independent ingress producer threads race on the SAME live
+    // BoundExchange. One CAS reservation may reach the scheduler; the loser
+    // must reject without rolling back the winner's queued or active DATA.
+    for(unsigned attempt=0;attempt<12;++attempt){
+        Suite s;s.begin(1);
+        std::atomic<unsigned> ready{0};
+        std::atomic<bool> start{false};
+        std::array<OresNativeSendStatus,2> statuses{
+            ORES_NATIVE_SEND_INVALID_REF,ORES_NATIVE_SEND_INVALID_REF};
+        auto producer=[&](unsigned index){
+            ready.fetch_add(1,std::memory_order_release);
+            while(!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            statuses[index]=s.contexts.submit_bound_exchange(
+                s.scheduler,*s.pins[0]);
+        };
+        std::thread first(producer,0),second(producer,1);
+        while(ready.load(std::memory_order_acquire)<2)
+            std::this_thread::yield();
+        start.store(true,std::memory_order_release);
+        first.join();second.join();
+        const unsigned admitted=unsigned(statuses[0]==ORES_NATIVE_SEND_ACCEPTED)+
+                                unsigned(statuses[1]==ORES_NATIVE_SEND_ACCEPTED);
+        const unsigned duplicates=unsigned(statuses[0]==ORES_NATIVE_SEND_INVALID_REF)+
+                                  unsigned(statuses[1]==ORES_NATIVE_SEND_INVALID_REF);
+        CHECK(admitted==1 && duplicates==1);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.observed==1 && s.bad==0);
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.pins[0])
+              ==ORES_NATIVE_SEND_INVALID_REF);
+        s.end();
+    }
     // Real native scheduler DATA callbacks on 3, 8 and 15 worker carriers;
     // distinct actor owners, never illicit parallel DATA on one serial actor.
     for(unsigned n:{3u,8u,15u}){
