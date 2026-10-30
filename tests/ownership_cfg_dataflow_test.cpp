@@ -291,6 +291,14 @@ int main() {
     };
     assert(rejected([&] { verify(region_join); }));
 
+    State left_region = {{"x", cell(kOwned)}};
+    left_region.at("x").shared_loans = 1;
+    left_region.at("x").shared_loan_ids = {600};
+    left_region.at("x").shared_loan_regions.emplace(600, owner_a);
+    State right_region = left_region;
+    right_region.at("x").shared_loan_regions.at(600) = owner_b;
+    assert(rejected([&] { join_into(left_region, right_region); }));
+
     // Token zero is the unique legacy entry-loan identity, not a value
     // that an independently executed branch may mint.
     Graph forged_entry;
