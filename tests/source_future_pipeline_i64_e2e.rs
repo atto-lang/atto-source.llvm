@@ -119,22 +119,12 @@ fn main() {
     let async_stage = fs::read_to_string(
         root.join("tests/fixtures/source-future-pipeline-async-stage-i64.ores"))
         .expect("read async-stage Future pipeline fixture");
-    let async_output = compile(
-        &compiler, &dir.0, "async-stage.ores", &async_stage);
-    assert!(async_output.status.success(),
-        "async-stage Future source compile failed: {}",
-        String::from_utf8_lossy(&async_output.stderr));
-    let async_ir = String::from_utf8_lossy(&async_output.stdout);
-    for needle in [
-        ".future.pending.consumed.producer",
-        "pending.plus_one_async.value",
-        "pending.twice.value",
-    ] {
-        assert!(async_ir.contains(needle),
-            "missing async-stage Future pipeline IR marker {needle}");
-    }
-    link_and_run(
-        &clang, &root, &dir.0, "async-stage", &async_output.stdout);
+    rejected(
+        &compiler,
+        &dir.0,
+        "async-stage.ores",
+        &async_stage,
+        "implicit |> Future flattening is forbidden");
 
     let borrowed = consumed.replace("rt take source()", "source()");
     rejected(&compiler, &dir.0, "borrowed.ores", &borrowed,
@@ -227,5 +217,5 @@ pub fnc main(): int {
         "tree shaking currently rejects Task/Future pipeline metadata edges"),
         "wrong tree-shake Future diagnostic: {tree_stderr}");
 
-    println!("PASS: source Future<int> producer/async-stage -> checked |> -> scheduler carrier -> await -> native 42");
+    println!("PASS: source Future<int> sync-stage pipeline executes; async stage preserves Future nesting and is rejected until explicit flatten/flat_map lowering");
 }
