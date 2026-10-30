@@ -19,9 +19,11 @@ public:
     struct Token {
         std::uint64_t generation;
         OresNativeActorRef actor;
+        // Weak value, not a retention lease or actor authority.
+        std::uint64_t request_context = 0;
     };
 
-    bool enqueue(OresNativeActorRef actor) noexcept {
+    bool enqueue(OresNativeActorRef actor, std::uint64_t request_context = 0) noexcept {
         if (phase() != Phase::reactor
                 || !actor.scheduler_domain
                 || !actor.generation
@@ -34,6 +36,7 @@ public:
         actor_domain_.store(actor.scheduler_domain, std::memory_order_relaxed);
         actor_slot_.store(actor.actor_slot, std::memory_order_relaxed);
         actor_generation_.store(actor.generation, std::memory_order_relaxed);
+        request_context_.store(request_context, std::memory_order_relaxed);
         state_.store(
             (generation << 2) | static_cast<unsigned>(Phase::queued),
             std::memory_order_release);
@@ -70,7 +73,8 @@ public:
             OresNativeActorRef{
                 actor_domain_.load(std::memory_order_relaxed),
                 actor_slot_.load(std::memory_order_relaxed),
-                actor_generation_.load(std::memory_order_relaxed)}};
+                actor_generation_.load(std::memory_order_relaxed)},
+            request_context_.load(std::memory_order_relaxed)};
     }
 
 private:
@@ -92,7 +96,9 @@ private:
                 || token.actor.actor_slot
                     != actor_slot_.load(std::memory_order_acquire)
                 || token.actor.generation
-                    != actor_generation_.load(std::memory_order_acquire))
+                    != actor_generation_.load(std::memory_order_acquire)
+                || token.request_context
+                    != request_context_.load(std::memory_order_acquire))
             return false;
 
         auto expected = expected_state;
@@ -106,5 +112,6 @@ private:
     std::atomic<std::uint64_t> actor_domain_{0};
     std::atomic<std::uint64_t> actor_slot_{0};
     std::atomic<std::uint64_t> actor_generation_{0};
+    std::atomic<std::uint64_t> request_context_{0};
 };
 } // namespace oreslang::runtime
