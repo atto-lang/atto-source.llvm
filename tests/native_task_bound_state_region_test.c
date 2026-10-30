@@ -67,6 +67,38 @@ static ores_std_sync_result release_retry(
     return out;
 }
 
+static void test_actor_arena_identity_binding(void) {
+    OresActorArena* arena =
+        ores_actor_arena_open(77u, 13u, 2u, 64u, 128u);
+    OresActorArena* foreign =
+        ores_actor_arena_open(78u, 13u, 2u, 64u, 128u);
+    CHECK(arena != NULL && foreign != NULL);
+
+    ores_task_bound_state_region region =
+        ORES_TASK_BOUND_STATE_REGION_UNBOUND_INIT;
+    ores_std_sync_code code;
+    do { code = ores_state_region_bind_actor_arena(&region, arena); }
+    while (code == ORES_STD_SYNC_RETRY);
+    CHECK(code == ORES_STD_SYNC_GRANTED);
+    CHECK(ores_state_region_valid(&region));
+    CHECK(ores_state_region_matches_actor_arena(&region, arena));
+    CHECK(!ores_state_region_matches_actor_arena(&region, foreign));
+
+    OresArenaIdentity identity = {0};
+    CHECK(ores_actor_arena_identity(arena, &identity));
+    CHECK(region.region_id == identity.domain);
+    CHECK(region.generation == identity.incarnation);
+
+    do { code = ores_state_region_bind_actor_arena(&region, foreign); }
+    while (code == ORES_STD_SYNC_RETRY);
+    CHECK(code == ORES_STD_SYNC_INVALID);
+
+    ores_actor_arena_retire(arena);
+    ores_actor_arena_retire(foreign);
+    CHECK(ores_actor_arena_try_destroy(arena) == 1);
+    CHECK(ores_actor_arena_try_destroy(foreign) == 1);
+}
+
 static void test_execution_store_authentication(void) {
     OresNativeExecutionContextStore* store =
         ores_native_execution_context_store_open(4u);
@@ -275,6 +307,7 @@ static void test_concurrent_task_bound_stress(void) {
 }
 
 int main(void) {
+    test_actor_arena_identity_binding();
     test_execution_store_authentication();
     test_identity_and_stale_release();
     test_foreign_region_and_generation();
