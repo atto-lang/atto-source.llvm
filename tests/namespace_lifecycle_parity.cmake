@@ -135,12 +135,19 @@ function(expect_native_exit name source_file expected_exit)
     string(APPEND native_file ".exe")
   endif()
   file(WRITE "${ir_file}" "${compiled_ir}")
+  # A successful linker exit must produce a fresh regular executable. A stale
+  # binary from a prior CTest attempt must never satisfy the positive gate.
+  file(REMOVE "${native_file}")
+  if(EXISTS "${native_file}" OR IS_SYMLINK "${native_file}")
+    message(FATAL_ERROR "${name} could not remove stale native output")
+  endif()
   execute_process(
     COMMAND "${CLANG}" -O0 -x ir "${ir_file}" -o "${native_file}"
     RESULT_VARIABLE clang_status OUTPUT_VARIABLE clang_out ERROR_VARIABLE clang_err
     WORKING_DIRECTORY "${WORK_DIR}" TIMEOUT 20)
-  if(NOT "${clang_status}" STREQUAL "0" OR NOT EXISTS "${native_file}")
-    message(FATAL_ERROR "${name} failed native IR link: ${clang_status}: ${clang_err}")
+  if(NOT "${clang_status}" STREQUAL "0" OR NOT EXISTS "${native_file}"
+     OR IS_DIRECTORY "${native_file}" OR IS_SYMLINK "${native_file}")
+    message(FATAL_ERROR "${name} failed to link a fresh native executable: ${clang_status}: ${clang_err}")
   endif()
   execute_process(
     COMMAND "${native_file}"
