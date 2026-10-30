@@ -65,6 +65,13 @@ class IsolateVM final {
     IsolatePhase phase = IsolatePhase::Created;
     std::vector<std::uint8_t> heap; // logical bounded tenant region
     std::unordered_map<std::uint64_t, std::uint64_t> actors;
+    // Host-only scalar slots scoped to an actor incarnation, not the tenant.
+    // Native actor arenas and source-level actor state remain separate work.
+    struct ActorScalarSlots {
+        std::uint64_t generation = 0;
+        std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> slots{};
+    };
+    std::unordered_map<std::uint64_t, ActorScalarSlots> actor_scalar_slots;
     std::uint64_t next_actor_generation = 1;
     std::size_t active_guest_calls = 0;
     // Temporary serialized entry for trusted synchronous scalar guests.
