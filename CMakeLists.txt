@@ -58,6 +58,12 @@ if(BUILD_TESTING)
         COMMAND oreslang-strict-signed64-oracle-test)
     set_tests_properties(native_strict_signed64_reference PROPERTIES TIMEOUT 15)
 
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_math_unary_precision_contract
+        COMMAND "${Python3_EXECUTABLE}" -m unittest
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_math_unary_precision_contract.py" -v)
+    set_tests_properties(native_math_unary_precision_contract PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
