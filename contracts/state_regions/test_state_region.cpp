@@ -1,5 +1,6 @@
 #include "state_region.hpp"
 #include <cassert>
+#define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); std::abort(); } } while (false)
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -22,27 +23,27 @@ using ores::state::Status;
 int main() {
     Region region;
     const size_t before = allocations.load();
-    assert(region.acquire(Mode::read) == Status::ok);
-    assert(region.acquire(Mode::read) == Status::ok);
-    assert(region.acquire(Mode::write) == Status::conflicting_access);
-    assert(region.retire() == Status::busy);
-    assert(region.release(Mode::read) == Status::ok);
-    assert(region.release(Mode::read) == Status::ok);
-    assert(region.acquire(Mode::write) == Status::ok);
-    assert(region.pin() == Status::ok);
-    assert(region.acquire(Mode::read) == Status::conflicting_access);
-    assert(region.retire() == Status::busy);
+    CHECK(region.acquire(Mode::read) == Status::ok);
+    CHECK(region.acquire(Mode::read) == Status::ok);
+    CHECK(region.acquire(Mode::write) == Status::conflicting_access);
+    CHECK(region.retire() == Status::busy);
+    CHECK(region.release(Mode::read) == Status::ok);
+    CHECK(region.release(Mode::read) == Status::ok);
+    CHECK(region.acquire(Mode::write) == Status::ok);
+    CHECK(region.pin() == Status::ok);
+    CHECK(region.acquire(Mode::read) == Status::conflicting_access);
+    CHECK(region.retire() == Status::busy);
     uint64_t value = 0;
     for (int i = 0; i < 100000; ++i) ++value;
-    assert(value == 100000);
-    assert(region.release(Mode::write) == Status::ok);
-    assert(region.version == 1);
-    assert(region.retire() == Status::busy);
-    assert(region.unpin() == Status::ok);
-    assert(region.retire() == Status::ok);
-    assert(region.acquire(Mode::read) == Status::retired);
-    assert(region.release(Mode::write) == Status::bad_release);
-    assert(region.unpin() == Status::bad_release);
-    assert(allocations.load() == before);
+    CHECK(value == 100000);
+    CHECK(region.release(Mode::write) == Status::ok);
+    CHECK(region.version == 1);
+    CHECK(region.retire() == Status::busy);
+    CHECK(region.unpin() == Status::ok);
+    CHECK(region.retire() == Status::ok);
+    CHECK(region.acquire(Mode::read) == Status::retired);
+    CHECK(region.release(Mode::write) == Status::bad_release);
+    CHECK(region.unpin() == Status::bad_release);
+    CHECK(allocations.load() == before);
     std::puts("state_region: PASS (100000 mutations; 0 counted C++ heap allocations)");
 }
