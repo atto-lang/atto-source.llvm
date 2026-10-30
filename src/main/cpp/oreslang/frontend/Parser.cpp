@@ -610,6 +610,16 @@ public:
             }
             if (token_.text == "model")
                 fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
+            // Explicit inversion is a storage/ownership request, not an
+            // ordinary class or value record. Fail before native IR emission
+            // until both row schema and checked one-level lowering are wired.
+            if (accept("inverted")) {
+                if (accept("struct"))
+                    fail("native inverted struct requires typed one-level SoA ownership and packed-value lowering");
+                if (accept("class"))
+                    fail("native inverted class requires typed one-level SoA ownership and row-method lowering");
+                fail("native inverted declaration requires struct or class");
+            }
             if (accept("enum")) {
                 if (token_.text != "MaxActorThreads")
                     fail("native user-defined tagged enum requires ADT layout and constructor lowering; expected 'MaxActorThreads'");
