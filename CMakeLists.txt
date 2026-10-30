@@ -1767,7 +1767,8 @@ if(BUILD_TESTING)
     # credit survives until an authenticated actor-owned cleanup turn finishes.
     add_executable(oreslang-actor-ledger-scheduler-stop-cleanup-test
         tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp
-        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
     target_include_directories(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE cxx_std_17)

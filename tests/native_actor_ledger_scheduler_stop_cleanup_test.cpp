@@ -1,6 +1,7 @@
 // Full NativeActorScheduler + ActorLedgerLeaseAdapter test: requires real scheduler.
 // Tests an externally issued STOP while original actor DATA frame is retained.
 #include "oreslang/runtime/ActorLedgerLeaseAdapter.hpp"
+#include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -21,6 +22,9 @@ struct Fixture {
     std::unique_ptr<Adapter> ledger;
     Adapter::Token first{};
     OresNativeRetainedDataTicket retained{};
+    OresActorI64Heap* heap = nullptr;
+    OresActorSlot owned_slot{};
+    OresActorLoan pinned_loan{};
     std::atomic<int> entered{0}, release_data{0};
     std::atomic<int> cleanup_entered{0}, release_cleanup{0};
     std::atomic<int> data_calls{0}, cleanup_calls{0};
@@ -40,6 +44,13 @@ extern "C" void actor_data(void* raw, size_t index, std::uint64_t payload) {
     CHECK(index == 0 && payload == 17);
     CHECK(ores_native_actor_scheduler_is_current_actor(f.scheduler, f.actor));
     CHECK(f.ledger->current_actor_lease());
+    // The actual actor-owned native heap is pinned across this suspended
+    // DATA callback and stays alive when STOP seals the logical mailbox.
+    OresActorTurn first_turn = ores_actor_i64_heap_enter(
+        f.heap, 7001, f.actor.generation);
+    f.owned_slot = ores_actor_i64_heap_new(f.heap, first_turn, 42);
+    f.pinned_loan = ores_actor_i64_heap_borrow(f.heap, first_turn, f.owned_slot);
+    ores_actor_i64_heap_leave(f.heap, first_turn);
     Adapter::Selection choice{};
     CHECK(f.ledger->admit(Adapter::Kind::Mail, f.first) == S::Ok);
     CHECK(f.ledger->claim(choice) == S::Ok);
@@ -62,6 +73,14 @@ extern "C" int actor_cleanup(void* raw, size_t index,
     CHECK(ticket.slot_generation == f.retained.slot_generation);
     CHECK(ticket.execution_id == f.retained.execution_id);
     CHECK(ores_native_actor_scheduler_retained_data_count(f.scheduler, f.actor) == 1);
+    // The physical heap is entered by the authenticated scheduler cleanup
+    // carrier, not by the external STOP caller or a timer producer.
+    OresActorTurn cleanup_turn = ores_actor_i64_heap_enter(
+        f.heap, 7001, f.actor.generation);
+    CHECK(ores_actor_i64_heap_read(f.heap, cleanup_turn, f.owned_slot) == 42);
+    ores_actor_i64_heap_leave(f.heap, cleanup_turn);
+    ores_actor_i64_heap_retire(f.heap);
+    CHECK(!ores_actor_i64_heap_try_destroy(f.heap)); // shared loan still live
     // A scheduler-owned cleanup turn, not the STOP caller, owns mutation.
     CHECK(f.ledger->current_actor_lease());
     CHECK(f.ledger->stop_and_request_cleanup() == S::Ok);
@@ -76,6 +95,9 @@ extern "C" int actor_cleanup(void* raw, size_t index,
     Adapter::Snapshot snapshot{};
     CHECK(f.ledger->snapshot(snapshot));
     CHECK(snapshot.closed && snapshot.live == 0 && !snapshot.executing);
+    // Physical guest exit precedes releasing the retained heap loan. Actual
+    // free is delayed until after the scheduler publishes terminal DONE.
+    ores_actor_i64_heap_release(f.heap, f.pinned_loan);
     // Returning success authenticates physical exit before the scheduler
     // acknowledges abandoned DATA and permits terminal heap reclamation.
     return 1;
@@ -89,6 +111,8 @@ int main() {
     f.actor = ores_native_actor_scheduler_spawn(f.scheduler, 0);
     CHECK(f.actor.scheduler_domain != 0);
     f.ledger = std::make_unique<Adapter>(f.scheduler, f.actor, 7001);
+    f.heap = ores_actor_i64_heap_open(7001, f.actor.generation, 2);
+    CHECK(f.heap);
     CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 17));
     wait_for(f.entered, "actor first suspension");
     // B is accepted behind suspended A, then STOP seals and abandons B.
@@ -101,12 +125,17 @@ int main() {
     wait_for(f.cleanup_entered, "authenticated cleanup turn");
     CHECK(!ores_native_actor_scheduler_poll_done(f.scheduler, f.actor));
     CHECK(f.cleanup_calls.load() == 1);
+    CHECK(!ores_actor_i64_heap_try_destroy(f.heap)); // outstanding loan
     CHECK(!ores_native_actor_scheduler_complete_retained_data(f.scheduler, f.retained));
     CHECK(!ores_native_actor_scheduler_abandon_retained_data(f.scheduler, f.retained));
     f.release_cleanup.store(1, std::memory_order_release);
     CHECK(ores_native_actor_scheduler_wait_done(f.scheduler, f.actor));
     CHECK(f.data_calls.load() == 1 && f.cleanup_calls.load() == 1);
     CHECK(!ores_native_actor_scheduler_retained_data_count(f.scheduler, f.actor));
+    // Once the authenticated cleanup callback has exited and native DATA is
+    // fully retired, the physical actor heap may finally be reclaimed.
+    CHECK(ores_actor_i64_heap_try_destroy(f.heap));
+    f.heap = nullptr;
     OresNativeActorTerminalState terminal{};
     CHECK(ores_native_actor_scheduler_terminal_state(f.scheduler, f.actor, &terminal));
     CHECK(terminal.kind == ORES_NATIVE_TERMINATION_STOPPED);
