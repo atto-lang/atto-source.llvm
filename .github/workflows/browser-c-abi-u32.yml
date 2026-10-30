@@ -8,6 +8,7 @@ on:
       - 'tests/fixtures/browser-c-abi-version-u32*.ores'
       - 'tests/browser_c_abi_u32_host.c'
       - 'scripts/verify-browser-c-abi-u32.sh'
+      - 'tests/ci/test-browser-c-abi-u32-gates.sh'
       - '.github/workflows/browser-c-abi-u32.yml'
       - 'CMakeLists.txt'
   workflow_dispatch:
@@ -44,6 +45,13 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y llvm-dev clang cmake ninja-build binutils
+      - name: Reject spoofed compiler and mismatched source identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/verify-browser-c-abi-u32.sh
+          bash -n tests/ci/test-browser-c-abi-u32-gates.sh
+          bash tests/ci/test-browser-c-abi-u32-gates.sh
       - name: Build real compiler outside the clean source checkout
         shell: bash
         run: |
