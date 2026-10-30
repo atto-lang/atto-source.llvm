@@ -1096,9 +1096,23 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
-    oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores
+        --diagnostic "native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
-    oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
+    oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores
+        --diagnostic "native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet")
+    oreslang_contract_test(native_isolated_actor_state_schema_metadata_boundary
+        source-isolated-actor-state-schema-boundary.ores
+        --diagnostic "native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet")
+    oreslang_contract_test(native_isolated_actor_state_duplicate_rejected
+        source-isolated-actor-state-duplicate-reject.ores
+        --diagnostic "duplicate actor state field 'count'")
+    oreslang_contract_test(native_isolated_actor_state_type_rejected
+        source-isolated-actor-state-type-reject.ores
+        --diagnostic "native actor state schema admits only int/bool fields in this metadata slice")
+    oreslang_contract_test(native_isolated_actor_requires_state
+        source-isolated-actor-missing-state-reject.ores
+        --diagnostic "native isolated actor requires sealed state { ... } before methods")
 
     # Native OS ABI is i32 even though Oreslang int is represented as i64.
     oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
