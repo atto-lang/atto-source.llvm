@@ -126,48 +126,70 @@ def optional_gate_selftest():
     print(f"RT_TIMER_OPTIONAL_GATE_SELFTEST_PASS allowed=2 denied={denied}")
 
 
-# Safety prerequisite for this stacked timer PR: a CMake restack must not
-# erase the parent ledger stress, lease-authority or STOP-cleanup targets.
+# Safety prerequisite: a CMake restack must not drop, bypass, or misbind
+# parent actor ledger, fencing, lease authority and scheduler STOP CTests.
 ACTOR_CTEST_INPUTS = (
     ("native_actor_execution_ledger_serialization",
+     "oreslang-actor-execution-ledger-test",
      "tests/native_actor_execution_ledger_test.cpp"),
     ("native_actor_execution_ledger_deterministic_stress",
+     "oreslang-actor-execution-ledger-stress-test",
      "tests/native_actor_execution_ledger_state_stress_test.cpp"),
     ("native_actor_ledger_stop_wake_fencing_interleavings",
+     "oreslang-actor-ledger-fencing-interleavings-test",
      "tests/native_actor_ledger_fencing_interleavings_test.cpp"),
     ("native_actor_ledger_lease_authority_boundary",
+     "oreslang-actor-ledger-lease-authority-test",
      "tests/native_actor_ledger_lease_authority_test.cpp"),
     ("native_actor_ledger_authenticated_scheduler_bridge",
+     "oreslang-actor-ledger-scheduler-bridge-test",
      "tests/native_actor_ledger_scheduler_bridge_test.cpp"),
     ("native_actor_ledger_scheduler_stop_retained_cleanup",
+     "oreslang-actor-ledger-scheduler-stop-cleanup-test",
      "tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp"),
 )
 
 
 def require_actor_ctest_registrations(cmake):
-    for test_name, fixture in ACTOR_CTEST_INPUTS:
-        pattern = (r"(?m)^[ \t]*add_test\([ \t]*NAME[ \t]+"
-                   + re.escape(test_name) + r"(?=\s|\))")
-        count = len(re.findall(pattern, cmake))
-        assert count == 1, (
-            f"actor dependency CTest missing or duplicated: {test_name}"
+    # A commented-out target, fixture or CTest is not an executable gate.
+    cmake = re.sub(r"(?m)#[^\n]*$", "", cmake)
+    for test_name, target, fixture in ACTOR_CTEST_INPUTS:
+        tpat = (r"(?ms)^[ \t]*add_test\([ \t]*NAME[ \t]+"
+                + re.escape(test_name)
+                + r"(?=\s|\))[ \t\n]+COMMAND[ \t\n]+"
+                + re.escape(target) + r"[ \t\n]*\)")
+        assert len(re.findall(tpat, cmake)) == 1, (
+            f"actor dependency CTest missing or misbound: {test_name}"
         )
-        assert fixture in cmake, f"actor dependency fixture omitted: {fixture}"
+        epat = (r"(?ms)^[ \t]*add_executable\([ \t]*"
+                + re.escape(target) + r"(?=\s|\))(?P<inputs>[^)]*)\)")
+        matches = list(re.finditer(epat, cmake))
+        assert len(matches) == 1, (
+            f"actor dependency executable missing or duplicated: {target}"
+        )
+        inputs = matches[0].group("inputs").split()
+        assert fixture in inputs, (
+            f"actor test {test_name} source target missing {fixture}"
+        )
 
 
 def actor_ctest_selftest():
     good = "".join(
-        f"add_executable(stub_{i}\n    {fixture})\n"
-        f"add_test(NAME {test_name} COMMAND stub_{i})\n"
-        for i, (test_name, fixture) in enumerate(ACTOR_CTEST_INPUTS)
+        f"add_executable({target}\n    {fixture})\n"
+        f"add_test(NAME {test_name} COMMAND {target})\n"
+        for test_name, target, fixture in ACTOR_CTEST_INPUTS
     )
     require_actor_ctest_registrations(good)
     denied = 0
-    for test_name, fixture in ACTOR_CTEST_INPUTS:
+    for test_name, target, fixture in ACTOR_CTEST_INPUTS:
         for mutant in (
             good.replace(f"add_test(NAME {test_name}",
                          f"# add_test(NAME {test_name}"),
             good.replace(fixture, "tests/omitted_stub.cpp"),
+            good.replace(f"COMMAND {target})", "COMMAND wrong_target)"),
+            good.replace(f"add_executable({target}",
+                         f"# add_executable({target}"),
+            good + f"\nadd_test(NAME {test_name} COMMAND {target})\n",
         ):
             try:
                 require_actor_ctest_registrations(mutant)
@@ -175,10 +197,10 @@ def actor_ctest_selftest():
                 denied += 1
             else:
                 raise AssertionError(
-                    f"lost actor CTest dependency not blocked: {test_name}"
+                    f"actor CTest source/target bypass: {test_name}"
                 )
-    assert denied == 12, f"actor CTest mutants escaped: {denied}"
-    print("RT_TIMER_PARENT_ACTOR_CTEST_SELFTEST_PASS allowed=1 denied=12")
+    assert denied == 30, f"actor CTest mutants escaped: {denied}"
+    print("RT_TIMER_PARENT_ACTOR_CTEST_SELFTEST_PASS allowed=1 denied=30")
 
 
 def audit_selftest():
