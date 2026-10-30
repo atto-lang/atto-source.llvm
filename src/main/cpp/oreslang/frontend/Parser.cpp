@@ -614,8 +614,10 @@ public:
             // ordinary class or value record. Fail before native IR emission
             // until both row schema and checked one-level lowering are wired.
             if (accept("inverted")) {
-                if (accept("struct"))
-                    fail("native inverted struct requires typed one-level SoA ownership and packed-value lowering");
+                if (accept("struct")) {
+                    program.inverted_structs.push_back(inverted_struct_declaration(exported));
+                    continue;
+                }
                 if (accept("class"))
                     fail("native inverted class requires typed one-level SoA ownership and row-method lowering");
                 fail("native inverted declaration requires struct or class");
@@ -702,6 +704,15 @@ public:
                 }
                 if (token_.text == "model")
                     fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
+                if (accept("inverted")) {
+                    if (accept("struct")) {
+                        program.inverted_structs.push_back(inverted_struct_declaration(public_class));
+                        continue;
+                    }
+                    if (accept("class"))
+                        fail("native inverted class requires typed one-level SoA ownership and row-method lowering");
+                    fail("native inverted declaration requires struct or class");
+                }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
@@ -730,7 +741,7 @@ public:
         validate_type_only_declarations(program);
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
-                 !program.actors.empty() || !program.contracts.empty() ||
+                 !program.actors.empty() || !program.inverted_structs.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
             fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
         }
@@ -739,8 +750,9 @@ public:
         resolve_alias_uses(program);
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty() && program.generators.empty() &&
-                program.type_only_declarations.empty())
-            fail("expected at least one function, generator, actor or type-only declaration");
+                program.type_only_declarations.empty() &&
+                program.inverted_structs.empty())
+            fail("expected at least one function, generator, actor, type-only or inverted struct declaration");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.generators.empty() || !program.actors.empty() ||
@@ -754,6 +766,42 @@ public:
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    std::unordered_set<std::string> inverted_struct_names_;
+    InvertedStructDecl inverted_struct_declaration(bool exported) {
+        InvertedStructDecl decl;
+        decl.exported = exported;
+        decl.offset = token_.offset;
+        decl.name = identifier();
+        if (!inverted_struct_names_.insert(decl.name).second)
+            fail("duplicate inverted struct declaration");
+        require("as");
+        std::unordered_set<std::string> members;
+        while (token_.text != "end") {
+            if (token_.kind == Kind::End)
+                fail("unterminated inverted struct declaration");
+            if (decl.fields.size() == 64)
+                fail("inverted struct field limit exceeded (64)");
+            InvertedStructField field;
+            field.offset = token_.offset;
+            field.mutable_field = accept("let");
+            field.name = identifier();
+            if (!members.insert(field.name).second)
+                fail("duplicate inverted struct field");
+            require(":");
+            if (accept("int") || accept("i64"))
+                field.type = InvertedScalarKind::I64;
+            else if (accept("bool"))
+                field.type = InvertedScalarKind::Bool;
+            else if (accept("f64"))
+                field.type = InvertedScalarKind::F64;
+            else fail("inverted struct member requires fixed scalar int/i64, bool or f64; nested inverted, pointers and resources require checked layout lowering");
+            require(";");
+            decl.fields.push_back(std::move(field));
+        }
+        if (decl.fields.empty()) fail("empty inverted struct is not admitted");
+        require("end");
+        return decl;
+    }
     std::vector<NativeSumType> sum_types_;
     bool is_sum_name(const std::string& name) const {
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
@@ -5799,6 +5847,12 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
+    // This AST is intentionally NOT an authorization for LLVM emission.
+    // The experimental i64-only guest adapter remains behind its explicit
+    // CLI flag until common nominal layouts and ownership HIR/MIR are wired.
+    if (!program.inverted_structs.empty())
+        throw std::runtime_error(
+            "native inverted struct schema parsed but typed SoA HIR/MIR ownership lowering is not implemented");
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
