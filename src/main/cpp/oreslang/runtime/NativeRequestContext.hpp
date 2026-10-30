@@ -230,6 +230,33 @@ public:
         return BoundExchange<Slots,MaxBytes>(std::move(*exchange_pin),table,
                     body,transport_owner,std::move(*read_pin));
     }
+    // Trusted reactor send path: the scheduler receives the exact dispatch
+    // ticket that was bound to the exchange, never a user-supplied payload.
+    // On rejection rollback queued->reactor before returning; caller must
+    // close both handles and release BoundExchange (in that order).
+    template<std::size_t Slots,std::size_t MaxBytes>
+    OresNativeSendStatus submit_bound_exchange(
+            OresNativeActorScheduler* scheduler,
+            const BoundExchange<Slots,MaxBytes>& bound) noexcept {
+        const auto token=bound.token();
+        auto* exchange=bound.exchange_pin_.exchange_;
+        if(!scheduler || !exchange || !token.dispatch_ticket ||
+                !token.request_context || token.request_registry!=registry_id_
+                || exchange->phase()!=NativeHttpExchange::Phase::queued)
+            return ORES_NATIVE_SEND_INVALID_REF;
+        const auto observed=exchange->token();
+        if(observed.generation!=token.generation ||
+                observed.dispatch_ticket!=token.dispatch_ticket ||
+                observed.request_registry!=token.request_registry ||
+                observed.request_context!=token.request_context ||
+                !same(observed.actor,token.actor))
+            return ORES_NATIVE_SEND_INVALID_REF;
+        const auto result=ores_native_actor_scheduler_try_send(
+                scheduler,token.actor,token.dispatch_ticket);
+        if(result!=ORES_NATIVE_SEND_ACCEPTED && !exchange->rollback(token))
+            std::terminate(); // no accepted callback can own a rejected send
+        return result;
+    }
     // Durable move-only suspension link: stored in Task/continuation frame,
     // not worker TLS. Lease survives physical carrier exit.
     struct Suspension final {
