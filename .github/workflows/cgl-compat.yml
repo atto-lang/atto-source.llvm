@@ -9,6 +9,10 @@ on:
       - 'tests/test_cgl_preflight.py'
       - 'tests/native_cgl_host_admission_test.cpp'
       - 'tests/native_cgl_dispatch_evidence_test.cpp'
+      - 'tests/native_cgl_carrier_slice_trace_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/CglCarrierDispatchTrace.hpp'
+      - 'src/main/cpp/oreslang/runtime/MultiActorCarrier.hpp'
+      - 'src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp'
       - 'src/main/cpp/oreslang/runtime/CglDispatchEvidence.hpp'
       - 'tests/fixtures/forward-call-main.ores'
       - 'src/main/cpp/oreslang/runtime/CglHostAdmission.hpp'
@@ -46,22 +50,20 @@ jobs:
       - name: Build native compiler
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --target oreslang-llvmc oreslang-native-cgl-host-admission-test oreslang-native-cgl-dispatch-evidence-test --parallel 2
+          cmake --build build --target oreslang-llvmc oreslang-native-cgl-host-admission-test oreslang-native-cgl-dispatch-evidence-test oreslang-native-cgl-carrier-slice-trace-test --parallel 2
       - name: End to end source to ELF64 process on generic Linux
         run: bash scripts/cgl-native-smoke.sh
-      - name: Existing native scalar source regression
+      - name: Check named CGL/dispatch/source native tests
+        shell: bash
         run: |
           set -euo pipefail
-          # Run each required test separately; --no-tests=error refuses missing tests.
+          # Fail if any required CTest disappears from the build.
           ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^native_cgl_linux_host_admission
+            -R '^native_cgl_linux_host_admission$'
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            -R '^native_cgl_timer_to_user_start_evidence$'
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            -R '^native_cgl_carrier_slice_timestamp_provenance$'
           ctest --test-dir build --output-on-failure --no-tests=error \
             -R '^native_source_i64_os_exit_subset$'
 
-          ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^native_cgl_timer_to_user_start_evidence
-          ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^native_source_i64_os_exit_subset$'
-
-          ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^native_source_i64_os_exit_subset$'
