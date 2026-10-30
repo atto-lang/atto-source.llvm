@@ -2,6 +2,26 @@
 use super::{require, run, stderr, stdout, TempDir};
 use std::path::Path;
 
+#[cfg(unix)]
+fn expected_llvm_trap_signal() -> Result<i32, String> {
+    // LLVM lowers llvm.trap to UD2/SIGILL on x86 and BRK/SIGTRAP on AArch64.
+    // Keep this mapping explicit and fail closed on architectures we have not
+    // qualified instead of accepting an unrelated fatal signal.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        return Ok(4);
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        return Ok(5);
+    }
+    #[allow(unreachable_code)]
+    Err(format!(
+        "checked-i64 LLVM trap signal is not pinned for architecture {}",
+        std::env::consts::ARCH
+    ))
+}
+
 /// Execute compiler-produced native code, including genuine signal traps.
 /// This is not a host arithmetic simulation or a typed actor-error contract.
 #[cfg(unix)]
@@ -90,10 +110,9 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                 require(observed.status.code() == Some(expected),
                     format!("{name} {optimization}: expected {expected}, got {:?}", observed.status))?;
             } else {
-                // LLVM emits UD2/SIGILL on Linux x64 and BRK/SIGTRAP on
-                // Apple Silicon. Match the target's precise trap signal;
-                // normal exits and unrelated signals must still fail.
-                let signal = if cfg!(all(target_os = "macos", target_arch = "aarch64")) { 5 } else { 4 };
+                // Match the target's precise LLVM trap signal; normal exits,
+                // unrelated fatal signals, and unqualified architectures fail.
+                let signal = expected_llvm_trap_signal()?;
                 require(observed.status.signal() == Some(signal),
                     format!("{name} {optimization}: expected trap signal {signal}, got {:?}", observed.status))?;
             }
