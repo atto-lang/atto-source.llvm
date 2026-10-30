@@ -49,11 +49,11 @@ fnc main(): int { return 42; }
     check(root.functions.size() == 1 && root.functions[0].name == "main",
           "following function lost");
     auto unresolved = parse_unresolved_program(
-        "define pub inverted struct Public as val: int; end");
+        "define pub inverted struct Public as id: int; end");
     check(unresolved.inverted_structs.size() == 1 &&
           unresolved.inverted_structs[0].exported, "define pub not retained");
     const auto alternate = parse_unresolved_program(
-        "pub define inverted struct Public as val: int; end");
+        "pub define inverted struct Public as id: int; end");
     check(alternate.inverted_structs.size() == 1 &&
           alternate.inverted_structs[0].exported, "pub define not retained");
     const auto nested = parse_unresolved_program(R"ores(
