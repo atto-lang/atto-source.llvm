@@ -185,6 +185,39 @@ int main() {
         validate_future_pipeline_plan(scalar_claims_future);
     }, "non-flattening Future pipeline stage cannot own");
 
+    // Compiler-owned proof metadata must reject malformed enum encodings.
+    // A stale/unknown input mode previously fell through to Send-only checks,
+    // bypassing the borrowed input's Send + Share requirement.
+    auto malformed_input = plan(
+        12, PipelineInputOwnership::ConsumedUpstreamOwnedPayload,
+        boxed(scalar()), scalar(), true);
+    malformed_input.input_ownership =
+        static_cast<PipelineInputOwnership>(0xff);
+    rejected([&] {
+        validate_future_pipeline_plan(malformed_input);
+    }, "unknown input ownership");
+    rejected([&] {
+        (void)publish_future_pipeline_plan(malformed_input, admission(malformed_input));
+    }, "unknown input ownership");
+
+    auto malformed_provenance = plan(
+        13, PipelineInputOwnership::ConsumedUpstreamOwnedPayload,
+        scalar(), scalar(), true);
+    malformed_provenance.effect_provenance =
+        static_cast<PipelineEffectProvenance>(0xff);
+    rejected([&] {
+        validate_future_pipeline_plan(malformed_provenance);
+    }, "unknown effect provenance");
+
+    auto malformed_future_ownership = plan(
+        14, PipelineInputOwnership::ConsumedUpstreamOwnedPayload,
+        scalar(), scalar(), true);
+    malformed_future_ownership.produced_future_ownership =
+        static_cast<PipelineStageFutureOwnership>(0xff);
+    rejected([&] {
+        validate_future_pipeline_plan(malformed_future_ownership);
+    }, "unknown deferred Future ownership");
+
     // Unknown upstream effect provenance survives both rt take and later edges.
     const FunctionEffects none{};
     const auto opaque = pipeline_root_effects(none, false);
