@@ -223,11 +223,12 @@ public:
     }
 
     void suspend() {
-        open(); no_loans();
-        // This operation proves only that no *field loans* are live. Actual
-        // actor owner pinning, scheduler contexts and task quiescence are
-        // NOT proved by this simple straight-line analysis.
-        append(OpKind::Suspend, layout_.columns());
+        open();
+        // The owner is stack/region-bound, and no pinned continuation or
+        // actor quiescence contract has been proved in this first linear
+        // HIR. Even loan-free suspension is denied until that exists.
+        throw std::logic_error(
+            "inverted owner cannot cross suspension without proven pinned lifetime");
     }
 
     void close() {
