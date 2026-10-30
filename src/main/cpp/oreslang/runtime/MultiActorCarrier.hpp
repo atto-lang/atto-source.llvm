@@ -13,6 +13,8 @@
 // No IO, borrowed frame, GC, or realtime admission is implemented here.
 namespace oreslang::runtime {
 
+class CglCarrierDispatchTrace;
+
 class MultiActorCarrier final {
     struct Shared;
 public:
@@ -76,7 +78,9 @@ public:
 
     // Registration is setup-only. Each actor gets a unique token and its
     // caller-owned state must outlive join(). Slots are never reused.
-    ActorToken register_actor(void* state, Slice slice, Cancel cancel);
+    // Optional trace sink must outlive join; reading it during dispatch is unsafe.
+    ActorToken register_actor(void* state, Slice slice, Cancel cancel,
+                              CglCarrierDispatchTrace* trace = nullptr);
     Producer producer() const noexcept;
     void start();
     void request_stop() noexcept; // reserved CONTROL; independent of user mail
@@ -89,6 +93,7 @@ private:
         void* state = nullptr;
         Slice slice = nullptr;
         Cancel cancel = nullptr;
+        CglCarrierDispatchTrace* trace = nullptr;
         std::uint64_t generation = 0;
         std::array<Message, mailbox_capacity> mailbox{};
         std::size_t head = 0, size = 0;
