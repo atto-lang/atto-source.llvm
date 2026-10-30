@@ -519,6 +519,50 @@ int main(){
         CHECK(ores_native_actor_scheduler_try_destroy(s.scheduler));
         s.scheduler=nullptr;
     }
+    // Physical descendant and I/O completion leases are independent.
+    // Cancellation cannot reclaim actor-owned request storage until BOTH
+    // worker threads have actually exited their retained native scopes.
+    // This is a host-memory foundation, not yet compiled source Task wiring.
+    {
+        Registry contexts;
+        const OresNativeActorRef owner{91,2,5};
+        auto h=contexts.open(owner,Suite::info(800));CHECK(h);
+        auto child=contexts.retain(*h,owner);CHECK(child);
+        auto io=contexts.retain(*h,owner);CHECK(io);
+        std::atomic<unsigned> started{0},release_order{0},done{0};
+        std::thread child_thread([lease=std::move(*child),
+                                  &started,&release_order,&done]() mutable {
+            started.fetch_add(1,std::memory_order_release);
+            while(release_order.load(std::memory_order_acquire)<1)
+                std::this_thread::yield();
+            lease.reset();
+            done.fetch_add(1,std::memory_order_release);
+        });
+        std::thread io_thread([lease=std::move(*io),
+                               &started,&release_order,&done]() mutable {
+            started.fetch_add(1,std::memory_order_release);
+            while(release_order.load(std::memory_order_acquire)<2)
+                std::this_thread::yield();
+            lease.reset();
+            done.fetch_add(1,std::memory_order_release);
+        });
+        while(started.load(std::memory_order_acquire)!=2)
+            std::this_thread::yield();
+        CHECK(contexts.close(*h,owner));
+        CHECK(contexts.available()==15);
+        CHECK(!contexts.lookup(*h,owner));
+        CHECK(!contexts.retain(*h,owner));
+        release_order.store(1,std::memory_order_release);
+        child_thread.join();
+        CHECK(done==1 && contexts.available()==15);
+        release_order.store(2,std::memory_order_release);
+        io_thread.join();
+        CHECK(done==2 && contexts.available()==16);
+        const auto next=contexts.open(owner,Suite::info(801));CHECK(next);
+        CHECK(next->value!=h->value);
+        CHECK(!contexts.lookup(*h,owner));
+        CHECK(contexts.close(*next,owner));
+    }
     // Stale handle cannot alias a later actor incarnation or request.
     {
         Suite s;const OresNativeActorRef owner{31,5,7};
