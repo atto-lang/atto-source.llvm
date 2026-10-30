@@ -88,42 +88,89 @@ inline bool namespace_pure_scalar_expression(const Expression* expression) {
             && !expression->condition_rhs && !expression->when_true
             && !expression->when_false;
     };
+    // Scalar-only export admission must validate the type of each AST edge,
+    // not merely that every node has *some* scalar resolved_type.
+    const auto type_is = [](const Expression* node, ScalarType type) {
+        return node && node->resolved_type == type;
+    };
     switch (expression->kind) {
         case Expression::Kind::Integer:
+            if (expression->resolved_type != ScalarType::I64
+                    || expression->left || expression->right || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::Boolean:
+            if (expression->resolved_type != ScalarType::Bool
+                    || expression->left || expression->right || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::Variable:
-            if (expression->left || expression->right || !no_ternary_children())
+            if (!valid_flat_namespace_name(expression->name)
+                    || expression->left || expression->right || !no_ternary_children())
                 return false;
             break;
         case Expression::Kind::Negate:
+            if (!type_is(expression->left.get(), ScalarType::I64)
+                    || expression->resolved_type != ScalarType::I64
+                    || expression->right || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::LogicalNot:
-            if (!expression->left || expression->right || !no_ternary_children())
+            if (!type_is(expression->left.get(), ScalarType::Bool)
+                    || expression->resolved_type != ScalarType::Bool
+                    || expression->right || !no_ternary_children())
                 return false;
             break;
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
         case Expression::Kind::Remainder:
+            if (!type_is(expression->left.get(), ScalarType::I64)
+                    || !type_is(expression->right.get(), ScalarType::I64)
+                    || expression->resolved_type != ScalarType::I64
+                    || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
+            if (!expression->left || !expression->right
+                    || expression->left->resolved_type != expression->right->resolved_type
+                    || expression->resolved_type != ScalarType::Bool
+                    || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::Less:
         case Expression::Kind::LessEqual:
         case Expression::Kind::Greater:
         case Expression::Kind::GreaterEqual:
+            if (!type_is(expression->left.get(), ScalarType::I64)
+                    || !type_is(expression->right.get(), ScalarType::I64)
+                    || expression->resolved_type != ScalarType::Bool
+                    || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::LogicalAnd:
         case Expression::Kind::LogicalOr:
         case Expression::Kind::LogicalXor:
-            if (!expression->left || !expression->right || !no_ternary_children())
+            if (!type_is(expression->left.get(), ScalarType::Bool)
+                    || !type_is(expression->right.get(), ScalarType::Bool)
+                    || expression->resolved_type != ScalarType::Bool
+                    || !no_ternary_children())
                 return false;
             break;
         case Expression::Kind::Conditional:
             if (expression->left || expression->right
-                    || !expression->when_true || !expression->when_false)
+                    || !expression->when_true || !expression->when_false
+                    || expression->when_true->resolved_type != expression->resolved_type
+                    || expression->when_false->resolved_type != expression->resolved_type)
                 return false;
             if (expression->condition) {
-                if (expression->condition_lhs || expression->condition_rhs)
+                if (expression->condition_lhs || expression->condition_rhs
+                        || expression->condition->resolved_type != ScalarType::Bool)
                     return false;
-            } else if (!expression->condition_lhs || !expression->condition_rhs) {
+            } else if (!expression->condition_lhs || !expression->condition_rhs
+                    || expression->condition_lhs->resolved_type
+                        != expression->condition_rhs->resolved_type) {
                 return false;
             }
             break;

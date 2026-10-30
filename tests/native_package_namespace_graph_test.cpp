@@ -306,6 +306,96 @@ int main() {
         fn.result->left = std::make_unique<Expression>();
         fn.result->left->kind = Expression::Kind::Boolean;
     }, "body expression");
+    // Type tags and variable identity must agree with the scalar AST shape.
+    // A forged Bool-typed integer, mixed arithmetic or untyped predicate is
+    // not a valid cross-unit scalar ABI even when all nodes are scalar.
+    reject_signature("integer_wrong_type_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Integer;
+        fn.result->resolved_type = ScalarType::Bool;
+    }, "body expression");
+    reject_signature("boolean_wrong_type_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Boolean;
+    }, "body expression");
+    reject_signature("unnamed_variable_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Variable;
+    }, "body expression");
+    reject_signature("dotted_variable_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Variable;
+        fn.result->name = "foreign.symbol";
+    }, "body expression");
+    reject_signature("add_bool_operand_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Add;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Integer;
+        fn.result->right = std::make_unique<Expression>();
+        fn.result->right->kind = Expression::Kind::Boolean;
+        fn.result->right->resolved_type = ScalarType::Bool;
+    }, "body expression");
+    reject_signature("logical_nonbool_operand_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::LogicalAnd;
+        fn.result->resolved_type = ScalarType::Bool;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Boolean;
+        fn.result->left->resolved_type = ScalarType::Bool;
+        fn.result->right = std::make_unique<Expression>();
+        fn.result->right->kind = Expression::Kind::Integer;
+    }, "body expression");
+    reject_signature("comparison_wrong_result_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Equal;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Integer;
+        fn.result->right = std::make_unique<Expression>();
+        fn.result->right->kind = Expression::Kind::Integer;
+    }, "body expression");
+    reject_signature("negate_bool_operand_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Negate;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Boolean;
+        fn.result->left->resolved_type = ScalarType::Bool;
+    }, "body expression");
+    reject_signature("conditional_nonbool_predicate_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Conditional;
+        fn.result->condition = std::make_unique<Expression>();
+        fn.result->condition->kind = Expression::Kind::Integer;
+        fn.result->when_true = std::make_unique<Expression>();
+        fn.result->when_true->kind = Expression::Kind::Integer;
+        fn.result->when_false = std::make_unique<Expression>();
+        fn.result->when_false->kind = Expression::Kind::Integer;
+    }, "body expression");
+    reject_signature("conditional_mixed_branches_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Conditional;
+        fn.result->condition = std::make_unique<Expression>();
+        fn.result->condition->kind = Expression::Kind::Boolean;
+        fn.result->condition->resolved_type = ScalarType::Bool;
+        fn.result->when_true = std::make_unique<Expression>();
+        fn.result->when_true->kind = Expression::Kind::Integer;
+        fn.result->when_false = std::make_unique<Expression>();
+        fn.result->when_false->kind = Expression::Kind::Boolean;
+        fn.result->when_false->resolved_type = ScalarType::Bool;
+    }, "body expression");
+    reject_signature("legacy_ternary_mixed_comparison_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Conditional;
+        fn.result->condition_lhs = std::make_unique<Expression>();
+        fn.result->condition_lhs->kind = Expression::Kind::Integer;
+        fn.result->condition_rhs = std::make_unique<Expression>();
+        fn.result->condition_rhs->kind = Expression::Kind::Boolean;
+        fn.result->condition_rhs->resolved_type = ScalarType::Bool;
+        fn.result->when_true = std::make_unique<Expression>();
+        fn.result->when_true->kind = Expression::Kind::Integer;
+        fn.result->when_false = std::make_unique<Expression>();
+        fn.result->when_false->kind = Expression::Kind::Integer;
+    }, "body expression");
     reject_signature("call_local_initializer_export", [](Function& fn) {
         fn.locals.emplace_back();
         fn.locals.back().initializer = std::make_unique<Expression>();
@@ -321,6 +411,7 @@ int main() {
     pure_expression.functions.front().locals.emplace_back();
     pure_expression.functions.front().locals.back().initializer = std::make_unique<Expression>();
     pure_expression.functions.front().locals.back().initializer->kind = Expression::Kind::Boolean;
+    pure_expression.functions.front().locals.back().initializer->resolved_type = ScalarType::Bool;
     another = units;
     another.push_back({"foo/pure_scalar_expression", "foo@1", &pure_expression});
     const auto pure_graph = link_package_namespaces(another, pins, {request});
@@ -340,6 +431,25 @@ int main() {
     ternary->when_false->kind = Expression::Kind::Integer;
     another = units;
     another.push_back({"foo/complete_ternary", "foo@1", &complete_ternary});
+    REQUIRE(link_package_namespaces(another, pins, {request})
+                .namespaces.at({"foo@1", "a"}).exports.size() == 4);
+
+    // Fully typed bool logic and a named bool variable remain admissible.
+    Program typed_bool = make_source("a", "typed_bool");
+    typed_bool.functions.front().return_type = ScalarType::Bool;
+    typed_bool.functions.front().result = std::make_unique<Expression>();
+    auto& bool_result = typed_bool.functions.front().result;
+    bool_result->kind = Expression::Kind::LogicalAnd;
+    bool_result->resolved_type = ScalarType::Bool;
+    bool_result->left = std::make_unique<Expression>();
+    bool_result->left->kind = Expression::Kind::Variable;
+    bool_result->left->name = "flag";
+    bool_result->left->resolved_type = ScalarType::Bool;
+    bool_result->right = std::make_unique<Expression>();
+    bool_result->right->kind = Expression::Kind::Boolean;
+    bool_result->right->resolved_type = ScalarType::Bool;
+    another = units;
+    another.push_back({"foo/typed_bool", "foo@1", &typed_bool});
     REQUIRE(link_package_namespaces(another, pins, {request})
                 .namespaces.at({"foo@1", "a"}).exports.size() == 4);
 
