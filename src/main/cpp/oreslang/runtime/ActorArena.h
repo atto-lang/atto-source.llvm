@@ -9,6 +9,7 @@ extern "C" {
  * are bump-allocated and invalidated/zeroed on each leave. */
 typedef struct OresActorArena OresActorArena;
 typedef struct { uint64_t domain, epoch; } OresArenaTurn;
+typedef struct { uint64_t domain, owner, incarnation; } OresArenaIdentity;
 typedef struct { uint64_t domain, index, generation; } OresArenaHandle;
 typedef struct { uint64_t domain, nonce, index, generation; } OresArenaLoan;
 typedef struct { uint64_t domain, epoch, offset, length; } OresArenaScratch;
@@ -21,6 +22,8 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
 int ores_actor_arena_prefault(OresActorArena*);
 /* True only after successful startup prefault and before destruction. */
 int ores_actor_arena_is_prefaulted(OresActorArena*);
+/* Read-only opaque identity; exposes no arena pointer or storage address. */
+int ores_actor_arena_identity(OresActorArena*, OresArenaIdentity*);
 OresArenaTurn ores_actor_arena_enter(OresActorArena*, uint64_t owner, uint64_t incarnation);
 /* Hard-RT entry is distinct from ordinary actor entry and fails closed unless
  * startup prefault completed. OS/RTOS page locking remains a deployment gate. */
