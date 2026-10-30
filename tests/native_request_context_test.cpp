@@ -63,6 +63,12 @@ struct Suite {
                 CHECK(s.contexts.with_admitted_turn(s.scheduler,exchange,token,
                        s.requests[slot],owner,[&]{
                     CHECK(Registry::current()->request_id==1000+slot);
+                    if(s.count>1){
+                        const auto other=(slot+1)%s.count;
+                        CHECK(!s.contexts.with_request_bytes(*s.pins[other],
+                            [&](std::string_view){throw std::runtime_error("cross request bleed");}));
+                        CHECK(Registry::current()->request_id==1000+slot);
+                    }
                     CHECK(!s.contexts.with_admitted_turn(nullptr,exchange,token,
                                         s.requests[slot],owner,[]{}));
                     CHECK(s.contexts.with_request_bytes(*s.pins[slot],
@@ -95,6 +101,8 @@ struct Suite {
                             CHECK(s.contexts.with_admitted_turn(
                                 s.scheduler,inner,inner_token,*inner_handle,owner,[&]{
                                 CHECK(Registry::current()->request_id==1099);
+                                CHECK(!s.contexts.with_request_bytes(*s.pins[slot],
+                                    [&](std::string_view){throw std::runtime_error("outer bytes escaped");}));
                                 CHECK(s.contexts.with_request_bytes(*inner_pin,
                                       [&](std::string_view bytes){CHECK(bytes=="GET /actor");}));
                                 throw std::runtime_error("inner failure");
