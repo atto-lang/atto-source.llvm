@@ -225,7 +225,9 @@ if(BUILD_TESTING)
 
     # Trusted host-only HTTP request context/lifetime foundation, stacked on
     # actor-incarnation exchange ownership. Not compiled .ores guest parity.
-    add_executable(oreslang-native-request-context-test tests/native_request_context_test.cpp)
+    add_executable(oreslang-native-request-context-test
+        tests/native_request_context_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-request-context-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-request-context-test PRIVATE Threads::Threads)
