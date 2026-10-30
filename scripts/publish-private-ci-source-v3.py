@@ -164,6 +164,11 @@ def require_source_security_codeowners(contents):
         "/scripts/test-publish-private-ci-source.py @ORESoftware",
         "/scripts/audit-private-ci-governance.py @ORESoftware",
         "/scripts/test-audit-private-ci-governance.py @ORESoftware",
+        "/tools/private-ci-policy/ @ORESoftware",
+        "/scripts/check-actions-execution-evidence.py @ORESoftware",
+        "/scripts/test-check-actions-execution-evidence.py @ORESoftware",
+        "/scripts/verify_ci_run.py @ORESoftware",
+        "/scripts/test_verify_ci_run.py @ORESoftware",
     ]
     if len(rules) < len(required_tail) or rules[-len(required_tail):] != required_tail:
         raise Denied("protected source CODEOWNERS lacks terminal security-owner rules")
