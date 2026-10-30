@@ -51,10 +51,12 @@ end
 - The callback may perform I/O, `await`, `select`, or an explicitly
   declared blocking call, **if** its `using` row allows the corresponding
   effects and the target profile admits the operation. A suspension releases
-  the logical lane. State-backed mutable borrows are retired/fenced before
-  suspension; after resumption the continuation must reacquire a
-  generation-checked scheduler ticket and fresh valid state access.
-  Callback-wide atomicity **does not** span an `await` that yields.
+  only the **physical carrier**, never the actor-wide logical user lane. The
+  same logical handler remains active; later mail/user callbacks may queue but
+  cannot enter actor guest code until that handler completes or is cancelled.
+  State-backed mutable borrows are retired/fenced before suspension; after
+  resumption the same logical turn must present a generation-checked scheduler
+  ticket and acquire fresh valid state access.
 - `requires bounded, no_alloc, no_block` is an independent verified
   real-time guarantee, not an effect or magic annotation. Unsound admission
   without target proof must fail closed. Do not weaken existing `pure`,
@@ -69,8 +71,9 @@ end
 5. `using state.read` but `s.count = ...`: understated effect row.
 6. Duplicate/unknown `using` entries and variables named `using` or
    `critical`: reserved/invalid.
-7. `await` with live mutable state loan or without `using suspend`:
-   no unverifiable readmission.
+7. `await` with a live mutable state loan, without `using suspend`,
+   without same-logical-turn retention, or without a generation fence:
+   no unverifiable readmission or actor reentrancy.
 
 ## Implementation and parity gate
 
