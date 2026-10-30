@@ -48,7 +48,8 @@ expect_fail symlink_compiler EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$
 expect_fail relative_compiler EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree" \
   ORESLANG_LLVMC="fake-compiler" ORESLANG_COMPILER_SHA256="$sha"
 # A modified checkout must not be accepted even with matching HEAD/tree pins.
-dirty="$root/.ores-u32-negative-dirty.$"
+dirty="$root/.ores-u32-negative-dirty.$BASHPID"
+[[ ! -e "$dirty" ]] || { echo "unsafe dirty probe path exists" >&2; exit 1; }
 trap 'rm -f -- "$dirty"; rm -rf -- "$tmp"' EXIT HUP INT TERM
 printf '%s\n' 'untracked synthetic test artifact' > "$dirty"
 expect_fail dirty_checkout EXPECTED_SOURCE_SHA="$head" EXPECTED_SOURCE_TREE="$tree" \
