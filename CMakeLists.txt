@@ -352,15 +352,19 @@ if(BUILD_TESTING)
     # bounded .ores inverted struct to LLVM IR, link it and execute native.
     # No portable backend parity is inferred from this host-only experiment.
     find_program(ORES_INVERTED_GUEST_CLANG NAMES clang clang-23 clang-22 clang-21 clang-20 clang-19)
-    if(ORES_INVERTED_GUEST_CLANG)
-        add_test(NAME native_inverted_i64_guest
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inverted_i64_guest.py"
-                --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                --clang "${ORES_INVERTED_GUEST_CLANG}"
-                --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inverted-i64")
-        set_tests_properties(native_inverted_i64_guest PROPERTIES TIMEOUT 180)
+    # Never silently drop the required guest execution test just because
+    # Clang was not found on the configured host. Let the exact-head test
+    # fail visibly if the toolchain is unavailable.
+    if(NOT ORES_INVERTED_GUEST_CLANG)
+        set(ORES_INVERTED_GUEST_CLANG clang)
     endif()
+    add_test(NAME native_inverted_i64_guest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inverted_i64_guest.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORES_INVERTED_GUEST_CLANG}"
+            --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inverted-i64")
+    set_tests_properties(native_inverted_i64_guest PROPERTIES TIMEOUT 180)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
