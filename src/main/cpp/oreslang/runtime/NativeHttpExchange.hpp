@@ -71,6 +71,7 @@ public:
         if (!token.request_context || !token.request_registry ||
             !token.dispatch_ticket ||
             pin_generation_.load(std::memory_order_acquire)!=token.generation ||
+            submission_generation_.load(std::memory_order_acquire)!=token.generation ||
             !scheduler ||
             !ores_native_actor_scheduler_is_current_actor(scheduler,token.actor))
             return false;
