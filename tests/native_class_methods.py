@@ -175,7 +175,12 @@ def main():
             (directory/'main.ores').write_text(source)
             for path,text in dependencies.items():(directory/path).write_text(text)
             result=run([a.compiler,str(directory/'main.ores')])
-            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+            # A parser crash, kill, timeout, or warning-only failure is not
+            # compiler-owned rejection evidence. Match the native frontend's
+            # documented diagnostic prefix and exact nonzero error exit.
+            if (result.returncode != 1 or result.stdout or
+                    not result.stderr.startswith('oreslang-llvmc: ') or
+                    diagnostic not in result.stderr):
                 raise AssertionError((name,diagnostic,result.returncode,result.stdout[:80],result.stderr))
             passed+=1
     print(f'PASS native class methods: {passed} cases, Java differential={compared}, sanitized={a.sanitize}; qualified imported construction is native-only (current Java runtime rejects it)')
