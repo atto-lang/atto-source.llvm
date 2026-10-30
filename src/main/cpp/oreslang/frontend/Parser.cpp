@@ -146,7 +146,7 @@ bool reserved(std::string_view name) {
         "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
-        "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
+        "nlex", "trap", "actor", "isoactor", "isolated", "state", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
@@ -637,6 +637,14 @@ public:
                 wrapped_module = true;
             } else {
                 if (accept("class")) { auto cls = class_declaration(); cls.exported = exported; program.classes.push_back(std::move(cls)); }
+                else if (accept("isolated")) {
+                    require("actor");
+                    program.actors.push_back(actor_declaration(true));
+                }
+                else if (accept("isolated")) {
+                    require("actor");
+                    program.actors.push_back(actor_declaration(true));
+                }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -1246,9 +1254,10 @@ private:
         return result;
     }
 
-    ActorDecl actor_declaration() {
+    ActorDecl actor_declaration(bool isolated = false) {
         ActorDecl actor;
         actor.offset = token_.offset;
+        actor.isolated = isolated;
         actor.name = nominal_declaration_name();
         if (callable_nominal_name(actor.name))
             fail("callable signatures cannot be declared as nominal actor types");
@@ -1256,8 +1265,45 @@ private:
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
         require("as");
         const bool braced = accept("{");
-        if (token_.text == "state") {
-            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
+        if (isolated && token_.text != "state") {
+            fail("native isolated actor requires sealed state { ... } before methods");
+        }
+        if (accept("state")) {
+            actor.has_state_schema = true;
+            require("{");
+            std::unordered_set<std::string> state_names;
+            while (!accept("}")) {
+                if (token_.kind == Kind::End)
+                    fail("unterminated native actor state schema");
+                if (actor.state_schema.size() == 16)
+                    fail("native actor state schema field limit exceeded (16)");
+                ActorStateField field;
+                field.offset = token_.offset;
+                field.name = identifier();
+                if (!state_names.insert(field.name).second)
+                    fail("duplicate actor state field '" + field.name + "'");
+                require(":");
+                if (accept("int")) {
+                    field.type = ScalarType::I64;
+                    require("=");
+                    accept("-");
+                    if (token_.kind != Kind::Integer)
+                        fail("native actor int state default must be a bounded integer literal");
+                    advance();
+                } else if (accept("bool")) {
+                    field.type = ScalarType::Bool;
+                    require("=");
+                    if (!accept("true") && !accept("false"))
+                        fail("native actor bool state default must be true or false");
+                } else {
+                    fail("native actor state schema admits only int/bool fields in this metadata slice");
+                }
+                require(";");
+                actor.state_schema.push_back(std::move(field));
+            }
+            if (actor.state_schema.empty())
+                fail("native actor state schema requires at least one field");
+            fail("native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet");
         }
         std::unordered_set<std::string> names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
