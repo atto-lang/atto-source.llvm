@@ -1,0 +1,42 @@
+# Source-free runner admission probe. Never checks out or exports repository contents.
+name: CGL source-free runner admission
+on:
+  push:
+    branches:
+      - 'integration/cgl-elf-entrypoint-current-main-20261030'
+    paths:
+      - '.github/workflows/cgl-runner-admission-canary.yml'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  source-free-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Prove an actual hosted runner executed
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_NAME:-}"
+          test -n "${RUNNER_OS:-}"
+          test "${RUNNER_OS}" = Linux
+          test "${GITHUB_REPOSITORY}" = 'ores-truffle-oreslang/oreslang-source.llvm'
+          echo "CGL_SOURCE_FREE_RUNNER_ADMITTED=true"
+          echo "RUNNER_OS=${RUNNER_OS}"
+          echo "HEAD_SHA=${GITHUB_SHA}"
+      - name: Probe installed compilers without source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          clang --version | head -n 1
+          gcc --version | head -n 1
+          java -version
+          echo "CGL_SYNTHETIC_TOOLCHAIN_PRESENT=true"
+      - name: Enforce no checked-out private source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$GITHUB_WORKSPACE/.git"
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
+          echo "CGL_NO_SOURCE_CHECKOUT=true"
