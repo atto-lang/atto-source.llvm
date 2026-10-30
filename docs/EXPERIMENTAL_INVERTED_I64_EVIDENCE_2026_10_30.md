@@ -25,6 +25,7 @@ Environment: Debian GCC 14.2.0, Swift LLVM Clang/Clang++ 17.0.0, hosted x86-64 L
 | 11 unsupported .ores source-negative cases (same programs as checked-in Python regression) | PASS, 11/11 specific expected rejections |
 | GCC `-fsanitize=address,undefined -fno-omit-frame-pointer` header driver on both positive source programs | PASS, no reported ASan/UBSan errors |
 | Clang++ driver -> Clang generated LLVM IR -> both positive native guest binaries | PASS, exit `42` each |
+| Clang 17 -O1 with ASan/UBSan instrumentation of both generated LLVM-IR guest binaries | PASS, both exit `42`, no sanitizer reports |
 
 These are **actual locally executed exact-header and exact-fixture native checks**, materially stronger than model-only tests. They are still *not* the complete production native LLVM compiler, source-org workflow, user-facing CLI, whole-project ABI, borrow checker, general Java/LLVM parity, wasm32 or actor-hard-RT certification.
 
