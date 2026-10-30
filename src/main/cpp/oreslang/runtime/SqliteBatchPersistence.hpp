@@ -151,7 +151,9 @@ public:
             return results;
         } catch(...) {rollback();throw;} // outcome unknown; caller must retry same op id.
     }
-    Recovery load(const Identity& id) {
+    // Internal restore: one read transaction binds directory epoch and state.
+    // The unfenced overload is privileged host/migration inspection only.
+    Recovery load_impl(const Identity& id, std::optional<std::uint64_t> required_epoch) {
         if(!valid_id(id.tenant)||!valid_id(id.actor)||!valid_id(id.slot))
             throw std::invalid_argument("invalid restore identity");
         std::lock_guard<std::mutex> lock(mu_);
@@ -159,6 +161,8 @@ public:
         // connection is committing a new event or activation concurrently.
         sql("BEGIN");
         try {
+        if(required_epoch && epoch(id)!=required_epoch)
+            throw std::logic_error("STALE_EPOCH");
         Recovery out;
         Statement q(db_,"SELECT version,snapshot_version,snapshot_schema,snapshot FROM state WHERE tenant=? AND actor=? AND slot=?");
         bind_identity(q,id);
@@ -192,6 +196,12 @@ public:
         sql("COMMIT");
         return out;
         } catch (...) { rollback(); throw; }
+    }
+    Recovery load(const Identity& id) { return load_impl(id,std::nullopt); }
+    Recovery load_fenced(const Identity& id, std::uint64_t trusted_epoch) {
+        if(trusted_epoch==0 || trusted_epoch>INT64_MAX)
+            throw std::invalid_argument("invalid trusted activation epoch");
+        return load_impl(id,trusted_epoch);
     }
 };
 } // namespace oreslang::runtime::persistence
