@@ -265,6 +265,37 @@ def verify_executable_acceptance_steps(sections):
                 f"{job}: required executable test command missing: {command}"
             )
 
+def extract_compiler_sources(cmake_source):
+    """Require static, complete coverage of real oreslang-llvmc translation units.
+
+    A new compiler CMake source must be bound to a PR trigger and immutable
+    blob check. A fixed historic count of eight is not sufficient.
+    """
+    target = re.findall(
+        r"(?ms)^[ \t]*add_executable[ \t]*\([ \t]*oreslang-llvmc(?=\s)(.*?)^[ \t]*\)",
+        cmake_source,
+    )
+    assert len(target) == 1, (
+        "expected one static oreslang-llvmc executable source block"
+    )
+    assert re.search(
+        r"(?m)^[ \t]*target_sources[ \t]*\([ \t]*oreslang-llvmc\b",
+        cmake_source,
+    ) is None, "dynamic oreslang-llvmc target_sources escape"
+    body = "\n".join(line.partition("#")[0] for line in target[0].splitlines())
+    sources = body.split()
+    assert len(sources) >= 8, "compiler target input list unexpectedly shrunk"
+    assert len(sources) == len(set(sources)), "duplicate compiler translation unit"
+    for path in sources:
+        assert re.fullmatch(
+            r"src/main/cpp/oreslang/[A-Za-z0-9_./-]+\.(?:cpp|c)", path
+        ), f"nonliteral compiler source: {path}"
+        assert ".." not in path.split("/"), (
+            f"compiler source path traversal: {path}"
+        )
+    return set(sources)
+
+
 def audit_selftest():
     # If test commands are removed, commented or replaced with echo, a
     # passing blob manifest must not produce a green acceptance job.
@@ -347,6 +378,38 @@ def audit_selftest():
             assert "must depend" in str(exc)
         else:
             raise AssertionError("unguarded guest job dependency accepted")
+    # CMake can add a new translation unit without changing the old eight
+    # source-file attestations. It must be discovered instead of silently
+    # excluded from the exact-head compiler input inventory.
+    cmake_fixture = (
+        "add_executable(oreslang-llvmc\n"
+        + "".join(
+            f"  src/main/cpp/oreslang/source{i}.cpp\n" for i in range(8)
+        )
+        + ")\n"
+    )
+    compiler_files = extract_compiler_sources(cmake_fixture)
+    assert len(compiler_files) == 8
+    new_input = "src/main/cpp/oreslang/new_codegen.cpp"
+    expanded = extract_compiler_sources(
+        cmake_fixture.replace(")\n", f"  {new_input}\n)\n")
+    )
+    assert expanded - compiler_files == {new_input}, (
+        "new compiler translation unit not discovered"
+    )
+    malformed = (
+        cmake_fixture.replace(")\n", "  src/main/cpp/oreslang/source0.cpp\n)\n"),
+        cmake_fixture.replace(")\n", "  src/main/cpp/oreslang/../escape.cpp\n)\n"),
+        cmake_fixture + "target_sources(oreslang-llvmc PRIVATE secret.cpp)\n",
+        cmake_fixture.replace(")\n", "  $<TARGET_OBJECTS:untracked>\n)\n"),
+    )
+    for bad_source in malformed:
+        try:
+            extract_compiler_sources(bad_source)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("dynamic/duplicate compiler input accepted")
     directory = "src/main/cpp/oreslang/runtime"
     assert triggered(f"{directory}/added/new.hpp", [f"{directory}/**"])
     assert not triggered(f"{directory}-evil/new.hpp", [f"{directory}/**"])
@@ -517,6 +580,9 @@ def check():
         for i, match in enumerate(boundaries)
     }
     assert set(REQUIRED_JOBS) <= sections.keys(), "missing mandatory jobs"
+    compiler_inputs = extract_compiler_sources(
+        (root / "CMakeLists.txt").read_text(encoding="utf-8")
+    )
     require_guest_gate_dependency(sections["compiled-ores-guest"])
     reject_conditional_gate_bypass(sections)
     verify_executable_acceptance_steps(sections)
@@ -532,6 +598,8 @@ def check():
         )
         attested = set(declared_paths)
         referenced = set(INPUT.findall(section))
+        if name == "compiled-ores-guest":
+            referenced.update(compiler_inputs)
         assert referenced, f"{name}: no source/test dependencies found"
         recursive_headers = local_header_closure(root, referenced)
         required = referenced | recursive_headers
