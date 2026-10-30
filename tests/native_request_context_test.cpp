@@ -41,6 +41,7 @@ struct Suite {
     bool revoke_on_turn=false;
     bool reject_resume=false;
     bool cancel_queued_second=false;
+    bool reject_unreserved=false;
     unsigned mode=0;
     std::atomic<unsigned> rejected{0};
     std::atomic<bool> hold_turn{false},turn_entered{false};
@@ -68,6 +69,14 @@ struct Suite {
             auto& exchange=s.exchanges[slot];
             const auto token=exchange.token();
             CHECK(!Registry::current()); // carrier callback does not inherit stale TLS
+            if(s.reject_unreserved) {
+                CHECK(exchange.phase()==NativeHttpExchange::Phase::queued);
+                CHECK(!exchange.claim_admitted(s.scheduler,token));
+                CHECK(!s.contexts.with_admitted_turn(s.scheduler,exchange,token,
+                    s.requests[slot],owner,[]{throw std::runtime_error("raw send claimed");}));
+                ++s.rejected;
+                return;
+            }
             if(s.second_pin && message==s.second_pin->token().dispatch_ticket) {
                 const auto second=s.second_pin->token();
                 CHECK(s.second_exchange.phase()==NativeHttpExchange::Phase::queued);
@@ -326,6 +335,25 @@ int main(){
         CHECK(s.observed==1 && s.bad==0);
         CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.pins[0])
               ==ORES_NATIVE_SEND_INVALID_REF);
+        s.end();
+    }
+    // A raw scheduler send with a copied ticket is NOT authorized HTTP
+    // admission. Without the exchange's one-time producer reservation, the
+    // actor must reject the claim even when its DATA payload matches.
+    {
+        Suite s;s.begin(1);
+        s.reject_unreserved=true;
+        CHECK(ores_native_actor_scheduler_try_send(
+            s.scheduler,s.actors[0],s.pins[0]->token().dispatch_ticket)
+            ==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.bad==0 && s.rejected==1 && s.observed==0);
+        CHECK(s.exchanges[0].phase()==NativeHttpExchange::Phase::queued);
+        s.reject_unreserved=false;
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.pins[0])
+              ==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.bad==0 && s.observed==1);
         s.end();
     }
     // A recycled exchange uses a fresh generation and DATA ticket.
