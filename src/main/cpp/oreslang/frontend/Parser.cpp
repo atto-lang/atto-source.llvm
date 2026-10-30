@@ -146,7 +146,7 @@ bool reserved(std::string_view name) {
         "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
-        "nlex", "trap", "actor", "isoactor", "isolated", "state", "def", "fnc", "routine",
+        "nlex", "trap", "actor", "isoactor", "isolated", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
