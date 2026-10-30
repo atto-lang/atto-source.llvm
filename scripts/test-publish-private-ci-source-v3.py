@@ -186,7 +186,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         for malformed in (None, [], "private", 0, True,
                           {**good, "id": True},
                           {**good, "id": float(1323598177)}):
-            with self.subTest(repository=repr(malformed)), (
+            with (
+                self.subTest(repository=repr(malformed)),
                 patch.object(v3, "gh_api", return_value=malformed),
                 patch.object(v3, "_gh_ref_request") as request,
             ):
@@ -209,7 +210,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             response = v3.subprocess.CompletedProcess(
                 ["gh"], 0, json.dumps(payload), ""
             )
-            with self.subTest(object=repr(malformed)), (
+            with (
+                self.subTest(object=repr(malformed)),
                 patch.object(v3, "gh_api", return_value=good),
                 patch.object(v3, "_gh_ref_request", return_value=response),
             ):
