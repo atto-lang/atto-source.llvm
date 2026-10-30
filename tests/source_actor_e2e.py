@@ -107,7 +107,7 @@ def main():
                     match.group(1)
                     for line in guest.stdout.splitlines()
                     if (match := re.search(
-                        r"\\bcall\\b.*@oreslang_source_actor_(spawn|send|stop)\\(",
+                        r"\bcall\b.*@oreslang_source_actor_(spawn|send|stop)\(",
                         line
                     ))
                 ]
