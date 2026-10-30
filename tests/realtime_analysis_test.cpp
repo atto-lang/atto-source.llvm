@@ -107,6 +107,26 @@ int main() {
                 "pure conditional must remain source-admitted and never certified");
     }
 
+    // Unknown/corrupted or newly introduced AST kinds must fail closed
+    // rather than silently defaulting to a pure operation in strict RT.
+    {
+        auto unmodeled = std::make_unique<Expression>();
+        unmodeled->kind = static_cast<Expression::Kind>(255);
+        Function leaf = pure("unknown_leaf", std::move(unmodeled));
+        const auto facts = realtime_detail::direct_facts(leaf, 8);
+        require(facts.unmodeled_expression,
+                "unclassified expression must be tracked by direct facts");
+        Program program;
+        program.functions.push_back(std::move(leaf));
+        program.functions.push_back(pure("main", call("unknown_leaf")));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted &&
+                    report.diagnostic == "RT015_UNMODELED_EXPRESSION",
+                "transitively reachable unclassified expression must fail closed");
+        require(!report.artifact_certified,
+                "unclassified expression must never certify an artifact");
+    }
+
     // Strict RT must not silently certify rt copy or rt share before typed
     // MIR establishes the copy/share byte and lifetime effects. The accepted
     // scalar-shaped AST is deliberately also rejected: its lowering proof is
