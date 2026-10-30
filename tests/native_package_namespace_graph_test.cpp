@@ -532,6 +532,17 @@ int main() {
         fn.locals.back().initializer->kind = Expression::Kind::Boolean;
         fn.locals.back().initializer->resolved_type = ScalarType::Bool;
     }, "local initializer");
+    reject_signature("uninitialized_used_scalar_local", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().name = "uninitialized";
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Variable;
+        fn.result->name = "uninitialized";
+    }, "uninitialized scalar local");
+    reject_signature("uninitialized_unused_scalar_local", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().name = "unused";
+    }, "uninitialized scalar local");
     Program bound_local = make_source("a", "bound_scalar_local");
     auto& bound_fn = bound_local.functions.front();
     bound_fn.locals.emplace_back();
@@ -686,7 +697,11 @@ int main() {
     // Ordinary mutable scalar/bool locals remain admissible in the inventory.
     Program scalar_local = make_source("a", "scalar_local");
     scalar_local.functions.front().locals.emplace_back();
+    scalar_local.functions.front().locals.back().name = "mutable_flag";
     scalar_local.functions.front().locals.back().scalar_type = ScalarType::Bool;
+    scalar_local.functions.front().locals.back().initializer = std::make_unique<Expression>();
+    scalar_local.functions.front().locals.back().initializer->kind = Expression::Kind::Boolean;
+    scalar_local.functions.front().locals.back().initializer->resolved_type = ScalarType::Bool;
     scalar_local.functions.front().locals.back().owner_mutable = true;
     scalar_local.functions.front().locals.back().assignable = true;
     another = units;

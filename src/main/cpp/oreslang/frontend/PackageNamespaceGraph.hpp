@@ -380,6 +380,13 @@ inline PackageNamespaceGraph link_package_namespaces(
                         || !lexical_types.emplace(local.name, local.scalar_type).second)
                     throw std::invalid_argument("native namespace invalid or duplicate scalar binding");
             }
+            // With statement bodies disallowed, an uninitialized local has
+            // no legal write before a scalar result can read it. Keep name and
+            // duplicate diagnostics above this check for malformed ASTs.
+            for (const auto& local : fn.locals) {
+                if (!local.initializer)
+                    throw std::invalid_argument("native namespace uninitialized scalar local requires checked lowering");
+            }
             if (fn.result
                     && (fn.result->resolved_type != fn.return_type
                         || !namespace_scalar_expression_bindings_valid(
