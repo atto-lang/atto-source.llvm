@@ -78,6 +78,9 @@ int main() {
 
     c.inferred = row(READ | SUSPEND);
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+            == CriticalStateAdmission::MissingLogicalTurnRetention);
+    c.logical_turn_retained_across_suspend = true;
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
             == CriticalStateAdmission::MissingContinuationFence);
     c.continuation_generation_fenced = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
