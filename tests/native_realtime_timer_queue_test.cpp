@@ -6,6 +6,76 @@
 using Queue = oreslang::runtime::realtime::HardRealtimeTimerQueue<2>;
 using Status = Queue::Status;
 
+// Deterministic arithmetic/admission oracle: unlike a wall-clock timing
+// benchmark this checks 12k exact boundaries and near-UINT64_MAX cases under
+// each native compiler/sanitizer build. It does NOT certify guest-start WCET.
+static void sweep_dispatch_budget_invariants() {
+    std::uint64_t seed = UINT64_C(0x9e3779b97f4a7c15);
+    auto next = [&seed]() noexcept -> std::uint64_t {
+        seed ^= seed >> 12;
+        seed ^= seed << 25;
+        seed ^= seed >> 27;
+        return seed * UINT64_C(2685821657736338717);
+    };
+    for (std::size_t i = 0; i < 12000; ++i) {
+        const std::uint64_t deadline = (i % 7 == 0)
+            ? UINT64_MAX - (next() % 512)
+            : next() % 1000000;
+        const std::uint64_t actor_id = 1 + next() % 1000;
+        const std::uint64_t generation = 1 + next() % 1000;
+        const std::uint64_t budget = (i % 19 == 0)
+            ? UINT64_MAX : next() % 1024;
+        const std::uint64_t reserve = (i % 23 == 0)
+            ? UINT64_MAX : (i % 29 == 0 ? 0 : next() % 1024 + 1);
+        const std::uint64_t wanted_lateness = (i % 11 == 0)
+            ? 0 : (i % 13 == 0 ? budget : next() % 1024);
+        const std::uint64_t lateness = wanted_lateness >
+            UINT64_MAX - deadline ? UINT64_MAX - deadline : wanted_lateness;
+
+        Queue timer;
+        Queue::Handle ticket{};
+        Queue::Expired expiry{};
+        Queue::Start receipt{};
+        assert(timer.arm_after(deadline, 0, actor_id, generation,
+                               budget, ticket) == Status::Ok);
+        assert(timer.poll_due(deadline, expiry) == Status::Ok);
+        assert(expiry.handle.domain == ticket.domain);
+        assert(expiry.handle.generation == ticket.generation);
+        // A forged generation and far-future timestamp cannot poison the
+        // monotonic watermark of the legitimate READY ticket.
+        assert(timer.claim_start_with_dispatch_bound(
+                   ticket, actor_id, generation + 1, UINT64_MAX,
+                   reserve == 0 ? 1 : reserve, receipt) == Status::Stale);
+        assert(receipt.claimed_at_ns == 0 && timer.outstanding() == 1);
+
+        const auto observed = deadline + lateness; // Saturation above.
+        const auto got = timer.claim_start_with_dispatch_bound(
+            ticket, actor_id, generation, observed, reserve, receipt);
+        if (reserve == 0) {
+            assert(got == Status::Invalid);
+            assert(timer.outstanding() == 1);
+            assert(receipt.deadline_ns == 0);
+            assert(timer.cancel(ticket) == Status::Ok);
+        } else {
+            const bool expected_miss = lateness > budget ||
+                reserve > budget - lateness; // Short-circuit prevents underflow.
+            assert(got == (expected_miss ? Status::DeadlineMissed : Status::Ok));
+            assert(receipt.deadline_ns == deadline);
+            assert(receipt.claimed_at_ns == observed);
+            assert(receipt.lateness_ns == lateness);
+            assert(receipt.maximum_lateness_ns == budget);
+            assert(receipt.dispatch_bound_applied);
+            assert(receipt.dispatch_bound_ns == reserve);
+            assert(timer.outstanding() == 0);
+            assert(timer.claim_start_with_dispatch_bound(
+                       ticket, actor_id, generation, observed, reserve, receipt)
+                   == Status::Stale);
+            assert(receipt.deadline_ns == 0);
+        }
+        assert(timer.outstanding() == 0);
+    }
+}
+
 int main() {
     Queue q;
     Queue::Handle a{}, b{}, c{};
@@ -216,5 +286,6 @@ int main() {
                overflow_h, 999, 1, UINT64_MAX, 1, bounded_start)
            == Status::DeadlineMissed);
     assert(bounded_start.lateness_ns == UINT64_MAX);
+    sweep_dispatch_budget_invariants();
     return 0;
 }
