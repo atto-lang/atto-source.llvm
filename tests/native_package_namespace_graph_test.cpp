@@ -257,6 +257,22 @@ int main() {
     reject_signature("pipeline_export", [](Function& fn) {
         fn.future_pipelines.emplace_back();
     }, "suspension export");
+    // Orphaned offsets and local await bindings must not bypass the
+    // function-level suspension guard on a forged/unresolved AST.
+    reject_signature("orphan_ready_offset_export", [](Function& fn) {
+        fn.ready_await_offset = 42;
+    }, "suspension export");
+    reject_signature("orphan_done_offset_export", [](Function& fn) {
+        fn.done_await_offset = 42;
+    }, "suspension export");
+    reject_signature("local_task_await_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().task_await_name = "task";
+    }, "suspension export");
+    reject_signature("local_future_await_export", [](Function& fn) {
+        fn.locals.emplace_back();
+        fn.locals.back().future_await_name = "future";
+    }, "suspension export");
 
     // 13. The host-only (name, arity) export inventory cannot erase
     // declared effect rows, actor authority or exception/cleanup effects.
@@ -304,5 +320,5 @@ int main() {
     const auto internal_graph = link_package_namespaces(internal_units, pins, {request});
     REQUIRE(internal_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
-    std::cout << "native package namespace source-only graph: 49/49 cases passed\n";
+    std::cout << "native package namespace source-only graph: 53/53 cases passed\n";
 }

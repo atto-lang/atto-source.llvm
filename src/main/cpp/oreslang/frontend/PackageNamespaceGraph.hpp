@@ -138,9 +138,17 @@ inline PackageNamespaceGraph link_package_namespaces(
             // require a separately checked cross-unit continuation ABI.
             if (!fn.source_tasks.empty() || !fn.future_pipelines.empty()
                     || !fn.ready_await_actor.empty() || !fn.done_await_actor.empty()
+                    || fn.ready_await_offset != 0 || fn.done_await_offset != 0
                     || fn.ready_await_form != NativeAwaitForm::None
                     || !fn.ready_future_name.empty() || !fn.ready_future_actor.empty())
                 throw std::invalid_argument("native namespace suspension export requires checked ABI lowering");
+            // Await continuations can also be encoded on local bindings,
+            // even when no producer or pipeline metadata is present. The
+            // scalar export inventory cannot erase these scheduler effects.
+            for (const auto& local : fn.locals) {
+                if (!local.task_await_name.empty() || !local.future_await_name.empty())
+                    throw std::invalid_argument("native namespace suspension export requires checked ABI lowering");
+            }
             // A (name, arity) inventory has no effect row, actor capability
             // or exception/cleanup ABI. Reject these unlowered boundaries
             // rather than silently exporting an apparently pure scalar call.
