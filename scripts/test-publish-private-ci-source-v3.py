@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Source-free unit tests for the LLVM private-CI v3 publisher."""
+"""Source-free unit tests for the LLVM private-CI generation-fenced publisher."""
 import base64
 import datetime as dt
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -20,6 +21,10 @@ REAL_ATOMIC_ROLLBACK_GUARD = v3.require_atomic_ref_rollback
 SOURCE_TREE = "a" * 40
 BASE_TREE = "b" * 40
 CARRIER_COMMIT = "c" * 40
+GENERATION_NONCE = "0" * 32
+GENERATION_TOKEN = "r123456789-a1-" + GENERATION_NONCE
+SOURCE_REF = "ci/oreslang-v4-" + GENERATION_TOKEN
+AUTH_REF = "ci/authorized-v4-" + GENERATION_TOKEN
 BASE = "d" * 40
 WORKFLOW = "e" * 40
 PLAN_BLOB = None
@@ -78,6 +83,49 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         )
         self._mock_future_rollback.start()
         self.addCleanup(self._mock_future_rollback.stop)
+        self._generation_env = patch.dict(
+            os.environ,
+            {"GITHUB_RUN_ID":"123456789", "GITHUB_RUN_ATTEMPT":"1"},
+            clear=False,
+        )
+        self._generation_env.start()
+        self.addCleanup(self._generation_env.stop)
+        self._generation_nonce = patch.object(
+            v3.secrets, "token_hex", return_value=GENERATION_NONCE
+        )
+        self._generation_nonce.start()
+        self.addCleanup(self._generation_nonce.stop)
+
+    def test_generation_identity_binds_run_attempt_nonce_and_both_refs(self):
+        generation = v3.new_generation_identity()
+        self.assertEqual(generation["dispatcher_run_id"], 123456789)
+        self.assertEqual(generation["dispatcher_run_attempt"], 1)
+        self.assertEqual(generation["nonce"], GENERATION_NONCE)
+        self.assertEqual(generation["source_ref"], SOURCE_REF)
+        self.assertEqual(generation["authorization_ref"], AUTH_REF)
+        self.assertRegex(generation["source_ref"], v3.HANDOFF_REF)
+        self.assertRegex(generation["authorization_ref"], v3.HANDOFF_REF)
+
+    def test_generation_identity_changes_across_attempt_or_nonce(self):
+        first = v3.new_generation_identity()
+        with patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT":"2"}, clear=False):
+            second = v3.new_generation_identity()
+        with patch.object(v3.secrets, "token_hex", return_value="1"*32):
+            third = v3.new_generation_identity()
+        self.assertNotEqual(first["source_ref"], second["source_ref"])
+        self.assertNotEqual(first["authorization_ref"], second["authorization_ref"])
+        self.assertNotEqual(first["source_ref"], third["source_ref"])
+        self.assertNotEqual(first["authorization_ref"], third["authorization_ref"])
+
+    def test_generation_identity_rejects_missing_or_noncanonical_dispatcher_context(self):
+        for env in (
+            {"GITHUB_RUN_ID":"", "GITHUB_RUN_ATTEMPT":"1"},
+            {"GITHUB_RUN_ID":"0123", "GITHUB_RUN_ATTEMPT":"1"},
+            {"GITHUB_RUN_ID":"123", "GITHUB_RUN_ATTEMPT":"0"},
+        ):
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=False):
+                with self.assertRaisesRegex(v3.Denied, "run identity"):
+                    v3.new_generation_identity()
 
     def test_production_publish_denied_before_source_access_or_writes(self):
         with (
@@ -103,7 +151,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 with patch.object(v3, "run_bounded_gh") as runner:
                     with self.assertRaisesRegex(v3.Denied, "repository is invalid"):
                         v3._gh_ref_request(
-                            repository, "ci/authorized-" + CARRIER_COMMIT, "GET"
+                            repository, AUTH_REF, "GET"
                         )
                     runner.assert_not_called()
 
@@ -111,7 +159,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         with patch.object(v3, "run_bounded_gh") as runner:
             with self.assertRaisesRegex(v3.Denied, "atomic lease"):
                 v3._gh_ref_request(
-                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT, "DELETE"
+                    "trusted/ci", AUTH_REF, "DELETE"
                 )
             runner.assert_not_called()
 
@@ -123,7 +171,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "atomic compare-and-delete"):
                 v3.delete_exact_ref(
                     "trusted/ci",
-                    "ci/oreslang-" + SOURCE_TREE,
+                    SOURCE_REF,
                     CARRIER_COMMIT, 1323598177,
                 )
             request.assert_not_called()
@@ -608,16 +656,16 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         with patch.object(v3, "live_ref_sha", side_effect=[None, None]):
             v3.require_handoff_refs_absent(
                 "trusted/ci",
-                "ci/oreslang-" + SOURCE_TREE,
-                "ci/authorized-" + CARRIER_COMMIT,
+                SOURCE_REF,
+                AUTH_REF,
                 1323598177,
             )
         with patch.object(v3, "live_ref_sha", return_value=CARRIER_COMMIT):
             with self.assertRaisesRegex(v3.Denied, "already exists"):
                 v3.require_handoff_refs_absent(
                     "trusted/ci",
-                    "ci/oreslang-" + SOURCE_TREE,
-                    "ci/authorized-" + CARRIER_COMMIT,
+                    SOURCE_REF,
+                    AUTH_REF,
                     1323598177,
                 )
 
@@ -1242,16 +1290,23 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
             )
 
-        self.assertEqual(result["branch"], "ci/oreslang-" + SOURCE_TREE)
+        self.assertEqual(result["branch"], SOURCE_REF)
         self.assertEqual(
-            result["authorization_ref"], "ci/authorized-" + CARRIER_COMMIT
+            result["authorization_ref"], AUTH_REF
         )
         receipt_raw = next(
             data for data in blob_bytes
-            if b'"schema":"ores-private-ci-receipt-v3"' in data
+            if b'"schema":"ores-private-ci-receipt-v4"' in data
         )
         receipt = json.loads(receipt_raw)
         self.assertEqual(receipt["expires_at"], "2026-10-21T00:00:00Z")
+        self.assertEqual(receipt["carrier"]["generation"], {
+            "dispatcher_run_id":123456789,
+            "dispatcher_run_attempt":1,
+            "nonce":GENERATION_NONCE,
+            "source_ref":SOURCE_REF,
+            "authorization_ref":AUTH_REF,
+        })
         self.assertEqual(receipt["source"]["repo_id"], v3.SOURCE_REPO_ID)
         self.assertEqual(receipt["source"]["pr"], 669)
         self.assertEqual(receipt["source"]["head_sha"], "9" * 40)
@@ -1275,8 +1330,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(
             refs,
             [
-                "refs/heads/ci/oreslang-" + SOURCE_TREE,
-                "refs/heads/ci/authorized-" + CARRIER_COMMIT,
+                "refs/heads/" + SOURCE_REF,
+                "refs/heads/" + AUTH_REF,
             ],
         )
 
@@ -1285,7 +1340,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         response = type(
             "Result", (), {"returncode": 0, "stderr": "", "stdout": "{}"}
         )()
-        ref_name = "ci/authorized-" + CARRIER_COMMIT
+        ref_name = AUTH_REF
         with (
             patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
             patch.object(v3, "github_api_environment", return_value={"GH_TOKEN": "x"}),
@@ -1293,7 +1348,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         ):
             self.assertIs(v3._gh_ref_request("trusted/ci", ref_name, "GET"), response)
         self.assertIn(
-            "repos/trusted/ci/git/ref/heads/ci%2Fauthorized-" + CARRIER_COMMIT,
+            "repos/trusted/ci/git/ref/heads/" + AUTH_REF.replace("/", "%2F"),
             run.call_args.args[0],
         )
         self.assertEqual(run.call_args.kwargs["env"], {"GH_TOKEN": "x"})
@@ -1320,7 +1375,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         ):
             with self.assertRaisesRegex(v3.Denied, "identity changed"):
                 v3.live_ref_sha(
-                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT, 1323598177
+                    "trusted/ci", AUTH_REF, 1323598177
                 )
 
     def test_delete_exact_ref_refuses_moved_ref(self):
@@ -1328,7 +1383,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "moved"):
                 v3.delete_exact_ref(
                     "trusted/ci",
-                    "ci/oreslang-" + SOURCE_TREE,
+                    SOURCE_REF,
                     CARRIER_COMMIT,
                     1323598177,
                 )
@@ -1407,7 +1462,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(
             deleted,
             [(
-                "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                "trusted/ci", SOURCE_REF,
                 CARRIER_COMMIT, contract["repository_id"],
             )],
         )
@@ -1440,7 +1495,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(
             deleted,
             [(
-                "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                "trusted/ci", SOURCE_REF,
                 CARRIER_COMMIT, contract["repository_id"],
             )],
         )
@@ -1455,7 +1510,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             if method == "POST" and route.endswith("/git/commits"):
                 return {"sha": CARRIER_COMMIT}
             if method == "POST" and route.endswith("/git/refs"):
-                if payload["ref"].startswith("refs/heads/ci/authorized-"):
+                if payload["ref"].startswith("refs/heads/ci/authorized-v4-"):
                     return {"ref": payload["ref"], "object": {"sha": "9" * 40}}
                 return {"ref": payload["ref"], "object": {"sha": payload["sha"]}}
             raise AssertionError((method, route))
@@ -1476,11 +1531,11 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             deleted,
             [
                 (
-                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT,
+                    "trusted/ci", AUTH_REF,
                     CARRIER_COMMIT, contract["repository_id"],
                 ),
                 (
-                    "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                    "trusted/ci", SOURCE_REF,
                     CARRIER_COMMIT, contract["repository_id"],
                 ),
             ],

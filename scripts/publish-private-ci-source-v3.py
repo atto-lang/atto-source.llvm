@@ -2,7 +2,7 @@
 """Fail-closed exact-tree publisher for private LLVM CI.
 
 Reads only the exact open PR Git tree from the official private source API,
-uploads that tree to one reviewed private carrier, emits a v3 receipt, and
+uploads that tree to one reviewed private carrier, emits a generation-fenced v4 receipt, and
 creates the carrier's exact-tree branch plus dispatcher authorization ref.
 No cross-org checkout, caller-provided API routes, or arbitrary commands.
 """
@@ -16,6 +16,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import resource
+import secrets
 import stat
 import subprocess
 import sys
@@ -46,7 +47,7 @@ RECEIPT_PATH = "ci/oreslang-receipt.json"
 
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")
 HANDOFF_REF = re.compile(
-    r"^ci/(?:oreslang-[0-9a-f]{40}|authorized-[0-9a-f]{40})$"
+    r"^ci/(?:oreslang-v4|authorized-v4)-r[1-9][0-9]{0,19}-a[1-9][0-9]{0,9}-[0-9a-f]{32}$"
 )
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 MAVEN_ARTIFACT = re.compile(
@@ -79,6 +80,25 @@ def valid_sha(value, label="invalid SHA"):
     if not isinstance(value, str) or not HEX40.fullmatch(value):
         raise Denied(label)
     return value
+
+
+def new_generation_identity():
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if (not re.fullmatch(r"[1-9][0-9]{0,19}", run_id)
+            or not re.fullmatch(r"[1-9][0-9]{0,9}", run_attempt)):
+        raise Denied("GitHub dispatcher run identity is missing or invalid")
+    nonce = secrets.token_hex(16)
+    if not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        raise Denied("generation nonce is invalid")
+    token = f"r{int(run_id)}-a{int(run_attempt)}-{nonce}"
+    return {
+        "dispatcher_run_id": int(run_id),
+        "dispatcher_run_attempt": int(run_attempt),
+        "nonce": nonce,
+        "source_ref": "ci/oreslang-v4-" + token,
+        "authorization_ref": "ci/authorized-v4-" + token,
+    }
 
 
 def git_blob_sha(data):
@@ -1250,6 +1270,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     # source-bearing destination writes. Never allow an unresolved rollback
     # race to be implicitly enabled by future allowlist/branch-policy changes.
     require_atomic_ref_rollback()
+    generation = new_generation_identity()
 
     protected_sha, contract = protected_authority(
         repository, source_pr, test_plan
@@ -1262,7 +1283,8 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     )
     verify_required_source_snapshot(plan_meta, source_commit, source_tree)
     verify_required_source_blobs(files, plan_meta["required_source_blobs"])
-    branch = "ci/oreslang-" + source_tree
+    branch = generation["source_ref"]
+    authorization = generation["authorization_ref"]
     plan_sha256 = plan_meta["sha256"]
 
     # The source snapshot can take significant time to read and authenticate.
@@ -1307,9 +1329,12 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         raise Denied("uploaded source tree differs from source PR root tree")
 
     receipt = {
-        "schema": "ores-private-ci-receipt-v3",
+        "schema": "ores-private-ci-receipt-v4",
         "expires_at": expires.isoformat().replace("+00:00", "Z"),
-        "carrier": {"workflow_blob_sha": contract["workflow_blob_sha"]},
+        "carrier": {
+            "workflow_blob_sha": contract["workflow_blob_sha"],
+            "generation": generation,
+        },
         "destination": {
             "repo": repository,
             "repo_id": contract["repository_id"],
@@ -1395,7 +1420,6 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     # to execute without the exact authorization ref. Treat every POST as
     # potentially successful before it returns so transport ambiguity cannot
     # strand private source indefinitely.
-    authorization = "ci/authorized-" + carrier_commit
     require_handoff_refs_absent(
         repository, branch, authorization, contract["repository_id"]
     )
@@ -1505,7 +1529,7 @@ def main(argv=None):
         print("PRIVATE_CI_DESTINATION_REJECTED: " + str(exc), file=sys.stderr)
         return 1
     print(
-        "PRIVATE_CI_V3_CREATED: "
+        "PRIVATE_CI_V4_CREATED: "
         + " ".join(f"{key}={value}" for key, value in result.items())
     )
     return 0

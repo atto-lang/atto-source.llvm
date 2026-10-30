@@ -51,7 +51,7 @@ jobs:
           PYTHONPATH: scripts
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -m unittest discover -s tests -p test_private_ci_export_gate.py -v
-      - name: Run authoritative V3 publisher negative/regression suite
+      - name: Run authoritative generation-fenced V4 publisher negative/regression suite
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 scripts/test-publish-private-ci-source-v3.py -v
