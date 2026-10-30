@@ -37,6 +37,7 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-heap-turnover.ores", 3, None, None),
+        ("source-actor-retire-replacement.ores", 4, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
@@ -146,6 +147,12 @@ def main():
                     # initialize independently; neither B nor C can inherit A's
                     # native actor-owned state.
                     expected = [(2, 10), (2, 102), (1, 5)][i]
+                    assert f"processed={expected[0]}" in line, line
+                    assert f"last={expected[1]}" in line, line
+                elif name == "source-actor-retire-replacement.ores":
+                    # A's state has been reclaimed before C is born. C's stop
+                    # must not corrupt still-live B, and D begins with zero.
+                    expected = [(1, 9), (1, 1), (2, 30), (1, 7)][i]
                     assert f"processed={expected[0]}" in line, line
                     assert f"last={expected[1]}" in line, line
                 else:
