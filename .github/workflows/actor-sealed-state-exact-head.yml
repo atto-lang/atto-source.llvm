@@ -114,8 +114,13 @@ jobs:
           echo "EXACT_ACTOR_SCHEMA_TREE=$(git rev-parse 'HEAD^{tree}')"
           for path in CMakeLists.txt src/main/cpp/oreslang/frontend/Parser.cpp \
             tests/contract.py tests/source_actor_e2e.py \
+            tests/native_isolated_sealed_state_compiled_guest.py \
+            tests/native_isolated_sealed_state_guest_bridge_test.c \
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
             tests/fixtures/source-isolated-actor-sealed-write.ores \
             tests/fixtures/source-isolated-actor-sealed-read.ores \
+            tests/fixtures/source-isolated-actor-sealed-write-actor-only.ores \
+            tests/fixtures/source-isolated-actor-sealed-read-actor-only.ores \
             tests/fixtures/source-isolated-actor-state-empty-reject.ores \
             tests/fixtures/source-isolated-actor-state-negative-overflow-reject.ores; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
@@ -166,5 +171,9 @@ jobs:
           python3 tests/source_actor_e2e.py \
             --compiler "$compiler" --clang clang --root "$PWD"
           python3 tests/source_actor_e2e.py \
+            --compiler "$compiler" --clang clang --root "$PWD" --sanitize
+          python3 tests/native_isolated_sealed_state_compiled_guest.py \
+            --compiler "$compiler" --clang clang --root "$PWD"
+          python3 tests/native_isolated_sealed_state_compiled_guest.py \
             --compiler "$compiler" --clang clang --root "$PWD" --sanitize
           echo "ACTOR_STATE_COMPILED_GUEST_AND_SANITIZERS=PASS"
