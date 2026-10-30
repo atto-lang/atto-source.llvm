@@ -107,6 +107,50 @@ class LocalGitAtomicRefCleanupTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.read(), self.a)
 
+    def test_two_ref_atomic_cleanup_succeeds_only_at_expected_shas(self):
+        second = "refs/heads/ci/atomic-auth-marker"
+        self.git("--git-dir", str(self.remote), "update-ref", second, self.a)
+        result = self.git("-C", str(self.work), "push", "--porcelain", "--atomic",
+                          f"--force-with-lease={REF}:{self.a}",
+                          f"--force-with-lease={second}:{self.a}",
+                          str(self.remote), f":{REF}", f":{second}", check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(self.read())
+        absent = self.git("--git-dir", str(self.remote), "rev-parse", "--verify",
+                          second, check=False)
+        self.assertNotEqual(absent.returncode, 0)
+
+    def test_two_ref_atomic_cleanup_preserves_both_when_one_ref_moves(self):
+        second = "refs/heads/ci/atomic-auth-marker"
+        self.git("--git-dir", str(self.remote), "update-ref", second, self.a)
+        b = self.commit("B")
+        self.git("-C", str(self.work), "push", "--quiet", str(self.remote),
+                 f"HEAD:{second}")
+        self.assertEqual(self.read(), self.a)
+        before = self.git("--git-dir", str(self.remote), "rev-parse", second).stdout.strip()
+        self.assertEqual(before, b)
+        result = self.git("-C", str(self.work), "push", "--porcelain", "--atomic",
+                          f"--force-with-lease={REF}:{self.a}",
+                          f"--force-with-lease={second}:{self.a}",
+                          str(self.remote), f":{REF}", f":{second}", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.read(), self.a, "source ref was partly deleted")
+        after = self.git("--git-dir", str(self.remote), "rev-parse", second).stdout.strip()
+        self.assertEqual(after, b, "competing auth ref overwritten")
+
+    def test_missing_atomic_push_capability_must_not_fallback_to_sequential_deletes(self):
+        second = "refs/heads/ci/atomic-auth-marker"
+        self.git("--git-dir", str(self.remote), "update-ref", second, self.a)
+        self.git("--git-dir", str(self.remote), "config", "receive.advertiseAtomic", "false")
+        result = self.git("-C", str(self.work), "push", "--porcelain", "--atomic",
+                          f"--force-with-lease={REF}:{self.a}",
+                          f"--force-with-lease={second}:{self.a}",
+                          str(self.remote), f":{REF}", f":{second}", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.read(), self.a)
+        auth = self.git("--git-dir", str(self.remote), "rev-parse", second).stdout.strip()
+        self.assertEqual(auth, self.a)
+
     def test_sha_lease_cannot_detect_aba_and_is_not_authorization(self):
         b = self.commit("B")
         self.git("-C", str(self.work), "push", "--quiet", str(self.remote),
