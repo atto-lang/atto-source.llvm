@@ -93,5 +93,9 @@ jobs:
           psql -U postgres -v ON_ERROR_STOP=1 -c "UPDATE ores_dispatch.actor_fence_v1 SET actor_generation=8, activation_epoch=10, exact_revision=repeat('c',40) WHERE tenant_id='tenant' AND actor_id='worker'"
           rc=0
           "$RUNNER_TEMP/pg_dispatch_native" probe native-after-fence || rc=$?
+          # A new generation cannot recycle a previously committed effect.
+          rc=0
+          "$RUNNER_TEMP/pg_dispatch_native" probe-newgen native-killed || rc=$?
           test "$rc" -eq 2
+          "$RUNNER_TEMP/pg_dispatch_native" probe-newgen native-fresh
           echo "PG_NATIVE_REAL_DB_CLAIM_PASS host_only=true native_guest=false"
