@@ -35,6 +35,11 @@ REQUIRED_OWNERS = {
     "/scripts/test-publish-private-ci-source-v3.py",
     "/scripts/test-private-ci-destination.sh",
     "/scripts/test-publish-private-ci-source.py",
+    "/tools/private-ci-policy/",
+    "/scripts/check-actions-execution-evidence.py",
+    "/scripts/test-check-actions-execution-evidence.py",
+    "/scripts/verify_ci_run.py",
+    "/scripts/test_verify_ci_run.py",
 }
 DESTINATION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z", re.ASCII)
 SHA40 = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
