@@ -262,48 +262,96 @@ static void test_seal_revokes_dormant_and_waiting_but_not_running(void) {
           ORES_STD_SYNC_GRANTED);
 }
 
-static ores_task_bound_state_region stress_region =
-    ORES_TASK_BOUND_STATE_REGION_INIT(500u, 8u);
-static uint64_t stress_value = 0;
+static void test_concurrent_task_bound_stress_matrix(void);
 
 typedef struct stress_arg {
+    ores_task_bound_state_region* region;
     ores_state_task_identity owner;
+    uint64_t* value;
+    atomic_uint* active_readers;
+    atomic_uint* active_writers;
+    unsigned int iterations;
     bool writer;
 } stress_arg;
 
 static void* stress_worker(void* payload) {
     stress_arg* arg = (stress_arg*)payload;
-    for (unsigned int n = 0; n < 2000u; ++n) {
+    for (unsigned int n = 0; n < arg->iterations; ++n) {
         const ores_std_access access =
             arg->writer ? ORES_STD_WRITE : ORES_STD_READ;
         ores_std_sync_result ticket =
-            request_retry(&stress_region, arg->owner, access);
-        start_retry(&stress_region, arg->owner, ticket.ticket);
+            request_retry(arg->region, arg->owner, access);
+        start_retry(arg->region, arg->owner, ticket.ticket);
         if (arg->writer) {
-            ++stress_value;
+            CHECK(atomic_fetch_add_explicit(
+                arg->active_writers, 1u, memory_order_seq_cst) == 0u);
+            CHECK(atomic_load_explicit(
+                arg->active_readers, memory_order_seq_cst) == 0u);
+            uint64_t previous = *arg->value;
+            sched_yield();
+            *arg->value = previous + 1u;
+            CHECK(atomic_load_explicit(
+                arg->active_readers, memory_order_seq_cst) == 0u);
+            CHECK(atomic_fetch_sub_explicit(
+                arg->active_writers, 1u, memory_order_seq_cst) == 1u);
         } else {
-            volatile uint64_t snapshot = stress_value;
-            (void)snapshot;
+            atomic_fetch_add_explicit(
+                arg->active_readers, 1u, memory_order_seq_cst);
+            CHECK(atomic_load_explicit(
+                arg->active_writers, memory_order_seq_cst) == 0u);
+            volatile uint64_t snapshot = *arg->value;
+            sched_yield();
+            CHECK(snapshot <= *arg->value);
+            CHECK(atomic_load_explicit(
+                arg->active_writers, memory_order_seq_cst) == 0u);
+            (void) snapshot;
+            CHECK(atomic_fetch_sub_explicit(
+                arg->active_readers, 1u, memory_order_seq_cst) > 0u);
         }
-        end_retry(&stress_region, arg->owner, ticket.ticket);
+        end_retry(arg->region, arg->owner, ticket.ticket);
         CHECK(release_retry(
-            &stress_region, arg->owner, ticket.ticket).code ==
+            arg->region, arg->owner, ticket.ticket).code ==
             ORES_STD_SYNC_GRANTED);
     }
     return NULL;
 }
 
-static void test_concurrent_task_bound_stress(void) {
-    pthread_t threads[8];
-    stress_arg args[8];
-    for (unsigned int i = 0; i < 8u; ++i) {
-        args[i].owner = task(9u, 100u + i, 10u + i, 1u);
-        args[i].writer = i < 3u;
-        CHECK(pthread_create(&threads[i], NULL, stress_worker, &args[i]) == 0);
+static void test_concurrent_task_bound_stress_matrix(void) {
+    const unsigned int counts[] = {3u, 7u, 15u};
+    const unsigned int iterations = 350u;
+    for (unsigned int c = 0; c < sizeof(counts)/sizeof(counts[0]); ++c) {
+        const unsigned int count = counts[c];
+        const unsigned int writer_count = (count + 2u)/3u;
+        ores_task_bound_state_region region =
+            ORES_TASK_BOUND_STATE_REGION_INIT(500u + count, 8u);
+        uint64_t protected_value = 0u;
+        atomic_uint active_readers = ATOMIC_VAR_INIT(0u);
+        atomic_uint active_writers = ATOMIC_VAR_INIT(0u);
+        pthread_t threads[15];
+        stress_arg args[15];
+        for (unsigned int i = 0; i < count; ++i) {
+            args[i].region = &region;
+            args[i].owner = task(9u, 100u + i, 10u + i, 1u);
+            args[i].value = &protected_value;
+            args[i].active_readers = &active_readers;
+            args[i].active_writers = &active_writers;
+            args[i].iterations = iterations;
+            args[i].writer = i < writer_count;
+            CHECK(pthread_create(&threads[i], NULL, stress_worker, &args[i]) == 0);
+        }
+        for (unsigned int i = 0; i < count; ++i)
+            CHECK(pthread_join(threads[i], NULL) == 0);
+        CHECK(protected_value == (uint64_t) writer_count * iterations);
+        CHECK(atomic_load_explicit(
+            &active_readers, memory_order_seq_cst) == 0u);
+        CHECK(atomic_load_explicit(
+            &active_writers, memory_order_seq_cst) == 0u);
+        ores_std_sync_result stop;
+        do { stop = ores_state_region_seal(&region); }
+        while (stop.code == ORES_STD_SYNC_RETRY);
+        CHECK(stop.code == ORES_STD_SYNC_GRANTED);
+        CHECK(ores_state_region_quiescent(&region) == ORES_STD_SYNC_GRANTED);
     }
-    for (unsigned int i = 0; i < 8u; ++i)
-        CHECK(pthread_join(threads[i], NULL) == 0);
-    CHECK(stress_value == 6000u);
 }
 
 int main(void) {
@@ -313,7 +361,7 @@ int main(void) {
     test_foreign_region_and_generation();
     test_reader_cohort_writer_fairness_and_owner_binding();
     test_seal_revokes_dormant_and_waiting_but_not_running();
-    test_concurrent_task_bound_stress();
+    test_concurrent_task_bound_stress_matrix();
     puts("Oreslang task-bound state-region admission PASS");
     return 0;
 }
