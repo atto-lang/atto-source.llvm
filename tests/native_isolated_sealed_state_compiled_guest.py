@@ -32,6 +32,23 @@ def main():
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
+    # The host-only synchronous state proof must never accidentally activate
+    # on the separate Wasm Worker or freestanding Cortex-M actor ABIs.
+    for target in ("wasm32", "thumbv7m-none-eabi"):
+        for access in ("write", "read"):
+            fixture = root / "tests/fixtures" / (
+                f"source-isolated-actor-sealed-{access}.ores")
+            blocked = subprocess.run(
+                [args.compiler, f"--target={target}", str(fixture)],
+                capture_output=True, text=True, timeout=90, check=False)
+            diagnostic = "native sealed actor-state guest v1 requires host scheduler"
+            if (blocked.returncode == 0 or
+                    diagnostic not in blocked.stderr or
+                    blocked.stdout.strip()):
+                raise RuntimeError(
+                    f"unverified target admitted sealed state: {target}/{access} "
+                    f"exit={blocked.returncode} "
+                    f"stderr={blocked.stderr[-800:]} stdout={blocked.stdout[-800:]}")
     with tempfile.TemporaryDirectory(prefix="oreslang-sealed-state-guest-") as tmp:
         directory = pathlib.Path(tmp)
         for kind in ("write", "read"):
