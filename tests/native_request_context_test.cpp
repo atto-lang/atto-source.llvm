@@ -24,11 +24,15 @@ struct Suite {
     Registry contexts;
     Buffers buffers;
     std::array<NativeHttpExchange,15> exchanges{};
+    NativeHttpExchange second_exchange;
     std::array<OresNativeActorRef,15> actors{};
     std::array<Registry::Handle,15> requests{};
     std::array<Buffers::Handle,15> bodies{};
     std::array<std::optional<Registry::BoundExchange<16,128>>,15> pins{};
     std::optional<Registry::Suspension> suspension;
+    std::optional<Registry::BoundExchange<16,128>> second_pin;
+    Registry::Handle second_request{};
+    Buffers::Handle second_body{};
     std::atomic<unsigned> ready{0},observed{0},bad{0};
     OresNativeActorScheduler* scheduler=nullptr;
     unsigned count=0;
@@ -53,6 +57,22 @@ struct Suite {
             auto& exchange=s.exchanges[slot];
             const auto token=exchange.token();
             CHECK(!Registry::current()); // carrier callback does not inherit stale TLS
+            if(s.second_pin && message==s.second_pin->token().dispatch_ticket) {
+                const auto second=s.second_pin->token();
+                CHECK(!s.contexts.with_admitted_turn(s.scheduler,exchange,token,
+                       s.requests[slot],owner,[]{throw std::runtime_error("wrong request");}));
+                CHECK(s.contexts.with_admitted_turn(s.scheduler,s.second_exchange,
+                      second,s.second_request,owner,[&]{
+                    CHECK(Registry::current()->request_id==1099);
+                    CHECK(!s.contexts.with_request_bytes(*s.pins[slot],
+                        [&](std::string_view){throw std::runtime_error("cross read");}));
+                    CHECK(s.contexts.with_request_bytes(*s.second_pin,
+                        [&](std::string_view bytes){CHECK(bytes=="GET /actor");}));
+                    ++s.observed;
+                }));
+                CHECK(!Registry::current());
+                return;
+            }
             if(message!=token.dispatch_ticket) {
                 CHECK(!s.contexts.with_admitted_turn(s.scheduler,exchange,token,
                       s.requests[slot],owner,[]{throw std::runtime_error("wrong ticket admitted");}));
@@ -235,6 +255,41 @@ int main(){
     for(unsigned n:{3u,8u,15u}){
         Suite s;s.begin(n,true);s.send_all();
         CHECK(s.observed==n);s.end();
+    }
+    // Two distinct HTTP requests use the SAME SERIAL actor but carry separate
+    // exact scheduler DATA envelopes. Both can be queued at the same time;
+    // each executes in the actor's own serialized DATA lane, never with the
+    // other request's context or borrowed request bytes.
+    {
+        Suite s;s.begin(1);
+        auto second=s.contexts.open(s.actors[0],Suite::info(99));
+        CHECK(second);
+        s.second_request=*second;
+        auto in=s.buffers.begin(1);CHECK(in);
+        std::memcpy(in->data(),"GET /actor",10);
+        s.second_body=in->publish(10);
+        auto pin=s.contexts.attach_exchange_with_buffer(s.second_exchange,
+                     s.second_request,s.actors[0],s.buffers,s.second_body,1);
+        CHECK(pin);
+        s.second_pin.emplace(std::move(*pin));
+        const auto first_ticket=s.pins[0]->token().dispatch_ticket;
+        const auto second_ticket=s.second_pin->token().dispatch_ticket;
+        CHECK(first_ticket!=second_ticket);
+        CHECK(s.second_exchange.claim(s.second_pin->token()));
+        CHECK(ores_native_actor_scheduler_try_send(s.scheduler,s.actors[0],
+              first_ticket)==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(ores_native_actor_scheduler_try_send(s.scheduler,s.actors[0],
+              second_ticket)==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.observed==2 && s.bad==0 && s.rejected==0);
+        const auto t=s.second_pin->token();
+        CHECK(s.second_exchange.complete(t));
+        CHECK(s.second_exchange.reclaim(t));
+        CHECK(s.contexts.close(s.second_request,s.actors[0]));
+        CHECK(s.buffers.close(s.second_body,1));
+        s.second_pin.reset();
+        CHECK(s.contexts.available()==15 && s.buffers.available()==15);
+        s.end();
     }
     // Exception unwinding restores the parent's current request on the same
     // scheduler-authorized carrier; no nested metadata bleeds to next turn.
