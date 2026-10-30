@@ -64,7 +64,6 @@ CREATE FUNCTION ores_dispatch.claim_once_v1(
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
-SET synchronous_commit = on
 AS $claim$
 DECLARE
     claimed boolean;
@@ -85,6 +84,7 @@ BEGIN
        p_utf8_bytes NOT BETWEEN 1 AND 65536 OR
        p_measured_tokens NOT BETWEEN 1 AND 16384 OR
        current_setting('fsync') <> 'on' OR
+       current_setting('synchronous_commit') NOT IN ('on', 'remote_apply') OR
        p_expires_ms <= floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint
     THEN
         RETURN false;
@@ -109,6 +109,10 @@ BEGIN
         RETURN false;
     END IF;
 
+    -- In production the TRUSTED host submits one autocommit statement and
+    -- does not mutate synchronous_commit after this check. This function
+    -- alone CANNOT prevent an explicitly malicious client from turning off
+    -- synchronous_commit before its outer COMMIT.
     -- Recheck the database clock immediately before the atomic admission.
     INSERT INTO ores_dispatch.claim_v1
         (tenant_id, actor_id, dispatch_id, context_sha256,
