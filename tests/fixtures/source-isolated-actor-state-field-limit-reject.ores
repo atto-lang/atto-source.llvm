@@ -1,0 +1,21 @@
+define isolated actor Counter as
+    state {
+        f0: int = 0;
+        f1: int = 0;
+        f2: int = 0;
+        f3: int = 0;
+        f4: int = 0;
+        f5: int = 0;
+        f6: int = 0;
+        f7: int = 0;
+        f8: int = 0;
+        f9: int = 0;
+        f10: int = 0;
+        f11: int = 0;
+        f12: int = 0;
+        f13: int = 0;
+        f14: int = 0;
+        f15: int = 0;
+        f16: int = 0;
+    }
+end
