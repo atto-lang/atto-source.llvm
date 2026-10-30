@@ -9,6 +9,17 @@ using oreslang::runtime::StrictSigned64Arithmetic;
 using oreslang::runtime::StrictIntegerFailure;
 using I = std::int64_t;
 
+static_assert(StrictSigned64Arithmetic::neg(I(0)).value == 0);
+static_assert(StrictSigned64Arithmetic::neg(I(42)).value == -42);
+static_assert(StrictSigned64Arithmetic::neg(I(-42)).value == 42);
+static_assert(StrictSigned64Arithmetic::neg(std::numeric_limits<I>::min()).failure
+    == StrictIntegerFailure::overflow);
+static_assert(StrictSigned64Arithmetic::abs(I(0)).value == 0);
+static_assert(StrictSigned64Arithmetic::abs(I(-42)).value == 42);
+static_assert(StrictSigned64Arithmetic::abs(std::numeric_limits<I>::max()).value
+    == std::numeric_limits<I>::max());
+static_assert(StrictSigned64Arithmetic::abs(std::numeric_limits<I>::min()).failure
+    == StrictIntegerFailure::overflow);
 static_assert(StrictSigned64Arithmetic::rem(-9, 4).value == -1);
 static_assert(StrictSigned64Arithmetic::mod(-9, 4).value == 3);
 static_assert(StrictSigned64Arithmetic::mod(-9, -4).value == 3);
@@ -234,6 +245,21 @@ int main() {
         auto actual = item.operation(item.left, item.right);
         if (actual.failure != item.error) return 11;
         if (actual.ok() && actual.value != item.expected) return 12;
+    }
+    for (I value : {std::numeric_limits<I>::min(), std::numeric_limits<I>::min() + 1,
+                    I(-42), I(-1), I(0), I(1), I(42), std::numeric_limits<I>::max()}) {
+        const auto negated = StrictSigned64Arithmetic::neg(value);
+        const auto absolute = StrictSigned64Arithmetic::abs(value);
+        if (value == std::numeric_limits<I>::min()) {
+            if (negated.failure != StrictIntegerFailure::overflow
+                    || absolute.failure != StrictIntegerFailure::overflow) return 18;
+            continue;
+        }
+        if (!negated.ok() || negated.value != -value) return 19;
+        const I expected_abs = value < 0 ? -value : value;
+        if (!absolute.ok() || absolute.value != expected_abs) return 20;
+        const auto restored = StrictSigned64Arithmetic::neg(negated.value);
+        if (!restored.ok() || restored.value != value) return 21;
     }
     for (I a : {I(-9), I(-1), I(0), I(1), I(9)}) {
         for (I b : {I(-4), I(1), I(4)}) {
