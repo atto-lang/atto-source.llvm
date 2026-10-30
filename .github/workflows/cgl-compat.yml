@@ -14,6 +14,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/CglHostAdmission.hpp'
       - 'CMakeLists.txt'
       - 'docs/CGL_DEPLOYMENT.md'
+      - 'docs/CGL_DISPATCH_EVIDENCE_V1.md'
       - '.github/workflows/cgl-compat.yml'
   workflow_dispatch:
 permissions:
