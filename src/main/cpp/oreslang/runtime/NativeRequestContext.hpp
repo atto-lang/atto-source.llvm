@@ -4,6 +4,9 @@
 // Await/callback producers may retain a lease; only admitted actor turns may
 // install the temporary carrier TLS lookup hint (not an authorization token).
 #include "oreslang/runtime/NativeHttpExchange.hpp"
+#include "oreslang/runtime/RequestSlotTable.hpp"
+#include <functional>
+#include <string_view>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -48,6 +51,7 @@ private:
         NativeRequestContext* table;
         Handle handle;
         OresNativeActorRef owner;
+        OresNativeActorScheduler* scheduler;
         Frame* previous;
     };
     inline static thread_local Frame* current_frame_ = nullptr;
@@ -60,6 +64,21 @@ private:
     }
     static bool valid(OresNativeActorRef a) noexcept {
         return a.scheduler_domain && a.generation;
+    }
+    // Exact-current scheduler authority, never request token or callback provenance.
+    static bool admitted(OresNativeActorScheduler* scheduler,
+                         OresNativeActorRef owner) noexcept {
+        if (!scheduler || !valid(owner) ||
+            !ores_native_actor_scheduler_is_current_actor(scheduler, owner))
+            return false;
+        OresNativeExecutionContext ctx{};
+        return ores_native_actor_scheduler_current_execution_context(scheduler, &ctx)
+            && ctx.id.runtime_domain == owner.scheduler_domain
+            && ctx.id.execution != 0
+            && ctx.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR
+            && ctx.allocation.domain == owner.scheduler_domain
+            && ctx.allocation.owner == owner.actor_slot
+            && ctx.allocation.generation == owner.generation;
     }
     static bool valid(Metadata m) noexcept {
         return m.request_id && m.trace_id && m.tenant_id && m.deadline_tick;
@@ -154,7 +173,8 @@ public:
     std::optional<Suspension> suspend_current(
             const NativeHttpExchange& exchange, NativeHttpExchange::Token token) {
         Frame* f=current_frame_;
-        if (!f || f->table!=this || !same(f->owner,token.actor)
+        if (!f || f->table!=this || !admitted(f->scheduler,f->owner)
+                || !same(f->owner,token.actor)
                 || f->handle.value!=token.request_context
                 || token.request_registry!=registry_id_ || !token.generation
                 || exchange.phase()!=NativeHttpExchange::Phase::actor)
@@ -169,14 +189,15 @@ public:
         return Suspension(f->handle,f->owner,token.generation,std::move(*pin));
     }
     template<typename Fn>
-    bool resume_admitted(const NativeHttpExchange& exchange,
+    bool resume_admitted(OresNativeActorScheduler* scheduler,
+            const NativeHttpExchange& exchange,
             NativeHttpExchange::Token token, const Suspension& suspended, Fn&& fn) {
         if(!suspended.pin || suspended.context.value!=suspended.pin.handle().value
                 || suspended.context.value!=token.request_context
                 || token.request_registry!=registry_id_
                 || suspended.exchange_generation!=token.generation
                 || !same(suspended.owner,token.actor))return false;
-        return with_admitted_turn(exchange,token,suspended.context,suspended.owner,
+        return with_admitted_turn(scheduler,exchange,token,suspended.context,suspended.owner,
                                   std::forward<Fn>(fn));
     }
     std::uint64_t registry_id() const noexcept {return registry_id_;}
@@ -240,12 +261,14 @@ public:
     // Call only from a scheduler-authenticated actor DATA turn. Matching
     // the owner tuple is necessary but NOT sufficient for guest authority.
     template<typename Fn>
-    bool with_admitted_turn(const NativeHttpExchange& exchange,
+    bool with_admitted_turn(OresNativeActorScheduler* scheduler,
+            const NativeHttpExchange& exchange,
             NativeHttpExchange::Token token, Handle handle,
             OresNativeActorRef owner, Fn&& callback) {
         static_assert(std::is_void_v<std::invoke_result_t<Fn&>>,
             "carrier binding must not return an escaped resource or awaitable");
-        if(!token.generation || !valid(owner) || !same(token.actor,owner)
+        if(!admitted(scheduler,owner) || !token.generation
+                || !valid(owner) || !same(token.actor,owner)
                 || token.request_context!=handle.value
                 || token.request_registry!=registry_id_
                 || exchange.phase()!=NativeHttpExchange::Phase::actor)return false;
@@ -257,7 +280,7 @@ public:
         if(!lease)return false;
         // Store lease prevents reuse; close revokes current() immediately.
         if(!lookup(handle,owner))return false;
-        Frame frame{this,handle,owner,current_frame_};
+        Frame frame{this,handle,owner,scheduler,current_frame_};
         current_frame_=&frame;
         const auto carrier=std::this_thread::get_id();
         struct Restore {
@@ -268,13 +291,31 @@ public:
                 current_frame_=frame->previous;
             }
         } restore{&frame,carrier};
+        if(!admitted(scheduler,owner))return false; // scheduler authority lost before guest invocation
         callback();
         return true;
+    }
+    // Host-only request-byte loan: source compilation must prove the borrowed
+    // string_view cannot escape or remain live across await/suspend. A separate
+    // transport slot is validated on every use; never persist a raw pointer
+    // in the logical request context or continuation.
+    template<std::size_t Slots,std::size_t MaxBytes,typename Visitor>
+    bool with_request_bytes(RequestSlotTable<Slots,MaxBytes>& table,
+            typename RequestSlotTable<Slots,MaxBytes>::Handle buffer,
+            std::uint64_t transport_owner, Visitor&& visitor) {
+        static_assert(std::is_void_v<std::invoke_result_t<Visitor&,std::string_view>>,
+            "request borrowed bytes visitor must return void");
+        Frame* frame=current_frame_;
+        if(!frame || frame->table!=this ||
+                !admitted(frame->scheduler,frame->owner) ||
+                !lookup(frame->handle,frame->owner))return false;
+        return table.with_borrow(buffer,transport_owner,std::forward<Visitor>(visitor));
     }
     // Convenience only, never an actor, heap or permissions accessor.
     static std::optional<Metadata> current() noexcept {
         auto* frame=current_frame_;
-        return frame ? frame->table->lookup(frame->handle,frame->owner) : std::nullopt;
+        return frame && admitted(frame->scheduler,frame->owner)
+            ? frame->table->lookup(frame->handle,frame->owner) : std::nullopt;
     }
 };
 } // namespace oreslang::runtime
