@@ -483,7 +483,6 @@ struct Program {
     std::string namespace_name;
     std::string module;
     std::vector<ClassDecl> classes;
-    std::vector<InvertedStructDecl> inverted_structs;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
@@ -491,6 +490,8 @@ struct Program {
     std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
+    // Appended to preserve existing positional aggregate field ordering.
+    std::vector<InvertedStructDecl> inverted_structs;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
