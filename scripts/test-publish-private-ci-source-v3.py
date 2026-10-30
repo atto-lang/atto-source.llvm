@@ -491,8 +491,23 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             b"/scripts/test-publish-private-ci-source.py @ORESoftware\n"
             b"/scripts/audit-private-ci-governance.py @ORESoftware\n"
             b"/scripts/test-audit-private-ci-governance.py @ORESoftware\n"
+            b"/tools/private-ci-policy/ @ORESoftware\n"
+            b"/scripts/check-actions-execution-evidence.py @ORESoftware\n"
+            b"/scripts/test-check-actions-execution-evidence.py @ORESoftware\n"
+            b"/scripts/verify_ci_run.py @ORESoftware\n"
+            b"/scripts/test_verify_ci_run.py @ORESoftware\n"
         )
         v3.require_source_security_codeowners(source_codeowners)
+        for protected in (
+            b"/tools/private-ci-policy/ @ORESoftware\n",
+            b"/scripts/check-actions-execution-evidence.py @ORESoftware\n",
+            b"/scripts/test_verify_ci_run.py @ORESoftware\n",
+        ):
+            with self.subTest(protected=protected), self.assertRaisesRegex(
+                    v3.Denied, "terminal security-owner"):
+                v3.require_source_security_codeowners(
+                    source_codeowners.replace(protected, b"")
+                )
         with self.assertRaisesRegex(v3.Denied, "terminal security-owner"):
             v3.require_source_security_codeowners(
                 source_codeowners + b"/scripts/publish-private-ci-source-v3.py @other\n"
