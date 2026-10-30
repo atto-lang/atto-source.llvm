@@ -41,9 +41,11 @@ inline CriticalStateAdmission admit_critical_handle_state(
         FunctionEffects using_effects,
         bool verified_serial_actor = false) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
-    // The serial privilege comes from a trusted actor declaration + scheduler,
-    // never from callback metadata supplied by guest code.
-    if (!callback.callback_critical && !verified_serial_actor)
+    // Scheduler-proven serial admission does not replace the mandatory
+    // inline critical callback marker. Otherwise a serial actor could
+    // silently authorize an unmarked state-capability callback.
+    (void)verified_serial_actor;  // Retained for source ABI compatibility.
+    if (!callback.callback_critical)
         return CriticalStateAdmission::MissingCallbackCritical;
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
