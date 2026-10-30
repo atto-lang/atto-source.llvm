@@ -3953,6 +3953,28 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 endif()
 
+# Compiler-owned singleton admission must remain contextual and fail closed
+# until the shared v1 semantics and lowering are implemented.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-singleton-admission-test
+        tests/native_singleton_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-singleton-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-singleton-admission-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-singleton-admission-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-singleton-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-singleton-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_singleton_admission
+        COMMAND oreslang-native-singleton-admission-test)
+    set_tests_properties(native_singleton_admission PROPERTIES TIMEOUT 20)
+endif()
+
 # Dependency-free, executable import/source admission boundary. This test
 # compiles the production SourceInput.hpp with the host C++ compiler.
 if(BUILD_TESTING AND UNIX)
