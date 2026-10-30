@@ -239,14 +239,31 @@ public:
         Lease pin{};
     private:
         friend class NativeRequestContext;
+        // 0 available, 1 executing resume, 2 consumed. Only an authenticated
+        // scheduler DATA turn can claim; copied/stale callbacks can never replay.
+        std::atomic<unsigned> resumption_state_{0};
         Suspension(Handle h, OresNativeActorRef a, std::uint64_t epoch,
                    Lease&& owned) noexcept:
             context(h), owner(a), exchange_generation(epoch), pin(std::move(owned)) {}
     public:
         Suspension(const Suspension&) = delete;
         Suspension& operator=(const Suspension&) = delete;
-        Suspension(Suspension&&) noexcept = default;
-        Suspension& operator=(Suspension&&) noexcept = default;
+        Suspension(Suspension&& rhs) noexcept:
+            context(rhs.context), owner(rhs.owner),
+            exchange_generation(rhs.exchange_generation), pin(std::move(rhs.pin)),
+            resumption_state_(rhs.resumption_state_.exchange(2,std::memory_order_acq_rel)) {}
+        Suspension& operator=(Suspension&& rhs) noexcept {
+            if(this!=&rhs) {
+                context=rhs.context;
+                owner=rhs.owner;
+                exchange_generation=rhs.exchange_generation;
+                pin=std::move(rhs.pin);
+                resumption_state_.store(
+                    rhs.resumption_state_.exchange(2,std::memory_order_acq_rel),
+                    std::memory_order_release);
+            }
+            return *this;
+        }
     };
     // Capture ONLY from an actual admitted physical turn. A foreign callback
     // producer with no active scope cannot manufacture a physical pin.
@@ -276,15 +293,28 @@ public:
     template<typename Fn>
     bool resume_admitted(OresNativeActorScheduler* scheduler,
             const NativeHttpExchange& exchange,
-            NativeHttpExchange::Token token, const Suspension& suspended, Fn&& fn) {
+            NativeHttpExchange::Token token, Suspension& suspended, Fn&& fn) {
         if(!suspended.pin || suspended.context.value!=suspended.pin.handle().value
                 || suspended.context.value!=token.request_context
                 || token.request_registry!=registry_id_
                 || !token.dispatch_ticket
                 || suspended.exchange_generation!=token.generation
-                || !same(suspended.owner,token.actor))return false;
-        return with_admitted_turn(scheduler,exchange,token,suspended.context,suspended.owner,
-                                  std::forward<Fn>(fn));
+                || !same(suspended.owner,token.actor)
+                || !admitted_for(scheduler,suspended.owner,token.dispatch_ticket))
+            return false;
+        unsigned expected=0;
+        if(!suspended.resumption_state_.compare_exchange_strong(expected,1,
+                std::memory_order_acq_rel))return false;
+        bool ok=false;
+        try {
+            ok=with_admitted_turn(scheduler,exchange,token,suspended.context,
+                    suspended.owner,std::forward<Fn>(fn));
+        } catch (...) {
+            suspended.resumption_state_.store(2,std::memory_order_release);
+            throw;
+        }
+        suspended.resumption_state_.store(ok?2:0,std::memory_order_release);
+        return ok;
     }
     std::uint64_t registry_id() const noexcept {return registry_id_;}
     NativeRequestContext()=default;
