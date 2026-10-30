@@ -223,6 +223,19 @@ if(BUILD_TESTING)
     add_test(NAME native_http_exchange_generation_ownership COMMAND oreslang-native-http-exchange-test)
     set_tests_properties(native_http_exchange_generation_ownership PROPERTIES TIMEOUT 20)
 
+    # Trusted host-only HTTP request context/lifetime foundation, stacked on
+    # actor-incarnation exchange ownership. Not compiled .ores guest parity.
+    add_executable(oreslang-native-request-context-test tests/native_request_context_test.cpp)
+    target_include_directories(oreslang-native-request-context-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-request-context-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-request-context-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_http_request_context_pinning_host_only
+        COMMAND oreslang-native-request-context-test)
+    set_tests_properties(native_http_request_context_pinning_host_only
+        PROPERTIES TIMEOUT 45)
+
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
