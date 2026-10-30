@@ -48,6 +48,38 @@ for a complete bounded trace array. It does not collect traces from OresVM
 and deliberately always reports `hard_realtime_qualified=false`. Its duplicate
 check is O(n^2), so it must never be called on the RT path.
 
+## Implemented observation seams (not full timer correlation)
+
+**LLVM experimental native carrier:** `MultiActorCarrier::register_actor` now
+accepts an optional caller-owned `CglCarrierDispatchTrace` sink. After
+authenticated actor slot/generation admission and immediately around the
+native `slice` callback, the worker records monotonic start/finish timestamps,
+message sequence, first-slice versus continuation, and actor generation.
+The fixed-capacity 256-record sink performs no heap allocation or locking on
+the single-worker append path. It detects overflow and readers must wait
+until `carrier.join()`. An independently known positive expected event count
+is required for full-coverage checks. This is a **native callback entry**,
+not the first compiled guest instruction, and the carrier currently does
+not know timer-due or timer-notification data.
+
+**GraalVM actual actor runtime:** opt in *before* creating `ActorRuntime`
+with `-Dores.runtime.cgl.handlerTrace=true`. The runtime allocates one
+fixed-capacity `CglActorMessageTrace` at initialization. It timestamps
+both source actor `receiveActor(...)` and host `behavior.onMessage(...)`
+around the already-admitted, nonreentrant handler call. No new per-message
+sample object is allocated; synchronization is host/JVM **soft-RT only**.
+The caller must wait until actors stop, explicitly seal, then inspect a
+snapshot against a positive expected admitted-handler count. The buffer
+tracks invalid and dropped records and fails closed on either. Mailbox
+sequences are zero-based. A source handler method call is **not** necessarily
+the first bytecode/instruction executed inside the guest language.
+
+**Still missing:** a common source-owned timer-ticket/join identity linking
+arm/due/notify with authenticated mailbox receipt and first actual guest
+instruction. Do not synthesize due/notification values, or combine different
+clock domains, to make either producer satisfy the offline `DispatchTrace`
+contract. Runtime/VM instrumentation and real host trials remain P0 work.
+
 ## Runtime parity implementation gate
 
 For **LLVM**, add actor-scheduler instrumentation at ticket registration,
