@@ -49,6 +49,19 @@ extern "C" std::int32_t actor_scalar_guest(
     return ORES_GUEST_OK;
 }
 
+// Two independent actor turns must overlap in physical native execution.
+// The host never holds its root registry mutex across user-code callbacks.
+static std::atomic<unsigned> parallel_entered{0};
+static std::atomic<bool> parallel_release{false};
+extern "C" std::int32_t parallel_actor_guest(
+        OresIsolateContext*, std::int64_t value, std::int64_t* out) {
+    parallel_entered.fetch_add(1, std::memory_order_release);
+    while (!parallel_release.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    *out = value;
+    return ORES_GUEST_OK;
+}
+
 int main() {
     OresVM vm;
     IsolateConfig cfg;
@@ -196,6 +209,43 @@ int main() {
     scalar_vm.begin_shutdown(scalar_tenant);
     scalar_vm.complete_shutdown(scalar_tenant);
     scalar_vm.destroy(scalar_tenant);
+
+    // Two different actors within ONE tenant can be in guest code at the
+    // same time; the tenant-global legacy scalar mutex no longer blocks them.
+    OresVM parallel_vm;
+    auto p_iso = parallel_vm.create_isolate({"parallel", 1024, 2});
+    parallel_vm.start(p_iso);
+    auto p_a1 = parallel_vm.register_actor(p_iso, 1);
+    auto p_a2 = parallel_vm.register_actor(p_iso, 2);
+    auto p_t1 = parallel_vm.enqueue_durable(p_iso, p_a1, 7, 1, 1);
+    auto p_t2 = parallel_vm.enqueue_durable(p_iso, p_a2, 19, 2, 1);
+    std::optional<OresVM::DurableGuestReceipt> p_result1;
+    std::optional<OresVM::DurableGuestReceipt> p_result2;
+    std::thread p_worker1([&] {
+        p_result1 = parallel_vm.try_invoke_durable_guest_result(
+            p_iso, p_t1.ticket, parallel_actor_guest, 11);
+    });
+    std::thread p_worker2([&] {
+        p_result2 = parallel_vm.try_invoke_durable_guest_result(
+            p_iso, p_t2.ticket, parallel_actor_guest, 22);
+    });
+    const auto p_deadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(5);
+    while (parallel_entered.load(std::memory_order_acquire) != 2 &&
+           std::chrono::steady_clock::now() < p_deadline)
+        std::this_thread::yield();
+    const bool both_started = parallel_entered.load(std::memory_order_acquire) == 2;
+    parallel_release.store(true, std::memory_order_release);
+    p_worker1.join();
+    p_worker2.join();
+    assert(both_started && p_result1 && p_result2);
+    assert(p_result1->outcome.value == 11 && p_result2->outcome.value == 22);
+    assert(parallel_vm.durable_snapshot(p_iso).entries == 0);
+    parallel_vm.retire_actor(p_iso, p_a1);
+    parallel_vm.retire_actor(p_iso, p_a2);
+    parallel_vm.begin_shutdown(p_iso);
+    parallel_vm.complete_shutdown(p_iso);
+    parallel_vm.destroy(p_iso);
 
     OresVM quarantined;
     auto q_iso=quarantined.create_isolate({"quarantined",1024,2});
