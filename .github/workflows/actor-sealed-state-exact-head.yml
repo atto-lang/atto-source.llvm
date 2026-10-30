@@ -113,7 +113,10 @@ jobs:
           echo "EXACT_ACTOR_SCHEMA_HEAD=$EXPECTED_HEAD"
           echo "EXACT_ACTOR_SCHEMA_TREE=$(git rev-parse 'HEAD^{tree}')"
           for path in CMakeLists.txt src/main/cpp/oreslang/frontend/Parser.cpp \
-            tests/contract.py tests/fixtures/source-isolated-actor-state-empty-reject.ores \
+            tests/contract.py tests/source_actor_e2e.py \
+            tests/fixtures/source-isolated-actor-sealed-write.ores \
+            tests/fixtures/source-isolated-actor-sealed-read.ores \
+            tests/fixtures/source-isolated-actor-state-empty-reject.ores \
             tests/fixtures/source-isolated-actor-state-negative-overflow-reject.ores; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
           done
@@ -154,3 +157,14 @@ jobs:
             --fixture tests/fixtures/source-isolated-actor-state-i64-min-boundary.ores \
             --diagnostic 'native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet'
           echo "ACTOR_STATE_COMPILER_ADMISSION=PASS_NOT_LOWERED"
+      - name: Execute compiled sealed-state actor source against native scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$PWD/build/actor-state-schema/oreslang-llvmc"
+          python3 -m py_compile tests/source_actor_e2e.py
+          python3 tests/source_actor_e2e.py \
+            --compiler "$compiler" --clang clang --root "$PWD"
+          python3 tests/source_actor_e2e.py \
+            --compiler "$compiler" --clang clang --root "$PWD" --sanitize
+          echo "ACTOR_STATE_COMPILED_GUEST_AND_SANITIZERS=PASS"
