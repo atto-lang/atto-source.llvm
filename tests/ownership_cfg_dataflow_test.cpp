@@ -389,6 +389,15 @@ int main() {
     assert(direct.at("x").shared_loans == 0 &&
            !direct.at("x").exclusive_loan);
 
+    // Direct helper callers must not bypass region/task provenance integrity
+    // by presenting malformed abstract state outside verify(Graph).
+    State malformed_region = {{"x", cell(kOwned)}};
+    malformed_region.at("x").shared_loan_regions.emplace(700, owner_a);
+    assert(rejected([&] { apply(op(Kind::Read, "x"), malformed_region); }));
+    State malformed_exclusive = {{"x", cell(kOwned)}};
+    malformed_exclusive.at("x").exclusive_loan_region = owner_a;
+    assert(rejected([&] { apply(op(Kind::Read, "x"), malformed_exclusive); }));
+
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
     Graph maybe_drop;
