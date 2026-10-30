@@ -47,6 +47,10 @@ public:
     std::size_t recorded_after_join() const noexcept { return used_; }
     std::uint64_t dropped_after_join() const noexcept { return dropped_; }
     bool complete_after_join() const noexcept { return dropped_ == 0; }
+    // Positive independently known dispatch count required for full coverage.
+    bool matches_expected_after_join(std::size_t expected) const noexcept {
+        return expected != 0 && used_ == expected && dropped_ == 0;
+    }
 
 private:
     std::array<Sample, capacity> samples_{};
