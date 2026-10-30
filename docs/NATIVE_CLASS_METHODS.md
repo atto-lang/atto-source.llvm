@@ -23,7 +23,15 @@ pub fnc main(): int {
 
 Calls bind by method name and explicit argument count, then acquire a hidden
 receiver loan. Default receivers are read-only; `mut self` requires an exclusive
-borrow. Generated method functions use internal LLVM linkage and retain class
+borrow. The hidden `self` receiver never participates in overload arity:
+`x()` and `x(mut self)()` collide as `x/0`, and `x(int n)` and
+`x(mut self, int n)` collide as `x/1`. Both declaration orders reject.
+Inline `y(mut self, int n)` and legacy `y(mut self)(int n)` share one
+mutable `y/1` selector; `x(string a)` alongside `y(mut self, int n)`
+is legal as far as overload identity is concerned. Read-only inline
+`y(self, int n)` also erases the marker. The compiler rejects duplicate
+native method slots with a name/arity diagnostic; actor sealed-state and
+general class-inheritance lowering remain separate gates. Generated method functions use internal LLVM linkage and retain class
 identity through module qualification. Only a method's exact declaring class
 receives lexical private-field/method privilege. Forwarding its receiver to an
 ordinary function does not forward private access. Private methods are checked
