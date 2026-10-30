@@ -42,8 +42,8 @@ def main():
                 raise RuntimeError(f"missing real LLVM IR for {kind}")
             for symbol in ("oreslang_actor_Counter_init",
                            "oreslang_actor_Counter_on_message"):
-                if not re.search(r"(?m)^define\\s+.*@"
-                                 + symbol + r"\\s*\\(", ir):
+                if not re.search(r"(?m)^define\s+.*@"
+                                 + symbol + r"\s*\(", ir):
                     raise RuntimeError(f"missing compiler-defined {symbol}")
             if "gc.statepoint" in ir or "gc.relocate" in ir:
                 raise RuntimeError("tracing GC inserted into native actor IR")
