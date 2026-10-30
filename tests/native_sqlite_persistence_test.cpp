@@ -67,6 +67,24 @@ int main(){
         assert(restored.version==1 && restored.snapshot_version==0 && restored.snapshot.empty());
         assert(restored.events.size()==1 && restored.events[0].version==1 && restored.events[0].payload[0]==99);
     }
+    { // Explicitly corrupt the event ledger: fail closed instead of losing state.
+        SqliteStore store(path);store.grant_epoch("tenant-a","tampered",1);
+        auto a=store.commit({write("tampered","evt1",1,0,WriteKind::Event,70)});
+        auto b=store.commit({write("tampered","evt2",1,1,WriteKind::Event,71)});
+        assert(a[0].durable() && b[0].durable());
+    }
+    {
+        sqlite3* conn=nullptr;
+        assert(sqlite3_open(path.c_str(),&conn)==SQLITE_OK);
+        char* err=nullptr;
+        assert(sqlite3_exec(conn,"DELETE FROM events WHERE actor='tampered' AND version=1",nullptr,nullptr,&err)==SQLITE_OK);
+        sqlite3_close(conn);
+        SqliteStore store(path);
+        bool rejected=false;
+        try { (void)store.load({"tenant-a","tampered","main"}); }
+        catch(const std::runtime_error&){rejected=true;}
+        assert(rejected && "missing journal event must abort reactivation");
+    }
     { // Version CAS within one batch: actor A conflict does not poison actor B.
         SqliteStore store(path);
         store.grant_epoch("tenant-a","mixed-a",1);store.grant_epoch("tenant-a","mixed-b",1);
