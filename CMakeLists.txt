@@ -1704,6 +1704,32 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_execution_ledger_serialization
         PROPERTIES TIMEOUT 20)
 
+    # Deterministic host-only lifecycle stress and STOP/WAKE fencing.
+    # Separate from the real scheduler bridge and compiled .ores guest gate.
+    add_executable(oreslang-actor-execution-ledger-stress-test
+        tests/native_actor_execution_ledger_state_stress_test.cpp)
+    target_include_directories(oreslang-actor-execution-ledger-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-execution-ledger-stress-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-execution-ledger-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_execution_ledger_deterministic_stress
+        COMMAND oreslang-actor-execution-ledger-stress-test)
+    set_tests_properties(native_actor_execution_ledger_deterministic_stress
+        PROPERTIES TIMEOUT 25)
+
+    add_executable(oreslang-actor-ledger-fencing-interleavings-test
+        tests/native_actor_ledger_fencing_interleavings_test.cpp)
+    target_include_directories(oreslang-actor-ledger-fencing-interleavings-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-ledger-fencing-interleavings-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-ledger-fencing-interleavings-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_ledger_stop_wake_fencing_interleavings
+        COMMAND oreslang-actor-ledger-fencing-interleavings-test)
+    set_tests_properties(native_actor_ledger_stop_wake_fencing_interleavings
+        PROPERTIES TIMEOUT 25)
+
     # Lease-authenticated native scheduler DATA/WAKE callbacks interacting
     # with an actor-private ledger. Deliberately host-only: the legacy
     # scheduler's native "processed" receipt still precedes ledgered guest B.
