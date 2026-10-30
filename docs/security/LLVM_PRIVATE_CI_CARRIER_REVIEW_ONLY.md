@@ -349,3 +349,73 @@ restore source-organization runner admission, OR establish a dedicated private
 carrier with live protected control-plane proof and immutable repository ID
 plus explicit source-export authorization. No transfer or merge is permitted
 on the strength of this proposal alone.
+
+## 8. October 30 source-free runner attempt 2 and dedicated-carrier admission
+
+**Read-only snapshot / NOT a carrier authorization.** Source repository
+`ores-truffle-oreslang/oreslang-source.llvm` (numeric ID `1410897874`),
+source `main` `31b2fff390adac994d270d6fcbf2f65beb980d2c`:
+GitHub's branch API reports `protected:false`, status-check enforcement
+`off`. The protected-main private-CI destination allowlist is still empty.
+
+The source-owned no-checkout, no-secrets [source-free admission canary
+#41009405208, attempt 2](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41009405208)
+was re-run successfully through GitHub's Actions dispatch API, but the
+**job did not execute**. The latest `admission` job `123913497830`
+recorded `conclusion:failure`, `runner_id:0`, `runner_name:""`,
+`runner_group_id:0`, `steps:[]` and a single check-run annotation.
+The connected GitHub API exposes `annotations_count:1` in the
+commit check-runs response but does not expose the annotation text;
+therefore **do not infer** billing exhaustion, a particular runner
+restriction or compiler failure. The administrator must copy the exact
+message from the job/check UI into [#159](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/159)
+and inspect private-Actions usage limits, spending policies, allowed
+runner groups, repository workflow permissions and admission holds.
+
+The current actor runtime candidate [#1126](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1126)
+is `d6bf31ced36f9eb84a755fe5c29ffc0de7032ca7`.
+Its stacked [#1149](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1149)
+exact-head workflow candidate is
+`34b91c46fe258f5e3c0a8785d10d01873ad2183a`; actor
+[run #41009591634](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41009591634)
+has `actor-ledger-contract` failed before any steps, with its
+`compiled-ores-guest` job correctly skipped. There is **no** hosted
+native/guest acceptance receipt for either candidate.
+
+A separate proposed **private** dedicated carrier was inspected:
+`honeypot-r-us-test/hnpt-e2e`, immutable repository ID `1346492776`.
+Its [carrier review PR #23](https://github.com/honeypot-r-us-test/hnpt-e2e/pull/23)
+currently has candidate head
+`5320b4433f9a0f547cbfbd97cd165dc40c4f44a2`;
+an independent `ORESoftware` review has been requested but **no
+review has been submitted**. The destination `main` is
+`537c5f1c4b0249ec5e4f016d82891cd74507bf86`,
+`protected:false`, with required-status-check enforcement `off`.
+The carrier PR's source-free workflows all currently report failure;
+neither a successful prior synthetic probe nor an open PR grants
+approval for any source copy.
+
+The [source retention incident #1150](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1150)
+remains **open**. Historical source-bearing Git objects remained
+retrievable after previous carrier branch-ref resets; a clean ref
+does **not** prove purge. Independent retention disposition and access
+review are required before any new carrier authorization.
+
+### Release/transfer hold (all conditions remain mandatory)
+
+1. Restore a source-org runner that executes real canary steps, or obtain
+   an independently approved dedicated private carrier with verified
+   budget, protection, and immutable repository/workflow/test-plan IDs.
+2. Establish enforced protected `main` on both source and carrier with
+   independent security-owner review and no unauthorized bypass.
+3. Resolve #1150 and obtain recorded, independent `ORESoftware` approval;
+   merge a reviewed exact-ID allowlist/contract to *protected source main*.
+4. Only thereafter perform publisher preflight with checked Git-tree
+   identity, then GCC/Clang/ASan/UBSan/CTest and actual compiled `.ores`
+   guest normal WAKE/STOP cleanup tests on the immutable current head.
+5. Keep #1126, #1149, #1146 and this review proposal **draft and unmerged**
+   until all applicable code, security, and executed-CI gates pass.
+
+This section records **source-free evidence only**. It does not authorize
+cross-organization GitHub API blob/tree copying, special runner permissions,
+a source export, a branch-protection bypass, or a merge.
