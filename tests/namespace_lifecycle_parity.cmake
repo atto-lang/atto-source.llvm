@@ -12,6 +12,9 @@ function(expect_rejection name source_text diagnostic)
     COMMAND "${COMPILER}" "${input}"
     RESULT_VARIABLE status OUTPUT_VARIABLE ir ERROR_VARIABLE err
     TIMEOUT 15)
+  if(NOT "${status}" MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "${name} compiler did not exit normally: ${status}")
+  endif()
   if(status EQUAL 0)
     message(FATAL_ERROR "${name} incorrectly admitted")
   endif()
@@ -45,6 +48,22 @@ expect_rejection(lifecycle-imported-init
   "import module Provider from \"./provider-with-init.ores\";\ndefine module App as pub fnc main(): int { return 0; } end\n"
   "once-only reachable initialization lowering")
 
+# A private imported hook must not bypass the same once-only lifecycle fence.
+file(WRITE "${WORK_DIR}/private-provider.ores"
+  "define module PrivateProvider as fnc init():int{return 1;} pub fnc answer():int{return 42;} end\n")
+expect_rejection(lifecycle-imported-private-init
+  "import module PrivateProvider from \"./private-provider.ores\"; pub fnc main():int{return PrivateProvider.answer();}\n"
+  "once-only reachable initialization lowering")
+
+# Reject hooks in transitive reachable dependencies, not only direct imports.
+file(WRITE "${WORK_DIR}/deep-with-init.ores"
+  "define module Deep as pub fnc init():int{return 1;} pub fnc answer():int{return 42;} end\n")
+file(WRITE "${WORK_DIR}/middle.ores"
+  "import module Deep from \"./deep-with-init.ores\"; define module Middle as pub fnc answer():int{return Deep.answer();} end\n")
+expect_rejection(lifecycle-transitive-init
+  "import module Middle from \"./middle.ores\"; pub fnc main():int{return Middle.answer();}\n"
+  "once-only reachable initialization lowering")
+
 # A source file in the same directory but not reached by an import must
 # not enter the native compile graph or run an init hook.
 file(WRITE "${WORK_DIR}/unrelated.ores"
@@ -55,6 +74,20 @@ execute_process(
   COMMAND "${COMPILER}" "${WORK_DIR}/main.ores"
   RESULT_VARIABLE status OUTPUT_VARIABLE ir ERROR_VARIABLE err
   TIMEOUT 15)
-if(NOT status EQUAL 0 OR NOT ir MATCHES "define i32 @main")
-  message(FATAL_ERROR "unreferenced namespace source contaminated native compilation: ${err}")
+if(NOT "${status}" MATCHES "^[0-9]+$" OR NOT status EQUAL 0 OR NOT ir MATCHES "define i32 @main")
+  message(FATAL_ERROR "unreferenced namespace source contaminated native compilation: ${status}: ${err}")
+endif()
+
+# A clean, explicitly imported provider must remain admitted; rejecting all
+# imports would incorrectly satisfy the negative-only lifecycle cases.
+file(WRITE "${WORK_DIR}/clean-provider.ores"
+  "define module Clean as pub fnc answer():int{return 42;} end\n")
+file(WRITE "${WORK_DIR}/clean-main.ores"
+  "import module Clean from \"./clean-provider.ores\"; pub fnc main():int{return Clean.answer();}\n")
+execute_process(
+  COMMAND "${COMPILER}" "${WORK_DIR}/clean-main.ores"
+  RESULT_VARIABLE status OUTPUT_VARIABLE ir ERROR_VARIABLE err
+  TIMEOUT 15)
+if(NOT "${status}" MATCHES "^[0-9]+$" OR NOT status EQUAL 0 OR NOT ir MATCHES "define i32 @main")
+  message(FATAL_ERROR "valid explicit module import rejected: ${status}: ${err}")
 endif()
