@@ -166,6 +166,32 @@ inline void validate_future_pipeline_plan(const FuturePipelinePlan& plan) {
         throw std::invalid_argument(
             "Future pipeline plan contains unknown effect bits");
 
+    // Proof records are compiler-owned, but malformed/stale enum bits must
+    // never be reinterpreted as a weaker Send-only ownership mode or as
+    // valid static effect provenance at a downstream publication boundary.
+    switch (plan.input_ownership) {
+        case PipelineInputOwnership::BorrowedUpstreamSharedPayload:
+        case PipelineInputOwnership::ConsumedUpstreamOwnedPayload:
+        case PipelineInputOwnership::OwnedPipelineValue:
+            break;
+        default:
+            throw std::invalid_argument("Future pipeline unknown input ownership");
+    }
+    switch (plan.effect_provenance) {
+        case PipelineEffectProvenance::CompleteStatic:
+        case PipelineEffectProvenance::UpstreamFutureUnknown:
+            break;
+        default:
+            throw std::invalid_argument("Future pipeline unknown effect provenance");
+    }
+    switch (plan.produced_future_ownership) {
+        case PipelineStageFutureOwnership::None:
+        case PipelineStageFutureOwnership::OwnedStageResult:
+            break;
+        default:
+            throw std::invalid_argument("Future pipeline unknown deferred Future ownership");
+    }
+
     const FunctionEffects expected_effects =
         plan.prior_effects.united(plan.stage_effects);
     if (plan.cumulative_effects.bits != expected_effects.bits)
