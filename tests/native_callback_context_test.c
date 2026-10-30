@@ -128,6 +128,65 @@ int main(void) {
     check(continuation_frames[0].record.boundary ==
         ORES_CONTINUATION_BOUNDARY_AWAIT);
 
+    /* Callback trace snapshots are diagnostics, never allocation authority. */
+    check(execution_frames[0].context.allocation.kind ==
+        ORES_ALLOCATION_DOMAIN_NONE);
+    check(execution_frames[0].context.allocation.domain == 0);
+    check(execution_frames[0].context.allocation.owner == 0);
+    check(execution_frames[0].context.allocation.generation == 0);
+    check(continuation_frames[0].record.allocation.kind ==
+        ORES_ALLOCATION_DOMAIN_NONE);
+    check(continuation_frames[0].record.allocation.domain == 0);
+    check(continuation_frames[0].record.allocation.owner == 0);
+    check(continuation_frames[0].record.allocation.generation == 0);
+    check((int)continuation_frames[0].record.state == 0);
+
+    /*
+     * Scheduler lifecycle changes after callback registration must not mutate
+     * the callback diagnostic evidence. The retained causal record remains
+     * addressable, but volatile continuation state is deliberately scrubbed.
+     */
+    OresNativeContinuationRecord claimed = {0};
+    check(ores_native_continuation_store_try_claim_resume(
+        continuations, callback.source_continuation, &claimed));
+    check(claimed.state == ORES_CONTINUATION_CLAIMED);
+    check(ores_native_continuation_store_finish_resume(
+        continuations, callback.source_continuation));
+
+    OresNativeExecutionTraceFrame execution_frames_after[2];
+    OresNativeContinuationTraceFrame continuation_frames_after[2];
+    OresNativeCallbackLogicalTraceResult callback_trace_after = {0};
+    check(ores_native_logical_trace_snapshot_callback(
+        executions,
+        continuations,
+        &callback,
+        execution_frames_after,
+        2,
+        continuation_frames_after,
+        2,
+        &callback_trace_after));
+    check(callback_trace_after.callback.boundary ==
+        callback_trace.callback.boundary);
+    check(callback_trace_after.callback.source_execution_id.execution ==
+        callback_trace.callback.source_execution_id.execution);
+    check(callback_trace_after.logical.execution_count ==
+        callback_trace.logical.execution_count);
+    check(callback_trace_after.logical.continuation_count ==
+        callback_trace.logical.continuation_count);
+    check(execution_frames_after[0].context.id.execution ==
+        execution_frames[0].context.id.execution);
+    check(execution_frames_after[0].context.parent_execution.slot ==
+        execution_frames[0].context.parent_execution.slot);
+    check(continuation_frames_after[0].record.boundary ==
+        continuation_frames[0].record.boundary);
+    check(continuation_frames_after[0].record.code_generation ==
+        continuation_frames[0].record.code_generation);
+    check(continuation_frames_after[0].record.source_token ==
+        continuation_frames[0].record.source_token);
+    check((int)continuation_frames_after[0].record.state == 0);
+    check(continuation_frames_after[0].record.allocation.kind ==
+        ORES_ALLOCATION_DOMAIN_NONE);
+
     OresNativeCallbackContext stale_copy = callback;
     check(ores_native_callback_context_release(
         executions, continuations, &callback));
