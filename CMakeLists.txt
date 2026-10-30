@@ -2711,6 +2711,10 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_public_class_field_read class-public-field-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(class_exec_mutable_borrow class-mutable-borrow-native.ores --run 42 --clang "${ORE_CLANG}")
+        # Native guest execution: synchronous borrowed state mutation, overdraw
+        # rejection, and joint two-field invariant. Not a GC/no-heap proof.
+        oreslang_contract_test(native_exec_owned_inventory_reservation
+            native-owned-inventory-reservation.ores --run 74 --clang "${ORE_CLANG}")
 
         oreslang_contract_test(native_projection_shared_clang
             class-projection-shared-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
