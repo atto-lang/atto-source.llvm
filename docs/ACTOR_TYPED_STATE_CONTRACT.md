@@ -1,4 +1,4 @@
-# Actor persistent state declaration contract (schema metadata parsed; lowering fail-closed)
+# Actor persistent state declaration contract (bounded LLVM synchronous lowering; suspension fail-closed)
 
 Actor state belongs to an actor *instance*. Its schema belongs to the actor type.
 Guest code cannot read `self.state`, override `handle_state`, or receive a raw
@@ -67,8 +67,9 @@ until a declaration is provided. This avoids implicit unbounded native storage.
    finalization and retirement. Never tie ownership to carrier-thread identity.
 6. Run identical positive/negative source fixtures through LLVM and GraalVM.
 
-The native `ActorStateScope.h` guard is a partial host ABI only. This document
-must not be taken as evidence that source-level state syntax compiles yet.
+The native `ActorStateScope.h` guard is a partial host ABI only. The bounded
+synchronous LLVM subset described below can lower one sealed callback, but is
+not evidence of suspended actor-state lowering, cross-backend parity or hard-RT.
 
 For effect inference, concrete proposed `using`/`requires` signature syntax,
 and current `pure`/`nlex`/`trap` limitations, see
@@ -159,11 +160,13 @@ when no `state` schema is declared. New schema actors reject other fields.
 Java's synchronous FFM host map is not a source-level `handle_state`
 implementation; source `critical` methods currently fail closed pending
 scheduler tickets. LLVM has matching typed effect bitsets and narrow `using` parsing. Its
-frontend now parses and bounds canonical `state { ... }` schema metadata,
-including `define isolated actor ...`, but intentionally rejects immediately
-after schema admission pending sealed `handle_state` + ledger-backed
-compiler/runtime lowering. Neither backend yet provides source-level
-suspendable `handle_state` or hard-real-time-certified reduction regions.
+frontend parses bounded canonical `state { ... }` metadata and now contains
+a narrowly scoped synchronous `define isolated actor` guest lowering slice:
+one lexical `critical-read` or `critical-write` callback within
+`on_message(int): int`, with only `int` schema fields and pure scalar
+arithmetic. Other actor-state forms remain fail-closed. Neither backend yet
+provides source-level suspendable `handle_state` or hard-real-time-certified
+reduction regions.
 
 Compound `+=` assignment remains unsupported by the inspected Java
 source parser; examples use `s.count = s.count + 1`. Lowering either
@@ -180,3 +183,40 @@ containing actor method need not be marked critical to invoke it. The caller's
 execution ticket belongs to the actor scheduler. Neither backend yet has
 end-to-end suspendable state-loan source runtime parity. See
 `CRITICAL_HANDLE_STATE_USING_PARITY.md`.
+
+## LLVM synchronous sealed-state guest v1 (draft, October 30, 2026)
+
+The following **restricted** syntax now has a parser and LLVM IR lowering
+path, backed by the existing actor-owned i64 heap and trusted actor scheduler:
+
+```oreslang
+define isolated actor Counter as
+    state { count: int = 0; }
+    pub on_message(int amount): int {
+        return self.handle_state(critical-write |s| -> {
+            s.count = s.count + amount;
+            return s.count;
+        });
+    }
+end
+```
+
+The callback is compiler-recognized, synchronous and nonescaping. Direct
+field reads/writes, a missing critical-read/write marker, unknown keys,
+unbound aliases, writes through critical-read and non-pure callback
+expressions are rejected before LLVM IR emission. A compiler-owned
+`sealed_state_synchronous_v1` marker, schema/slot matching and epoch
+checks prevent metadata-only declarations from using the actor backend.
+The generated i64 arithmetic uses LLVM checked overflow intrinsics.
+
+The draft has exact-head host tests, compiled guest C turn tests, source
+actor scheduler E2E and ASan/UBSan scripts. These tests are *registered but
+not proven executed* until a real, nonzero-step runner finishes; source
+org Actions currently fail before runner assignment.
+
+**Not yet supported:** `bool` state lowering, `critical` shorthand,
+multiple methods/callbacks, general callback expressions, state-capability
+borrows or escapes, compiled `await` inside `handle_state`, suspended
+state-loan reacquisition, generation-fenced resumed guest state, and
+multi-backend/hard-RT claims. Metadata-only declarations without the
+restricted method still fail closed, as do all unsupported constructs.
