@@ -46,6 +46,7 @@ public:
         request_context_.store(request_context, std::memory_order_relaxed);
         request_registry_.store(request_registry, std::memory_order_relaxed);
         dispatch_ticket_.store(dispatch_ticket, std::memory_order_relaxed);
+        initial_entry_generation_.store(0, std::memory_order_relaxed);
         state_.store(
             (generation << 2) | static_cast<unsigned>(Phase::queued),
             std::memory_order_release);
@@ -57,9 +58,42 @@ public:
         return transition(token, Phase::queued, Phase::reactor);
     }
 
-    // Caller must first authenticate scheduler-current-actor identity.
+    // Compatibility for context-free legacy callers. A request-bearing token
+    // must NOT claim an exchange from a reactor/producer or foreign actor.
     bool claim(Token token) noexcept {
-        return transition(token, Phase::queued, Phase::actor);
+        return !token.request_context && !token.dispatch_ticket
+            && transition(token, Phase::queued, Phase::actor);
+    }
+    // DATA admission is authenticated by the scheduler, not a caller-provided
+    // actor tuple or a thread-local lookup. Never invoked on a producer thread.
+    bool claim_admitted(OresNativeActorScheduler* scheduler, Token token) noexcept {
+        if (!token.request_context || !token.request_registry ||
+            !token.dispatch_ticket || !scheduler ||
+            !ores_native_actor_scheduler_is_current_actor(scheduler,token.actor))
+            return false;
+        std::uint64_t delivered=0;
+        return ores_native_actor_scheduler_current_data_payload(
+                   scheduler,token.actor,&delivered)
+            && delivered==token.dispatch_ticket
+            && transition(token, Phase::queued, Phase::actor);
+    }
+    // Admit initial handler once per exact exchange generation. The runtime
+    // checks live scheduler DATA authority before invoking this gate; a
+    // separately validated continuation uses its own one-shot resume path.
+    bool enter_initial(Token token) noexcept {
+        if (!token.generation || !token.dispatch_ticket ||
+            phase()!=Phase::actor) return false;
+        const auto actual=this->token();
+        if (actual.generation!=token.generation ||
+            actual.dispatch_ticket!=token.dispatch_ticket ||
+            actual.request_context!=token.request_context ||
+            actual.request_registry!=token.request_registry ||
+            actual.actor.scheduler_domain!=token.actor.scheduler_domain ||
+            actual.actor.actor_slot!=token.actor.actor_slot ||
+            actual.actor.generation!=token.actor.generation) return false;
+        std::uint64_t expected=0;
+        return initial_entry_generation_.compare_exchange_strong(
+            expected,token.generation,std::memory_order_acq_rel);
     }
 
     bool complete(Token token) noexcept {
@@ -161,5 +195,6 @@ private:
     std::atomic<std::uint64_t> request_registry_{0};
     std::atomic<std::uint64_t> dispatch_ticket_{0};
     std::atomic<std::uint64_t> pin_generation_{0};
+    std::atomic<std::uint64_t> initial_entry_generation_{0};
 };
 } // namespace oreslang::runtime
