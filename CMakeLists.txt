@@ -46,6 +46,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # CGL Linux compatibility gate: read-only OS observation, not scheduler
+    # admission, CPU reservation or a realtime performance certificate.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-cgl-host-admission-test
+            tests/native_cgl_host_admission_test.cpp)
+        target_include_directories(oreslang-native-cgl-host-admission-test PRIVATE
+            "src/main/cpp")
+        target_compile_options(oreslang-native-cgl-host-admission-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_cgl_linux_host_admission
+            COMMAND oreslang-native-cgl-host-admission-test)
+        set_tests_properties(native_cgl_linux_host_admission PROPERTIES TIMEOUT 15)
+    endif()
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
