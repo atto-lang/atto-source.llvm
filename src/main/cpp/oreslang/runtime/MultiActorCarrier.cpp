@@ -1,6 +1,8 @@
 #include "oreslang/runtime/MultiActorCarrier.hpp"
+#include "oreslang/runtime/CglCarrierDispatchTrace.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <stdexcept>
 #include <utility>
@@ -10,6 +12,11 @@ namespace {
 // Actor tickets must never be valid in two distinct carrier lifetimes.
 // The saturated CAS prevents wraparound reuse (including after UINT64_MAX).
 std::atomic<std::uint64_t> next_global_actor_generation{1};
+std::uint64_t trace_monotonic_ns() noexcept {
+    const auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return ticks > 0 ? static_cast<std::uint64_t>(ticks) : 0;
+}
 std::uint64_t mint_actor_generation() {
     auto value = next_global_actor_generation.load(std::memory_order_relaxed);
     for (;;) {
@@ -38,7 +45,8 @@ MultiActorCarrier::~MultiActorCarrier() noexcept {
 }
 
 MultiActorCarrier::ActorToken MultiActorCarrier::register_actor(
-        void* state, Slice slice, Cancel cancel) {
+        void* state, Slice slice, Cancel cancel,
+        CglCarrierDispatchTrace* trace) {
     if (!state || !slice || !cancel)
         throw std::invalid_argument("actor state, slice and cancel required");
     std::lock_guard<std::mutex> lock(shared_->mutex);
@@ -60,6 +68,7 @@ MultiActorCarrier::ActorToken MultiActorCarrier::register_actor(
     actor.state = state;
     actor.slice = slice;
     actor.cancel = cancel;
+    actor.trace = trace;
     actor.generation = generation;
     return {static_cast<std::uint32_t>(index + 1), actor.generation};
 }
@@ -256,9 +265,26 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
         const auto message = actor.current;
         auto* user_state = actor.state;
         auto* callback = actor.slice;
+        auto* trace = actor.trace;
+        const auto actor_generation = actor.generation;
         const auto fuel = state->fuel;
         lock.unlock();
+        // Capture the actual native slice callback boundary, not a timer
+        // notification or an assumed guest-instruction start. Instrumentation
+        // is opt-in and has no heap allocation on the dispatch path.
+        const auto slice_start_ns = trace ? trace_monotonic_ns() : 0;
         const auto outcome = callback(user_state, message, cause, fuel);
+        if (trace != nullptr) {
+            const auto slice_finish_ns = trace_monotonic_ns();
+            (void)trace->append({
+                static_cast<std::uint32_t>(index + 1),
+                actor_generation,
+                message.sequence,
+                cause == Cause::initial,
+                slice_start_ns,
+                slice_finish_ns
+            });
+        }
         lock.lock();
         ++state->counters.dispatches;
         // A completed guest slice has ALREADY committed its source effects.
