@@ -167,19 +167,36 @@ public:
         Statement q(db_,"SELECT version,snapshot_version,snapshot_schema,snapshot FROM state WHERE tenant=? AND actor=? AND slot=?");
         bind_identity(q,id);
         if(q.step()==SQLITE_ROW) {
-            out.version=static_cast<std::uint64_t>(sqlite3_column_int64(q.p,0));
-            out.snapshot_version=static_cast<std::uint64_t>(sqlite3_column_int64(q.p,1));
-            out.snapshot_schema=static_cast<std::uint32_t>(sqlite3_column_int(q.p,2));
+            const auto head=sqlite3_column_int64(q.p,0);
+            const auto snapshot_head=sqlite3_column_int64(q.p,1);
+            const auto snapshot_schema=sqlite3_column_int64(q.p,2);
             const auto len=sqlite3_column_bytes(q.p,3);
+            const bool snapshot_null=sqlite3_column_type(q.p,3)==SQLITE_NULL;
+            if(head<0 || snapshot_head<0 || snapshot_head>head ||
+               snapshot_schema<0 || snapshot_schema>UINT32_MAX || len<0 || len>1048576 ||
+               (snapshot_head>0 && (snapshot_schema==0 || snapshot_null)) ||
+               (snapshot_head==0 && (snapshot_schema!=0 || !snapshot_null)))
+                throw std::runtime_error("INVALID_ACTOR_SNAPSHOT");
+            out.version=static_cast<std::uint64_t>(head);
+            out.snapshot_version=static_cast<std::uint64_t>(snapshot_head);
+            out.snapshot_schema=static_cast<std::uint32_t>(snapshot_schema);
             if(len){const auto* src=static_cast<const std::uint8_t*>(sqlite3_column_blob(q.p,3));out.snapshot.assign(src,src+len);}
         }
         Statement ev(db_,"SELECT version,schema,payload FROM events WHERE tenant=? AND actor=? AND slot=? AND version>? ORDER BY version ASC");
         bind_identity(ev,id);ev.integer(4,out.snapshot_version);
+        std::size_t replay_bytes=0;
         while(ev.step()==SQLITE_ROW) {
-            Event e;
-            e.version=static_cast<std::uint64_t>(sqlite3_column_int64(ev.p,0));
-            e.schema_version=static_cast<std::uint32_t>(sqlite3_column_int(ev.p,1));
+            const auto version=sqlite3_column_int64(ev.p,0);
+            const auto schema=sqlite3_column_int64(ev.p,1);
             const auto len=sqlite3_column_bytes(ev.p,2);
+            if(version<1 || schema<1 || schema>UINT32_MAX || len<0 || len>1048576 ||
+               sqlite3_column_type(ev.p,2)==SQLITE_NULL ||
+               static_cast<std::size_t>(len)>16777216-replay_bytes)
+                throw std::runtime_error("INVALID_ACTOR_EVENT");
+            replay_bytes+=static_cast<std::size_t>(len);
+            Event e;
+            e.version=static_cast<std::uint64_t>(version);
+            e.schema_version=static_cast<std::uint32_t>(schema);
             if(len){const auto* src=static_cast<const std::uint8_t*>(sqlite3_column_blob(ev.p,2));e.payload.assign(src,src+len);}
             // Reject corrupted, truncated or out-of-order journals; never
             // silently publish an actor state missing an acknowledged event.
