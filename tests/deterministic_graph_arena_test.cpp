@@ -136,6 +136,26 @@ int main() {
   outstanding.reset(); // physical completion/loan release, not just cancellation
   VERIFY(draining.close() && draining.closed());
   VERIFY(drops == 5);
+
+  // A Task can hold an allocation-free region-lifetime pin without imposing
+  // a permanent read lock: an admitted actor turn may still mutate a node.
+  // Region destruction must wait for actual pin completion after STOP.
+  Graph pinned;
+  auto held = pinned.emplace(6, &drops);
+  VERIFY(held.has_value());
+  auto frame_pin = pinned.hold_region();
+  VERIFY(frame_pin.has_value() && pinned.active_lifetime_pins() == 1);
+  VERIFY(pinned.with_mut(*held, [](DropTracked& v) { v.value = 60; }));
+  VERIFY(pinned.borrow(*held).has_value());
+  pinned.begin_retire(); // cancellation request is not physical completion
+  VERIFY(!pinned.hold_region().has_value());
+  VERIFY(!pinned.close() && !pinned.closed());
+  VERIFY(pinned.active_lifetime_pins() == 1 && drops == 5);
+  frame_pin.reset(); // trusted completion / FFI acknowledgement
+  VERIFY(pinned.active_lifetime_pins() == 0);
+  VERIFY(pinned.close() && pinned.closed());
+  VERIFY(drops == 6);
+
   // Domain construction, scoped reads, exclusive writes, cyclic links and
   // region reclamation allocate no C++ heap blocks for this fixed-width T.
   // Construction must not publish uninitialized slots or recursively close
