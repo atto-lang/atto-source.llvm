@@ -273,6 +273,7 @@ jobs:
               -pthread -Isrc/main/cpp \
               tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp \
               "build/actor-ledger-gate/scheduler-$tool.o" \
+              "build/actor-ledger-gate/heap-$tool.o" \
               -o "build/actor-ledger-gate/bridge-stop-$tool"
             "build/actor-ledger-gate/bridge-stop-$tool"
           done
@@ -357,6 +358,7 @@ jobs:
             -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
             -Isrc/main/cpp tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp \
             build/actor-ledger-gate/scheduler-sanitized.o \
+            build/actor-ledger-gate/heap-sanitized.o \
             -o build/actor-ledger-gate/bridge-stop-sanitized
           build/actor-ledger-gate/bridge-stop-sanitized
           clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
