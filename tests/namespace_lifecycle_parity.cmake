@@ -8,6 +8,15 @@ file(MAKE_DIRECTORY "${WORK_DIR}")
 function(expect_rejection name source_text diagnostic)
   set(input "${WORK_DIR}/${name}.ores")
   file(WRITE "${input}" "${source_text}")
+  # Rejected inputs must not leave native output on disk even when stdout is
+  # empty. Check both common compiler output naming conventions; remove stale
+  # outputs from prior CTest attempts so each case measures this invocation.
+  set(artifact_suffixes ".ll" ".bc" ".o" ".obj" ".s" ".wasm" ".out" ".exe")
+  foreach(stem "${WORK_DIR}/${name}" "${input}")
+    foreach(suffix IN LISTS artifact_suffixes)
+      file(REMOVE "${stem}${suffix}")
+    endforeach()
+  endforeach()
   execute_process(
     COMMAND "${COMPILER}" "${input}"
     RESULT_VARIABLE status OUTPUT_VARIABLE ir ERROR_VARIABLE err
@@ -21,6 +30,13 @@ function(expect_rejection name source_text diagnostic)
   if(NOT ir STREQUAL "")
     message(FATAL_ERROR "${name} emitted IR on rejection")
   endif()
+  foreach(stem "${WORK_DIR}/${name}" "${input}")
+    foreach(suffix IN LISTS artifact_suffixes)
+      if(EXISTS "${stem}${suffix}")
+        message(FATAL_ERROR "${name} wrote ${stem}${suffix} on rejection")
+      endif()
+    endforeach()
+  endforeach()
   string(FIND "${err}" "${diagnostic}" found)
   if(found EQUAL -1)
     message(FATAL_ERROR "${name} expected '${diagnostic}' but saw: ${err}")
