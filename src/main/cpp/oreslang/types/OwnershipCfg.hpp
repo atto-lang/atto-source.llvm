@@ -20,6 +20,30 @@ constexpr ValueMask kOwned = 2;
 constexpr ValueMask kMoved = 4;
 constexpr ValueMask kDropped = 8;
 
+struct RegionLoanProvenance {
+    std::uint64_t region_id = 0;
+    std::uint64_t region_generation = 0;
+    std::uint64_t runtime_domain = 0;
+    std::uint64_t execution_id = 0;
+    std::uint32_t execution_slot = 0;
+    std::uint32_t execution_generation = 0;
+
+    bool operator==(const RegionLoanProvenance& rhs) const {
+        return region_id == rhs.region_id &&
+            region_generation == rhs.region_generation &&
+            runtime_domain == rhs.runtime_domain &&
+            execution_id == rhs.execution_id &&
+            execution_slot == rhs.execution_slot &&
+            execution_generation == rhs.execution_generation;
+    }
+};
+
+inline bool valid_region_loan_provenance(const RegionLoanProvenance& value) {
+    return value.region_id && value.region_generation &&
+        value.runtime_domain && value.execution_id &&
+        value.execution_slot && value.execution_generation;
+}
+
 struct PlaceState {
     ValueMask possible = kUninitialized;
     unsigned shared_loans = 0;
@@ -28,21 +52,31 @@ struct PlaceState {
     // Token zero is reserved for a legacy loan already live at graph entry.
     std::set<std::uint64_t> shared_loan_ids;
     std::optional<std::uint64_t> exclusive_loan_id;
+    // Region-backed loans additionally bind compile-time provenance to the
+    // exact logical execution + generation that may retire the runtime ticket.
+    std::map<std::uint64_t, RegionLoanProvenance> shared_loan_regions;
+    std::optional<RegionLoanProvenance> exclusive_loan_region;
 
     // Preserve legacy three-field construction under -Werror while making
     // the new identity fields explicit and safely default-initialized.
     PlaceState(ValueMask state = kUninitialized, unsigned shared = 0,
             bool exclusive = false, std::set<std::uint64_t> sharedIds = {},
-            std::optional<std::uint64_t> exclusiveId = std::nullopt)
+            std::optional<std::uint64_t> exclusiveId = std::nullopt,
+            std::map<std::uint64_t, RegionLoanProvenance> sharedRegions = {},
+            std::optional<RegionLoanProvenance> exclusiveRegion = std::nullopt)
         : possible(state), shared_loans(shared), exclusive_loan(exclusive),
-          shared_loan_ids(std::move(sharedIds)), exclusive_loan_id(exclusiveId) {}
+          shared_loan_ids(std::move(sharedIds)), exclusive_loan_id(exclusiveId),
+          shared_loan_regions(std::move(sharedRegions)),
+          exclusive_loan_region(std::move(exclusiveRegion)) {}
 
     bool operator==(const PlaceState& rhs) const {
         return possible == rhs.possible &&
             shared_loans == rhs.shared_loans &&
             exclusive_loan == rhs.exclusive_loan &&
             shared_loan_ids == rhs.shared_loan_ids &&
-            exclusive_loan_id == rhs.exclusive_loan_id;
+            exclusive_loan_id == rhs.exclusive_loan_id &&
+            shared_loan_regions == rhs.shared_loan_regions &&
+            exclusive_loan_region == rhs.exclusive_loan_region;
     }
 };
 using State = std::map<std::string, PlaceState>;
@@ -58,11 +92,14 @@ struct Operation {
     // Optional explicit lexical loan identity; absent borrow IDs derive from
     // the original CFG operation site, not the active traversal order.
     std::optional<std::uint64_t> loan_id;
+    std::optional<RegionLoanProvenance> region_provenance;
 
     Operation() = default;
     Operation(Kind operation, std::string key,
-            std::optional<std::uint64_t> provenance = std::nullopt)
-        : kind(operation), place(std::move(key)), loan_id(provenance) {}
+            std::optional<std::uint64_t> provenance = std::nullopt,
+            std::optional<RegionLoanProvenance> region = std::nullopt)
+        : kind(operation), place(std::move(key)), loan_id(provenance),
+          region_provenance(std::move(region)) {}
 };
 
 struct BasicBlock {
