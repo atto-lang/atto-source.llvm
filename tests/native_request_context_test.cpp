@@ -408,6 +408,50 @@ int main(){
         CHECK(ores_native_actor_scheduler_try_destroy(s.scheduler));
         s.scheduler=nullptr;
     }
+    // An ACCEPTED request may still be abandoned when the actor stops.
+    // Quiescence, not successful mailbox admission, authorizes its rollback.
+    {
+        Suite s;s.begin(1,false,false,false,2);
+        s.hold_turn.store(true);
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*s.pins[0])
+              ==ORES_NATIVE_SEND_ACCEPTED);
+        const auto deadline=std::chrono::steady_clock::now()+
+                            std::chrono::seconds(8);
+        while(!s.turn_entered.load() &&
+              std::chrono::steady_clock::now()<deadline)
+            std::this_thread::yield();
+        CHECK(s.turn_entered.load());
+        auto second=s.contexts.open(s.actors[0],Suite::info(99));CHECK(second);
+        auto ingress=s.buffers.begin(1);CHECK(ingress);
+        std::memcpy(ingress->data(),"GET /actor",10);
+        const auto bytes=ingress->publish(10);CHECK(bytes.value);
+        auto pending=s.contexts.attach_exchange_with_buffer(
+            s.second_exchange,*second,s.actors[0],s.buffers,bytes,1);
+        CHECK(pending);
+        CHECK(s.contexts.submit_bound_exchange(s.scheduler,*pending)
+              ==ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(!s.contexts.rollback_abandoned_exchange(s.scheduler,*pending));
+        CHECK(ores_native_actor_scheduler_stop(s.scheduler,s.actors[0]));
+        s.hold_turn.store(false);
+        CHECK(ores_native_actor_scheduler_drain(s.scheduler));
+        CHECK(s.bad==0 && s.observed==1);
+        CHECK(ores_native_actor_scheduler_poll_done(s.scheduler,s.actors[0]));
+        CHECK(s.contexts.rollback_abandoned_exchange(s.scheduler,*pending));
+        CHECK(s.contexts.close(*second,s.actors[0]));
+        CHECK(s.buffers.close(bytes,1));
+        pending.reset();
+        CHECK(s.contexts.available()==15 && s.buffers.available()==15);
+        const auto accepted=s.pins[0]->token();
+        CHECK(s.exchanges[0].complete(accepted));
+        CHECK(s.exchanges[0].reclaim(accepted));
+        CHECK(s.contexts.close(s.requests[0],s.actors[0]));
+        CHECK(s.buffers.close(s.bodies[0],1));
+        s.pins[0].reset();
+        CHECK(s.contexts.available()==16 && s.buffers.available()==16);
+        ores_native_actor_scheduler_retire(s.scheduler);
+        CHECK(ores_native_actor_scheduler_try_destroy(s.scheduler));
+        s.scheduler=nullptr;
+    }
     // Stale handle cannot alias a later actor incarnation or request.
     {
         Suite s;const OresNativeActorRef owner{31,5,7};
