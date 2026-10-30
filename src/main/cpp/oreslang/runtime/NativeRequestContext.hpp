@@ -113,8 +113,11 @@ public:
     struct ExchangePin final {
         NativeHttpExchange::Token token;
         Lease pin;
+    private:
+        friend class NativeRequestContext;
         ExchangePin(NativeHttpExchange::Token t, Lease&& p) noexcept:
             token(t), pin(std::move(p)) {}
+    public:
         ExchangePin(const ExchangePin&) = delete;
         ExchangePin& operator=(const ExchangePin&) = delete;
         ExchangePin(ExchangePin&&) noexcept = default;
@@ -135,9 +138,12 @@ public:
         OresNativeActorRef owner{0,0,0};
         std::uint64_t exchange_generation = 0;
         Lease pin{};
+    private:
+        friend class NativeRequestContext;
         Suspension(Handle h, OresNativeActorRef a, std::uint64_t epoch,
                    Lease&& owned) noexcept:
             context(h), owner(a), exchange_generation(epoch), pin(std::move(owned)) {}
+    public:
         Suspension(const Suspension&) = delete;
         Suspension& operator=(const Suspension&) = delete;
         Suspension(Suspension&&) noexcept = default;
