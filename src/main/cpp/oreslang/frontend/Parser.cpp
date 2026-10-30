@@ -1406,7 +1406,9 @@ private:
                 signature.mutable_receiver = method.parameters.front().mode == Parameter::Mode::BorrowMut;
                 for (const auto& prior : result.methods)
                     if (prior.name == signature.name && prior.arity == signature.arity)
-                        fail("duplicate native method name/arity");
+                        fail("duplicate native method name/arity '" + signature.name +
+                             "/" + std::to_string(signature.arity) +
+                             "' (self receiver does not count toward arity)");
                 result.methods.push_back(std::move(signature));
                 methods_.push_back(std::move(method));
                 continue;
@@ -1875,10 +1877,6 @@ private:
                 if (accept(",")) {
                     if (token_.text == ")")
                         fail("native explicit self receiver must be followed by a parameter after ','");
-                } else if (token_.text == ")" && peek_next().text == "(") {
-                    // As with mut self, a standalone read-only receiver may
-                    // precede the ordinary value-parameter list.
-                    require(")"); require("(");
                 } else if (token_.text != ")") {
                     fail("native explicitly typed read self receiver unsupported");
                 }
