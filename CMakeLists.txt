@@ -1879,6 +1879,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-dop-checked-region-test)
     set_tests_properties(native_dop_checked_region_addressing PROPERTIES TIMEOUT 20)
 
+    # Compiler-owned straight-line typed HIR and native generation-checked
+    # row storage: explicit val/let, borrow, bounds, identity and lifecycle.
+    # Compiles independent of LLVM SDK, even in the full project CTest tree.
+    add_executable(oreslang-inverted-typed-hir-test
+        tests/native_inverted_typed_plan_test.cpp)
+    target_include_directories(oreslang-inverted-typed-hir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-inverted-typed-hir-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-inverted-typed-hir-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-inverted-typed-hir-test PRIVATE Threads::Threads)
+    add_test(NAME inverted_typed_hir_and_checked_owner
+        COMMAND oreslang-inverted-typed-hir-test)
+    set_tests_properties(inverted_typed_hir_and_checked_owner PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
     target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-dop-inverted-columns-test PRIVATE cxx_std_20)
