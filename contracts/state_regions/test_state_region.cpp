@@ -1,6 +1,6 @@
 #include "state_region.hpp"
 #include <cassert>
-#define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); std::abort(); } } while (false)
+#define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #x); std::abort(); } } while (false)
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
