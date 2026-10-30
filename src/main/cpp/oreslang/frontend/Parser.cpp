@@ -1282,12 +1282,13 @@ private:
                 if (accept("int")) {
                     field.type = ScalarType::I64;
                     require("=");
-                    (void)signed_integer_literal();
+                    field.initial_i64 = signed_integer_literal();
                 } else if (accept("bool")) {
                     field.type = ScalarType::Bool;
                     require("=");
-                    if (!accept("true") && !accept("false"))
-                        fail("native actor bool state default must be true or false");
+                    if (accept("true")) field.initial_i64 = 1;
+                    else if (accept("false")) field.initial_i64 = 0;
+                    else fail("native actor bool state default must be true or false");
                 } else {
                     fail("native actor state schema admits only int/bool fields in this metadata slice");
                 }
@@ -1296,7 +1297,133 @@ private:
             }
             if (actor.state_schema.empty())
                 fail("native actor state schema requires at least one field");
-            fail("native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet");
+            // Preserve the existing fail-closed metadata boundary for legacy
+            // actors and declarations without an explicit sealed callback.
+            // The only executable v1 is an isolated, synchronous on_message
+            // with ONE nonescaping compiler-recognized critical-read/write
+            // callback, no await, FFI, arbitrary functions or bare state access.
+            if (!isolated || token_.text != "pub")
+                fail("native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet");
+            for (const auto& field : actor.state_schema) {
+                if (field.type != ScalarType::I64)
+                    fail("native sealed-state guest v1 supports only int fields");
+            }
+            Function method;
+            method.offset = token_.offset;
+            method.exported = true;
+            require("pub");
+            if (!accept("fnc")) accept("method");
+            require("on_message");
+            method.name = "on_message";
+            require("(");
+            require("int");
+            Parameter param;
+            param.name = identifier();
+            if (state_names.count(param.name))
+                fail("sealed actor message parameter shadows state field");
+            method.parameters.push_back(std::move(param));
+            require(")");
+            require(":");
+            require("int");
+            require("{");
+            require("return");
+            require("self");
+            require(".");
+            require("handle_state");
+            require("(");
+            require("critical");
+            require("-");
+            const std::string access = identifier();
+            if (access != "read" && access != "write")
+                fail("native sealed handle_state requires critical-read or critical-write");
+            require("|");
+            const std::string binding = identifier();
+            if (binding == method.parameters.front().name || state_names.count(binding))
+                fail("native sealed state callback binding shadows message or state");
+            require("|");
+            require("->");
+            require("{");
+            // Internally the existing actor-owned heap remains the backing
+            // store. It is NOT source-accessible: every field reference must
+            // be the exact lexical s.field inside this sealed callback.
+            // Reusing the checked i64 heap preserves actor-domain/epoch guards
+            // and checked arithmetic in generated LLVM IR.
+            for (const auto& field : actor.state_schema) {
+                LocalBinding slot;
+                slot.name = field.name;
+                slot.offset = field.offset;
+                slot.field_mutable = true; // only the sealed write callback can mutate it
+                slot.initializer = std::make_unique<Expression>();
+                slot.initializer->kind = Expression::Kind::Integer;
+                slot.initializer->integer = field.initial_i64;
+                actor.fields.push_back(std::move(slot));
+            }
+            std::function<void(Expression&)> check_sealed_expression;
+            check_sealed_expression = [&](Expression& e) {
+                switch (e.kind) {
+                    case Expression::Kind::Integer:
+                        return;
+                    case Expression::Kind::Variable:
+                        if (e.name != method.parameters.front().name)
+                            fail("sealed actor state is accessible only through critical callback binding");
+                        return;
+                    case Expression::Kind::Field:
+                        if (!e.left || e.left->kind != Expression::Kind::Variable ||
+                            e.left->name != binding || !state_names.count(e.name))
+                            fail("sealed actor state field must use lexical callback binding");
+                        e.kind = Expression::Kind::Variable;
+                        e.left.reset();
+                        return;
+                    case Expression::Kind::Negate:
+                    case Expression::Kind::Add:
+                    case Expression::Kind::Subtract:
+                    case Expression::Kind::Multiply:
+                        if (!e.left)
+                            fail("invalid sealed state scalar expression");
+                        check_sealed_expression(*e.left);
+                        if (e.kind != Expression::Kind::Negate) {
+                            if (!e.right) fail("invalid sealed state binary expression");
+                            check_sealed_expression(*e.right);
+                        }
+                        return;
+                    default:
+                        fail("native sealed state callback v1 permits only pure integer arithmetic");
+                }
+            };
+            // State writes remain ordered, bounded and synchronous. No
+            // direct field writes, captured state pointers or async frames.
+            while (token_.text != "return") {
+                if (token_.kind == Kind::End || token_.text == "}")
+                    fail("native sealed callback requires a return");
+                if (access != "write")
+                    fail("critical-read callback cannot mutate sealed actor state");
+                if (method.actor_field_writes.size() >= 16)
+                    fail("native sealed state callback exceeds 16 field writes");
+                require(binding);
+                require(".");
+                ActorFieldWrite write;
+                write.offset = token_.offset;
+                write.field = identifier();
+                if (!state_names.count(write.field))
+                    fail("unknown sealed actor state field");
+                require("=");
+                write.expression = expression();
+                check_sealed_expression(*write.expression);
+                require(";");
+                method.actor_field_writes.push_back(std::move(write));
+            }
+            require("return");
+            method.result = expression();
+            check_sealed_expression(*method.result);
+            require(";");
+            require("}");
+            require(")");
+            require(";");
+            require("}");
+            actor.on_message = std::move(method);
+            if (braced) require("}");
+            else require("end");
+            return actor;
         }
         std::unordered_set<std::string> names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
