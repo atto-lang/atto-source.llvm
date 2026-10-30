@@ -17,10 +17,14 @@ static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().span
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().span()), std::span<float>>);
 static_assert(!std::is_copy_constructible_v<Store::Loan<0, true>>);
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().read_at(0)), float>);
+static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().read_handle(std::declval<const Store::Handle&>())), float>);
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().size_checked()), std::size_t>);
 template<class T> concept HasCheckedWrite = requires(T& loan) { loan.write_at(0, 1.0f); };
+template<class T> concept HasHandleWrite = requires(T& loan, const Store::Handle& h) { loan.write_handle(h, 1.0f); };
 static_assert(!HasCheckedWrite<Store::Loan<0, false>>);
 static_assert(HasCheckedWrite<Store::Loan<0, true>>);
+static_assert(!HasHandleWrite<Store::Loan<0, false>>);
+static_assert(HasHandleWrite<Store::Loan<0, true>>);
 static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
 static_assert(!std::is_default_constructible_v<Store::Handle>);
@@ -36,6 +40,7 @@ int main() {
     auto h0 = a.push(1.5f, 100, true);
     auto h1 = a.push(2.5f, 200, false);
     auto h2 = a.push(3.5f, 300, true);
+    auto foreign_row = b.push(9.5f, 900, false);
     check(a.size() == 3 && a.get<0>(h2) == 3.5f && a.get<1>(h1) == 200);
     a.reserve(16);
     // Deterministic oversized reservation must fail without changing any
@@ -55,10 +60,13 @@ int main() {
         auto w = a.borrow_write<1>();
         check(r.span().size() == 3 && r.span()[1] == 2.5f);
         check(r.size_checked() == 3 && r.read_at(1) == 2.5f);
+        check(r.read_handle(h1) == 2.5f);
         expect<std::out_of_range>([&] { (void)r.read_at(3); });
+        expect<std::out_of_range>([&] { (void)r.read_handle(foreign_row); });
         expect<std::out_of_range>([&] { w.write_at(100, 123); });
-        w.write_at(1, 999);
-        check(w.read_at(1) == 999);
+        expect<std::out_of_range>([&] { w.write_handle(foreign_row, 123); });
+        w.write_handle(h1, 999);
+        check(w.read_handle(h1) == 999);
         check(r2.span()[0] == 1.5f);
         expect<std::logic_error>([&] { (void)a.borrow_write<0>(); });
         expect<std::logic_error>([&] { (void)a.borrow_read<1>(); });
@@ -86,6 +94,11 @@ int main() {
     auto reused = a.push(4.5f, 400, false);
     check(reused.slot() == h1.slot() && reused.generation() != h1.generation());
     expect<std::out_of_range>([&] { a.set<0>(h1, 1.0f); });
+    {
+        auto checked = a.borrow_read<0>();
+        expect<std::out_of_range>([&] { (void)checked.read_handle(h1); });
+        check(checked.read_handle(reused) == 4.5f);
+    }
     // Disjoint columns can be mutated concurrently without touching layout or identities.
     std::atomic<bool> start{false};
     std::thread t1([&] {

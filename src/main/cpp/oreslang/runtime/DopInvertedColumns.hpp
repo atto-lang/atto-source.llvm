@@ -165,11 +165,12 @@ public:
         Loan(Loan&& other) noexcept : state_(std::move(other.state_)) {}
         Loan& operator=(Loan&&) = delete;
         ~Loan() { release(); }
-        // Checked scalar access is the only safe native borrowing target for
-        // untrusted/source-lowered row operations. A raw span may escape its
-        // lexical loan and cannot be revoked after release or reallocation.
-        // Each access here validates loan lifetime and owner state under the
-        // same lock as structural mutation and teardown.
+        // Checked scalar access always validates loan lifetime and owner state
+        // under the same lock as structural mutation and teardown. Physical
+        // row-index operations remain host-only: guest/source row access must
+        // also prove the Handle issuer/owner/generation via read_handle or
+        // write_handle. A raw span may escape its lexical loan and cannot be
+        // revoked after release or reallocation.
         std::size_t size_checked() const {
             if (!state_) throw std::logic_error("released inverted column loan");
             std::lock_guard<std::mutex> lock(state_->mutex);
@@ -185,6 +186,12 @@ public:
                 throw std::out_of_range("inverted column loan row out of bounds");
             return column[row];
         }
+        Value read_handle(const Handle& handle) const {
+            if (!state_) throw std::logic_error("released inverted column loan");
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            const auto row = resolve(*state_, handle);
+            return std::get<I>(state_->columns)[row];
+        }
         void write_at(std::size_t row, Value value) requires(Write) {
             if (!state_) throw std::logic_error("released inverted column loan");
             std::lock_guard<std::mutex> lock(state_->mutex);
@@ -193,6 +200,12 @@ public:
             if (row >= column.size())
                 throw std::out_of_range("inverted column loan row out of bounds");
             column[row] = value;
+        }
+        void write_handle(const Handle& handle, Value value) requires(Write) {
+            if (!state_) throw std::logic_error("released inverted column loan");
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            const auto row = resolve(*state_, handle);
+            std::get<I>(state_->columns)[row] = value;
         }
         // Legacy host-only zero-copy API. Never lower this as a raw guest
         // pointer: source borrow proof does not currently establish revocation.
