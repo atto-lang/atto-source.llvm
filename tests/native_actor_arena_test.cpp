@@ -36,4 +36,6 @@ int main() {
     catch (const std::invalid_argument&) {}
     try { ActorArena undersized(1, 64); assert(false); }
     catch (const std::invalid_argument&) {}
+    try { ActorArena oversized(1, ActorArena::kMaxCapacity + 1); assert(false); }
+    catch (const std::invalid_argument&) {}
 }

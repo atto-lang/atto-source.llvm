@@ -106,7 +106,8 @@ public:
                 [](unsigned char c) { return c < 0x20 || c == 0x7f; });
         if (unsafe_tenant_id || config.heap_limit_bytes == 0 ||
             config.max_actors == 0 || config.max_inflight_guest_calls == 0 ||
-            config.actor_arena_bytes < ActorArena::kScalarPrefix)
+            config.actor_arena_bytes < ActorArena::kScalarPrefix ||
+            config.actor_arena_bytes > ActorArena::kMaxCapacity)
             throw std::invalid_argument("isolate requires a bounded ID and positive quotas");
         if (config.mode != IsolateMode::TrustedInProcess)
             throw std::logic_error("sandboxed-process isolation is not implemented");

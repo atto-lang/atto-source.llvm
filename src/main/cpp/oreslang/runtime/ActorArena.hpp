@@ -15,12 +15,13 @@ namespace oreslang::runtime {
 class ActorArena final {
 public:
     static constexpr std::uint32_t kScalarSlots = 16;
+    static constexpr std::uint32_t kMaxCapacity = 16u * 1024u * 1024u;
     static constexpr std::size_t kScalarPrefix =
         sizeof(std::int64_t) * kScalarSlots;
 
     ActorArena(std::uint64_t generation, std::uint32_t capacity)
         : generation_(generation), capacity_(capacity),
-          storage_(capacity >= kScalarPrefix && generation != 0
+          storage_(capacity >= kScalarPrefix && capacity <= kMaxCapacity && generation != 0
                        ? std::make_unique<std::uint8_t[]>(capacity)
                        : throw std::invalid_argument("invalid actor arena size or generation")),
           next_(kScalarPrefix) {}
