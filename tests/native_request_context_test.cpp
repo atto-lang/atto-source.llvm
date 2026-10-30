@@ -88,6 +88,10 @@ struct Suite {
                     s.observed.fetch_add(1);
                 });
                 CHECK(resumed!=s.reject_resume);
+                if(resumed) {
+                    CHECK(!s.contexts.resume_admitted(s.scheduler,exchange,token,
+                            *s.suspension,[]{throw std::runtime_error("duplicate resume");}));
+                }
             } else {
                 CHECK(s.contexts.with_admitted_turn(s.scheduler,exchange,token,
                        s.requests[slot],owner,[&]{
