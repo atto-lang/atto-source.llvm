@@ -1423,6 +1423,7 @@ private:
             actor.on_message = std::move(method);
             if (braced) require("}");
             else require("end");
+            actor.sealed_state_write_v1 = access == "write";
             actor.sealed_state_synchronous_v1 = true;
             return actor;
         }
