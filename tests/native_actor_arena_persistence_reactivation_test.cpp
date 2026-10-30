@@ -65,7 +65,11 @@ int main() {
     {
         SqliteStore reopened(db);
         reopened.grant_epoch(stable.tenant,stable.actor,2);
-        auto restored=reopened.load(stable);
+        bool stale_reactivation_denied=false;
+        try { (void)reopened.load_fenced(stable,1); }
+        catch(const std::logic_error&) { stale_reactivation_denied=true; }
+        assert(stale_reactivation_denied);
+        auto restored=reopened.load_fenced(stable,2);
         assert(restored.version==1 && restored.snapshot_version==1 && restored.snapshot_schema==1);
         assert(restored.events.empty());
         const auto payload=decode_u64(restored.snapshot);
