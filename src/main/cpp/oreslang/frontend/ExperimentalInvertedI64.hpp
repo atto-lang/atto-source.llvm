@@ -120,6 +120,9 @@ class Compiler {
     std::size_t index() {
         const auto v = integer();
         if (v < 0) fail("inverted index must be nonnegative");
+        if (static_cast<std::uint64_t>(v) >
+            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+            fail("inverted index exceeds target size_t");
         return static_cast<std::size_t>(v);
     }
     std::size_t field() {
