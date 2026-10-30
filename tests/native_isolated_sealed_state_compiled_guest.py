@@ -47,6 +47,14 @@ def main():
                     raise RuntimeError(f"missing compiler-defined {symbol}")
             if "gc.statepoint" in ir or "gc.relocate" in ir:
                 raise RuntimeError("tracing GC inserted into native actor IR")
+            mutable_init = "call void @ores_actor_i64_heap_field_init_mutable("
+            immutable_init = "call void @ores_actor_i64_heap_field_init("
+            write_call = "call void @ores_actor_i64_heap_field_write("
+            if kind == "read":
+                if mutable_init in ir or write_call in ir or immutable_init not in ir:
+                    raise RuntimeError("critical-read generated mutable native state")
+            elif mutable_init not in ir or write_call not in ir:
+                raise RuntimeError("critical-write missing mutable native state")
             ll = directory / f"{kind}.ll"
             ll.write_text(ir, encoding="utf-8")
             executable = directory / f"actor-{kind}"
