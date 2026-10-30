@@ -307,8 +307,8 @@ public:
                 std::memory_order_acq_rel))return false;
         bool ok=false;
         try {
-            ok=with_admitted_turn(scheduler,exchange,token,suspended.context,
-                    suspended.owner,std::forward<Fn>(fn));
+            ok=with_verified_turn(scheduler,exchange,token,suspended.context,
+                    suspended.owner,true,std::forward<Fn>(fn));
         } catch (...) {
             suspended.resumption_state_.store(2,std::memory_order_release);
             throw;
@@ -374,13 +374,14 @@ public:
         std::size_t count=0;for(const auto& s:slots_)count+=s.phase==Phase::free;
         return count;
     }
-    // Call only from a scheduler-authenticated actor DATA turn. Matching
-    // the owner tuple is necessary but NOT sufficient for guest authority.
+    // Internal bridge only. The public initial path consumes the envelope
+    // exactly once; a validated Suspension uses the continuation path.
+private:
     template<typename Fn>
-    bool with_admitted_turn(OresNativeActorScheduler* scheduler,
+    bool with_verified_turn(OresNativeActorScheduler* scheduler,
             const NativeHttpExchange& exchange,
             NativeHttpExchange::Token token, Handle handle,
-            OresNativeActorRef owner, Fn&& callback) {
+            OresNativeActorRef owner, bool continuation_resume, Fn&& callback) {
         static_assert(std::is_void_v<std::invoke_result_t<Fn&>>,
             "carrier binding must not return an escaped resource or awaitable");
         if(!admitted_for(scheduler,owner,token.dispatch_ticket) ||
@@ -398,6 +399,13 @@ public:
         if(!lease)return false;
         // Store lease prevents reuse; close revokes current() immediately.
         if(!lookup(handle,owner))return false;
+        const Frame* outer=current_frame_;
+        const bool nested=outer && outer->table==this &&
+            outer->exchange==&exchange &&
+            outer->exchange_generation==token.generation &&
+            outer->dispatch_ticket==token.dispatch_ticket;
+        if(!continuation_resume && !nested && !exchange.enter_initial(token))
+            return false;
         Frame frame{this,handle,owner,scheduler,&exchange,
                     token.generation,token.dispatch_ticket,current_frame_};
         current_frame_=&frame;
@@ -413,6 +421,17 @@ public:
         if(!admitted_for(scheduler,owner,token.dispatch_ticket))return false;
         callback();
         return true;
+    }
+public:
+    // A repeated scheduler DATA ticket is not a new request invocation.
+    // Resume only through a valid one-shot structured Suspension.
+    template<typename Fn>
+    bool with_admitted_turn(OresNativeActorScheduler* scheduler,
+            const NativeHttpExchange& exchange,
+            NativeHttpExchange::Token token, Handle handle,
+            OresNativeActorRef owner, Fn&& callback) {
+        return with_verified_turn(scheduler,exchange,token,handle,owner,
+                                  false,std::forward<Fn>(callback));
     }
     // No untrusted choice of transport handle/owner at lookup: use only the
     // exchange's trusted ingress-bound buffer. The short guest borrow is
