@@ -107,22 +107,22 @@ def main():
         # declaration order, parameter type, or inline/split self spelling.
         ('implicit-then-mut-zero', '''define class Foo as
           x():void{return;} x(mut self)():void{return;}end
-          pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/0'"),
         ('mut-then-implicit-zero', '''define class Foo as
           x(mut self)():void{return;} x():void{return;}end
-          pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/0'"),
         ('implicit-then-inline-mut-one', '''define class Foo as
           x(int n):int{return n;} x(mut self, int n):int{return n;}end
-          pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/1'"),
         ('inline-mut-then-implicit-one', '''define class Foo as
           x(mut self, int n):int{return n;} x(int n):int{return n;}end
-          pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/1'"),
         ('inline-read-then-split-mut-one', '''define class Foo as
           x(self, int n):int{return n;} x(mut self)(int n):int{return n;}end
-          pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/1'"),
         ('read-and-mut-zero', '''define class Foo as
           x(self):int{return 1;} x(mut self):int{return 2;}end
-          pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/0'"),
         ('wrong-method-arity', COUNTER+'pub fnc main():int{let Counter c=new Counter();return c.read(1,2);}',{},'explicit call arity'),
         ('method-field-take', '''define class Box as let int value=42;
           pub take(mut self)():int{return rt take self.value;}end pub fnc main():int{return 0;}''',{},'borrow'),
