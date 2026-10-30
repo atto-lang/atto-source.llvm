@@ -51,8 +51,9 @@ struct PlaceState {
     // Token zero is reserved for a legacy loan already live at graph entry.
     std::set<std::uint64_t> shared_loan_ids;
     std::optional<std::uint64_t> exclusive_loan_id;
-    // Region-backed loans additionally bind compile-time requirement to the
-    // exact logical execution + generation that may retire the runtime ticket.
+    // Region-backed loans carry a symbolic compiler requirement. Runtime
+    // lowering must later bind it to the authenticated current logical
+    // execution and the live region/execution generations.
     std::map<std::uint64_t, RegionLoanRequirement> shared_region_requirements;
     std::optional<RegionLoanRequirement> exclusive_region_requirement;
 
@@ -91,13 +92,14 @@ struct Operation {
     // Optional explicit lexical loan identity; absent borrow IDs derive from
     // the original CFG operation site, not the active traversal order.
     std::optional<std::uint64_t> loan_id;
+    // Symbolic only: concrete runtime IDs/generations are intentionally absent.
     std::optional<RegionLoanRequirement> region_requirement;
 
     Operation() = default;
     Operation(Kind operation, std::string key,
-            std::optional<std::uint64_t> requirement = std::nullopt,
+            std::optional<std::uint64_t> loan = std::nullopt,
             std::optional<RegionLoanRequirement> region = std::nullopt)
-        : kind(operation), place(std::move(key)), loan_id(requirement),
+        : kind(operation), place(std::move(key)), loan_id(loan),
           region_requirement(std::move(region)) {}
 };
 
@@ -265,7 +267,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
         case Operation::Kind::ReleaseShared: {
             if (!value.shared_loans) violation(op.place, "unmatched shared loan release");
             if (!op.loan_id && value.shared_loan_ids.size() != 1)
-                violation(op.place, "shared loan release requires unambiguous requirement");
+                violation(op.place, "shared loan release requires unambiguous provenance");
             const auto to_release = op.loan_id.value_or(*value.shared_loan_ids.begin());
             if (!value.shared_loan_ids.count(to_release))
                 violation(op.place, "shared loan release has foreign provenance");
@@ -273,7 +275,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             if (region != value.shared_region_requirements.end()) {
                 if (!op.region_requirement ||
                         *op.region_requirement != region->second)
-                    violation(op.place, "shared region loan release has foreign task requirement");
+                    violation(op.place, "shared region loan release has foreign region binding");
                 value.shared_region_requirements.erase(region);
             } else if (op.region_requirement) {
                 violation(op.place, "local shared loan cannot be released as region loan");
@@ -289,7 +291,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             if (value.exclusive_region_requirement) {
                 if (!op.region_requirement ||
                         *op.region_requirement != *value.exclusive_region_requirement)
-                    violation(op.place, "exclusive region loan release has foreign task requirement");
+                    violation(op.place, "exclusive region loan release has foreign region binding");
             } else if (op.region_requirement) {
                 violation(op.place, "local exclusive loan cannot be released as region loan");
             }
@@ -322,7 +324,7 @@ inline bool join_into(State& target, const State& incoming) {
                 pair.second.exclusive_loan_id != other->second.exclusive_loan_id ||
                 pair.second.shared_region_requirements != other->second.shared_region_requirements ||
                 pair.second.exclusive_region_requirement != other->second.exclusive_region_requirement)
-            violation(pair.first, "different live loan requirement at CFG join");
+            violation(pair.first, "different live loan identity or region requirement at CFG join");
         ValueMask merged = static_cast<ValueMask>(pair.second.possible | other->second.possible);
         if (merged != pair.second.possible) {
             pair.second.possible = merged;
@@ -335,7 +337,7 @@ inline bool join_into(State& target, const State& incoming) {
 inline Analysis verify(const Graph& graph) {
     if (graph.blocks.empty())
         throw std::runtime_error("ownership violation: empty CFG");
-    // Each lexical borrow must own a globally unique requirement token,
+    // Each lexical borrow must own a globally unique loan token,
     // including across mutually exclusive CFG predecessors. Otherwise two
     // different borrows with the same count and token could spuriously join,
     // allowing a single release to discharge the wrong branch's loan.
