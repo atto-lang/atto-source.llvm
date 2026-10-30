@@ -30,3 +30,8 @@ A completed native region backend must additionally enforce non-escaping
 borrows at compile time, pin actual callbacks/FFI/continuations, reclaim
 owned arenas only after real retirement, and verify mutation allocation +
 latency under load. The region struct itself does not free memory.
+
+## 2026-10-30 hardening
+The test now uses `CHECK` (which cannot be compiled away by `NDEBUG`) instead of `assert`. Reconstructed exact test logic locally passed optimized, `-DNDEBUG -Werror`, and ASan/UBSan runs. This is developer-host smoke evidence; exact-head GitHub Actions execution has not been established. Do not interpret zero-step workflow failures as test failures or as evidence of exhausted Actions minutes.
+
+Private source export must remain disabled until the source repository's independently reviewed protected-main policy authorizes the exact destination identity and exact source snapshot. The current approved-destinations file contains no destinations. Runner capacity in another org is not transfer authorization. Source-free independent tests can be run elsewhere without copying the private Git tree.
