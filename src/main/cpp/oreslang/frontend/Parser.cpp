@@ -1393,6 +1393,9 @@ private:
             // State writes remain ordered, bounded and synchronous. No
             // direct field writes, captured state pointers or async frames.
             while (token_.text != "return") {
+                if (token_.text == "await" || token_.text == "suspend" ||
+                    token_.text == "select" || token_.text == "yield")
+                    fail("native sealed state callback suspend requires generation-fenced continuation lowering");
                 if (token_.kind == Kind::End || token_.text == "}")
                     fail("native sealed callback requires a return");
                 if (access != "write")
@@ -1413,6 +1416,9 @@ private:
                 method.actor_field_writes.push_back(std::move(write));
             }
             require("return");
+            if (token_.text == "await" || token_.text == "suspend" ||
+                token_.text == "select" || token_.text == "yield")
+                fail("native sealed state callback suspend requires generation-fenced continuation lowering");
             method.result = expression();
             check_sealed_expression(*method.result);
             require(";");
