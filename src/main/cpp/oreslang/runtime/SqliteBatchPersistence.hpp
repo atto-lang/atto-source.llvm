@@ -155,6 +155,10 @@ public:
         if(!valid_id(id.tenant)||!valid_id(id.actor)||!valid_id(id.slot))
             throw std::invalid_argument("invalid restore identity");
         std::lock_guard<std::mutex> lock(mu_);
+        // Reconstruct from one consistent SQLite read snapshot even if another
+        // connection is committing a new event or activation concurrently.
+        sql("BEGIN");
+        try {
         Recovery out;
         Statement q(db_,"SELECT version,snapshot_version,snapshot_schema,snapshot FROM state WHERE tenant=? AND actor=? AND slot=?");
         bind_identity(q,id);
@@ -173,9 +177,21 @@ public:
             e.schema_version=static_cast<std::uint32_t>(sqlite3_column_int(ev.p,1));
             const auto len=sqlite3_column_bytes(ev.p,2);
             if(len){const auto* src=static_cast<const std::uint8_t*>(sqlite3_column_blob(ev.p,2));e.payload.assign(src,src+len);}
+            // Reject corrupted, truncated or out-of-order journals; never
+            // silently publish an actor state missing an acknowledged event.
+            if(e.schema_version==0 || e.version!=out.snapshot_version+out.events.size()+1)
+                throw std::runtime_error("INCOMPLETE_ACTOR_JOURNAL");
             out.events.push_back(std::move(e));
+            if(out.events.size()>10000)
+                throw std::runtime_error("ACTOR_JOURNAL_REPLAY_LIMIT");
         }
+        if(out.snapshot_version>out.version ||
+           (out.snapshot_version>0 && out.snapshot_schema==0) ||
+           out.snapshot_version+out.events.size()!=out.version)
+            throw std::runtime_error("INCOMPLETE_ACTOR_JOURNAL");
+        sql("COMMIT");
         return out;
+        } catch (...) { rollback(); throw; }
     }
 };
 } // namespace oreslang::runtime::persistence
