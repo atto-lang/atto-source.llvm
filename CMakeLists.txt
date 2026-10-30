@@ -60,6 +60,20 @@ if(BUILD_TESTING)
         set_tests_properties(native_cgl_linux_host_admission PROPERTIES TIMEOUT 15)
     endif()
 
+    # Evidence-only checker: timer due and actual actor user-code entry must
+    # both be observed; a timely timer notification alone is insufficient.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-cgl-dispatch-evidence-test
+            tests/native_cgl_dispatch_evidence_test.cpp)
+        target_include_directories(oreslang-native-cgl-dispatch-evidence-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+        target_compile_options(oreslang-native-cgl-dispatch-evidence-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_cgl_timer_to_user_start_evidence
+            COMMAND oreslang-native-cgl-dispatch-evidence-test)
+        set_tests_properties(native_cgl_timer_to_user_start_evidence PROPERTIES TIMEOUT 15)
+    endif()
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
