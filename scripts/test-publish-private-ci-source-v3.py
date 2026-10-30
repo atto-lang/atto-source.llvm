@@ -470,6 +470,11 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 source_codeowners + b"/scripts/publish-private-ci-source-v3.py @other\n"
             )
 
+    def test_file_bound_covers_current_llvm_tree_and_remains_bounded(self):
+        self.assertEqual(v3.MAX_FILES, 2048)
+        self.assertGreaterEqual(v3.MAX_FILES, 1305)
+        self.assertLessEqual(v3.MAX_FILES, v3.MAX_TREE_ENTRIES)
+
     def test_decode_contents_authenticates_blob_digest(self):
         raw = b"reviewed bytes\n"
         good = {
