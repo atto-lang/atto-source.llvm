@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
+#include "oreslang/runtime/NativeCallbackContext.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -40,6 +41,26 @@ int ores_native_logical_trace_snapshot(
     OresNativeContinuationTraceFrame* continuation_frames,
     size_t continuation_capacity,
     OresNativeLogicalTraceResult* out);
+
+typedef struct {
+    OresNativeCallbackProvenance callback;
+    OresNativeLogicalTraceResult logical;
+} OresNativeCallbackLogicalTraceResult;
+
+/*
+ * Snapshot a foreign callback's immutable provenance plus the same bounded
+ * logical ancestry used for guest failures. This validates the generation-
+ * checked callback token but never installs it as an active execution.
+ */
+int ores_native_logical_trace_snapshot_callback(
+    OresNativeExecutionContextStore* executions,
+    OresNativeContinuationStore* continuations,
+    const OresNativeCallbackContext* callback,
+    OresNativeExecutionTraceFrame* execution_frames,
+    size_t execution_capacity,
+    OresNativeContinuationTraceFrame* continuation_frames,
+    size_t continuation_capacity,
+    OresNativeCallbackLogicalTraceResult* out);
 
 #ifdef __cplusplus
 }
