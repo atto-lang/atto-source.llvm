@@ -453,6 +453,31 @@ int main() {
     REQUIRE(link_package_namespaces(another, pins, {request})
                 .namespaces.at({"foo@1", "a"}).exports.size() == 4);
 
+    // A forged scalar-only AST must not consume unbounded host stack. The
+    // exact maximum number of nodes on a path remains admissible, while one
+    // additional node fails closed before recursive validation descends.
+    const auto scalar_negate_chain = [](std::size_t nodes) {
+        auto root = std::make_unique<Expression>();
+        Expression* current = root.get();
+        for (std::size_t i = 1; i < nodes; ++i) {
+            current->kind = Expression::Kind::Negate;
+            current->left = std::make_unique<Expression>();
+            current = current->left.get();
+        }
+        current->kind = Expression::Kind::Integer;
+        return root;
+    };
+    reject_signature("scalar_expression_excess_depth", [&](Function& fn) {
+        fn.result = scalar_negate_chain(kMaxNamespaceScalarExpressionDepth + 1);
+    }, "body expression");
+    Program bounded_depth = make_source("a", "bounded_depth");
+    bounded_depth.functions.front().result =
+        scalar_negate_chain(kMaxNamespaceScalarExpressionDepth);
+    another = units;
+    another.push_back({"foo/bounded_depth", "foo@1", &bounded_depth});
+    REQUIRE(link_package_namespaces(another, pins, {request})
+                .namespaces.at({"foo@1", "a"}).exports.size() == 4);
+
     // 12. Lifecycle suspension, task/Future pipelines and continuation
     // metadata are not ordinary synchronous scalar namespace exports.
     reject_signature("ready_await_export", [](Function& fn) {

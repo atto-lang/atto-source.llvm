@@ -77,8 +77,13 @@ inline bool valid_flat_namespace_name(const std::string& name) {
  // call-free expression trees can enter the host namespace export inventory.
  // An apparently scalar result can still hide Console/Call/borrow/nominal
  // operations in a nested expression or local initializer.
-inline bool namespace_pure_scalar_expression(const Expression* expression) {
+// Bounded admission prevents a malformed/host-injected scalar AST from
+// exhausting the linker stack before a verified native lowering exists.
+inline constexpr std::size_t kMaxNamespaceScalarExpressionDepth = 128;
+inline bool namespace_pure_scalar_expression_at_depth(
+        const Expression* expression, std::size_t depth) {
     if (!expression) return true;
+    if (depth >= kMaxNamespaceScalarExpressionDepth) return false;
     // A scalar tag is not proof that a forged/unresolved AST is well formed.
     // Require complete operands, and refuse surplus children which could hide
     // unvalidated evaluation paths. The legacy equality-ternary representation
@@ -183,13 +188,17 @@ inline bool namespace_pure_scalar_expression(const Expression* expression) {
             || !expression->arguments.empty() || !expression->argument_names.empty()
             || !expression->type_arguments.empty() || expression->type_arguments_present)
         return false;
-    return namespace_pure_scalar_expression(expression->left.get())
-        && namespace_pure_scalar_expression(expression->right.get())
-        && namespace_pure_scalar_expression(expression->condition.get())
-        && namespace_pure_scalar_expression(expression->condition_lhs.get())
-        && namespace_pure_scalar_expression(expression->condition_rhs.get())
-        && namespace_pure_scalar_expression(expression->when_true.get())
-        && namespace_pure_scalar_expression(expression->when_false.get());
+    return namespace_pure_scalar_expression_at_depth(expression->left.get(), depth + 1)
+        && namespace_pure_scalar_expression_at_depth(expression->right.get(), depth + 1)
+        && namespace_pure_scalar_expression_at_depth(expression->condition.get(), depth + 1)
+        && namespace_pure_scalar_expression_at_depth(expression->condition_lhs.get(), depth + 1)
+        && namespace_pure_scalar_expression_at_depth(expression->condition_rhs.get(), depth + 1)
+        && namespace_pure_scalar_expression_at_depth(expression->when_true.get(), depth + 1)
+        && namespace_pure_scalar_expression_at_depth(expression->when_false.get(), depth + 1);
+}
+
+inline bool namespace_pure_scalar_expression(const Expression* expression) {
+    return namespace_pure_scalar_expression_at_depth(expression, 0);
 }
 
 // This API cannot invent package ownership from a namespace header, pathname,
