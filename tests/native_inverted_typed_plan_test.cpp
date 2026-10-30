@@ -87,7 +87,7 @@ int main() {
     rejects([&] { plan.snapshot(0); }, "mutable loan");
     rejects([&] { plan.push(4); }, "structural operation conflicts");
     rejects([&] { plan.erase_swap(0); }, "structural operation conflicts");
-    rejects([&] { plan.suspend(); }, "structural operation conflicts");
+    rejects([&] { plan.suspend(); }, "cannot cross suspension");
     rejects([&] { plan.close(); }, "structural operation conflicts");
     plan.release_write("x");
     plan.snapshot(0); // immutable read loans do not prevent detached snapshot
@@ -96,7 +96,7 @@ int main() {
     rejects([&] { plan.erase_swap(1); }, "structural operation conflicts");
     plan.release_read("id");
     rejects([&] { plan.release_read("id"); }, "unmatched inverted read release");
-    plan.suspend(); // no live field loan; actor suspension proof still separate
+    rejects([&] { plan.suspend(); }, "cannot cross suspension"); // pinning unproven
     plan.erase_swap(0);
     assert(plan.length() == 1);
     plan.push(4);
