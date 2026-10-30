@@ -266,6 +266,46 @@ int main() {
         fn.result->left = std::make_unique<Expression>();
         fn.result->left->kind = Expression::Kind::Call;
     }, "body expression");
+    // Malformed scalar ASTs must not be inventoried as callable exports:
+    // a scalar resolved_type alone does not validate operand completeness.
+    reject_signature("missing_binary_left", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Add;
+        fn.result->right = std::make_unique<Expression>();
+        fn.result->right->kind = Expression::Kind::Integer;
+    }, "body expression");
+    reject_signature("missing_binary_right", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Add;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Integer;
+    }, "body expression");
+    reject_signature("missing_unary_operand", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Negate;
+    }, "body expression");
+    reject_signature("missing_conditional_branch", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Conditional;
+        fn.result->condition = std::make_unique<Expression>();
+        fn.result->condition->kind = Expression::Kind::Boolean;
+        fn.result->when_true = std::make_unique<Expression>();
+        fn.result->when_true->kind = Expression::Kind::Integer;
+    }, "body expression");
+    reject_signature("missing_conditional_condition", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Conditional;
+        fn.result->when_true = std::make_unique<Expression>();
+        fn.result->when_true->kind = Expression::Kind::Integer;
+        fn.result->when_false = std::make_unique<Expression>();
+        fn.result->when_false->kind = Expression::Kind::Integer;
+    }, "body expression");
+    reject_signature("surplus_literal_operand", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Integer;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Boolean;
+    }, "body expression");
     reject_signature("call_local_initializer_export", [](Function& fn) {
         fn.locals.emplace_back();
         fn.locals.back().initializer = std::make_unique<Expression>();
@@ -276,6 +316,8 @@ int main() {
     pure_expression.functions.front().result->kind = Expression::Kind::Add;
     pure_expression.functions.front().result->left = std::make_unique<Expression>();
     pure_expression.functions.front().result->left->kind = Expression::Kind::Integer;
+    pure_expression.functions.front().result->right = std::make_unique<Expression>();
+    pure_expression.functions.front().result->right->kind = Expression::Kind::Integer;
     pure_expression.functions.front().locals.emplace_back();
     pure_expression.functions.front().locals.back().initializer = std::make_unique<Expression>();
     pure_expression.functions.front().locals.back().initializer->kind = Expression::Kind::Boolean;
@@ -283,6 +325,23 @@ int main() {
     another.push_back({"foo/pure_scalar_expression", "foo@1", &pure_expression});
     const auto pure_graph = link_package_namespaces(another, pins, {request});
     REQUIRE(pure_graph.namespaces.at({"foo@1", "a"}).exports.size() == 4);
+
+    // Complete first-class and legacy ternaries remain valid pure scalars.
+    Program complete_ternary = make_source("a", "complete_ternary");
+    complete_ternary.functions.front().result = std::make_unique<Expression>();
+    auto& ternary = complete_ternary.functions.front().result;
+    ternary->kind = Expression::Kind::Conditional;
+    ternary->condition = std::make_unique<Expression>();
+    ternary->condition->kind = Expression::Kind::Boolean;
+    ternary->condition->resolved_type = ScalarType::Bool;
+    ternary->when_true = std::make_unique<Expression>();
+    ternary->when_true->kind = Expression::Kind::Integer;
+    ternary->when_false = std::make_unique<Expression>();
+    ternary->when_false->kind = Expression::Kind::Integer;
+    another = units;
+    another.push_back({"foo/complete_ternary", "foo@1", &complete_ternary});
+    REQUIRE(link_package_namespaces(another, pins, {request})
+                .namespaces.at({"foo@1", "a"}).exports.size() == 4);
 
     // 12. Lifecycle suspension, task/Future pipelines and continuation
     // metadata are not ordinary synchronous scalar namespace exports.
@@ -435,5 +494,5 @@ int main() {
     const auto internal_graph = link_package_namespaces(internal_units, pins, {request});
     REQUIRE(internal_graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
 
-    std::cout << "native package namespace source-only graph: 75/75 cases passed\n";
+    std::cout << "native package namespace source-only graph: structural AST admission checks passed\n";
 }

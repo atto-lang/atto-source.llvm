@@ -79,12 +79,27 @@ inline bool valid_flat_namespace_name(const std::string& name) {
  // operations in a nested expression or local initializer.
 inline bool namespace_pure_scalar_expression(const Expression* expression) {
     if (!expression) return true;
+    // A scalar tag is not proof that a forged/unresolved AST is well formed.
+    // Require complete operands, and refuse surplus children which could hide
+    // unvalidated evaluation paths. The legacy equality-ternary representation
+    // is admitted only when BOTH comparison operands are present.
+    const auto no_ternary_children = [&] {
+        return !expression->condition && !expression->condition_lhs
+            && !expression->condition_rhs && !expression->when_true
+            && !expression->when_false;
+    };
     switch (expression->kind) {
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
         case Expression::Kind::Variable:
+            if (expression->left || expression->right || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
+            if (!expression->left || expression->right || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
@@ -98,7 +113,19 @@ inline bool namespace_pure_scalar_expression(const Expression* expression) {
         case Expression::Kind::LogicalAnd:
         case Expression::Kind::LogicalOr:
         case Expression::Kind::LogicalXor:
+            if (!expression->left || !expression->right || !no_ternary_children())
+                return false;
+            break;
         case Expression::Kind::Conditional:
+            if (expression->left || expression->right
+                    || !expression->when_true || !expression->when_false)
+                return false;
+            if (expression->condition) {
+                if (expression->condition_lhs || expression->condition_rhs)
+                    return false;
+            } else if (!expression->condition_lhs || !expression->condition_rhs) {
+                return false;
+            }
             break;
         default:
             return false;

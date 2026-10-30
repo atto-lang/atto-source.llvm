@@ -15,10 +15,10 @@ same-spelling namespace names in other packages stay separate. It refuses
 unsupported native nominal/class/actor namespace types until typed ABI
 lowering exists. Existing define module scopes remain independent.
 
-The host-only regression executes five identity/isolation/rejection cases,
+The host-only regression authors identity/isolation, scalar-ABI and malformed-AST rejection cases,
 including ten sources in foo with a=3, b=4, c=3, and an app namespace selection
 from a pinned foo. The test does **not** parse import ns, compile .ores guest
-sources, validate a real manifest/lockfile, emit LLVM IR, or run the 43 fixture.
+sources, validate a real manifest/lockfile, emit LLVM IR, or execute the guest fixture returning 43.
 
 Required next vertical slice: package-format source inventory + pinned aliases;
 parse exact import ns a from 'pkg:foo'; with a typed AST selector; compile all
