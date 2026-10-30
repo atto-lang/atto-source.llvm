@@ -4,6 +4,7 @@ on:
     paths:
       - scripts/private_ci_export_gate.py
       - tests/test_private_ci_export_gate.py
+      - tests/test_atomic_ref_cleanup_local.py
       - scripts/publish-private-ci-source-v3.py
       - scripts/test-publish-private-ci-source-v3.py
       - .github/private-ci-approved-repositories.txt
@@ -14,6 +15,7 @@ on:
     paths:
       - scripts/private_ci_export_gate.py
       - tests/test_private_ci_export_gate.py
+      - tests/test_atomic_ref_cleanup_local.py
       - scripts/publish-private-ci-source-v3.py
       - scripts/test-publish-private-ci-source-v3.py
       - .github/private-ci-approved-repositories.txt
@@ -53,3 +55,8 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 scripts/test-publish-private-ci-source-v3.py -v
+      - name: Exercise local-only expected-SHA ref cleanup and ABA limits
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          GIT_TERMINAL_PROMPT: "0"
+        run: python3 -m unittest discover -s tests -p test_atomic_ref_cleanup_local.py -v
