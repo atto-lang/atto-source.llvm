@@ -1531,6 +1531,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_nested_future_preserves_type_fail_closed
         source-nested-future-flatten-unimplemented.ores
         --diagnostic "nested Future remains nested; implicit Future flatten is forbidden")
+    oreslang_contract_test(source_nested_future_generic_payload_preserves_type_fail_closed
+        source-nested-future-generic-payload-fail-closed.ores
+        --diagnostic "nested Future remains nested; implicit Future flatten is forbidden")
+    oreslang_contract_test(source_nested_option_generic_payload_preserves_type_fail_closed
+        source-nested-option-generic-payload-fail-closed.ores
+        --diagnostic "nested Option remains nested; implicit Option flatten is forbidden")
 
 
     # Entry<K,V> is a compiler-owned nominal product in Java/GraalVM.
