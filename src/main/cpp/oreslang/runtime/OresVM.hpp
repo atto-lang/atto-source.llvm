@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -168,8 +169,16 @@ public:
             throw std::logic_error("actor quota exhausted");
         if (state->next_actor_generation == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor generations exhausted");
-        const auto incarnation = state->next_actor_generation++;
+        const auto incarnation = state->next_actor_generation;
         state->actors.emplace(actor_id, incarnation);
+        try {
+            state->actor_scalar_slots.emplace(actor_id,
+                IsolateVM::ActorScalarSlots{incarnation, {}});
+        } catch (...) {
+            state->actors.erase(actor_id);
+            throw;
+        }
+        ++state->next_actor_generation;
         return ActorTicket(state, actor_id, incarnation);
     }
 
@@ -186,6 +195,12 @@ public:
             throw std::logic_error("stale or foreign actor ticket");
         if (state->durable_queues.has_actor({actor.id_, actor.actor_generation_}))
             throw std::logic_error("cannot retire actor with outstanding durable work");
+        auto scalar = state->actor_scalar_slots.find(actor.id_);
+        if (scalar == state->actor_scalar_slots.end() ||
+            scalar->second.generation != actor.actor_generation_)
+            throw std::logic_error("actor scalar-state incarnation mismatch");
+        scalar->second.slots.fill(0);
+        state->actor_scalar_slots.erase(scalar);
         state->actors.erase(it);
     }
 
