@@ -1123,9 +1123,24 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_source_critical_rw_guest_not_lowered
         source-critical-rw-guest-unlowered.ores
         --diagnostic "native actor state { ... } requires sealed handle_state lowering")
-    oreslang_contract_test(native_source_critical_nested_guest_not_lowered
+    oreslang_contract_test(native_source_critical_nested_guest_rejected
         source-critical-nested-guest-unlowered.ores
-        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+        --diagnostic "nested native sealed actor critical loans require reentrancy analysis")
+    oreslang_contract_test(native_source_critical_read_mutation_rejected
+        sealed-state-critical-read-mutation.ores
+        --diagnostic "native sealed actor critical read callback cannot mutate state")
+    oreslang_contract_test(native_source_critical_unknown_field_rejected
+        sealed-state-critical-unknown-field.ores
+        --diagnostic "unknown native sealed actor state field")
+    oreslang_contract_test(native_source_critical_suspension_rejected
+        sealed-state-critical-await.ores
+        --diagnostic "native sealed actor critical callback forbids suspension")
+    oreslang_contract_test(native_source_critical_mode_rejected
+        sealed-state-critical-invalid-mode.ores
+        --diagnostic "native sealed actor critical mode must be read or write")
+    oreslang_contract_test(native_source_critical_escape_rejected
+        sealed-state-critical-borrow-escape.ores
+        --diagnostic "native sealed actor state borrow cannot escape callback")
     # Typed schema parsing is now distinct from the legacy actor scalar path.
     # Even a *valid* schema still fails closed until critical loan HIR/codegen.
     oreslang_contract_test(native_sealed_schema_valid_signed_min_not_lowered
