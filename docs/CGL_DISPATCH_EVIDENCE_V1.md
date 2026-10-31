@@ -47,6 +47,17 @@ The source-local LLVM `CglDispatchEvidence.hpp` is an **offline** evaluator
 for a complete bounded trace array. It does not collect traces from OresVM
 and deliberately always reports `hard_realtime_qualified=false`. Its duplicate
 check is O(n^2), so it must never be called on the RT path.
+An independently generated, positive **expected total ticket count**
+(completed + canceled) is required in addition to the minimum completed count.
+Setting `capture_complete=true` or having enough completed samples alone
+cannot compensate for missing events.
+
+The GraalVM post-quiescence snapshot uses an offline distinctness key of
+(actor UUID, actor **generation**, zero-based mailbox sequence). A reused
+sequence after hot reload is a new identity only when its generation changes.
+Generation zero and a duplicate key fail the coverage check. Neither producer
+may claim complete coverage solely from a self-reported record count: the
+expected count must be taken from a separate authenticated admission ledger.
 
 ## Implemented observation seams (not full timer correlation)
 
