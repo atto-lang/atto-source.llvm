@@ -370,6 +370,13 @@ void rewrite_entry_expression(
             || expression->name.find('.', dot + 1) != std::string::npos)
         fail("namespace call must be exactly binding.member");
 
+    // A dotted name resolved to a pinned namespace is not a general
+    // method-call escape hatch. Named/generic calls need a later ABI with
+    // explicit source-to-provider argument mapping and lifetime rules.
+    if (!positional_call_arguments(*expression)
+            || expression->type_arguments_present
+            || !expression->type_arguments.empty())
+        fail("entry namespace calls require flat positional non-generic syntax");
     const std::string binding = expression->name.substr(0, dot);
     const std::string member = expression->name.substr(dot + 1);
     const auto imported = graph.imports.find({source_unit_id, binding});
