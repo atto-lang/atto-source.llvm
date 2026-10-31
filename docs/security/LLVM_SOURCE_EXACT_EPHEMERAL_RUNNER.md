@@ -55,3 +55,15 @@ Run the official runner with the one-time `--jitconfig` value only on that dispo
 Official GitHub references: https://docs.github.com/en/rest/actions/self-hosted-runners and https://docs.github.com/en/actions/reference/security/secure-use and https://docs.github.com/en/rest/actions/self-hosted-runner-groups.
 
 **Validation limit:** The JIT script's shell syntax and five source-free mocked administration scenarios have been checked locally (one permitted, four denied). This does **not** confirm real organization's runner-group ID, plan eligibility, runner-image integrity, review enforcement, JIT registration, source JUnit/native execution or real GitHub management writes. No runner or secret was provisioned by this PR.
+
+## Source-free regression command
+
+On a trusted workstation or any ordinary CI job that does not receive an administrative GitHub token, verify the JIT provisioning fail-closed logic with the checked-in, **fully mocked** CLI:
+
+```bash
+bash -n scripts/ci/prepare_source_ephemeral_jit.sh
+bash -n scripts/ci/test_prepare_source_ephemeral_jit.sh
+bash scripts/ci/test_prepare_source_ephemeral_jit.sh scripts/ci/prepare_source_ephemeral_jit.sh
+```
+
+The test harness replaces `gh` with a local stub. It exercises unprotected main, overbroad runner groups, extra repository visibility, failed POST, attempts to provision inside Actions, successful 0600 credential-file creation, and refusal to overwrite an existing config. **It neither creates a real runner nor uses the private-source publisher.**
