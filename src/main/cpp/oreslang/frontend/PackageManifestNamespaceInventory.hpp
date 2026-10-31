@@ -62,6 +62,14 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
     const std::filesystem::path& manifest_path,
     const std::function<std::string(const std::filesystem::path&)>& read_manifest);
 
+// Discover the nearest physical package authority from an entry source.
+// A nearer legacy marker is an independent package boundary and blocks
+// fallback to an ancestor modern manifest; schema-v2 namespace inventory then
+// fails closed rather than inheriting parent authority.
+VerifiedPackageManifestV2 discover_verified_package_manifest_v2(
+    const std::filesystem::path& entry_source,
+    const std::function<std::string(const std::filesystem::path&)>& read_manifest);
+
 // Builds the exact pinned namespace compiler input from one root application
 // manifest, verified dependency manifests, and an already-verified package
 // lock snapshot. No directory scan, ORES_PATHS/ORESLANG_PATH fallback,
