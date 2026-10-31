@@ -2574,9 +2574,46 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     catch_consume, native_error_return);
 
                 builder.SetInsertPoint(catch_consume);
+                llvm::Value* nominal_match = nullptr;
+                if (!fn.caught_error_type_test.empty()) {
+                    if (!fn.caught_error_type_match_result)
+                        throw std::runtime_error(
+                            "native ErrorSlot type test lacks match result");
+                    if (fn.caught_error_type_test ==
+                            "ArithmeticOverflowError") {
+                        nominal_match = builder.CreateICmpEQ(
+                            caught_code,
+                            llvm::ConstantInt::get(
+                                caught_code->getType(),
+                                kArithmeticOverflowErrorCode),
+                            "caught.error.is.arithmetic_overflow");
+                    } else if (fn.caught_error_type_test == "Error") {
+                        nominal_match = is_error;
+                    } else {
+                        throw std::runtime_error(
+                            "unsupported native ErrorSlot nominal type");
+                    }
+                } else if (fn.caught_error_type_match_result) {
+                    throw std::runtime_error(
+                        "native ErrorSlot match result lacks nominal type");
+                }
+
                 clear_native_error_slot(
                     builder, error_slot_type, native_error_slot);
-                auto* caught_result = lower_return(*fn.result);
+                llvm::Value* caught_result = nullptr;
+                if (nominal_match) {
+                    // Parser v1 admits literal handler arms only, so eager
+                    // lowering here has no side effects and preserves the
+                    // source-level nominal condition exactly.
+                    auto* matched = lower_return(
+                        *fn.caught_error_type_match_result);
+                    auto* fallback = lower_return(*fn.result);
+                    caught_result = builder.CreateSelect(
+                        nominal_match, matched, fallback,
+                        "caught.error.nominal.result");
+                } else {
+                    caught_result = lower_return(*fn.result);
+                }
                 auto* caught_exit = builder.GetInsertBlock();
                 builder.CreateBr(catch_merge);
 
