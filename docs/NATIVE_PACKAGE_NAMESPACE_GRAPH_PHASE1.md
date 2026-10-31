@@ -19,8 +19,13 @@ The host-only regression authors identity/isolation, scalar-ABI and malformed-AS
 including ten sources in foo with a=3, b=4, c=3, and an app namespace selection
 from a pinned foo. The new `resolve_package_namespace_scalar_call` lookup uses the checked import edge
 plus exact function name/value arity/parameter types to return one physical provider source ID
-and its scalar result type. It rejects missing bindings, wrong arity/type, missing exports and
-cross-package fallbacks without disk I/O or guest-side reflection.
+and its scalar result type. An import may specify a distinct lexical `as` alias;
+the import table is keyed by (importing source, **local alias**), not by a
+globally shared namespace name. Thus two pinned dependency instances exporting
+the same namespace may coexist without merging providers. Duplicate and
+reserved local aliases fail closed. It rejects missing bindings, wrong
+arity/type, missing exports and cross-package fallbacks without disk I/O or
+guest-side reflection.
 
 Separately, `tests/native_module_imports.py` now includes an **executable three-file module**
 guest returning 43: two imported scalar provider functions must each appear as
