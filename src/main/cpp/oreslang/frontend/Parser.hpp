@@ -491,6 +491,17 @@ inline std::uint64_t source_suspension_authority_fingerprint(
     // execution-context provenance.
     text(fn.name);
     text(fn.method_owner);
+    number(fn.generic_parameters.size());
+    for (const auto& parameter : fn.generic_parameters) {
+        text(parameter.name);
+        text(parameter.default_type);
+    }
+    byte(fn.scalar_while ? 1u : 0u);
+    if (fn.scalar_while) {
+        text(fn.scalar_while->counter);
+        number(static_cast<std::uint64_t>(fn.scalar_while->initial));
+        number(static_cast<std::uint64_t>(fn.scalar_while->upper_bound));
+    }
     text(fn.ready_await_actor);
     text(fn.done_await_actor);
     number(fn.ready_await_offset);
@@ -530,6 +541,9 @@ inline std::uint64_t source_suspension_authority_fingerprint(
     for (const auto& actor : fn.actor_spawns) {
         text(actor.name);
         text(actor.actor_type);
+        byte(static_cast<std::uint8_t>(actor.declared_type.kind));
+        text(actor.declared_type.argument);
+        number(actor.offset);
     }
     number(fn.actor_sends.size());
     for (const auto& send : fn.actor_sends) {
