@@ -141,6 +141,8 @@ jobs:
             tests/fixtures/source-isolated-actor-sealed-direct-read-reject.ores \
             tests/fixtures/source-isolated-actor-sealed-suspend-reject.ores \
             tests/fixtures/source-isolated-actor-sealed-split-critical-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-multi-write-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-postcommit-overflow-reject.ores \
             tests/fixtures/source-isolated-actor-state-empty-reject.ores \
             tests/fixtures/source-isolated-actor-state-negative-overflow-reject.ores; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
