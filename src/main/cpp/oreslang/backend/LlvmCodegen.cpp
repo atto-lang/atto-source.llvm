@@ -658,6 +658,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
         }
         if (actor.has_state_schema) {
+            if (wasm32_target || cortex_m_target)
+                throw std::runtime_error(
+                    "native sealed actor-state guest v1 requires host scheduler; wasm32/cortex-m target lowering is unverified");
             // Never treat state schema metadata as a lowering credential.
             // Only the parser-verified, sync, lexical handle_state callback
             // may use the existing native actor-owned i64 heap backend.

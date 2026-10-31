@@ -32,6 +32,23 @@ def main():
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
+    # The host-only synchronous state proof must never accidentally activate
+    # on the separate Wasm Worker or freestanding Cortex-M actor ABIs.
+    for target in ("wasm32", "thumbv7m-none-eabi"):
+        for access in ("write", "read"):
+            fixture = root / "tests/fixtures" / (
+                f"source-isolated-actor-sealed-{access}.ores")
+            blocked = subprocess.run(
+                [args.compiler, f"--target={target}", str(fixture)],
+                capture_output=True, text=True, timeout=90, check=False)
+            diagnostic = "native sealed actor-state guest v1 requires host scheduler"
+            if (blocked.returncode == 0 or
+                    diagnostic not in blocked.stderr or
+                    blocked.stdout.strip()):
+                raise RuntimeError(
+                    f"unverified target admitted sealed state: {target}/{access} "
+                    f"exit={blocked.returncode} "
+                    f"stderr={blocked.stderr[-800:]} stdout={blocked.stdout[-800:]}")
     with tempfile.TemporaryDirectory(prefix="oreslang-sealed-state-guest-") as tmp:
         directory = pathlib.Path(tmp)
         for kind in ("write", "read"):
@@ -42,8 +59,8 @@ def main():
                 raise RuntimeError(f"missing real LLVM IR for {kind}")
             for symbol in ("oreslang_actor_Counter_init",
                            "oreslang_actor_Counter_on_message"):
-                if not re.search(r"(?m)^define\\s+.*@"
-                                 + symbol + r"\\s*\\(", ir):
+                if not re.search(r"(?m)^define\s+.*@"
+                                 + symbol + r"\s*\(", ir):
                     raise RuntimeError(f"missing compiler-defined {symbol}")
             if "gc.statepoint" in ir or "gc.relocate" in ir:
                 raise RuntimeError("tracing GC inserted into native actor IR")
@@ -79,6 +96,28 @@ def main():
                 receipt = f"COMPILED_SEALED_{kind.upper()}_GUEST_PASS"
                 if receipt not in result.stdout:
                     raise RuntimeError(f"run {index}: missing {kind} guest receipt")
+            # In addition to the deterministic actor-owned-heap turn bridge,
+            # run the same compiled Oreslang handler on the real native DATA
+            # scheduler. The trusted host waits for two executed callbacks
+            # before requesting STOP; abandoned messages cannot count as pass.
+            scheduled = directory / f"actor-scheduler-{kind}"
+            checked([
+                args.clang, "-std=c11", "-pthread", "-UNDEBUG", "-Wall",
+                "-Wextra", "-Wpedantic", "-Werror",
+                "-Wno-error=override-module", *flags,
+                "-I", str(root / "src/main/cpp"),
+                "-x", "ir", str(ll), "-x", "c",
+                str(root / "tests/native_isolated_sealed_state_scheduler_guest_test.c"),
+                str(root / "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"),
+                str(root / "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"),
+                "-o", str(scheduled)
+            ])
+            for index in range(3 if args.sanitize else 12):
+                result = checked([str(scheduled), kind], env=env)
+                receipt = f"COMPILED_SEALED_SCHEDULER_{kind.upper()}_PASS processed=2 abandoned=0"
+                if receipt not in result.stdout:
+                    raise RuntimeError(
+                        f"run {index}: missing genuine scheduler receipt")
     print("COMPILED_SEALED_STATE_GUEST_PASS "
           f"mode={'ASAN_UBSAN' if args.sanitize else 'RELEASE'}")
 

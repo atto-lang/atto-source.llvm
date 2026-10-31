@@ -12,7 +12,10 @@ on:
       - 'tests/actor_state_scope_test.c'
       - 'tests/source_actor_e2e.py'
       - 'tests/native_isolated_sealed_state_compiled_guest.py'
+      - 'tests/sealed_state_compiled_guest.rs'
       - 'tests/native_isolated_sealed_state_guest_bridge_test.c'
+      - 'tests/native_isolated_sealed_state_scheduler_guest_test.c'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
       - 'tests/critical_handle_state_contract_test.cpp'
       - 'tests/critical_state_loan_bridge_test.cpp'
@@ -117,14 +120,29 @@ jobs:
           echo "EXACT_ACTOR_SCHEMA_HEAD=$EXPECTED_HEAD"
           echo "EXACT_ACTOR_SCHEMA_TREE=$(git rev-parse 'HEAD^{tree}')"
           for path in CMakeLists.txt src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/frontend/Parser.hpp \
+            src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
             tests/contract.py tests/source_actor_e2e.py \
             tests/native_isolated_sealed_state_compiled_guest.py \
+            tests/sealed_state_compiled_guest.rs \
             tests/native_isolated_sealed_state_guest_bridge_test.c \
+            tests/native_isolated_sealed_state_scheduler_guest_test.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
             tests/fixtures/source-isolated-actor-sealed-write.ores \
             tests/fixtures/source-isolated-actor-sealed-read.ores \
             tests/fixtures/source-isolated-actor-sealed-write-actor-only.ores \
             tests/fixtures/source-isolated-actor-sealed-read-actor-only.ores \
+            tests/fixtures/source-isolated-actor-sealed-read-mutation-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-unknown-field-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-wrong-binding-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-unmarked-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-bool-gate-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-direct-read-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-suspend-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-split-critical-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-multi-write-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-postcommit-overflow-reject.ores \
             tests/fixtures/source-isolated-actor-state-empty-reject.ores \
             tests/fixtures/source-isolated-actor-state-negative-overflow-reject.ores; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
@@ -176,8 +194,11 @@ jobs:
             --compiler "$compiler" --clang clang --root "$PWD"
           python3 tests/source_actor_e2e.py \
             --compiler "$compiler" --clang clang --root "$PWD" --sanitize
-          python3 tests/native_isolated_sealed_state_compiled_guest.py \
+          command -v rustc >/dev/null
+          rustc --edition=2021 -O -D warnings tests/sealed_state_compiled_guest.rs \
+            -o build/actor-state-schema/oreslang-sealed-state-guest
+          build/actor-state-schema/oreslang-sealed-state-guest \
             --compiler "$compiler" --clang clang --root "$PWD"
-          python3 tests/native_isolated_sealed_state_compiled_guest.py \
+          build/actor-state-schema/oreslang-sealed-state-guest \
             --compiler "$compiler" --clang clang --root "$PWD" --sanitize
-          echo "ACTOR_STATE_COMPILED_GUEST_AND_SANITIZERS=PASS"
+          echo "ACTOR_STATE_COMPILED_GUEST_RUST_AND_SANITIZERS=PASS"

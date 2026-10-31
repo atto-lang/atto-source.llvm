@@ -201,18 +201,32 @@ define isolated actor Counter as
 end
 ```
 
-The callback is compiler-recognized, synchronous and nonescaping. Direct
-field reads/writes, a missing critical-read/write marker, unknown keys,
-unbound aliases, writes through critical-read and non-pure callback
+The callback is compiler-recognized, synchronous and nonescaping.
+In this v1 it may make at most **one field write**. After that write, the
+return must be an infallible scalar load or literal; checked arithmetic
+in the return would otherwise trap after a partial commit. Full multi-field
+atomicity and transactional rollback are not implemented. Direct state
+access outside the callback, a missing critical-read/write marker, unknown
+keys, unbound aliases, writes through critical-read and non-pure callback
 expressions are rejected before LLVM IR emission. A compiler-owned
 `sealed_state_synchronous_v1` marker, schema/slot matching and epoch
 checks prevent metadata-only declarations from using the actor backend.
 The generated i64 arithmetic uses LLVM checked overflow intrinsics.
 
 The draft has exact-head host tests, compiled guest C turn tests, source
-actor scheduler E2E and ASan/UBSan scripts. These tests are *registered but
-not proven executed* until a real, nonzero-step runner finishes; source
-org Actions currently fail before runner assignment.
+actor scheduler E2E and ASan/UBSan scripts. The deterministic bridge requires
+two compiler-emitted callbacks under distinct actor heap turns and validates
+a loss-free read/write access trace. A second bridge schedules **two** DATA
+messages, waits for actual compiled guest handler execution, and requires
+processed=2, abandoned=0 before accepting STOP and reclaiming the heap.
+Wasm32 and Cortex-M execution remain explicitly fail-closed.
+`--profile=native-hard-rt`, `--rt-check` and `--rt-report`
+also reject the sealed-state slice: no worst-case bound, safe cancellation
+or hard-real-time admission certificate has been established.
+
+These tests are *registered but not proven executed* until a real,
+nonzero-step runner finishes; source org Actions currently fail before runner
+assignment. A local Python regex-only smoke check is not LLVM guest proof.
 
 **Not yet supported:** `bool` state lowering, `critical` shorthand,
 multiple methods/callbacks, general callback expressions, state-capability
