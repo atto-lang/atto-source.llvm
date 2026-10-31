@@ -514,6 +514,7 @@ private:
         if (!fn.catch_binding.empty()) binding_name(unit, fn.catch_binding);
         expression(unit, fn.caught_throw_value.get());
         expression(unit, fn.caught_error_try_result.get());
+        expression(unit, fn.caught_error_type_match_result.get());
         expression(unit, fn.result.get());
     }
 };
