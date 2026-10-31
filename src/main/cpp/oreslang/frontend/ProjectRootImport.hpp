@@ -135,9 +135,14 @@ inline std::filesystem::path resolve_project_root_import(
     for (;;) {
         const fs::path manifest = cursor / ".ores.pkg.toml";
         if (exists_marker(manifest)) {
+            // Never canonicalize away a mutable manifest symlink, even if it
+            // currently points to a regular file in the same directory.
+            // The marker is a package authority, not a relocatable alias.
             std::error_code regular_error;
-            if (!fs::is_regular_file(manifest, regular_error) || regular_error)
-                throw std::runtime_error("native package manifest must be a regular file");
+            const auto marker_status = fs::symlink_status(manifest, regular_error);
+            if (regular_error || marker_status.type() != fs::file_type::regular)
+                throw std::runtime_error(
+                    "native package manifest must be a regular non-symlink file");
             const auto physical_manifest = fs::canonical(manifest, error);
             if (error)
                 throw std::runtime_error("cannot resolve native package manifest");
