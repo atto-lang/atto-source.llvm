@@ -239,6 +239,15 @@ bool within(const fs::path& root, const fs::path& path) {
     return true;
 }
 
+bool same_physical_file(
+        const fs::path& left, const fs::path& right, const char* context) {
+    std::error_code error;
+    const bool equivalent = fs::equivalent(left, right, error);
+    if (error)
+        fail(std::string("cannot compare ") + context + " physical identities");
+    return equivalent;
+}
+
 bool marker_exists(const fs::path& path) {
     std::error_code error;
     const auto status = fs::symlink_status(path, error);
@@ -312,10 +321,14 @@ const VerifiedPackageManifestV2* find_manifest(
         const fs::path& exact,
         const VerifiedPackageManifestV2& root,
         const std::vector<VerifiedPackageManifestV2>& dependencies) {
-    if (root.manifest_path == exact) return &root;
+    if (same_physical_file(
+            root.manifest_path, exact, "manifest authority"))
+        return &root;
     const VerifiedPackageManifestV2* found = nullptr;
     for (const auto& manifest : dependencies) {
-        if (manifest.manifest_path != exact) continue;
+        if (!same_physical_file(
+                manifest.manifest_path, exact, "manifest authority"))
+            continue;
         if (found) fail("duplicate dependency manifest authority");
         found = &manifest;
     }
@@ -658,13 +671,18 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
         load_verified_package_manifest_v2(root_manifest_path, read_manifest);
     std::vector<VerifiedPackageManifestV2> dependency_manifests;
     dependency_manifests.reserve(dependency_manifest_paths.size());
-    std::set<std::string> dependency_manifest_ids;
     for (const auto& path : dependency_manifest_paths) {
         auto manifest = load_verified_package_manifest_v2(path, read_manifest);
-        if (!dependency_manifest_ids.insert(manifest.manifest_path.string()).second)
-            fail("duplicate dependency manifest authority");
-        if (manifest.manifest_path == root_manifest.manifest_path)
+        if (same_physical_file(
+                manifest.manifest_path, root_manifest.manifest_path,
+                "root/dependency manifest"))
             fail("root manifest cannot also be supplied as dependency manifest");
+        for (const auto& prior : dependency_manifests) {
+            if (same_physical_file(
+                    prior.manifest_path, manifest.manifest_path,
+                    "dependency manifest"))
+                fail("duplicate dependency manifest authority");
+        }
         dependency_manifests.push_back(std::move(manifest));
     }
     if (!valid_package_instance_id(lock.root_package_instance_id))
@@ -676,7 +694,6 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
     struct ManifestGroupIdentity {
         fs::path manifest;
         std::string package_key;
-        std::string instance_id;
     };
     std::vector<ManifestGroupIdentity> manifest_group_identities;
     for (const auto& [instance_id, entry] : lock.package_instances) {
@@ -699,7 +716,7 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
                 fail("two PackageInstanceIds claim the same manifest package group");
         }
         manifest_group_identities.push_back({
-            physical, entry.package_key, instance_id});
+            physical, entry.package_key});
         for (const auto& [relative, digest] : entry.source_sha256) {
             if (!relative_path_spelling_valid(relative, false, true)
                     || !valid_sha256(digest))
@@ -711,8 +728,9 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
         lock.root_package_instance_id);
     if (root_lock == lock.package_instances.end())
         fail("root PackageInstanceId is absent from lock snapshot");
-    if (physical_manifest_by_instance.at(lock.root_package_instance_id)
-            != root_manifest.manifest_path)
+    if (!same_physical_file(
+            physical_manifest_by_instance.at(lock.root_package_instance_id),
+            root_manifest.manifest_path, "root manifest"))
         fail("root manifest does not match locked manifest authority");
 
     std::set<std::string> selected_instances{
