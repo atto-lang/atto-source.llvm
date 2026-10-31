@@ -377,6 +377,10 @@ Program load_pinned_namespace_program(const PinnedNamespaceProgramInput& input) 
             const auto signature = std::make_pair(
                 fn.name, fn.parameters.size());
             if (authorized_exports[source_id].count(signature) == 0) continue;
+            // Source-level pub grants namespace visibility, not host ABI
+            // visibility. Once authorized and rewritten, provider symbols are
+            // linker-owned implementation details.
+            fn.native_internal = true;
             fn.name = prefixes.at(source_id) + fn.name;
             linked.functions.push_back(std::move(fn));
             ++moved;
