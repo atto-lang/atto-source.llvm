@@ -1,5 +1,25 @@
 # Native Oreslang DB POSIX WAL physical sync — stage 1
 
+## Parent-directory WAL creation sync (stage 1.7, host-only)
+
+`DbDurableWalFile::open_trusted` now requires `fsync(directory_fd)`
+after exclusive file lock and before returning a writable owner. Merely
+`fdatasync`-ing a newly created WAL does not establish its directory
+entry's survival across a filesystem crash. A failed directory sync
+throws and closes the opened WAL descriptor without yielding authority;
+on an unsupported filesystem it MUST fail closed, not downgrade to a
+file-only commit receipt. On Linux, a tracked regression uses a valid
+`O_PATH` directory FD that permits `openat` but rejects `fsync`
+with `EBADF`. The existing normal-open process roundtrip remains.
+
+This protects one WAL open's file-name metadata sync only. It does NOT
+authenticate the supplied FD, defeat hostile directory co-writers, sync
+checkpoint rename/unlink, prove power-cut persistence, execute compiled
+Oreslang, or provide guest commit ACK. Tests and sanitizers still require
+exact-tree execution and source approval before promotion.
+
+
+
 **Host-only POSIX runtime; no guest I/O, commit ACK, authenticated storage
 capability, allocator/actor scheduler integration, or end-to-end durability.**
 
