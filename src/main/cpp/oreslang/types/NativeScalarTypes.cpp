@@ -302,8 +302,14 @@ void validate_native_scalar_types(const Program& program) {
         statements(fn.statements, locals); statements(fn.caught_throw_defers, locals);
         if (fn.caught_throw_value)
             require(expression(*fn.caught_throw_value, locals), scalar(false), fn.offset, "throw payload requires int");
-        if (!fn.catch_binding.empty()) locals.emplace(fn.catch_binding, scalar(false));
+        // Explicit scalar throw binds an int payload. NativeErrorSlotV1 catch
+        // keeps its binding opaque until nominal Error object lowering exists.
+        if (!fn.catch_binding.empty() && !fn.caught_error_try_result)
+            locals.emplace(fn.catch_binding, scalar(false));
         const Type result = result_type(fn);
+        if (fn.caught_error_try_result)
+            require(expression(*fn.caught_error_try_result, locals), result,
+                fn.offset, "protected ErrorSlot return type");
         for (const auto& guard : fn.early_returns) {
             if (guard.condition) require(expression(*guard.condition, locals), scalar(true), guard.offset, "guard requires bool");
             else compare(*guard.lhs, *guard.rhs, locals);
