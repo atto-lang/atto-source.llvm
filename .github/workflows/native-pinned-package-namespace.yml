@@ -6,11 +6,14 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/frontend/PackageNamespaceGraph.hpp'
+      - 'src/main/cpp/oreslang/frontend/PackageManifestNamespaceInventory.hpp'
+      - 'src/main/cpp/oreslang/frontend/PackageManifestNamespaceInventory.cpp'
       - 'src/main/cpp/oreslang/frontend/PinnedNamespaceLoader.hpp'
       - 'src/main/cpp/oreslang/frontend/PinnedNamespaceLoader.cpp'
       - 'src/main/cpp/oreslang/backend/**'
       - 'src/main/cpp/oreslang/types/**'
       - 'tests/native_package_namespace_graph_test.cpp'
+      - 'tests/native_manifest_namespace_inventory_test.cpp'
       - 'tests/native_pinned_namespace_ir_test.cpp'
       - 'tests/pinned_namespace_execution.cmake'
       - 'tests/namespace_lifecycle_parity.cmake'
@@ -48,8 +51,8 @@ jobs:
       - name: Configure focused native namespace gates
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 
-      - name: Build compiler, host graph, and pinned namespace driver
-        run: cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-namespace-package-index-test oreslang-native-pinned-namespace-ir-test
+      - name: Build compiler, host graph, pinned driver, and locked-manifest driver
+        run: cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-namespace-package-index-test oreslang-native-pinned-namespace-ir-test oreslang-native-manifest-namespace-ir-test
 
       - name: Verify focused CTest gates are actually registered
         shell: bash
@@ -58,7 +61,8 @@ jobs:
           ctest --test-dir build --show-only=json-v1 > build/namespace-ctest.json
           grep -Fq '"name" : "native_namespace_package_identity_source_only"' build/namespace-ctest.json
           grep -Fq '"name" : "native_pinned_namespace_package_exit_43"' build/namespace-ctest.json
+          grep -Fq '"name" : "native_locked_manifest_namespace_exit_43"' build/namespace-ctest.json
           grep -Fq '"name" : "native_namespace_lifecycle_fail_closed"' build/namespace-ctest.json
 
-      - name: Execute graph boundary, pinned namespace, and lifecycle gates
-        run: ctest --test-dir build --output-on-failure --timeout 90 -R '^(native_namespace_package_identity_source_only|native_pinned_namespace_package_exit_43|native_namespace_lifecycle_fail_closed)$'
+      - name: Execute graph, direct-pinned, locked-manifest, and lifecycle gates
+        run: ctest --test-dir build --output-on-failure --timeout 90 -R '^(native_namespace_package_identity_source_only|native_pinned_namespace_package_exit_43|native_locked_manifest_namespace_exit_43|native_namespace_lifecycle_fail_closed)
