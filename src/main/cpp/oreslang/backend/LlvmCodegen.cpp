@@ -651,6 +651,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_string_", 0) == 0)
             throw std::runtime_error("reserved native string runtime symbol collision");
+    // Reject forged/stale source suspension shapes before creating LLVM IR.
+    // Parser acceptance or typed Future plans alone do not prove lifetimes.
+    for (const auto& fn : source.functions)
+        if (has_source_suspension(fn) &&
+                (!fn.suspension_ownership_admitted ||
+                 !fn.suspension_authority_fingerprint ||
+                 fn.suspension_authority_fingerprint !=
+                     source_suspension_authority_fingerprint(fn)))
+            throw std::runtime_error(
+                "native source await lacks checked ownership suspension authority");
     if (!source.imports.empty())
         throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
     for (const auto& actor : source.actors) {
