@@ -220,6 +220,9 @@ a loss-free read/write access trace. A second bridge schedules **two** DATA
 messages, waits for actual compiled guest handler execution, and requires
 processed=2, abandoned=0 before accepting STOP and reclaiming the heap.
 Wasm32 and Cortex-M execution remain explicitly fail-closed.
+`--profile=native-hard-rt`, `--rt-check` and `--rt-report`
+also reject the sealed-state slice: no worst-case bound, safe cancellation
+or hard-real-time admission certificate has been established.
 
 These tests are *registered but not proven executed* until a real,
 nonzero-step runner finishes; source org Actions currently fail before runner
