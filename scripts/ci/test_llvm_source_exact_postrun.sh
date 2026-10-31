@@ -14,6 +14,22 @@ extract_step() {
     END { if (!found) exit 12 }
   ' "$workflow"
 }
+# No GitHub expressions are allowed in a Bash run block: workflow_dispatch
+# input substitution would happen *before* shell parsing, enabling injection
+# if a later edit weakens trusted preflight. Inputs belong in step env only.
+awk '
+  /^        run: \\|[[:space:]]*$/ { in_run=1; next }
+  in_run && /^      - name: / { in_run=0 }
+  in_run && index($0, "${{") > 0 { bad=1 }
+  END { exit bad ? 1 : 0 }
+' "$workflow" || { echo "direct GitHub expression inside shell run block" >&2; exit 1; }
+v3_step="$(extract_step 'Run full V3 private-export security regressions (no export)')"
+grep -qxF "        if: inputs.suite == 'security-v3'" <<< "$v3_step"
+grep -qxF '          SOURCE_SHA: ${{ inputs.source_sha }}' <<< "$v3_step"
+grep -qxF '          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' <<< "$v3_step"
+grep -qxF '          echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=$SOURCE_SHA"' <<< "$v3_step"
+printf 'SOURCEFREE_NO_INLINE_GITHUB_BASH_EXPRESSION=PASS\\n'
+
 grep -qxF '          - actor-ledger' "$workflow" || {
   echo 'missing actor-ledger dispatch choice' >&2; exit 1;
 }

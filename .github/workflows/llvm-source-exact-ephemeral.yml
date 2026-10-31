@@ -187,15 +187,17 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
           GIT_TERMINAL_PROMPT: '0'
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -f scripts/publish-private-ci-source-v3.py
           test -f scripts/test-publish-private-ci-source-v3.py
           test -f tests/test_atomic_ref_cleanup_local.py
           python3 scripts/test-publish-private-ci-source-v3.py -v
           PYTHONPATH=scripts python3 -m unittest discover -s tests -p test_private_ci_export_gate.py -v
           python3 -m unittest discover -s tests -p test_atomic_ref_cleanup_local.py -v
-          echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=${{ inputs.source_sha }}"
+          echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=$SOURCE_SHA"
 
       - name: Verify preinstalled LLVM / Clang / CMake toolchain
         if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger' || inputs.suite == 'continuation-gate' || inputs.suite == 'cgl-compat'
