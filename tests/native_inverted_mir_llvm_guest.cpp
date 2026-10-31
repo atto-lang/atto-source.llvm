@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 int main(int argc, char** argv) {
-  if (argc != 3) { std::cerr << "Usage: mir_llvm_guest <positive|bounds|immutable|missing-operand> <out.ll>\n";return 2; }
+  if (argc != 3) { std::cerr << "Usage: mir_llvm_guest <positive|closed|bounds|immutable|missing-operand> <out.ll>\n";return 2; }
   try {
     using namespace oreslang; using namespace oreslang::dop::hir; using namespace oreslang::dop::mir;
     InvertedStructDecl decl; decl.name = "Pair";
@@ -20,6 +20,11 @@ int main(int argc, char** argv) {
       plan.write_runtime_checked(1,"x"); plan.erase_swap(0);
       plan.read_runtime_checked(0,"x");
       operands.rows = {{{11,501},{21,502}}}; operands.writes = {42};
+    } else if (mode == "closed") {
+      // A detached SSA result is returned after revocation and volatile
+      // teardown, with all physical payload/metadata slots overwritten.
+      plan.push(2); plan.read_runtime_checked(0, "x"); plan.close();
+      operands.rows = {{{42, 501}}};
     } else if (mode == "bounds") {
       plan.push(2);plan.read_runtime_checked(1,"x");
       operands.rows = {{{11,501}}};
