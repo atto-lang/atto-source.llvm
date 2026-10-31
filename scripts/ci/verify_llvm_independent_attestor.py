@@ -31,6 +31,7 @@ SUITES = {
     "continuation-gate": (
         TOOLCHAIN, "Build and execute exact-head pinned continuation CTest",
         "Execute exact-head pinned continuation GCC and Clang ASan UBSan",
+        "Execute exact-head pinned continuation under GCC TSan",
     ),
     "cgl-compat": (
         TOOLCHAIN, "Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF",

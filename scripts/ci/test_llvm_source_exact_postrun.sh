@@ -162,6 +162,21 @@ assert_before 'Execute exact-head CGL negative preflight, native compiler, CTest
 assert_before 'Execute linked CGL native tests with Clang ASan and UBSan' 'Exact-source result scope (never a carrier export approval)'
 printf 'SOURCEFREE_CGL_NATIVE_ELF_SANITIZER_WORKFLOW_CONTRACT=PASS\n'
 
+# Continuation-gate TSan is mandatory and cannot be silently skipped.
+tsan_step="$(extract_step 'Execute exact-head pinned continuation under GCC TSan')"
+grep -qxF "        if: inputs.suite == 'continuation-gate'" <<< "$tsan_step"
+for required in \
+  'TSAN_OPTIONS: "halt_on_error=1"' \
+  'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' \
+  'test -f tests/pinned_continuation_gate_test.cpp' \
+  'command -v g++' \
+  '-fsanitize=thread -fno-omit-frame-pointer' \
+  'timeout 120s "$scratch/pinned-test-tsan"' \
+  'PINNED_CONTINUATION_TSAN_EXECUTED_FOR_SHA=$SOURCE_SHA'; do
+  grep -Fq -- "$required" <<< "$tsan_step"
+done
+printf 'SOURCEFREE_PINNED_CONTINUATION_TSAN_CONTRACT=PASS\n'
+
 # Refuse any authorization marker after PR-controlled code on the same runner.
 if grep -Fq 'Post-run attestation of current PR head and independent reviewer' "$workflow" ||
    grep -Fq 'POST_EXECUTION_EXACT_PR_HEAD_REVIEW=PASS' "$workflow"; then

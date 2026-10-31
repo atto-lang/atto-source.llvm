@@ -206,3 +206,21 @@ The documented P0 post-run PATH/GITHUB_ENV injection is addressed by running
 the final attestor on a separate source-org-only disposable runner with no
 shared PR checkout, environment, artifacts or credentials. Real runner
 admission and exact-head native source execution remain unverified.
+
+## Pinned continuation lifecycle source-only test scope
+
+The `continuation-gate` suite must execute the checked-in native CMake/CTest target
+`oreslang-pinned-continuation-gate-test` and
+`native_pinned_continuation_loan_cancel_quiescence`, GCC and Clang ASan+UBSan,
+and an additional mandatory GCC ThreadSanitizer build and run of the same tracked
+source. The TSan step is **not** optional when `run_sanitizers=false`; that
+flag controls optional guest sanitizers in the actor suites. The independent
+fresh-runner attestor must observe completed/success GitHub step receipts for
+CTest, ASan+UBSan and TSan. Missing or skipped steps fail closed.
+
+Even successful host tests do not establish compiler-lowered Oreslang `await`
+lifecycle, physical actor-frame reclamation, Java/LLVM parity, PREEMPT_RT
+latency or hard-real-time certification. The suite cannot be dispatched until
+source-org admission, independent reviews and protected private `main` are
+enforced. Never mirror private source into another organization without the
+separately approved destination contract and source-main allowlist.

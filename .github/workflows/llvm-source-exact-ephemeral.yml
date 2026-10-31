@@ -301,6 +301,26 @@ jobs:
           done
           echo "PINNED_CONTINUATION_GCC_CLANG_SANITIZERS_EXECUTED_FOR_SHA=$SOURCE_SHA"
 
+      - name: Execute exact-head pinned continuation under GCC TSan
+        if: inputs.suite == 'continuation-gate'
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TSAN_OPTIONS: "halt_on_error=1"
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f tests/pinned_continuation_gate_test.cpp
+          command -v g++
+          command -v timeout
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          g++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -pthread \
+            -fsanitize=thread -fno-omit-frame-pointer -I src/main/cpp \
+            tests/pinned_continuation_gate_test.cpp -o "$scratch/pinned-test-tsan"
+          timeout 120s "$scratch/pinned-test-tsan"
+          echo "PINNED_CONTINUATION_TSAN_EXECUTED_FOR_SHA=$SOURCE_SHA"
+
       # Generic Linux binary compatibility only, not PREEMPT_RT/RT certification.
       - name: Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF
         if: inputs.suite == 'cgl-compat'

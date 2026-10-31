@@ -201,6 +201,23 @@ class AttestorSourceFreeTests(unittest.TestCase):
         with self.assertRaises(attestor.Denied):
             self.evaluate(env, data)
 
+    def test_continuation_tsan_required_for_both_sanitizer_flags(self):
+        name = "Execute exact-head pinned continuation under GCC TSan"
+        for san in (True, False):
+            with self.subTest(sanitizers=san):
+                env, data = fixture(suite="continuation-gate", san=san)
+                self.assertIn(name, attestor.required_steps("continuation-gate", san))
+                source = data["repos/" + repo + "/actions/runs/100/attempts/2/jobs?per_page=100"]["jobs"][0]
+                source["steps"] = [step for step in source["steps"] if step["name"] != name]
+                with self.assertRaises(attestor.Denied):
+                    self.evaluate(env, data)
+
+                env, data = fixture(suite="continuation-gate", san=san)
+                steps = data["repos/" + repo + "/actions/runs/100/attempts/2/jobs?per_page=100"]["jobs"][0]["steps"]
+                next(step for step in steps if step["name"] == name)["conclusion"] = "skipped"
+                with self.assertRaises(attestor.Denied):
+                    self.evaluate(env, data)
+
     def test_spoofed_approval_marker_not_used(self):
         env, data = fixture()
         jobs = data["repos/" + repo + "/actions/runs/100/attempts/2/jobs?per_page=100"]["jobs"]
