@@ -8,7 +8,7 @@ root="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$root"
 fail() { printf 'BROWSER_C_U32_NOT_VERIFIED: %s\n' "$*" >&2; exit 1; }
 [[ "$(uname -s)" == "Linux" ]] || fail "Linux ELF is required"
-for tool in git clang cc nm readelf sha256sum timeout; do
+for tool in git clang cc nm readelf sha256sum timeout awk; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool unavailable"
 done
 [[ -v EXPECTED_SOURCE_SHA && "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
