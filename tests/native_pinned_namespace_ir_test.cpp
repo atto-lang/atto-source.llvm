@@ -125,6 +125,17 @@ int main() {
                 "unknown namespace member or wrong arity");
         }
 
+        // Same package is not enough: another namespace in foo@1 is still a
+        // distinct identity and cannot be reached without explicit syntax.
+        {
+            auto candidate = make_program();
+            source(candidate, "foo/other/aggregation/aggregate").source =
+                "namespace a; pub fnc aggregate(int value): int { return route_code(); }\n";
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
+                "unknown namespace member or wrong arity");
+        }
+
         // Provider dependency cycles, including multi-file recursion, are
         // rejected before final whole-program compiler validation/codegen.
         {
