@@ -100,6 +100,13 @@ public:
     static std::optional<IoLease> retain_async_io(
             Context& context, Handle request, OresNativeActorRef owner,
             PinnedContinuationGate& gate, AsyncIoTicket ticket) {
+        // The complete native actor incarnation is part of the I/O gate's
+        // trusted registration, not a caller-provided ticket or actor slot.
+        // A cross-actor or restarted-actor request must fail BEFORE acquiring
+        // any physical lease or reserving this operation.
+        if(!gate.matches_request_owner({
+                owner.scheduler_domain,owner.actor_slot,owner.generation}))
+            return std::nullopt;
         // Atomic binding is the I/O retirement linearization boundary.
         // A ready-to-retire operation can never be attached to a new request;
         // the normal gate retirement path cannot pass an attached physical pin.
