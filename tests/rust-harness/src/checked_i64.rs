@@ -181,6 +181,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("math-neg-two-args", "pub fnc main():int{return Math.neg(1,2);}"),
         ("math-unknown-intrinsic", "pub fnc main():int{return Math.pow(2);}"),
         ("portable-overflow-typed-catch", SHARED_I64_OVERFLOW_TYPED_CATCH),
+        ("overflow-catch-unproven-call",
+         "fnc safe():int{return 42;} pub fnc main():int{try{return safe();}catch(err){return 1;}finally{}}"),
     ];
     for (name, source) in rejects {
         let input = temp.path.join(format!("{name}-reject.ores"));

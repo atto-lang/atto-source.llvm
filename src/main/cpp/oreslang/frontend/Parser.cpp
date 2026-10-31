@@ -351,6 +351,10 @@ bool native_catchable_checked_i64_tree(
         return native_catchable_checked_i64_tree(*expr.left, depth + 1) &&
             native_catchable_checked_i64_tree(*expr.right, depth + 1);
     if (expr.kind == K::Call) {
+        // v1 catches only one terminal scalar call. Nested calls inside an
+        // arithmetic tree would require a broader effect analysis before
+        // claiming that every exceptional edge reaches this handler.
+        if (depth != 1) return false;
         for (const auto& argument : expr.arguments)
             if (!native_catchable_checked_i64_tree(*argument, depth + 1))
                 return false;

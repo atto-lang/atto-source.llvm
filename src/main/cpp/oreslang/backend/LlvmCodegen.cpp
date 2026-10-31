@@ -213,9 +213,9 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     // Source int follows the shared no-wrapping i64 contract. Use defined
     // overflow intrinsics, never poison-producing nsw arithmetic. Inside the
     // restricted terminal try/catch slice, overflow becomes a typed Oreslang
-    // Throw with NumericErrorCode::ArithmeticOverflowError. Everywhere else
-    // the pre-existing native trap remains fail-closed until general effect
-    // propagation is lowered.
+    // Throw with NumericErrorCode::ArithmeticOverflowError. Restricted
+    // private scalar helpers may also propagate that effect through their
+    // {value,kind,code} ABI. Other contexts retain the native trap fail-closed.
     auto* module = builder.GetInsertBlock()->getModule();
     auto* parent = builder.GetInsertBlock()->getParent();
     auto* intrinsic = llvm::Intrinsic::getDeclaration(module, operation, {left->getType()});
@@ -2402,6 +2402,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 if (!fn.caught_checked_overflow_result)
                     throw std::runtime_error(
                         "checked overflow catch lacks handler result");
+                if (expr.kind == Expression::Kind::Call) {
+                    llvm::Function* callee = declarations.at(
+                        native_function_slot(
+                            expr.name, expr.arguments.size()));
+                    auto* result_type = llvm::dyn_cast<llvm::StructType>(
+                        callee->getReturnType());
+                    if (!result_type || result_type != i64_effect_result_type)
+                        throw std::runtime_error(
+                            "native checked overflow catch call requires a proven i64 effect-result callee");
+                }
 
                 auto* error_kind = entry_alloca(
                     builder, i64, nullptr, "numeric.effect.kind");
