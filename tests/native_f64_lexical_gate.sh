@@ -101,7 +101,12 @@ negative implicit_bool_to_f64 'pub fnc main(): int {
   val f64 value = true;
   return 42;
 }'
+negative unsupported_f64_return_abi 'pub fnc main(): f64 { return 0.3; }'
+negative unsupported_f64_parameter_abi 'pub fnc f(f64 value): int {
+  return 42;
+}
+pub fnc main(): int { return 42; }'
 
-[[ "$pass" -eq 6 && "$reject" -eq 7 ]] ||
+[[ "$pass" -eq 6 && "$reject" -eq 9 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=6; NEGATIVE_NO_IR_PASS=7 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=6; NEGATIVE_NO_IR_PASS=9 (not arrays/solver)"
