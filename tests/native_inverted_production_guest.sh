@@ -32,13 +32,21 @@ done
 # A guest read past logical length is dynamically guarded, rather than
 # allowing an inbounds GEP from a capacity-only proof.
 "$compiler" "$fixtures/negative-two-column-out-of-bounds.ores" > "$tmp/bounds.ll"
+if ! grep -Fq 'call void @llvm.trap()' "$tmp/bounds.ll" ||
+   ! grep -Fq 'icmp ult i64' "$tmp/bounds.ll"; then
+    echo "FAIL: production bounds guest emitted no guarded trap" >&2
+    exit 1
+fi
 "$clang" -O2 -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
 set +e
 (ulimit -c 0; "$tmp/bounds" >/dev/null 2>&1) >/dev/null 2>&1
 actual=$?
 set -e
-if [ "$actual" -eq 0 ] || [ "$actual" -eq 42 ]; then
-    echo "FAIL: production native out-of-bounds read did not trap" >&2
+# llvm.trap must terminate by a trap signal (SIGILL or SIGTRAP),
+# not any nonzero status such as a missing binary, loader failure or abort.
+# On Bash/Linux these two signals produce 128+4 and 128+5.
+if [ "$actual" -ne 132 ] && [ "$actual" -ne 133 ]; then
+    echo "FAIL: production bounds guest did not terminate with SIGILL/SIGTRAP (exit $actual)" >&2
     exit 1
 fi
 
