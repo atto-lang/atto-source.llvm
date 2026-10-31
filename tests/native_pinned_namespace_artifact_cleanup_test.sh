@@ -11,6 +11,10 @@ root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 work="$root/work"
 mkdir -p "$work"
+# Simulate a file outside WORK_DIR. The harness may clean its own artifacts,
+# but must never overwrite this external sentinel through an output symlink.
+export SYNTH_SENTINEL="$root/external-sentinel"
+printf 'external file must remain unchanged\n' >"$SYNTH_SENTINEL"
 cat > "$root/helper" <<'HELPER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -18,6 +22,8 @@ case "${SYNTH_MODE:-normal}" in
   fail) echo 'synthetic helper failure' >&2; exit 1 ;;
   invalid-ir) printf 'not LLVM IR\n'; exit 0 ;;
   helper-stderr) echo 'synthetic helper warning' >&2 ;;
+  symlink-ir) ln -s "${SYNTH_SENTINEL:?}" pinned-namespace.ll ;;
+  symlink-native) ln -s "${SYNTH_SENTINEL:?}" pinned-namespace-native ;;
   noisy-guest)
     cat <<'LLVM_IR'
 @.msg = private unnamed_addr constant [6 x i8] c"NOISE\00"
@@ -70,4 +76,7 @@ expect_failure invalid-ir 43 '' 'did not emit a native main'
 expect_failure helper-stderr 43 '' 'pinned namespace helper wrote stderr'
 expect_failure noisy-guest 43 '' 'pinned namespace guest produced output'
 expect_failure normal 99 '' 'unexpected pinned namespace guest oracle'
-echo 'SYNTHETIC_NAMESPACE_HARNESS_CLEANUP=PASS positive=3 negative=6 scope=NOT_ORESLANG_COMPILER_OR_GUEST'
+expect_failure symlink-ir 43 '' 'namespace helper precreated output artifact'
+expect_failure symlink-native 43 '' 'namespace helper precreated output artifact'
+test "$(cat "$SYNTH_SENTINEL")" = 'external file must remain unchanged'
+echo 'SYNTHETIC_NAMESPACE_HARNESS_CLEANUP=PASS positive=3 negative=8 scope=NOT_ORESLANG_COMPILER_OR_GUEST'
