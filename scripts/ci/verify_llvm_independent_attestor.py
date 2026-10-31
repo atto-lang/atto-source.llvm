@@ -101,6 +101,34 @@ def verify_job_receipt(record, suite, sanitizers, attempt):
     return source["id"], attestor["id"]
 
 
+
+def verify_strong_main_protection(protection):
+    """Independent exact-head attestor must enforce the same source-main
+    review and strict status policy as trusted preflight and JIT enrollment."""
+    require(type(protection) is dict, "missing-main-protection")
+    reviews = protection.get("required_pull_request_reviews")
+    checks = protection.get("required_status_checks")
+    require(type(reviews) is dict and type(checks) is dict,
+            "missing-approvals-or-required-status-checks")
+    require(reviews.get("require_code_owner_reviews") is True
+            and reviews.get("dismiss_stale_reviews") is True
+            and type(reviews.get("required_approving_review_count")) is int
+            and reviews["required_approving_review_count"] >= 1,
+            "weak-independent-review-policy")
+    require(protection.get("enforce_admins", {}).get("enabled") is True
+            and protection.get("allow_force_pushes", {}).get("enabled") is False
+            and protection.get("allow_deletions", {}).get("enabled") is False,
+            "admin-force-or-delete-bypass")
+    require(checks.get("strict") is True, "non-strict-required-checks")
+    contexts, identities = checks.get("contexts", []), checks.get("checks", [])
+    require(type(contexts) is list and type(identities) is list
+            and len(contexts) + len(identities) > 0,
+            "missing-required-status-checks")
+    bypass = reviews.get("bypass_pull_request_allowances") or {}
+    require(type(bypass) is dict and all(bypass.get(k, []) == []
+            for k in ("users", "teams", "apps")), "independent-review-bypass")
+    return True
+
 def verify_live(get_json, env):
     require(env.get("GITHUB_REPOSITORY") == REPOSITORY, "foreign-repository")
     require(env.get("GITHUB_REF") == "refs/heads/main", "not-trusted-main-event")
@@ -125,6 +153,7 @@ def verify_live(get_json, env):
     main = get_json(prefix + "/branches/main")
     require(main.get("protected") is True and main.get("commit", {}).get("sha") == main_sha,
             "main-unprotected-or-moved")
+    verify_strong_main_protection(get_json(prefix + "/branches/main/protection"))
     pull = get_json(prefix + "/pulls/" + pr)
     head, author = pull.get("head", {}), pull.get("user", {})
     require(head.get("sha") == source_sha

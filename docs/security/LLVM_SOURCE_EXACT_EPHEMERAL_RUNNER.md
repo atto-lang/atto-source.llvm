@@ -188,3 +188,21 @@ workflow_dispatch run is attached to trusted main, not a PR-head required status
 A successful attestor is not by itself merge/export or hard-RT authorization.
 Both jobs remain NOT_EXECUTED until real source-org runner admission, protected
 main, independent review and two truly separate disposable machines are verified.
+
+## Governance integration with parent #1220 (current source-main policy)
+
+This stacked attestor fix is integrated with the parent's subsequent stronger
+governance requirements: executor pre-checkout authorization, administrator
+JIT provisioning and the **separate clean attestor** all fail closed unless
+the actual LLVM main branch-protection endpoint enforces CODEOWNER review,
+stale review dismissal, positive independent approval count, administrator
+enforcement, disabled force-push/deletion and review bypasses, and at least one
+strict required status check. A protected:true badge alone is insufficient.
+The attestor verifies protection from its own independent read-only GitHub API
+connection and never accepts a PR-generated policy receipt. Offline negative
+tests cover weak and absent controls, but are not approval or hosted evidence.
+
+The documented P0 post-run PATH/GITHUB_ENV injection is addressed by running
+the final attestor on a separate source-org-only disposable runner with no
+shared PR checkout, environment, artifacts or credentials. Real runner
+admission and exact-head native source execution remain unverified.

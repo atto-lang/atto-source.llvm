@@ -32,6 +32,20 @@ def fixture(suite="cgl-compat", san=True):
         prefix + "/branches/main": {
             "protected": True, "commit": {"sha": main_sha},
         },
+        prefix + "/branches/main/protection": {
+            "required_pull_request_reviews": {
+                "require_code_owner_reviews": True,
+                "dismiss_stale_reviews": True,
+                "required_approving_review_count": 1,
+                "bypass_pull_request_allowances": {
+                    "users": [], "teams": [], "apps": [],
+                },
+            },
+            "required_status_checks": {"strict": True, "contexts": ["llvm-security"], "checks": []},
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+        },
         prefix + "/pulls/1200": {
             "head": {"sha": sha, "repo": {"full_name": repo, "private": True}},
             "user": {"id": 1234}, "state": "open",
@@ -124,6 +138,47 @@ class AttestorSourceFreeTests(unittest.TestCase):
                     env["GITHUB_REF"] = "refs/heads/untrusted"
                 elif mode == "flag":
                     env["RUN_SANITIZERS"] = "maybe"
+                with self.assertRaises(attestor.Denied):
+                    self.evaluate(env, data)
+
+    def test_independent_protection_is_not_just_a_badge(self):
+        prefix = "repos/" + repo
+        key = prefix + "/branches/main/protection"
+        for mode in ("missing", "weak_owner", "stale", "no_review", "bypass",
+                     "admin", "force_push", "delete", "no_checks",
+                     "empty_checks", "non_strict_checks", "invalid_checks"):
+            with self.subTest(mode=mode):
+                env, data = fixture()
+                p = data[key]
+                if mode == "missing":
+                    del data[key]
+                    # Missing protection must fail closed even if the branch
+                    # endpoint still claims protected=true.
+                    with self.assertRaises((attestor.Denied, AssertionError)):
+                        self.evaluate(env, data)
+                    continue
+                if mode == "weak_owner":
+                    p["required_pull_request_reviews"]["require_code_owner_reviews"] = False
+                elif mode == "stale":
+                    p["required_pull_request_reviews"]["dismiss_stale_reviews"] = False
+                elif mode == "no_review":
+                    p["required_pull_request_reviews"]["required_approving_review_count"] = 0
+                elif mode == "bypass":
+                    p["required_pull_request_reviews"]["bypass_pull_request_allowances"]["apps"] = [{"slug": "bypass"}]
+                elif mode == "admin":
+                    p["enforce_admins"]["enabled"] = False
+                elif mode == "force_push":
+                    p["allow_force_pushes"]["enabled"] = True
+                elif mode == "delete":
+                    p["allow_deletions"]["enabled"] = True
+                elif mode == "no_checks":
+                    del p["required_status_checks"]
+                elif mode == "empty_checks":
+                    p["required_status_checks"]["contexts"] = []
+                elif mode == "non_strict_checks":
+                    p["required_status_checks"]["strict"] = False
+                elif mode == "invalid_checks":
+                    p["required_status_checks"]["contexts"] = "bad"
                 with self.assertRaises(attestor.Denied):
                     self.evaluate(env, data)
 

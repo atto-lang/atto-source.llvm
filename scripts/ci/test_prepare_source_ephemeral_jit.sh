@@ -27,7 +27,7 @@ case "$1" in
   "repos/$EXPECTED_REPO/branches/main")
     if [[ "${MOCK_SCENARIO:-}" == unprotected ]]; then echo '{"name":"main","protected":false}'; else echo '{"name":"main","protected":true}'; fi ;;
   "repos/$EXPECTED_REPO/branches/main/protection")
-    good_protection='{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
+    good_protection='{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"required_status_checks":{"strict":true,"contexts":["llvm-security"],"checks":[]}}'
     case "${MOCK_SCENARIO:-}" in
       weak_review) jq -c '.required_pull_request_reviews.require_code_owner_reviews=false' <<< "$good_protection" ;;
       admin_bypass) jq -c '.required_pull_request_reviews.bypass_pull_request_allowances.users=[{"login":"admin"}]' <<< "$good_protection" ;;
@@ -36,6 +36,10 @@ case "$1" in
       force_push_allowed) jq -c '.allow_force_pushes.enabled=true' <<< "$good_protection" ;;
       delete_allowed) jq -c '.allow_deletions.enabled=true' <<< "$good_protection" ;;
       app_bypass) jq -c '.required_pull_request_reviews.bypass_pull_request_allowances.apps=[{"slug":"bypass-app"}]' <<< "$good_protection" ;;
+      absent_required_checks) jq -c 'del(.required_status_checks)' <<< "$good_protection" ;;
+      empty_required_checks) jq -c '.required_status_checks.contexts=[]' <<< "$good_protection" ;;
+      non_strict_required_checks) jq -c '.required_status_checks.strict=false' <<< "$good_protection" ;;
+      malformed_required_checks) jq -c '.required_status_checks.contexts="untrusted"' <<< "$good_protection" ;;
       *) printf '%s\n' "$good_protection" ;;
     esac ;;
   "repos/$EXPECTED_REPO/contents/scripts/ci/prepare_source_ephemeral_jit.sh?ref=main")
@@ -69,7 +73,7 @@ EXPECTED_LABEL="oreslang-llvm-ephemeral-v1"
 export PATH="$temp/bin:$original_path"
 EXPECTED_HELPER_PATH="$helper"
 export EXPECTED_REPO EXPECTED_WORKFLOW EXPECTED_LABEL EXPECTED_HELPER_PATH
-for scenario in unprotected weak_review admin_bypass stale_review no_admin_enforcement force_push_allowed delete_allowed app_bypass stale_helper overbroad_group extra_repository post_failure; do
+for scenario in unprotected weak_review admin_bypass stale_review no_admin_enforcement force_push_allowed delete_allowed app_bypass absent_required_checks empty_required_checks non_strict_required_checks malformed_required_checks stale_helper overbroad_group extra_repository post_failure; do
   if MOCK_SCENARIO="$scenario" bash "$helper" 7 "$temp/secure/$scenario.b64" >"$temp/log" 2>&1; then
     echo "UNSAFE_JIT_ADMISSION=$scenario" >&2; exit 1
   fi
