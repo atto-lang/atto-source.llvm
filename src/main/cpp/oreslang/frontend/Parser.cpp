@@ -788,8 +788,6 @@ public:
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
-    // Restricted host-only AST pass, never set by the ordinary CLI parser.
-    bool verified_namespace_metadata_only_ = false;
     std::vector<NativeSumType> sum_types_;
     bool is_sum_name(const std::string& name) const {
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
@@ -5657,6 +5655,8 @@ private:
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // Restricted host-only AST pass, never set by the ordinary CLI parser.
+    bool verified_namespace_metadata_only_ = false;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
