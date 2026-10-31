@@ -1,4 +1,4 @@
-//! Real compiler admission: eight denials and three genuine IR controls.
+//! Real compiler admission: thirteen denials and three genuine IR controls.
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -115,6 +115,10 @@ fn main() {
     let negatives = [
         ("mut-share-scalar-reject", "pub fnc main(): int { let int v = 42; return rt mut share v; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-parenthesized-owned-reject", "pub fnc main(): int { let int v = 42; return rt mut share (v); }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-over-shared-handle-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt share v); }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-over-mutable-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt mut borrow v); }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
+
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
@@ -135,13 +139,57 @@ fn main() {
         check_case(&compiler, &root.0, name, source, None);
     }
     println!(
-        "PASS native borrow admission: ten no-IR/no-artifact denials, three real IR controls"
+        "PASS native borrow admission: thirteen no-IR/no-artifact denials, three real IR controls"
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    fn assert_rejected_fake_compiler(script_body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = Scratch::new();
+        let compiler = root.0.join("synthetic-compiler.sh");
+        fs::write(&compiler, format!("#!/bin/sh\\n{script_body}\\n")).unwrap();
+        let mut permissions = fs::metadata(&compiler).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&compiler, permissions).unwrap();
+        let caught = std::panic::catch_unwind(|| {
+            check_case(
+                &compiler,
+                &root.0,
+                "invalid-mutable-share",
+                "pub fnc main(): int { return rt mut share 42; }\\n",
+                Some("bad ownership"),
+            );
+        });
+        assert!(caught.is_err(), "invalid compiler output escaped admission");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_ir_leak_even_on_failed_compile() {
+        assert_rejected_fake_compiler(
+            "printf 'define i64 @main() {\\n'\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_artifact_creation_on_failure() {
+        assert_rejected_fake_compiler(
+            "touch unapproved.ll\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_success_exit_with_diagnostic() {
+        assert_rejected_fake_compiler("printf 'bad ownership\\n' >&2\\nexit 0");
+    }
+
     #[test]
     fn definition_predicate_requires_actual_function_line() {
         for output in [
