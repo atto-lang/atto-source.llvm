@@ -316,6 +316,98 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 )
             run.assert_not_called()
 
+    def test_atomic_cleanup_refuses_cross_generation_ref_pair(self):
+        """Never let a source ref and authorization ref name two generations."""
+        mismatch = "ci/authorized-v4-r123456789-a1-" + "f" * 32
+        with patch.object(v3, "live_ref_sha") as lookup:
+            with self.assertRaisesRegex(v3.Denied, "authorization ref is invalid"):
+                v3.delete_handoff_refs_atomic(
+                    "trusted/ci", SOURCE_REF, mismatch,
+                    CARRIER_COMMIT, 1323598177,
+                )
+            lookup.assert_not_called()
+
+    def test_atomic_cleanup_refuses_moved_authorization_before_push(self):
+        with (
+            patch.object(v3, "live_ref_sha",
+                         side_effect=[CARRIER_COMMIT, "9" * 40]),
+            patch.object(v3, "run_bounded_gh") as runner,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "moved"):
+                v3.delete_handoff_refs_atomic(
+                    "trusted/ci", SOURCE_REF, AUTH_REF,
+                    CARRIER_COMMIT, 1323598177,
+                )
+            runner.assert_not_called()
+
+    def test_atomic_cleanup_success_transport_requires_absent_both_refs(self):
+        """A success response is not enough when a ref is recreated."""
+        run = v3.subprocess.CompletedProcess(["git"], 0, "", "")
+        with (
+            patch.object(v3, "live_ref_sha",
+                         side_effect=[CARRIER_COMMIT, CARRIER_COMMIT,
+                                      CARRIER_COMMIT, None]),
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "trusted_git_cli", return_value="/usr/bin/git"),
+            patch.object(v3, "git_transport_environment", return_value={}),
+            patch.object(v3, "run_bounded_gh", return_value=run) as runner,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "did not remove exact generation refs"):
+                v3.delete_handoff_refs_atomic(
+                    "trusted/ci", SOURCE_REF, AUTH_REF,
+                    CARRIER_COMMIT, 1323598177,
+                )
+            self.assertTrue(any("push" in call.args[0]
+                                for call in runner.call_args_list))
+
+    def test_atomic_cleanup_transport_denial_never_falls_back_to_rest(self):
+        """Even 404 readback after a failed push is not proof of cleanup."""
+        denied = v3.subprocess.CompletedProcess(
+            ["git"], 1, "", "atomic transaction rejected"
+        )
+        with (
+            patch.object(v3, "live_ref_sha",
+                         side_effect=[CARRIER_COMMIT, CARRIER_COMMIT, None, None]),
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "trusted_git_cli", return_value="/usr/bin/git"),
+            patch.object(v3, "git_transport_environment", return_value={}),
+            patch.object(v3, "run_bounded_gh", return_value=denied),
+            patch.object(v3, "_gh_ref_request") as rest,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "failed or remained ambiguous"):
+                v3.delete_handoff_refs_atomic(
+                    "trusted/ci", SOURCE_REF, AUTH_REF,
+                    CARRIER_COMMIT, 1323598177,
+                )
+            rest.assert_not_called()
+
+    def test_sha_only_aba_cannot_certify_exclusive_generation_ownership(self):
+        """Exhibit the ABA limitation without enabling production transfer.
+
+        The mocked transport is not a GitHub provider proof: both refs can
+        churn A->B->A before the lease, yielding identical SHA observations.
+        The staged cleanup accepts current SHAs, which is exactly why
+        require_atomic_ref_rollback must remain an unconditional DENY.
+        """
+        run = v3.subprocess.CompletedProcess(["git"], 0, "", "")
+        # The intermediate ref churn cannot be observed from SHA-only GETs.
+        with (
+            patch.object(v3, "live_ref_sha",
+                         side_effect=[CARRIER_COMMIT, CARRIER_COMMIT,
+                                      None, None]),
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "trusted_git_cli", return_value="/usr/bin/git"),
+            patch.object(v3, "git_transport_environment", return_value={}),
+            patch.object(v3, "run_bounded_gh", return_value=run),
+        ):
+            self.assertTrue(v3.delete_handoff_refs_atomic(
+                "trusted/ci", SOURCE_REF, AUTH_REF,
+                CARRIER_COMMIT, 1323598177,
+            ))
+        with self.assertRaisesRegex(v3.Denied,
+                                    "not independently approved"):
+            REAL_ATOMIC_ROLLBACK_GUARD()
+
     def test_incident_gate_requires_exact_completed_identity(self):
         def issue(number, issue_id, state="closed", reason="completed", url=None):
             return {
