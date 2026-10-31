@@ -57,13 +57,13 @@ assert_before() {
   }
 }
 trusted_step="$(extract_step 'Checkout trusted main for source-free workflow tests')"
-grep -qxF '          ref: \${{ github.sha }}' <<< "$trusted_step"
+grep -qxF '          ref: ${{ github.sha }}' <<< "$trusted_step"
 grep -qxF '          persist-credentials: false' <<< "$trusted_step"
 mock_step="$(extract_step 'Execute trusted source-free post-run authorization regression mocks')"
 grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$mock_step"
 grep -qxF '          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml' <<< "$mock_step"
 pr_checkout="$(extract_step 'Checkout pinned source tree (never persist auth)')"
-grep -qxF '          ref: \${{ inputs.source_sha }}' <<< "$pr_checkout"
+grep -qxF '          ref: ${{ inputs.source_sha }}' <<< "$pr_checkout"
 grep -qxF '          persist-credentials: false' <<< "$pr_checkout"
 assert_before 'Verify open same-repo PR and exact immutable head before checkout' 'Checkout trusted main for source-free workflow tests'
 assert_before 'Checkout trusted main for source-free workflow tests' 'Execute trusted source-free post-run authorization regression mocks'
