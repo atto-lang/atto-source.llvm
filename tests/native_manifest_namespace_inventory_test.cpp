@@ -242,7 +242,7 @@ int main() {
                 "[project]\nname = \"tail\"\n"
                 "[packages.tail]\n"
                 "files = [\"src/x.ores\"] junk ]\n");
-            must_fail("trailing material after array", [&] {
+            must_fail("malformed manifest array", [&] {
                 (void)oreslang::load_verified_package_manifest_v2(
                     dir / ".ores.pkg.toml", read_text);
             });
