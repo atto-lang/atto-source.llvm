@@ -26,6 +26,16 @@ public:
 
     // Single actor-carrier worker only. Fixed-cost, no heap, no lock, no throw.
     bool append(Sample sample) noexcept {
+        // Reject invalid samples before capacity accounting; an unusable
+        // trace is never positive timing evidence.
+        if (sample.actor_slot == 0 || sample.actor_generation == 0 ||
+            sample.slice_start_ns == 0 ||
+            sample.slice_finish_ns < sample.slice_start_ns) {
+            if (invalid_ != std::numeric_limits<std::uint64_t>::max()) {
+                ++invalid_;
+            }
+            return false;
+        }
         if (used_ == capacity) {
             if (dropped_ != std::numeric_limits<std::uint64_t>::max()) {
                 ++dropped_;
@@ -46,16 +56,20 @@ public:
 
     std::size_t recorded_after_join() const noexcept { return used_; }
     std::uint64_t dropped_after_join() const noexcept { return dropped_; }
-    bool complete_after_join() const noexcept { return dropped_ == 0; }
+    std::uint64_t invalid_after_join() const noexcept { return invalid_; }
+    bool complete_after_join() const noexcept {
+        return used_ != 0 && dropped_ == 0 && invalid_ == 0;
+    }
     // Positive independently known dispatch count required for full coverage.
     bool matches_expected_after_join(std::size_t expected) const noexcept {
-        return expected != 0 && used_ == expected && dropped_ == 0;
+        return expected != 0 && used_ == expected && complete_after_join();
     }
 
 private:
     std::array<Sample, capacity> samples_{};
     std::size_t used_ = 0;
     std::uint64_t dropped_ = 0;
+    std::uint64_t invalid_ = 0;
 };
 
 } // namespace oreslang::runtime
