@@ -300,6 +300,14 @@ int main() {
         if (first_ir != reordered_ir)
             throw std::runtime_error(
                 "pinned namespace lowering is not deterministic across inventory order");
+        if (first_ir.find("define internal i64 @__ores_namespace_") ==
+                std::string::npos)
+            throw std::runtime_error(
+                "namespace provider implementation did not use internal linkage");
+        if (first_ir.find("define i64 @__ores_namespace_") !=
+                std::string::npos)
+            throw std::runtime_error(
+                "namespace provider implementation leaked external linkage");
 
         std::cout << first_ir;
         std::cout.flush();
