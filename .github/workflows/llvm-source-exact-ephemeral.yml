@@ -38,6 +38,9 @@ concurrency:
 
 jobs:
   source-exact-validation:
+    permissions:
+      contents: read
+      pull-requests: read
     if: github.repository == 'ores-truffle-oreslang/oreslang-source.llvm' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, oreslang-llvm-ephemeral-v1]
     timeout-minutes: 110
