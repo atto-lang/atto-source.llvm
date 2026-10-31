@@ -193,6 +193,19 @@ inline void validate_region_loan_state(const State& state) {
 }
 
 
+// Direct apply() callers must not be allowed to mint a loan token already
+// live on another place. Entry validation catches pre-existing collisions,
+// but borrow admission also needs a pre-mutation check of the new token.
+inline void require_unused_loan_identity(const State& state,
+                                         const std::string& place_key,
+                                         std::uint64_t token) {
+    if (!token) violation(place_key, "reserved entry loan identity");
+    for (const auto& [name, value] : state)
+        if (value.shared_loan_ids.count(token) ||
+                (value.exclusive_loan_id && *value.exclusive_loan_id == token))
+            violation(place_key, "duplicate live loan identity on place " + name);
+}
+
 inline void require_owned(const std::string& key, const PlaceState& value) {
     if (value.possible != kOwned)
         violation(key, "not definitely initialized on every CFG predecessor");
@@ -280,6 +293,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             if (value.exclusive_loan) violation(op.place, "shared borrow overlaps mutable loan");
             if (value.shared_loans == 65535) violation(op.place, "shared loan count exceeds bound");
             const auto token = op.loan_id.value_or(site_id);
+            require_unused_loan_identity(state, op.place, token);
             if (!value.shared_loan_ids.insert(token).second)
                 violation(op.place, "shared loan identity already live");
             if (op.region_requirement)
@@ -297,6 +311,8 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             require_owned(op.place, value);
             if (value.exclusive_loan || value.shared_loans)
                 violation(op.place, "overlapping exclusive loans");
+            require_unused_loan_identity(state, op.place,
+                                         op.loan_id.value_or(site_id));
             value.exclusive_loan = true;
             value.exclusive_loan_id = op.loan_id.value_or(site_id);
             value.exclusive_region_requirement = op.region_requirement;
@@ -345,6 +361,10 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
 }
 
 inline bool join_into(State& target, const State& incoming) {
+    // A caller bypassing verify(Graph) must not join a whole-object place
+    // and an overlapping projection into a purportedly sound state.
+    validate_disjoint_place_layout(target);
+    validate_disjoint_place_layout(incoming);
     validate_region_loan_state(target);
     validate_region_loan_state(incoming);
     if (target.size() != incoming.size())
