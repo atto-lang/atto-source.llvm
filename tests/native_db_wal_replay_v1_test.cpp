@@ -1,4 +1,5 @@
 #include "oreslang/runtime/DbWalReplayV1.hpp"
+#include "oreslang/runtime/DbDurableWalFile.hpp"
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -85,5 +86,18 @@ int main(){
     rejects([&]{ DbWalReplayV1::scan(fd,7,5,[](auto,auto,auto){}); });
     auto repaired=DbWalReplayV1::scan(fd,7,4,[](auto,auto,auto){});
     assert(repaired.records==2 && repaired.valid_bytes==62);
+    // Exercise the production-style trusted directory-relative locked
+    // owner wrapper as a separate generation after full process reopen.
+    int root=::open("/tmp", O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+    assert(root>=0);
+    {
+        auto owned=oreslang::runtime::DbDurableWalFile::open_trusted(
+                root, name + 5, 5);
+        auto report=owned->scan_recovery(7,4);
+        assert(report.records==2 && report.valid_bytes==62);
+        rejects([&]{ (void)owned->scan_recovery(8,4); });
+        rejects([&]{ (void)owned->scan_recovery(7,5); });
+    }
+    assert(::close(root)==0);
     assert(::close(fd)==0); assert(::unlink(name)==0);
 }
