@@ -289,9 +289,9 @@ inline void require_expression_depth(std::size_t depth, std::size_t offset) {
     }
 }
 
-// The first native terminal-try slice has no exceptional CFG. Restrict
-// protected return/guard expressions to primitive values or an addressable,
-// ownership-checked class field read: no nested calls or ownership transfers.
+// A protected return that is proved nonthrowing may use a primitive value or
+// addressable ownership-checked field read. Checked i64 arithmetic is handled
+// separately by the restricted numeric Throw CFG below.
 bool nonthrowing_protected_read(const Expression& expr) {
     if (expr.kind == Expression::Kind::Integer ||
             expr.kind == Expression::Kind::Boolean ||
@@ -300,8 +300,8 @@ bool nonthrowing_protected_read(const Expression& expr) {
            expr.left->kind == Expression::Kind::Variable;
 }
 
-// Arithmetic over checked scalar reads is nonthrowing. Never admit
-// general calls, array mutations, ownership transfers, or suspension.
+// Pure here means no calls, mutations, ownership transfers or suspension.
+ // Checked add/sub/mul/neg/abs may still produce ArithmeticOverflowError.
 bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     if (nonthrowing_protected_read(expr)) return true;
@@ -334,6 +334,37 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             (!expr.condition_rhs || native_pure_scalar_tree(*expr.condition_rhs, depth + 1)) &&
             native_pure_scalar_tree(*expr.when_true, depth + 1) &&
             native_pure_scalar_tree(*expr.when_false, depth + 1);
+    return false;
+}
+
+bool native_catchable_checked_i64_tree(
+        const Expression& expr, std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer || expr.kind == K::Variable) return true;
+    if (expr.kind == K::Field)
+        return expr.left && expr.left->kind == K::Variable;
+    if ((expr.kind == K::Negate || expr.kind == K::Abs) && expr.left)
+        return native_catchable_checked_i64_tree(*expr.left, depth + 1);
+    if ((expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply) && expr.left && expr.right)
+        return native_catchable_checked_i64_tree(*expr.left, depth + 1) &&
+            native_catchable_checked_i64_tree(*expr.right, depth + 1);
+    return false;
+}
+
+bool native_checked_i64_tree_may_overflow(
+        const Expression& expr, std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Negate || expr.kind == K::Abs ||
+            expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply)
+        return true;
+    if (expr.left && native_checked_i64_tree_may_overflow(
+            *expr.left, depth + 1)) return true;
+    if (expr.right && native_checked_i64_tree_may_overflow(
+            *expr.right, depth + 1)) return true;
     return false;
 }
 
@@ -3061,8 +3092,14 @@ private:
                     (value.result->kind != Expression::Kind::Variable ||
                      value.result->name != value.scalar_while->counter))
                 fail("experimental scalar loop must return the counter");
-            if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
-                fail("native protected try return requires nonthrowing scalar/field read");
+            if (terminal_try_finally && !nonthrowing_protected_read(*value.result)) {
+                if (native_catchable_checked_i64_tree(*value.result) &&
+                        native_checked_i64_tree_may_overflow(*value.result)) {
+                    value.caught_checked_overflow = true;
+                } else {
+                    fail("native protected try return requires a nonthrowing read or checked i64 add/sub/mul/neg/abs tree");
+                }
+            }
         }
         if (!accept(";") && token_.text != "}") fail("expected ';' or closing return brace");
         if (terminal_try_finally) {
@@ -3072,22 +3109,41 @@ private:
             // remains unreachable until typed exceptional CFG is implemented.
             require("catch");
             require("(");
-            identifier();
+            const std::string terminal_catch_binding = identifier();
             require(")");
             require("{");
-            // Native try cannot throw: allow the Java-required catch return
-            // only as a literal sentinel. It is unreachable by construction,
-            // never lowered as a fake catch handler.
-            if (accept("return")) {
+            if (value.caught_checked_overflow) {
                 if (value.returns_void)
-                    fail("native nonthrowing catch return requires int result");
-                if (token_.kind != Kind::Integer)
-                    fail("native nonthrowing catch requires only an integer literal return");
-                integer_literal();
+                    fail("native checked overflow catch requires int result");
+                for (const auto& param : value.parameters)
+                    if (param.name == terminal_catch_binding)
+                        fail("native checked overflow binding shadows parameter");
+                for (const auto& local : value.locals)
+                    if (local.name == terminal_catch_binding)
+                        fail("native checked overflow binding shadows local owner");
+                value.catch_binding = terminal_catch_binding;
+                require("return");
+                value.caught_checked_overflow_result = expression();
+                if (!nonthrowing_protected_read(
+                        *value.caught_checked_overflow_result))
+                    fail("native checked overflow catch return requires a nonthrowing scalar/field read");
                 require(";");
+                if (token_.text != "}")
+                    fail("native checked overflow catch supports one terminal return");
+            } else {
+                // A proved-nonthrowing try keeps the compatibility catch
+                // unreachable; never lower its sentinel as a fake handler.
+                if (accept("return")) {
+                    if (value.returns_void)
+                        fail("native nonthrowing catch return requires int result");
+                    if (token_.kind != Kind::Integer)
+                        fail("native nonthrowing catch requires only an integer literal return");
+                    integer_literal();
+                    require(";");
+                }
+                if (token_.text != "}")
+                    fail("native nonthrowing catch requires only an optional integer literal return");
             }
-            if (token_.text != "}")
-                fail("native nonthrowing catch requires only an optional integer literal return");
             require("}");
             require("finally");
             require("{");
@@ -4832,7 +4888,7 @@ private:
                         !fn.future_pipelines.empty() ||
                         !fn.ready_await_actor.empty() ||
                         !fn.done_await_actor.empty() ||
-                        fn.scalar_while || fn.caught_throw_value ||
+                        fn.scalar_while || fn.caught_throw_value || fn.caught_checked_overflow ||
                         !fn.result)
                     throw std::runtime_error(
                         "native async Future<int> v1 callable must be private, "
@@ -4850,7 +4906,7 @@ private:
                         !fn.source_tasks.empty() ||
                         !fn.generic_parameters.empty() ||
                         fn.has_declared_effects ||
-                        fn.scalar_while || fn.caught_throw_value ||
+                        fn.scalar_while || fn.caught_throw_value || fn.caught_checked_overflow ||
                         !fn.actor_spawns.empty() ||
                         !fn.actor_actions.empty() ||
                         !fn.actor_field_writes.empty() ||
@@ -4886,7 +4942,7 @@ private:
                         !fn.generic_parameters.empty() ||
                         fn.has_declared_effects ||
                         fn.scalar_while ||
-                        fn.caught_throw_value ||
+                        (fn.caught_throw_value || fn.caught_checked_overflow) ||
                         !fn.actor_spawns.empty() ||
                         !fn.actor_actions.empty() ||
                         !fn.actor_field_writes.empty() ||
@@ -5074,6 +5130,22 @@ private:
                     throw std::runtime_error("duplicate caught throw binding '" +
                         fn.catch_binding + "'");
             }
+            bool validated_checked_try_result = false;
+            if (fn.caught_checked_overflow) {
+                if (!fn.result || !fn.caught_checked_overflow_result)
+                    throw std::runtime_error(
+                        "checked overflow catch is missing try/catch result");
+                // The catch name is not in scope while validating the protected
+                // expression. Admit it only after the try expression is bound.
+                validate_expression(*fn.result, params, functions);
+                validated_checked_try_result = true;
+                if (!params.insert(fn.catch_binding).second)
+                    throw std::runtime_error(
+                        "duplicate checked overflow catch binding '" +
+                        fn.catch_binding + "'");
+                validate_expression(
+                    *fn.caught_checked_overflow_result, params, functions);
+            }
             for (const auto& guard : fn.early_returns) {
                 if (guard.condition) validate_expression(*guard.condition, params, functions);
                 else {
@@ -5082,7 +5154,8 @@ private:
                 }
                 validate_expression(*guard.result, params, functions);
             }
-            if (fn.result) validate_expression(*fn.result, params, functions);
+            if (fn.result && !validated_checked_try_result)
+                validate_expression(*fn.result, params, functions);
 
             // Independent scalar type pass. Name/arity validation above must
             // complete first so this pass never guesses through unresolved
@@ -5234,6 +5307,15 @@ private:
             if (fn.caught_throw_value)
                 require_scalar(*fn.caught_throw_value, ScalarType::I64,
                     "native thrown scalar", scalar_types);
+            if (fn.caught_checked_overflow) {
+                require_scalar(*fn.result, ScalarType::I64,
+                    "native checked overflow try result", scalar_types);
+                TypeMap catch_types = scalar_types;
+                catch_types.emplace(fn.catch_binding, ScalarType::I64);
+                require_scalar(*fn.caught_checked_overflow_result,
+                    fn.return_type, "native checked overflow catch result",
+                    catch_types);
+            }
             for (const auto& guard : fn.early_returns) {
                 if (guard.condition) {
                     require_scalar(*guard.condition, ScalarType::Bool,
@@ -5247,7 +5329,7 @@ private:
                 require_scalar(*guard.result, fn.return_type,
                     "native guarded return", scalar_types);
             }
-            if (fn.result && !fn.returns_void)
+            if (fn.result && !fn.returns_void && !fn.caught_checked_overflow)
                 require_scalar(*fn.result, fn.return_type,
                     "native function return", scalar_types);
         }
@@ -5404,6 +5486,7 @@ private:
             lower_extension_expression(fn.caught_throw_value, aliases);
             for (auto& deferred : fn.caught_throw_defers)
                 lower_extension_expression(deferred.expression, aliases);
+            lower_extension_expression(fn.caught_checked_overflow_result, aliases);
             lower_extension_expression(fn.result, aliases);
         }
     }
@@ -5703,7 +5786,7 @@ void resolve_future_pipeline_contracts(Program& program) {
                 !producer.future_pipelines.empty() ||
                 !producer.ready_await_actor.empty() ||
                 !producer.done_await_actor.empty() ||
-                producer.scalar_while || producer.caught_throw_value ||
+                producer.scalar_while || producer.caught_throw_value || producer.caught_checked_overflow ||
                 !producer.result)
             throw std::runtime_error(
                 "native async Future<int> v1 callable must be capture-free, "
@@ -5751,7 +5834,7 @@ void resolve_future_pipeline_contracts(Program& program) {
                         !stage.future_pipelines.empty() ||
                         !stage.ready_await_actor.empty() ||
                         !stage.done_await_actor.empty() ||
-                        stage.scalar_while || stage.caught_throw_value ||
+                        stage.scalar_while || stage.caught_throw_value || stage.caught_checked_overflow ||
                         !stage.result ||
                         !native_pure_scalar_tree(*stage.result))
                     throw std::runtime_error(

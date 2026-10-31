@@ -227,6 +227,12 @@ int main() {
     CHECK(no_slots.overflow_count == 3);
     CHECK(fail_count == 3);
 
+    constexpr auto overflow = oreslang::arithmetic_overflow_effect();
+    CHECK(overflow.kind == EffectKind::Throw);
+    CHECK(overflow.code == 65537u);
+    CHECK(static_cast<std::uint32_t>(
+        oreslang::NumericErrorCode::ArithmeticOverflowError) == 65537u);
+
     CHECK(oreslang::native_trap_admits(EffectKind::Throw));
     for (const EffectKind kind : kinds)
         if (kind != EffectKind::Throw)

@@ -3,6 +3,7 @@
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/EffectUnwind.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -56,6 +57,11 @@ struct RegionMoveLowering {
     const std::unordered_set<std::string>* array_names = nullptr;
     const std::unordered_set<std::string>* array_fields = nullptr;
     llvm::BasicBlock* resource_failure = nullptr;
+    // Optional checked-i64 Throw edge used only by the restricted terminal
+    // try/catch slice. Both slots are compiler-owned and entry-allocated.
+    llvm::BasicBlock* arithmetic_overflow_target = nullptr;
+    llvm::Value* arithmetic_effect_kind = nullptr;
+    llvm::Value* arithmetic_error_code = nullptr;
     // Compiler-owned error tag survives every owner-drop and region close.
     // Values exactly match OresNativeIntArrayStatus; not a guest Result yet.
     llvm::Value* array_failure_status = nullptr;
@@ -124,22 +130,46 @@ llvm::AllocaInst* entry_alloca(llvm::IRBuilder<>& builder, llvm::Type* type, llv
 llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
                                       llvm::Intrinsic::ID operation,
                                       llvm::Value* left, llvm::Value* right,
-                                      const std::string& name) {
+                                      const std::string& name,
+                                      const RegionMoveLowering* moves = nullptr) {
     // Source int follows the shared no-wrapping i64 contract. Use defined
-    // overflow intrinsics, never poison-producing nsw arithmetic. A target
-    // trap is the current failure ABI; typed actor errors remain separate.
+    // overflow intrinsics, never poison-producing nsw arithmetic. Inside the
+    // restricted terminal try/catch slice, overflow becomes a typed Oreslang
+    // Throw with NumericErrorCode::ArithmeticOverflowError. Everywhere else
+    // the pre-existing native trap remains fail-closed until general effect
+    // propagation is lowered.
     auto* module = builder.GetInsertBlock()->getModule();
     auto* parent = builder.GetInsertBlock()->getParent();
     auto* intrinsic = llvm::Intrinsic::getDeclaration(module, operation, {left->getType()});
     auto* pair = builder.CreateCall(intrinsic, {left, right}, name + ".checked");
     auto* value = builder.CreateExtractValue(pair, {0}, name + ".value");
     auto* overflow = builder.CreateExtractValue(pair, {1}, name + ".overflow");
-    auto* failed = llvm::BasicBlock::Create(builder.getContext(), name + ".trap", parent);
+    auto* failed = llvm::BasicBlock::Create(builder.getContext(), name + ".overflow", parent);
     auto* proceed = llvm::BasicBlock::Create(builder.getContext(), name + ".ok", parent);
     builder.CreateCondBr(overflow, failed, proceed);
     builder.SetInsertPoint(failed);
-    builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
-    builder.CreateUnreachable();
+    const bool routed = moves && moves->arithmetic_overflow_target;
+    if (routed) {
+        if (!moves->arithmetic_effect_kind || !moves->arithmetic_error_code)
+            throw std::runtime_error(
+                "checked arithmetic effect edge lacks compiler-owned ABI slots");
+        builder.CreateStore(
+            llvm::ConstantInt::get(
+                left->getType(),
+                static_cast<std::uint64_t>(EffectKind::Throw)),
+            moves->arithmetic_effect_kind);
+        builder.CreateStore(
+            llvm::ConstantInt::get(
+                left->getType(),
+                static_cast<std::uint64_t>(
+                    NumericErrorCode::ArithmeticOverflowError)),
+            moves->arithmetic_error_code);
+        builder.CreateBr(moves->arithmetic_overflow_target);
+    } else {
+        builder.CreateCall(
+            llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+        builder.CreateUnreachable();
+    }
     builder.SetInsertPoint(proceed);
     return value;
 }
@@ -369,7 +399,7 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
-                llvm::ConstantInt::get(i64, 0), value, "neg");
+                llvm::ConstantInt::get(i64, 0), value, "neg", moves);
         }
         case Expression::Kind::Abs: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
@@ -379,7 +409,7 @@ llvm::Value* lower(const Expression& expr,
             // result without relying on host std::abs or LLVM nsw poison.
             auto* negated = checked_signed_arithmetic(
                 builder, llvm::Intrinsic::ssub_with_overflow,
-                llvm::ConstantInt::get(i64, 0), value, "abs.neg");
+                llvm::ConstantInt::get(i64, 0), value, "abs.neg", moves);
             auto* negative = builder.CreateICmpSLT(
                 value, llvm::ConstantInt::get(i64, 0), "abs.negative");
             return builder.CreateSelect(negative, negated, value, "abs");
@@ -422,19 +452,19 @@ llvm::Value* lower(const Expression& expr,
                 return builder.CreateCall(runtime, {left, right}, "string.concat");
             }
             return checked_signed_arithmetic(builder, llvm::Intrinsic::sadd_with_overflow,
-                left, right, "add");
+                left, right, "add", moves);
         }
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
-                left, right, "sub");
+                left, right, "sub", moves);
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
-                left, right, "mul");
+                left, right, "mul", moves);
         }
         case Expression::Kind::Remainder: {
             // The frontend normalizes syntactically signed literal divisors.
@@ -699,7 +729,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (const auto& fn : source.functions) {
             // A host-only caught-i64 CFG is not a certified wasm guest
             // exception ABI, even if an LLVM optimizer could emit its blocks.
-            if (fn.caught_throw_value)
+            if (fn.caught_throw_value || fn.caught_checked_overflow)
                 throw std::runtime_error("wasm32 native caught-throw guest unsupported");
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
@@ -781,6 +811,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (const auto& s : fn.actor_sends) scan_string(s.payload.get());
         for (const auto& w : fn.actor_field_writes) scan_string(w.expression.get());
         scan_string(fn.caught_throw_value.get());
+        scan_string(fn.caught_checked_overflow_result.get());
         scan_string(fn.result.get());
     };
     for (const auto& fn : source.functions) scan_function(fn);
@@ -798,6 +829,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
                 [](const Function& f) {
                     return !f.ready_await_actor.empty() || f.caught_throw_value ||
+                        f.caught_checked_overflow ||
                         f.scalar_while || !f.source_tasks.empty() ||
                         !f.future_pipelines.empty();
                 }))
@@ -2104,6 +2136,85 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // That fast path still runs the same drop and lifetime cleanup.
         std::function<llvm::Value*(const Expression&)> lower_return;
         lower_return = [&](const Expression& expr) -> llvm::Value* {
+            if (fn.caught_checked_overflow && &expr == fn.result.get()) {
+                if (owning_return)
+                    throw std::runtime_error(
+                        "checked overflow catch cannot return an owning aggregate");
+                if (!fn.caught_checked_overflow_result)
+                    throw std::runtime_error(
+                        "checked overflow catch lacks handler result");
+
+                auto* error_kind = entry_alloca(
+                    builder, i64, nullptr, "numeric.effect.kind");
+                auto* error_code = entry_alloca(
+                    builder, i64, nullptr, "numeric.effect.code");
+                builder.CreateStore(
+                    llvm::ConstantInt::get(i64, 0), error_kind);
+                builder.CreateStore(
+                    llvm::ConstantInt::get(i64, 0), error_code);
+
+                auto* handler = llvm::BasicBlock::Create(
+                    context, "throw.catch.numeric", function);
+                auto* accepted = llvm::BasicBlock::Create(
+                    context, "throw.catch.numeric.accepted", function);
+                auto* invalid = llvm::BasicBlock::Create(
+                    context, "throw.catch.numeric.invalid", function);
+                auto* join = llvm::BasicBlock::Create(
+                    context, "throw.catch.numeric.join", function);
+
+                RegionMoveLowering caught = region_moves;
+                caught.arithmetic_overflow_target = handler;
+                caught.arithmetic_effect_kind = error_kind;
+                caught.arithmetic_error_code = error_code;
+                llvm::Value* normal = lower(
+                    expr, builder, i64, storage, field_storage,
+                    declarations, &caught);
+                auto* normal_exit = builder.GetInsertBlock();
+                builder.CreateBr(join);
+
+                builder.SetInsertPoint(handler);
+                auto* observed_kind = builder.CreateLoad(
+                    i64, error_kind, "numeric.effect.kind.value");
+                auto* observed_code = builder.CreateLoad(
+                    i64, error_code, "numeric.effect.code.value");
+                auto* is_throw = builder.CreateICmpEQ(
+                    observed_kind,
+                    llvm::ConstantInt::get(
+                        i64, static_cast<std::uint64_t>(EffectKind::Throw)));
+                auto* is_overflow = builder.CreateICmpEQ(
+                    observed_code,
+                    llvm::ConstantInt::get(
+                        i64, static_cast<std::uint64_t>(
+                            NumericErrorCode::ArithmeticOverflowError)));
+                builder.CreateCondBr(
+                    builder.CreateAnd(is_throw, is_overflow),
+                    accepted, invalid);
+
+                builder.SetInsertPoint(invalid);
+                builder.CreateCall(
+                    llvm::Intrinsic::getDeclaration(
+                        &module, llvm::Intrinsic::trap));
+                builder.CreateUnreachable();
+
+                builder.SetInsertPoint(accepted);
+                auto catch_storage = storage;
+                if (!catch_storage.emplace(fn.catch_binding, error_code).second)
+                    throw std::runtime_error(
+                        "duplicate checked overflow catch storage");
+                llvm::Value* recovered = lower(
+                    *fn.caught_checked_overflow_result,
+                    builder, i64, catch_storage, field_storage,
+                    declarations, &region_moves);
+                auto* recovered_exit = builder.GetInsertBlock();
+                builder.CreateBr(join);
+
+                builder.SetInsertPoint(join);
+                auto* merged = builder.CreatePHI(
+                    i64, 2, "numeric.try.result");
+                merged->addIncoming(normal, normal_exit);
+                merged->addIncoming(recovered, recovered_exit);
+                return merged;
+            }
             if (!owning_return) return lower(expr, builder, i64, storage, field_storage, declarations, &region_moves);
             if (expr.kind == Expression::Kind::Call) {
                 RegionMoveLowering forwarding = region_moves;

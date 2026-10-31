@@ -128,6 +128,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         include_str!("../../fixtures/numeric-v1/i64-mul-overflow.ores");
     const SHARED_I64_NEG_OVERFLOW: &str =
         include_str!("../../fixtures/numeric-v1/i64-neg-overflow.ores");
+    const SHARED_I64_OVERFLOW_CATCH: &str =
+        include_str!("../../fixtures/numeric-v1/i64-overflow-catch.ores");
     use std::{ffi::OsStr, fs, os::unix::process::ExitStatusExt};
     let temp = TempDir::new("ores-checked-i64-").map_err(|e| e.to_string())?;
     fs::write(temp.path.join("math-shadow.ores"),
@@ -141,6 +143,7 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("near-min", "pub fnc main():int{return (-9223372036854775808+1)-(-9223372036854775808);}", 1),
         ("negate", "pub fnc main():int{return -(-42);}", 42),
         ("portable-math-i64-ok", SHARED_MATH_OK, 84),
+        ("portable-overflow-catch", SHARED_I64_OVERFLOW_CATCH, 42),
         ("math-abs", "pub fnc main():int{return Math.abs(-42);}", 42),
         ("math-neg", "pub fnc main():int{return Math.neg(-42);}", 42),
         ("dynamic-math-abs", "fnc magnitude(int a):int{return Math.abs(a);} pub fnc main():int{return magnitude(-42);}", 42),
@@ -210,6 +213,15 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             require(compiled.status.success(), format!("{name}: {}", stderr(&compiled)))?;
             if let Some(intrinsic) = intrinsic {
                 require(stdout(&compiled).contains(intrinsic), format!("{name}: missing checked intrinsic"))?;
+            }
+            if name == "portable-overflow-catch" {
+                let emitted = stdout(&compiled);
+                require(emitted.contains("throw.catch.numeric"),
+                    format!("{name}: missing numeric catch CFG"))?;
+                require(emitted.contains("65537"),
+                    format!("{name}: missing ArithmeticOverflowError ABI code"))?;
+                require(emitted.contains("numeric.effect.kind"),
+                    format!("{name}: missing typed Throw discriminant slot"))?;
             }
             fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
             let linked = run(clang, [OsStr::new("-x"), OsStr::new("ir"), OsStr::new(optimization),

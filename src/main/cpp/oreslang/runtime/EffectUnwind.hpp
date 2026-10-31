@@ -11,8 +11,10 @@ namespace oreslang {
  * Typed native effect ABI. LLVM generated code should propagate these
  * discriminants as data/branches, not use C++ exception objects or GC.
  *
- * NOT yet wired into the Oreslang frontend/code generator. This is the native
- * cleanup substrate for lexical defer/finally and later actor fault reporting.
+ * Checked-i64 overflow is now wired into the restricted terminal try/catch
+ * compiler slice using EffectKind::Throw plus NumericErrorCode. General source
+ * throw/raise/panic propagation is still incomplete; this remains the native
+ * cleanup substrate for lexical defer/finally and actor fault reporting.
  */
 enum class EffectKind : std::uint8_t {
     Return, Throw, Raise, Panic, Cancel, Fatal, ProcessExit
@@ -22,6 +24,27 @@ struct EffectStatus {
     EffectKind kind = EffectKind::Return;
     std::uint32_t code = 0;
 };
+
+/**
+ * Stable source-language numeric Error ABI. These values match
+ * oreslang.numeric-errors.v1 and are backend-neutral guest identities.
+ * Host exception classes, POSIX signals and trap opcodes are never identity.
+ */
+enum class NumericErrorCode : std::uint32_t {
+    ArithmeticOverflowError = 65537u,
+    DivisionByZeroError = 65538u,
+    InexactConversionError = 65539u,
+    NumericRangeError = 65540u,
+    NumericParseError = 65541u,
+    NumericContextError = 65542u,
+    NumericResourceError = 65543u,
+    NonterminatingDecimalError = 65544u
+};
+
+constexpr EffectStatus arithmetic_overflow_effect() noexcept {
+    return {EffectKind::Throw,
+            static_cast<std::uint32_t>(NumericErrorCode::ArithmeticOverflowError)};
+}
 
 // Only recoverable ordinary source throws may be captured by trap. Control
 // signals and terminal failures must propagate even through deferred cleanup.

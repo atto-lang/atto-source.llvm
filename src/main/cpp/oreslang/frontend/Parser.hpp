@@ -363,6 +363,11 @@ struct Function {
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
     std::vector<Statement> caught_throw_defers;
+    // Restricted terminal try/catch path for checked i64 arithmetic. The catch
+    // binding currently carries the stable NumericErrorCode as int; nominal
+    // native Error objects remain a later ABI layer.
+    bool caught_checked_overflow = false;
+    std::unique_ptr<Expression> caught_checked_overflow_result;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
