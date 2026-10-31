@@ -208,7 +208,7 @@ int main() {
             auto candidate = make_program();
             source(candidate, "app/main").source =
                 "import ns a from \"pkg:foo\"; "
-                "pub fnc main(): int { return a.add(a: 20, b: 23); }\\n";
+                "pub fnc main(): int { return a.add(a: 20, b: 23); }\n";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
                 "entry namespace calls require flat positional non-generic syntax");
