@@ -1367,6 +1367,10 @@ private:
                                          return declared.name == field;
                                      }))
                         fail("unknown native sealed actor state field '" + field + "'");
+                    if (token_.text == "=")
+                        access.written_fields.push_back(field);
+                    else
+                        access.read_fields.push_back(field);
                     continue;
                 }
                 if (token_.text == "{") {
