@@ -7,6 +7,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/PackageNamespaceGraph.hpp'
       - 'tests/native_package_namespace_graph_test.cpp'
       - 'tests/project_root_import_test.cpp'
+      - 'tests/native_verified_namespace_manifest_v2_test.cpp'
       - 'docs/NATIVE_PACKAGE_NAMESPACE_GRAPH_PHASE1.md'
       - '.github/workflows/native-package-namespace-graph.yml'
   workflow_dispatch:
@@ -51,6 +52,15 @@ jobs:
             -I src/main/cpp tests/project_root_import_test.cpp \
             -o /tmp/oreslang-project-root-import-test
           /tmp/oreslang-project-root-import-test
+      - name: Compile and execute SHA-256-pinned v2 manifest inventory regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ matrix.compiler }}" -std=c++17 -O2 -UNDEBUG \
+            -Wall -Wextra -Wpedantic -Werror \
+            -I src/main/cpp tests/native_verified_namespace_manifest_v2_test.cpp \
+            -lcrypto -o /tmp/oreslang-v2-manifest-inventory-test
+          /tmp/oreslang-v2-manifest-inventory-test
   clang-sanitized-host-contract:
     # Source-only graph admission. This is not compiled Oreslang guest parity.
     runs-on: ubuntu-latest
@@ -76,7 +86,9 @@ jobs:
                       src/main/cpp/oreslang/frontend/Parser.hpp \
                       tests/native_package_namespace_graph_test.cpp \
                       src/main/cpp/oreslang/frontend/ProjectRootImport.hpp \
-                      tests/project_root_import_test.cpp; do
+                      tests/project_root_import_test.cpp \
+                      src/main/cpp/oreslang/frontend/VerifiedNamespaceManifestV2.hpp \
+                      tests/native_verified_namespace_manifest_v2_test.cpp; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
           done
           echo "EXACT_HOST_HEAD=$EXPECTED_HEAD EXACT_HOST_TREE=$(git rev-parse 'HEAD^{tree}')"
@@ -98,3 +110,12 @@ jobs:
             -I src/main/cpp tests/project_root_import_test.cpp \
             -o /tmp/oreslang-project-root-import-sanitized
           /tmp/oreslang-project-root-import-sanitized
+      - name: Compile and execute Clang ASan/UBSan v2 manifest inventory proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -I src/main/cpp tests/native_verified_namespace_manifest_v2_test.cpp \
+            -lcrypto -o /tmp/oreslang-v2-manifest-inventory-sanitized
+          /tmp/oreslang-v2-manifest-inventory-sanitized
