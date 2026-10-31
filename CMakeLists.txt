@@ -46,6 +46,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    # Host-only generation-fenced WAL retirement model, not guest I/O or
+    # a durable commit receipt. Keep as a separate host evidence class.
+    add_executable(oreslang-native-db-wal-owner-retirement-test
+        tests/native_db_wal_owner_retirement_test.cpp)
+    target_include_directories(oreslang-native-db-wal-owner-retirement-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-db-wal-owner-retirement-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-db-wal-owner-retirement-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_owner_physical_retirement_host_only
+        COMMAND oreslang-native-db-wal-owner-retirement-test)
+    set_tests_properties(native_db_wal_owner_physical_retirement_host_only
+        PROPERTIES TIMEOUT 30)
     # Host-only POSIX storage substrate, NOT source guest or durable DB proof.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
         add_executable(oreslang-native-db-durable-wal-host-test
