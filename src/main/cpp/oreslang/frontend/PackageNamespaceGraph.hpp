@@ -267,6 +267,11 @@ inline PackageNamespaceGraph link_package_namespaces(
         verified_instances.insert(unit.package_instance_id);
 
         const Program& program = *unit.program;
+        // Validate embedded namespace AST even on ordinary root importers.
+        // A caller without a namespace header must not bypass the v2 loader.
+        if (!program.namespace_imports.empty())
+            throw std::invalid_argument(
+                "native namespace embedded imports require verified v2 package linking");
         if (program.namespace_name.empty()) continue;
         if (!valid_flat_namespace_name(program.namespace_name))
             throw std::invalid_argument("invalid flat source namespace header");
@@ -276,9 +281,6 @@ inline PackageNamespaceGraph link_package_namespaces(
             throw std::invalid_argument("module wrapper cannot declare a file namespace");
         if (!program.imports.empty())
             throw std::invalid_argument("native namespace unresolved module imports require checked dependency lowering");
-        if (!program.namespace_imports.empty())
-            throw std::invalid_argument(
-                "native namespace embedded imports require verified v2 package linking");
 
         // Reject unlowered top-level declarations before registering the
         // namespace; no nominal/constraint/loop ABI can enter this scalar graph.
