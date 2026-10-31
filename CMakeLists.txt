@@ -2123,6 +2123,17 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-critical-state-effects-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-critical-state-effects-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_critical_handle_state_using_contract COMMAND oreslang-critical-state-effects-test)
+    # A real C++20 executable checks that the newly typed sealed state AST
+    # cannot collapse into the older unguarded scalar actor-field lane.
+    add_executable(oreslang-sealed-state-typed-ast-test
+        tests/sealed_state_ast_contract_test.cpp)
+    target_include_directories(oreslang-sealed-state-typed-ast-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-sealed-state-typed-ast-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-sealed-state-typed-ast-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_sealed_state_typed_ast_contract
+        COMMAND oreslang-sealed-state-typed-ast-test)
     add_executable(oreslang-critical-state-loan-bridge-test tests/critical_state_loan_bridge_test.cpp)
     target_include_directories(oreslang-critical-state-loan-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-critical-state-loan-bridge-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
