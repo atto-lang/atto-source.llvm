@@ -16,11 +16,11 @@ cases = [
     ("pub define inverted class Particle as x: int; end\n",
      "native inverted class requires typed one-level SoA ownership"),
     ("define inverted struct Position as x: int; y: int; end\n",
-     "native inverted struct requires typed one-level SoA ownership"),
+     "native inverted struct schema parsed but typed SoA HIR/MIR ownership lowering is not implemented"),
     ("define pub inverted struct Position as x: int; end\n",
-     "native inverted struct requires typed one-level SoA ownership"),
+     "native inverted struct schema parsed but typed SoA HIR/MIR ownership lowering is not implemented"),
     ("pub define inverted struct Position as x: int; end\n",
-     "native inverted struct requires typed one-level SoA ownership"),
+     "native inverted struct schema parsed but typed SoA HIR/MIR ownership lowering is not implemented"),
 ]
 with tempfile.TemporaryDirectory() as temp:
     source = pathlib.Path(temp) / "source.ores"
