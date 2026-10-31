@@ -109,6 +109,9 @@ public:
             if(!gate.abort_request_binding(ticket)) std::terminate();
             return std::nullopt;
         }
+        // Irreversible publication prevents even an erroneous late abort
+        // from releasing a live request's atomic retirement fence.
+        if(!gate.commit_request_binding(ticket)) std::terminate();
         // Settlement after publication is safe: only this IoLease can retire
         // the bound operation after the broker and resume have quiesced.
         return IoLease(gate,ticket,std::move(*pin));
