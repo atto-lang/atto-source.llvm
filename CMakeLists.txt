@@ -4511,6 +4511,15 @@ if(BUILD_TESTING)
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/pinned-namespace-execution"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/pinned_namespace_execution.cmake")
     set_tests_properties(native_pinned_namespace_package_exit_43 PROPERTIES TIMEOUT 60)
+    add_test(NAME native_pinned_namespace_all_providers_exit_53
+        COMMAND "${CMAKE_COMMAND}"
+            "-DHELPER=$<TARGET_FILE:oreslang-native-pinned-namespace-ir-test>"
+            "-DHELPER_ARGS=--all-providers"
+            "-DEXPECTED_GUEST_STATUS=53"
+            "-DCLANG=${ORE_SOURCE_I64_CLANG}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/pinned-namespace-all-providers"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/pinned_namespace_execution.cmake")
+    set_tests_properties(native_pinned_namespace_all_providers_exit_53 PROPERTIES TIMEOUT 60)
 
     add_executable(oreslang-native-manifest-namespace-ir-test
         tests/native_manifest_namespace_inventory_test.cpp
