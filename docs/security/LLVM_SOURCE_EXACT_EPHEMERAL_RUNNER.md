@@ -139,3 +139,43 @@ filter on the helper path and proves that approved admission leaves the filter
 marker absent. A separate positive control verifies that ordinary `git
 hash-object` would have executed it. The mock never issues real GitHub calls
 or provisions a runner. No source-export policy is changed.
+
+## P0 independent post-run attestor boundary (issue #1233)
+
+A positive result from PR-controlled code or the execution job's own summary is NOT
+independent authorization. The previous same-job post-run gh/git approval check
+could inherit attacker-influenced GITHUB_PATH/GITHUB_ENV. It is removed from
+the untrusted execution job. The proposed workflow requires TWO genuinely
+different single-job disposable VMs in the original source organization:
+
+1. Executor label "oreslang-llvm-ephemeral-v1" runs independently reviewed PR
+   native/guest tests. No post-untrusted-code GH_TOKEN attestation is permitted.
+   Its step summary is nonauthoritative.
+2. Fresh attestor label "oreslang-llvm-attestor-ephemeral-v1" runs as a separate
+   job after a successful executor. It never checks out PR source, never shares
+   artifacts, caches, GITHUB_PATH/GITHUB_ENV, VM state or credentials with the
+   executor, and checks out only dispatch-pinned reviewed main. It uses its own
+   read-only Actions, contents and pull-request token. It rejects absent or
+   skipped actual suite steps, missing runners, duplicated job/step names, a
+   reused runner ID, crossed runner labels, wrong attempts, stale/dismissed
+   independent reviews, a changed PR head, or unprotected/moved main.
+
+Administrators must provision both runners OUTSIDE GitHub Actions on distinct
+clean single-tenant machines, AFTER independently reviewed source-main
+protection, runner-group repository/workflow restrictions, and exact current
+PR-head approval. From the approved trusted helper on an administrative host:
+
+    bash scripts/ci/prepare_source_ephemeral_jit.sh RUNNER_GROUP_ID /private/executor.b64
+    bash scripts/ci/prepare_source_ephemeral_jit.sh RUNNER_GROUP_ID /private/attestor.b64 --attestor
+
+Use separate one-time JIT credentials and tear down both single-job VMs afterward.
+The helper refuses overbroad groups, missing CODEOWNER/admin enforcement, altered
+trusted-main helper blobs, execution inside Actions and credential overwrites.
+One reused VM carrying both labels is prohibited and rejected by the attestor.
+Do not copy private LLVM source into any alternate organization.
+
+The source-free mock tests do NOT establish GitHub-hosted execution. The manual
+workflow_dispatch run is attached to trusted main, not a PR-head required status.
+A successful attestor is not by itself merge/export or hard-RT authorization.
+Both jobs remain NOT_EXECUTED until real source-org runner admission, protected
+main, independent review and two truly separate disposable machines are verified.
