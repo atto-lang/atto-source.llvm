@@ -326,6 +326,76 @@ int main() {
             });
         }
 
+        // When modern and legacy markers coexist in the same directory, the
+        // modern manifest is authoritative. An invalid modern marker must not
+        // fall through to legacy.
+        {
+            const auto dir = fixture.root / "same-dir-modern";
+            write_text(dir / "src/main.ores",
+                "pub fnc main(): int { return 0; }\n");
+            write_text(dir / ".ores.pkg.toml",
+                "schema_version = \"2\"\n"
+                "[project]\nname = \"modern\"\n"
+                "[packages.modern]\nfiles = [\"src/main.ores\"]\n");
+            write_text(dir / ".oreslangc.cfg.toml", "legacy = true\n");
+            const auto discovered =
+                oreslang::discover_verified_package_manifest_v2(
+                    dir / "src/main.ores", read_text);
+            if (discovered.project_name != "modern")
+                throw std::runtime_error("same-directory modern manifest did not win");
+        }
+        {
+            const auto dir = fixture.root / "invalid-modern-marker";
+            write_text(dir / "src/main.ores",
+                "pub fnc main(): int { return 0; }\n");
+            fs::create_directories(dir / ".ores.pkg.toml");
+            write_text(dir / ".oreslangc.cfg.toml", "legacy = true\n");
+            must_fail("regular non-symlink file", [&] {
+                (void)oreslang::discover_verified_package_manifest_v2(
+                    dir / "src/main.ores", read_text);
+            });
+        }
+
+        // Modern TOML accepts LF/CRLF, never a lone CR hidden in comments or
+        // at EOF.
+        {
+            const auto dir = fixture.root / "bare-cr";
+            write_text(dir / "src/main.ores",
+                "pub fnc main(): int { return 0; }\n");
+            write_text(dir / ".ores.pkg.toml",
+                "schema_version = \"2\"\r"
+                "[project]\nname = \"bad-cr\"\n"
+                "[packages.main]\nfiles = [\"src/main.ores\"]\n");
+            must_fail("bare CR", [&] {
+                (void)oreslang::load_verified_package_manifest_v2(
+                    dir / ".ores.pkg.toml", read_text);
+            });
+        }
+
+#if !defined(_WIN32)
+        // Configured project.root is a physical containment boundary; an
+        // apparently relative symlink cannot redirect authority outside.
+        {
+            const auto dir = fixture.root / "root-symlink";
+            const auto outside = fixture.root / "external-project";
+            write_text(outside / "src/x.ores",
+                "namespace x; pub fnc x(): int { return 1; }\n");
+            fs::create_directories(dir);
+            std::error_code symlink_error;
+            fs::create_directory_symlink(outside, dir / "app", symlink_error);
+            if (!symlink_error) {
+                write_text(dir / ".ores.pkg.toml",
+                    "schema_version = \"2\"\n"
+                    "[project]\nname = \"escape\"\nroot = \"app\"\n"
+                    "[packages.escape]\nfiles = [\"src/x.ores\"]\n");
+                must_fail("project.root escapes physical manifest directory", [&] {
+                    (void)oreslang::load_verified_package_manifest_v2(
+                        dir / ".ores.pkg.toml", read_text);
+                });
+            }
+        }
+#endif
+
         // Two opaque package IDs cannot claim one physical manifest+group
         // through hard-link aliases. Different groups in the same manifest are
         // allowed, but the exact same group has one physical authority.
@@ -442,6 +512,42 @@ int main() {
             must_fail("no cross-package fallback", [&] {
                 (void)oreslang::load_pinned_namespace_program(input);
             });
+        }
+
+        // Supplying a valid dependency manifest that is not selected by any
+        // root alias must not enlarge the compile graph.
+        {
+            const auto unused = fixture.root / "unused";
+            write_text(unused / "src/u.ores",
+                "namespace u; pub fnc value(): int { return 9; }\n");
+            write_text(unused / ".ores.pkg.toml",
+                "schema_version = \"2\"\n"
+                "[project]\nname = \"unused\"\n"
+                "[packages.unused]\nfiles = [\"src/u.ores\"]\n");
+            must_fail("unreferenced dependency manifest", [&] {
+                (void)oreslang::build_pinned_namespace_program_from_manifests(
+                    fixture.app_manifest_path,
+                    {fixture.foo_manifest_path, unused / ".ores.pkg.toml"},
+                    fixture.lock, fixture.app_main, read_text, read_text);
+            });
+        }
+
+        // The lock may spell the root manifest through a hard-link alias, but
+        // physical manifest identity remains authoritative.
+        {
+            const auto alias = fixture.app / ".ores.pkg.root-alias.toml";
+            std::error_code link_error;
+            fs::create_hard_link(fixture.app_manifest_path, alias, link_error);
+            if (!link_error) {
+                auto aliased = fixture.lock;
+                aliased.package_instances.at("app@sha:2222").manifest_path =
+                    alias;
+                auto input = fixture.materialize(aliased);
+                if (input.entry_source_unit_id.empty())
+                    throw std::runtime_error(
+                        "physical root manifest alias lost entry identity");
+                fs::remove(alias, link_error);
+            }
         }
 
         // Positive lock closure contains exactly app + ten foo files. Neither
