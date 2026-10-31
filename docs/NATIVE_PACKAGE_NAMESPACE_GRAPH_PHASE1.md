@@ -23,9 +23,13 @@ and its scalar result type. An import may specify a distinct lexical `as` alias;
 the import table is keyed by (importing source, **local alias**), not by a
 globally shared namespace name. Thus two pinned dependency instances exporting
 the same namespace may coexist without merging providers. Duplicate and
-reserved local aliases fail closed. It rejects missing bindings, wrong
-arity/type, missing exports and cross-package fallbacks without disk I/O or
-guest-side reflection.
+reserved local aliases fail closed. In addition, `+/` resolves only
+against the already verified importing source's package-instance identity,
+never against a global namespace or ambient directory; an absent namespace in
+that package must fail, without falling back to a similarly named external
+package. The graph does not infer verified ownership from paths. It rejects
+missing bindings, wrong arity/type, missing exports and cross-package fallbacks
+without disk I/O or guest-side reflection.
 
 Separately, `tests/native_module_imports.py` now includes an **executable three-file module**
 guest returning 43: two imported scalar provider functions must each appear as
