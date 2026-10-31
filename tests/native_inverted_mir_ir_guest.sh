@@ -16,6 +16,23 @@ set +e
 rc=$?
 set -e
 if [ "$rc" -ne 42 ]; then echo "FAIL: positive MIR native exit: $rc"; exit 1; fi
+"$emitter" closed "$scratch/closed.ll"
+for guard in 'store volatile i1 false, ptr %alive' 'store volatile i64 0, ptr'; do
+ if ! grep -Fq "$guard" "$scratch/closed.ll"; then
+   echo "FAIL: typed MIR close omitted volatile erasure: $guard"; exit 1
+ fi
+done
+# Every one of three 2-slot column/metadata lanes must be wiped.
+wipe_count="$(grep -Fc 'store volatile i64 0, ptr' "$scratch/closed.ll")"
+if [ "$wipe_count" -ne 7 ]; then
+ echo "FAIL: expected 6 volatile column scrubs + length, got $wipe_count"; exit 1
+fi
+"$clang" -O2 -x ir "$scratch/closed.ll" -o "$scratch/closed"
+set +e
+"$scratch/closed" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -ne 42 ]; then echo "FAIL: closed MIR native exit: $rc"; exit 1; fi
 "$emitter" bounds "$scratch/bounds.ll"
 "$clang" -x ir "$scratch/bounds.ll" -o "$scratch/bounds"
 set +e
@@ -29,4 +46,4 @@ for rejected in immutable missing-operand; do
  fi
  if [ -s "$scratch/$rejected.ll" ]; then echo "FAIL: emitted unsafe $rejected IR"; exit 1; fi
 done
-printf 'PASS: strict C++17 typed MIR -> real native LLVM IR (exit 42, bounds trap, two rejects)\n'
+printf 'PASS: strict C++17 typed MIR -> real native LLVM IR (exit 42, owner close erasure, bounds trap, two rejects)\n'
