@@ -3,6 +3,42 @@
 set -euo pipefail
 workflow="${1:?usage: test_llvm_source_exact_postrun.sh WORKFLOW_FILE}"
 [[ -f "$workflow" ]] || { echo 'missing workflow' >&2; exit 2; }
+# Make deletion, echo-only replacement, or incorrect suite guards for the
+# real actor-ledger integration fail the source-free handoff regression.
+extract_step() {
+  local name="$1"
+  awk -v wanted="$name" '
+    $0 == "      - name: " wanted { found=1; next }
+    found && /^      - name: / { exit }
+    found { print }
+    END { if (!found) exit 12 }
+  ' "$workflow"
+}
+grep -qxF '          - actor-ledger' "$workflow" || {
+  echo 'missing actor-ledger dispatch choice' >&2; exit 1;
+}
+native_step="$(extract_step 'Run real ledger, scheduler STOP and pinned physical-heap native suite')"
+grep -qxF "        if: inputs.suite == 'actor-ledger'" <<< "$native_step"
+grep -qxF '          test -x scripts/ci/run_actor_ledger_native_exact_head.sh' <<< "$native_step"
+grep -qxF '          bash scripts/ci/run_actor_ledger_native_exact_head.sh "$SOURCE_SHA"' <<< "$native_step"
+for name in \
+  'Verify preinstalled LLVM / Clang / CMake toolchain' \
+  'Build actual Oreslang source compiler against LLVM' \
+  'Compile and execute real Oreslang source actor fixtures'; do
+  step="$(extract_step "$name")"
+  grep -qxF "        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger'" <<< "$step" || {
+    echo "actor-ledger missing actual compiler/guest dependency: $name" >&2; exit 1;
+  }
+done
+guest_step="$(extract_step 'Execute real compiled Oreslang ledger guest fixtures')"
+grep -qxF "        if: inputs.suite == 'actor-ledger'" <<< "$guest_step"
+grep -qxF '          test -f tests/native_actor_compiled_guest_ledger.py' <<< "$guest_step"
+grep -qxF '          PYTHONOPTIMIZE=0 python3 tests/native_actor_compiled_guest_ledger.py \' <<< "$guest_step"
+san_step="$(extract_step 'Execute compiled ledger guests under Clang ASan and UBSan')"
+grep -qxF "        if: inputs.suite == 'actor-ledger' && inputs.run_sanitizers" <<< "$san_step"
+grep -qxF '          PYTHONOPTIMIZE=0 python3 tests/native_actor_compiled_guest_ledger.py \' <<< "$san_step"
+printf 'SOURCEFREE_ACTOR_LEDGER_WORKFLOW_CONTRACT=PASS\n'
+
 block="$(awk '
   /^      - name: Post-run attestation of current PR head and independent reviewer$/ { in_step=1; next }
   in_step && /^      - name: / { exit }
