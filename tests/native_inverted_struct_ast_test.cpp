@@ -2,6 +2,7 @@
 // An inverted struct is an explicitly nominal value schema, never a class;
 // despite syntactic admission the program cannot pass codegen validation.
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/InvertedSchemaMirAdmission.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -46,6 +47,18 @@ fnc main(): int { return 42; }
           p.fields[3].type == InvertedScalarKind::F64,
           "fixed scalar types not retained");
     check(root.classes.empty(), "inverted struct must not become a class");
+    // Production parser AST passes through the *same independently verified*
+    // MIR schema gate used by resolution. Only a synthetic allocate+close
+    // probe is permitted; no source rows or guest codegen are authorized.
+    const auto admitted_schemas = dop::mir::preflight_inverted_schemas(root);
+    check(admitted_schemas.size() == 1, "production AST MIR preflight lost schema");
+    check(admitted_schemas.front().layout.packed_row_bytes() == 25,
+          "production schema MIR lost ordered packed field widths");
+    check(admitted_schemas.front().probe.instructions().size() == 2,
+          "production schema MIR emitted unauthorized guest operations");
+    check(admitted_schemas.front().probe.instructions()[1].kind == dop::hir::OpKind::Close,
+          "production schema MIR failed to revoke synthetic owner");
+
     check(root.functions.size() == 1 && root.functions[0].name == "main",
           "following function lost");
     auto unresolved = parse_unresolved_program(
