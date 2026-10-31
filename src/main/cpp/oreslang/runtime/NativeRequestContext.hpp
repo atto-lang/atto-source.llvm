@@ -172,8 +172,18 @@ public:
             pin_(std::move(src.pin_)) {}
         ExchangePin& operator=(ExchangePin&&) = delete;
         ~ExchangePin(){
-            if(pin_ && (!exchange_ || !exchange_->release_physical_pin(token)))
-                std::terminate(); // early release or different generation
+            if(pin_) {
+                // The context's own physical lease must leave BEFORE the
+                // exchange's generation fence opens for another producer.
+                // Otherwise enqueue() can race the tail of this destructor
+                // while the prior generation is still physically retained.
+                if (!exchange_ ||
+                    exchange_->phase()!=NativeHttpExchange::Phase::reactor)
+                    std::terminate(); // release before terminal/reclaim
+                pin_.reset();
+                if (!exchange_->release_physical_pin(token))
+                    std::terminate(); // never unlock another generation
+            }
         }
     };
     std::optional<ExchangePin> attach_exchange(NativeHttpExchange& exchange,
