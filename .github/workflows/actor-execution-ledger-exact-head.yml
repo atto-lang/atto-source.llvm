@@ -30,6 +30,7 @@ on:
       - tests/source_actor_await_trace_runtime_test.c
       - tests/test_actor_ledger_workflow_inputs.py
       - tests/test_actor_ledger_native_runner_refusals.py
+      - scripts/ci/run_actor_ledger_native_exact_head.sh
       - tests/**
       - tests/native_actor_execution_ledger_test.cpp
       - tests/native_actor_execution_ledger_state_stress_test.cpp
@@ -125,6 +126,7 @@ jobs:
             tests/source_actor_await_trace_runtime_test.c \
             tests/test_actor_ledger_workflow_inputs.py \
             tests/test_actor_ledger_native_runner_refusals.py \
+            scripts/ci/run_actor_ledger_native_exact_head.sh \
             tests/native_actor_compiled_guest_ledger_bridge_test.c \
             tests/native_actor_compiled_guest_ledger.py \
             tests/fixtures/native-retained-guest-steps.ores \

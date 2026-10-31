@@ -14,12 +14,12 @@ if not __debug__:
     raise SystemExit("actor CI dependency audit rejects optimized Python")
 
 INPUT = re.compile(
-    r"(?:src/main/cpp|tests)/[A-Za-z0-9_./-]+"
-    r"\.(?:cpp|hpp|ores|py|c|h)(?![A-Za-z0-9_.])"
+    r"(?:src/main/cpp|tests|scripts/ci)/[A-Za-z0-9_./-]+"
+    r"\.(?:cpp|hpp|ores|py|c|h|sh)(?![A-Za-z0-9_.])"
 )
 JOB = re.compile(r"(?m)^  ([a-z][a-z0-9-]*):\s*$")
 TRIGGER = re.compile(
-    r"(?m)^      - ((?:src/main/cpp|tests)/[A-Za-z0-9_./*-]+)$"
+    r"(?m)^      - ((?:src/main/cpp|tests|scripts/ci)/[A-Za-z0-9_./*-]+)$"
 )
 LOCAL_INCLUDE = re.compile(r'(?m)^[ \t]*#[ \t]*include[ \t]+"([^"\r\n]+)"')
 BLOB_LOOP = re.compile(r"for path in \\\n(.*?); do", re.DOTALL)
