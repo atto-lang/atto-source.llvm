@@ -310,6 +310,9 @@ void validate_native_scalar_types(const Program& program) {
         if (fn.caught_error_try_result)
             require(expression(*fn.caught_error_try_result, locals), result,
                 fn.offset, "protected ErrorSlot return type");
+        if (fn.caught_error_type_match_result)
+            require(expression(*fn.caught_error_type_match_result, locals), result,
+                fn.offset, "ErrorSlot type-match return type");
         for (const auto& guard : fn.early_returns) {
             if (guard.condition) require(expression(*guard.condition, locals), scalar(true), guard.offset, "guard requires bool");
             else compare(*guard.lhs, *guard.rhs, locals);
