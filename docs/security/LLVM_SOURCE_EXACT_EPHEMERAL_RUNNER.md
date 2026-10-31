@@ -54,7 +54,7 @@ Run the official runner with the one-time `--jitconfig` value only on that dispo
 
 Official GitHub references: https://docs.github.com/en/rest/actions/self-hosted-runners and https://docs.github.com/en/actions/reference/security/secure-use and https://docs.github.com/en/rest/actions/self-hosted-runner-groups.
 
-**Validation limit:** The JIT script's shell syntax and five source-free mocked administration scenarios have been checked locally (one permitted, four denied). This does **not** confirm real organization's runner-group ID, plan eligibility, runner-image integrity, review enforcement, JIT registration, source JUnit/native execution or real GitHub management writes. No runner or secret was provisioned by this PR.
+**Validation limit:** The JIT script's shell syntax and 15 source-free local Bash test cases have been executed per backend (12 independent denial cases, inside-Actions denial, secure one-time creation, and no overwrite). This does **not** confirm real organization's runner-group ID, plan eligibility, runner-image integrity, review enforcement, JIT registration, source JUnit/native execution or real GitHub management writes. No runner or secret was provisioned by this PR.
 
 ## Source-free regression command
 
@@ -67,3 +67,9 @@ bash scripts/ci/test_prepare_source_ephemeral_jit.sh scripts/ci/prepare_source_e
 ```
 
 The test harness replaces `gh` with a local stub. It exercises unprotected main, overbroad runner groups, extra repository visibility, failed POST, attempts to provision inside Actions, successful 0600 credential-file creation, and refusal to overwrite an existing config. **It neither creates a real runner nor uses the private-source publisher.**
+
+### Additional admission security checks
+
+The administrative helper does not accept a GitHub branch response containing only `protected: true` as sufficient. It reads live source-main branch protection and requires enabled independent CODEOWNER review, stale-review dismissal, administrator enforcement, and no force-push, branch deletion, or explicit PR-review bypass. It refuses to generate a JIT credential if any required control is absent. It additionally computes `git hash-object` of its own local script and checks it against the reviewed immutable blob at `/scripts/ci/prepare_source_ephemeral_jit.sh` on protected `main`, so an unreviewed or modified workstation copy cannot generate the runner credential. Treat the local helper as untrusted until this byte-exact check succeeds.
+
+**Executed local evidence:** the committed script and checked-in mock test both matched their GitHub blob SHA exactly; `bash -n` passed and the test runner returned `SOURCEFREE_MOCK_JIT_ADMISSION=PASS`. No live runner-authorization API calls were made. This does not authorize executing PR code without independent approval.
