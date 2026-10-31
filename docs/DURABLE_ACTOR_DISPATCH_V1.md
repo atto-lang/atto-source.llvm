@@ -168,3 +168,24 @@ No end-to-end hard-real-time dispatch claim follows from this change.
 
 No PostgreSQL server was available in the local verification container and
 the source-org exact-head Actions remain zero-step/not-executed.
+
+## October 30 native libpq parameterized protocol regression
+
+`agent_pg_parameterized_claim_test.cpp` invokes the production
+`PostgresActorDispatchClaim.hpp` through an intercepted libpq ABI. The
+executable test asserts all ten positional SQL bind values, the exact
+schema-qualified `claim_once_v1` query, enforced connection/statement/
+lock timeouts, and resource cleanup. It covers a simulated successful
+admission, duplicate rejection, ambiguous SQL error without retry, broken
+connection, already-open transaction, and invalid digest denied before
+opening any connection.
+
+The exact committed new test Git blob is
+`18a4b48ff1e105c76e4accd0e9ed5a86b31122d4`; the adapter Git blob
+is `82bc4dad6318297443d5ab55e1ae8793d06a822b`.
+The same files passed locally using GCC C++17 -Werror and Clang C++17
+-werror with ASan/UBSan and leak detection. The source-local PostgreSQL
+workflow now compiles and executes this regression with both compilers.
+**Libpq is mocked at its API boundary: this does NOT execute PostgreSQL,
+commit any claim, test cross-host linearizability, or prove a native
+Oreslang guest.** Actual database admission remains release-blocking.
