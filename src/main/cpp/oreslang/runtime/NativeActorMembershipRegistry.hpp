@@ -7,6 +7,8 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <optional>
+#include <vector>
 #include <stdexcept>
 #include <utility>
 
@@ -187,6 +189,33 @@ public:
         auto it = groups_.find(group_id);
         return it != groups_.end()
             && it->second.members.count(ActorKey{actor_id, generation}) != 0;
+    }
+
+    // Trusted-host local pg-style snapshot; allocation and copy are bounded by
+    // the group's max_members, and no guest delivery runs under the lock.
+    // The result is an instant-in-time view, NOT a live-delivery permit:
+    // all senders must re-authenticate the actor incarnation at mailbox
+    // admission and accept per-recipient STOP/revocation races.
+    struct Member {
+        std::uint64_t actor_id;
+        std::uint64_t generation;
+    };
+    struct Snapshot {
+        std::uint64_t runtime_id;
+        std::uint64_t registry_incarnation;
+        std::uint64_t group_id;
+        std::uint64_t join_epoch;
+        std::vector<Member> members;
+    };
+    std::optional<Snapshot> snapshot_group(std::uint64_t group_id) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto it = groups_.find(group_id);
+        if (it == groups_.end()) return std::nullopt;
+        Snapshot result{runtime_id_, instance_id_, group_id, it->second.epoch, {}};
+        result.members.reserve(it->second.members.size());
+        for (const auto& actor : it->second.members)
+            result.members.push_back(Member{actor.first, actor.second});
+        return result;
     }
 
     std::size_t member_count(std::uint64_t group_id) const {
