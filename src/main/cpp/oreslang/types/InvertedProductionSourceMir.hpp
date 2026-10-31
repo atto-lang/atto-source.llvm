@@ -24,6 +24,8 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
             !program.functions.empty() || !program.classes.empty() ||
             !program.actors.empty() || !program.imports.empty() ||
             !program.contracts.empty() || !program.type_only_declarations.empty() ||
+            !program.type_constraint_descriptors.empty() ||
+            !program.conforms.empty() || !program.sum_types.empty() ||
             !program.generators.empty() || !program.cooperative_loops.empty() ||
             !program.module.empty() || !program.namespace_name.empty())
         throw std::logic_error("production inverted i64 requires one standalone local main");
