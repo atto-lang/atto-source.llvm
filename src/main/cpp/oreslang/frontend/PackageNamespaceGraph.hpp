@@ -81,10 +81,12 @@ inline bool valid_flat_namespace_name(const std::string& name) {
     });
 }
 
-// Until an effect-aware cross-unit body checker exists, only scalar,
- // call-free expression trees can enter the host namespace export inventory.
- // An apparently scalar result can still hide Console/Call/borrow/nominal
- // operations in a nested expression or local initializer.
+// Default host inventory admits only scalar, call-free expression trees.
+// An explicit executable-linker option may admit structurally scalar Call
+// nodes, but target identity, visibility, arity, types and acyclicity still
+// require the checked pinned lowering stage. An apparently scalar result can
+// otherwise hide Console/borrow/nominal operations in a nested expression or
+// local initializer.
 // Bounded admission prevents a malformed/host-injected scalar AST from
 // exhausting the linker stack before a verified native lowering exists.
 inline constexpr std::size_t kMaxNamespaceScalarExpressionDepth = 128;
