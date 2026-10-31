@@ -64,6 +64,14 @@ positive arithmetic 'pub fnc main(): int {
   val f64 value = (2.5 + 1.5) * 3.0 - 1.0;
   if value == 11.0; then return 42; else return 86; fi
 }'
+positive division 'pub fnc main(): int {
+  val f64 value = 7.0 / 2.0;
+  if value == 3.5; then return 42; else return 86; fi
+}'
+positive simplex_rounding 'pub fnc main(): int {
+  val f64 value = 0.3 * (0.7 / 0.3);
+  if value > 0.7; then return 42; else return 86; fi
+}'
 positive signed_zero 'pub fnc main(): int {
   val f64 value = -0.0;
   if value == 0.0; then return 42; else return 86; fi
@@ -101,12 +109,20 @@ negative implicit_bool_to_f64 'pub fnc main(): int {
   val f64 value = true;
   return 42;
 }'
+negative int_division 'pub fnc main(): int {
+  val int value = 7 / 2;
+  return value;
+}'
+negative mixed_division 'pub fnc main(): int {
+  val f64 value = 7.0 / 2;
+  return 42;
+}'
 negative unsupported_f64_return_abi 'pub fnc main(): f64 { return 0.3; }'
 negative unsupported_f64_parameter_abi 'pub fnc f(f64 value): int {
   return 42;
 }
 pub fnc main(): int { return 42; }'
 
-[[ "$pass" -eq 6 && "$reject" -eq 9 ]] ||
+[[ "$pass" -eq 8 && "$reject" -eq 11 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=6; NEGATIVE_NO_IR_PASS=9 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=8; NEGATIVE_NO_IR_PASS=11 (not arrays/solver)"
