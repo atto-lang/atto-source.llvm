@@ -10,6 +10,7 @@ on:
       - 'tests/native_verified_namespace_manifest_v2_test.cpp'
       - 'tests/native_namespace_physical_source_v2_test.cpp'
       - 'tests/native_verified_namespace_source_snapshot_v2_test.cpp'
+      - 'tests/native_verified_namespace_graph_v2_test.cpp'
       - 'docs/NATIVE_PACKAGE_NAMESPACE_GRAPH_PHASE1.md'
       - '.github/workflows/native-package-namespace-graph.yml'
   workflow_dispatch:
@@ -81,6 +82,15 @@ jobs:
             -I src/main/cpp tests/native_verified_namespace_source_snapshot_v2_test.cpp \
             -lcrypto -o /tmp/oreslang-v2-physical-snapshot-test
           /tmp/oreslang-v2-physical-snapshot-test
+      - name: Compile and execute verified v2 snapshot-to-namespace graph bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ matrix.compiler }}" -std=c++17 -O2 -UNDEBUG \
+            -Wall -Wextra -Wpedantic -Werror \
+            -I src/main/cpp tests/native_verified_namespace_graph_v2_test.cpp \
+            -lcrypto -o /tmp/oreslang-v2-verified-owner-graph-test
+          /tmp/oreslang-v2-verified-owner-graph-test
   clang-sanitized-host-contract:
     # Source-only graph admission. This is not compiled Oreslang guest parity.
     runs-on: ubuntu-latest
@@ -112,7 +122,9 @@ jobs:
                       src/main/cpp/oreslang/frontend/NamespacePhysicalSourceV2.hpp \
                       src/main/cpp/oreslang/frontend/VerifiedNamespaceSourceSnapshotV2.hpp \
                       tests/native_namespace_physical_source_v2_test.cpp \
-                      tests/native_verified_namespace_source_snapshot_v2_test.cpp; do
+                      tests/native_verified_namespace_source_snapshot_v2_test.cpp \
+                      src/main/cpp/oreslang/frontend/VerifiedNamespaceGraphV2.hpp \
+                      tests/native_verified_namespace_graph_v2_test.cpp; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
           done
           echo "EXACT_HOST_HEAD=$EXPECTED_HEAD EXACT_HOST_TREE=$(git rev-parse 'HEAD^{tree}')"
@@ -157,3 +169,13 @@ jobs:
             -I src/main/cpp tests/native_verified_namespace_source_snapshot_v2_test.cpp \
             -lcrypto -o /tmp/oreslang-v2-physical-snapshot-sanitized
           /tmp/oreslang-v2-physical-snapshot-sanitized
+      - name: Clang ASan/UBSan verified v2 ownership graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -DNDEBUG \
+            -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -I src/main/cpp tests/native_verified_namespace_graph_v2_test.cpp \
+            -lcrypto -o /tmp/oreslang-v2-verified-owner-graph-sanitized
+          /tmp/oreslang-v2-verified-owner-graph-sanitized
