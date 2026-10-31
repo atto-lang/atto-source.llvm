@@ -40,7 +40,7 @@ positive() {
 }
 
 negative() {
-  local name="$1" source="$2"
+  local name="$1" source="$2" expected_diagnostic="$3"
   printf '%s\n' "$source" > "$scratch/$name.ores"
   local compile_rc=0
   "$compiler" --target=host "$scratch/$name.ores" \
@@ -51,8 +51,9 @@ negative() {
   [[ "$compile_rc" -eq 1 ]] ||
     { echo "NATIVE_F64_REJECTION_NOT_SOURCE_ERROR: $name rc=$compile_rc" >&2; exit 1; }
   [[ ! -s "$scratch/$name.ll" ]] &&
-    grep -q '^oreslang-llvmc: ' "$scratch/$name.stderr" ||
-    { echo "NATIVE_F64_PARTIAL_IR_OR_WRONG_DIAGNOSTIC: $name" >&2
+    grep -q '^oreslang-llvmc: ' "$scratch/$name.stderr" &&
+    grep -Fq -- "$expected_diagnostic" "$scratch/$name.stderr" ||
+    { echo "NATIVE_F64_PARTIAL_IR_OR_WRONG_DIAGNOSTIC: $name expected=$expected_diagnostic" >&2
       cat "$scratch/$name.stderr" >&2; exit 1; }
   reject=$((reject + 1))
   echo "NATIVE_F64_REJECTED_NO_IR: $name"
@@ -118,50 +119,50 @@ positive integer_control 'pub fnc main(): int { return 42; }'
 negative implicit_int_to_f64 'pub fnc main(): int {
   val f64 value = 1;
   return 42;
-}'
+}' 'native scalar local initializer requires f64'
 negative mixed_add 'pub fnc main(): int {
   val f64 value = 0.5 + 1;
   return 42;
-}'
+}' 'arithmetic; implicit int/f64 conversion prohibited'
 negative mixed_ordered_compare 'pub fnc main(): int {
   val f64 value = 0.5;
   if value < 1; then return 42; fi
   return 86;
-}'
+}' 'ordered comparison; implicit int/f64 conversion prohibited'
 negative f64_to_integer_return 'pub fnc main(): int {
   return 1.5;
-}'
+}' 'native function return requires int, got f64'
 negative malformed_exponent 'pub fnc main(): int {
   val f64 value = 1e+;
   return 42;
-}'
+}' 'malformed native floating exponent'
 negative out_of_range 'pub fnc main(): int {
   val f64 value = 1e9999;
   return 42;
-}'
+}' 'native f64 literal outside finite binary64 range or malformed'
 negative implicit_bool_to_f64 'pub fnc main(): int {
   val f64 value = true;
   return 42;
-}'
+}' 'native scalar local initializer requires f64, got bool'
 negative int_division 'pub fnc main(): int {
   val int value = 7 / 2;
   return value;
-}'
+}' 'f64 division (int/int unsupported)'
 negative mixed_division 'pub fnc main(): int {
   val f64 value = 7.0 / 2;
   return 42;
-}'
-negative unsupported_f64_return_abi 'pub fnc main(): f64 { return 0.3; }'
+}' 'f64 division (no implicit int conversion)'
+negative unsupported_f64_return_abi 'pub fnc main(): f64 { return 0.3; }' 'native f64 return ABI not yet admitted'
 negative unsupported_f64_parameter_abi 'pub fnc f(f64 value): int {
   return 42;
 }
-pub fnc main(): int { return 42; }'
+pub fnc main(): int { return 42; }' 'native f64 function parameter ABI not yet admitted'
 negative unsupported_branch_f64_local 'pub fnc main(): int {
   if true; then
     val f64 value = 0.3;
     return 42;
   else return 86; fi
-}'
+}' 'native branch-local f64 storage requires scoped double lowering'
 
 [[ "$pass" -eq 12 && "$reject" -eq 12 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
