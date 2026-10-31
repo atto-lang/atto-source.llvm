@@ -169,7 +169,7 @@ public:
         checked_row(index);
         const auto col = checked_field(field);
         if (!layout_.column(col).mutable_field)
-            throw std::logic_error("immutable inverted field cannot be written");
+            throw std::logic_error("immutable inverted field cannot be written after initialization");
         if (writers_[col] || readers_[col])
             throw std::logic_error("inverted field has an outstanding loan");
         append(OpKind::WriteField, col, index);
@@ -191,7 +191,7 @@ public:
     std::size_t write_runtime_checked(std::size_t index, std::string_view field) {
         const auto col = checked_field(field);
         if (!layout_.column(col).mutable_field)
-            throw std::logic_error("immutable inverted field cannot be written");
+            throw std::logic_error("immutable inverted field cannot be written after initialization");
         if (writers_[col] || readers_[col])
             throw std::logic_error("inverted field has an outstanding loan");
         append(OpKind::WriteField, col, index);
