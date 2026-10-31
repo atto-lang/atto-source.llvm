@@ -83,6 +83,9 @@ endfunction()
 expect_rejection(namespace-import
   "import namespace billing as payments from \"checkout\";\ndefine module App as pub fnc main(): int { return 0; } end\n"
   "verified manifest package index")
+expect_rejection(namespace-ns-default-loader
+  "import ns a from \"pkg:foo\";\npub fnc main(): int { return a.answer(); }\n"
+  "verified pinned package namespace inventory")
 expect_rejection(lifecycle-init
   "define module App as pub fnc init(): int { return 1; } pub fnc main(): int { return 0; } end\n"
   "once-only reachable initialization lowering")
