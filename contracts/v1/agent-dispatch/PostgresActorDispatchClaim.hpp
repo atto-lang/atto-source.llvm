@@ -25,8 +25,14 @@ class PostgresActorDispatchClaim final {
         s.utf8_bytes == 0 || s.utf8_bytes > 65536 ||
         s.measured_tokens == 0 || s.measured_tokens > 16384 ||
         conninfo_.empty()) return false;
+    // Override any unbounded/disabled timeout supplied in conninfo or env.
+    // These bounds are server-side only for SQL execution; hostile network
+    // outages still require isolation from actor scheduler threads.
+    const char* keywords[] = {"dbname", "connect_timeout", "options", nullptr};
+    const char* connection_values[] = {conninfo_.c_str(), "3",
+        "-c statement_timeout=10000 -c lock_timeout=5000", nullptr};
     std::unique_ptr<PGconn, decltype(&PQfinish)> connection(
-        PQconnectdb(conninfo_.c_str()), &PQfinish);
+        PQconnectdbParams(keywords, connection_values, 1), &PQfinish);
     if (!connection || PQstatus(connection.get()) != CONNECTION_OK ||
         PQtransactionStatus(connection.get()) != PQTRANS_IDLE) return false;
     const std::string gen = std::to_string(s.generation);
