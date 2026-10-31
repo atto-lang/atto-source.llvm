@@ -1,0 +1,3 @@
+define actor Counter as
+  state {}
+end
