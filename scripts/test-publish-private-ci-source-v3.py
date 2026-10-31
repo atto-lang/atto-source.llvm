@@ -879,6 +879,76 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
         )
 
+    def test_source_tree_rejects_ambiguous_paths_before_blob_read(self):
+        valid = {
+            "path": "src/synthetic.cpp", "type": "blob",
+            "mode": "100644", "sha": BLOB, "size": len(DATA),
+        }
+        rejected = [
+            ("double-slash", [{**valid, "path": "src//sneak.cpp"}],
+             "path unsafe"),
+            ("dot-segment", [{**valid, "path": "src/./sneak.cpp"}],
+             "path unsafe"),
+            ("parent-segment", [{**valid, "path": "src/../sneak.cpp"}],
+             "path unsafe"),
+            ("trailing-slash", [{**valid, "path": "src/sneak.cpp/"}],
+             "path unsafe"),
+            ("git-directory", [{**valid, "path": "src/.GiT/config"}],
+             "path unsafe"),
+            ("backslash", [{**valid, "path": r"src\config"}],
+             "path unsafe"),
+            ("control", [{**valid, "path": "src/\x7fbad.cpp"}],
+             "path unsafe"),
+            ("casefold-collision", [
+                valid, {**valid, "path": "src/SYNTHETIC.cpp"}
+            ], "duplicate/case-colliding"),
+            ("duplicate-path", [valid, dict(valid)],
+             "duplicate/case-colliding"),
+            ("bad-directory-mode", [
+                {**valid, "path": "src", "type": "tree",
+                 "mode": "100644"},
+                valid
+            ], "directory mode invalid"),
+            ("bad-directory-sha", [
+                {**valid, "path": "src", "type": "tree",
+                 "mode": "040000", "sha": "not-a-sha"},
+                valid
+            ], "source directory SHA"),
+            ("casefold-directory-collision", [
+                {**valid, "path": "src", "type": "tree",
+                 "mode": "040000"},
+                {**valid, "path": "SRC", "type": "tree",
+                 "mode": "040000"},
+                valid
+            ], "duplicate/case-colliding"),
+        ]
+        for label, tree_entries, message in rejected:
+            calls = []
+
+            def api(route, method="GET", payload=None):
+                calls.append(route)
+                if route == f"repos/{v3.SOURCE_REPO}/pulls/669":
+                    return {
+                        "number": 669, "state": "open",
+                        "head": {"sha": "9" * 40,
+                                 "repo": {"full_name": v3.SOURCE_REPO}},
+                        "base": {"ref": "main"},
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
+                    return {"sha": "9" * 40,
+                            "tree": {"sha": SOURCE_TREE}}
+                if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                    return {"sha": SOURCE_TREE, "truncated": False,
+                            "tree": tree_entries}
+                raise AssertionError(route)
+
+            with self.subTest(label=label):
+                with patch.object(v3, "gh_api", side_effect=api):
+                    with self.assertRaisesRegex(v3.Denied, message):
+                        v3.exact_source_tree(669, "9" * 40)
+                self.assertFalse(any("/git/blobs/" in route for route in calls),
+                                 "unsafe source path caused private blob read")
+
     def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
         seen = []
         def api(route, method="GET", payload=None):
