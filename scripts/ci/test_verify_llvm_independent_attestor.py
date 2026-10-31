@@ -9,6 +9,11 @@ spec = importlib.util.spec_from_file_location("attestor", script)
 attestor = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(attestor)
 repo = attestor.REPOSITORY
+SYNTHETIC_PINS = {
+    "version": 1, "repository": repo, "branch": "main",
+    "state": "APPROVED",  # Test fixture ONLY, not actual authority.
+    "checks": [{"context": "synthetic/llvm-security", "app_id": 12345}],
+}
 sha = "a" * 40
 main_sha = "b" * 40
 
@@ -41,7 +46,10 @@ def fixture(suite="cgl-compat", san=True):
                     "users": [], "teams": [], "apps": [],
                 },
             },
-            "required_status_checks": {"strict": True, "contexts": ["llvm-security"], "checks": []},
+            "required_status_checks": {
+                "strict": True, "contexts": ["synthetic/llvm-security"],
+                "checks": [{"context": "synthetic/llvm-security", "app_id": 12345}],
+            },
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
@@ -76,7 +84,7 @@ class AttestorSourceFreeTests(unittest.TestCase):
         def get_json(path):
             self.assertIn(path, data)
             return data[path]
-        return attestor.verify_live(get_json, env)
+        return attestor.verify_live(get_json, env, approved_check_pins=SYNTHETIC_PINS)
 
     def test_all_suites_and_sanitizer_modes(self):
         for suite in attestor.SUITES:
@@ -175,6 +183,7 @@ class AttestorSourceFreeTests(unittest.TestCase):
                     del p["required_status_checks"]
                 elif mode == "empty_checks":
                     p["required_status_checks"]["contexts"] = []
+                    p["required_status_checks"]["checks"] = []
                 elif mode == "non_strict_checks":
                     p["required_status_checks"]["strict"] = False
                 elif mode == "invalid_checks":
@@ -217,6 +226,25 @@ class AttestorSourceFreeTests(unittest.TestCase):
                 next(step for step in steps if step["name"] == name)["conclusion"] = "skipped"
                 with self.assertRaises(attestor.Denied):
                     self.evaluate(env, data)
+
+    def test_pinned_identity_and_real_unapproved_contract(self):
+        env, data = fixture()
+        prefix = "repos/" + repo
+        for field, value in (("app_id", 12346), ("context", "synthetic/impostor")):
+            with self.subTest(field=field):
+                env, data = fixture()
+                required = data[prefix + "/branches/main/protection"]["required_status_checks"]
+                required["checks"][0][field] = value
+                with self.assertRaises(attestor.Denied):
+                    self.evaluate(env, data)
+        env, data = fixture()
+        # The real contract is intentionally not approved, so live admission
+        # must fail even when the synthetic REST responses look successful.
+        def get_json(path):
+            self.assertIn(path, data)
+            return data[path]
+        with self.assertRaises(attestor.Denied):
+            attestor.verify_live(get_json, env)
 
     def test_spoofed_approval_marker_not_used(self):
         env, data = fixture()

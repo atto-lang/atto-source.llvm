@@ -3,6 +3,8 @@
 import json
 import os
 import re
+import importlib.util
+from pathlib import Path
 import urllib.error
 import urllib.request
 
@@ -131,7 +133,24 @@ def verify_strong_main_protection(protection):
             for k in ("users", "teams", "apps")), "independent-review-bypass")
     return True
 
-def verify_live(get_json, env):
+def verify_expected_check_pins(protection, pinned=None):
+    # The attestor loads these only from separately checked-out trusted main.
+    # PR code cannot supply the contract or the expected check-app identities.
+    directory = Path(__file__).resolve().parent
+    script = directory / "verify_llvm_required_check_pins.py"
+    spec = importlib.util.spec_from_file_location("llvm_pinned_checks", script)
+    require(spec is not None and spec.loader is not None, "check-pin-verifier-missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    policy = pinned if pinned is not None else json.loads(
+        (directory / "llvm_required_check_pins.json").read_text(encoding="utf-8"))
+    try:
+        module.verify(policy, protection)
+    except module.Denied as exc:
+        raise Denied("required-check-identity-denied:" + str(exc)) from exc
+
+
+def verify_live(get_json, env, approved_check_pins=None):
     require(env.get("GITHUB_REPOSITORY") == REPOSITORY, "foreign-repository")
     require(env.get("GITHUB_REF") == "refs/heads/main", "not-trusted-main-event")
     require(env.get("RUNNER_ENVIRONMENT") == "self-hosted", "not-self-hosted")
@@ -155,7 +174,9 @@ def verify_live(get_json, env):
     main = get_json(prefix + "/branches/main")
     require(main.get("protected") is True and main.get("commit", {}).get("sha") == main_sha,
             "main-unprotected-or-moved")
-    verify_strong_main_protection(get_json(prefix + "/branches/main/protection"))
+    protection = get_json(prefix + "/branches/main/protection")
+    verify_strong_main_protection(protection)
+    verify_expected_check_pins(protection, approved_check_pins)
     pull = get_json(prefix + "/pulls/" + pr)
     head, author = pull.get("head", {}), pull.get("user", {})
     require(head.get("sha") == source_sha
@@ -219,7 +240,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (Denied, urllib.error.URLError, ValueError, KeyError, TypeError) as error:
+    except (Denied, urllib.error.URLError, ValueError, KeyError, TypeError, OSError) as error:
         reason = str(error) if isinstance(error, Denied) else "unavailable-or-invalid-api-response"
         print("FRESH_SOURCE_ORG_INDEPENDENT_ATTESTOR=DENIED:" + reason)
         raise SystemExit(1)

@@ -116,6 +116,7 @@ jobs:
         shell: bash
         env:
           PYTHONDONTWRITEBYTECODE: '1'
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -137,6 +138,15 @@ jobs:
           test "$(git hash-object --no-filters scripts/ci/verify_llvm_independent_attestor.py)" = \
             "$(git rev-parse HEAD:scripts/ci/verify_llvm_independent_attestor.py)"
           python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py
+          # Reviewed main is checked out, and NO PR source has run yet.
+          # The checked-in identity pins are intentionally UNAPPROVED.
+          for tracked_path in scripts/ci/llvm_required_check_pins.json scripts/ci/verify_llvm_required_check_pins.py scripts/ci/test_verify_llvm_required_check_pins.py; do
+            test "$(git hash-object --no-filters "$tracked_path")" = "$(git rev-parse "HEAD:$tracked_path")"
+          done
+          python3 -I -B scripts/ci/test_verify_llvm_required_check_pins.py
+          bash scripts/ci/test_prepare_source_ephemeral_jit.sh scripts/ci/prepare_source_ephemeral_jit.sh
+          gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection" |
+            python3 -I -B scripts/ci/verify_llvm_required_check_pins.py scripts/ci/llvm_required_check_pins.json -
 
       - name: Fetch pinned PR objects into empty sparse checkout (never persist auth)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -442,6 +452,10 @@ jobs:
           test "$(git hash-object --no-filters scripts/ci/test_verify_llvm_independent_attestor.py)" = \
             "$(git rev-parse HEAD:scripts/ci/test_verify_llvm_independent_attestor.py)"
           python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py
+          for tracked_path in scripts/ci/llvm_required_check_pins.json scripts/ci/verify_llvm_required_check_pins.py scripts/ci/test_verify_llvm_required_check_pins.py; do
+            test "$(git hash-object --no-filters "$tracked_path")" = "$(git rev-parse "HEAD:$tracked_path")"
+          done
+          python3 -I -B scripts/ci/test_verify_llvm_required_check_pins.py
 
       - name: Independently verify current exact head approval and actual source job steps
         shell: bash

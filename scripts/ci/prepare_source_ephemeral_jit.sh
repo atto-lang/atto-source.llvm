@@ -8,7 +8,7 @@ if [[ "$#" -lt 2 || "$#" -gt 3 || ! "$1" =~ ^[1-9][0-9]{0,10}$ || ( "$#" -eq 3 &
 fi
 group_id="$1"
 output="$2"
-for tool in gh jq openssl stat mktemp; do command -v "$tool" >/dev/null; done
+for tool in gh jq openssl stat mktemp python3 git; do command -v "$tool" >/dev/null; done
 [[ "${GH_HOST:-github.com}" == "github.com" ]] || { echo "DENIED: unsupported GitHub host" >&2; exit 1; }
 [[ "$output" == /* && ! -e "$output" && ! -L "$output" ]] || { echo "DENIED: output must be new absolute file" >&2; exit 1; }
 parent="${output%/*}"
@@ -31,6 +31,7 @@ jq -e --arg repo "$repository" '.full_name==$repo and .private==true and .archiv
   <<< "$checking_repo" >/dev/null || { echo "DENIED: source repository identity/state" >&2; exit 1; }
 repo_id="$(jq -er '.id | select(type=="number")' <<< "$checking_repo")"
 branch="$(gh api "repos/${repository}/branches/main")"
+main_sha="$(jq -er '.commit.sha | select(type=="string" and test("^[0-9a-f]{40}$"))' <<< "$branch")"
 jq -e '.name=="main" and .protected==true' <<< "$branch" >/dev/null || {
   echo "DENIED: protected source main is not enforced" >&2; exit 1;
 }
@@ -60,12 +61,31 @@ jq -e '
 # Refuse a modified local provisioner, even if main workflow is reviewed.
 # Validate exactly the immutable Git blob of this script on protected source main.
 command -v git >/dev/null
-trusted_helper_sha="$(gh api "repos/${repository}/contents/scripts/ci/prepare_source_ephemeral_jit.sh?ref=main" --jq '.sha')"
+trusted_helper_sha="$(gh api "repos/${repository}/contents/scripts/ci/prepare_source_ephemeral_jit.sh?ref=${main_sha}" --jq '.sha')"
 local_helper_sha="$(git hash-object --no-filters -- "$0")"
 [[ "$trusted_helper_sha" =~ ^[0-9a-f]{40}$ && "$local_helper_sha" == "$trusted_helper_sha" ]] || {
   echo "DENIED: local admin helper differs from protected reviewed main" >&2; exit 1;
 }
-workflow_meta="$(gh api "repos/${repository}/contents/.github/workflows/${workflow_file}?ref=main")"
+# Reject unreviewed or substituted status-check issuers before requesting a
+# one-time runner credential. The local validator/pins must exactly match
+# source main's immutable Git blobs, and the real contract starts UNAPPROVED.
+policy_dir="$(cd "$(dirname -- "$0")" && pwd -P)"
+for trusted_name in llvm_required_check_pins.json verify_llvm_required_check_pins.py; do
+  local_policy_file="$policy_dir/$trusted_name"
+  [[ -f "$local_policy_file" && ! -L "$local_policy_file" ]] || {
+    echo "DENIED: trusted required-check policy missing or symlinked" >&2; exit 1;
+  }
+  trusted_policy_sha="$(gh api "repos/${repository}/contents/scripts/ci/${trusted_name}?ref=${main_sha}" --jq '.sha')"
+  actual_policy_sha="$(git hash-object --no-filters -- "$local_policy_file")"
+  [[ "$trusted_policy_sha" =~ ^[0-9a-f]{40}$ && "$actual_policy_sha" == "$trusted_policy_sha" ]] || {
+    echo "DENIED: required-check policy differs from protected main" >&2; exit 1;
+  }
+done
+printf '%s\n' "$protection" |
+  python3 -I -B "$policy_dir/verify_llvm_required_check_pins.py" "$policy_dir/llvm_required_check_pins.json" - >/dev/null || {
+    echo "DENIED: required status checks lack independently pinned issuer IDs" >&2; exit 1;
+  }
+workflow_meta="$(gh api "repos/${repository}/contents/.github/workflows/${workflow_file}?ref=${main_sha}")"
 jq -e --arg path ".github/workflows/$workflow_file" '.path==$path and .type=="file"' \
   <<< "$workflow_meta" >/dev/null || { echo "DENIED: main workflow not present" >&2; exit 1; }
 
@@ -80,6 +100,11 @@ jq -e --arg repo "$repository" --argjson id "$repo_id" '
   and .repositories[0].full_name==$repo and .repositories[0].id==$id
 ' <<< "$visible" >/dev/null || { echo "DENIED: runner group exposes other repositories" >&2; exit 1; }
 
+# Fail closed if main changed since the pinned trust snapshot was checked.
+actual_main_sha="$(gh api "repos/${repository}/branches/main" --jq '.commit.sha')"
+[[ "$actual_main_sha" == "$main_sha" ]] || {
+  echo "DENIED: reviewed source main changed during JIT admission" >&2; exit 1;
+}
 umask 077
 tmp="$(mktemp "${parent}/.jit-config.XXXXXXXX")"
 trap 'rm -f "$tmp"' EXIT

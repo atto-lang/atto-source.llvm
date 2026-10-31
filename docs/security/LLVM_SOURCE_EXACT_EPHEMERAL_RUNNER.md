@@ -241,3 +241,35 @@ that the original default opener inherits it, then verifies the proposed
 attestor opener supplies a disabled proxy handler and still rejects redirects.
 No HTTP requests, real credentials, private source transfer or runner
 registration are part of that regression.
+
+## Immutable protected-main required-check identity contract
+
+The source-exact executor and its independent attestor now require a trusted
+main-branch `scripts/ci/llvm_required_check_pins.json` containing the exact
+independently reviewed `(context, app_id)` pairs for every required GitHub
+status check. The file begins with `state=UNAPPROVED` and zero pins: **runner
+authorization is deliberately disabled** until a separately reviewed
+protected-main policy change records actual, issuer-bound check identities.
+No test fixture or live API response may be copied into this file as approval.
+
+A shared source-free Python verifier compares the pinned JSON contract with
+the protected source-main branch-protection response. It rejects missing,
+additional, duplicated, renamed, unpinned or app-ID-substituted checks,
+non-strict checks, and name-only legacy status contexts. It rejects bool,
+zero, null and string app IDs. The accepted set must match completely, not
+merely share a required context name. The local test matrix uses **synthetic
+only** context names and app IDs, not production approvals.
+
+The executor runs the validator and its self-tests after checkout of trusted
+main and BEFORE any PR source checkout. The admin-only JIT helper verifies
+the raw SHA of the local validator and pin file against reviewed source main,
+then validates the live branch protection before asking for a JIT registration
+token; its offline mocked enrollment tests use a synthetic local fixture.
+The separate clean attestor validates the same policy from its independently
+checked-out trusted main against a fresh GitHub API response. Missing access,
+unapproved pins or identity drift always deny the runner, never grant a
+fallback. No private source export/carrier policy is altered by this change.
+
+Exact committed source-free tests still require a successful original-source
+organization runner; local synthetic test execution does not prove LLVM
+compiled guest execution or source-runner admission.
