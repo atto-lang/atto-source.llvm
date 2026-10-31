@@ -853,6 +853,115 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raw, "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
             )
 
+    def test_source_protection_rejects_malformed_github_metadata(self):
+        base = {
+            "id": v3.SOURCE_REPO_ID, "full_name": v3.SOURCE_REPO,
+            "private": True,
+        }
+        route = f"repos/{v3.SOURCE_REPO}"
+        for malformed in (None, [], "source", True, {**base, "id": float(v3.SOURCE_REPO_ID)}):
+            with self.subTest(repository=repr(malformed)):
+                with patch.object(v3, "gh_api", return_value=malformed):
+                    with self.assertRaisesRegex(v3.Denied, "identity/privacy"):
+                        v3.source_protection()
+
+        for malformed in (None, [], False, "main", {"name": v3.SOURCE_BRANCH}):
+            with self.subTest(branch=repr(malformed)):
+                with patch.object(v3, "gh_api", side_effect=[
+                    base, malformed
+                ]):
+                    with self.assertRaisesRegex(v3.Denied, "not protected"):
+                        v3.source_protection()
+
+        branch = {
+            "name": v3.SOURCE_BRANCH, "protected": True,
+            "commit": {"sha": PROTECTED},
+        }
+        for malformed in (None, [], "protection", True):
+            with self.subTest(protection=repr(malformed)):
+                with patch.object(v3, "gh_api", side_effect=[
+                    base, branch, malformed
+                ]):
+                    with self.assertRaisesRegex(v3.Denied, "metadata is invalid"):
+                        v3.source_protection()
+
+    def test_destination_and_carrier_main_deny_malformed_provider_metadata(self):
+        contract = carrier_contract()
+        healthy_repo = {
+            "id": contract["repository_id"], "full_name": "trusted/ci",
+            "private": True, "visibility": "private", "default_branch": "main",
+            "archived": False, "disabled": False, "fork": False,
+        }
+        base_sha = contract["base_sha"]
+        valid_branch = {
+            "name": "main", "protected": True, "commit": {"sha": base_sha},
+        }
+        cases = [
+            ("repo", None, "carrier identity/state"),
+            ("repo", [], "carrier identity/state"),
+            ("repo", {**healthy_repo, "id": float(contract["repository_id"])},
+             "carrier identity/state"),
+            ("commit", {"tree": None}, "base commit/tree metadata"),
+            ("commit", "not a commit", "base commit/tree metadata"),
+            ("tree", [], "base tree listing incomplete"),
+            ("workflow", None, "workflow differs"),
+            ("plan", None, "test plan differs"),
+        ]
+        for fault, malformed, reason in cases:
+            with self.subTest(fault=fault, malformed=repr(malformed)):
+                def fake_api(route, method="GET", payload=None):
+                    if route == "repos/trusted/ci":
+                        return malformed if fault == "repo" else healthy_repo
+                    if route == f"repos/trusted/ci/git/commits/{base_sha}":
+                        return (malformed if fault == "commit"
+                                else {"tree": {"sha": BASE_TREE}})
+                    if route == f"repos/trusted/ci/git/trees/{BASE_TREE}?recursive=1":
+                        return (malformed if fault == "tree"
+                                else {"sha": BASE_TREE, "truncated": False, "tree": []})
+                    if route == ("repos/trusted/ci/contents/"
+                                 + contract["workflow_path"] + "?ref=" + base_sha):
+                        return (malformed if fault == "workflow" else {
+                            "path": contract["workflow_path"], "type": "file",
+                            "sha": contract["workflow_blob_sha"]})
+                    if route == ("repos/trusted/ci/contents/"
+                                 + contract["test_plan_path"] + "?ref=" + base_sha):
+                        return malformed if fault == "plan" else {
+                            "path": contract["test_plan_path"],
+                            "type": "file", "encoding": "base64",
+                            "sha": contract["test_plan_blob_sha"]}
+                    raise AssertionError(route)
+                with (
+                    patch.object(v3, "gh_api", side_effect=fake_api),
+                    patch.object(v3, "checked_carrier_main", return_value=base_sha),
+                ):
+                    with self.assertRaisesRegex(v3.Denied, reason):
+                        v3.checked_destination("trusted/ci", contract)
+
+        for malformed in (None, [], "branch", {"name": "main", "commit": None}):
+            with self.subTest(branch=repr(malformed)):
+                with patch.object(v3, "gh_api", return_value=malformed):
+                    with self.assertRaisesRegex(v3.Denied, "branch identity changed"):
+                        v3.checked_carrier_main("trusted/ci", contract)
+
+    def test_recheck_destination_denies_malformed_metadata_before_upload(self):
+        contract = carrier_contract()
+        repo = {
+            "id": contract["repository_id"], "full_name": "trusted/ci",
+            "private": True, "visibility": "private",
+        }
+        for malformed in (None, [], {**repo, "id": float(contract["repository_id"])}):
+            with self.subTest(repository=repr(malformed)):
+                with patch.object(v3, "gh_api", return_value=malformed):
+                    with self.assertRaisesRegex(v3.Denied, "identity/privacy"):
+                        v3.recheck_destination_identity("trusted/ci", contract)
+
+        for malformed in (None, [], "main",
+                          {"name": "main", "commit": None}):
+            with self.subTest(branch=repr(malformed)):
+                with patch.object(v3, "gh_api", side_effect=[repo, malformed]):
+                    with self.assertRaisesRegex(v3.Denied, "main changed"):
+                        v3.recheck_destination_identity("trusted/ci", contract)
+
     def test_authorized_source_main_rejects_unprotected_main(self):
         def api(route, method="GET", payload=None):
             if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
