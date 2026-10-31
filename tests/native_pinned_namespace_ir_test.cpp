@@ -9,7 +9,6 @@
 #include <utility>
 
 using oreslang::PinnedNamespaceProgramInput;
-using oreslang::PinnedNamespaceSourceInput;
 
 namespace {
 
@@ -95,6 +94,31 @@ int main() {
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(wrong_pin); },
                 "unknown namespace member or wrong arity");
+        }
+
+        // A provider init remains an observable once-only lifecycle hook even
+        // when private. The scalar namespace graph must reject it.
+        {
+            auto provider_init = make_program();
+            provider_init.sources.front().source =
+                "namespace a; "
+                "fnc init(): int { return 0; } "
+                "pub fnc add(int a, int b): int { return a + b; }\n";
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(provider_init); },
+                "init lifecycle");
+        }
+
+        // The host API is a closed inventory, not a directory scan. An extra
+        // non-entry source without package-owned namespace identity is refused.
+        {
+            auto ambient = make_program();
+            ambient.sources.push_back({
+                "foo/ambient", "foo@1",
+                "pub fnc ambient(): int { return 1; }\n"});
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(ambient); },
+                "non-entry source must declare a package-owned namespace");
         }
 
         auto linked = oreslang::load_pinned_namespace_program(make_program());
