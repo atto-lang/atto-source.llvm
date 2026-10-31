@@ -111,3 +111,31 @@ This is not generalized MIR edge emission, nor positive pinned-frame support:
 invalidates on await/parameter changes. Existing native source actor/task/
 Future compilation and executable fixtures provide a regression gate for the
 admitted no-loan path. The test is checked in, not an exact-head executed pass.
+
+## Hardening: post-admission source mutation (2026-10-30)
+
+The restricted source-await path now records a compiler-only fingerprint of
+the checked Function AST, including nested expression/argument trees, local
+initializers, scoped statement trees, Task result expressions, actor capability
+declarations, type/effect summaries and normal/exceptional returns. LLVM
+emission rejects a missing or stale fingerprint, or a previously approved
+await that was removed after checking. This closes a concrete gap in an older
+shallow fingerprint that only tracked binding names and await presence.
+
+This fingerprint is a **stale-AST detector**, not an unforgeable capability:
+the compiler/host must still own the checked AST and prohibit untrusted
+mutation. The program-wide class/module environment and side effects of
+linked FFI remain separate checker obligations. Do not describe the fingerprint
+as a cryptographic source attestation.
+
+Direct calls to the reusable ownership CFG helper also now reject malformed
+ownership masks, oversized loan counts and repeated loan identities across
+separate places, including when no full Graph entry verification is invoked.
+Added negative native C++ cases for those bypasses.
+
+**Evidence:** source changes and regressions are checked in, but exact-head
+compiler/CTest execution, sanitizer results and native linked binary proof
+remain NOT_EXECUTED while source-org Actions jobs fail at runner admission.
+The local environment provides Clang/GCC but does not have the private repo's
+complete mount/headers or Rust toolchain. Do not convert source-free or
+subset syntax checks into executable LLVM guest acceptance.
