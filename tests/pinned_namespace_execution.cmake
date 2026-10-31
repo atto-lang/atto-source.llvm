@@ -4,6 +4,15 @@ if(NOT DEFINED HELPER OR NOT EXISTS "${HELPER}" OR
   message(FATAL_ERROR "HELPER, CLANG and WORK_DIR are required")
 endif()
 
+# A second all-provider program shares the same exact 12 source units but
+# executes namespace b's four otherwise-unused providers too.
+if(NOT DEFINED EXPECTED_GUEST_STATUS)
+  set(EXPECTED_GUEST_STATUS 43)
+endif()
+if(NOT "${EXPECTED_GUEST_STATUS}" MATCHES "^(43|53)$")
+  message(FATAL_ERROR "unexpected pinned namespace guest oracle")
+endif()
+
 file(MAKE_DIRECTORY "${WORK_DIR}")
 set(ir_file "${WORK_DIR}/pinned-namespace.ll")
 set(native_file "${WORK_DIR}/pinned-namespace-native")
@@ -12,7 +21,7 @@ if(WIN32)
 endif()
 
 execute_process(
-  COMMAND "${HELPER}"
+  COMMAND "${HELPER}" ${HELPER_ARGS}
   RESULT_VARIABLE helper_status
   OUTPUT_VARIABLE ir
   ERROR_VARIABLE helper_err
@@ -60,11 +69,11 @@ execute_process(
   WORKING_DIRECTORY "${WORK_DIR}"
   TIMEOUT 10)
 
-if(NOT "${guest_status}" STREQUAL "43")
+if(NOT "${guest_status}" STREQUAL "${EXPECTED_GUEST_STATUS}")
   message(FATAL_ERROR "pinned namespace guest exit mismatch: ${guest_status}")
 endif()
 if(NOT "${guest_out}" STREQUAL "" OR NOT "${guest_err}" STREQUAL "")
   message(FATAL_ERROR "pinned namespace guest produced output: stdout=[${guest_out}] stderr=[${guest_err}]")
 endif()
 
-message(STATUS "PINNED_NAMESPACE_NATIVE_EXIT_43=PASS")
+message(STATUS "PINNED_NAMESPACE_NATIVE_EXIT_${EXPECTED_GUEST_STATUS}=PASS")
