@@ -152,6 +152,36 @@ fnc main(): int {
 )ores");
     }, "outside current length");
 
+    // Real Parser.cpp -> Program -> resolve_and_validate_program must not
+    // silently discard extra declaration categories that this narrow native
+    // MIR/stack-owner implementation does not know how to lower.
+    const auto fresh_inverted_main = []() {
+        return parse_unresolved_program(R"ores(
+define inverted struct Position as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<Position>.with_capacity(2);
+    rows.push(11, 21);
+    return rows.get(0, x);
+}
+)ores");
+    };
+    rejects([&] {
+        auto poisoned = fresh_inverted_main();
+        poisoned.sum_types.push_back(NativeSumType{});
+        resolve_and_validate_program(poisoned);
+    }, "requires one standalone local main");
+    rejects([&] {
+        auto poisoned = fresh_inverted_main();
+        poisoned.conforms.push_back("UnloweredCapability");
+        resolve_and_validate_program(poisoned);
+    }, "requires one standalone local main");
+    rejects([&] {
+        auto poisoned = fresh_inverted_main();
+        poisoned.type_constraint_descriptors.push_back(
+            TypeConstraintDescriptor{});
+        resolve_and_validate_program(poisoned);
+    }, "requires one standalone local main");
+
     rejects([] {
         auto p = parse_unresolved_program(
             "define inverted struct Point as x: int; end");
