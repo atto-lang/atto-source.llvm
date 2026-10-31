@@ -157,6 +157,18 @@ class CGLAdmissionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.inspect(data)
 
+    def test_reject_non_executable_or_non_regular_interpreter(self):
+        with tempfile.TemporaryDirectory() as td:
+            loader = Path(td) / "loader"
+            loader.write_bytes(b"not an executable loader")
+            loader.chmod(0o644)
+            for target in (loader, Path(td)):
+                with self.subTest(interpreter=str(target)):
+                    with self.assertRaisesRegex(
+                            ValueError, "executable regular file"):
+                        self.inspect(elf(kind=3,
+                                         interpreter=os.fsencode(target) + b"\\0"))
+
     def test_accept_pie_with_host_interpreter(self):
         interp = "/lib64/ld-linux-x86-64.so.2"
         if not Path(interp).is_file():
