@@ -1162,6 +1162,8 @@ void validate_i64_ownership(Program& program) {
             // move/borrow into an exceptional edge that CFG lowering ignores.
             check_value(*function.caught_error_try_result, locals, functions);
         }
+        if (function.caught_error_type_match_result)
+            check_value(*function.caught_error_type_match_result, locals, functions);
         const Locals cfg_entry = locals;
         const bool owning_return = class_arrays.count(function.return_class) &&
             !class_arrays.at(function.return_class).empty();
