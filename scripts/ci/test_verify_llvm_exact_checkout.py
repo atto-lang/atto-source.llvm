@@ -3,8 +3,8 @@
 import os,sys,subprocess,tempfile,unittest
 from pathlib import Path
 CHECK=Path(__file__).with_name("verify_llvm_exact_checkout.py")
-def cmd(c,*a,check=True):
-    return subprocess.run(a,cwd=c,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,check=check)
+def cmd(c,*a,check=True,env=None):
+    return subprocess.run(a,cwd=c,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,check=check,env=env)
 class VerifyTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -19,8 +19,9 @@ class VerifyTests(unittest.TestCase):
     def commit(self):
         cmd(self.dir,"git","add",".");cmd(self.dir,"git","commit","-qm","fixture")
         self.sha=cmd(self.dir,"git","rev-parse","HEAD").stdout.strip()
-    def check(self,allowed=False,sha=None):
-        r=cmd(self.dir,sys.executable,str(CHECK),sha or self.sha,check=False)
+    def check(self,allowed=False,sha=None,extra_env=None):
+        e=os.environ.copy();e.update(extra_env or {})
+        r=cmd(self.dir,sys.executable,str(CHECK),sha or self.sha,check=False,env=e)
         self.assertEqual(r.returncode==0,allowed,r.stdout+r.stderr)
     def test_clean(self): self.check(True)
     def test_wrong_sha(self): self.check(sha="b"*40)
@@ -47,6 +48,23 @@ class VerifyTests(unittest.TestCase):
         (self.dir/"another").hardlink_to(self.dir/"normal.txt");self.check()
     def test_committed_symlink(self):
         (self.dir/"link").symlink_to("normal.txt");self.commit();self.check()
+    def test_injected_alternate_index_cannot_hide_staging(self):
+        # A clean alternate index must not hide the real, staged index drift.
+        saved=self.dir/".git"/"clean-index"
+        saved.write_bytes((self.dir/".git"/"index").read_bytes())
+        (self.dir/"normal.txt").write_text("staged other bytes\n")
+        cmd(self.dir,"git","add","normal.txt")
+        (self.dir/"normal.txt").write_text("original\n")
+        self.check(extra_env={"GIT_INDEX_FILE":str(saved)})
+
+    def test_hostile_git_directory_and_object_env_ignored(self):
+        self.check(True,extra_env={"GIT_DIR":str(self.dir/"missing-git"),
+                                   "GIT_WORK_TREE":str(self.dir/"missing-worktree"),
+                                   "GIT_OBJECT_DIRECTORY":str(self.dir/"missing-objects"),
+                                   "GIT_CONFIG_COUNT":"1",
+                                   "GIT_CONFIG_KEY_0":"core.repositoryformatversion",
+                                   "GIT_CONFIG_VALUE_0":"999"})
+
     def test_clean_filter(self):
         (self.dir/".gitattributes").write_text("normal.txt filter=tripwire\n");self.commit()
         marker=self.dir/"FILTER_EXECUTED"

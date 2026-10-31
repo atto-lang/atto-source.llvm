@@ -4,7 +4,14 @@ import os, re, stat, subprocess, sys
 from pathlib import Path
 class Denied(Exception): pass
 OID=re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
-def env(): return dict(os.environ,GIT_NO_REPLACE_OBJECTS="1",GIT_CONFIG_NOSYSTEM="1",GIT_CONFIG_GLOBAL=os.devnull,GIT_OPTIONAL_LOCKS="0")
+def env():
+    # Never let the invoking environment redirect Git's index, objects,
+    # worktree or configuration away from the checkout being verified.
+    safe = {key: value for key, value in os.environ.items()
+            if not key.startswith("GIT_")}
+    safe.update(GIT_NO_REPLACE_OBJECTS="1", GIT_CONFIG_NOSYSTEM="1",
+                GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0")
+    return safe
 def git(*a):
     p=subprocess.run(["git","-c","core.fsmonitor=false","-c","core.untrackedCache=false","-c","core.hooksPath=/dev/null",*a],env=env(),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     if p.returncode: raise Denied("Git metadata query failed")
