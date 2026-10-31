@@ -41,6 +41,7 @@ std::string field_key(const std::string& receiver, const std::string& field) {
 
 constexpr std::uint32_t kArithmeticOverflowErrorCode = 65537u;
 constexpr std::uint8_t kErrorEffectThrow = 1u;
+constexpr std::uint8_t kErrorEffectPanic = 3u;
 
 bool native_error_slot_scalar_function(const Function& fn) {
     if (fn.returns_void || fn.return_type != ScalarType::I64 ||
@@ -215,6 +216,18 @@ llvm::Value* load_native_error_code(llvm::IRBuilder<>& builder,
     return builder.CreateLoad(
         llvm::Type::getInt32Ty(builder.getContext()),
         builder.CreateStructGEP(type, slot, 0, name + ".addr"), name);
+}
+
+void promote_native_error_to_panic(llvm::IRBuilder<>& builder,
+                                   llvm::StructType* type,
+                                   llvm::Value* slot,
+                                   const llvm::Twine& name) {
+    builder.CreateStore(
+        llvm::ConstantInt::get(
+            llvm::Type::getInt8Ty(builder.getContext()),
+            kErrorEffectPanic),
+        builder.CreateStructGEP(
+            type, slot, 1, name + ".effect.addr"));
 }
 
 llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
@@ -1295,6 +1308,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     llvm::ConstantInt::get(wrapper_code->getType(), 0)),
                 wrapper_failed, wrapper_ok);
             wrapper_builder.SetInsertPoint(wrapper_failed);
+            // This wrapper is a guest-invocation boundary with no recover
+            // scope. An unhandled throw/raise therefore reaches panic before
+            // the platform fail-closed trap; the signal itself is not Error
+            // identity.
+            promote_native_error_to_panic(
+                wrapper_builder, error_slot_type, wrapper_slot,
+                "error.wrapper.unhandled.panic");
             wrapper_builder.CreateCall(llvm::Intrinsic::getDeclaration(
                 &module, llvm::Intrinsic::trap));
             wrapper_builder.CreateUnreachable();
@@ -1352,6 +1372,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (error_slot_functions.count(function_slot)) {
                 error_builder.CreateRet(llvm::ConstantInt::get(i64, 0));
             } else {
+                // No recover scope exists in scalar v1. Once the error has
+                // escaped main, the language-level unhandled state is panic.
+                promote_native_error_to_panic(
+                    error_builder, error_slot_type, native_error_slot,
+                    "error.unhandled.panic");
                 error_builder.CreateCall(llvm::Intrinsic::getDeclaration(
                     &module, llvm::Intrinsic::trap));
                 error_builder.CreateUnreachable();
