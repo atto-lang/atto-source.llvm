@@ -12,16 +12,17 @@ on:
         required: true
         type: string
       suite:
-        description: "Exact-source actor, ledger, continuation CTest/sanitizer, or V3 security suite"
+        description: "Exact-source actor, ledger, continuation, CGL Linux compatibility, or V3 security suite"
         required: true
         type: choice
         options:
           - actor-llvm
           - actor-ledger
           - continuation-gate
+          - cgl-compat
           - security-v3
       run_sanitizers:
-        description: "For actor-llvm/ledger, run guest ASan/UBSan; continuation-gate always runs native sanitizers"
+        description: "For actor/ledger/CGL, request ASan/UBSan; continuation-gate always runs native sanitizers"
         type: boolean
         required: true
         default: true
@@ -144,7 +145,7 @@ jobs:
           echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=${{ inputs.source_sha }}"
 
       - name: Verify preinstalled LLVM / Clang / CMake toolchain
-        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger' || inputs.suite == 'continuation-gate'
+        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger' || inputs.suite == 'continuation-gate' || inputs.suite == 'cgl-compat'
         shell: bash
         run: |
           set -euo pipefail
@@ -256,6 +257,68 @@ jobs:
             timeout 120s "$scratch/pinned-test"
           done
           echo "PINNED_CONTINUATION_GCC_CLANG_SANITIZERS_EXECUTED_FOR_SHA=$SOURCE_SHA"
+
+      # Generic Linux binary compatibility only, not PREEMPT_RT/RT certification.
+      - name: Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF
+        if: inputs.suite == 'cgl-compat'
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f tests/test_cgl_preflight.py
+          test -f tests/fixtures/forward-call-main.ores
+          test -f tests/native_cgl_host_admission_test.cpp
+          test -f tests/native_cgl_dispatch_evidence_test.cpp
+          test -f tests/native_cgl_carrier_slice_trace_test.cpp
+          python3 -m unittest discover -s tests -p test_cgl_preflight.py -v
+          cmake -S . -B build-cgl-source-exact -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build-cgl-source-exact --target \
+            oreslang-llvmc \
+            oreslang-native-cgl-host-admission-test \
+            oreslang-native-cgl-dispatch-evidence-test \
+            oreslang-native-cgl-carrier-slice-trace-test --parallel 2
+          for named_test in \
+            native_cgl_linux_host_admission \
+            native_cgl_timer_to_user_start_evidence \
+            native_cgl_carrier_slice_timestamp_provenance \
+            native_source_i64_os_exit_subset; do
+            ctest --test-dir build-cgl-source-exact --output-on-failure \
+              --no-tests=error -R "^${named_test}$"
+          done
+          bash scripts/cgl-native-smoke.sh "$PWD/build-cgl-source-exact"
+          echo "CGL_SOURCE_TO_ELF_EXIT42_AND_CTEST_EXECUTED_FOR_SHA=$SOURCE_SHA"
+
+      - name: Execute linked CGL native tests with Clang ASan and UBSan
+        if: inputs.suite == 'cgl-compat' && inputs.run_sanitizers
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ASAN_OPTIONS: 'detect_leaks=1:halt_on_error=1'
+          UBSAN_OPTIONS: 'halt_on_error=1:print_stacktrace=1'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          command -v clang++
+          cmake -S . -B build-cgl-asan-ubsan \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-cgl-asan-ubsan --target \
+            oreslang-native-cgl-host-admission-test \
+            oreslang-native-cgl-dispatch-evidence-test \
+            oreslang-native-cgl-carrier-slice-trace-test --parallel 2
+          for named_test in \
+            native_cgl_linux_host_admission \
+            native_cgl_timer_to_user_start_evidence \
+            native_cgl_carrier_slice_timestamp_provenance; do
+            ctest --test-dir build-cgl-asan-ubsan --output-on-failure \
+              --no-tests=error -R "^${named_test}$"
+          done
+          echo "CGL_CLANG_ASAN_UBSAN_LINKED_TESTS_EXECUTED_FOR_SHA=$SOURCE_SHA"
 
       # Re-attest current identity after the actual selected suite has executed.
       - name: Post-run attestation of current PR head and independent reviewer
