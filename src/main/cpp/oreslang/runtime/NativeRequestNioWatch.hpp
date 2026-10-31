@@ -22,8 +22,8 @@ public:
     using Handle=typename Work::Handle;
 
     struct AcceptedWatch final {
-        OresNativeNioWatch watch{};
-        int fd=-1;
+        const OresNativeNioWatch watch;
+        const int fd;
         const AsyncIoTicket operation;
         PinnedContinuationGate* operation_gate=nullptr;
         typename Work::IoLease physical;
