@@ -31,5 +31,27 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Verify mandatory OresLLM native test inventory (never zero tests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v clang
+          test -x build/oreslang-llvmc
+          inventory="$(ctest --test-dir build -N -R '^oresllm_')"
+          printf '%s\n' "$inventory"
+          for name in \
+            oresllm_explicit_ownership_borrow_accept \
+            oresllm_explicit_ownership_borrow_execute \
+            oresllm_arithmetic_star_preserved \
+            oresllm_c_style_reference_parameter_rejected \
+            oresllm_c_style_address_of_rejected \
+            oresllm_c_style_pointer_decl_rejected; do
+            grep -F " $name" <<< "$inventory" >/dev/null || {
+              echo "::error::Missing mandatory compiler/native test $name"
+              exit 1
+            }
+          done
+          grep -Eq 'Total Tests: 6
+ <<< "$inventory"
       - name: Execute real source-to-IR, negative-admission and Clang AOT tests
-        run: ctest --test-dir build -R '^oresllm_' --output-on-failure
+        run: ctest --test-dir build -R '^oresllm_' --no-tests=error --output-on-failure
