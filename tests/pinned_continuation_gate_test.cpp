@@ -1,6 +1,7 @@
 #include "oreslang/runtime/PinnedContinuationGate.hpp"
 #include <atomic>
 #include <cstdint>
+#include <new>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -377,6 +378,46 @@ int main() {
                   && gate.try_claim_resume(ticket)
                   && gate.finish_resume(ticket)
                   && gate.try_retire(ticket), "bounded registry failed to retire");
+    }
+    // A destroyed gate may be reconstructed at the EXACT same address with
+    // the same actor ticket, borrower, slot and serial. A receipt from the
+    // previous incarnation must not authorize release of the new loan.
+    // This is an in-process host identity regression, not cross-DSO/FFI proof.
+    for (std::uint64_t round = 1; round <= 64; ++round) {
+        AsyncIoTicket ticket{130, round, round};
+        alignas(BorrowerPinnedContinuationGate)
+            unsigned char storage[sizeof(BorrowerPinnedContinuationGate)];
+        auto* first = new (storage) BorrowerPinnedContinuationGate(ticket);
+        auto stale = first->acquire(ticket, 77,
+            BorrowerPinnedContinuationGate::Loan::shared);
+        check(stale.has_value() && first->loan_state() == 1,
+              "reused-storage first incarnation did not acquire");
+        check(first->settle(ticket, AsyncIoTerminal::cancelled)
+                && first->broker_acknowledge(ticket)
+                && first->try_claim_resume(ticket)
+                && first->finish_resume(ticket)
+                && first->release(ticket, 77, *stale)
+                && first->try_retire(ticket),
+              "reused-storage first incarnation did not retire cleanly");
+        first->~BorrowerPinnedContinuationGate();
+        auto* second = new (storage) BorrowerPinnedContinuationGate(ticket);
+        auto fresh = second->acquire(ticket, 77,
+            BorrowerPinnedContinuationGate::Loan::shared);
+        check(fresh.has_value() && second->loan_state() == 1,
+              "reused-storage second incarnation did not acquire");
+        check(!second->release(ticket, 77, *stale)
+                && second->loan_state() == 1,
+              "stale receipt crossed gate lifetime at reused address");
+        check(second->settle(ticket, AsyncIoTerminal::success)
+                && second->broker_acknowledge(ticket)
+                && second->try_claim_resume(ticket)
+                && second->finish_resume(ticket)
+                && !second->try_retire(ticket)
+                && second->release(ticket, 77, *fresh)
+                && second->try_retire(ticket)
+                && second->loan_state() == PinnedContinuationGate::retirement_fence_bit,
+              "reused-storage second incarnation failed safe retirement");
+        second->~BorrowerPinnedContinuationGate();
     }
     // Two gate instances may have identical tickets and per-gate serials.
     // A copied receipt from one incarnation must never release the other.
