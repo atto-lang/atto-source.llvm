@@ -48,12 +48,19 @@ IEEE unordered-not-equal. No fast-math assumptions are introduced by this
 patch.
 
 `tests/native_f64_lexical_gate.sh`, now registered in CTest as
-`native_f64_scalar_e2e`, requires **eight actually compiled/linked/executed
-guest programs** (seven f64 checks and one signed-i64 control) to terminate
+`native_f64_scalar_e2e`, requires **twelve actually compiled/linked/executed
+guest programs** (eleven f64 checks and one signed-i64 control) to terminate
 with exit 42 and empty output. Twelve deliberately invalid source programs
 must fail with no LLVM IR, including int-to-f64 coercion, mixed arithmetic,
 mixed comparison, integer or mixed-type division, unsupported function f64
 ABIs, branch-local f64 owners, malformed exponent and overflowed literals.
+Additional executable f64 cases now test IEEE NaN inequality,
+ordered comparisons with NaN, division-by-negative-zero sign preservation,
+and positive infinity. Negative-source fixtures require the compiler's exact
+**source diagnostic exit code 1**, the `oreslang-llvmc:` diagnostic prefix
+and **zero IR**; a compiler crash, missing executable, signal or runner failure
+must never be accepted as a negative-test pass.
+
 These cases are **authored but not executed on an authorized LLVM runner**:
 no native f64 PASS, compiler parity or numerical correctness receipt
 can yet be claimed.
