@@ -75,15 +75,30 @@ public:
 
     bool release_after_ticket_retirement() noexcept {
         if (!active_.load(std::memory_order_acquire)) return false;
+
+        // Claim the only retirement probe BEFORE touching region_. A delayed
+        // loser must never dereference actor-owned state after the winner can
+        // release the last resource loan and make physical reclamation legal.
+        bool expected = false;
+        if (!release_probe_claimed_.compare_exchange_strong(
+                expected, true,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire))
+            return false;
+
         const auto status = ores_state_region_ticket_retired(region_, ticket_);
-        if (status != ORES_STD_SYNC_GRANTED) return false;
-        // Duplicate/competing supervisor and completion observers may both
-        // see ticket retirement. Only ONE may retire its actor resource loan:
-        // releasing twice would otherwise hit NativeActorRef's fatal
-        // underflow path. The actor loan remains held until this winner
-        // actually calls release_resource_loan().
-        if (!active_.exchange(false, std::memory_order_acq_rel)) return false;
+        if (status != ORES_STD_SYNC_GRANTED) {
+            // The actor loan is still held and active_ remains true. Re-open
+            // the probe lane so a later completion observation can retry.
+            release_probe_claimed_.store(false, std::memory_order_release);
+            return false;
+        }
+
+        // Keep active_ true until after the resource loan is actually
+        // relinquished. This preserves its meaning for lifecycle observers:
+        // active()==true always implies this pin still owns actor lifetime.
         actor_.release_resource_loan();
+        active_.store(false, std::memory_order_release);
         return true;
     }
 
@@ -97,6 +112,7 @@ private:
     ores_task_bound_state_region* region_ = nullptr;
     ores_std_ticket ticket_{};
     std::atomic<bool> active_{false};
+    std::atomic<bool> release_probe_claimed_{false};
 };
 
 } // namespace oreslang::runtime

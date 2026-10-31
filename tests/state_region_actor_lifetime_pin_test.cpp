@@ -142,7 +142,25 @@ int main() {
     CHECK(freed == 0);
     CHECK(ref.get_done().wait_for(std::chrono::milliseconds(0))
         == std::future_status::timeout);
-    CHECK(!pin.release_after_ticket_retirement());
+    // Competing early observers must serialize the retirement probe and
+    // leave the pin active when the exact ticket is still executing.
+    constexpr int early_contenders = 32;
+    std::atomic<bool> start_early_completion{false};
+    std::atomic<int> early_release_receipts{0};
+    std::vector<std::thread> early_observers;
+    early_observers.reserve(early_contenders);
+    for (int i = 0; i < early_contenders; ++i) {
+        early_observers.emplace_back([&] {
+            while (!start_early_completion.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            if (pin.release_after_ticket_retirement())
+                early_release_receipts.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+    start_early_completion.store(true, std::memory_order_release);
+    for (auto& observer : early_observers) observer.join();
+    CHECK(early_release_receipts.load(std::memory_order_relaxed) == 0);
+    CHECK(pin.active());
     CHECK(ref.outstanding_resource_loans() == 1);
     // A logical STOP may not release a PHYSICALLY EXECUTING task ticket.
     CHECK(ores_state_region_release(&region, owner, request.ticket).code

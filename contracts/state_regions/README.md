@@ -207,3 +207,25 @@ counter, real task-bound gate, native arena destruction or full CMake/CTest.
 It cannot certify complete actor-state retirement, hard real-time, or guest
 compiler behavior. The actual source-org 5-job matrix remains unassigned
 and zero-step.
+
+
+## Claim-before-probe completion ordering — 2026-10-31
+
+The first concurrent completion hardening still allowed every observer that saw
+`active_ == true` to call `ores_state_region_ticket_retired(region_, ticket_)`
+before the one-winner atomic exchange. A delayed loser could therefore cross the
+resource-loan release boundary and dereference actor-owned region state after the
+winner had made physical reclamation legal.
+
+The pin now uses a separate atomic `release_probe_claimed_` lane. Exactly one
+observer claims that lane **before** any retirement query. If the ticket is still
+live/busy, the claim is reopened while `active_` and the actor resource loan
+remain held. If the ticket is retired, that same observer releases the actor
+resource loan and only then publishes `active_ = false`. Losing observers never
+touch `region_` during that attempt.
+
+The native regression now also races 32 pre-retirement completion observers and
+requires zero release receipts, `active()==true`, and one outstanding actor
+resource loan before the existing 32-way post-retirement one-winner test. These
+are authored exact-source tests; private source-org CI still requires a real
+assigned runner before they count as native execution evidence.
