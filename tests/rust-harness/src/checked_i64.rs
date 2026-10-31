@@ -95,6 +95,31 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             source_root.join("tests/fixtures/numeric-v1/math-module-error-root-catch.ores"),
             Some(42),
         ),
+        (
+            "error-slot-add-catch",
+            source_root.join("tests/fixtures/numeric-v1/error-slot-add-catch.ores"),
+            Some(42),
+        ),
+        (
+            "error-slot-sub-catch",
+            source_root.join("tests/fixtures/numeric-v1/error-slot-sub-catch.ores"),
+            Some(42),
+        ),
+        (
+            "error-slot-mul-catch",
+            source_root.join("tests/fixtures/numeric-v1/error-slot-mul-catch.ores"),
+            Some(42),
+        ),
+        (
+            "error-slot-unary-neg-catch",
+            source_root.join("tests/fixtures/numeric-v1/error-slot-unary-neg-catch.ores"),
+            Some(42),
+        ),
+        (
+            "error-slot-math-abs-catch",
+            source_root.join("tests/fixtures/numeric-v1/error-slot-math-abs-catch.ores"),
+            Some(42),
+        ),
     ];
     for optimization in ["-O1", "-O2"] {
         for (name, input, expected) in &module_cases {
@@ -124,6 +149,7 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                 || name.contains("catch-not-taken")
                 || name.contains("typed-overflow-catch")
                 || name.contains("error-root-catch")
+                || name.starts_with("error-slot-")
             {
                 require(
                     module_ir.contains("error.catch")
@@ -134,7 +160,9 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                     ),
                 )?;
             }
-            if name.contains("typed-overflow-catch") {
+            if name.contains("typed-overflow-catch")
+                || name.starts_with("error-slot-")
+            {
                 require(
                     module_ir.contains("caught.error.is.arithmetic_overflow")
                         && module_ir.contains("i32 65537")
