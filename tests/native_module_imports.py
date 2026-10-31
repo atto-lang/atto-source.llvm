@@ -95,6 +95,15 @@ def main():
         'lib.ores': 'define module Lib as define class Flag as const bool ready=true;pub enabled():bool{return self.ready;}pub result():int{return 42;}end pub fnc answer():int{let Flag f=new Flag();return f.enabled() ? f.result() : 0;}end',
     },42))
     negatives = [
+        # Import namespaces have a distinct AST identity; before checked v2
+        # package-manifest integration they must emit no LLVM IR, regardless
+        # of whether the quoted selector is local or a pinned dependency.
+        ('namespace-local-unlinked', 'import namespace billing as pay from "+/"; pub fnc main():int{return pay.answer();}', library, 'NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED'),
+        ('namespace-pinned-unlinked', 'import namespace billing as pay from "checkout"; pub fnc main():int{return pay.answer();}', library, 'NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED'),
+        ('namespace-traversal-selector', 'import namespace billing as pay from "../other"; pub fnc main():int{return 0;}', library, 'invalid native namespace package alias'),
+        ('namespace-empty-selector', 'import namespace billing as pay from ""; pub fnc main():int{return 0;}', library, 'namespace package selector'),
+        ('namespace-duplicate-local-alias', 'import namespace billing as pay from "+/"; import namespace other as pay from "checkout"; pub fnc main():int{return 0;}', library, 'duplicate imported namespace binding'),
+        ('namespace-module-alias-collision', 'import module Lib as pay from "./lib"; import namespace billing as pay from "+/"; pub fnc main():int{return 0;}', library, 'duplicate imported namespace binding'),
         ('private-export', 'import module Lib from "./lib"; pub fnc main():int{return Lib.secret();}', library, 'imported function is private'),
         ('wrong-selection', 'import module Other from "./lib"; pub fnc main():int{return 0;}', library, 'does not declare selected module'),
         ('wrong-arity', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer(2);}', library, 'wrong call arity'),
