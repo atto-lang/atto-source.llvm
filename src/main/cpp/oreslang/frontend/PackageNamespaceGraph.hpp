@@ -58,6 +58,14 @@ struct PackageNamespaceGraph {
     std::map<std::pair<std::string, std::string>, PackageNamespaceKey> imports;
 };
 
+// Default host inventory remains call-free. Executable pinned lowering may
+// explicitly admit structurally scalar Call nodes, but must independently
+// resolve every call to an exact graph export and prove an acyclic call graph
+// before codegen.
+struct PackageNamespaceLinkOptions {
+    bool allow_scalar_calls = false;
+};
+
 inline bool valid_flat_namespace_name(const std::string& name) {
     if (name.empty() || name == "__root__" || name == "__proto__"
             || name == "constructor" || name == "prototype") return false;
@@ -84,7 +92,8 @@ inline constexpr std::size_t kMaxNamespaceScalarExpressionDepth = 128;
 inline constexpr std::size_t kMaxNamespaceScalarExpressionNodes = 1024;
 inline bool namespace_pure_scalar_expression_at_depth(
         const Expression* expression, std::size_t depth,
-        std::size_t& remaining_nodes) {
+        std::size_t& remaining_nodes,
+        PackageNamespaceLinkOptions options = {}) {
     if (!expression) return true;
     if (depth >= kMaxNamespaceScalarExpressionDepth || remaining_nodes == 0) return false;
     --remaining_nodes;
@@ -183,27 +192,55 @@ inline bool namespace_pure_scalar_expression_at_depth(
                 return false;
             }
             break;
+        case Expression::Kind::Call:
+            if (!options.allow_scalar_calls
+                    || !valid_flat_namespace_name(expression->name)
+                    || expression->left || expression->right
+                    || !no_ternary_children()
+                    || !expression->argument_names.empty()
+                    || expression->type_arguments_present
+                    || !expression->type_arguments.empty())
+                return false;
+            break;
         default:
             return false;
     }
     if (expression->resolved_type != ScalarType::I64
             && expression->resolved_type != ScalarType::Bool) return false;
     if (!expression->resolved_class.empty() || !expression->sum_type.empty()
-            || !expression->arguments.empty() || !expression->argument_names.empty()
+            || !expression->argument_names.empty()
             || !expression->type_arguments.empty() || expression->type_arguments_present)
         return false;
-    return namespace_pure_scalar_expression_at_depth(expression->left.get(), depth + 1, remaining_nodes)
-        && namespace_pure_scalar_expression_at_depth(expression->right.get(), depth + 1, remaining_nodes)
-        && namespace_pure_scalar_expression_at_depth(expression->condition.get(), depth + 1, remaining_nodes)
-        && namespace_pure_scalar_expression_at_depth(expression->condition_lhs.get(), depth + 1, remaining_nodes)
-        && namespace_pure_scalar_expression_at_depth(expression->condition_rhs.get(), depth + 1, remaining_nodes)
-        && namespace_pure_scalar_expression_at_depth(expression->when_true.get(), depth + 1, remaining_nodes)
-        && namespace_pure_scalar_expression_at_depth(expression->when_false.get(), depth + 1, remaining_nodes);
+    if (expression->kind != Expression::Kind::Call && !expression->arguments.empty())
+        return false;
+    if (!namespace_pure_scalar_expression_at_depth(
+            expression->left.get(), depth + 1, remaining_nodes, options)
+            || !namespace_pure_scalar_expression_at_depth(
+                expression->right.get(), depth + 1, remaining_nodes, options)
+            || !namespace_pure_scalar_expression_at_depth(
+                expression->condition.get(), depth + 1, remaining_nodes, options)
+            || !namespace_pure_scalar_expression_at_depth(
+                expression->condition_lhs.get(), depth + 1, remaining_nodes, options)
+            || !namespace_pure_scalar_expression_at_depth(
+                expression->condition_rhs.get(), depth + 1, remaining_nodes, options)
+            || !namespace_pure_scalar_expression_at_depth(
+                expression->when_true.get(), depth + 1, remaining_nodes, options)
+            || !namespace_pure_scalar_expression_at_depth(
+                expression->when_false.get(), depth + 1, remaining_nodes, options))
+        return false;
+    for (const auto& argument : expression->arguments) {
+        if (!namespace_pure_scalar_expression_at_depth(
+                argument.get(), depth + 1, remaining_nodes, options))
+            return false;
+    }
+    return true;
 }
 
-inline bool namespace_pure_scalar_expression(const Expression* expression) {
+inline bool namespace_pure_scalar_expression(
+        const Expression* expression, PackageNamespaceLinkOptions options = {}) {
     std::size_t remaining_nodes = kMaxNamespaceScalarExpressionNodes;
-    return namespace_pure_scalar_expression_at_depth(expression, 0, remaining_nodes);
+    return namespace_pure_scalar_expression_at_depth(
+        expression, 0, remaining_nodes, options);
 }
 
 // A scalar Variable is not a verified lexical binding: each reference must
@@ -228,6 +265,8 @@ inline bool namespace_scalar_expression_bindings_valid(
         pending.push_back(current->condition_rhs.get());
         pending.push_back(current->when_true.get());
         pending.push_back(current->when_false.get());
+        for (const auto& argument : current->arguments)
+            pending.push_back(argument.get());
     }
     return true;
 }
@@ -239,7 +278,8 @@ inline bool namespace_scalar_expression_bindings_valid(
 inline PackageNamespaceGraph link_package_namespaces(
         const std::vector<NamespaceOwnedSource>& sources,
         const PackageAliasPins& pinned_aliases,
-        const std::vector<NamespaceImportRequest>& imports) {
+        const std::vector<NamespaceImportRequest>& imports,
+        PackageNamespaceLinkOptions options = {}) {
     PackageNamespaceGraph result;
     std::map<std::string, std::string> owner_by_source;
     std::set<std::string> verified_instances;
@@ -297,7 +337,7 @@ inline PackageNamespaceGraph link_package_namespaces(
             // operands as absent; that must not admit an absent root result.
             if (!fn.result)
                 throw std::invalid_argument("native namespace non-void export has no scalar result expression");
-            if (!namespace_pure_scalar_expression(fn.result.get()))
+            if (!namespace_pure_scalar_expression(fn.result.get(), options))
                 throw std::invalid_argument("native namespace body expression requires checked effect lowering");
             if (!fn.generic_parameters.empty() || !fn.method_owner.empty())
                 throw std::invalid_argument("native namespace generic/method exports require checked lowering");
@@ -320,7 +360,7 @@ inline PackageNamespaceGraph link_package_namespaces(
             // even when no producer or pipeline metadata is present. The
             // scalar export inventory cannot erase these scheduler effects.
             for (const auto& local : fn.locals) {
-                if (!namespace_pure_scalar_expression(local.initializer.get()))
+                if (!namespace_pure_scalar_expression(local.initializer.get(), options))
                     throw std::invalid_argument("native namespace local initializer requires checked effect lowering");
                 if (!local.task_await_name.empty() || !local.future_await_name.empty())
                     throw std::invalid_argument("native namespace suspension export requires checked ABI lowering");
