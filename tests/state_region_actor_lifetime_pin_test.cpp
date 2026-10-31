@@ -65,6 +65,8 @@ int main() {
         ref, *arena, region, request.ticket);
     assert(pin.active());
     assert(ref.outstanding_resource_loans() == 1);
+    assert(ores_state_region_start(&region, owner, request.ticket)
+           == ORES_STD_SYNC_GRANTED);
 
     // A different actor generation cannot claim the live region ticket.
     NativeActorGroup stale_group(712, 1);
@@ -91,6 +93,14 @@ int main() {
         == std::future_status::timeout);
     assert(!pin.release_after_ticket_retirement());
     assert(ref.outstanding_resource_loans() == 1);
+    // A logical STOP may not release a PHYSICALLY EXECUTING task ticket.
+    assert(ores_state_region_release(&region, owner, request.ticket).code
+           == ORES_STD_SYNC_EXECUTING);
+    assert(ores_state_region_ready_to_suspend(&region, owner, request.ticket)
+           == ORES_STD_SYNC_EXECUTING);
+    assert(freed == 0);
+    assert(ores_state_region_end(&region, owner, request.ticket)
+           == ORES_STD_SYNC_GRANTED);
 
     // Retire the exact state ticket. Only then may the actor lifetime pin drop.
     auto released = ores_state_region_release(
