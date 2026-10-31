@@ -201,9 +201,13 @@ define isolated actor Counter as
 end
 ```
 
-The callback is compiler-recognized, synchronous and nonescaping. Direct
-field reads/writes, a missing critical-read/write marker, unknown keys,
-unbound aliases, writes through critical-read and non-pure callback
+The callback is compiler-recognized, synchronous and nonescaping.
+In this v1 it may make at most **one field write**. After that write, the
+return must be an infallible scalar load or literal; checked arithmetic
+in the return would otherwise trap after a partial commit. Full multi-field
+atomicity and transactional rollback are not implemented. Direct state
+access outside the callback, a missing critical-read/write marker, unknown
+keys, unbound aliases, writes through critical-read and non-pure callback
 expressions are rejected before LLVM IR emission. A compiler-owned
 `sealed_state_synchronous_v1` marker, schema/slot matching and epoch
 checks prevent metadata-only declarations from using the actor backend.
