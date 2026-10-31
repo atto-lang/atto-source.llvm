@@ -701,7 +701,7 @@ int main(){
         const AsyncIoTicket ticket{71,8,21};
         PinnedContinuationGate unbound_gate(ticket);
         CHECK(!Work::register_async_io(contexts,*h,owner,unbound_gate,
-                                       ticket,[]{return true;}));
+                                       ticket,[]() noexcept {return true;}));
         CHECK(unbound_gate.request_binding_state()==0);
         PinnedContinuationGate gate(ticket,{
             owner.scheduler_domain,owner.actor_slot,owner.generation});
@@ -709,21 +709,23 @@ int main(){
         auto other_request=contexts.open(other_owner,Suite::info(911));
         CHECK(other_request);
         CHECK(!Work::register_async_io(contexts,*other_request,other_owner,
-                                         gate,ticket,[]{return true;}));
+                                         gate,ticket,[]() noexcept {return true;}));
         CHECK(gate.request_binding_state()==0);
         CHECK(contexts.close(*other_request,other_owner));
         CHECK(!Work::register_async_io(contexts,*h,owner,gate,
-                                       {71,8,22},[]{return true;}));
+                                       {71,8,22},[]() noexcept {return true;}));
         // No broker may touch request storage after a rejected registration.
+        // A throwing registrar is forbidden at compile time: it may have
+        // accepted an actual watch before throwing, so rollback is ambiguous.
         PinnedContinuationGate rejected_gate(ticket,{
             owner.scheduler_domain,owner.actor_slot,owner.generation});
         unsigned attempts=0;
         CHECK(!Work::register_async_io(contexts,*h,owner,rejected_gate,ticket,
-            [&] { ++attempts; return false; }));
+            [&]() noexcept { ++attempts; return false; }));
         CHECK(attempts==1 && rejected_gate.request_binding_state()==0 &&
               contexts.available()==15);
         CHECK(!Work::register_async_io(contexts,*h,owner,rejected_gate,ticket,
-            [&]() -> bool { ++attempts; throw std::runtime_error("watch failed"); }));
+            [&]() noexcept { ++attempts; return false; }));
         CHECK(attempts==2 && rejected_gate.request_binding_state()==0 &&
               contexts.available()==15);
         // An immediate completion may settle during NIO watch admission.
@@ -731,10 +733,9 @@ int main(){
         PinnedContinuationGate immediate(ticket,{
             owner.scheduler_domain,owner.actor_slot,owner.generation});
         auto immediate_io=Work::register_async_io(contexts,*h,owner,
-            immediate,ticket,[&] {
-                CHECK(immediate.request_binding_state()==1);
-                CHECK(immediate.settle(ticket,AsyncIoTerminal::success));
-                return true;
+            immediate,ticket,[&]() noexcept {
+                return immediate.request_binding_state()==1 &&
+                    immediate.settle(ticket,AsyncIoTerminal::success);
             });
         CHECK(immediate_io && immediate.request_binding_state()==2);
         CHECK(!immediate.try_retire(ticket));
@@ -744,12 +745,11 @@ int main(){
         CHECK(immediate_io->finish_after_broker_and_resume_quiescence());
         CHECK(contexts.available()==15);
         auto io=Work::register_async_io(contexts,*h,owner,gate,ticket,
-            [&] {
-                CHECK(gate.request_binding_state()==1);
-                return true;
+            [&]() noexcept {
+                return gate.request_binding_state()==1;
             });CHECK(io);
         CHECK(gate.request_binding_state()==2);
-        CHECK(!Work::register_async_io(contexts,*h,owner,gate,ticket,[]{return true;}));
+        CHECK(!Work::register_async_io(contexts,*h,owner,gate,ticket,[]() noexcept {return true;}));
         CHECK(gate.acquire(ticket,PinnedContinuationGate::Loan::shared));
         std::atomic<unsigned> child_drained{0};
         CHECK(!root->seal_and_observe_child_quiescence([&] {
@@ -758,7 +758,7 @@ int main(){
         CHECK(contexts.close(*h,owner));
         CHECK(!pinned->ready_to_retire());
         CHECK(!Work::retain_child_task(contexts,*h,owner,root,child));
-        CHECK(!Work::register_async_io(contexts,*h,owner,gate,ticket,[]{return true;}));
+        CHECK(!Work::register_async_io(contexts,*h,owner,gate,ticket,[]() noexcept {return true;}));
         CHECK(root->cancel("request-disconnect"));
         CHECK(child->is_cancelled() && grandchild->is_cancelled());
         // A child authority with a live structured descendant cannot retire.
@@ -803,7 +803,7 @@ int main(){
         CHECK(io->finish_after_broker_and_resume_quiescence());
         CHECK(gate.request_binding_state()==3);
         CHECK(!io->finish_after_broker_and_resume_quiescence());
-        CHECK(!Work::register_async_io(contexts,*h,owner,gate,ticket,[]{return true;}));
+        CHECK(!Work::register_async_io(contexts,*h,owner,gate,ticket,[]() noexcept {return true;}));
         CHECK(pinned->ready_to_retire()); // final context owner only
         CHECK(!exchange.enqueue(owner));
         pinned.reset();
