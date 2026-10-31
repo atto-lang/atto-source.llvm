@@ -92,6 +92,17 @@ inline bool unchanged(const struct stat& lhs, const struct stat& rhs) {
         lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino &&
         lhs.st_size == rhs.st_size && time_same;
 }
+// An open descriptor remains valid after its pathname is replaced. Before
+// publishing bytes, also bind the original directory entry to that inode.
+// This is a checked boundary, not an atomic filesystem freeze: verified
+// callers must compile the captured bytes and must never re-open the path.
+inline void require_same_path_binding(int directory, const std::string& filename,
+                                      const struct stat& originally_opened) {
+    struct stat named{};
+    if (::fstatat(directory, filename.c_str(), &named, AT_SYMLINK_NOFOLLOW) != 0 ||
+        !unchanged(originally_opened, named))
+        throw std::runtime_error("v2 source pathname changed during capture");
+}
 inline std::string read_file(int directory, const std::string& filename, std::size_t limit) {
     Fd handle(::openat(directory, filename.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
     if (handle.fd < 0) throw std::runtime_error("v2 regular source/manifest unavailable or symlinked");
@@ -113,6 +124,7 @@ inline std::string read_file(int directory, const std::string& filename, std::si
     if (::fstat(handle.fd, &after) != 0 || !unchanged(before, after) ||
         data.size() != static_cast<std::size_t>(before.st_size))
         throw std::runtime_error("v2 file changed during read");
+    require_same_path_binding(directory, filename, before);
     return data;
 }
 inline void forbid_nested_manifest(int dir) {
