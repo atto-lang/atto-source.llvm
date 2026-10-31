@@ -600,6 +600,34 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
     return result;
 }
 
+VerifiedPackageManifestV2 discover_verified_package_manifest_v2(
+        const fs::path& entry_source,
+        const std::function<std::string(const fs::path&)>& read_manifest) {
+    if (!read_manifest) fail("manifest reader is required");
+    std::error_code error;
+    const fs::path physical_entry = fs::canonical(entry_source, error);
+    if (error || !fs::is_regular_file(physical_entry, error) || error)
+        fail("cannot discover package authority from missing/non-regular entry source");
+
+    for (fs::path cursor = physical_entry.parent_path(); !cursor.empty();) {
+        const fs::path modern = cursor / ".ores.pkg.toml";
+        const fs::path legacy = cursor / ".oreslangc.cfg.toml";
+        const bool modern_exists = marker_exists(modern);
+        const bool legacy_exists = marker_exists(legacy);
+
+        if (modern_exists)
+            return load_verified_package_manifest_v2(modern, read_manifest);
+        if (legacy_exists)
+            fail("nearest package authority is legacy; schema-v2 namespace inventory requires .ores.pkg.toml");
+
+        if (cursor == cursor.root_path()) break;
+        const auto parent = cursor.parent_path();
+        if (parent.empty() || parent == cursor) break;
+        cursor = parent;
+    }
+    fail("schema-v2 namespace inventory requires nearest .ores.pkg.toml");
+}
+
 PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
         const VerifiedPackageManifestV2& root_manifest,
         const std::vector<VerifiedPackageManifestV2>& dependency_manifests,
