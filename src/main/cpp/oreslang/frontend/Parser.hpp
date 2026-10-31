@@ -397,6 +397,9 @@ struct CriticalStateAccessDecl {
     Mode mode = Mode::Read;
     std::string state_parameter;
     std::size_t offset = 0;
+    // Lexical source-field uses only; these do not grant runtime authority.
+    std::vector<std::string> read_fields;
+    std::vector<std::string> written_fields;
     // No numeric execution id, actor generation, loan slot or raw pointer:
     // the compiler emits a symbolic requirement; runtime mints authority.
 };
