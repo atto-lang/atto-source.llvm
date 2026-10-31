@@ -66,13 +66,13 @@ jobs:
           review_record="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
             --jq 'if length >= 100 then "TOO_MANY_REVIEWS" else
               ([.[] | select(.user.login == "ORESoftware" and .submitted_at != null)]
-               | sort_by(.submitted_at) | last // {}
+               | sort_by(.submitted_at, .id) | last // {}
                | [(.state // ""), (.commit_id // ""), (.user.id // 0 | tostring)] | @tsv)
             end')"
           IFS=$'\t' read -r review_state review_commit reviewer_id <<< "$review_record"
           test "$review_state" = "APPROVED"
           test "$review_commit" = "$SOURCE_SHA"
-          [[ "$reviewer_id" =~ ^[1-9][0-9]*$ ]]
+          test "$reviewer_id" = "11139560"
           test "$reviewer_id" != "$pr_author_id"
           echo "PROTECTED_MAIN_AND_INDEPENDENT_EXACT_HEAD_REVIEW=PASS"
       - name: Checkout pinned source tree (never persist auth)
