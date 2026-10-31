@@ -62,6 +62,14 @@ grep -qxF '          persist-credentials: false' <<< "$trusted_step"
 mock_step="$(extract_step 'Execute trusted source-free post-run authorization regression mocks')"
 grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$mock_step"
 grep -qxF '          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml' <<< "$mock_step"
+grep -qxF '          python3 scripts/ci/test_verify_llvm_exact_checkout.py' <<< "$mock_step"
+grep -qxF '          git cat-file blob HEAD:scripts/ci/verify_llvm_exact_checkout.py > "$RUNNER_TEMP/verify_llvm_exact_checkout.py"' <<< "$mock_step"
+grep -Fq -- 'git hash-object --no-filters scripts/ci/verify_llvm_exact_checkout.py' <<< "$mock_step"
+exact_step="$(extract_step 'Require exact tree and preinstalled native toolchain')"
+grep -qxF '          python3 "$RUNNER_TEMP/verify_llvm_exact_checkout.py" "$SOURCE_SHA"' <<< "$exact_step"
+if grep -Fq 'git diff --quiet' <<< "$exact_step"; then
+  echo 'unsafe Git diff in exact-source preflight' >&2; exit 1
+fi
 pr_checkout="$(extract_step 'Checkout pinned source tree (never persist auth)')"
 grep -qxF '          ref: ${{ inputs.source_sha }}' <<< "$pr_checkout"
 grep -qxF '          persist-credentials: false' <<< "$pr_checkout"

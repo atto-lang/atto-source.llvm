@@ -77,3 +77,21 @@ The test harness replaces `gh` with a local stub. It exercises unprotected main,
 The administrative helper does not accept a GitHub branch response containing only `protected: true` as sufficient. It reads live source-main branch protection and requires enabled independent CODEOWNER review, stale-review dismissal, administrator enforcement, and no force-push, branch deletion, or explicit PR-review bypass. It refuses to generate a JIT credential if any required control is absent. It additionally computes `git hash-object` of its own local script and checks it against the reviewed immutable blob at `/scripts/ci/prepare_source_ephemeral_jit.sh` on protected `main`, so an unreviewed or modified workstation copy cannot generate the runner credential. Treat the local helper as untrusted until this byte-exact check succeeds.
 
 **Executed local evidence:** the committed script and checked-in mock test both matched their GitHub blob SHA exactly; `bash -n` passed and the test runner returned `SOURCEFREE_MOCK_JIT_ADMISSION=PASS`. No live runner-authorization API calls were made. This does not authorize executing PR code without independent approval.
+
+## Trusted-main filter-free checkout admission
+
+The verifier is copied via `git cat-file blob HEAD:scripts/ci/verify_llvm_exact_checkout.py`
+from independently reviewed protected `main` into `$RUNNER_TEMP` **before**
+the PR checkout, then executed from that trusted copy after the PR checkout.
+Main-file hash checks use `git hash-object --no-filters`, not a filter-applying
+Git operation. The verifier uses Git raw tree/index metadata and batched
+raw blob reads, no-follow regular file opening, and rejects index/content/mode
+drift, untracked and ignored files, symlinks, gitlinks, FIFOs and hardlinks.
+The 13 synthetic Git tests include an actively malicious clean filter: the
+verifier does not execute it, while `git diff` does.
+
+This is **post-checkout** integrity evidence only. The checkout operation
+itself must run with sanitized Git config, no reusable secrets and a disposable
+source-organization runner. Filesystem mutation after the check is not
+prevented. No run, source transfer, compiler execution or export approval
+is inferred from the source-free tests.
