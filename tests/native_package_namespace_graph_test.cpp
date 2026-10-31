@@ -109,6 +109,34 @@ int main() {
     REQUIRE(separate.namespaces.at({"foo@1", "a"}).exports.size() == 3);
     REQUIRE(separate.namespaces.at({"other@1", "a"}).exports.size() == 1);
 
+    // The SAME namespace spelling in different verified package instances
+    // can coexist only through distinct lexical "as" aliases.
+    const PackageAliasPins two_pins{{"app@1", {
+        {"foo", "foo@1"}, {"other", "other@1"}}}};
+    const std::vector<NamespaceImportRequest> two_imports{
+        {"app/main", "foo", "a", "primary"},
+        {"app/main", "other", "a", "secondary"}};
+    const auto alias_graph = link_package_namespaces(another, two_pins, two_imports);
+    REQUIRE(alias_graph.imports.at({"app/main", "primary"}).package_instance_id == "foo@1");
+    REQUIRE(alias_graph.imports.at({"app/main", "secondary"}).package_instance_id == "other@1");
+    REQUIRE(resolve_package_namespace_scalar_call(
+        alias_graph, "app/main", "primary", "add", {}).source_unit_id == "compute/math/add");
+    REQUIRE(resolve_package_namespace_scalar_call(
+        alias_graph, "app/main", "secondary", "foreign", {}).source_unit_id == "other/a");
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            alias_graph, "app/main", "primary", "foreign", {});
+    }, "not exported");
+    must_reject([&] {
+        (void)link_package_namespaces(another, two_pins, {
+            {"app/main", "foo", "a", "same"},
+            {"app/main", "other", "a", "same"}});
+    }, "duplicate lexical namespace import binding");
+    must_reject([&] {
+        (void)link_package_namespaces(another, two_pins, {
+            {"app/main", "foo", "a", "__root__"}});
+    }, "invalid namespace import alias or selector");
+
     // 3. Duplicate public symbol/signature inside same package fails closed.
     Program duplicate = make_source("a", "add");
     another = units;
