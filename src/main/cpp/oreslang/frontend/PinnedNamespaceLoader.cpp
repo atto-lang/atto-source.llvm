@@ -47,6 +47,27 @@ bool valid_host_identity(const std::string& value) {
     });
 }
 
+// Source IDs are logical, closed-inventory identities, not paths to open.
+// Nevertheless admit only canonical portable relative components: otherwise
+// equal physical-looking providers may obtain distinct symbols/ABI fingerprints,
+// or a future materializer could accidentally interpret traversal syntax.
+bool valid_source_unit_id(const std::string& value) {
+    if (!valid_host_identity(value) || value.front() == '/'
+            || value.find('\\\\') != std::string::npos) return false;
+    std::size_t begin = 0;
+    while (begin < value.size()) {
+        const auto end = value.find('/', begin);
+        const auto length = (end == std::string::npos)
+            ? value.size() - begin : end - begin;
+        if (length == 0 || (length == 1 && value[begin] == '.')
+                || (length == 2 && value[begin] == '.'
+                    && value[begin + 1] == '.')) return false;
+        if (end == std::string::npos) return true;
+        begin = end + 1;
+    }
+    return false; // trailing slash
+}
+
 using ProviderSignatureKey = std::pair<std::string, std::size_t>;
 using ProviderSignatures = std::map<
     frontend::PackageNamespaceKey,
@@ -471,6 +492,8 @@ void reject_provider_call_cycles(
 Program load_pinned_namespace_program(const PinnedNamespaceProgramInput& input) {
     if (!valid_host_identity(input.entry_source_unit_id))
         fail("entry source id is missing, oversized or contains control bytes");
+    if (!valid_source_unit_id(input.entry_source_unit_id))
+        fail("noncanonical entry source unit identity");
     if (input.sources.empty() || input.sources.size() > kMaxPinnedNamespaceSources)
         fail("source inventory must contain 1..128 units");
 
@@ -483,6 +506,8 @@ Program load_pinned_namespace_program(const PinnedNamespaceProgramInput& input) 
         if (!valid_host_identity(source.source_unit_id)
                 || !valid_host_identity(source.package_instance_id))
             fail("every source requires bounded control-free source/package identity");
+        if (!valid_source_unit_id(source.source_unit_id))
+            fail("noncanonical source unit identity");
         if (source.source.size() > kMaxPinnedNamespaceBytes - aggregate_bytes)
             fail("source inventory exceeds 8 MiB aggregate input limit");
         aggregate_bytes += source.source.size();
