@@ -205,6 +205,40 @@ int main(void) {
     check(ores_native_actor_mailbox_try_destroy(isolated_a) == 1);
     check(ores_native_actor_mailbox_try_destroy(isolated_b) == 1);
 
-    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 distinct_mailbox_overlap=2 capacity=1 retire_wake=1 try_admission=1");
+    /* Retirement must unblock *all* pre-admitted waiters without allowing
+     * any queued handler to start after the retired marker is set. Test the
+     * maximum small FIFO backlog, not just a single blocked waiter. */
+    OresNativeActorMailbox* retiring_many =
+        ores_native_actor_mailbox_open(THREADS + 1);
+    check(retiring_many != NULL);
+    check(ores_native_actor_mailbox_enter(retiring_many) == 1);
+    atomic_int abandoned_active = 0, abandoned_max = 0, abandoned_finished = 0;
+    ThreadArgs abandoned[THREADS];
+    pthread_t abandoned_threads[THREADS];
+    for (int i = 0; i < THREADS; i++) {
+        abandoned[i] = (ThreadArgs){retiring_many, &abandoned_active,
+            &abandoned_max, &abandoned_finished, &order_index, NULL, i};
+        check(pthread_create(&abandoned_threads[i], NULL, worker,
+                &abandoned[i]) == 0);
+        wait_for_pending(retiring_many, (size_t)i + 2);
+    }
+    check(ores_native_actor_mailbox_pending(retiring_many) == THREADS + 1);
+    /* Already admitted waiters wake on retirement, return denial, and must
+     * never run guest work or decrement the active owner's pending credit. */
+    ores_native_actor_mailbox_retire(retiring_many);
+    ores_native_actor_mailbox_retire(retiring_many); /* idempotent */
+    check(ores_native_actor_mailbox_try_enter(retiring_many) == 0);
+    check(ores_native_actor_mailbox_try_destroy(retiring_many) == 0);
+    for (int i = 0; i < THREADS; i++)
+        check(pthread_join(abandoned_threads[i], NULL) == 0);
+    check(atomic_load(&abandoned_finished) == 0);
+    check(atomic_load(&abandoned_active) == 0);
+    check(atomic_load(&abandoned_max) == 0);
+    check(ores_native_actor_mailbox_pending(retiring_many) == 1);
+    ores_native_actor_mailbox_leave(retiring_many);
+    check(ores_native_actor_mailbox_pending(retiring_many) == 0);
+    check(ores_native_actor_mailbox_try_destroy(retiring_many) == 1);
+
+    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 distinct_mailbox_overlap=2 retire_waiters=12 capacity=1 retire_wake=1 try_admission=1");
     return 0;
 }
