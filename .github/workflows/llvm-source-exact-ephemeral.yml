@@ -1,0 +1,163 @@
+name: LLVM actor and V3 source-exact ephemeral gate
+# Workflow remains on trusted main; untrusted PR source runs only in disposable VMs.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Open same-repository PR number (stacked PRs supported)"
+        required: true
+        type: string
+      source_sha:
+        description: "Exact current PR head commit (40 lowercase hex characters)"
+        required: true
+        type: string
+      suite:
+        description: "Actual source actor compiler/native tests or full V3 security suite"
+        required: true
+        type: choice
+        options:
+          - actor-llvm
+          - security-v3
+      run_sanitizers:
+        description: "For actor-llvm, also execute native source actors under ASan/UBSan"
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: llvm-source-exact-${{ inputs.pr_number }}-${{ inputs.source_sha }}-${{ inputs.suite }}
+  cancel-in-progress: false
+
+jobs:
+  source-exact-validation:
+    if: github.repository == 'ores-truffle-oreslang/oreslang-source.llvm' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, oreslang-llvm-ephemeral-v1]
+    timeout-minutes: 110
+    steps:
+      - name: Verify open same-repo PR and exact immutable head before checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,7}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REPOSITORY" = 'ores-truffle-oreslang/oreslang-source.llvm'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$RUNNER_ENVIRONMENT" = 'self-hosted'
+          command -v gh
+          receipt="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '[.head.sha, .head.repo.full_name, .state, (.head.repo.private|tostring)] | @tsv')"
+          IFS=$'\t' read -r actual_sha actual_repo state private <<< "$receipt"
+          test "$actual_sha" = "$SOURCE_SHA"
+          test "$actual_repo" = "$GITHUB_REPOSITORY"
+          test "$state" = 'open'
+          test "$private" = 'true'
+          echo "Accepted exact head $SOURCE_SHA from source PR $PR_NUMBER"
+
+      - name: Checkout pinned source tree (never persist auth)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Require exact tree and preinstalled native toolchain
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          test "$RUNNER_ENVIRONMENT" = 'self-hosted'
+          command -v python3
+          echo "EXACT_SOURCE_COMMIT=$SOURCE_SHA"
+          echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Run full V3 private-export security regressions (no export)
+        if: inputs.suite == 'security-v3'
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          test -f scripts/publish-private-ci-source-v3.py
+          test -f scripts/test-publish-private-ci-source-v3.py
+          test -f tests/test_atomic_ref_cleanup_local.py
+          python3 scripts/test-publish-private-ci-source-v3.py -v
+          PYTHONPATH=scripts python3 -m unittest discover -s tests -p test_private_ci_export_gate.py -v
+          python3 -m unittest discover -s tests -p test_atomic_ref_cleanup_local.py -v
+          echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=${{ inputs.source_sha }}"
+
+      - name: Verify preinstalled LLVM / Clang / CMake toolchain
+        if: inputs.suite == 'actor-llvm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v cmake
+          command -v clang
+          command -v llvm-config
+          command -v cc
+          cmake --version
+          clang --version
+          llvm-config --version
+
+      - name: Build actual Oreslang source compiler against LLVM
+        if: inputs.suite == 'actor-llvm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-source-exact -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
+          cmake --build build-source-exact --target oreslang-llvmc --parallel 2
+          test -x build-source-exact/oreslang-llvmc
+
+      - name: Compile and execute real Oreslang source actor fixtures
+        if: inputs.suite == 'actor-llvm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONOPTIMIZE=0 python3 tests/source_actor_e2e.py \
+            --compiler "$PWD/build-source-exact/oreslang-llvmc" \
+            --clang "$(command -v clang)" --root "$PWD"
+
+      - name: Repeat real source actor compile-and-execution under ASan/UBSan
+        if: inputs.suite == 'actor-llvm' && inputs.run_sanitizers
+        shell: bash
+        env:
+          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+        run: |
+          set -euo pipefail
+          PYTHONOPTIMIZE=0 python3 tests/source_actor_e2e.py \
+            --compiler "$PWD/build-source-exact/oreslang-llvmc" \
+            --clang "$(command -v clang)" --root "$PWD" --sanitize
+
+      - name: Exact-source result scope (never a carrier export approval)
+        if: always()
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SUITE: ${{ inputs.suite }}
+          SANITIZERS_REQUESTED: ${{ inputs.run_sanitizers }}
+        run: |
+          {
+            echo 'Oreslang LLVM source-org exact-head execution.'
+            echo "PR: $PR_NUMBER; source commit: $SOURCE_SHA; suite: $SUITE"
+            echo "Root tree: $(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo NOT_CHECKED_OUT)"
+            echo "ASan/UBSan requested: $SANITIZERS_REQUESTED"
+            echo 'Status is valid only when the selected actual test steps executed.'
+            echo 'This workflow does not authorize private-source export or claim retained object purge.'
+            echo 'Require reviewed main workflow and one-job disposable source-only runner.'
+          } >> "$GITHUB_STEP_SUMMARY"
