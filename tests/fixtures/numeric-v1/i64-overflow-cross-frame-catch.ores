@@ -1,0 +1,14 @@
+fnc leaf():int{
+  return 9223372036854775807+1;
+}
+fnc middle():int{
+  return leaf();
+}
+pub fnc main():int{
+  try {
+    return middle();
+  } catch (err) {
+    return 42;
+  } finally {
+  }
+}

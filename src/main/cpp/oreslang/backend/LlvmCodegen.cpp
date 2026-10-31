@@ -77,6 +77,14 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    // Restricted native i64 effect-return ABI. The map identifies callees
+    // whose LLVM return type is {value, kind, code}; target/slots describe
+    // the current frame's generic propagation edge.
+    const std::unordered_map<std::string, bool>* effect_results = nullptr;
+    llvm::StructType* i64_effect_result_type = nullptr;
+    llvm::BasicBlock* effect_propagate_target = nullptr;
+    llvm::Value* effect_kind_slot = nullptr;
+    llvm::Value* effect_code_slot = nullptr;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -125,6 +133,76 @@ llvm::AllocaInst* entry_alloca(llvm::IRBuilder<>& builder, llvm::Type* type, llv
     auto& entry = builder.GetInsertBlock()->getParent()->getEntryBlock();
     llvm::IRBuilder<> slots(&entry, entry.begin());
     return slots.CreateAlloca(type, count, name);
+}
+
+bool simple_i64_effect_expression(const Expression& expr, std::size_t depth = 1) {
+    if (depth > 256) return false;
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer || expr.kind == K::Variable) return true;
+    if ((expr.kind == K::Negate || expr.kind == K::Abs) && expr.left)
+        return simple_i64_effect_expression(*expr.left, depth + 1);
+    if ((expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply) && expr.left && expr.right)
+        return simple_i64_effect_expression(*expr.left, depth + 1) &&
+            simple_i64_effect_expression(*expr.right, depth + 1);
+    if (expr.kind == K::Call) {
+        for (const auto& argument : expr.arguments)
+            if (!simple_i64_effect_expression(*argument, depth + 1))
+                return false;
+        return true;
+    }
+    return false;
+}
+
+bool expression_has_direct_checked_overflow(
+        const Expression& expr, std::size_t depth = 1) {
+    if (depth > 256) return false;
+    using K = Expression::Kind;
+    if (expr.kind == K::Negate || expr.kind == K::Abs ||
+            expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply)
+        return true;
+    if (expr.left && expression_has_direct_checked_overflow(
+            *expr.left, depth + 1)) return true;
+    if (expr.right && expression_has_direct_checked_overflow(
+            *expr.right, depth + 1)) return true;
+    for (const auto& argument : expr.arguments)
+        if (expression_has_direct_checked_overflow(*argument, depth + 1))
+            return true;
+    return false;
+}
+
+bool expression_calls_effect_result(
+        const Expression& expr,
+        const std::unordered_map<std::string, bool>& effect_results,
+        std::size_t depth = 1) {
+    if (depth > 256) return false;
+    if (expr.kind == Expression::Kind::Call) {
+        const auto found = effect_results.find(
+            native_function_slot(expr.name, expr.arguments.size()));
+        if (found != effect_results.end() && found->second) return true;
+    }
+    if (expr.left && expression_calls_effect_result(
+            *expr.left, effect_results, depth + 1)) return true;
+    if (expr.right && expression_calls_effect_result(
+            *expr.right, effect_results, depth + 1)) return true;
+    for (const auto& argument : expr.arguments)
+        if (expression_calls_effect_result(
+                *argument, effect_results, depth + 1))
+            return true;
+    return false;
+}
+
+llvm::Value* pack_i64_effect_result(
+        llvm::IRBuilder<>& builder,
+        llvm::StructType* type,
+        llvm::Value* value,
+        llvm::Value* kind,
+        llvm::Value* code) {
+    llvm::Value* packed = llvm::UndefValue::get(type);
+    packed = builder.CreateInsertValue(packed, value, {0}, "effect.result.value");
+    packed = builder.CreateInsertValue(packed, kind, {1}, "effect.result.kind");
+    return builder.CreateInsertValue(packed, code, {2}, "effect.result.code");
 }
 
 llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
@@ -675,8 +753,95 @@ llvm::Value* lower(const Expression& expr,
                 ordered.push_back(moves->result_destination);
                 ordered.push_back(moves->result_region);
             }
-            return builder.CreateCall(callee, ordered,
+            llvm::Value* call = builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
+            const std::string slot =
+                native_function_slot(expr.name, expr.arguments.size());
+            const bool effect_result = moves && moves->effect_results &&
+                moves->effect_results->at(slot);
+            if (!effect_result) return call;
+            if (!moves->i64_effect_result_type ||
+                    callee->getReturnType() != moves->i64_effect_result_type)
+                throw std::runtime_error(
+                    "native effect-result callee has mismatched LLVM ABI");
+
+            auto* value = builder.CreateExtractValue(
+                call, {0}, "call.effect.value");
+            auto* kind = builder.CreateExtractValue(
+                call, {1}, "call.effect.kind");
+            auto* code = builder.CreateExtractValue(
+                call, {2}, "call.effect.code");
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* success = llvm::BasicBlock::Create(
+                builder.getContext(), "call.effect.return", parent);
+            auto* exceptional = llvm::BasicBlock::Create(
+                builder.getContext(), "call.effect.propagate", parent);
+            builder.CreateCondBr(
+                builder.CreateICmpEQ(
+                    kind, llvm::ConstantInt::get(i64,
+                        static_cast<std::uint64_t>(EffectKind::Return))),
+                success, exceptional);
+
+            builder.SetInsertPoint(exceptional);
+            auto emit_propagation = [&](llvm::BasicBlock* target,
+                                        llvm::Value* kind_slot,
+                                        llvm::Value* code_slot) {
+                if (!target || !kind_slot || !code_slot)
+                    throw std::runtime_error(
+                        "native effect propagation edge lacks compiler-owned slots");
+                builder.CreateStore(kind, kind_slot);
+                builder.CreateStore(code, code_slot);
+                builder.CreateBr(target);
+            };
+
+            if (moves->arithmetic_overflow_target) {
+                auto* caught = llvm::BasicBlock::Create(
+                    builder.getContext(), "call.effect.overflow.catch", parent);
+                auto* uncaught = llvm::BasicBlock::Create(
+                    builder.getContext(), "call.effect.uncaught", parent);
+                auto* is_throw = builder.CreateICmpEQ(
+                    kind, llvm::ConstantInt::get(i64,
+                        static_cast<std::uint64_t>(EffectKind::Throw)));
+                auto* is_overflow = builder.CreateICmpEQ(
+                    code, llvm::ConstantInt::get(i64,
+                        static_cast<std::uint64_t>(
+                            NumericErrorCode::ArithmeticOverflowError)));
+                builder.CreateCondBr(
+                    builder.CreateAnd(is_throw, is_overflow),
+                    caught, uncaught);
+
+                builder.SetInsertPoint(caught);
+                emit_propagation(
+                    moves->arithmetic_overflow_target,
+                    moves->arithmetic_effect_kind,
+                    moves->arithmetic_error_code);
+
+                builder.SetInsertPoint(uncaught);
+                if (moves->effect_propagate_target) {
+                    emit_propagation(
+                        moves->effect_propagate_target,
+                        moves->effect_kind_slot,
+                        moves->effect_code_slot);
+                } else {
+                    builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                        builder.GetInsertBlock()->getModule(),
+                        llvm::Intrinsic::trap));
+                    builder.CreateUnreachable();
+                }
+            } else if (moves->effect_propagate_target) {
+                emit_propagation(
+                    moves->effect_propagate_target,
+                    moves->effect_kind_slot,
+                    moves->effect_code_slot);
+            } else {
+                builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                    builder.GetInsertBlock()->getModule(),
+                    llvm::Intrinsic::trap));
+                builder.CreateUnreachable();
+            }
+
+            builder.SetInsertPoint(success);
+            return value;
         }
     }
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
@@ -1081,6 +1246,69 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
+    //
+    // Native cross-frame effect ABI v1 is deliberately narrow: only private,
+    // straight-line scalar helpers whose final expression can overflow (or
+    // transitively call another such helper) return {value,kind,code}. Exported
+    // symbols, main, async/task/pipeline functions, owning values, wasm32 and
+    // Cortex-M retain their existing ABI until separately certified.
+    auto* i64_effect_result_type = llvm::StructType::get(
+        context, {i64, i64, i64}, false);
+    std::unordered_map<std::string, bool> effect_results;
+    std::unordered_set<std::string> pipeline_scalar_abi;
+    for (const auto& owner : source.functions) {
+        for (const auto& pipeline : owner.future_pipelines) {
+            pipeline_scalar_abi.insert(
+                native_function_slot(pipeline.producer_function, 0));
+            for (const auto& stage : pipeline.stages)
+                pipeline_scalar_abi.insert(native_function_slot(stage, 1));
+        }
+    }
+    auto effect_candidate = [&](const Function& fn) {
+        if (wasm32_target || cortex_m_target || fn.exported ||
+                fn.name == "main" || fn.returns_void ||
+                fn.return_type != ScalarType::I64 ||
+                !fn.return_class.empty() || !fn.result ||
+                fn.async_source_i64 || fn.caught_throw_value ||
+                fn.caught_checked_overflow ||
+                !fn.locals.empty() || !fn.statements.empty() ||
+                !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+                !fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+                !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                pipeline_scalar_abi.count(
+                    native_function_slot(fn.name, fn.parameters.size())))
+            return false;
+        for (const auto& parameter : fn.parameters)
+            if (!parameter.class_name.empty() ||
+                    parameter.mode != Parameter::Mode::Value)
+                return false;
+        return simple_i64_effect_expression(*fn.result);
+    };
+    for (const auto& fn : source.functions)
+        effect_results.emplace(
+            native_function_slot(fn.name, fn.parameters.size()), false);
+    for (const auto& fn : source.functions)
+        if (effect_candidate(fn) &&
+                expression_has_direct_checked_overflow(*fn.result))
+            effect_results.at(
+                native_function_slot(fn.name, fn.parameters.size())) = true;
+    for (std::size_t pass = 0; pass < source.functions.size(); ++pass) {
+        bool changed = false;
+        for (const auto& fn : source.functions) {
+            const auto slot =
+                native_function_slot(fn.name, fn.parameters.size());
+            if (!effect_results.at(slot) && effect_candidate(fn) &&
+                    expression_calls_effect_result(
+                        *fn.result, effect_results)) {
+                effect_results.at(slot) = true;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
     for (const auto& fn : source.functions) {
@@ -1111,9 +1339,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         const bool owning = class_owns_arrays(fn.return_class);
         owning_results.emplace(native_function_slot(fn.name, fn.parameters.size()), owning);
         if (owning) { argument_types.push_back(native_ptr); argument_types.push_back(native_ptr); }
+        const bool effect_returning = effect_results.at(
+            native_function_slot(fn.name, fn.parameters.size()));
+        llvm::Type* result_type = fn.returns_void
+            ? static_cast<llvm::Type*>(llvm::Type::getVoidTy(context))
+            : (effect_returning
+                ? static_cast<llvm::Type*>(i64_effect_result_type)
+                : static_cast<llvm::Type*>(i64));
         llvm::FunctionType* signature = llvm::FunctionType::get(
-            fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
-            argument_types, false);
+            result_type, argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
             (fn.native_internal || fn.async_source_i64)
@@ -1153,6 +1387,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
         const auto& hidden = class_array_parameters.at(native_function_slot(fn.name, fn.parameters.size()));
         const bool owning_return = owning_results.at(native_function_slot(fn.name, fn.parameters.size()));
+        const bool effect_returning = effect_results.at(
+            native_function_slot(fn.name, fn.parameters.size()));
         llvm::Value* result_destination = owning_return ? function->getArg(fn.parameters.size() + hidden.size()) : nullptr;
         llvm::Value* result_region = owning_return ? function->getArg(fn.parameters.size() + hidden.size() + 1) : nullptr;
         for (std::size_t i = 0; i < hidden.size(); ++i)
@@ -1321,6 +1557,27 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
             &record_classes, &record_schemas, record_new, record_get, record_check,
             &class_array_regions, &class_array_parameters, &owning_results};
+        region_moves.effect_results = &effect_results;
+        region_moves.i64_effect_result_type = i64_effect_result_type;
+        llvm::BasicBlock* effect_return_block = nullptr;
+        llvm::Value* frame_effect_kind = nullptr;
+        llvm::Value* frame_effect_code = nullptr;
+        if (effect_returning) {
+            frame_effect_kind = entry_alloca(
+                builder, i64, nullptr, "effect.kind.slot");
+            frame_effect_code = entry_alloca(
+                builder, i64, nullptr, "effect.code.slot");
+            builder.CreateStore(llvm::ConstantInt::get(i64, 0), frame_effect_kind);
+            builder.CreateStore(llvm::ConstantInt::get(i64, 0), frame_effect_code);
+            effect_return_block = llvm::BasicBlock::Create(
+                context, "effect.return", function);
+            region_moves.arithmetic_overflow_target = effect_return_block;
+            region_moves.arithmetic_effect_kind = frame_effect_kind;
+            region_moves.arithmetic_error_code = frame_effect_code;
+            region_moves.effect_propagate_target = effect_return_block;
+            region_moves.effect_kind_slot = frame_effect_kind;
+            region_moves.effect_code_slot = frame_effect_code;
+        }
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
@@ -2385,9 +2642,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     ? lower_return(*fn.result)
                     : nullptr);
             emit_lexical_cleanup();
-            if (fn.returns_void) builder.CreateRetVoid();
-            else builder.CreateRet(result);
+            if (fn.returns_void) {
+                builder.CreateRetVoid();
+            } else if (effect_returning) {
+                builder.CreateRet(pack_i64_effect_result(
+                    builder, i64_effect_result_type, result,
+                    llvm::ConstantInt::get(i64,
+                        static_cast<std::uint64_t>(EffectKind::Return)),
+                    llvm::ConstantInt::get(i64, 0)));
+            } else {
+                builder.CreateRet(result);
+            }
         } else {
+            if (effect_returning)
+                throw std::runtime_error(
+                    "native effect-result v1 requires a single straight-line return");
             llvm::Value* return_snapshot = fn.returns_void
                 ? nullptr : (structured_returns ? structured_snapshot : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot"));
             llvm::BasicBlock* cleanup = structured_returns ? structured_cleanup : llvm::BasicBlock::Create(
@@ -2445,6 +2714,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             emit_lexical_cleanup();
             if (fn.returns_void) builder.CreateRetVoid();
             else builder.CreateRet(builder.CreateLoad(i64, return_snapshot, "return.snapshot"));
+        }
+        if (effect_returning) {
+            if (!effect_return_block || !frame_effect_kind || !frame_effect_code)
+                throw std::runtime_error(
+                    "native effect-result frame lacks propagation state");
+            builder.SetInsertPoint(effect_return_block);
+            auto* kind = builder.CreateLoad(
+                i64, frame_effect_kind, "effect.return.kind");
+            auto* code = builder.CreateLoad(
+                i64, frame_effect_code, "effect.return.code");
+            builder.CreateRet(pack_i64_effect_result(
+                builder, i64_effect_result_type,
+                llvm::ConstantInt::get(i64, 0), kind, code));
         }
         if (array_failure) {
             builder.SetInsertPoint(array_failure);

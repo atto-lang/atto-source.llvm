@@ -350,6 +350,12 @@ bool native_catchable_checked_i64_tree(
             expr.kind == K::Multiply) && expr.left && expr.right)
         return native_catchable_checked_i64_tree(*expr.left, depth + 1) &&
             native_catchable_checked_i64_tree(*expr.right, depth + 1);
+    if (expr.kind == K::Call) {
+        for (const auto& argument : expr.arguments)
+            if (!native_catchable_checked_i64_tree(*argument, depth + 1))
+                return false;
+        return true;
+    }
     return false;
 }
 
@@ -359,7 +365,7 @@ bool native_checked_i64_tree_may_overflow(
     using K = Expression::Kind;
     if (expr.kind == K::Negate || expr.kind == K::Abs ||
             expr.kind == K::Add || expr.kind == K::Subtract ||
-            expr.kind == K::Multiply)
+            expr.kind == K::Multiply || expr.kind == K::Call)
         return true;
     if (expr.left && native_checked_i64_tree_may_overflow(
             *expr.left, depth + 1)) return true;
@@ -3097,7 +3103,7 @@ private:
                         native_checked_i64_tree_may_overflow(*value.result)) {
                     value.caught_checked_overflow = true;
                 } else {
-                    fail("native protected try return requires a nonthrowing read or checked i64 add/sub/mul/neg/abs tree");
+                    fail("native protected try return requires a nonthrowing read or checked i64 add/sub/mul/neg/abs/scalar-call tree");
                 }
             }
         }

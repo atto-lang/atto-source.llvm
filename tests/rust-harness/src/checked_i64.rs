@@ -132,6 +132,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         include_str!("../../fixtures/numeric-v1/i64-overflow-catch.ores");
     const SHARED_I64_OVERFLOW_TYPED_CATCH: &str =
         include_str!("../../fixtures/numeric-v1/i64-overflow-typed-catch.ores");
+    const SHARED_I64_OVERFLOW_CROSS_FRAME_CATCH: &str =
+        include_str!("../../fixtures/numeric-v1/i64-overflow-cross-frame-catch.ores");
     use std::{ffi::OsStr, fs, os::unix::process::ExitStatusExt};
     let temp = TempDir::new("ores-checked-i64-").map_err(|e| e.to_string())?;
     fs::write(temp.path.join("math-shadow.ores"),
@@ -146,6 +148,7 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("negate", "pub fnc main():int{return -(-42);}", 42),
         ("portable-math-i64-ok", SHARED_MATH_OK, 84),
         ("portable-overflow-catch", SHARED_I64_OVERFLOW_CATCH, 42),
+        ("portable-overflow-cross-frame-catch", SHARED_I64_OVERFLOW_CROSS_FRAME_CATCH, 42),
         ("math-abs", "pub fnc main():int{return Math.abs(-42);}", 42),
         ("math-neg", "pub fnc main():int{return Math.neg(-42);}", 42),
         ("dynamic-math-abs", "fnc magnitude(int a):int{return Math.abs(a);} pub fnc main():int{return magnitude(-42);}", 42),
@@ -203,6 +206,9 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("dynamic-subtract", "fnc sub(int a,int b):int{return a-b;} pub fnc main():int{return sub(-9223372036854775808,1);}", "llvm.ssub.with.overflow.i64"),
         ("dynamic-multiply", "fnc mul(int a,int b):int{return a*b;} pub fnc main():int{return mul(3037000500,3037000500);}", "llvm.smul.with.overflow.i64"),
         ("dynamic-negate", "fnc neg(int a):int{return -a;} pub fnc main():int{return neg(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
+        ("dynamic-cross-frame-uncaught",
+         "fnc leaf():int{return 9223372036854775807+1;} fnc middle():int{return leaf();} pub fnc main():int{return middle();}",
+         "llvm.sadd.with.overflow.i64"),
     ];
     let mut executions = 0;
     for optimization in ["-O1", "-O2"] {
@@ -225,6 +231,30 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                     format!("{name}: missing ArithmeticOverflowError ABI code"))?;
                 require(emitted.contains("numeric.effect.kind"),
                     format!("{name}: missing typed Throw discriminant slot"))?;
+            }
+            if name == "portable-overflow-cross-frame-catch" {
+                let emitted = stdout(&compiled);
+                require(emitted.contains("define { i64, i64, i64 } @leaf("),
+                    format!("{name}: leaf did not adopt effect-result ABI"))?;
+                require(emitted.contains("define { i64, i64, i64 } @middle("),
+                    format!("{name}: middle did not adopt transitive effect-result ABI"))?;
+                require(emitted.contains("call.effect.propagate"),
+                    format!("{name}: missing cross-frame propagation CFG"))?;
+                require(emitted.contains("throw.catch.numeric"),
+                    format!("{name}: outer catch CFG missing"))?;
+                require(emitted.contains("65537"),
+                    format!("{name}: missing ArithmeticOverflowError ABI code"))?;
+
+                for helper in ["leaf", "middle"] {
+                    let marker = format!("define {{ i64, i64, i64 }} @{helper}(");
+                    let start = emitted.find(&marker)
+                        .ok_or_else(|| format!("{name}: missing {helper} definition"))?;
+                    let tail = &emitted[start..];
+                    let end = tail.find("\n}")
+                        .ok_or_else(|| format!("{name}: unterminated {helper} definition"))?;
+                    require(!tail[..end].contains("llvm.trap"),
+                        format!("{name}: {helper} still traps instead of forwarding effect"))?;
+                }
             }
             fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
             let linked = run(clang, [OsStr::new("-x"), OsStr::new("ir"), OsStr::new(optimization),
