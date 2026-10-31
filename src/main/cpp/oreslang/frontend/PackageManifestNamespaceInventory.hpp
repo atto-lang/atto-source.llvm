@@ -76,10 +76,11 @@ VerifiedPackageManifestV2 discover_verified_package_manifest_v2(
 // current-working-directory fallback, or namespace spelling fallback is
 // permitted. Manifest and source SHA-256 values must match the lock snapshot.
 PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
-    const VerifiedPackageManifestV2& root_manifest,
-    const std::vector<VerifiedPackageManifestV2>& dependency_manifests,
+    const std::filesystem::path& root_manifest_path,
+    const std::vector<std::filesystem::path>& dependency_manifest_paths,
     const VerifiedPackageLockSnapshot& lock,
     const std::filesystem::path& entry_source,
+    const std::function<std::string(const std::filesystem::path&)>& read_manifest,
     const std::function<std::string(const std::filesystem::path&)>& read_source);
 
 } // namespace oreslang
