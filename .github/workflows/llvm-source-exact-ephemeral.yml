@@ -12,15 +12,16 @@ on:
         required: true
         type: string
       suite:
-        description: "Actual source actor compiler/native tests or full V3 security suite"
+        description: "Exact-source actor, ledger, continuation CTest/sanitizer, or V3 security suite"
         required: true
         type: choice
         options:
           - actor-llvm
           - actor-ledger
+          - continuation-gate
           - security-v3
       run_sanitizers:
-        description: "For actor-llvm, run guest ASan/UBSan; actor-ledger always runs native sanitizers"
+        description: "For actor-llvm/ledger, run guest ASan/UBSan; continuation-gate always runs native sanitizers"
         type: boolean
         required: true
         default: true
@@ -138,7 +139,7 @@ jobs:
           echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=${{ inputs.source_sha }}"
 
       - name: Verify preinstalled LLVM / Clang / CMake toolchain
-        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger'
+        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger' || inputs.suite == 'continuation-gate'
         shell: bash
         run: |
           set -euo pipefail
@@ -213,6 +214,99 @@ jobs:
           PYTHONOPTIMIZE=0 python3 tests/native_actor_compiled_guest_ledger.py \
             --compiler "$PWD/build-source-exact/oreslang-llvmc" \
             --clang "$(command -v clang)" --root "$PWD" --sanitize
+
+      # Tracked checked-in C++ ownership regression, not a synthetic model.
+      - name: Build and execute exact-head pinned continuation CTest
+        if: inputs.suite == 'continuation-gate'
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f tests/pinned_continuation_gate_test.cpp
+          test -f src/main/cpp/oreslang/runtime/PinnedContinuationGate.hpp
+          cmake -S . -B build-continuation-gate -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+          cmake --build build-continuation-gate --target oreslang-pinned-continuation-gate-test --parallel 2
+          ctest --test-dir build-continuation-gate \
+            -R '^native_pinned_continuation_loan_cancel_quiescence
+      - name: Post-run attestation of current PR head and independent reviewer
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')" = "true"
+          receipt="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.head.sha, .head.repo.full_name, .state, (.head.repo.private|tostring), (.user.id|tostring)] | @tsv')"
+          actual_sha="$(printf '%s' "$receipt" | cut -f1)"
+          actual_repo="$(printf '%s' "$receipt" | cut -f2)"
+          pr_state="$(printf '%s' "$receipt" | cut -f3)"
+          is_private="$(printf '%s' "$receipt" | cut -f4)"
+          author_id="$(printf '%s' "$receipt" | cut -f5)"
+          test "$actual_sha" = "$SOURCE_SHA"
+          test "$actual_repo" = "$GITHUB_REPOSITORY"
+          test "$pr_state" = "open"
+          test "$is_private" = "true"
+          [[ "$author_id" =~ ^[1-9][0-9]*$ ]]
+          review="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" --jq 'if length >= 100 then "TOO_MANY_REVIEWS" else ([.[] | select(.user.login == "ORESoftware" and .submitted_at != null)] | sort_by(.submitted_at, .id) | last // {} | [(.state // ""), (.commit_id // ""), (.user.id // 0 | tostring)] | @tsv) end')"
+          state="$(printf '%s' "$review" | cut -f1)"
+          review_sha="$(printf '%s' "$review" | cut -f2)"
+          reviewer_id="$(printf '%s' "$review" | cut -f3)"
+          test "$state" = "APPROVED"
+          test "$review_sha" = "$SOURCE_SHA"
+          test "$reviewer_id" = "11139560"
+          test "$reviewer_id" != "$author_id"
+          echo "POST_EXECUTION_EXACT_PR_HEAD_REVIEW=PASS"
+
+      - name: Exact-source result scope (never a carrier export approval)
+        if: always()
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SUITE: ${{ inputs.suite }}
+          SANITIZERS_REQUESTED: ${{ inputs.run_sanitizers }}
+        run: |
+          {
+            echo 'Oreslang LLVM source-org exact-head execution.'
+            echo "PR: $PR_NUMBER; source commit: $SOURCE_SHA; suite: $SUITE"
+            echo "Root tree: $(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo NOT_CHECKED_OUT)"
+            echo "ASan/UBSan requested: $SANITIZERS_REQUESTED"
+            echo 'Status is valid only when the selected actual test steps executed.'
+            echo 'This workflow does not authorize private-source export or claim retained object purge.'
+            echo 'Require reviewed main workflow and one-job disposable source-only runner.'
+          } >> "$GITHUB_STEP_SUMMARY"
+ \
+            --output-on-failure --no-tests=error
+          echo "TRACKED_PINNED_CONTINUATION_CTEST_EXECUTED_FOR_SHA=$SOURCE_SHA"
+
+      - name: Execute exact-head pinned continuation GCC and Clang ASan UBSan
+        if: inputs.suite == 'continuation-gate'
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          command -v g++
+          command -v clang++
+          command -v timeout
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          for compiler in g++ clang++; do
+            "$compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -I src/main/cpp tests/pinned_continuation_gate_test.cpp \
+              -o "$scratch/pinned-continuation-${compiler}"
+            timeout 120s "$scratch/pinned-continuation-${compiler}"
+          done
+          echo "PINNED_CONTINUATION_GCC_CLANG_SANITIZERS_EXECUTED_FOR_SHA=$SOURCE_SHA"
 
       # Re-attest current identity after the actual selected suite has executed.
       - name: Post-run attestation of current PR head and independent reviewer
