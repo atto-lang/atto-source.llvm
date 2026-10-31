@@ -1131,6 +1131,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_sealed_schema_valid_signed_min_not_lowered
         sealed-state-schema-min-int-unlowered.ores
         --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_sealed_schema_valid_signed_max_not_lowered
+        sealed-state-schema-max-int-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_sealed_schema_negative_overflow_rejected
+        sealed-state-schema-negative-overflow.ores
+        --diagnostic "integer literal overflows signed 64-bit result")
     oreslang_contract_test(native_sealed_schema_duplicate_rejected
         sealed-state-schema-duplicate.ores
         --diagnostic "duplicate sealed actor state field")
