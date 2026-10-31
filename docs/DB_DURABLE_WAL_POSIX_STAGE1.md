@@ -148,3 +148,40 @@ in private `akrion-sim/akrion-sim-sync` and
 runner assignment (`runner_id=0`, zero steps). Recent `voxletra-e2e`
 and `scintilla-run-e2e` runs likewise had zero steps. No private
 Oreslang source was transferred to an unverified runner.
+
+
+## Stage 1.6 — validated ODB1 native append before fdatasync
+
+New `DbWalFrameV1.hpp` enforces the same ODB1 v1 structure, signed
+31-bit identity/sequence, key/value bounds, DELETE restriction, exact
+length, Adler32 checksum and tenant/generation/op match as the Java
+reference. The low-level `DbDurableWalFile` now has a distinct
+`append_validated_and_sync(tenant,generation,operation_id,frame,length)`
+entry point that verifies the immutable frame before OS file mutation;
+the original `append_and_sync` remains a trusted **low-level primitive**
+and is NOT safe for guest callers. The trusted actor must supply the
+tenant from an authenticated grant rather than from DATA.
+
+Tracked tests: `native_db_wal_frame_v1_host_only` and
+`native_db_wal_validated_append_host_only` are registered in CMake.
+The latter validates that wrong tenant/generation/op/checksum do not
+change WAL file length; then accepts a valid record, syncs, forks a
+second process which appends+fdatasync, exits and is verified on reopen.
+
+Exact Git blob SHAs verified via `git hash-object`:
+`DbWalFrameV1.hpp` `3d5964b1b09f1cee4b0469c12f8594b70558bf3f`;
+`native_db_wal_frame_v1_test.cpp`
+`4f6d2ab76c70c7c2bb9336274ce48a8b11e00e0c`;
+`DbDurableWalFile.hpp`
+`68e2dbbf488ca573298de1d967b9499f811db40f`;
+`native_db_wal_validated_append_test.cpp`
+`e43012f88bc5bfe2dc97f0f6781346017aaab5a1`.
+Both **exact tracked tests** compiled and passed locally with
+`g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+-fsanitize=address,undefined -fno-omit-frame-pointer` and ASan leak
+detection + UBSan halt-on-error. A separate sanitized generated-frame
+harness passed 5,000 valid/mutated random frames.
+
+This is source-exact subset proof, NOT full LLVM CMake/CTest, real
+native .ores guest lowering, authenticated tenant authorizer,
+power-loss guarantee, replay or durable ACK.
