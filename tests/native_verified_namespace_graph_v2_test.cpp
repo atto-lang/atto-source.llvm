@@ -145,6 +145,59 @@ int main() {
                 return host_parse(bytes == "caller" ? "legacy" : bytes);
             });
     }, "legacy module imports lack verified ownership"); ++cases;
+    // A second, separately verified physical package can import the first
+    // only through a lock independently pinned by the host. No fallback
+    // across namespace spelling, directories or unverified aliases.
+    {
+        const auto app_root = root.parent_path() / (root.filename().string() + "-app");
+        struct AppCleanup {
+            fs::path path;
+            ~AppCleanup() { std::error_code ec; fs::remove_all(path, ec); }
+        } app_cleanup{app_root};
+        const std::string app_manifest = "schema_version = \"2\"\n[project]\nroot = \".\"\n"
+            "[packages.app]\nfiles = [\"src/client.ores\"]\n";
+        write(app_root / ".ores.pkg.toml", app_manifest);
+        write(app_root / "src/client.ores", "external");
+        const std::string app_sources = sha(
+            "src/client.ores\n" + sha("external") + "\n");
+        const auto app_snapshot = load_verified_namespace_source_snapshot_v2(
+            app_root, {"src/client.ores"}, sha(app_manifest), app_sources, sha);
+        const std::string importer_owner = "v2:" + app_snapshot.inventory().manifest_sha256()
+            + ":" + app_snapshot.inventory().sources_sha256() + ":app";
+        const std::string provider_owner = "v2:" + snapshot.inventory().manifest_sha256()
+            + ":" + snapshot.inventory().sources_sha256() + ":checkout";
+        const auto lock_source = "schema_version = \"1\"\n[[dependency]]\n"
+            "importer = \"" + importer_owner + "\"\nalias = \"other\"\ntarget = \""
+            + provider_owner + "\"\n";
+        const auto lock = verify_namespace_dependency_lock_v2(
+            lock_source, sha(lock_source), {importer_owner, provider_owner}, sha);
+        const auto external_graph = link_verified_namespace_snapshots_v2(
+            {{&snapshot}, {&app_snapshot}}, host_parse, &lock);
+        const auto external_source = external_graph.imports.find(
+            {importer_owner + "/src/client.ores", "payments"});
+        if (external_source == external_graph.imports.end() ||
+                external_source->second.package_instance_id != provider_owner)
+            throw std::runtime_error("locked external import did not bind exact package");
+        ++cases;
+        const auto resolved = resolve_package_namespace_scalar_call(
+            external_graph, importer_owner + "/src/client.ores", "payments", "answer", {});
+        if (resolved.owner.package_instance_id != provider_owner ||
+                resolved.source_unit_id.find("src/provider.ores") == std::string::npos)
+            throw std::runtime_error("locked external import resolved wrong provider");
+        ++cases;
+        denied([&] {
+            (void)link_verified_namespace_snapshots_v2(
+                {{&snapshot}, {&app_snapshot}}, host_parse);
+        }, "verified lockfile pins"); ++cases;
+        denied([&] {
+            (void)link_verified_namespace_snapshots_v2(
+                {{&app_snapshot}}, host_parse, &lock);
+        }, "locked target lacks physical verified snapshot"); ++cases;
+        denied([&] {
+            (void)link_verified_namespace_snapshots_v2(
+                {{&snapshot}}, host_parse, &lock);
+        }, "locked importer lacks physical verified snapshot"); ++cases;
+    }
     // Consume the frozen bytes, not whichever bytes a pathname now resolves to.
     write(root / "src/provider.ores", "private");
     if (build().namespaces.size() != 1)
