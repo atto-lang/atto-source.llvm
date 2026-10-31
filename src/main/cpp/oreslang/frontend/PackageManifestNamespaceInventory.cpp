@@ -404,6 +404,11 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
     bool source_roots_seen = false;
     std::map<std::string, std::vector<std::string>> package_paths;
     std::set<std::string> package_files_seen;
+    std::set<std::string> declared_tables;
+    bool project_version_seen = false;
+    bool source_import_paths_seen = false;
+    bool entrypoint_main_seen = false;
+    bool build_profile_seen = false;
 
     for (const auto& line : lines) {
         if (line.front() == '[') {
@@ -412,6 +417,8 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
                     || line.find(']') != line.size() - 1)
                 fail("malformed package manifest table header");
             section = trim(line.substr(1, line.size() - 2));
+            if (!declared_tables.insert(section).second)
+                fail("duplicate package manifest table [" + section + "]");
             if (section == "project" || section == "source"
                     || section == "entrypoints" || section == "build")
                 continue;
@@ -459,6 +466,8 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
                         project_root_text, true, false))
                     fail("project.root must be canonical relative path within manifest directory");
             } else if (key == "version") {
+                if (project_version_seen) fail("duplicate project.version");
+                project_version_seen = true;
                 (void)parse_string(value, "project.version");
             } else {
                 fail("unsupported [project] key '" + key + "'");
@@ -476,6 +485,9 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
                         fail("source.roots contains noncanonical relative path");
                 }
             } else if (key == "import_paths") {
+                if (source_import_paths_seen)
+                    fail("duplicate source.import_paths");
+                source_import_paths_seen = true;
                 const auto ignored =
                     parse_string_array(value, "source.import_paths");
                 for (const auto& path : ignored) {
@@ -491,6 +503,8 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
         if (section == "entrypoints") {
             if (key != "main")
                 fail("unsupported [entrypoints] key '" + key + "'");
+            if (entrypoint_main_seen) fail("duplicate entrypoints.main");
+            entrypoint_main_seen = true;
             const auto entry = parse_string(value, "entrypoints.main");
             if (!relative_path_spelling_valid(entry, false, true))
                 fail("entrypoints.main must be canonical relative .ores path");
@@ -500,6 +514,8 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
         if (section == "build") {
             if (key != "library_profile")
                 fail("unsupported [build] key '" + key + "'");
+            if (build_profile_seen) fail("duplicate build.library_profile");
+            build_profile_seen = true;
             const auto profile = parse_string(value, "build.library_profile");
             if (profile != "core" && profile != "std")
                 fail("build.library_profile must be core or std");
@@ -657,7 +673,12 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
         fail("verified package lock contains no package instances");
 
     std::map<std::string, fs::path> physical_manifest_by_instance;
-    std::map<std::string, std::string> instance_by_manifest_group;
+    struct ManifestGroupIdentity {
+        fs::path manifest;
+        std::string package_key;
+        std::string instance_id;
+    };
+    std::vector<ManifestGroupIdentity> manifest_group_identities;
     for (const auto& [instance_id, entry] : lock.package_instances) {
         if (!valid_package_instance_id(instance_id))
             fail("invalid PackageInstanceId in lock snapshot");
@@ -667,10 +688,18 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
             fail("locked manifest SHA-256 must be lowercase 64-hex");
         const fs::path physical = canonical_regular_manifest(entry.manifest_path);
         physical_manifest_by_instance.emplace(instance_id, physical);
-        const std::string group_key =
-            physical.string() + "\n" + entry.package_key;
-        if (!instance_by_manifest_group.emplace(group_key, instance_id).second)
-            fail("two PackageInstanceIds claim the same manifest package group");
+        for (const auto& claimed : manifest_group_identities) {
+            if (claimed.package_key != entry.package_key) continue;
+            std::error_code equivalent_error;
+            const bool equivalent =
+                fs::equivalent(claimed.manifest, physical, equivalent_error);
+            if (equivalent_error)
+                fail("cannot compare locked manifest physical identities");
+            if (equivalent)
+                fail("two PackageInstanceIds claim the same manifest package group");
+        }
+        manifest_group_identities.push_back({
+            physical, entry.package_key, instance_id});
         for (const auto& [relative, digest] : entry.source_sha256) {
             if (!relative_path_spelling_valid(relative, false, true)
                     || !valid_sha256(digest))
