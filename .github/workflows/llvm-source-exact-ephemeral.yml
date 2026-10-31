@@ -50,6 +50,10 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_REPOSITORY" = 'ores-truffle-oreslang/oreslang-source.llvm'
           test "$GITHUB_REF" = 'refs/heads/main'
+          # Source protection is a prerequisite, not an optional admin follow-up.
+          # Verify it BEFORE executing checkout or arbitrary PR-controlled build code.
+          protected_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          test "$protected_main" = 'true'
           test "$RUNNER_ENVIRONMENT" = 'self-hosted'
           command -v gh
           receipt="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
