@@ -1,6 +1,7 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <functional>
 #include <memory>
