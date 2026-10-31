@@ -86,16 +86,25 @@ bool native_error_slot_scalar_program(const Program& source) {
     // helpers. This proves cross-unit propagation for the canonical Math
     // module without changing existing standalone helper-call IR contracts.
     bool imported_helper = false;
+    const Function* root_main = nullptr;
     for (const auto& fn : source.functions) {
         if (!native_error_slot_scalar_function(fn))
             return false;
-        if (fn.name == "main")
+        if (fn.name == "main") {
+            root_main = &fn;
             continue;
+        }
         if (fn.name.rfind("__ores_module_", 0) != 0)
             return false;
         imported_helper = true;
     }
-    return imported_helper;
+    // Tree shaking may remove an unused library from a direct arithmetic
+    // catch fixture. A single root main with the newly admitted terminal
+    // ErrorSlot catch is still ABI-safe: main keeps its public signature and
+    // owns the slot locally, so no legacy helper-call ABI changes.
+    return imported_helper ||
+        (source.functions.size() == 1 && root_main &&
+         root_main->caught_error_try_result);
 }
 
 // Owned i64 parameters receive stack slots so the only permitted loans can
