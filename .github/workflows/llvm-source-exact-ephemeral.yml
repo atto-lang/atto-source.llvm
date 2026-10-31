@@ -48,33 +48,33 @@ jobs:
           set -euo pipefail
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,7}$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$GITHUB_REPOSITORY" = 'ores-truffle-oreslang/oreslang-source.llvm'
-          test "$GITHUB_REF" = 'refs/heads/main'
-          # Source protection is a prerequisite, not an optional admin follow-up.
-          # Verify it BEFORE executing checkout or arbitrary PR-controlled build code.
-          protected_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
-          test "$protected_main" = 'true'
-          test "$RUNNER_ENVIRONMENT" = 'self-hosted'
+          test "$GITHUB_REPOSITORY" = "ores-truffle-oreslang/oreslang-source.llvm"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$RUNNER_ENVIRONMENT" = "self-hosted"
           command -v gh
+          protected_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
+          test "$protected_main" = "true"
           receipt="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
             --jq '[.head.sha, .head.repo.full_name, .state, (.head.repo.private|tostring), (.user.id|tostring)] | @tsv')"
           IFS=$'\t' read -r actual_sha actual_repo state private pr_author_id <<< "$receipt"
           test "$actual_sha" = "$SOURCE_SHA"
           test "$actual_repo" = "$GITHUB_REPOSITORY"
-          test "$state" = 'open'
-          test "$private" = 'true'
-          # Before running any PR source, require a distinct, approved reviewer.
-          # Only the latest submitted ORESoftware review on the exact commit counts.
+          test "$state" = "open"
+          test "$private" = "true"
           [[ "$pr_author_id" =~ ^[1-9][0-9]*$ ]]
+          # The latest independently submitted ORESoftware review must approve THIS HEAD.
           review_record="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
             --jq 'if length >= 100 then "TOO_MANY_REVIEWS" else
               ([.[] | select(.user.login == "ORESoftware" and .submitted_at != null)]
                | sort_by(.submitted_at) | last // {}
                | [(.state // ""), (.commit_id // ""), (.user.id // 0 | tostring)] | @tsv)
             end')"
-          IFS=
-          echo "Accepted exact head $SOURCE_SHA from source PR $PR_NUMBER"
-
+          IFS=$'\t' read -r review_state review_commit reviewer_id <<< "$review_record"
+          test "$review_state" = "APPROVED"
+          test "$review_commit" = "$SOURCE_SHA"
+          [[ "$reviewer_id" =~ ^[1-9][0-9]*$ ]]
+          test "$reviewer_id" != "$pr_author_id"
+          echo "PROTECTED_MAIN_AND_INDEPENDENT_EXACT_HEAD_REVIEW=PASS"
       - name: Checkout pinned source tree (never persist auth)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
