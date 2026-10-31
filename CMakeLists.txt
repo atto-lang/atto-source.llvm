@@ -2535,6 +2535,18 @@ if(BUILD_TESTING)
         --diagnostic "positional argument cannot follow named argument")
     oreslang_contract_test(native_named_call_mut_borrow_conflict named-call-mut-borrow-after-loan-reject.ores
         --diagnostic "field read conflicts with active mutable borrow")
+    # Member-call parsing is a separate syntax path. It must enforce the
+    # same duplicate/ordering constraints as direct calls, and native array
+    # operations must reject labels until signature-aware permutation exists.
+    oreslang_contract_test(native_named_member_unlowered_array_label
+        named-member-array-unlowered-reject.ores
+        --diagnostic "named native array/member arguments require checked lowering")
+    oreslang_contract_test(native_named_member_duplicate_label
+        named-member-array-duplicate-reject.ores
+        --diagnostic "duplicate named member argument")
+    oreslang_contract_test(native_named_member_positional_after_named
+        named-member-array-positional-after-reject.ores
+        --diagnostic "positional member argument cannot follow named argument")
     oreslang_contract_test(reject_duplicates duplicate-function.ores
         --diagnostic "already has arity 0")
     oreslang_contract_test(reject_same_arity_different_names native-name-arity-duplicate.ores
