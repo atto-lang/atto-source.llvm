@@ -48,6 +48,14 @@ public:
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
+        // Defense in depth: the old module linker must never silently ignore
+        // namespace AST records if a future parser starts admitting them.
+        // Authenticated package-source ownership and typed namespace call
+        // lowering have not been connected to this executable path.
+        for (const auto& unit : units) {
+            if (!unit->program.namespace_imports.empty())
+                fail(*unit, "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native loader requires verified v2 namespace package linking");
+        }
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
