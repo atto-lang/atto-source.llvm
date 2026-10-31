@@ -42,12 +42,18 @@ positive() {
 negative() {
   local name="$1" source="$2"
   printf '%s\n' "$source" > "$scratch/$name.ores"
-  if "$compiler" --target=host "$scratch/$name.ores" \
-      > "$scratch/$name.ll" 2> "$scratch/$name.stderr"; then
-    echo "NATIVE_F64_FALSE_ACCEPT: $name" >&2; exit 1
-  fi
-  [[ ! -s "$scratch/$name.ll" && -s "$scratch/$name.stderr" ]] ||
-    { echo "NATIVE_F64_PARTIAL_IR_OR_MISSING_ERROR: $name" >&2; exit 1; }
+  local compile_rc=0
+  "$compiler" --target=host "$scratch/$name.ores" \
+      > "$scratch/$name.ll" 2> "$scratch/$name.stderr" || compile_rc=$?
+  # The actual compiler's caught source-error contract is exactly exit 1
+  # and a structured oreslang-llvmc: diagnostic. Signals, crashes, timeouts,
+  # missing binaries and runner failures are NOT successful rejection tests.
+  [[ "$compile_rc" -eq 1 ]] ||
+    { echo "NATIVE_F64_REJECTION_NOT_SOURCE_ERROR: $name rc=$compile_rc" >&2; exit 1; }
+  [[ ! -s "$scratch/$name.ll" ]] &&
+    grep -q '^oreslang-llvmc: ' "$scratch/$name.stderr" ||
+    { echo "NATIVE_F64_PARTIAL_IR_OR_WRONG_DIAGNOSTIC: $name" >&2
+      cat "$scratch/$name.stderr" >&2; exit 1; }
   reject=$((reject + 1))
   echo "NATIVE_F64_REJECTED_NO_IR: $name"
 }
