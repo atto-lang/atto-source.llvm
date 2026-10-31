@@ -1,0 +1,161 @@
+#pragma once
+// Experimental verified-MIR -> native LLVM IR for a LOCAL two-i64-column
+// owner. No escaped handles, actor lifetime or production source admission.
+// The C++17 LLVM compiler can include this without an LLVM SDK dependency.
+#include "oreslang/types/InvertedTypedMir.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace oreslang::dop::mir {
+struct I64PairIrOperands {
+    std::vector<std::array<std::int64_t, 2>> rows;
+    std::vector<std::int64_t> writes;
+};
+class I64PairLlvmEmitter final {
+    std::string code_;
+    unsigned next_ = 0;
+    std::size_t cap_;
+    std::size_t pushes_ = 0;
+    std::size_t writes_ = 0;
+    std::string last_read_ = "0";
+    bool closed_ = false;
+
+    std::string temp() { return "%m" + std::to_string(++next_); }
+    std::string label() { return "mblock" + std::to_string(++next_); }
+    void emit(const std::string& s) { code_ += "  " + s + "\n"; }
+    static std::string num(std::int64_t v) { return std::to_string(v); }
+    std::string load(const std::string& pointer) {
+        auto t = temp(); emit(t + " = load i64, ptr " + pointer); return t;
+    }
+    std::string slot_ptr(const std::string& lane, const std::string& index) {
+        auto p = temp();
+        emit(p + " = getelementptr inbounds [" + std::to_string(cap_) +
+             " x i64], ptr " + lane + ", i64 0, i64 " + index);
+        return p;
+    }
+    void guard(const std::string& condition) {
+        const auto ok = label(), error = label();
+        emit("br i1 " + condition + ", label %" + ok + ", label %" + error);
+        code_ += error + ":\n";
+        emit("call void @llvm.trap()"); emit("unreachable");
+        code_ += ok + ":\n";
+    }
+    void owner_guard() {
+        const auto p = temp(); emit(p + " = load i1, ptr %alive"); guard(p);
+    }
+    std::string index_guard(std::size_t row) {
+        if (row > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))
+            throw std::out_of_range("MIR index exceeds signed i64");
+        const auto length = load("%length");
+        const auto good = temp();
+        emit(good + " = icmp ult i64 " + std::to_string(row) + ", " + length);
+        guard(good);
+        // Each dense index is resolved fresh; there is no external row handle
+        // or stale generation token in this restricted source ABI. The lane's
+        // positive generation is checked as a live slot discriminator.
+        const auto gp = slot_ptr("%generation", std::to_string(row));
+        const auto generation = load(gp);
+        const auto valid = temp();
+        emit(valid + " = icmp ne i64 " + generation + ", 0");
+        guard(valid);
+        return std::to_string(row);
+    }
+public:
+    explicit I64PairLlvmEmitter(std::size_t capacity) : cap_(capacity) {
+        if (capacity == 0 || capacity > 256)
+            throw std::invalid_argument("experimental MIR LLVM columns capacity must be 1..256");
+    }
+    std::string build(const Module& module, const I64PairIrOperands& args) {
+        if (module.layout().columns() != 2 ||
+            module.layout().column(0).type != InvertedScalarKind::I64 ||
+            module.layout().column(1).type != InvertedScalarKind::I64 ||
+            module.capacity() != cap_)
+            throw std::invalid_argument("experimental MIR LLVM requires matching two-i64 layout");
+        code_ = "; typed MIR, experimental local i64 pair LLVM IR; no external row handles\n";
+        code_ += "declare void @llvm.trap()\n";
+        code_ += "define i32 @main() {\nentry:\n";
+        emit("%length = alloca i64");
+        emit("store i64 0, ptr %length");
+        emit("%alive = alloca i1");
+        emit("store i1 true, ptr %alive");
+        for (const auto* name : {"%col0", "%col1", "%generation"})
+            emit(std::string(name) + " = alloca [" + std::to_string(cap_) + " x i64]");
+        for (const auto& op : module.instructions()) {
+            if (op.kind == OpKind::Allocate) continue;
+            owner_guard();
+            switch (op.kind) {
+                case OpKind::Push: {
+                    if (pushes_ == args.rows.size())
+                        throw std::invalid_argument("missing MIR LLVM push operands");
+                    const auto length = load("%length");
+                    const auto ok = temp();
+                    emit(ok + " = icmp ult i64 " + length + ", " + std::to_string(cap_));
+                    guard(ok);
+                    emit("store i64 " + num(args.rows[pushes_][0]) + ", ptr " + slot_ptr("%col0", length));
+                    emit("store i64 " + num(args.rows[pushes_][1]) + ", ptr " + slot_ptr("%col1", length));
+                    emit("store i64 1, ptr " + slot_ptr("%generation", length));
+                    const auto next = temp(); emit(next + " = add i64 " + length + ", 1");
+                    emit("store i64 " + next + ", ptr %length"); ++pushes_;
+                    break;
+                }
+                case OpKind::ReadField: {
+                    const auto idx = index_guard(op.index);
+                    last_read_ = load(slot_ptr(op.column ? "%col1" : "%col0", idx));
+                    break;
+                }
+                case OpKind::WriteField: {
+                    if (writes_ == args.writes.size())
+                        throw std::invalid_argument("missing MIR LLVM write operand");
+                    const auto idx = index_guard(op.index);
+                    emit("store i64 " + num(args.writes[writes_++]) + ", ptr " +
+                         slot_ptr(op.column ? "%col1" : "%col0", idx));
+                    break;
+                }
+                case OpKind::Snapshot: {
+                    const auto idx = index_guard(op.index);
+                    (void)load(slot_ptr("%col0", idx));
+                    (void)load(slot_ptr("%col1", idx));
+                    break;
+                }
+                case OpKind::EraseSwap: {
+                    const auto idx = index_guard(op.index);
+                    const auto length = load("%length");
+                    const auto last = temp(); emit(last + " = sub i64 " + length + ", 1");
+                    for (const auto* name : {"%col0", "%col1", "%generation"}) {
+                        const auto tail = slot_ptr(name, last);
+                        const auto val = load(tail);
+                        emit("store i64 " + val + ", ptr " + slot_ptr(name, idx));
+                        emit("store i64 0, ptr " + tail);
+                    }
+                    emit("store i64 " + last + ", ptr %length");
+                    break;
+                }
+                case OpKind::BorrowRead: case OpKind::BorrowWrite:
+                case OpKind::ReleaseRead: case OpKind::ReleaseWrite:
+                    // All loans are verified in MIR; no reference escapes this
+                    // local function or crosses suspension. No pointer emitted.
+                    break;
+                case OpKind::Close:
+                    emit("store i1 false, ptr %alive"); closed_ = true; break;
+                default: throw std::logic_error("unsupported MIR opcode in LLVM IR emitter");
+            }
+        }
+        if (pushes_ != args.rows.size() || writes_ != args.writes.size())
+            throw std::invalid_argument("unused MIR LLVM operands");
+        // Side effects are represented in checked column stack storage; return
+        // the last field read (or zero), matching the prototype's i32 test ABI.
+        const auto result = temp(); emit(result + " = trunc i64 " + last_read_ + " to i32");
+        emit("ret i32 " + result);
+        code_ += "}\n";
+        return code_;
+    }
+};
+inline std::string emit_native_i64_pair_ir(const Module& verified,
+                                           const I64PairIrOperands& inputs) {
+    return I64PairLlvmEmitter(verified.capacity()).build(verified, inputs);
+}
+} // namespace oreslang::dop::mir
