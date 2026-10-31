@@ -3214,6 +3214,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_supervisor_execution_authority
         COMMAND oreslang-native-execution-authority-test)
     set_tests_properties(native_actor_supervisor_execution_authority PROPERTIES TIMEOUT 30)
+    # Trusted native authority adversarial lifecycle test: a foreign physical
+    # carrier cannot steal an execution claim, retirement fences active work,
+    # and stale generation claims fail after restart. Does not execute guest code.
+    add_executable(oreslang-native-actor-authority-stop-claim-race-test
+        tests/native_actor_authority_stop_claim_race_test.c)
+    target_include_directories(oreslang-native-actor-authority-stop-claim-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-authority-stop-claim-race-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-authority-stop-claim-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_authority_stop_claim_race
+        COMMAND oreslang-native-actor-authority-stop-claim-race-test)
+    set_tests_properties(native_actor_authority_stop_claim_race PROPERTIES TIMEOUT 30)
+
 
     # Across all actor-owned entrypoints (DATA and supervisor CONTROL), no
     # actor can have two physical guest executors, even on separate workers.
