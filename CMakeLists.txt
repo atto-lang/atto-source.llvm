@@ -1126,6 +1126,26 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_source_critical_nested_guest_not_lowered
         source-critical-nested-guest-unlowered.ores
         --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    # Typed schema parsing is now distinct from the legacy actor scalar path.
+    # Even a *valid* schema still fails closed until critical loan HIR/codegen.
+    oreslang_contract_test(native_sealed_schema_valid_signed_min_not_lowered
+        sealed-state-schema-min-int-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_sealed_schema_duplicate_rejected
+        sealed-state-schema-duplicate.ores
+        --diagnostic "duplicate sealed actor state field")
+    oreslang_contract_test(native_sealed_schema_empty_rejected
+        sealed-state-schema-empty.ores
+        --diagnostic "empty sealed actor state schema")
+    oreslang_contract_test(native_sealed_schema_type_rejected
+        sealed-state-schema-type-unlowered.ores
+        --diagnostic "native sealed actor state schema currently recognizes int fields only")
+    oreslang_contract_test(native_sealed_schema_overflow_rejected
+        sealed-state-schema-overflow.ores
+        --diagnostic "integer literal overflows signed 64-bit result")
+    oreslang_contract_test(native_sealed_schema_capacity_rejected
+        sealed-state-schema-too-many.ores
+        --diagnostic "native sealed actor state field limit exceeded (16)")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
 
