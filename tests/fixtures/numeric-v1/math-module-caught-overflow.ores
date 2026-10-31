@@ -1,0 +1,10 @@
+import module Math from "../../../stdlib/math";
+
+pub fnc main(): int {
+  try {
+    return Math.neg((-9223372036854775807 - 1));
+  } catch (err) {
+    return 42;
+  } finally {
+  }
+}
