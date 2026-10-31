@@ -5,6 +5,9 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeHttpExchange.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeRequestContext.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeRequestPhysicalWork.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeRequestNioWatch.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVMNio.h'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorABI.h'
       - 'src/main/cpp/oreslang/runtime/TaskCancellation.hpp'
       - 'src/main/cpp/oreslang/runtime/PinnedContinuationGate.hpp'
       - 'src/main/cpp/oreslang/runtime/AsyncIoCompletionGate.hpp'
@@ -12,6 +15,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
       - 'src/main/cpp/oreslang/runtime/RequestSlotTable.hpp'
       - 'tests/native_request_context_test.cpp'
+      - 'tests/native_request_nio_watch_abi_test.cpp'
       - 'tests/native_task_cancellation_test.cpp'
       - 'tests/pinned_continuation_gate_test.cpp'
       - 'tests/native_http_exchange_test.cpp'
@@ -86,6 +90,10 @@ jobs:
             -o "$RUNNER_TEMP/native-http-exchange"
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror \
             "${options[@]}" -I src/main/cpp \
+            tests/native_request_nio_watch_abi_test.cpp \
+            -o "$RUNNER_TEMP/native-request-nio-watch-abi"
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror \
+            "${options[@]}" -I src/main/cpp \
             tests/native_task_cancellation_test.cpp \
             -o "$RUNNER_TEMP/native-http-task-cancellation"
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror \
@@ -100,6 +108,7 @@ jobs:
           export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
           timeout 90s "$RUNNER_TEMP/native-http-request-context"
           timeout 40s "$RUNNER_TEMP/native-http-exchange"
+          timeout 30s "$RUNNER_TEMP/native-request-nio-watch-abi"
           timeout 60s "$RUNNER_TEMP/native-http-task-cancellation"
           timeout 60s "$RUNNER_TEMP/native-http-pinned-continuation"
           echo "HTTP_REQUEST_CONTEXT_EXACT_HEAD_PASS flavor=${{ matrix.flavor }}"
