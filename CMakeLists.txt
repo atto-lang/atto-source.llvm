@@ -3267,6 +3267,23 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Native scheduler handler-originated sealed STOP: a running callback
+    # must not self-wait, seal must abandon queued DATA exactly once, and a
+    # host observer must see the correct terminal receipt after quiescence.
+    # This is a native host test, not a compiled .ores guest test.
+    add_executable(oreslang-native-actor-self-sealed-stop-test
+        tests/native_actor_self_sealed_stop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-self-sealed-stop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-self-sealed-stop-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-self-sealed-stop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_self_sealed_stop_terminal_accounting
+        COMMAND oreslang-native-actor-self-sealed-stop-test)
+    set_tests_properties(native_actor_self_sealed_stop_terminal_accounting
+        PROPERTIES TIMEOUT 30)
+
     # Scheduler-owned producer continuation wake escrow: independent from
     # supervisor CONTROL and USER mail capacity. Native host substrate only.
     add_executable(oreslang-native-continuation-wake-escrow-test
