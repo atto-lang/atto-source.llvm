@@ -63,5 +63,27 @@ int main() {
     rejected([&]{(void)read_namespace_v2_physical_files(root,{"src/pkg/entry.ores","src/pkg/extra.ores"});}); ++n;
     if (valid().source_bytes.size() != 1) throw std::runtime_error("restored snapshot wrong");
     ++n;
+    // Controlled source-path identity race: an already opened descriptor is
+    // unchanged but its directory entry has been replaced with identical
+    // source bytes. The identity bridge must detect the different inode.
+    {
+        using namespace namespace_v2_physical_detail;
+        Fd parent(::open((root/"src/pkg").c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+        if (parent.fd < 0) throw std::runtime_error("test cannot open provider directory");
+        Fd original(::openat(parent.fd, "entry.ores", O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+        if (original.fd < 0) throw std::runtime_error("test cannot open source file");
+        struct stat before{};
+        if (::fstat(original.fd, &before) != 0) throw std::runtime_error("test cannot inspect inode");
+        require_same_path_binding(parent.fd, "entry.ores", before);
+        ++n;
+        const auto replacement = root/"src/pkg/replacement.ores";
+        write(replacement, contents);
+        fs::rename(replacement, src);
+        rejected([&]{ require_same_path_binding(parent.fd, "entry.ores", before); });
+        ++n;
+        if (valid().source_bytes.at("src/pkg/entry.ores") != contents)
+            throw std::runtime_error("same-byte replacement not readable");
+        ++n;
+    }
     std::cout<<"PASS physical source v2 cases="<<n<<"\n";
 }
