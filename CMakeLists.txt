@@ -1894,6 +1894,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-inverted-typed-hir-test)
     set_tests_properties(inverted_typed_hir_and_checked_owner PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-inverted-mir-compiler17-test
+        tests/native_inverted_mir_compiler17_test.cpp)
+    target_include_directories(oreslang-inverted-mir-compiler17-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-inverted-mir-compiler17-test PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(oreslang-inverted-mir-compiler17-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME inverted_mir_compiler_cpp17
+        COMMAND oreslang-inverted-mir-compiler17-test)
+    set_tests_properties(inverted_mir_compiler_cpp17 PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-inverted-typed-mir-test
         tests/native_inverted_typed_mir_test.cpp)
     target_include_directories(oreslang-inverted-typed-mir-test PRIVATE
