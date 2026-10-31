@@ -365,12 +365,12 @@ int main(int argc, char** argv) {
             auto program = make_program();
             if (all_providers) {
                 source(program, "app/src/main.ores").source =
-                    "import ns a from \\"pkg:foo\\";\\n"
-                    "import ns b from \\"pkg:foo\\";\\n"
-                    "import ns c from \\"pkg:foo\\";\\n"
+                    "import ns a from \"pkg:foo\";\n"
+                    "import ns b from \"pkg:foo\";\n"
+                    "import ns c from \"pkg:foo\";\n"
                     "pub fnc main(): int { return a.aggregate(21) + c.response_delta() "
                     "+ b.model_code() + b.query_code() + b.storage_code() "
-                    "+ b.validation_code(); }\\n";
+                    "+ b.validation_code(); }\n";
             }
             return program;
         };
