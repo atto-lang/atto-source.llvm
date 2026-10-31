@@ -17,9 +17,12 @@ Status: **draft compatibility pilot**, NOT a CGL-certified, PREEMPT_RT-qualified
 
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
     cmake --build build --target oreslang-llvmc --parallel 2
-    python3 -m unittest discover -s tests -p test_cgl_preflight.py -v
+    PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_preflight.py -v
+    PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_smoke_bounded.py -v
     bash scripts/cgl-native-smoke.sh
     python3 scripts/cgl-preflight.py --require-preempt-rt
+
+The source-to-ELF smoke uses GNU `timeout` to bound compiler invocation to 180 seconds and guest execution to 30 seconds, with a 5-second termination grace period. Wrong exit status and deadline expiry fail closed. A separate four-case **source-free synthetic shell** regression validates this control flow; it does not establish actual `oreslang-llvmc` correctness or guest/native runtime execution.
 
 On a target CGL host, also record the exact Git tree/commit, distribution image, kernel config, libc/interpreter, CPU/SMT topology, cgroup effective cpuset, security profile and boot flags. Verify actual ELF loader + glibc/libstdc++ ABI dependencies with platform tooling. Successful ELF admission is not a dependency/ABI check.
 

@@ -9,13 +9,15 @@ if [[ ! -x "$compiler" ]]; then
   echo "missing oreslang-llvmc in $build_dir" >&2
   exit 69
 fi
+command -v timeout >/dev/null || { echo "GNU timeout is required for bounded CGL execution" >&2; exit 69; }
 python3 "$root/scripts/cgl-preflight.py"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
-ORESLANG_LLVMC="$compiler" "$root/scripts/compile-aot.sh" "$root/tests/fixtures/forward-call-main.ores" "$work/cgl-scalar"
+timeout --signal=TERM --kill-after=5s 180s env ORESLANG_LLVMC="$compiler" \
+  "$root/scripts/compile-aot.sh" "$root/tests/fixtures/forward-call-main.ores" "$work/cgl-scalar"
 python3 "$root/scripts/cgl-preflight.py" --binary "$work/cgl-scalar"
 set +e
-"$work/cgl-scalar"
+timeout --signal=TERM --kill-after=5s 30s "$work/cgl-scalar"
 status=$?
 set -e
 if [[ "$status" -ne 42 ]]; then

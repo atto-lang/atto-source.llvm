@@ -7,6 +7,7 @@ on:
       - 'src/main/cpp/oreslang/**'
       - 'tests/fixtures/**'
       - 'tests/test_cgl_preflight.py'
+      - 'tests/test_cgl_smoke_bounded.py'
       - 'tests/native_cgl_host_admission_test.cpp'
       - 'tests/native_cgl_dispatch_evidence_test.cpp'
       - 'tests/native_cgl_carrier_slice_trace_test.cpp'
@@ -46,7 +47,9 @@ jobs:
       - name: Install LLVM compiler dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
       - name: Preflight negative matrix
-        run: python3 -m unittest discover -s tests -p test_cgl_preflight.py -v
+        run: PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_preflight.py -v
+      - name: Source-free bounded smoke and timeout negative regression
+        run: PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_smoke_bounded.py -v
       - name: Build native compiler
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
