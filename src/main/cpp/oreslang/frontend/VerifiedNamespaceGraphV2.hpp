@@ -41,7 +41,8 @@ inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
         const auto& files = bundle.snapshot->source_bytes();
         if (verified.package_files().empty())
             throw std::invalid_argument("v2 namespace package has no source inventory");
-        if (files.empty() || source_count > 4096 - files.size())
+        if (files.empty() || files.size() > 4096 ||
+                source_count > 4096 - files.size())
             throw std::invalid_argument("v2 namespace source inventory exceeds bound");
         source_count += files.size();
 
