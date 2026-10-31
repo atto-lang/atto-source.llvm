@@ -9,15 +9,27 @@ endif()
 if(NOT DEFINED EXPECTED_GUEST_STATUS)
   set(EXPECTED_GUEST_STATUS 43)
 endif()
-if(NOT "${EXPECTED_GUEST_STATUS}" MATCHES "^(43|53)$")
-  message(FATAL_ERROR "unexpected pinned namespace guest oracle")
-endif()
-
 file(MAKE_DIRECTORY "${WORK_DIR}")
 set(ir_file "${WORK_DIR}/pinned-namespace.ll")
 set(native_file "${WORK_DIR}/pinned-namespace-native")
 if(WIN32)
   string(APPEND native_file ".exe")
+endif()
+
+# Never retain artifacts from an earlier invocation, including when this
+# invocation fails before emitting IR. Other steps must not mistake a stale
+# executable or .ll file for fresh evidence from the current exact head.
+function(reject_namespace_execution reason)
+  file(REMOVE "${ir_file}" "${native_file}")
+  message(FATAL_ERROR "${reason}")
+endfunction()
+file(REMOVE "${ir_file}" "${native_file}")
+if(EXISTS "${ir_file}" OR IS_SYMLINK "${ir_file}" OR
+   EXISTS "${native_file}" OR IS_SYMLINK "${native_file}")
+  reject_namespace_execution("could not clear stale namespace IR/executable")
+endif()
+if(NOT "${EXPECTED_GUEST_STATUS}" MATCHES "^(43|53)$")
+  reject_namespace_execution("unexpected pinned namespace guest oracle")
 endif()
 
 execute_process(
@@ -29,20 +41,16 @@ execute_process(
   TIMEOUT 20)
 
 if(NOT "${helper_status}" STREQUAL "0")
-  message(FATAL_ERROR "pinned namespace helper failed: ${helper_status}: ${helper_err}")
+  reject_namespace_execution("pinned namespace helper failed: ${helper_status}: ${helper_err}")
 endif()
 if(NOT "${helper_err}" STREQUAL "")
-  message(FATAL_ERROR "pinned namespace helper wrote stderr: ${helper_err}")
+  reject_namespace_execution("pinned namespace helper wrote stderr: ${helper_err}")
 endif()
 if(NOT ir MATCHES "define i32 @main\\(")
-  message(FATAL_ERROR "pinned namespace lowering did not emit a native main")
+  reject_namespace_execution("pinned namespace lowering did not emit a native main")
 endif()
 
 file(WRITE "${ir_file}" "${ir}")
-file(REMOVE "${native_file}")
-if(EXISTS "${native_file}" OR IS_SYMLINK "${native_file}")
-  message(FATAL_ERROR "could not clear stale native namespace executable")
-endif()
 
 execute_process(
   COMMAND "${CLANG}" -O0 -x ir "${ir_file}" -o "${native_file}"
@@ -55,10 +63,10 @@ execute_process(
 if(NOT "${clang_status}" STREQUAL "0" OR
    NOT EXISTS "${native_file}" OR IS_DIRECTORY "${native_file}" OR
    IS_SYMLINK "${native_file}")
-  message(FATAL_ERROR "Clang failed to link fresh namespace guest: ${clang_status}: ${clang_err}")
+  reject_namespace_execution("Clang failed to link fresh namespace guest: ${clang_status}: ${clang_err}")
 endif()
 if(NOT "${clang_out}" STREQUAL "")
-  message(FATAL_ERROR "Clang unexpectedly wrote stdout: ${clang_out}")
+  reject_namespace_execution("Clang unexpectedly wrote stdout: ${clang_out}")
 endif()
 
 execute_process(
@@ -70,10 +78,10 @@ execute_process(
   TIMEOUT 10)
 
 if(NOT "${guest_status}" STREQUAL "${EXPECTED_GUEST_STATUS}")
-  message(FATAL_ERROR "pinned namespace guest exit mismatch: ${guest_status}")
+  reject_namespace_execution("pinned namespace guest exit mismatch: ${guest_status}")
 endif()
 if(NOT "${guest_out}" STREQUAL "" OR NOT "${guest_err}" STREQUAL "")
-  message(FATAL_ERROR "pinned namespace guest produced output: stdout=[${guest_out}] stderr=[${guest_err}]")
+  reject_namespace_execution("pinned namespace guest produced output: stdout=[${guest_out}] stderr=[${guest_err}]")
 endif()
 
 message(STATUS "PINNED_NAMESPACE_NATIVE_EXIT_${EXPECTED_GUEST_STATUS}=PASS")
