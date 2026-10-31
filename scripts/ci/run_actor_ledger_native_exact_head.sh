@@ -82,18 +82,16 @@ for current_compiler in gcc clang clang-sanitized; do
       "$work/heap-$suffix.o" -o "$work/$test-$suffix"
     run_executable "$test" "$work/$test-$suffix"
   done
+  # Sanitized success path retains leak detection. The non-sanitized
+  # quarantine test intentionally holds failed-cleanup memory until shutdown.
+  cleanup_defines=()
+  if [[ "$current_compiler" == clang-sanitized ]]; then
+    cleanup_defines=(-DORES_NATIVE_CLEANUP_SUCCESS_ONLY=1)
+  fi
   "$cc" -std=c11 "${opts[@]}" -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
-    -pthread "${san[@]}" -Isrc/main/cpp \
+    "${cleanup_defines[@]}" -pthread "${san[@]}" -Isrc/main/cpp \
     tests/native_actor_retained_cleanup_autoadmit_test.c \
     "$work/scheduler-$suffix.o" -o "$work/cleanup-$suffix"
-  # Failed physical cleanup deliberately leaves a quarantined actor; LSan
-  # would otherwise flag this expected leak as a failure of the success path.
-  if [[ "$current_compiler" == clang-sanitized ]]; then
-    ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
-      timeout 60s "$work/cleanup-$suffix"
-    printf 'NATIVE_ACTOR_EXECUTED compiler=%s test=retained_cleanup_quarantine sha=%s\n' "$current_compiler" "$expected_sha"
-  else
-    run_executable retained_cleanup_quarantine "$work/cleanup-$suffix"
-  fi
+  run_executable retained_cleanup "$work/cleanup-$suffix"
 done
 printf 'NATIVE_ACTOR_EXACT_HEAD_HOST_MATRIX_PASS sha=%s configurations=3 tests_each=5\n' "$expected_sha"
