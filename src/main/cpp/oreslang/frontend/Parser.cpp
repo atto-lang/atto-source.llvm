@@ -3118,10 +3118,9 @@ private:
             require("{");
 
             if (value.caught_error_try_result) {
-                // First guest ErrorSlot catch slice. The binding is kept as
-                // opaque Error identity metadata; reading fields/type identity
-                // is a later nominal-Error slice. For now the handler is an
-                // integer literal result and finally must be empty.
+                // First guest ErrorSlot catch slice. The binding is opaque
+                // except for the language nominal is-type test. No host
+                // exception object or integer payload is exposed.
                 value.catch_binding = terminal_catch_binding;
                 for (const auto& param : value.parameters)
                     if (param.name == value.catch_binding)
@@ -3129,14 +3128,49 @@ private:
                 for (const auto& local : value.locals)
                     if (local.name == value.catch_binding)
                         fail("native ErrorSlot catch binding shadows local owner");
-                require("return");
-                if (token_.kind != Kind::Integer)
-                    fail("native ErrorSlot catch v1 requires an integer literal handler result");
-                value.result = expression();
-                if (!value.result ||
-                        value.result->kind != Expression::Kind::Integer)
-                    fail("native ErrorSlot catch v1 requires an integer literal handler result");
-                require(";");
+
+                if (accept("if")) {
+                    if (identifier() != value.catch_binding)
+                        fail("native ErrorSlot type test must use the catch binding");
+                    require("is");
+                    require("type");
+                    value.caught_error_type_test = identifier();
+                    if (value.caught_error_type_test != "ArithmeticOverflowError" &&
+                            value.caught_error_type_test != "Error")
+                        fail("native ErrorSlot type test supports only ArithmeticOverflowError or Error");
+                    require("{");
+                    require("return");
+                    if (token_.kind != Kind::Integer)
+                        fail("native ErrorSlot type-match handler requires an integer literal");
+                    value.caught_error_type_match_result = expression();
+                    if (!value.caught_error_type_match_result ||
+                            value.caught_error_type_match_result->kind !=
+                                Expression::Kind::Integer)
+                        fail("native ErrorSlot type-match handler requires an integer literal");
+                    require(";");
+                    require("}");
+                    require("else");
+                    require("{");
+                    require("return");
+                    if (token_.kind != Kind::Integer)
+                        fail("native ErrorSlot type-mismatch handler requires an integer literal");
+                    value.result = expression();
+                    if (!value.result ||
+                            value.result->kind != Expression::Kind::Integer)
+                        fail("native ErrorSlot type-mismatch handler requires an integer literal");
+                    require(";");
+                    require("}");
+                    require("fi");
+                } else {
+                    require("return");
+                    if (token_.kind != Kind::Integer)
+                        fail("native ErrorSlot catch v1 requires an integer literal handler result");
+                    value.result = expression();
+                    if (!value.result ||
+                            value.result->kind != Expression::Kind::Integer)
+                        fail("native ErrorSlot catch v1 requires an integer literal handler result");
+                    require(";");
+                }
                 require("}");
                 require("finally");
                 require("{");
@@ -5455,6 +5489,7 @@ private:
                 lower_extension_expression(write.expression, aliases);
             lower_extension_expression(fn.caught_throw_value, aliases);
             lower_extension_expression(fn.caught_error_try_result, aliases);
+            lower_extension_expression(fn.caught_error_type_match_result, aliases);
             for (auto& deferred : fn.caught_throw_defers)
                 lower_extension_expression(deferred.expression, aliases);
             lower_extension_expression(fn.result, aliases);
