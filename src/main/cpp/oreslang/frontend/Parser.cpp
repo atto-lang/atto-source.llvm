@@ -559,6 +559,43 @@ public:
             advance();
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
+            if (accept("namespace")) {
+                // Parse namespace syntax into a separate AST family. A source
+                // spelling must never be interpreted as an existing module
+                // path or package-owner proof by the old module loader.
+                NamespaceImportSyntax selected;
+                selected.offset = token_.offset;
+                selected.namespace_name = identifier();
+                selected.local_name = accept("as")
+                    ? identifier() : selected.namespace_name;
+                if (!module_names_.insert(selected.local_name).second)
+                    fail("duplicate imported namespace binding '" + selected.local_name + "'");
+                require("from");
+                if (token_.kind != Kind::String)
+                    fail("native namespace import requires a quoted package selector");
+                selected.package_selector = std::string(token_.text);
+                if (selected.package_selector.empty()
+                        || selected.package_selector.size() > 128)
+                    fail("native namespace package selector exceeds 128 bytes");
+                const auto& selector = selected.package_selector;
+                if (selector != "+/") {
+                    if (!((selector.front() >= 'A' && selector.front() <= 'Z')
+                            || (selector.front() >= 'a' && selector.front() <= 'z')))
+                        fail("invalid native namespace package alias");
+                    for (unsigned char ch : selector)
+                        if (!((ch >= 'A' && ch <= 'Z')
+                                || (ch >= 'a' && ch <= 'z')
+                                || (ch >= '0' && ch <= '9')
+                                || ch == '_' || ch == '-'))
+                            fail("invalid native namespace package alias");
+                }
+                advance();
+                require(";");
+                program.namespace_imports.push_back(std::move(selected));
+                if (program.namespace_imports.size() > 32)
+                    fail("native namespace import limit exceeded (32)");
+                continue;
+            }
             ModuleImport imported;
             imported.offset = token_.offset;
             imported.selected_class = accept("class");
@@ -717,6 +754,11 @@ public:
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        // The package-local host graph is not connected to an authenticated
+        // v2 manifest/source loader and native codegen yet. Namespace AST
+        // imports must not silently enter the existing relative module linker.
+        if (!program.namespace_imports.empty())
+            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace imports require verified v2 package manifests and cross-unit lowering");
         validate_type_only_declarations(program);
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
