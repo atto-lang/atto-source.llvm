@@ -86,6 +86,26 @@ public:
     }
 
 
+    /*
+     * Request-scoped Task admission must verify its exact structured parent
+     * in the SAME graph-lock transaction that retains the request's physical
+     * context lease. Checking is_owned_by() separately permits adoption or
+     * cancellation to invalidate the check before the lease is acquired.
+     *
+     * As with with_active_authority(), operations must be bounded host-only
+     * work, never guest code, a Task method, or a blocking scheduler call.
+     */
+    template <typename Operation>
+    bool with_active_child_of(const Ptr& expected_parent,
+                              Operation&& operation) const {
+        if (!expected_parent) return false;
+        std::lock_guard<std::mutex> guard(graph_mutex());
+        if (retired_ || cancelled_ || owner_.lock() != expected_parent ||
+            expected_parent->retired_ || expected_parent->cancelled_)
+            return false;
+        return static_cast<bool>(std::forward<Operation>(operation)());
+    }
+
     std::size_t owned_child_count() const {
         std::lock_guard<std::mutex> guard(graph_mutex());
         return children_.size();
