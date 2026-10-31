@@ -378,6 +378,27 @@ int main() {
                   && gate.finish_resume(ticket)
                   && gate.try_retire(ticket), "bounded registry failed to retire");
     }
+    // Two gate instances may have identical tickets and per-gate serials.
+    // A copied receipt from one incarnation must never release the other.
+    {
+        AsyncIoTicket ticket{125, 8, 12};
+        BorrowerPinnedContinuationGate first(ticket);
+        BorrowerPinnedContinuationGate second(ticket);
+        auto a = first.acquire(ticket, 77, BorrowerPinnedContinuationGate::Loan::shared);
+        auto b = second.acquire(ticket, 77, BorrowerPinnedContinuationGate::Loan::shared);
+        check(a.has_value() && b.has_value(), "same-ticket gate setup failed");
+        check(!first.release(ticket, 77, *b)
+                  && !second.release(ticket, 77, *a)
+                  && first.loan_state() == 1 && second.loan_state() == 1,
+              "cross-incarnation receipt released another gate's loan");
+        check(first.release(ticket, 77, *a) && second.release(ticket, 77, *b),
+              "own-incarnation receipts failed to release");
+        auto reused = first.acquire(ticket, 77, BorrowerPinnedContinuationGate::Loan::shared);
+        check(reused.has_value() && !first.release(ticket, 77, *a)
+                  && first.loan_state() == 1,
+              "stale receipt consumed reused slot");
+        check(first.release(ticket, 77, *reused), "reused slot could not release");
+    }
     // Receipt release and retirement share the adapter mutex; the underlying
     // loan word still supplies the permanent CAS fence.
     for (std::uint64_t round = 1; round <= 128; ++round) {

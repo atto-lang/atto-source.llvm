@@ -157,23 +157,25 @@ public:
         Receipt& operator=(const Receipt&) = default;
     private:
         friend class BorrowerPinnedContinuationGate;
-        Receipt(std::size_t slot, std::uint64_t serial,
+        Receipt(std::size_t slot, std::uint64_t gate_id, std::uint64_t serial,
                 std::uint64_t borrower, Loan mode) noexcept
-            : slot_(slot), serial_(serial), borrower_(borrower), mode_(mode) {}
+            : slot_(slot), gate_id_(gate_id), serial_(serial),
+              borrower_(borrower), mode_(mode) {}
         std::size_t slot_;
+        std::uint64_t gate_id_;
         std::uint64_t serial_;
         std::uint64_t borrower_;
         Loan mode_;
     };
 
     explicit BorrowerPinnedContinuationGate(AsyncIoTicket ticket) noexcept
-        : gate_(ticket) {}
+        : gate_(ticket), gate_id_(issue_gate_id()) {}
     BorrowerPinnedContinuationGate(const BorrowerPinnedContinuationGate&) = delete;
     BorrowerPinnedContinuationGate& operator=(const BorrowerPinnedContinuationGate&) = delete;
 
     std::optional<Receipt> acquire(AsyncIoTicket ticket, std::uint64_t borrower,
                                    Loan mode) {
-        if (borrower == 0 || !PinnedContinuationGate::valid_loan_mode(mode))
+        if (gate_id_ == 0 || borrower == 0 || !PinnedContinuationGate::valid_loan_mode(mode))
             return std::nullopt;
         std::lock_guard<std::mutex> lock(mu_);
         if (next_serial_ == UINT64_MAX) return std::nullopt; // never reuse an identity
@@ -182,14 +184,15 @@ public:
             if (!gate_.acquire(ticket, mode)) return std::nullopt;
             const auto serial = ++next_serial_;
             slots_[i] = Slot{serial, borrower, mode, true};
-            return Receipt(i, serial, borrower, mode);
+            return Receipt(i, gate_id_, serial, borrower, mode);
         }
         return std::nullopt; // bounded admission; no allocation or silent overflow
     }
 
     bool release(AsyncIoTicket ticket, std::uint64_t borrower,
                  const Receipt& receipt) {
-        if (borrower == 0 || borrower != receipt.borrower_
+        if (gate_id_ == 0 || receipt.gate_id_ != gate_id_
+                || borrower == 0 || borrower != receipt.borrower_
                 || receipt.slot_ >= slots_.size()) return false;
         std::lock_guard<std::mutex> lock(mu_);
         auto& slot = slots_[receipt.slot_];
@@ -224,6 +227,20 @@ public:
     AsyncIoTerminal terminal() const noexcept { return gate_.terminal(); }
 
 private:
+    // A serial starts at 1 for EACH gate. Without a gate incarnation,
+    // a receipt from a second gate with the same ticket/borrower/slot/serial
+    // could release the first gate's loan. Never reuse a gate incarnation.
+    static std::uint64_t issue_gate_id() noexcept {
+        auto current = next_gate_id_.load(std::memory_order_relaxed);
+        while (current != UINT64_MAX) {
+            if (next_gate_id_.compare_exchange_weak(current, current + 1,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                return current;
+        }
+        return 0; // exhaustion fails closed: no receipt admission
+    }
+    inline static std::atomic<std::uint64_t> next_gate_id_{1};
+
     struct Slot {
         std::uint64_t serial = 0;
         std::uint64_t borrower = 0;
@@ -231,6 +248,7 @@ private:
         bool live = false;
     };
     PinnedContinuationGate gate_;
+    const std::uint64_t gate_id_;
     std::mutex mu_;
     std::array<Slot, max_receipts> slots_{};
     std::uint64_t next_serial_ = 0;
