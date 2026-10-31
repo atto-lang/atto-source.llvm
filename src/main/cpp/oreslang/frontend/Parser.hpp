@@ -365,6 +365,11 @@ struct Function {
     // whose throw-effect edge is consumed by the local catch. The catch
     // binding remains opaque in this slice and cannot be read as an i64.
     std::unique_ptr<Expression> caught_error_try_result;
+    // Optional nominal test inside the local ErrorSlot catch:
+    //   if err is type ArithmeticOverflowError { ... } else { ... } fi
+    // v1 supports ArithmeticOverflowError and its builtin Error root.
+    std::string caught_error_type_test;
+    std::unique_ptr<Expression> caught_error_type_match_result;
     std::string catch_binding;
     std::vector<Statement> caught_throw_defers;
     std::unique_ptr<Expression> result;
