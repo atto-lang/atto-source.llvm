@@ -63,6 +63,69 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             executions += 1;
         }
     }
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let module_cases = [
+        (
+            "stdlib-math-ok",
+            source_root.join("tests/fixtures/numeric-v1/math-module-ok.ores"),
+            Some(42),
+        ),
+        (
+            "stdlib-math-min-overflow",
+            source_root.join("tests/fixtures/numeric-v1/math-module-min-overflow.ores"),
+            None,
+        ),
+    ];
+    for optimization in ["-O1", "-O2"] {
+        for (name, input, expected) in &module_cases {
+            let ir = temp.path.join(format!("{name}-module.ll"));
+            let binary = temp.path.join(format!("{name}-{}", &optimization[1..]));
+            let compiled = run(compiler, [input.as_os_str()])?;
+            require(
+                compiled.status.success(),
+                format!("{name}: imported stdlib Math compile failed: {}", stderr(&compiled)),
+            )?;
+            require(
+                stdout(&compiled).contains("llvm.ssub.with.overflow.i64"),
+                format!("{name}: imported stdlib Math lost checked negation lowering"),
+            )?;
+            fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
+            let linked = run(
+                clang,
+                [
+                    OsStr::new("-x"),
+                    OsStr::new("ir"),
+                    OsStr::new(optimization),
+                    ir.as_os_str(),
+                    OsStr::new("-o"),
+                    binary.as_os_str(),
+                ],
+            )?;
+            require(
+                linked.status.success(),
+                format!("{name} {optimization}: clang failed: {}", stderr(&linked)),
+            )?;
+            let observed = Command::new(&binary)
+                .current_dir(&temp.path)
+                .output()
+                .map_err(|e| e.to_string())?;
+            if let Some(expected) = expected {
+                require(
+                    observed.status.code() == Some(*expected),
+                    format!("{name} {optimization}: expected {expected}, got {:?}", observed.status),
+                )?;
+            } else {
+                let signal =
+                    if cfg!(all(target_os = "macos", target_arch = "aarch64")) { 5 } else { 4 };
+                require(
+                    observed.status.signal() == Some(signal),
+                    format!("{name} {optimization}: expected trap signal {signal}, got {:?}", observed.status),
+                )?;
+            }
+            executions += 1;
+        }
+    }
+
     println!("PASS {executions} actual native checked-i64 executions, O1/O2; no typed actor-error claim");
     Ok(())
 }
