@@ -434,6 +434,16 @@ llvm::Value* lower(const Expression& expr,
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
         }
+        case Expression::Kind::Divide: {
+            if (expr.resolved_type != ScalarType::F64 ||
+                    !expr.left || !expr.right ||
+                    expr.left->resolved_type != ScalarType::F64 ||
+                    expr.right->resolved_type != ScalarType::F64)
+                throw std::runtime_error("native f64 division lacks checked f64/f64 typing");
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            return builder.CreateFDiv(left, right, "f64.div");
+        }
         case Expression::Kind::Remainder: {
             // The frontend normalizes syntactically signed literal divisors.
             // Never trust an externally supplied AST to skip this proof gate.
