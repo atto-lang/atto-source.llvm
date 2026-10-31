@@ -25,15 +25,15 @@ org="ores-truffle-oreslang"
 if ! gh auth status >/dev/null 2>&1; then echo "DENIED: GitHub admin CLI authentication missing" >&2; exit 1; fi
 
 checking_repo="$(gh api "repos/${repository}")"
-jq -e --arg repo "$repository" '.full_name==$repo and .private==true and .archived==false and .disabled==false and .fork==false'
+jq -e --arg repo "$repository" '.full_name==$repo and .private==true and .archived==false and .disabled==false and .fork==false' \
   <<< "$checking_repo" >/dev/null || { echo "DENIED: source repository identity/state" >&2; exit 1; }
 repo_id="$(jq -er '.id | select(type=="number")' <<< "$checking_repo")"
 branch="$(gh api "repos/${repository}/branches/main")"
 jq -e '.name=="main" and .protected==true' <<< "$branch" >/dev/null || {
   echo "DENIED: protected source main is not enforced" >&2; exit 1;
 }
-workflow_meta="$(gh api "repos/${repository}/contents/${workflow_file}?ref=main")"
-jq -e --arg path ".github/workflows/$workflow_file" '.path==$path and .type=="file"'
+workflow_meta="$(gh api "repos/${repository}/contents/.github/workflows/${workflow_file}?ref=main")"
+jq -e --arg path ".github/workflows/$workflow_file" '.path==$path and .type=="file"' \
   <<< "$workflow_meta" >/dev/null || { echo "DENIED: main workflow not present" >&2; exit 1; }
 
 group="$(gh api "orgs/${org}/actions/runner-groups/${group_id}")"
