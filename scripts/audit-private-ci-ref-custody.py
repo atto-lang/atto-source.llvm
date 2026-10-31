@@ -100,10 +100,24 @@ def audit_source(source):
     }
     for statement in publish.body[:guard_index]:
         require(not any(
-            call_name(node) in forbidden_before
+            isinstance(node, (ast.Return, ast.Yield, ast.YieldFrom, ast.Await))
             for node in ast.walk(statement)
-            if isinstance(node, ast.Call)
-        ), "publisher accessed private authority before export guard")
+        ), "publisher may not return or suspend before export guard")
+        for node in ast.walk(statement):
+            if not isinstance(node, ast.Call):
+                continue
+            require(call_name(node) not in forbidden_before,
+                    "publisher accessed private authority before export guard")
+            if isinstance(node.func, ast.Name):
+                require(node.func.id in {"isinstance", "valid_sha"},
+                        "unexpected direct call before export guard")
+            elif isinstance(node.func, ast.Attribute):
+                require(node.func.attr in {
+                    "fullmatch", "utcoffset", "now", "astimezone", "replace"
+                }, "unexpected attribute call before export guard")
+            else:
+                raise CustodyContractError(
+                    "dynamic call before export guard is forbidden")
 
     ref_request = function(tree, "_gh_ref_request")
     early_rest_deny = False
