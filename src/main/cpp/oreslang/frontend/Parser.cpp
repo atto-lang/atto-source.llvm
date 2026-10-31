@@ -1331,8 +1331,15 @@ private:
             require(".");
             require("handle_state");
             require("(");
+            // Canonical hyphenated critical-read/write is one lexical modifier.
+            // Do not reinterpret guest arithmetic as an access capability.
+            const std::size_t critical_offset = token_.offset;
             require("critical");
+            if (token_.offset != critical_offset + 8 || token_.text != "-")
+                fail("sealed handle_state requires contiguous critical-read/write modifier");
             require("-");
+            if (token_.offset != critical_offset + 9)
+                fail("sealed handle_state requires contiguous critical-read/write modifier");
             const std::string access = identifier();
             if (access != "read" && access != "write")
                 fail("native sealed handle_state requires critical-read or critical-write");
