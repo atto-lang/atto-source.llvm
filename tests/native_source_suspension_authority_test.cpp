@@ -154,5 +154,22 @@ int main() {
     task_result.source_tasks.front().result->integer = 3;
     assert(source_suspension_authority_fingerprint(task_result) != before_task);
 
+    // An actor source declaration is also part of the checked lifetime
+    // environment. Mutating its declared capability type must invalidate
+    // the prior admission, even if the await still names the same actor.
+    Function actor_shape;
+    actor_shape.name = "main";
+    actor_shape.ready_await_actor = "worker";
+    ActorSpawnBinding actor;
+    actor.name = "worker";
+    actor.actor_type = "Worker";
+    actor.declared_type.kind = SourceType::Kind::ActorRef;
+    actor.declared_type.argument = "Worker";
+    actor_shape.actor_spawns.push_back(std::move(actor));
+    const auto before_actor =
+        source_suspension_authority_fingerprint(actor_shape);
+    actor_shape.actor_spawns.front().declared_type.argument = "OtherActor";
+    assert(source_suspension_authority_fingerprint(actor_shape) != before_actor);
+
     return 0;
 }
