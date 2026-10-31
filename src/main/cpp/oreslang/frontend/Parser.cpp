@@ -1352,9 +1352,6 @@ private:
                         token_.text == "spawn" || token_.text == "return" ||
                         exceptional_control(token_.text))
                     fail("native sealed actor critical callback forbids suspension, escape and exceptional control");
-                if (access.mode == CriticalStateAccessDecl::Mode::Read &&
-                        token_.text == "=")
-                    fail("native sealed actor critical read callback cannot mutate state");
                 if (token_.text == access.state_parameter) {
                     if (peek_next().text != ".")
                         fail("native sealed actor state borrow cannot escape callback");
@@ -1367,10 +1364,13 @@ private:
                                          return declared.name == field;
                                      }))
                         fail("unknown native sealed actor state field '" + field + "'");
-                    if (token_.text == "=")
+                    if (token_.text == "=") {
+                        if (access.mode == CriticalStateAccessDecl::Mode::Read)
+                            fail("native sealed actor critical read callback cannot mutate state");
                         access.written_fields.push_back(field);
-                    else
+                    } else {
                         access.read_fields.push_back(field);
+                    }
                     continue;
                 }
                 if (token_.text == "{") {
