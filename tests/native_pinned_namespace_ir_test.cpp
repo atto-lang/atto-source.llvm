@@ -81,8 +81,12 @@ PinnedNamespaceProgramInput make_program() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        const bool all_providers = argc == 2 &&
+            std::string(argv[1]) == "--all-providers";
+        if (argc > 2 || (argc == 2 && !all_providers))
+            throw std::invalid_argument("unknown namespace fixture mode");
         // Missing package alias must never fall back by namespace spelling.
         {
             auto candidate = make_program();
@@ -357,10 +361,23 @@ int main() {
 
         // Internal symbol assignment and emitted IR must be independent of
         // host inventory ordering.
-        auto first = make_program();
+        const auto make_selected_program = [&] {
+            auto program = make_program();
+            if (all_providers) {
+                source(program, "app/src/main.ores").source =
+                    "import ns a from \\"pkg:foo\\";\\n"
+                    "import ns b from \\"pkg:foo\\";\\n"
+                    "import ns c from \\"pkg:foo\\";\\n"
+                    "pub fnc main(): int { return a.aggregate(21) + c.response_delta() "
+                    "+ b.model_code() + b.query_code() + b.storage_code() "
+                    "+ b.validation_code(); }\\n";
+            }
+            return program;
+        };
+        auto first = make_selected_program();
         const std::string first_ir = oreslang::emit_verified_llvm_ir(
             oreslang::load_pinned_namespace_program(first));
-        auto reordered = make_program();
+        auto reordered = make_selected_program();
         std::reverse(reordered.sources.begin(), reordered.sources.end());
         const std::string reordered_ir = oreslang::emit_verified_llvm_ir(
             oreslang::load_pinned_namespace_program(reordered));
