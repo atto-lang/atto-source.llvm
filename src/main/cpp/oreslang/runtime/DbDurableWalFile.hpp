@@ -9,8 +9,10 @@
 // actor/isolate permissions and pin the physical I/O worker lifetime.
 // File locks are advisory and cannot exclude a hostile directory co-writer.
 // Returned sync metadata is NOT a guest capability, logical commit or ACK.
+#include <array>
 #include <cerrno>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -91,9 +93,17 @@ public:
                                           std::uint32_t operation_id,
                                           const std::uint8_t* frame,
                                           std::size_t frame_size) {
+        if (!frame || frame_size < min_frame || frame_size > max_frame)
+            throw std::invalid_argument("WAL frame outside bounded range");
+        // Validate and physically write the SAME detached bytes. A guest or
+        // caller buffer must not change the wire after integrity checking.
+        // The caller still owes a stable, readable source for this copy.
+        std::array<std::uint8_t, max_frame> detached {};
+        std::memcpy(detached.data(), frame, frame_size);
         DbWalFrameV1::require_matching(
-                frame, frame_size, tenant, generation, operation_id);
-        return append_and_sync(generation, operation_id, frame, frame_size);
+                detached.data(), frame_size, tenant, generation, operation_id);
+        return append_and_sync(
+                generation, operation_id, detached.data(), frame_size);
     }
 
     /**
