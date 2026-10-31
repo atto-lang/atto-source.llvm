@@ -53,8 +53,14 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
     temp = pathlib.Path(scratch)
     for i, filename in enumerate(positive):
         normal = compiler_run(filename, experimental=False)
-        if normal.returncode == 0 or normal.stdout.lstrip().startswith(";"):
-            raise AssertionError("default compiler wrongly admitted experimental inverted source")
+        if normal.returncode != 0:
+            raise AssertionError("production two-i64 compiler rejected an admitted source: "
+                                 + normal.stderr)
+        verify_ir(normal.stdout)
+        if "; typed MIR, experimental local i64 pair LLVM IR" not in normal.stdout:
+            raise AssertionError("production compiler did not emit verified typed MIR")
+        if "store volatile i1 false, ptr %alive" not in normal.stdout:
+            raise AssertionError("production main did not close and scrub its owner")
         result = compiler_run(filename)
         if result.returncode != 0:
             raise AssertionError(f"real .ores positive failed compilation: {result.stderr}")
