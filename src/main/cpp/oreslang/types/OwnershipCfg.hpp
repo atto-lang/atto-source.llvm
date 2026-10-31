@@ -150,7 +150,23 @@ inline void validate_disjoint_place_layout(const State& state) {
 }
 
 inline void validate_region_loan_state(const State& state) {
+    // This validator is called not only from verify(Graph), but directly
+    // from apply/join helpers. Do not let malformed abstract state bypass
+    // the entry-only checks or claim a duplicated loan on another place.
+    std::set<std::uint64_t> live_identity;
     for (const auto& [name, value] : state) {
+        if (!value.possible ||
+                (value.possible & static_cast<ValueMask>(
+                    ~(kOwned | kMoved | kUninitialized | kDropped))))
+            violation(name, "invalid abstract ownership state");
+        if (value.shared_loans > 65535)
+            violation(name, "shared loan count exceeds bound");
+        for (const auto loan_id : value.shared_loan_ids)
+            if (!live_identity.insert(loan_id).second)
+                violation(name, "duplicate live loan provenance across places");
+        if (value.exclusive_loan_id &&
+                !live_identity.insert(*value.exclusive_loan_id).second)
+            violation(name, "duplicate live loan provenance across places");
         // No direct verifier or join caller may present an inconsistent loan
         // count/identity or a borrow whose owner is no longer definitely live.
         // verify(Graph) normalizes legacy anonymous entry loans beforehand.
