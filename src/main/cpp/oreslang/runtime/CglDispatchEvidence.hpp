@@ -101,7 +101,8 @@ struct EvidenceSummary {
         if (t.queue_depth > result.max_observed_queue_depth) {
             result.max_observed_queue_depth = t.queue_depth;
         }
-        if (t.due_ns < t.armed_ns || t.deadline_ns < t.due_ns) {
+        if (t.armed_ns == 0 || t.due_ns < t.armed_ns ||
+            t.deadline_ns < t.due_ns) {
             result.failure = EvidenceFailure::invalid_timestamp;
             return result;
         }
