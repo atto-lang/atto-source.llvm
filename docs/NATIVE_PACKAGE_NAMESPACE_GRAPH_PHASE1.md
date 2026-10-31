@@ -50,14 +50,15 @@ The pinned executable loader supplies the missing authority:
 - provider implementations forced to LLVM internal linkage after graph authorization;
 - final ordinary scalar type/ownership validation after all call names are rewritten.
 
-The current provider-call slice is intentionally positional and int-returning.
-Call-free public bool exports remain part of the scalar graph, but bool-returning
-cross-file provider calls are deferred until the executable linker has an
-explicit pre-validation typed-call signature table rather than relying on the
-parser's unresolved default expression type.
+The current provider-call slice is intentionally positional and scalar
+`int`/`bool` only. A closed pre-validation signature table seeds unresolved
+provider expression types, validates positional argument types, and leaves
+named/generic/richer ABI calls fail-closed before graph admission.
 
-The executable regression changes namespace `a` into a three-file DAG:
-`aggregate/1 -> double/1 -> add/2`, while a different package instance also
-declares namespace `a` with a colliding `add/2`. The intended native result
-remains exit 43. Current source-org Actions still fail before runner steps, so
-this checked-in executable path is **not execution-qualified** yet.
+The executable regression changes namespace `a` into a three-file int DAG
+`aggregate/1 -> double/1 -> add/2` and namespace `c` into a bool-returning
+cross-file chain `response_delta/0 -> handler_ok/1 -> route_ok/1`, while a
+different package instance also declares namespace `a` with a colliding
+`add/2`. The intended native result remains exit 43. Current source-org
+Actions still fail before runner steps, so this checked-in executable path is
+**not execution-qualified** yet.
