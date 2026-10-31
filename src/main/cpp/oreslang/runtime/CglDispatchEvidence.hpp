@@ -33,6 +33,7 @@ struct EvidenceLimits {
     std::uint64_t max_due_to_start_ns;
     std::uint32_t max_queue_depth;
     std::size_t min_completed;
+    std::size_t expected_total_records; // completed + canceled, from independent ledger
     std::uint64_t dropped_records;
     bool capture_complete;
 };
@@ -63,7 +64,8 @@ struct EvidenceSummary {
     if (limits.actor_incarnation == 0 || limits.generation == 0 ||
         limits.max_notify_to_start_ns == 0 || limits.max_due_to_start_ns == 0 ||
         limits.max_queue_depth == 0 ||
-        limits.min_completed == 0) {
+        limits.min_completed == 0 ||
+        limits.expected_total_records < limits.min_completed) {
         result.failure = EvidenceFailure::invalid_config;
         return result;
     }
@@ -73,6 +75,10 @@ struct EvidenceSummary {
     }
     if (traces == nullptr || count < limits.min_completed) {
         result.failure = EvidenceFailure::no_coverage;
+        return result;
+    }
+    if (count != limits.expected_total_records) {
+        result.failure = EvidenceFailure::trace_loss;
         return result;
     }
     for (std::size_t i = 0; i < count; ++i) {
