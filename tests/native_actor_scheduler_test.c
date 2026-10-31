@@ -12,6 +12,7 @@
 static void check(int ok) { if (!ok) abort(); }
 typedef struct {
     atomic_int active[ACTORS], peak[ACTORS], next[ACTORS], total, errors;
+    atomic_int global_active, global_peak;
     atomic_uint_fast64_t last_execution[ACTORS];
     atomic_uint_fast64_t allocation_domain[ACTORS];
     atomic_uint_fast64_t allocation_generation[ACTORS];
@@ -59,6 +60,11 @@ static void run(void* raw, size_t actor, uint64_t msg) {
     int previous = atomic_load(&s->peak[actor]);
     while (current > previous &&
            !atomic_compare_exchange_weak(&s->peak[actor], &previous, current)) { }
+    int global_current = atomic_fetch_add(&s->global_active, 1) + 1;
+    int global_previous = atomic_load(&s->global_peak);
+    while (global_current > global_previous &&
+           !atomic_compare_exchange_weak(
+               &s->global_peak, &global_previous, global_current)) { }
     if (current != 1 || (int)msg != atomic_fetch_add(&s->next[actor], 1))
         atomic_fetch_add(&s->errors, 1);
     while (atomic_load(&s->hold)) {
@@ -66,6 +72,7 @@ static void run(void* raw, size_t actor, uint64_t msg) {
         nanosleep(&pause, NULL);
     }
     atomic_fetch_sub(&s->active[actor], 1);
+    atomic_fetch_sub(&s->global_active, 1);
     atomic_fetch_add(&s->total, 1);
 }
 int main(void) {
@@ -137,6 +144,52 @@ int main(void) {
     check(!ores_native_actor_scheduler_submit(scheduler, 0, 999));
     check(ores_native_actor_scheduler_try_destroy(scheduler));
 
+    /*
+     * Physical carrier parallelism is cross-actor capacity only. Two distinct
+     * actor domains may execute simultaneously, while run() still asserts each
+     * individual actor has active==1. This must remain true until compiler-
+     * proven per-turn actor-state isolation enables same-actor parallelism.
+     */
+    State parallel = {0};
+    atomic_store(&parallel.hold, 1);
+    scheduler = ores_native_actor_scheduler_open(2, 1, 2, run, &parallel);
+    check(scheduler != NULL);
+    parallel.scheduler = scheduler;
+    check(ores_native_actor_scheduler_prestart_carriers(scheduler));
+    check(ores_native_actor_scheduler_started_carriers(scheduler) == 2);
+    OresNativeActorRef parallel_a =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    OresNativeActorRef parallel_b =
+        ores_native_actor_scheduler_spawn(scheduler, 1);
+    check(parallel_a.scheduler_domain && parallel_b.scheduler_domain);
+    check(ores_native_actor_scheduler_send(scheduler, parallel_a, 0));
+    check(ores_native_actor_scheduler_send(scheduler, parallel_b, 0));
+
+    struct timespec overlap_pause = {0, 1000000};
+    int observed_overlap = 0;
+    for (int attempt = 0; attempt < 5000; ++attempt) {
+        if (atomic_load(&parallel.global_active) == 2) {
+            observed_overlap = 1;
+            break;
+        }
+        nanosleep(&overlap_pause, NULL);
+    }
+    check(observed_overlap);
+    check(atomic_load(&parallel.peak[0]) == 1);
+    check(atomic_load(&parallel.peak[1]) == 1);
+    check(atomic_load(&parallel.global_peak) == 2);
+
+    atomic_store(&parallel.hold, 0);
+    check(ores_native_actor_scheduler_drain(scheduler));
+    check(atomic_load(&parallel.total) == 2);
+    check(atomic_load(&parallel.errors) == 0);
+    check(ores_native_actor_scheduler_stop(scheduler, parallel_a));
+    check(ores_native_actor_scheduler_stop(scheduler, parallel_b));
+    check(ores_native_actor_scheduler_poll_done(scheduler, parallel_a));
+    check(ores_native_actor_scheduler_poll_done(scheduler, parallel_b));
+    ores_native_actor_scheduler_retire(scheduler);
+    check(ores_native_actor_scheduler_try_destroy(scheduler));
+
     State pressure = {0};
     atomic_store(&pressure.hold, 1);
     scheduler = ores_native_actor_scheduler_open(1, 1, 2, run, &pressure);
@@ -205,6 +258,6 @@ int main(void) {
     check(runtime_terminal.abandoned_user_messages == 0);
     check(runtime_terminal.abandoned_control_messages == 0);
     check(ores_native_actor_scheduler_try_destroy(scheduler));
-    puts("NATIVE_ACTOR_READY_QUEUE_PASS actors=5 messages=1000 fifo=1 max_active=1 rejected=3");
+    puts("NATIVE_ACTOR_READY_QUEUE_PASS actors=5 messages=1000 fifo=1 same_actor_max=1 distinct_actor_overlap=2 rejected=3");
     return 0;
 }
