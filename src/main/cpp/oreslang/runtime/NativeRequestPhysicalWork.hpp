@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 namespace oreslang::runtime {
@@ -99,8 +100,10 @@ public:
 
     // The registration callback is the trusted host's actual NIO watch
     // admission call (e.g. ores_native_vm_nio_try_watch), not a guest callback.
-    // It MUST return true only once a physical broker watch has been accepted,
-    // and false only when no broker is able to touch the provided buffers.
+    // It MUST be nonthrowing and return true only once a physical broker
+    // watch has been accepted, and false only when no broker is able to
+    // touch the provided buffers. An exception after successful physical
+    // registration cannot be translated into a safe rollback.
     // An immediately delivered readiness/cancellation completion may settle
     // the gate before registration returns; RESERVED prevents retirement
     // until the physical request lease is irreversibly PUBLISHED.
@@ -112,6 +115,11 @@ public:
             Context& context, Handle request, OresNativeActorRef owner,
             PinnedContinuationGate& gate, AsyncIoTicket ticket,
             RegisterWatch&& register_watch) {
+        static_assert(std::is_nothrow_invocable_v<RegisterWatch&>,
+            "Native NIO watch admission must be a nonthrowing host callback");
+        static_assert(std::is_convertible_v<
+            std::invoke_result_t<RegisterWatch&>,bool>,
+            "Native NIO watch admission must return acceptance status");
         if(!gate.matches_request_owner({
                 owner.scheduler_domain,owner.actor_slot,owner.generation}))
             return std::nullopt;
@@ -121,16 +129,10 @@ public:
             if(!gate.abort_request_binding(ticket)) std::terminate();
             return std::nullopt;
         }
-        bool accepted=false;
-        try {
-            accepted=static_cast<bool>(
-                std::forward<RegisterWatch>(register_watch)());
-        } catch (...) {
-            // A throwing host registrar is treated as failed admission.
-            // It must never throw AFTER accepting/publishing a broker watch.
-            if(!gate.abort_request_binding(ticket)) std::terminate();
-            return std::nullopt;
-        }
+        // Throwing here after accepting a kernel watch could otherwise
+        // release the physical request pin under a live broker callback.
+        const bool accepted=static_cast<bool>(
+            std::forward<RegisterWatch>(register_watch)());
         if(!accepted) {
             if(!gate.abort_request_binding(ticket)) std::terminate();
             return std::nullopt;
