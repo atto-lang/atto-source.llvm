@@ -10,6 +10,12 @@ The one-time registration token must remain outside the guest worker. Use a low-
 
 The trusted workflow must be independently reviewed and merged into `main` before it becomes dispatchable. Do not enable export publisher V3 while `require_atomic_ref_rollback()` unconditionally denies; incident #1150 (retained Git objects), race issue #1154, protected source-main and approved-destination policy remain independent hard gates.
 
+## CGL native Linux compatibility scope
+
+The optional `cgl-compat` suite runs only against an **open, independently approved CGL implementation PR head** in the same private source repository. Do **not** dispatch this suite for #1220 itself or actor-only #1149; their trees do not contain the CGL build/test files. For example, draft [CGL integration #1200](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1200) currently contains the four CMake target names and required CTest registrations; independently review its **current exact SHA**, and repeat inventory checks if its head changes.
+
+The suite runs the actual ELF negative preflight unit tests with assertions enabled, builds `oreslang-llvmc` and all three CGL host/dispatch/trace native targets, executes four named CTests, and uses the native smoke script to compile `.ores` into a Linux ELF program that must exit 42. With `run_sanitizers=true` it separately compiles and executes three linked native CGL tests under Clang ASan/UBSan. Its trusted-main offline regression asserts that real preflight, CTest, ELF smoke and sanitizer commands remain present. Missing target/source files or absent named CTests fail closed. A passing suite proves **Linux native compatibility subset** only, not carrier-grade realtime, PREEMPT_RT latency, CPU isolation, deadline admission, full actor timing guarantees, or production certification. The manual workflow's status is **not** automatically attached to the tested PR SHA.
+
 ## Dispatch via the main branch only
 
 Actions -> **LLVM actor and V3 source-exact ephemeral gate** -> Run workflow on `main`. Specify an **open same-repository PR** and its immutable current head SHA; stacked PRs work.

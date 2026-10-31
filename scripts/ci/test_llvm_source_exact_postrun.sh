@@ -90,6 +90,69 @@ assert_before 'Require exact tree and preinstalled native toolchain' 'Run real l
 assert_before 'Run real ledger, scheduler STOP and pinned physical-heap native suite' 'Build actual Oreslang source compiler against LLVM'
 printf 'SOURCEFREE_TRUSTED_CHECKOUT_AND_NATIVE_BEFORE_BUILD=PASS\n'
 
+# CGL is a real executed native + ELF compatibility gate, not an echo receipt.
+# The source-only handoff must fail review if future edits drop its negative
+# preflight, named CTest targets, source-to-ELF exit-42 smoke, or ASan/UBSan.
+grep -qxF '          - cgl-compat' "$workflow"
+cgl_step="$(extract_step 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF')"
+cgl_san_step="$(extract_step 'Execute linked CGL native tests with Clang ASan and UBSan')"
+cgl_require() {
+  local needle="$1"
+  grep -Fq -- "$needle" <<< "$cgl_step" || {
+    echo "CGL suite lost required execution dependency: $needle" >&2
+    exit 1
+  }
+}
+for source_path in \
+  tests/test_cgl_preflight.py \
+  tests/fixtures/forward-call-main.ores \
+  tests/native_cgl_host_admission_test.cpp \
+  tests/native_cgl_dispatch_evidence_test.cpp \
+  tests/native_cgl_carrier_slice_trace_test.cpp \
+  tests/native_source_i64_executable.py \
+  scripts/cgl-native-smoke.sh \
+  scripts/cgl-preflight.py \
+  scripts/compile-aot.sh; do
+  cgl_require "test -f $source_path"
+done
+for native_target in \
+  oreslang-llvmc \
+  oreslang-native-cgl-host-admission-test \
+  oreslang-native-cgl-dispatch-evidence-test \
+  oreslang-native-cgl-carrier-slice-trace-test; do
+  cgl_require "$native_target"
+done
+for ctest_name in \
+  native_cgl_linux_host_admission \
+  native_cgl_timer_to_user_start_evidence \
+  native_cgl_carrier_slice_timestamp_provenance \
+  native_source_i64_os_exit_subset; do
+  cgl_require "$ctest_name"
+done
+cgl_require "PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_preflight.py -v"
+cgl_require 'ctest --test-dir build-cgl-source-exact --output-on-failure'
+cgl_require '--no-tests=error -R "^${named_test}$"'
+cgl_require 'bash scripts/cgl-native-smoke.sh "$PWD/build-cgl-source-exact"'
+cgl_require 'CGL_SOURCE_TO_ELF_EXIT42_AND_CTEST_EXECUTED_FOR_SHA=$SOURCE_SHA'
+grep -qxF "        if: inputs.suite == 'cgl-compat'" <<< "$cgl_step"
+grep -qxF "        if: inputs.suite == 'cgl-compat' && inputs.run_sanitizers" <<< "$cgl_san_step"
+for san_needle in \
+  '-DCMAKE_CXX_COMPILER=clang++' \
+  '-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"' \
+  '-DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"' \
+  'ctest --test-dir build-cgl-asan-ubsan --output-on-failure' \
+  '--no-tests=error -R "^${named_test}$"' \
+  'CGL_CLANG_ASAN_UBSAN_LINKED_TESTS_EXECUTED_FOR_SHA=$SOURCE_SHA'; do
+  grep -Fq -- "$san_needle" <<< "$cgl_san_step" || {
+    echo "CGL sanitizer suite lost required execution dependency: $san_needle" >&2
+    exit 1
+  }
+done
+assert_before 'Require exact tree and preinstalled native toolchain' 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF'
+assert_before 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF' 'Execute linked CGL native tests with Clang ASan and UBSan'
+assert_before 'Execute linked CGL native tests with Clang ASan and UBSan' 'Post-run attestation of current PR head and independent reviewer'
+printf 'SOURCEFREE_CGL_NATIVE_ELF_SANITIZER_WORKFLOW_CONTRACT=PASS\n'
+
 block="$(awk '
   /^      - name: Post-run attestation of current PR head and independent reviewer$/ { in_step=1; next }
   in_step && /^      - name: / { exit }

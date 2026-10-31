@@ -289,7 +289,11 @@ jobs:
           test -f tests/native_cgl_host_admission_test.cpp
           test -f tests/native_cgl_dispatch_evidence_test.cpp
           test -f tests/native_cgl_carrier_slice_trace_test.cpp
-          python3 -m unittest discover -s tests -p test_cgl_preflight.py -v
+          test -f scripts/cgl-native-smoke.sh
+          test -f scripts/cgl-preflight.py
+          test -f scripts/compile-aot.sh
+          test -f tests/native_source_i64_executable.py
+          PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_preflight.py -v
           cmake -S . -B build-cgl-source-exact -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build-cgl-source-exact --target \
             oreslang-llvmc \
