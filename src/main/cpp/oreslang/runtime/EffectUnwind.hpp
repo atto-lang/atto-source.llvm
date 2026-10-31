@@ -25,6 +25,10 @@ struct EffectStatus {
     std::uint32_t code = 0;
 };
 
+// Forward declaration for the allocation-free I64EffectResult helpers below.
+// Their inline definitions must not depend on a later undeclared symbol.
+constexpr EffectStatus normalize_effect(EffectStatus status) noexcept;
+
 /**
  * Stable source-language numeric Error ABI. These values match
  * oreslang.numeric-errors.v1 and are backend-neutral guest identities.
