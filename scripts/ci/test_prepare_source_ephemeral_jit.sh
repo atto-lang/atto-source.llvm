@@ -45,6 +45,9 @@ case "$1" in
 esac
 GH
 chmod +x "$temp/bin/gh"
+EXPECTED_REPO="ores-truffle-oreslang/oreslang-source.llvm"
+EXPECTED_WORKFLOW="llvm-source-exact-ephemeral.yml"
+EXPECTED_LABEL="oreslang-llvm-ephemeral-v1"
 export PATH="$temp/bin:$original_path"
 export EXPECTED_REPO EXPECTED_WORKFLOW EXPECTED_LABEL
 for scenario in unprotected overbroad_group extra_repository post_failure; do
