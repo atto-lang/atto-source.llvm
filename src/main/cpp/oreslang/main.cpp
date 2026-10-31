@@ -419,7 +419,7 @@ int main(int argc, char** argv) {
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
-            admitted_provider_bits);
+            admitted_provider_bits, wasm32_target);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
