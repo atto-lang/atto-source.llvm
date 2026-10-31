@@ -63,6 +63,9 @@ int main(){
     };
     auto ok=DbWalReplayV1::scan(fd,7,4,visit);
     assert(ok.records==2 && ok.valid_bytes==62 && !ok.incomplete_tail && visited==2);
+    // The reopened descriptor starts at offset zero. A torn tail must
+    // append at EOF, not overwrite an acknowledged earlier frame.
+    assert(::lseek(fd,0,SEEK_END)==62);
     append(fd,third,15);
     auto tail=DbWalReplayV1::scan(fd,7,4,[](auto,auto,auto){});
     assert(tail.records==2 && tail.valid_bytes==62 && tail.incomplete_tail);
