@@ -31,3 +31,23 @@ Before DB commit: trusted opaque handle registry, per-call owner fences,
 async physical loans, parent directory fsync/rename, WAL replay and
 idempotency, partial write/sync fault injection, Java/Graal differential
 fixtures and real process-crash tests. No private source transferred.
+
+
+## Stage 1.1: native actor owner-retirement model
+
+The host-only `DbWalOwnerRetirementGate` binds the physical admission
+lifecycle to one actor ID and generation. The one-way sequence is
+`open -> draining -> closing -> closed`, with an in-flight worker pin
+preventing close and an irrevocable drain preventing fresh writes.
+An owner may retry close after the actual physical worker retires;
+stale owner/generation and duplicate close are rejected. This is an
+independent state model, NOT YET integrated with
+`AsyncIoActorLifetimePin`, WAL fd close, or compiler-generated guest.
+
+CTEST: `native_db_wal_owner_physical_retirement_host_only`
+(build target `oreslang-native-db-wal-owner-retirement-test`).
+Local isolated g++17 500-iteration concurrent model test passed under
+`-Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined`
+using a matching local source copy; the exact-head CMake/CTest runner
+remains NOT_EXECUTED. Real OS resource lifetime and fdatasync/ACK
+semantics need additional integration tests.
