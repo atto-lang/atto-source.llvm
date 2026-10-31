@@ -1258,7 +1258,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (hidden_error_slot) {
             public_wrapper = llvm::Function::Create(
                 public_signature, linkage, symbol, module);
-            argument_types.push_back(native_ptr);
+            argument_types.push_back(native_pointer_type(context, error_slot_type));
             auto* implementation_signature = llvm::FunctionType::get(
                 i64, argument_types, false);
             declaration = llvm::Function::Create(
