@@ -14,6 +14,91 @@ namespace {
 namespace fs = std::filesystem;
 constexpr std::size_t max_bytes = 8u * 1024u * 1024u;
 constexpr std::size_t max_units = 128, max_depth = 32;
+
+bool freestanding_scalar_expression(const Expression* expr) {
+    if (!expr) return true;
+    switch (expr->kind) {
+        case Expression::Kind::Integer:
+        case Expression::Kind::Boolean:
+        case Expression::Kind::Variable:
+        case Expression::Kind::Negate:
+        case Expression::Kind::LogicalNot:
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual:
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
+        case Expression::Kind::Conditional:
+        case Expression::Kind::Call:
+            break;
+        default:
+            return false;
+    }
+    if (!expr->resolved_class.empty() || !expr->sum_type.empty())
+        return false;
+    if (!freestanding_scalar_expression(expr->left.get()) ||
+            !freestanding_scalar_expression(expr->right.get()) ||
+            !freestanding_scalar_expression(expr->condition.get()) ||
+            !freestanding_scalar_expression(expr->condition_lhs.get()) ||
+            !freestanding_scalar_expression(expr->condition_rhs.get()) ||
+            !freestanding_scalar_expression(expr->when_true.get()) ||
+            !freestanding_scalar_expression(expr->when_false.get()))
+        return false;
+    return std::all_of(
+        expr->arguments.begin(), expr->arguments.end(),
+        [](const auto& argument) {
+            return freestanding_scalar_expression(argument.get());
+        });
+}
+
+bool freestanding_scalar_leaf_program(const Program& program) {
+    if (program.module.empty() || !program.imports.empty() ||
+            !program.namespace_name.empty() ||
+            !program.cooperative_loops.empty() || !program.generators.empty() ||
+            !program.classes.empty() || !program.actors.empty() ||
+            !program.contracts.empty() || !program.type_only_declarations.empty() ||
+            !program.type_constraint_descriptors.empty() ||
+            !program.conforms.empty() || !program.sum_types.empty() ||
+            program.functions.empty())
+        return false;
+    for (const auto& fn : program.functions) {
+        if (!fn.generic_parameters.empty() || fn.scalar_while ||
+                !fn.locals.empty() || !fn.statements.empty() ||
+                !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+                fn.async_source_i64 || !fn.ready_await_actor.empty() ||
+                !fn.done_await_actor.empty() || !fn.ready_future_name.empty() ||
+                !fn.ready_future_actor.empty() || !fn.actor_sends.empty() ||
+                !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+                !fn.actor_field_writes.empty() || fn.returns_void ||
+                fn.return_type != ScalarType::I64 ||
+                !fn.pending_return_type_alias.empty() ||
+                !fn.return_class.empty() || fn.caught_throw_value ||
+                !fn.catch_binding.empty() || !fn.caught_throw_defers.empty() ||
+                !fn.result || !fn.method_owner.empty() ||
+                fn.has_declared_effects || !fn.return_sum.empty())
+            return false;
+        for (const auto& parameter : fn.parameters) {
+            if (parameter.mode != Parameter::Mode::Value ||
+                    parameter.scalar_type != ScalarType::I64 ||
+                    !parameter.class_name.empty() ||
+                    !parameter.generic_type.empty() ||
+                    !parameter.pending_type_alias.empty() ||
+                    !parameter.sum_type.empty())
+                return false;
+        }
+        if (!freestanding_scalar_expression(fn.result.get()))
+            return false;
+    }
+    return true;
+}
 struct Unit {
     fs::path path;
     SourceIdentity identity;
@@ -38,11 +123,15 @@ class Loader {
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
     bool owned, scalar_loop, host;
+    bool freestanding_user_scalar_modules;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
-           std::uint32_t admitted_provider_bits)
+           std::uint32_t admitted_provider_bits,
+           bool allow_freestanding_user_scalar_modules)
         : owned(owned), scalar_loop(scalar_loop), host(host),
+          freestanding_user_scalar_modules(
+              allow_freestanding_user_scalar_modules),
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
@@ -147,6 +236,11 @@ private:
                 fail(*unit,
                     "compiler-owned library inferred undeclared provider or hosted effect");
         }
+        if (!host && freestanding_user_scalar_modules && index != 0 &&
+                !unit->compiler_owned_library &&
+                !freestanding_scalar_leaf_program(unit->program))
+            fail(*unit,
+                "freestanding user module must be a leaf pure-scalar i64 library");
         for (const auto& fn : unit->program.functions) {
             auto& arities = unit->functions[fn.name];
             arities.emplace(fn.parameters.size(), fn.exported);
@@ -232,9 +326,14 @@ private:
                         "compiler-owned library modules may import only ores.core/* or alloc/*");
                 if (frontend::is_reserved_std_import(raw))
                     fail(current, "native ores.std package resolution remains unsupported");
-                if (!host)
-                    fail(current,
-                        "freestanding native imports require compiler-owned ores.core/* modules");
+                if (!host) {
+                    if (!freestanding_user_scalar_modules || index != 0)
+                        fail(current,
+                            "freestanding native imports require compiler-owned ores.core/* modules or a root-relative pure-scalar leaf module");
+                    if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
+                        fail(current,
+                            "freestanding user scalar modules require relative ./ or ../ source paths");
+                }
 
                 fs::path dependency;
                 if (raw.rfind("+/", 0) == 0) {
@@ -418,8 +517,10 @@ private:
 } // namespace
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
                             bool owned, bool scalar_loop, bool host,
-                            std::uint32_t admitted_provider_bits) {
-    return Loader(owned, scalar_loop, host, admitted_provider_bits)
+                            std::uint32_t admitted_provider_bits,
+                            bool freestanding_user_scalar_modules) {
+    return Loader(owned, scalar_loop, host, admitted_provider_bits,
+                  freestanding_user_scalar_modules)
         .run(path, std::move(source), identity);
 }
 } // namespace oreslang
