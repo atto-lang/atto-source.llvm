@@ -98,6 +98,13 @@ jobs:
           echo "EXACT_SOURCE_COMMIT=$SOURCE_SHA"
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
 
+      - name: Execute source-free post-run authorization regression mocks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/ci/test_llvm_source_exact_postrun.sh
+          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml
+
       - name: Run full V3 private-export security regressions (no export)
         if: inputs.suite == 'security-v3'
         shell: bash
