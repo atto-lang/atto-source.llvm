@@ -3252,12 +3252,10 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
-            if (token_.text == "/")
-                fail("native floating division unsupported: int/int yields float in Java; "
-                     "LLVM float typing and zero-divisor semantics are not implemented");
+            // Native division requires two explicitly typed f64 operands:
+            // int/int and mixed source expressions remain rejected by the
+            // scalar type passes (no implicit numeric conversions).
+            const bool division = token_.text == "/";
             const bool remainder = token_.text == "%";
             const auto offset = token_.offset;
             advance();
@@ -3282,7 +3280,8 @@ private:
                          "until typed zero-divisor effects are implemented");
             }
             auto expr = make_expression(remainder ? Expression::Kind::Remainder
-                                                 : Expression::Kind::Multiply, offset);
+                                                 : division ? Expression::Kind::Divide
+                                                            : Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = std::move(right);
             left = std::move(expr);
@@ -4219,6 +4218,7 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder:
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual:
@@ -4403,15 +4403,21 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder: {
                 ScalarType left = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                if (left != ScalarType::I64 && (left != ScalarType::F64 ||
-                        expr.kind == Expression::Kind::Remainder))
-                    throw std::runtime_error("arithmetic requires int or f64 (remainder int only)");
-                require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
+                if (expr.kind == Expression::Kind::Divide) {
+                    require_type(left, ScalarType::F64, "f64 division (int/int unsupported)");
+                    require_type(right, ScalarType::F64, "f64 division (no implicit int conversion)");
+                } else {
+                    if (left != ScalarType::I64 && (left != ScalarType::F64 ||
+                            expr.kind == Expression::Kind::Remainder))
+                        throw std::runtime_error("arithmetic requires int or f64 (remainder int only)");
+                    require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
+                }
                 return expr.resolved_type = left;
             }
             case Expression::Kind::Less:
