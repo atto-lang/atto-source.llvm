@@ -76,6 +76,7 @@ for fixture in \
   browser-c-abi-version-u32-guest-spoof \
   browser-c-abi-version-u32-overload \
   browser-c-abi-version-u32-effectful \
+  browser-c-abi-version-u32-extra-guest \
   browser-c-abi-version-u32-duplicate
 do
   if timeout --kill-after=5s 20s "$compiler" --target=host \
