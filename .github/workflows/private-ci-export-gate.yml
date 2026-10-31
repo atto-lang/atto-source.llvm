@@ -9,6 +9,9 @@ on:
       - scripts/private_ci_export_gate.py
       - tests/test_private_ci_export_gate.py
       - tests/test_atomic_ref_cleanup_local.py
+      - scripts/audit-private-ci-ref-custody.py
+      - scripts/test-audit-private-ci-ref-custody.py
+      - docs/security/PRIVATE_CI_REF_CUSTODY_AND_QUARANTINE.md
       - scripts/publish-private-ci-source-v3.py
       - scripts/test-publish-private-ci-source-v3.py
       - .github/private-ci-approved-repositories.txt
@@ -48,6 +51,14 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 scripts/test-publish-private-ci-source-v3.py -v
+      - name: Enforce unconditional private export denial and no unsafe ref deletion
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/audit-private-ci-ref-custody.py
+          python3 scripts/test-audit-private-ci-ref-custody.py -v
       - name: Exercise local-only expected-SHA ref cleanup and ABA limits
         env:
           PYTHONDONTWRITEBYTECODE: "1"
