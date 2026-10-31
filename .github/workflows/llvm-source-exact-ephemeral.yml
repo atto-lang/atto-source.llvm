@@ -22,7 +22,7 @@ on:
           - cgl-compat
           - security-v3
       run_sanitizers:
-        description: "For actor/ledger/CGL, request ASan/UBSan; continuation-gate always runs native sanitizers"
+        description: "Optional guest sanitizers for actor suites; CGL and continuation native sanitizers are mandatory"
         type: boolean
         required: true
         default: true
@@ -332,7 +332,7 @@ jobs:
           echo "CGL_SOURCE_TO_ELF_EXIT42_AND_CTEST_EXECUTED_FOR_SHA=$SOURCE_SHA"
 
       - name: Execute linked CGL native tests with Clang ASan and UBSan
-        if: inputs.suite == 'cgl-compat' && inputs.run_sanitizers
+        if: inputs.suite == 'cgl-compat'
         shell: bash
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}

@@ -139,7 +139,8 @@ cgl_require '--no-tests=error -R "^${named_test}$"'
 cgl_require 'bash scripts/cgl-native-smoke.sh "$PWD/build-cgl-source-exact"'
 cgl_require 'CGL_SOURCE_TO_ELF_EXIT42_AND_CTEST_EXECUTED_FOR_SHA=$SOURCE_SHA'
 grep -qxF "        if: inputs.suite == 'cgl-compat'" <<< "$cgl_step"
-grep -qxF "        if: inputs.suite == 'cgl-compat' && inputs.run_sanitizers" <<< "$cgl_san_step"
+# A false run_sanitizers input must not bypass CGL native sanitizer evidence.
+grep -qxF "        if: inputs.suite == 'cgl-compat'" <<< "$cgl_san_step"
 for san_needle in \
   '-DCMAKE_CXX_COMPILER=clang++' \
   '-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"' \
