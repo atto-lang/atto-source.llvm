@@ -1211,7 +1211,11 @@ def recheck_destination_identity(repository, contract):
             or repo.get("id") != contract["repository_id"]
             or repo.get("full_name") != repository
             or repo.get("private") is not True
-            or repo.get("visibility") != "private"):
+            or repo.get("visibility") != "private"
+            or repo.get("default_branch") != "main"
+            or repo.get("archived") is not False
+            or repo.get("disabled") is not False
+            or repo.get("fork") is not False):
         raise Denied("carrier identity/privacy changed during transfer")
     branch = gh_api(f"repos/{repository}/branches/main")
     if (not isinstance(branch, dict)
