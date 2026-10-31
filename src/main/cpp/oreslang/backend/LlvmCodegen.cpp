@@ -20,6 +20,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "oreslang/backend/LlvmCompat.hpp"
+#include "native-error-slot-v1.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -39,9 +40,11 @@ std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
 }
 
-constexpr std::uint32_t kArithmeticOverflowErrorCode = 65537u;
-constexpr std::uint8_t kErrorEffectThrow = 1u;
-constexpr std::uint8_t kErrorEffectPanic = 3u;
+constexpr std::uint32_t kArithmeticOverflowErrorCode =
+    ORES_ERROR_ARITHMETIC_OVERFLOW_V1;
+constexpr std::uint8_t kErrorEffectThrow = ORES_EFFECT_THROW_V1;
+constexpr std::uint8_t kErrorEffectPanic = ORES_EFFECT_PANIC_V1;
+static_assert(sizeof(OresNativeErrorSlotV1) == 16);
 
 bool native_error_slot_scalar_function(const Function& fn) {
     if (fn.returns_void || fn.return_type != ScalarType::I64 ||
