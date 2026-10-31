@@ -13,6 +13,7 @@ A straight-line `LinearPlan` records checked symbolic operations for allocation,
 - bounds and capacity are checked, and unmatched releases rejected
 - even loan-free owner suspension remains rejected until pinned actor/task lifetime is proved
 - close revokes further symbolic operations
+- the compiler-owned operation stream is capped at 4096 operations with failure-atomic rejection on exhaustion
 
 **Critical limits:** this is a straight-line compile-time operation-admission component, **not** complete control-flow borrow analysis, task/actor pinning, runtime handle minting, HIR→MIR generation, LLVM IR lowering, hard-real-time allocation proof, or compiler type-checking of arbitrary source expression values. Row-handle issuance, generation rollover, storage scrubbing and checked runtime loans are implemented in the separate `DopInvertedColumns.hpp` C++ native host layer and exercised independently in the new test; they are NOT yet exposed as guest methods.
 
@@ -39,3 +40,9 @@ Full production parser test and true compiler integration additionally require `
 Current work was inspected by fetching exact GitHub files and checking the expected integration and test anchors. **Do not label this as compiled or executed C++20 HIR / full compiler testing until a stepful run exists.** The prior isolated experimental i64 guest execution evidence remains scoped to its exact earlier header/fixture blobs and does not prove this new typed HIR component.
 
 Next implementation dependency: lower typed operations into explicit backend MIR owner/column primitives with generation-checked row handles, restrict branch/control-flow effects with dataflow joins, and run full exact-head compiler and native sanitizer tests. Extend Java next, then Wasm/.NET/Forge with shared executable fixtures, never with host-only model substitutes.
+
+### Real native-host differential gate (staged, not executed)
+
+The C++20 test additionally performs the **same** admitted push, field-write/read, two disjoint field loans, loan release, swap-delete and stale-handle checks against an actual `InvertedColumns<std::int64_t, std::int64_t>` owner. A blocked structural mutation is checked in both the typed plan and the native owner. It also verifies that the 4096-op compiler budget cannot publish a partial extra operation.
+
+This host differential **does not** execute source-language generated LLVM IR, and the typed IR operation sequence is not yet a lowered MIR instruction stream. For this reason the test may only advance the *host HIR/native owner* gate when actually executed, never the production guest parity gate. Full compiler and GitHub Actions evidence remain pending.
