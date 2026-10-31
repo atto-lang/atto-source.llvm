@@ -130,3 +130,28 @@ of the standalone state-region prototype and its test, **not** the
 full source compiler lowering, CMake/CTest, FFI provenance, or a hard-real-time
 latency/reclamation bound. Those remain draft-only until exact native tests
 execute.
+
+
+## Exact-head native actor-lifetime matrix — 2026-10-31
+
+The new same-repository workflow
+`.github/workflows/state-region-actor-lifetime-exact-head.yml`
+compiles the **real** `tests/state_region_actor_lifetime_pin_test.cpp` and
+`src/main/cpp/oreslang/runtime/ActorArena.c`, alongside their production
+actor resource, group lifecycle and Task ticket headers, at the exact PR head.
+It runs GCC/Clang × optimized/ASan+UBSan, with `-DNDEBUG` in both modes
+to expose Release-only omissions.
+
+To prevent false-green native passes when callers build outside CMake,
+the actor lifetime regression now uses always-on `CHECK` for **39
+validation sites**, including state ticket operation calls formerly inside
+`assert`. It checks unbound-region, forged ticket sequence and already
+retired ticket admission, proving that validation failures return their
+provisional actor resource loan. Other checks cover executing-ticket STOP
+and physical arena teardown only after exact completion.
+
+**Current limitation:** Actions run `41223055980` produced four failed
+jobs, all without an assigned runner and all with zero steps. The test is
+authored, not executable CI evidence until a runner actually compiles it.
+Previous local exact-source standalone `state_region.hpp` prototype tests
+are narrower and do not establish the new actor-lifetime integration.
