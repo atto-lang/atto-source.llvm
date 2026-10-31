@@ -512,7 +512,9 @@ private:
         for (auto& write : fn.actor_field_writes) expression(unit, write.expression.get());
         for (const auto& spawn : fn.actor_spawns) binding_name(unit, spawn.name);
         if (!fn.catch_binding.empty()) binding_name(unit, fn.catch_binding);
-        expression(unit, fn.caught_throw_value.get()); expression(unit, fn.result.get());
+        expression(unit, fn.caught_throw_value.get());
+        expression(unit, fn.caught_error_try_result.get());
+        expression(unit, fn.result.get());
     }
 };
 } // namespace
