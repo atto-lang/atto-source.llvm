@@ -2453,6 +2453,7 @@ private:
             if (accept(":")) { local->name = first; type = type_name(); }
             else { type = first; local->name = identifier(); }
             if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
+            if (type == "f64") fail("native branch-local f64 storage requires scoped double lowering; unsupported");
             if (type == "Array") fail("ordered owning local requires scoped region/drop lowering");
             if (type == "int") local->scalar_type = ScalarType::I64;
             else if (type == "bool") local->scalar_type = ScalarType::Bool;
