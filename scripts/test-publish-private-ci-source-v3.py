@@ -948,10 +948,23 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         repo = {
             "id": contract["repository_id"], "full_name": "trusted/ci",
             "private": True, "visibility": "private",
+            "default_branch": "main",
+            "archived": False, "disabled": False, "fork": False,
         }
         for malformed in (None, [], {**repo, "id": float(contract["repository_id"])}):
             with self.subTest(repository=repr(malformed)):
                 with patch.object(v3, "gh_api", return_value=malformed):
+                    with self.assertRaisesRegex(v3.Denied, "identity/privacy"):
+                        v3.recheck_destination_identity("trusted/ci", contract)
+
+        for key, value in (
+            ("default_branch", "unsafe-branch"),
+            ("archived", True), ("disabled", True), ("fork", True),
+            ("private", False), ("visibility", "public"),
+        ):
+            with self.subTest(changed_field=key):
+                changed = {**repo, key: value}
+                with patch.object(v3, "gh_api", return_value=changed):
                     with self.assertRaisesRegex(v3.Denied, "identity/privacy"):
                         v3.recheck_destination_identity("trusted/ci", contract)
 
@@ -1087,6 +1100,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             "full_name": "trusted/ci",
             "private": True,
             "visibility": "private",
+            "default_branch": "main",
+            "archived": False, "disabled": False, "fork": False,
         }
         with patch.object(v3, "gh_api", side_effect=[
             eligible,
