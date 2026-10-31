@@ -255,6 +255,8 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
+        case Expression::Kind::Floating:
+            return llvm::ConstantFP::get(builder.getDoubleTy(), expr.floating);
         case Expression::Kind::Boolean:
             return llvm::ConstantInt::get(i64, expr.boolean ? 1 : 0);
         case Expression::Kind::Variable: {
@@ -272,8 +274,9 @@ llvm::Value* lower(const Expression& expr,
                     llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
                     llvm::ConstantInt::get(i64, cls.fields.size()), values}, "return.record.handle");
             }
-            llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
-                expr.name + ".read");
+            llvm::Value* stored = builder.CreateLoad(
+                expr.resolved_type == ScalarType::F64 ? builder.getDoubleTy() : i64,
+                storage.at(expr.name), expr.name + ".read");
             if (moves && moves->live_flags &&
                     moves->live_flags->count(expr.name))
                 return builder.CreateCall(moves->read, {moves->region, stored},
@@ -368,6 +371,8 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::F64)
+                return builder.CreateFNeg(value, "f64.neg");
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
                 llvm::ConstantInt::get(i64, 0), value, "neg");
         }
@@ -403,6 +408,8 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Add: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::F64)
+                return builder.CreateFAdd(left, right, "f64.add");
             if (expr.resolved_type == ScalarType::String) {
                 auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_concat",
                     llvm::FunctionType::get(i64, {i64, i64}, false));
@@ -414,12 +421,16 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::F64)
+                return builder.CreateFSub(left, right, "f64.sub");
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
                 left, right, "sub");
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::F64)
+                return builder.CreateFMul(left, right, "f64.mul");
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
         }
@@ -454,6 +465,19 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::GreaterEqual: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.left->resolved_type == ScalarType::F64) {
+                llvm::Value* compared = nullptr;
+                switch (expr.kind) {
+                    case Expression::Kind::Equal: compared = builder.CreateFCmpOEQ(left, right, "f64.eq"); break;
+                    case Expression::Kind::NotEqual: compared = builder.CreateFCmpUNE(left, right, "f64.neq"); break;
+                    case Expression::Kind::Less: compared = builder.CreateFCmpOLT(left, right, "f64.lt"); break;
+                    case Expression::Kind::LessEqual: compared = builder.CreateFCmpOLE(left, right, "f64.le"); break;
+                    case Expression::Kind::Greater: compared = builder.CreateFCmpOGT(left, right, "f64.gt"); break;
+                    case Expression::Kind::GreaterEqual: compared = builder.CreateFCmpOGE(left, right, "f64.ge"); break;
+                    default: throw std::runtime_error("invalid f64 comparison kind");
+                }
+                return builder.CreateZExt(compared, i64, "f64.cmp.bool");
+            }
             if (expr.left->resolved_type == ScalarType::String) {
                 if (expr.kind != Expression::Kind::Equal && expr.kind != Expression::Kind::NotEqual)
                     throw std::runtime_error("native String ordered comparison is not supported");
@@ -1570,7 +1594,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 builder.CreateStore(builder.getTrue(), live);
                 owned_live_flags.emplace(binding.name, live);
             } else {
-                slot = builder.CreateAlloca(i64, nullptr, binding.name + ".stack.owned");
+                // IEEE f64 locals retain true double storage. Never reinterpret
+                // floating bits as the i64 source/borrow/ABI value domain.
+                llvm::Type* slot_type = binding.scalar_type == ScalarType::F64
+                    ? builder.getDoubleTy() : i64;
+                slot = builder.CreateAlloca(slot_type, nullptr, binding.name + ".stack.owned");
                 native_lifetime_start(builder, slot, 8);
                 builder.CreateStore(initial, slot);
             }
