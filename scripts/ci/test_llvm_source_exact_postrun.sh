@@ -21,13 +21,15 @@ native_step="$(extract_step 'Run real ledger, scheduler STOP and pinned physical
 grep -qxF "        if: inputs.suite == 'actor-ledger'" <<< "$native_step"
 grep -qxF '          test -x scripts/ci/run_actor_ledger_native_exact_head.sh' <<< "$native_step"
 grep -qxF '          bash scripts/ci/run_actor_ledger_native_exact_head.sh "$SOURCE_SHA"' <<< "$native_step"
+# Toolchain is intentionally shared with continuation and CGL suites.
+toolchain_step="$(extract_step 'Verify preinstalled LLVM / Clang / CMake toolchain')"
+grep -qxF "        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger' || inputs.suite == 'continuation-gate' || inputs.suite == 'cgl-compat'" <<< "$toolchain_step"
 for name in \
-  'Verify preinstalled LLVM / Clang / CMake toolchain' \
   'Build actual Oreslang source compiler against LLVM' \
   'Compile and execute real Oreslang source actor fixtures'; do
   step="$(extract_step "$name")"
   grep -qxF "        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger'" <<< "$step" || {
-    echo "actor-ledger missing actual compiler/guest dependency: $name" >&2; exit 1;
+    echo "actor-ledger missing actual compiler/guest dependency: $name" >&2; exit 1
   }
 done
 guest_step="$(extract_step 'Execute real compiled Oreslang ledger guest fixtures')"
@@ -172,7 +174,7 @@ grep -qxF '          python3 -I -B scripts/ci/test_verify_llvm_independent_attes
 attest_final="$(extract_step 'Independently verify current exact head approval and actual source job steps')"
 grep -qxF '          GH_TOKEN: ${{ github.token }}' <<< "$attest_final"
 grep -qxF '          PYTHONOPTIMIZE=0 python3 -I -B scripts/ci/verify_llvm_independent_attestor.py' <<< "$attest_final"
-if grep -Fq 'ref: SOURCE_${{ github.sha }}' <<< "$attest_checkout"; then
+if grep -Fq 'ref: ${{ inputs.source_sha }}' <<< "$attest_checkout"; then
   echo 'fresh attestor tries to checkout PR source' >&2; exit 1
 fi
 assert_before 'Exact-source result scope (never a carrier export approval)' 'Checkout reviewed protected main only (no PR source)'
