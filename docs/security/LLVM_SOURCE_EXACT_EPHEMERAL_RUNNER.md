@@ -224,3 +224,20 @@ latency or hard-real-time certification. The suite cannot be dispatched until
 source-org admission, independent reviews and protected private `main` are
 enforced. Never mirror private source into another organization without the
 separately approved destination contract and source-main allowlist.
+
+## Fresh attestor: deny ambient proxy routing
+
+The fresh, token-bearing GitHub metadata attestor must connect directly to the
+hard-coded `https://api.github.com` endpoint. Python's default
+`urllib.request.build_opener` inherits `HTTPS_PROXY`, `ALL_PROXY` and
+platform proxy configuration; the attestor now explicitly supplies
+`urllib.request.ProxyHandler({})` alongside its no-redirect handler to avoid
+routing its bearer token through an environment-configured proxy. This does
+not replace trusted TLS certificates, secure VM provisioning or independent
+GitHub API approval checks.
+
+The source-free regression creates an inert hostile proxy setting, confirms
+that the original default opener inherits it, then verifies the proposed
+attestor opener supplies a disabled proxy handler and still rejects redirects.
+No HTTP requests, real credentials, private source transfer or runner
+registration are part of that regression.

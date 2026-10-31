@@ -228,5 +228,38 @@ class AttestorSourceFreeTests(unittest.TestCase):
             self.evaluate(env, data)
 
 
+    def test_attestor_github_client_ignores_ambient_proxy_without_network(self):
+        # This test never invokes the returned getter, so no network request
+        # or real token is involved. The negative control must observe the
+        # unsafe implicit proxy handler before checking our hardened opener.
+        import os
+        import urllib.request
+        from unittest import mock
+
+        original = urllib.request.build_opener
+        with mock.patch.dict(os.environ, {
+            "https_proxy": "http://127.0.0.1:19999",
+            "http_proxy": "http://127.0.0.1:19999",
+            "all_proxy": "http://127.0.0.1:19999",
+        }):
+            implicit = original(attestor.NoRedirect())
+            implicit_proxies = [
+                h.proxies for h in implicit.handlers
+                if isinstance(h, urllib.request.ProxyHandler)
+            ]
+            self.assertTrue(any(p.get("https") for p in implicit_proxies),
+                            "negative control did not inherit hostile proxy")
+            with mock.patch.object(urllib.request, "build_opener",
+                                   wraps=original) as spy:
+                getter = attestor.github_fetch("synthetic-never-sent")
+                self.assertTrue(callable(getter))
+                passed = spy.call_args.args
+                self.assertTrue(any(
+                    type(h) is urllib.request.ProxyHandler and h.proxies == {}
+                    for h in passed), "attestor did not explicitly disable proxies")
+                self.assertTrue(any(type(h) is attestor.NoRedirect for h in passed),
+                                "attestor lost its redirect rejection")
+
+
 if __name__ == "__main__":
     unittest.main()

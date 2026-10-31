@@ -186,7 +186,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def github_fetch(token):
-    opener = urllib.request.build_opener(NoRedirect())
+    # Never inherit HTTPS_PROXY/ALL_PROXY (or platform proxy settings) into
+    # this fresh, token-bearing attestor. HTTPS goes directly to api.github.com.
+    # Supplying an explicit ProxyHandler also disables urllib's default
+    # environment-derived ProxyHandler; NoRedirect still rejects redirects.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
     def get_json(path):
         request = urllib.request.Request("https://api.github.com/" + path, headers={
