@@ -425,6 +425,34 @@ int main() {
         fn.locals.back().initializer = std::make_unique<Expression>();
         fn.locals.back().initializer->kind = Expression::Kind::Call;
     }, "local initializer");
+
+    // Default host inventory remains call-free. The executable pinned linker
+    // must opt in explicitly, after which only structurally scalar flat calls
+    // are admitted; target identity/acyclicity remain the executable linker's
+    // responsibility.
+    Program opted_call = make_source("a", "opted_call");
+    opted_call.functions.front().result = std::make_unique<Expression>();
+    opted_call.functions.front().result->kind = Expression::Kind::Call;
+    opted_call.functions.front().result->name = "callee";
+    opted_call.functions.front().result->resolved_type = ScalarType::I64;
+    another = units;
+    another.push_back({"foo/opted_call", "foo@1", &opted_call});
+    REQUIRE(link_package_namespaces(
+                another, pins, {request}, PackageNamespaceLinkOptions{true})
+                .namespaces.at({"foo@1", "a"}).exports.size() == 4);
+
+    Program dotted_call = make_source("a", "dotted_call");
+    dotted_call.functions.front().result = std::make_unique<Expression>();
+    dotted_call.functions.front().result->kind = Expression::Kind::Call;
+    dotted_call.functions.front().result->name = "other.callee";
+    dotted_call.functions.front().result->resolved_type = ScalarType::I64;
+    another = units;
+    another.push_back({"foo/dotted_call", "foo@1", &dotted_call});
+    must_reject([&] {
+        (void)link_package_namespaces(
+            another, pins, {request}, PackageNamespaceLinkOptions{true});
+    }, "body expression");
+
     Program pure_expression = make_source("a", "pure_scalar_expression");
     pure_expression.functions.front().result = std::make_unique<Expression>();
     pure_expression.functions.front().result->kind = Expression::Kind::Add;
