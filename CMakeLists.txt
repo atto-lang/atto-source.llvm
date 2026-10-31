@@ -46,6 +46,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only POSIX storage substrate, NOT source guest or durable DB proof.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+        add_executable(oreslang-native-db-durable-wal-host-test
+            tests/native_db_durable_wal_file_test.cpp)
+        target_include_directories(oreslang-native-db-durable-wal-host-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-db-durable-wal-host-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_db_durable_wal_host_only
+            COMMAND oreslang-native-db-durable-wal-host-test)
+        set_tests_properties(native_db_durable_wal_host_only PROPERTIES TIMEOUT 20)
+    endif()
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
