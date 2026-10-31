@@ -1155,6 +1155,13 @@ void validate_i64_ownership(Program& program) {
             if (!locals.emplace(function.catch_binding, LocalOwnership{}).second)
                 throw std::runtime_error("native caught throw binding shadows live local");
         }
+        if (function.caught_error_try_result) {
+            // The first ErrorSlot catch is scalar-only and its catch binding
+            // is opaque. Still traverse the protected expression through the
+            // ordinary ownership checker so a call argument cannot smuggle a
+            // move/borrow into an exceptional edge that CFG lowering ignores.
+            check_value(*function.caught_error_try_result, locals, functions);
+        }
         const Locals cfg_entry = locals;
         const bool owning_return = class_arrays.count(function.return_class) &&
             !class_arrays.at(function.return_class).empty();
@@ -1377,6 +1384,9 @@ void validate_i64_ownership(Program& program) {
             condition.successors = {2 * i + 1, 2 * i + 2};
             append_return_path(guard.result.get(), 2 * i + 1);
         }
+        if (function.caught_error_try_result)
+            add_effects(*function.caught_error_try_result,
+                        cfg.blocks[guard_count * 2].operations);
         append_return_path(function.result.get(), guard_count * 2);
         // Every reachable terminal CFG path must end with an explicit
         // conditional drop of the experimental heap-owned places. The
