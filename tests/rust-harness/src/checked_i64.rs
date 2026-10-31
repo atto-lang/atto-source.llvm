@@ -85,6 +85,16 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             source_root.join("tests/fixtures/numeric-v1/math-module-catch-not-taken.ores"),
             Some(42),
         ),
+        (
+            "stdlib-math-typed-overflow-catch",
+            source_root.join("tests/fixtures/numeric-v1/math-module-typed-overflow-catch.ores"),
+            Some(42),
+        ),
+        (
+            "stdlib-math-error-root-catch",
+            source_root.join("tests/fixtures/numeric-v1/math-module-error-root-catch.ores"),
+            Some(42),
+        ),
     ];
     for optimization in ["-O1", "-O2"] {
         for (name, input, expected) in &module_cases {
@@ -110,13 +120,36 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                     "{name}: imported Math did not thread NativeErrorSlotV1 through the linked scalar call"
                 ),
             )?;
-            if name.contains("caught-overflow") || name.contains("catch-not-taken") {
+            if name.contains("caught-overflow")
+                || name.contains("catch-not-taken")
+                || name.contains("typed-overflow-catch")
+                || name.contains("error-root-catch")
+            {
                 require(
                     module_ir.contains("error.catch")
                         && module_ir.contains("caught.error.code")
                         && module_ir.contains("error.catch.consume"),
                     format!(
                         "{name}: terminal try/catch did not lower to a local ErrorSlot continuation"
+                    ),
+                )?;
+            }
+            if name.contains("typed-overflow-catch") {
+                require(
+                    module_ir.contains("caught.error.is.arithmetic_overflow")
+                        && module_ir.contains("i32 65537")
+                        && module_ir.contains("caught.error.nominal.result"),
+                    format!(
+                        "{name}: ArithmeticOverflowError identity was not derived from shared code 65537"
+                    ),
+                )?;
+            }
+            if name.contains("error-root-catch") {
+                require(
+                    module_ir.contains("caught.error.present")
+                        && module_ir.contains("caught.error.nominal.result"),
+                    format!(
+                        "{name}: builtin Error root identity was not derived from nonzero guest error code"
                     ),
                 )?;
             }
@@ -216,7 +249,7 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ),
     )?;
 
-    println!("PASS {executions} actual native checked-i64 executions, O1/O2; linked Math uses NativeErrorSlotV1 code 65537/effect throw, local catch consumes throw and unhandled outer boundary still traps");
+    println!("PASS {executions} actual native checked-i64 executions, O1/O2; linked Math uses NativeErrorSlotV1 code 65537/effect throw, local catch consumes throw, nominal ArithmeticOverflowError/Error tests return 42, and unhandled outer boundary still traps");
     Ok(())
 }
 
