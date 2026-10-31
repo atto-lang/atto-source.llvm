@@ -2,9 +2,10 @@
 
 #include "oreslang/runtime/WalStorageFdOwner.hpp"
 
+#include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <functional>
 #include <future>
@@ -13,6 +14,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -25,6 +27,9 @@ namespace oreslang::runtime {
 class WalStorageDiskQueue final {
 public:
     static constexpr std::size_t kMaxOutstanding = 32;
+    // Bound total host threads/shards even if every individual queue is bounded.
+    // Per-isolate admission and kernel retirement pins are still required.
+    static constexpr std::size_t kMaxDiskQueues = 16;
     using Scope = WalStorageFdOwner::Scope;
     using Receipt = WalStorageFdOwner::SyncedReceipt;
 
@@ -52,7 +57,10 @@ public:
 
     // Never call from a native actor carrier: the caller must be the isolate's
     // off-carrier retirement service. Existing requests may have side effects.
-    ~WalStorageDiskQueue() noexcept { retire_on_runtime_worker(); }
+    ~WalStorageDiskQueue() noexcept {
+        retire_on_runtime_worker();
+        if (reservedBudget_) activeQueues_.fetch_sub(1, std::memory_order_acq_rel);
+    }
 
     std::future<Receipt> submit(const void* actor_activation,
                                 Scope claimed,
@@ -72,8 +80,12 @@ public:
             throw std::length_error("WAL worker admission limit reached");
         // Copy before queuing. Physical owner independently validates checksum,
         // tenant/generation, op ID, sequence, and 1MiB total WAL budget.
-        requests_.push_back(Request{std::vector<std::uint8_t>(untrusted_frame),
-                                    std::move(promise)});
+        // Fixed ring slots are provisioned at construction, not allocated on
+        // the noexcept disk worker; only the submitting host thread clones.
+        requests_[requestTail_].emplace(
+            Request{std::vector<std::uint8_t>(untrusted_frame), std::move(promise)});
+        requestTail_ = (requestTail_ + 1) % kMaxOutstanding;
+        ++requestCount_;
         ++outstanding_;
         requestsCv_.notify_one();
         return future;
@@ -106,7 +118,13 @@ private:
         : owner_(std::move(owner)), issuer_(issuer), scope_(expected),
           testBeforePhysical_(std::move(test_before_physical)) {
         if (!owner_ || !issuer_) throw std::invalid_argument("missing WAL host grant");
-        start_workers();
+        reserve_global_budget();
+        try { start_workers(); }
+        catch (...) {
+            activeQueues_.fetch_sub(1, std::memory_order_acq_rel);
+            reservedBudget_ = false;
+            throw;
+        }
     }
 
     struct Request {
@@ -118,6 +136,23 @@ private:
         std::optional<Receipt> receipt;
         std::exception_ptr failure;
     };
+    static_assert(std::is_nothrow_move_constructible_v<Request>,
+                  "request ring movement must not allocate or throw");
+    static_assert(std::is_nothrow_move_constructible_v<Completion>,
+                  "completion ring movement must not allocate or throw");
+
+    void reserve_global_budget() {
+        std::size_t current = activeQueues_.load(std::memory_order_relaxed);
+        while (current < kMaxDiskQueues) {
+            if (activeQueues_.compare_exchange_weak(
+                    current, current + 1, std::memory_order_acq_rel,
+                    std::memory_order_relaxed)) {
+                reservedBudget_ = true;
+                return;
+            }
+        }
+        throw std::length_error("global WAL worker/FD owner budget exhausted");
+    }
 
     void start_workers() {
         try {
@@ -143,10 +178,12 @@ private:
             std::optional<Request> next;
             {
                 std::unique_lock<std::mutex> guard(lock_);
-                requestsCv_.wait(guard, [this] { return stopping_ || !requests_.empty(); });
-                if (requests_.empty() && stopping_) return;
-                next.emplace(std::move(requests_.front()));
-                requests_.pop_front();
+                requestsCv_.wait(guard, [this] { return stopping_ || requestCount_ != 0; });
+                if (requestCount_ == 0 && stopping_) return;
+                next.emplace(std::move(*requests_[requestHead_]));
+                requests_[requestHead_].reset();
+                requestHead_ = (requestHead_ + 1) % kMaxOutstanding;
+                --requestCount_;
             }
             Completion completed{std::move(next->promise),std::nullopt,{}};
             try {
@@ -164,18 +201,37 @@ private:
                 // Once work was accepted and queued, classify any physical
                 // dispatch failure as UNKNOWN; an apparent validation error
                 // cannot prove no bytes reached the kernel.
-                completed.failure = std::make_exception_ptr(
-                    WalStorageFdOwner::UnknownOutcome("queued disk outcome unknown"));
+                // The failure object was constructed at queue admission;
+                // don't allocate an exception inside a noexcept worker loop.
+                completed.failure = unknownFailure_;
                 // Strict quarantine after any queued failure. Even a validation
                 // error cannot silently advance or skip this stream's ledger.
                 std::lock_guard<std::mutex> guard(lock_);
                 poisoned_ = true;
             }
+            bool handedOff = false;
             {
                 std::lock_guard<std::mutex> guard(lock_);
-                completions_.push_back(std::move(completed));
+                // Normally outstanding<=32 proves available handoff space.
+                // Even if that invariant is violated, do NOT terminate the host.
+                if (completionCount_ < kMaxOutstanding) {
+                    completions_[completionTail_].emplace(std::move(completed));
+                    completionTail_ = (completionTail_ + 1) % kMaxOutstanding;
+                    ++completionCount_;
+                    handedOff = true;
+                } else {
+                    poisoned_ = true;
+                }
             }
-            handoffCv_.notify_one();
+            if (handedOff) handoffCv_.notify_one();
+            else {
+                // std::promise does not run user continuations inline; a
+                // missing handoff slot is an UNKNOWN physical outcome.
+                try { completed.promise.set_exception(unknownFailure_); }
+                catch (...) { /* future abandoned; never destroy the host */ }
+                std::lock_guard<std::mutex> guard(lock_);
+                --outstanding_;
+            }
         }
     }
 
@@ -185,11 +241,13 @@ private:
             {
                 std::unique_lock<std::mutex> guard(lock_);
                 handoffCv_.wait(guard, [this] {
-                    return handoffStopping_ || !completions_.empty();
+                    return handoffStopping_ || completionCount_ != 0;
                 });
-                if (handoffStopping_ && completions_.empty()) return;
-                result.emplace(std::move(completions_.front()));
-                completions_.pop_front();
+                if (handoffStopping_ && completionCount_ == 0) return;
+                result.emplace(std::move(*completions_[completionHead_]));
+                completions_[completionHead_].reset();
+                completionHead_ = (completionHead_ + 1) % kMaxOutstanding;
+                --completionCount_;
             }
             // Promise completion has no inline user callback. No guest closure
             // ever runs on either of these native workers.
@@ -232,8 +290,20 @@ private:
     mutable std::mutex lock_;
     std::condition_variable requestsCv_;
     std::condition_variable handoffCv_;
-    std::deque<Request> requests_;
-    std::deque<Completion> completions_;
+    // No std::deque allocation on worker paths. Preconstructed empty ring
+    // slots; only submitter allocation and owner physical operations can fail.
+    std::array<std::optional<Request>, kMaxOutstanding> requests_{};
+    std::array<std::optional<Completion>, kMaxOutstanding> completions_{};
+    std::size_t requestHead_ = 0;
+    std::size_t requestTail_ = 0;
+    std::size_t requestCount_ = 0;
+    std::size_t completionHead_ = 0;
+    std::size_t completionTail_ = 0;
+    std::size_t completionCount_ = 0;
+    inline static std::atomic<std::size_t> activeQueues_{0};
+    bool reservedBudget_ = false;
+    const std::exception_ptr unknownFailure_ = std::make_exception_ptr(
+        WalStorageFdOwner::UnknownOutcome("queued disk outcome unknown"));
     std::thread diskWorker_;
     std::thread handoffWorker_;
     std::size_t outstanding_ = 0;

@@ -11,7 +11,7 @@ trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 timeout 30s "$scratch/wal-disk-test" >"$scratch/out" 2>"$scratch/err" || {
   cat "$scratch/err" >&2; exit 1;
 }
-printf '%s\n' 'WAL_DISK_QUEUE_HOST_PASS checks=22; NO ACTOR PIN OR GUEST PROOF' \
+printf '%s\n' 'WAL_DISK_QUEUE_HOST_PASS checks=25; NO ACTOR PIN OR GUEST PROOF' \
   >"$scratch/expected"
 cmp -s "$scratch/out" "$scratch/expected" || { cat "$scratch/out" >&2; exit 1; }
-printf 'NATIVE_OFF_CARRIER_HOST_CHECKS=22 NO_ACTOR_PIN NO_GUEST_PROOF\n'
+printf 'NATIVE_OFF_CARRIER_HOST_CHECKS=25 NO_ACTOR_PIN NO_GUEST_PROOF\n'
