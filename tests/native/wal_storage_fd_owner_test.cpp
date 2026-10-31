@@ -91,6 +91,40 @@ static void tests() {
         delete not_ok;
     });
     ::close(empty);::unlink(linkname.c_str());::unlink(other);
+
+    // Linux's pwrite() + O_APPEND can append instead of respecting the
+    // explicit WAL sequence offset: reject this FD status at adoption.
+    char appendname[]="/tmp/ores-wal-append-XXXXXX";
+    int appendfd=::mkstemp(appendname);
+    if(appendfd<0)throw std::runtime_error("append fixture setup failed");
+    int current=::fcntl(appendfd,F_GETFL);
+    check(current>=0 && ::fcntl(appendfd,F_SETFL,current|O_APPEND)==0,
+          "enable unsafe O_APPEND fixture");
+    reject<std::invalid_argument>([&]{
+        auto* not_ok=WalStorageFdOwner::adopt_verified_fd(appendfd,&activation,scope);
+        delete not_ok;
+    });
+    check(::fcntl(appendfd,F_GETFL)>=0,
+          "rejected append FD remains caller-owned");
+    ::close(appendfd);
+    ::unlink(appendname);
+
+    // A caller retaining an alias could flip O_APPEND after adoption.
+    // Detect this before pwrite, quarantine and reject further writes.
+    char changedname[]="/tmp/ores-wal-flags-change-XXXXXX";
+    int changedfd=::mkstemp(changedname);
+    if(changedfd<0)throw std::runtime_error("changed-flags fixture setup failed");
+    auto* changed=WalStorageFdOwner::adopt_verified_fd(changedfd,&activation,scope);
+    int initial_flags=::fcntl(changedfd,F_GETFL);
+    check(initial_flags>=0 && ::fcntl(changedfd,F_SETFL,initial_flags|O_APPEND)==0,
+          "mutate O_APPEND after WAL FD adoption");
+    reject<WalStorageFdOwner::UnknownOutcome>([&]{
+        changed->write_and_sync_on_disk_worker(&activation,scope,frame(7,5,1,99));
+    });
+    check(changed->quarantined(),"changed descriptor flags quarantine WAL owner");
+    delete changed;
+    ::unlink(changedname);
+
     char readname[]="/tmp/ores-wal-readonly-XXXXXX";
     int writable=::mkstemp(readname);
     if(writable<0)throw std::runtime_error("read-only fixture setup failed");
