@@ -85,7 +85,7 @@ struct Operation {
     enum class Kind {
         Initialize, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
-        ReleaseShared, ReleaseExclusive
+        ReleaseShared, ReleaseExclusive, Suspend
     };
     Kind kind;
     std::string place;
@@ -151,6 +151,16 @@ inline void validate_disjoint_place_layout(const State& state) {
 
 inline void validate_region_loan_state(const State& state) {
     for (const auto& [name, value] : state) {
+        // No direct verifier or join caller may present an inconsistent loan
+        // count/identity or a borrow whose owner is no longer definitely live.
+        // verify(Graph) normalizes legacy anonymous entry loans beforehand.
+        if (value.shared_loans != value.shared_loan_ids.size() ||
+                value.exclusive_loan != value.exclusive_loan_id.has_value() ||
+                (value.shared_loans && value.exclusive_loan))
+            violation(name, "inconsistent live loan identities");
+        if ((value.shared_loans || value.exclusive_loan) &&
+                value.possible != kOwned)
+            violation(name, "borrow with owner not definitely alive");
         for (const auto& [loan_id, requirement] : value.shared_region_requirements) {
             if (!loan_id || !value.shared_loan_ids.count(loan_id) ||
                     !valid_region_loan_requirement(requirement))
@@ -176,6 +186,17 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
     validate_region_loan_state(state);
+    if (op.kind == Operation::Kind::Suspend) {
+        // Source await/select/channel suspension has no implicit lifetime
+        // extension. A future pinned-frame lowering needs a distinct,
+        // compiler-issued proof, not a flag supplied to this operation.
+        if (!op.place.empty() || op.loan_id || op.region_requirement)
+            violation(op.place, "invalid suspension boundary provenance");
+        for (const auto& [name, value] : state)
+            if (value.shared_loans || value.exclusive_loan)
+                violation(name, "live borrow crosses unproven suspension");
+        return;
+    }
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -301,6 +322,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
+        case Operation::Kind::Suspend:
             break;
     }
     violation(op.place, "invalid CFG operation");
