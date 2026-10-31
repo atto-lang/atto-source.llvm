@@ -3285,8 +3285,11 @@ private:
             std::string operation(token_.text);
             if (operation == "mut") {
                 advance();
+                if (token_.text == "share")
+                    fail("native rt mut share requires verified SharedMutex<T> capability, "
+                         "guarded lowering and allocation-domain proof; refusing unsynchronized alias");
                 if (token_.text != "borrow")
-                    fail("'rt mut' only supports borrowing; use 'rt mut borrow value'");
+                    fail("'rt mut' only supports borrowing in native scalar lowering");
                 operation = "borrow";
                 mutable_borrow = true;
             }
