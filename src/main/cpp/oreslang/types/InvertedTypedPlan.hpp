@@ -176,6 +176,28 @@ public:
         return col;
     }
 
+    // Source indices are runtime values in the general compiler. The
+    // backend MUST emit an owner-relative bounds/validity guard; unlike the
+    // above constant-folding checks, these operations do not assume that a
+    // compile-time row count proves source indexing safety.
+    std::size_t read_runtime_checked(std::size_t index, std::string_view field) {
+        const auto col = checked_field(field);
+        if (writers_[col])
+            throw std::logic_error("inverted field has an outstanding mutable loan");
+        append(OpKind::ReadField, col, index);
+        return col;
+    }
+
+    std::size_t write_runtime_checked(std::size_t index, std::string_view field) {
+        const auto col = checked_field(field);
+        if (!layout_.column(col).mutable_field)
+            throw std::logic_error("immutable inverted field cannot be written");
+        if (writers_[col] || readers_[col])
+            throw std::logic_error("inverted field has an outstanding loan");
+        append(OpKind::WriteField, col, index);
+        return col;
+    }
+
     void borrow_read(std::string_view field) {
         const auto col = checked_field(field);
         if (writers_[col])
