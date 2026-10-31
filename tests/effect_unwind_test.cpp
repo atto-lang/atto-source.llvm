@@ -266,6 +266,26 @@ int main() {
     static_assert(forged_i64.effect.code == 0xFFFFFFFDu);
     static_assert(forged_i64.value == 0);
 
+    // The restricted typed-i64 result carrier must never downgrade malformed
+    // Return+error to ordinary success, including an injected overflow code.
+    constexpr oreslang::I64EffectResult forged_return{
+        42, {EffectKind::Return, 65537u}};
+    static_assert(oreslang::i64_has_effect(forged_return));
+    static_assert(!oreslang::i64_catch_matches(forged_return, 65537u));
+    constexpr auto fenced_return = oreslang::i64_forward(forged_return);
+    static_assert(fenced_return.effect.kind == EffectKind::Fatal);
+    static_assert(fenced_return.effect.code == 0xFFFFFFFDu);
+    static_assert(fenced_return.value == 0);
+    constexpr auto fenced_recover =
+        oreslang::i64_recover(forged_return, 65537u, 7);
+    static_assert(fenced_recover.effect.kind == EffectKind::Fatal);
+    static_assert(fenced_recover.value == 0);
+    constexpr auto canonical_success = oreslang::i64_forward(oreslang::i64_return(42));
+    static_assert(canonical_success.effect.kind == EffectKind::Return);
+    static_assert(canonical_success.effect.code == 0);
+    static_assert(canonical_success.value == 42);
+    static_assert(!oreslang::i64_has_effect(canonical_success));
+
     CHECK(oreslang::native_trap_admits(EffectKind::Throw));
     for (const EffectKind kind : kinds)
         if (kind != EffectKind::Throw)
