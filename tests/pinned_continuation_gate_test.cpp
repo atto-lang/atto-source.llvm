@@ -9,6 +9,40 @@ static void check(bool success, const char* description) {
     if (!success) throw std::runtime_error(description);
 }
 int main() {
+    // Exhaust on-wire u8 loan modes: only shared(0) and exclusive(1) may
+    // acquire or release actor-owned frame loans. Unknown values must not
+    // silently alias shared mode or release someone else's live loan.
+    for (unsigned raw = 0; raw != 256; ++raw) {
+        const auto mode = static_cast<PinnedContinuationGate::Loan>(raw);
+        const bool admitted = raw <= 1;
+        check(PinnedContinuationGate::valid_loan_mode(mode) == admitted,
+              "loan-mode discriminant admission changed");
+        AsyncIoTicket ticket{88, 9, static_cast<std::uint64_t>(raw + 1)};
+        PinnedContinuationGate frame(ticket);
+        check(frame.acquire(ticket, mode) == admitted,
+              "forged loan mode acquired an actor frame");
+        if (admitted) {
+            const std::uint32_t expected = raw == 0 ? 1u : PinnedContinuationGate::exclusive_bit;
+            check(frame.loan_state() == expected && frame.release(ticket, mode),
+                  "canonical loan acquisition/release failed");
+        } else {
+            check(frame.loan_state() == 0, "invalid acquisition changed loan state");
+            check(frame.acquire(ticket, PinnedContinuationGate::Loan::shared),
+                  "shared control loan rejected");
+            check(!frame.release(ticket, mode) && frame.loan_state() == 1,
+                  "forged release dropped a shared loan");
+            check(frame.release(ticket, PinnedContinuationGate::Loan::shared),
+                  "shared control loan leaked");
+            check(frame.acquire(ticket, PinnedContinuationGate::Loan::exclusive),
+                  "exclusive control loan rejected");
+            check(!frame.release(ticket, mode)
+                  && frame.loan_state() == PinnedContinuationGate::exclusive_bit,
+                  "forged release dropped an exclusive loan");
+            check(frame.release(ticket, PinnedContinuationGate::Loan::exclusive),
+                  "exclusive control loan leaked");
+        }
+        check(frame.loan_state() == 0, "loan discriminant test leaked a loan");
+    }
     // Exhaust all on-wire u8 terminal values. Only the five declared
     // terminal outcomes may settle either the I/O admission or the pinned
     // frame; a forged value must preserve pending and prohibit broker ACK,

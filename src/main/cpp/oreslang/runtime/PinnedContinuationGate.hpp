@@ -12,6 +12,11 @@ namespace oreslang::runtime {
 class PinnedContinuationGate final {
 public:
     enum class Loan : std::uint8_t { shared, exclusive };
+    // Host/FFI values must be validated before treating an unknown mode as
+    // shared. A forged release mode must not drop another owner's loan.
+    static constexpr bool valid_loan_mode(Loan mode) noexcept {
+        return mode == Loan::shared || mode == Loan::exclusive;
+    }
     static constexpr std::uint32_t exclusive_bit = 0x80000000u;
     static constexpr std::uint32_t max_shared_loans = 1024;
 
@@ -20,7 +25,8 @@ public:
     PinnedContinuationGate& operator=(const PinnedContinuationGate&) = delete;
 
     bool acquire(AsyncIoTicket ticket, Loan mode) noexcept {
-        if (!valid(ticket) || terminal_.load(std::memory_order_acquire) != AsyncIoTerminal::pending)
+        if (!valid(ticket) || !valid_loan_mode(mode)
+                || terminal_.load(std::memory_order_acquire) != AsyncIoTerminal::pending)
             return false;
         std::uint32_t old = loans_.load(std::memory_order_acquire);
         for (;;) {
@@ -40,7 +46,7 @@ public:
     }
 
     bool release(AsyncIoTicket ticket, Loan mode) noexcept {
-        if (!valid(ticket)) return false;
+        if (!valid(ticket) || !valid_loan_mode(mode)) return false;
         std::uint32_t old = loans_.load(std::memory_order_acquire);
         for (;;) {
             if (mode == Loan::exclusive ? old != exclusive_bit
