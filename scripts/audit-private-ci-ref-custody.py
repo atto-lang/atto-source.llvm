@@ -75,6 +75,7 @@ def audit_module_root(tree):
     alias import, decorator, or conditional rebinding is permitted.
     """
     main_guards = 0
+    exception_classes = 0
     for index, statement in enumerate(tree.body):
         if (index == 0 and isinstance(statement, ast.Expr)
                 and isinstance(statement.value, ast.Constant)
@@ -98,9 +99,14 @@ def audit_module_root(tree):
                     "module assignment may only declare uppercase constants")
             continue
         if isinstance(statement, ast.ClassDef):
-            require(statement.name == "Denied"
-                    and not statement.decorator_list,
-                    "unexpected or decorated module class")
+            exception_classes += 1
+            require(exception_classes == 1
+                    and statement.name == "Denied"
+                    and not statement.decorator_list
+                    and len(statement.bases) == 1
+                    and isinstance(statement.bases[0], ast.Name)
+                    and statement.bases[0].id == "RuntimeError",
+                    "publisher must have one undecorated Denied exception class")
             continue
         if isinstance(statement, ast.FunctionDef):
             require(not statement.decorator_list,
@@ -139,6 +145,7 @@ def audit_module_root(tree):
                 and not call.args[0].keywords,
                 "CLI entry must invoke only sys.exit(main())")
     require(main_guards == 1, "publisher CLI entry missing")
+    require(exception_classes == 1, "publisher Denied exception class missing")
 
 
 def audit_source(source):
