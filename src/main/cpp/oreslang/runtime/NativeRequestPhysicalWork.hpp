@@ -97,30 +97,45 @@ public:
         return TaskLease(std::move(child_authority),std::move(*retained));
     }
 
-    static std::optional<IoLease> retain_async_io(
+    // The registration callback is the trusted host's actual NIO watch
+    // admission call (e.g. ores_native_vm_nio_try_watch), not a guest callback.
+    // It MUST return true only once a physical broker watch has been accepted,
+    // and false only when no broker is able to touch the provided buffers.
+    // An immediately delivered readiness/cancellation completion may settle
+    // the gate before registration returns; RESERVED prevents retirement
+    // until the physical request lease is irreversibly PUBLISHED.
+    //
+    // No allocation or blocking is introduced by this bridge; the host's
+    // chosen registrar must independently satisfy those constraints.
+    template<typename RegisterWatch>
+    static std::optional<IoLease> register_async_io(
             Context& context, Handle request, OresNativeActorRef owner,
-            PinnedContinuationGate& gate, AsyncIoTicket ticket) {
-        // The complete native actor incarnation is part of the I/O gate's
-        // trusted registration, not a caller-provided ticket or actor slot.
-        // A cross-actor or restarted-actor request must fail BEFORE acquiring
-        // any physical lease or reserving this operation.
+            PinnedContinuationGate& gate, AsyncIoTicket ticket,
+            RegisterWatch&& register_watch) {
         if(!gate.matches_request_owner({
                 owner.scheduler_domain,owner.actor_slot,owner.generation}))
             return std::nullopt;
-        // Atomic binding is the I/O retirement linearization boundary.
-        // A ready-to-retire operation can never be attached to a new request;
-        // the normal gate retirement path cannot pass an attached physical pin.
         if(!gate.try_bind_request(ticket)) return std::nullopt;
         auto pin=context.retain(request,owner);
         if(!pin || gate.terminal()!=AsyncIoTerminal::pending) {
             if(!gate.abort_request_binding(ticket)) std::terminate();
             return std::nullopt;
         }
-        // Irreversible publication prevents even an erroneous late abort
-        // from releasing a live request's atomic retirement fence.
+        bool accepted=false;
+        try {
+            accepted=static_cast<bool>(
+                std::forward<RegisterWatch>(register_watch)());
+        } catch (...) {
+            // A throwing host registrar is treated as failed admission.
+            // It must never throw AFTER accepting/publishing a broker watch.
+            if(!gate.abort_request_binding(ticket)) std::terminate();
+            return std::nullopt;
+        }
+        if(!accepted) {
+            if(!gate.abort_request_binding(ticket)) std::terminate();
+            return std::nullopt;
+        }
         if(!gate.commit_request_binding(ticket)) std::terminate();
-        // Settlement after publication is safe: only this IoLease can retire
-        // the bound operation after the broker and resume have quiesced.
         return IoLease(gate,ticket,std::move(*pin));
     }
 };
