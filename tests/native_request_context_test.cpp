@@ -1,6 +1,7 @@
 // Actual NativeActorScheduler admissions, not hand-written carrier claims.
 // This test requires linking NativeActorScheduler.c into the CTest target.
 #include "oreslang/runtime/NativeRequestContext.hpp"
+#include "oreslang/runtime/NativeRequestPhysicalWork.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -675,6 +676,88 @@ int main(){
         CHECK(next->value!=h->value);
         CHECK(!contexts.lookup(*h,owner));
         CHECK(contexts.close(*next,owner));
+    }
+    // Real native TaskCancellation and PinnedContinuationGate integration,
+    // rather than artificial naked RequestContext::Lease objects. The host
+    // worker and I/O broker must physically exit before exchange retirement.
+    {
+        using Work=NativeRequestPhysicalWork<16>;
+        Registry contexts;
+        const OresNativeActorRef owner{71,4,8};
+        auto h=contexts.open(owner,Suite::info(910));CHECK(h);
+        NativeHttpExchange exchange;
+        auto pinned=contexts.attach_exchange(exchange,*h,owner);CHECK(pinned);
+        const auto token=pinned->token();
+        CHECK(exchange.rollback(token));
+        auto root=TaskCancellation::root();
+        auto child=root->child();
+        auto grandchild=child->child();
+        auto task=Work::retain_child_task(contexts,*h,owner,child);CHECK(task);
+        auto rejected_owner=owner; ++rejected_owner.generation;
+        CHECK(!Work::retain_child_task(contexts,*h,rejected_owner,child));
+        const AsyncIoTicket ticket{71,8,21};
+        PinnedContinuationGate gate(ticket);
+        CHECK(!Work::retain_async_io(contexts,*h,owner,gate,{71,8,22}));
+        auto io=Work::retain_async_io(contexts,*h,owner,gate,ticket);CHECK(io);
+        CHECK(gate.acquire(ticket,PinnedContinuationGate::Loan::shared));
+        std::atomic<unsigned> child_drained{0};
+        CHECK(!root->seal_and_observe_child_quiescence([&] {
+            child_drained.fetch_add(1,std::memory_order_release);
+        }));
+        CHECK(contexts.close(*h,owner));
+        CHECK(!pinned->ready_to_retire());
+        CHECK(!Work::retain_child_task(contexts,*h,owner,child));
+        CHECK(!Work::retain_async_io(contexts,*h,owner,gate,ticket));
+        CHECK(root->cancel("request-disconnect"));
+        CHECK(child->is_cancelled() && grandchild->is_cancelled());
+        // A child authority with a live structured descendant cannot retire.
+        CHECK(!task->finish_after_physical_exit());
+        std::atomic<bool> release_worker{false},worker_ok{false};
+        std::thread worker([&] {
+            while(!release_worker.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            try {
+                grandchild->retire();
+                worker_ok.store(task->finish_after_physical_exit(),
+                                std::memory_order_release);
+            } catch(...) {
+                worker_ok.store(false,std::memory_order_release);
+            }
+        });
+        CHECK(!io->finish_after_broker_and_resume_quiescence());
+        CHECK(gate.settle(ticket,AsyncIoTerminal::cancelled));
+        CHECK(!io->finish_after_broker_and_resume_quiescence());
+        // Cancellation wins the terminal race, but does not indicate broker
+        // quiescence, cleanup/resume completion or released request borrows.
+        CHECK(contexts.available()==15);
+        CHECK(!pinned->ready_to_retire());
+        release_worker.store(true,std::memory_order_release);
+        worker.join();
+        CHECK(worker_ok.load(std::memory_order_acquire) && child_drained==1);
+        CHECK(!pinned->ready_to_retire());
+        root->retire();
+        CHECK(gate.release(ticket,PinnedContinuationGate::Loan::shared));
+        std::atomic<bool> broker_done{false};
+        std::thread broker([&]{
+            // Actual broker thread can no longer touch request storage on exit.
+            broker_done.store(true,std::memory_order_release);
+        });
+        broker.join();
+        CHECK(broker_done.load(std::memory_order_acquire));
+        CHECK(gate.broker_acknowledge(ticket));
+        CHECK(!io->finish_after_broker_and_resume_quiescence());
+        CHECK(gate.try_claim_resume(ticket));
+        CHECK(gate.finish_resume(ticket));
+        CHECK(io->finish_after_broker_and_resume_quiescence());
+        CHECK(!io->finish_after_broker_and_resume_quiescence());
+        CHECK(pinned->ready_to_retire()); // final context owner only
+        CHECK(!exchange.enqueue(owner));
+        pinned.reset();
+        CHECK(contexts.available()==16);
+        CHECK(exchange.enqueue(owner));
+        const auto next=exchange.token();
+        CHECK(next.generation>token.generation);
+        CHECK(exchange.rollback(next));
     }
     // Stale handle cannot alias a later actor incarnation or request.
     {
