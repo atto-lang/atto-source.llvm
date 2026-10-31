@@ -12,6 +12,7 @@ using File = Registry::FileIdentity;
 
 static_assert(!std::is_copy_constructible_v<Registry::Grant>);
 static_assert(!std::is_copy_assignable_v<Registry::Grant>);
+static_assert(!std::is_move_assignable_v<Registry::Grant>);
 
 int main() {
     Registry registry(55);
@@ -38,13 +39,19 @@ int main() {
     assert(second && registry.outstanding() == 2);
     assert(!registry.issue(55, 2, 3, 103, 9, File{11, 1003}, c));
 
-    assert(a.admit(101, 7));
+    assert(registry.begin_write(*first, 55, 1, 1, 101, 7, fileA));
+    assert(!registry.begin_write(*first, 55, 1, 1, 101, 7, fileA));
+    assert(!registry.begin_write(*first, 55, 2, 1, 101, 7, fileA));
+    assert(!registry.begin_write(*first, 55, 1, 1, 101, 7, fileB));
+    assert(!registry.begin_write(*first, 56, 1, 1, 101, 7, fileA));
     assert(!registry.drain(*first, 55, 101, 8)); // stale incarnation
     assert(!registry.drain(*first, 55, 101, 7)); // in flight
     assert(!registry.can_write(*first, 55, 1, 1, 101, 7, fileA));
     assert(!registry.begin_close(*first, 55, 101, 7));
     assert(!registry.issue(55, 1, 1, 103, 9, File{11, 1003}, c));
-    a.physical_write_retired(101, 7);
+    assert(!registry.physical_write_retired(*first, 55, 101, 8));
+    assert(registry.physical_write_retired(*first, 55, 101, 7));
+    assert(!registry.physical_write_retired(*first, 55, 101, 7));
     assert(registry.drain(*first, 55, 101, 7));
     assert(registry.begin_close(*first, 55, 101, 7));
     assert(!registry.begin_close(*first, 55, 101, 7));
@@ -64,16 +71,25 @@ int main() {
     assert(registry.can_write(*reused, 55, 1, 1, 103, 9, fileA));
 
     std::atomic<bool> start{false};
+    std::atomic<unsigned> admitted{0};
     std::thread drain([&] {
         while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
-        assert(registry.drain(*reused, 55, 103, 9));
+        (void)registry.drain(*reused, 55, 103, 9);
     });
     std::thread writer([&] {
         while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
-        (void)registry.can_write(*reused, 55, 1, 1, 103, 9, fileA);
+        if (registry.begin_write(*reused, 55, 1, 1, 103, 9, fileA))
+            admitted.fetch_add(1, std::memory_order_relaxed);
     });
     start.store(true, std::memory_order_release);
     drain.join(); writer.join();
+    assert(admitted.load() <= 1);
+    assert(!registry.begin_write(*reused, 55, 1, 1, 103, 9, fileA));
+    if (admitted.load()) {
+        assert(!registry.begin_close(*reused, 55, 103, 9));
+        assert(registry.physical_write_retired(*reused, 55, 103, 9));
+    }
+    assert(registry.drain(*reused, 55, 103, 9));
     assert(!registry.can_write(*reused, 55, 1, 1, 103, 9, fileA));
     registry.seal();
     assert(!registry.can_write(*second, 55, 1, 2, 102, 8, fileB));

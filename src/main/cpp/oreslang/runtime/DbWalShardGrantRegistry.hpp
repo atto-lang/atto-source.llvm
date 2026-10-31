@@ -39,17 +39,10 @@ public:
             : issuer_(other.issuer_), index_(other.index_), epoch_(other.epoch_) {
             other.issuer_ = nullptr;
         }
-        Grant& operator=(Grant&& other) noexcept {
-            if (this != &other) {
-                // Moving over a live grant must NOT implicitly release the
-                // shard: the registry retains it until verified retirement.
-                issuer_ = other.issuer_;
-                index_ = other.index_;
-                epoch_ = other.epoch_;
-                other.issuer_ = nullptr;
-            }
-            return *this;
-        }
+        // Never overwrite a live authority and orphan its reserved slot.
+        // Move construction for std::optional<Grant> is supported; assignment
+        // is deliberately forbidden even if the destination looks empty.
+        Grant& operator=(Grant&&) = delete;
         bool attached() const noexcept { return issuer_ != nullptr; }
     private:
         Grant(const DbWalShardGrantRegistry* issuer, std::size_t index,
@@ -109,6 +102,47 @@ public:
             && s->generation == generation && s->file == file
             && s->gate->owns(actor_id, generation)
             && s->gate->phase() == DbWalOwnerRetirementGate::Phase::open;
+    }
+
+    /**
+     * AUTHORITATIVE admission for one physical write. A separate can_write()
+     * check is only diagnostic; checking then admitting with a second call
+     * would permit drain to win between those steps. Holding the registry
+     * lock while taking the bound gate's active slot makes drain/write
+     * ordering linearizable. No allocation, but NOT safe on hard-RT carriers.
+     */
+    bool begin_write(const Grant& grant, std::uint64_t context_id,
+            std::uint32_t tenant_id, std::uint32_t shard_id,
+            std::uint64_t actor_id, std::uint32_t generation,
+            FileIdentity file) {
+        std::lock_guard<std::mutex> lock(mu_);
+        Slot* s = lookup(grant);
+        if (!s || sealed_ || context_id != context_id_
+                || s->phase != Phase::active
+                || s->tenant != tenant_id || s->shard != shard_id
+                || s->actor != actor_id || s->generation != generation
+                || !(s->file == file)
+                || !s->gate->owns(actor_id, generation))
+            return false;
+        return s->gate->admit(actor_id, generation);
+    }
+
+    /**
+     * Only the trusted actual I/O worker / physical pin retirement may
+     * release this slot. A cancelled logical Future is not that receipt.
+     * A DRAINING owner can retire a previously admitted physical write.
+     */
+    bool physical_write_retired(const Grant& grant,
+            std::uint64_t context_id, std::uint64_t actor_id,
+            std::uint32_t generation) {
+        std::lock_guard<std::mutex> lock(mu_);
+        Slot* s = lookup(grant);
+        if (!s || context_id != context_id_
+                || s->actor != actor_id || s->generation != generation
+                || !s->gate->owns(actor_id, generation)
+                || !s->gate->active()) return false;
+        s->gate->physical_write_retired(actor_id, generation);
+        return true;
     }
 
     // Drain irrevocably seals writes but keeps the shard/file reserved.
