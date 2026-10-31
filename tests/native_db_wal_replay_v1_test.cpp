@@ -51,6 +51,11 @@ int main(){
     int status=0;
     assert(::waitpid(pid,&status,0)==pid);
     assert(WIFEXITED(status)&&WEXITSTATUS(status)==0);
+    // Reopen through an independent descriptor: do not accidentally
+    // conflate inherited fork state with process-restart file recovery.
+    assert(::close(fd)==0);
+    fd=::open(name,O_RDWR|O_CLOEXEC|O_NOFOLLOW);
+    assert(fd>=0);
     unsigned visited=0;
     auto visit=[&](const std::uint8_t* bytes,std::size_t n,std::uint64_t off){
         assert(n==31 && off==31U*visited);
