@@ -548,10 +548,12 @@ bool entry_builtin_name(std::string_view name) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
-                    bool experimental_rt_scalar_loop)
+                    bool experimental_rt_scalar_loop,
+                    bool verified_namespace_metadata_only = false)
         : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
-          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
+          verified_namespace_metadata_only_(verified_namespace_metadata_only) {}
 
     Program parse() {
         Program program;
@@ -757,10 +759,10 @@ public:
         // The package-local host graph is not connected to an authenticated
         // v2 manifest/source loader and native codegen yet. Namespace AST
         // imports must not silently enter the existing relative module linker.
-        if (!program.namespace_imports.empty())
+        if (!verified_namespace_metadata_only_ && !program.namespace_imports.empty())
             fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace imports require verified v2 package manifests and cross-unit lowering");
         validate_type_only_declarations(program);
-        if (!program.namespace_name.empty() &&
+        if (!verified_namespace_metadata_only_ && !program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
@@ -786,6 +788,8 @@ public:
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    // Restricted host-only AST pass, never set by the ordinary CLI parser.
+    bool verified_namespace_metadata_only_ = false;
     std::vector<NativeSumType> sum_types_;
     bool is_sum_name(const std::string& name) const {
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
@@ -5817,6 +5821,14 @@ void resolve_future_pipeline_contracts(Program& program) {
 }
 
 } // namespace
+
+Program parse_verified_namespace_source_unresolved(
+        std::string_view authenticated_source) {
+    // Precondition: independently pinned physical source snapshot. Preserve
+    // unresolved imports for the verified namespace graph to authorize.
+    // Never run resolve_and_validate_program or emit IR here.
+    return Parser(authenticated_source, false, false, true).parse();
+}
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
