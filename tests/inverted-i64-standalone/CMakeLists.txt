@@ -27,6 +27,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
 endif()
 
+add_executable(oreslang-inverted-mir-compiler17-test
+    ../native_inverted_mir_compiler17_test.cpp)
+target_include_directories(oreslang-inverted-mir-compiler17-test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/main/cpp")
+set_target_properties(oreslang-inverted-mir-compiler17-test PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(oreslang-inverted-mir-compiler17-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+endif()
+
 add_executable(oreslang-inverted-typed-mir-test
     ../native_inverted_typed_mir_test.cpp)
 target_include_directories(oreslang-inverted-typed-mir-test PRIVATE
@@ -39,6 +50,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 if(BUILD_TESTING)
+    add_test(NAME inverted_mir_compiler_cpp17
+        COMMAND oreslang-inverted-mir-compiler17-test)
+    set_tests_properties(inverted_mir_compiler_cpp17 PROPERTIES TIMEOUT 30)
     add_test(NAME inverted_typed_mir_native_columns
         COMMAND oreslang-inverted-typed-mir-test)
     set_tests_properties(inverted_typed_mir_native_columns PROPERTIES TIMEOUT 30)
