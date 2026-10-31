@@ -12,6 +12,7 @@ on:
       - 'tests/actor_state_scope_test.c'
       - 'tests/source_actor_e2e.py'
       - 'tests/native_isolated_sealed_state_compiled_guest.py'
+      - 'tests/sealed_state_compiled_guest.rs'
       - 'tests/native_isolated_sealed_state_guest_bridge_test.c'
       - 'tests/native_isolated_sealed_state_scheduler_guest_test.c'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
@@ -123,6 +124,7 @@ jobs:
             src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
             tests/contract.py tests/source_actor_e2e.py \
             tests/native_isolated_sealed_state_compiled_guest.py \
+            tests/sealed_state_compiled_guest.rs \
             tests/native_isolated_sealed_state_guest_bridge_test.c \
             tests/native_isolated_sealed_state_scheduler_guest_test.c \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
@@ -189,8 +191,11 @@ jobs:
             --compiler "$compiler" --clang clang --root "$PWD"
           python3 tests/source_actor_e2e.py \
             --compiler "$compiler" --clang clang --root "$PWD" --sanitize
-          python3 tests/native_isolated_sealed_state_compiled_guest.py \
+          command -v rustc >/dev/null
+          rustc --edition=2021 -O -D warnings tests/sealed_state_compiled_guest.rs \
+            -o build/actor-state-schema/oreslang-sealed-state-guest
+          build/actor-state-schema/oreslang-sealed-state-guest \
             --compiler "$compiler" --clang clang --root "$PWD"
-          python3 tests/native_isolated_sealed_state_compiled_guest.py \
+          build/actor-state-schema/oreslang-sealed-state-guest \
             --compiler "$compiler" --clang clang --root "$PWD" --sanitize
-          echo "ACTOR_STATE_COMPILED_GUEST_AND_SANITIZERS=PASS"
+          echo "ACTOR_STATE_COMPILED_GUEST_RUST_AND_SANITIZERS=PASS"
