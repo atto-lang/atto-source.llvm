@@ -18,6 +18,9 @@ by bounded literal-only rows.push(i64,i64), rows.set(index,field,i64),
 rows.erase_swap(index), and a terminal return rows.get(index,field).
 No general expressions, aliases, loops, calls, other functions, methods, actors,
 network or escaped handles. An unsupported source does not emit guest IR.
+The module linker explicitly rejects *all* inverted declarations when any
+cross-unit linking is requested, rather than dropping inverted AST metadata
+from its linked Program.
 
 Example source: tests/fixtures/inverted-i64/positive-production-erase-swap.ores
 
