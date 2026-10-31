@@ -202,6 +202,7 @@ int main() {
             expect<std::invalid_argument>([&] { (void)guarded.push(forged, 1.0); });
             const auto valid = guarded.push(position, 1.0);
             expect<std::invalid_argument>([&] { guarded.set<0>(valid, forged); });
+            expect<std::invalid_argument>([&] { guarded.write_index<0>(0, forged); });
             expect<std::invalid_argument>([&] { guarded.set_row(valid, forged, 2.0); });
             check(guarded.get<0>(valid) == position && guarded.get<1>(valid) == 1.0);
         }
