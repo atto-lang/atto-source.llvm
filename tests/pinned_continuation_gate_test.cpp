@@ -18,6 +18,9 @@ int main() {
         check(!plain.matches_request_owner({42,3,7}),
               "ticket-only I/O gate accidentally authorized request ownership");
         PinnedContinuationGate actor_bound(t,{42,3,7});
+        PinnedContinuationGate inconsistent({42,8,15},{42,3,7});
+        check(!inconsistent.matches_request_owner({42,3,7}),
+              "I/O operation generation mismatched the bound actor incarnation");
         check(actor_bound.matches_request_owner({42,3,7}),
               "registered complete owner identity was lost");
         check(!actor_bound.matches_request_owner({42,4,7}) &&
