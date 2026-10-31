@@ -32,6 +32,23 @@ branch="$(gh api "repos/${repository}/branches/main")"
 jq -e '.name=="main" and .protected==true' <<< "$branch" >/dev/null || {
   echo "DENIED: protected source main is not enforced" >&2; exit 1;
 }
+# "protected:true" by itself is not an independent review gate.
+# Only real enforced branch protection (not a weak rule that sets the badge) admits JIT.
+protection="$(gh api "repos/${repository}/branches/main/protection")"
+jq -e '
+  (.required_pull_request_reviews | type=="object")
+  and (.required_pull_request_reviews.require_code_owner_reviews==true)
+  and (.required_pull_request_reviews.dismiss_stale_reviews==true)
+  and (.required_pull_request_reviews.required_approving_review_count | type=="number")
+  and (.required_pull_request_reviews.required_approving_review_count>=1)
+  and (.enforce_admins.enabled==true)
+  and (.allow_force_pushes.enabled==false)
+  and (.allow_deletions.enabled==false)
+  and ([.required_pull_request_reviews.bypass_pull_request_allowances?
+       | (.users // []), (.teams // []), (.apps // [])] | all(.==[]))
+' <<< "$protection" >/dev/null || {
+  echo "DENIED: protected main does not enforce CODEOWNER/stale/admin/no-bypass" >&2; exit 1;
+}
 workflow_meta="$(gh api "repos/${repository}/contents/.github/workflows/${workflow_file}?ref=main")"
 jq -e --arg path ".github/workflows/$workflow_file" '.path==$path and .type=="file"' \
   <<< "$workflow_meta" >/dev/null || { echo "DENIED: main workflow not present" >&2; exit 1; }
