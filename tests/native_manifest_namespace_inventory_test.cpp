@@ -418,6 +418,31 @@ int main() {
             }
         }
 
+        // Resource admission happens before any lock-entry path expansion.
+        {
+            auto oversized = fixture.lock;
+            for (std::size_t i = oversized.package_instances.size();
+                    i <= 128; ++i) {
+                oversized.package_instances.emplace(
+                    "extra@" + std::to_string(i),
+                    oreslang::VerifiedLockedPackageInstance{});
+            }
+            must_fail("exceeds 128 package instances", [&] {
+                (void)fixture.materialize(oversized);
+            });
+        }
+        {
+            auto oversized = fixture.lock;
+            for (std::size_t i = oversized.dependency_aliases.size();
+                    i < 128; ++i) {
+                oversized.dependency_aliases.emplace(
+                    "alias_" + std::to_string(i), "foo@sha:1111");
+            }
+            must_fail("exceeds 127 dependency aliases", [&] {
+                (void)fixture.materialize(oversized);
+            });
+        }
+
         // Manifest authority is content-addressed.
         {
             auto stale = fixture.lock;
