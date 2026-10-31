@@ -1,0 +1,13 @@
+define inverted struct Position as
+    let x: int;
+    id: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Position>.with_capacity(3);
+    rows.push(11, 100);
+    rows.push(20, 101);
+    rows.set(1, x, 42);
+    rows.erase_swap(0);
+    return rows.get(0, x);
+}
