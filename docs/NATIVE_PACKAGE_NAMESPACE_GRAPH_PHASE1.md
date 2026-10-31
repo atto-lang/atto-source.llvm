@@ -127,3 +127,37 @@ The CLI's existing parser/loader gate for executable namespace imports is
 unchanged and remains fail-closed. GCC, Clang and sanitized compilation of
 the new host graph test must be recorded from executing, exact-head CI or a
 complete local private checkout before treating that bridge as qualified.
+
+
+## Authenticated production-parser host bridge (preparatory, non-executable)
+
+`parse_verified_namespace_source_unresolved` is a separately named,
+host-only parser entry point that accepts already pinned/captured source
+bytes and preserves namespace declarations and `import namespace` syntax
+as **unresolved AST**. It does not run ordinary executable program
+validation or LLVM lowering. The existing `parse_unresolved_program` /
+`parse_program` entry points still reject namespace runtime imports and
+namespace function declarations. Moreover, `resolve_and_validate_program`
+now independently rejects such host-only ASTs, preventing use of the generic
+executable validator as an accidental admission bypass.
+
+`link_verified_native_namespace_snapshots_v2` composes that real parser
+with the already authenticated snapshot-to-owner graph: source text comes
+from frozen verified byte buffers rather than a post-admission file read.
+The host graph still accepts `+/` only, rejects external package aliases
+without a separately verified lockfile/pin graph, and does **not** emit
+LLVM IR or run guest code.
+
+Two new CMake/CTest targets are authored:
+`native_verified_namespace_parser_v2_host_only` exercises actual
+`Parser.cpp` parsing and executable rejection; and
+`native_verified_namespace_real_parser_v2_host_only` creates a local v2
+manifest/source fixture, admits it using OpenSSL-backed test SHA-256 pins,
+parses only the captured bytes, and resolves its qualified scalar target.
+The fixture's self-generated hashes establish **test consistency only**:
+production digest authority MUST come from independently approved package
+pins, not hashes minted from the same untrusted tree.
+
+These new tests must compile and execute in a real, pinned LLVM toolchain
+before they count as evidence. Neither permits the CLI to compile namespaces,
+and neither is the still-pending three-file LLVM guest exit-43 conformance.
