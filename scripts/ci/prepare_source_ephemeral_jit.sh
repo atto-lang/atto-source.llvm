@@ -2,8 +2,8 @@
 # Admin-only JIT config helper. Never invoke this script from a GitHub workflow.
 set -euo pipefail
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then echo "DENIED: admin provisioning inside Actions" >&2; exit 1; fi
-if [[ "$#" -ne 2 || ! "$1" =~ ^[1-9][0-9]{0,10}$ ]]; then
-  echo "Usage: prepare_source_ephemeral_jit.sh RUNNER_GROUP_ID /secure/dir/config.b64" >&2
+if [[ "$#" -lt 2 || "$#" -gt 3 || ! "$1" =~ ^[1-9][0-9]{0,10}$ || ( "$#" -eq 3 && "$3" != "--attestor" ) ]]; then
+  echo "Usage: prepare_source_ephemeral_jit.sh RUNNER_GROUP_ID /secure/dir/config.b64 [--attestor]" >&2
   exit 2
 fi
 group_id="$1"
@@ -19,6 +19,8 @@ parent="${output%/*}"
 backend="llvm"
 repository="ores-truffle-oreslang/oreslang-source.llvm"
 runner_label="oreslang-llvm-ephemeral-v1"
+# Dedicated fresh attestor VM: never give both labels to the same runner.
+if [[ "$#" -eq 3 ]]; then runner_label="oreslang-llvm-attestor-ephemeral-v1"; fi
 workflow_file="llvm-source-exact-ephemeral.yml"
 workflow_ref="ores-truffle-oreslang/oreslang-source.llvm/.github/workflows/llvm-source-exact-ephemeral.yml@refs/heads/main"
 org="ores-truffle-oreslang"
@@ -75,7 +77,7 @@ jq -e --arg repo "$repository" --argjson id "$repo_id" '
 umask 077
 tmp="$(mktemp "${parent}/.jit-config.XXXXXXXX")"
 trap 'rm -f "$tmp"' EXIT
-runner_name="oreslang-${backend}-jit-$(openssl rand -hex 10)"
+runner_name="oreslang-${backend}-${runner_label##oreslang-llvm-}-jit-$(openssl rand -hex 10)"
 jq -n --arg name "$runner_name" --arg label "$runner_label" --argjson gid "$group_id" '
   {name:$name,runner_group_id:$gid,labels:["self-hosted","linux","x64",$label],work_folder:"_work"}
 ' | gh api --method POST "orgs/${org}/actions/runners/generate-jitconfig" --input - \
