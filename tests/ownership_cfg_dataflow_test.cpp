@@ -517,6 +517,46 @@ int main() {
     State independent = two_places_same_loan;
     assert(!join_into(independent, two_places_same_loan));
 
+    // Before this hardening, direct apply(Borrow*) only validated the
+    // preexisting state. A new loan could reuse another live place's token,
+    // and the call would succeed until some *later* operation validated it.
+    // Both shared/exclusive admission must reject BEFORE mutation.
+    State reusable_identity = {{"a", cell(kOwned)}, {"b", cell(kOwned)}};
+    apply(Operation{Kind::BorrowShared, "a", 1001}, reusable_identity);
+    const State preserved = reusable_identity;
+    assert(rejected([&] {
+        apply(Operation{Kind::BorrowShared, "b", 1001}, reusable_identity);
+    }));
+    assert(reusable_identity == preserved);
+    assert(rejected([&] {
+        apply(Operation{Kind::BorrowExclusive, "b", 1001}, reusable_identity);
+    }));
+    assert(reusable_identity == preserved);
+    // The same provenance cannot be reused on the very same place either.
+    assert(rejected([&] {
+        apply(Operation{Kind::BorrowShared, "a", 1001}, reusable_identity);
+    }));
+    assert(reusable_identity == preserved);
+    // A freshly issued token is legal and becomes reusable only AFTER
+    // its actual owning loan is released.
+    apply(Operation{Kind::BorrowShared, "b", 1002}, reusable_identity);
+    apply(Operation{Kind::ReleaseShared, "b", 1002}, reusable_identity);
+    apply(Operation{Kind::ReleaseShared, "a", 1001}, reusable_identity);
+    apply(Operation{Kind::BorrowExclusive, "b", 1001}, reusable_identity);
+    apply(Operation{Kind::ReleaseExclusive, "b", 1001}, reusable_identity);
+
+    // Direct joins must check alias-layout integrity as rigorously as the
+    // full graph verifier, even when both input states are identical.
+    State overlapping_layout = {{"obj", cell(kOwned)},
+                                {"obj.field", cell(kOwned)}};
+    assert(rejected([&] {
+        join_into(overlapping_layout, overlapping_layout);
+    }));
+    State clean_layout = {{"obj.first", cell(kOwned)},
+                          {"obj.second", cell(kOwned)}};
+    State clean_layout_copy = clean_layout;
+    assert(!join_into(clean_layout, clean_layout_copy));
+
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
     Graph maybe_drop;
