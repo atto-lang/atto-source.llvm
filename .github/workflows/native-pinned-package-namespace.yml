@@ -16,6 +16,7 @@ on:
       - 'tests/native_manifest_namespace_inventory_test.cpp'
       - 'tests/native_pinned_namespace_ir_test.cpp'
       - 'tests/pinned_namespace_execution.cmake'
+      - 'tests/native_pinned_namespace_artifact_cleanup_test.sh'
       - 'tests/namespace_lifecycle_parity.cmake'
       - 'docs/NATIVE_PACKAGE_NAMESPACE_GRAPH_PHASE1.md'
       - 'CMakeLists.txt'
@@ -47,6 +48,10 @@ jobs:
 
       - name: Install LLVM toolchain
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
+
+      - name: Verify synthetic IR harness rejects failures without stale artifacts
+        shell: bash
+        run: bash tests/native_pinned_namespace_artifact_cleanup_test.sh tests/pinned_namespace_execution.cmake "$(command -v clang)"
 
       - name: Configure focused native namespace gates
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
