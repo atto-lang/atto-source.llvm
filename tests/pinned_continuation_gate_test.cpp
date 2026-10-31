@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <new>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -593,4 +594,48 @@ int main() {
                   && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
               "borrower receipt release/retirement race violated fence");
     }
+
+    // Concurrent gate construction must issue unique process-local
+    // incarnation identities. Identical tickets, borrowers, and first-slot
+    // serials must not make receipts interchangeable across gate instances.
+    // This does not prove uniqueness across shared libraries or processes.
+    {
+        constexpr std::size_t instances = 32;
+        const AsyncIoTicket ticket{131, 9, 23};
+        using Gate = BorrowerPinnedContinuationGate;
+        std::vector<std::unique_ptr<Gate>> gates(instances);
+        std::vector<std::optional<Gate::Receipt>> receipts(instances);
+        std::vector<std::thread> constructors;
+        std::atomic<bool> start{false};
+        for (std::size_t i = 0; i < instances; ++i) {
+            constructors.emplace_back([&, i] {
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                gates[i] = std::make_unique<Gate>(ticket);
+                receipts[i] = gates[i]->acquire(ticket, 77, Gate::Loan::shared);
+            });
+        }
+        start.store(true, std::memory_order_release);
+        for (auto& worker : constructors) worker.join();
+        for (std::size_t i = 0; i < instances; ++i) {
+            check(receipts[i].has_value() && gates[i]->loan_state() == 1,
+                  "concurrent gate construction failed to issue receipt");
+            for (std::size_t j = 0; j < instances; ++j) {
+                if (i == j) continue;
+                check(!gates[i]->release(ticket, 77, *receipts[j])
+                          && gates[i]->loan_state() == 1,
+                      "concurrent gate incarnation reused another receipt identity");
+            }
+            check(gates[i]->release(ticket, 77, *receipts[i])
+                      && !gates[i]->release(ticket, 77, *receipts[i])
+                      && gates[i]->settle(ticket, AsyncIoTerminal::cancelled)
+                      && gates[i]->broker_acknowledge(ticket)
+                      && gates[i]->try_claim_resume(ticket)
+                      && gates[i]->finish_resume(ticket)
+                      && gates[i]->try_retire(ticket)
+                      && gates[i]->loan_state() == PinnedContinuationGate::retirement_fence_bit,
+                  "concurrent gate incarnation failed single-use cleanup");
+        }
+    }
+
 }
