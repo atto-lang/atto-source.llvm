@@ -83,3 +83,50 @@ GitHub-hosted runner in `honeypot-r-us-test/hnpt-e2e`:
 This proves the independent model and alternate runner capacity only. The LLVM
 private-CI approved-destination file currently contains no destination entries,
 so no private LLVM source was copied to the carrier.
+
+## Actor-resource pin construction ordering
+
+`StateRegionActorLifetimePin` uses the existing `NativeActorRef`
+generation/terminal-bit resource accounting. Constructor order is now
+**retain actor lifetime first, validate native arena and exact state ticket
+second**. Without this ordering, a finalizer could observe zero outstanding
+resource loans and physically destroy the arena between an optimistic ticket
+lookup and the late resource retain.
+
+If identity, region generation, ticket provenance, or ticket liveness
+validation fails, the constructor releases the provisional actor resource
+loan before propagating the failure. An already-terminal actor cannot
+acquire the loan and fails before reading the arena. The trusted caller must
+still keep the arena and region valid until the constructor begins; a raw
+pointer passed from already-reclaimed storage is never made safe by a
+retention API.
+
+The native regression also exercises a physically `EXECUTING` ticket:
+STOP cannot release or suspend that ticket; final actor resource reclamation
+remains deferred until exact task end/release and successful pin retirement.
+Additional negative tests exercise foreign-generation admission and
+post-DONE terminal pin denial. These changes are **authored tests**.
+The source-org native build remains unexecuted until a stepful runner is
+available; independent local source-free C++17/CAS exercises are not
+production compiler or CTest evidence.
+
+
+## Exact-source local native prototype verification — 2026-10-31
+
+Reconstructed two native prototype source files byte-for-byte from the PR:
+- `contracts/state_regions/state_region.hpp` Git blob
+  `47ae29c18821884ba3eeeee07469c3ef6371fc5c`
+- `contracts/state_regions/test_state_region.cpp` Git blob
+  `8cf0a176d5e7a93f80f7395770c2acbf4c17bbb1`
+
+Locally compiled the exact bytes with GCC and Clang, separately under
+C++20 `-O2 -Wall -Wextra -Werror -pedantic -DNDEBUG` and
+`-O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined
+-fno-omit-frame-pointer`: **4/4 executions PASS**.
+Each exercised 100,000 scalar increments and observed no additional
+`operator new` calls in the measured scope. This is an executable proof
+of the standalone state-region prototype and its test, **not** the
+`StateRegionActorLifetimePin` / `NativeActorRetirementBarrier` integration,
+full source compiler lowering, CMake/CTest, FFI provenance, or a hard-real-time
+latency/reclamation bound. Those remain draft-only until exact native tests
+execute.

@@ -1,10 +1,21 @@
 #include "oreslang/runtime/StateRegionActorLifetimePin.hpp"
 #include "oreslang/runtime/NativeActorRetirementBarrier.hpp"
 
-#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <chrono>
 #include <memory>
 #include <stdexcept>
+
+// CTest/standalone Release builds must not silently remove the API calls
+// inside assertions. This test exercises physical ticket transitions even
+// when the external build defines NDEBUG.
+#define CHECK(expr) do { \
+    if (!(expr)) { \
+        std::fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #expr); \
+        std::abort(); \
+    } \
+} while (false)
 
 using namespace oreslang::runtime;
 
@@ -28,7 +39,7 @@ int main() {
 
     OresActorArena* arena =
         ores_actor_arena_open(actor_id, generation, 2, 64, 128);
-    assert(arena != nullptr);
+    CHECK(arena != nullptr);
 
     int freed = 0;
     registry->register_resource(
@@ -47,25 +58,50 @@ int main() {
     NativeActorRetirementBarrier owned(
         registry, group.runtime_finalizer(ref), quarantine);
     barrier = &owned;
-    assert(group.mark_ready(ref));
+    CHECK(group.mark_ready(ref));
 
     ores_task_bound_state_region region =
         ORES_TASK_BOUND_STATE_REGION_UNBOUND_INIT;
     auto bind = ores_state_region_bind_actor_arena(&region, arena);
-    assert(bind == ORES_STD_SYNC_GRANTED);
-    assert(ores_state_region_matches_actor_arena(&region, arena));
+    CHECK(bind == ORES_STD_SYNC_GRANTED);
+    CHECK(ores_state_region_matches_actor_arena(&region, arena));
 
     const auto owner = execution_identity();
     auto request = ores_state_region_request(
         &region, owner, ORES_STD_WRITE);
-    assert(request.code == ORES_STD_SYNC_GRANTED);
-    assert(request.ticket.sequence != 0);
+    CHECK(request.code == ORES_STD_SYNC_GRANTED);
+    CHECK(request.ticket.sequence != 0);
 
     StateRegionActorLifetimePin pin(
         ref, *arena, region, request.ticket);
-    assert(pin.active());
-    assert(ref.outstanding_resource_loans() == 1);
-    assert(ores_state_region_start(&region, owner, request.ticket)
+    CHECK(pin.active());
+    CHECK(ref.outstanding_resource_loans() == 1);
+    // A syntactically valid ticket of the correct scope must still prove
+    // exact live-binding identity; simply sharing an arena is insufficient.
+    auto forged_ticket = request.ticket;
+    ++forged_ticket.sequence;
+    bool forged_rejected = false;
+    try {
+        StateRegionActorLifetimePin forged(
+            ref, *arena, region, forged_ticket);
+    } catch (const std::invalid_argument&) {
+        forged_rejected = true;
+    }
+    CHECK(forged_rejected);
+    CHECK(ref.outstanding_resource_loans() == 1);
+    // A different region cannot launder an otherwise valid actor ticket.
+    ores_task_bound_state_region unbound_region =
+        ORES_TASK_BOUND_STATE_REGION_UNBOUND_INIT;
+    bool foreign_region_rejected = false;
+    try {
+        StateRegionActorLifetimePin foreign(
+            ref, *arena, unbound_region, request.ticket);
+    } catch (const std::invalid_argument&) {
+        foreign_region_rejected = true;
+    }
+    CHECK(foreign_region_rejected);
+    CHECK(ref.outstanding_resource_loans() == 1);
+    CHECK(ores_state_region_start(&region, owner, request.ticket)
            == ORES_STD_SYNC_GRANTED);
 
     // A different actor generation cannot claim the live region ticket.
@@ -79,10 +115,10 @@ int main() {
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    assert(rejected);
-    assert(stale.outstanding_resource_loans() == 0);
+    CHECK(rejected);
+    CHECK(stale.outstanding_resource_loans() == 0);
     stale_group.close();
-    assert(stale.outstanding_resource_loans() == 0);
+    CHECK(stale.outstanding_resource_loans() == 0);
     stale.get_done().get();
     // Once this unrelated actor has reached a terminal resource state,
     // attempting a lifetime pin must fail *before* reading any arena fields.
@@ -93,45 +129,56 @@ int main() {
     } catch (const std::logic_error&) {
         terminal_rejected = true;
     }
-    assert(terminal_rejected);
-    assert(stale.outstanding_resource_loans() == 0);
+    CHECK(terminal_rejected);
+    CHECK(stale.outstanding_resource_loans() == 0);
 
     // Logical stop cannot physically reclaim the arena while the ticket lives.
     group.close();
-    assert(owned.poll() ==
+    CHECK(owned.poll() ==
         NativeActorRetirementBarrier::Poll::not_admitted);
-    assert(freed == 0);
-    assert(ref.get_done().wait_for(std::chrono::milliseconds(0))
+    CHECK(freed == 0);
+    CHECK(ref.get_done().wait_for(std::chrono::milliseconds(0))
         == std::future_status::timeout);
-    assert(!pin.release_after_ticket_retirement());
-    assert(ref.outstanding_resource_loans() == 1);
+    CHECK(!pin.release_after_ticket_retirement());
+    CHECK(ref.outstanding_resource_loans() == 1);
     // A logical STOP may not release a PHYSICALLY EXECUTING task ticket.
-    assert(ores_state_region_release(&region, owner, request.ticket).code
+    CHECK(ores_state_region_release(&region, owner, request.ticket).code
            == ORES_STD_SYNC_EXECUTING);
-    assert(ores_state_region_ready_to_suspend(&region, owner, request.ticket)
+    CHECK(ores_state_region_ready_to_suspend(&region, owner, request.ticket)
            == ORES_STD_SYNC_EXECUTING);
-    assert(freed == 0);
-    assert(ores_state_region_end(&region, owner, request.ticket)
+    CHECK(freed == 0);
+    CHECK(ores_state_region_end(&region, owner, request.ticket)
            == ORES_STD_SYNC_GRANTED);
 
     // Retire the exact state ticket. Only then may the actor lifetime pin drop.
     auto released = ores_state_region_release(
         &region, owner, request.ticket);
-    assert(released.code == ORES_STD_SYNC_GRANTED);
-    assert(ores_state_region_ticket_retired(
+    CHECK(released.code == ORES_STD_SYNC_GRANTED);
+    CHECK(ores_state_region_ticket_retired(
         &region, request.ticket) == ORES_STD_SYNC_GRANTED);
-    assert(pin.release_after_ticket_retirement());
-    assert(!pin.active());
-    assert(ref.outstanding_resource_loans() == 0);
+    CHECK(pin.release_after_ticket_retirement());
+    CHECK(!pin.active());
+    CHECK(ref.outstanding_resource_loans() == 0);
+    // A once-live but now retired exact ticket cannot reacquire arena
+    // lifetime, even before the resource registry's final close runs.
+    bool retired_ticket_rejected = false;
+    try {
+        StateRegionActorLifetimePin replay(
+            ref, *arena, region, request.ticket);
+    } catch (const std::invalid_argument&) {
+        retired_ticket_rejected = true;
+    }
+    CHECK(retired_ticket_rejected);
+    CHECK(ref.outstanding_resource_loans() == 0);
 
-    assert(owned.poll() == NativeActorRetirementBarrier::Poll::completed);
-    assert(freed == 1);
+    CHECK(owned.poll() == NativeActorRetirementBarrier::Poll::completed);
+    CHECK(freed == 1);
     ref.get_done().get();
 
     // Release is linear and physical reclamation occurs exactly once.
-    assert(!pin.release_after_ticket_retirement());
-    assert(owned.poll() == NativeActorRetirementBarrier::Poll::completed);
-    assert(freed == 1);
+    CHECK(!pin.release_after_ticket_retirement());
+    CHECK(owned.poll() == NativeActorRetirementBarrier::Poll::completed);
+    CHECK(freed == 1);
 
     return 0;
 }
