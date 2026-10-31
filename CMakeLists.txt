@@ -1115,6 +1115,17 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
     oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    # Exact guest `critical[read]`/`critical[write]` syntax from Java is currently
+    # NOT native source-lowered. Native task-bound region CTest success must
+    # not silently turn into a fictitious guest-language parity PASS.
+    # Once full frontend/HIR/IR lowering exists, replace these explicit
+    # expected-failure tests with real source -> LLVM IR -> process tests.
+    oreslang_contract_test(native_source_critical_rw_guest_not_lowered
+        source-critical-rw-guest-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_source_critical_nested_guest_not_lowered
+        source-critical-nested-guest-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
 
