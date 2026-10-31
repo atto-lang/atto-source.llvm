@@ -1921,6 +1921,8 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
+                } else if (token_.text == "f64") {
+                    fail("native f64 function parameter ABI not yet admitted; lexical f64 locals only");
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
                     // Deferred scalar aliases are admitted only after full resolution.
                 } else if (token_.kind == Kind::Identifier &&
@@ -1960,6 +1962,8 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
+            } else if (token_.text == "f64") {
+                fail("native f64 return ABI not yet admitted; lexical f64 locals only");
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
             } else if (token_.kind == Kind::Identifier &&
