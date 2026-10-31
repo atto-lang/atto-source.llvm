@@ -784,8 +784,11 @@ public:
             if (fn.c_export_u32_symbol.empty()) continue;
             if (program.functions.size() != 1 ||
                 !program.actors.empty() || !program.classes.empty() ||
-                !program.generators.empty() || !program.cooperative_loops.empty())
-                fail("C_EXPORT_U32_REJECT: version-only host source may contain only one guest function");
+                !program.generators.empty() || !program.cooperative_loops.empty() ||
+                !program.type_only_declarations.empty() ||
+                !program.contracts.empty() || !program.imports.empty() ||
+                !sum_types_.empty())
+                fail("C_EXPORT_U32_REJECT: version-only host source may contain only one guest function and no other declarations");
         }
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
