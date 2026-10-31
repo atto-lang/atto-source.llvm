@@ -62,3 +62,59 @@ different package instance also declares namespace `a` with a colliding
 `add/2`. The intended native result remains exit 43. Current source-org
 Actions still fail before runner steps, so this checked-in executable path is
 **not execution-qualified** yet.
+
+
+## Schema-v2 manifest and verified lock inventory
+
+The pinned executable loader no longer requires callers to invent source/package
+ownership by hand. `PackageManifestNamespaceInventory` adds a filesystem-backed,
+fail-closed boundary for the proposed canonical `.ores.pkg.toml` schema v2.
+
+The implemented manifest subset accepts the existing project/source/build fields
+needed by native compilation and any number of explicit `[packages.<key>]`
+groups. Package members are exact root-relative `.ores` files; there is no
+globbing or recursive directory scan. Physical source identity is canonicalized,
+hard-link/symlink aliases cannot grant multiple explicit package memberships,
+configured `[project].root` must remain physically below the manifest directory,
+and nested modern or legacy package markers terminate parent authority.
+
+A single manifest may own multiple declared package groups. The immutable
+`PackageInstanceId` therefore binds **both** an exact canonical manifest and an
+exact `packages.<key>` group. Merely pinning a manifest does not authorize every
+source listed elsewhere in the project.
+
+The language-wide lockfile serialization is still unresolved. LLVM deliberately
+does **not** invent a `.lock` filename or TOML/JSON wire format here. Instead,
+the compiler consumes a serialization-neutral `VerifiedPackageLockSnapshot`
+whose entries contain:
+
+- opaque immutable `PackageInstanceId`;
+- exact canonical manifest authority;
+- exact `packages.<key>` selection;
+- SHA-256 of the manifest bytes;
+- exact manifest-relative source membership and SHA-256 for every selected file;
+- root-package dependency alias -> exact PackageInstanceId pins.
+
+The adapter compares the bytes actually consumed by compilation against those
+SHA-256 values. A stale manifest, changed source, changed membership list,
+unknown alias target, wrong package group, unreferenced dependency manifest, or
+physical source claimed by two locked package instances fails before namespace
+linking. `pkg:` namespace resolution never consults `ORES_PATHS`,
+`ORESLANG_PATH`, cwd, directory names, project names, or namespace spelling as
+fallback authority.
+
+Nearest modern manifest discovery starts from the **physical entry source**.
+A nearer legacy `.oreslangc.cfg.toml` is an independent boundary and blocks
+fallback to an ancestor modern manifest; it is not silently skipped. Same-directory
+modern authority wins by being checked first, but an invalid modern marker fails
+closed rather than falling back.
+
+The executable regression `native_locked_manifest_namespace_exit_43` builds a
+real app/foo filesystem fixture. The foo manifest has ten selected files across
+namespaces a/b/c, a separate colliding `packages.shadow` group, and an unlisted
+ambient source. The verified lock selects only `packages.foo`. Materialization
+must produce exactly app + ten foo sources, then compile the same int/bool
+provider DAGs to LLVM IR and a native guest with expected exit 43.
+
+This is still not an executed parity claim while source-org Actions jobs have
+`steps=null`.
