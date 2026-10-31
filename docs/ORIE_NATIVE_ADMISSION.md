@@ -34,25 +34,26 @@ locale-independent conversion: malformed or out-of-range literals fail
 before LLVM IR emission; implicit coercion between int and f64 is forbidden.
 
 The first supported scope is **finite f64 literals, explicit typed lexical
-locals, unary negation, addition, subtraction, multiplication, equality and
-ordered comparisons**. The scalar parser's type pass and independent
+locals, unary negation, addition, subtraction, multiplication, f64-only division,
+equality and ordered comparisons**. The scalar parser's type pass and independent
 `NativeScalarTypes` checker agree on source type identity. The ownership
 checker admits f64 literals/pure comparisons but forbids using a float as
 an int-only caught-throw payload.
 
 Codegen lowers these values as actual LLVM `double`, with f64 stack slots,
-`fadd`, `fsub`, `fmul`, `fneg`, and `fcmp` operations rather than
+`fadd`, `fsub`, `fmul`, `fdiv`, `fneg`, and `fcmp` operations rather than
 bit-casting them to the signed-i64 ABI. Comparisons produce a canonical i64
 bool. Ordered relational predicates are false on NaN; inequality uses
 IEEE unordered-not-equal. No fast-math assumptions are introduced by this
 patch.
 
 `tests/native_f64_lexical_gate.sh`, now registered in CTest as
-`native_f64_scalar_e2e`, requires **six actually compiled/linked/executed
-guest programs** (five f64 checks and one signed-i64 control) to terminate
-with exit 42 and empty output. Seven deliberately invalid source programs
+`native_f64_scalar_e2e`, requires **eight actually compiled/linked/executed
+guest programs** (seven f64 checks and one signed-i64 control) to terminate
+with exit 42 and empty output. Eleven deliberately invalid source programs
 must fail with no LLVM IR, including int-to-f64 coercion, mixed arithmetic,
-mixed comparison, malformed exponent and overflowed numeric literals.
+mixed comparison, integer or mixed-type division, unsupported function f64
+ABIs, malformed exponent and overflowed numeric literals.
 These cases are **authored but not executed on an authorized LLVM runner**:
 no native f64 PASS, compiler parity or numerical correctness receipt
 can yet be claimed.
@@ -61,8 +62,9 @@ can yet be claimed.
 
 This is not a general f64 ABI: floating-point function parameters/returns,
 class fields, f64 sum payloads and owned `Array<f64>` need separate
-type/ownership/data-layout integration. Float division and f32 are not yet
-lowered; int/int division retains its existing native fail-closed behavior.
+type/ownership/data-layout integration. Floating-point function division is only admitted for f64/f64 expressions
+in lexical code; f32 and typed f64 function interfaces are not yet lowered.
+int/int division remains explicitly fail-closed.
 Exhaustive IEEE bit-vector compatibility, denormals, FP exception behavior,
 NaN payloads, signed zero and optimization-level differential tests remain
 independent acceptance gates. Numeric routines in ORIE need more than this
