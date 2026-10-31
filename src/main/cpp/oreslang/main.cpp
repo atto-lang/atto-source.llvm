@@ -423,6 +423,17 @@ int main(int argc, char** argv) {
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
+        // The synchronous sealed actor-state implementation is backed by
+        // the host OresVM execution lease and actor-owned heap. A Wasm Worker
+        // or freestanding Cortex-M bootstrap cannot silently inherit those
+        // credentials by parsing an otherwise valid native state schema.
+        if ((wasm32_target || cortex_m_target) &&
+            std::any_of(ast.actors.begin(), ast.actors.end(),
+                [](const oreslang::ActorDecl& a) { return a.has_state_schema; })) {
+            throw std::runtime_error(
+                "native sealed actor-state guest v1 requires host scheduler; wasm32/cortex-m target lowering is unverified");
+        }
+
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
                 std::cout << "descriptor\t"
