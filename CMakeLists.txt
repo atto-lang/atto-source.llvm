@@ -19,6 +19,28 @@ elseif(NOT ORES_MANAGED_REF_MODE STREQUAL "compressed32")
 endif()
 message(STATUS "Oreslang managed reference mode: ${ORES_MANAGED_REF_MODE}")
 
+# Opt-in host-only receiver selector verification for environments without
+# LLVM C++ headers or llvm-config. Never claim native guest compiler evidence
+# from this bounded CTest target. Normal builds remain LLVM-backed.
+option(ORES_RECEIVER_SLOT_HOST_ONLY "Build only the host receiver slot CTest" OFF)
+if(ORES_RECEIVER_SLOT_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "ORES_RECEIVER_SLOT_HOST_ONLY requires BUILD_TESTING=ON")
+    endif()
+    add_executable(oreslang-native-receiver-slot-test
+        tests/native_receiver_slot_test.cpp)
+    target_include_directories(oreslang-native-receiver-slot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-receiver-slot-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-receiver-slot-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_receiver_erased_slot_host_contract
+        COMMAND oreslang-native-receiver-slot-test)
+    set_tests_properties(native_receiver_erased_slot_host_contract PROPERTIES TIMEOUT 10)
+    return()
+endif()
+
 find_package(LLVM CONFIG REQUIRED)
 if(LLVM_VERSION_MAJOR LESS 14)
     message(FATAL_ERROR "Oreslang requires LLVM 14 or newer; found ${LLVM_PACKAGE_VERSION}")
