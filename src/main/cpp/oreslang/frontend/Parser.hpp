@@ -361,6 +361,10 @@ struct Function {
     std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
+    // First NativeErrorSlotV1 catch slice: a terminal protected scalar return
+    // whose throw-effect edge is consumed by the local catch. The catch
+    // binding remains opaque in this slice and cannot be read as an i64.
+    std::unique_ptr<Expression> caught_error_try_result;
     std::string catch_binding;
     std::vector<Statement> caught_throw_defers;
     std::unique_ptr<Expression> result;
