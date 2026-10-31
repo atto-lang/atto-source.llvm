@@ -87,9 +87,11 @@ public:
     }
 
     // Atomic request-binding admission and retirement use ONE state word.
-    // 0 = no binding, 1 = one live request-owned physical lease,
-    // 2 = retired. This prevents a newly attached request from racing
-    // try_retire(), and prohibits two distinct requests sharing one I/O gate.
+    // 0 = unbound, 1 = unpublished admission reservation,
+    // 2 = published physical request lease, 3 = retired.
+    // Distinguishing reservation from publication means a late erroneous
+    // abort can NEVER release an already-published request's lifetime fence.
+    // A second request can never attach to the same operation gate.
     // No mutex, allocation, or guest execution occurs in these operations.
     bool try_bind_request(AsyncIoTicket ticket) noexcept {
         if (!valid(ticket) ||
@@ -117,13 +119,23 @@ public:
                 std::memory_order_acquire);
     }
 
+    // The producer has now acquired its exact request-context registry lease.
+    // Publishing is one-way; after this CAS no abort can discard the fence.
+    bool commit_request_binding(AsyncIoTicket ticket) noexcept {
+        if (!valid(ticket)) return false;
+        unsigned expected=1;
+        return request_binding_.compare_exchange_strong(
+                expected,2,std::memory_order_acq_rel,
+                std::memory_order_acquire);
+    }
+
     // Must be called by the lifetime owner AFTER live loans release, broker
     // ACK and a distinct guest cleanup/resume turn FINISHED.
     bool try_retire(AsyncIoTicket ticket) noexcept {
         if (!ready_to_retire(ticket)) return false;
         unsigned expected=0;
         if (!request_binding_.compare_exchange_strong(
-                expected,2,std::memory_order_acq_rel,
+                expected,3,std::memory_order_acq_rel,
                 std::memory_order_acquire)) return false;
         retired_.store(true,std::memory_order_release);
         return true;
@@ -134,9 +146,9 @@ public:
     // try_retire path cannot retire an I/O gate with a live request pin.
     bool try_retire_bound_request(AsyncIoTicket ticket) noexcept {
         if (!ready_to_retire(ticket)) return false;
-        unsigned expected=1;
+        unsigned expected=2;
         if (!request_binding_.compare_exchange_strong(
-                expected,2,std::memory_order_acq_rel,
+                expected,3,std::memory_order_acq_rel,
                 std::memory_order_acquire)) return false;
         retired_.store(true,std::memory_order_release);
         return true;
