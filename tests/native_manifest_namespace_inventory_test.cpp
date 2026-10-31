@@ -213,6 +213,41 @@ int main() {
             });
         }
 
+        // Configured project.root is the filesystem authority, not the
+        // manifest directory itself.
+        {
+            const auto dir = fixture.root / "configured-root";
+            write_text(dir / "app/src/x.ores",
+                "namespace x; pub fnc x(): int { return 1; }\n");
+            write_text(dir / ".ores.pkg.toml",
+                "schema_version = \"2\"\n"
+                "[project]\nname = \"configured\"\nroot = \"app\"\n"
+                "[source]\nroots = [\"src\"]\n"
+                "[packages.configured]\nfiles = [\"src/x.ores\"]\n");
+            const auto manifest =
+                oreslang::load_verified_package_manifest_v2(
+                    dir / ".ores.pkg.toml", read_text);
+            if (manifest.project_root != fs::canonical(dir / "app"))
+                throw std::runtime_error("configured project.root was ignored");
+        }
+
+        // Trailing material after a nominally closed TOML array must not be
+        // silently ignored by the strict subset parser.
+        {
+            const auto dir = fixture.root / "array-tail";
+            write_text(dir / "src/x.ores",
+                "namespace x; pub fnc x(): int { return 1; }\n");
+            write_text(dir / ".ores.pkg.toml",
+                "schema_version = \"2\"\n"
+                "[project]\nname = \"tail\"\n"
+                "[packages.tail]\n"
+                "files = [\"src/x.ores\"] junk ]\n");
+            must_fail("trailing material after array", [&] {
+                (void)oreslang::load_verified_package_manifest_v2(
+                    dir / ".ores.pkg.toml", read_text);
+            });
+        }
+
         // One physical file cannot acquire two package identities through
         // multiple manifest groups.
         {
@@ -247,6 +282,31 @@ int main() {
             });
         }
 
+        // Discovery begins at the physical entry source. A nearer legacy
+        // marker is an independent boundary and cannot be skipped in favor of
+        // the valid ancestor modern manifest.
+        {
+            const auto dir = fixture.root / "discovery";
+            write_text(dir / ".ores.pkg.toml",
+                "schema_version = \"2\"\n"
+                "[project]\nname = \"ancestor\"\n"
+                "[packages.ancestor]\nfiles = [\"child/src/main.ores\"]\n");
+            write_text(dir / "child/src/main.ores",
+                "pub fnc main(): int { return 0; }\n");
+            const auto discovered =
+                oreslang::discover_verified_package_manifest_v2(
+                    dir / "child/src/main.ores", read_text);
+            if (discovered.manifest_path !=
+                    fs::canonical(dir / ".ores.pkg.toml"))
+                throw std::runtime_error("nearest modern manifest discovery mismatch");
+
+            write_text(dir / "child/.oreslangc.cfg.toml", "legacy = true\n");
+            must_fail("nearest package authority is legacy", [&] {
+                (void)oreslang::discover_verified_package_manifest_v2(
+                    dir / "child/src/main.ores", read_text);
+            });
+        }
+
         // Manifest authority is content-addressed.
         {
             auto stale = fixture.lock;
@@ -265,6 +325,28 @@ int main() {
             must_fail("source membership set mismatch", [&] {
                 (void)fixture.materialize(stale);
             });
+        }
+
+        // Physical ownership is compared by file identity across manifests,
+        // not merely by canonical spelling. If hard links are supported on
+        // this filesystem, a dependency cannot claim the root entry inode.
+        {
+            const auto model = fixture.foo / "src/data/models.ores";
+            const auto original = read_text(model);
+            std::error_code link_error;
+            fs::remove(model, link_error);
+            if (link_error)
+                throw std::runtime_error("could not prepare hard-link ownership test");
+            fs::create_hard_link(fixture.app_main, model, link_error);
+            if (!link_error) {
+                must_fail("multiple locked package instances", [&] {
+                    (void)fixture.materialize(fixture.lock);
+                });
+                fs::remove(model, link_error);
+                if (link_error)
+                    throw std::runtime_error("could not clear hard-link ownership test");
+            }
+            write_text(model, original);
         }
 
         // Source bytes are content-addressed too.
