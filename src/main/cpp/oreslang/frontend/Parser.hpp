@@ -403,6 +403,92 @@ inline std::uint64_t source_suspension_authority_fingerprint(
         number(value.size());
         for (const unsigned char ch : value) byte(ch);
     };
+    // Snapshot the actual source expressions as well as the shallow
+    // binding metadata. Without this, post-admission replacement of a
+    // checked return, initializer, nested argument, or statement would
+    // leave the previously issued suspension authority unchanged.
+    const auto expression = [&](const auto& self,
+                                const Expression* expr) -> void {
+        byte(expr ? 1u : 0u);
+        if (!expr) return;
+        byte(static_cast<std::uint8_t>(expr->kind));
+        number(expr->offset);
+        number(static_cast<std::uint64_t>(expr->integer));
+        byte(expr->boolean ? 1u : 0u);
+        byte(static_cast<std::uint8_t>(expr->resolved_type));
+        text(expr->resolved_class);
+        text(expr->sum_type);
+        text(expr->name);
+        self(self, expr->left.get());
+        self(self, expr->right.get());
+        self(self, expr->condition.get());
+        self(self, expr->condition_lhs.get());
+        self(self, expr->condition_rhs.get());
+        self(self, expr->when_true.get());
+        self(self, expr->when_false.get());
+        number(expr->arguments.size());
+        for (const auto& arg : expr->arguments)
+            self(self, arg.get());
+        number(expr->argument_names.size());
+        for (const auto& name : expr->argument_names) text(name);
+        byte(expr->type_arguments_present ? 1u : 0u);
+        number(expr->type_arguments.size());
+        for (const auto& arg : expr->type_arguments) {
+            text(arg.name);
+            text(arg.type);
+            byte(arg.infer ? 1u : 0u);
+        }
+    };
+    const auto binding = [&](const LocalBinding& local) {
+        text(local.name);
+        text(local.class_name);
+        text(local.task_await_name);
+        text(local.future_await_name);
+        text(local.sum_type);
+        text(local.pending_type_alias);
+        text(local.array_record_class);
+        text(local.move_source);
+        number(local.offset);
+        byte(static_cast<std::uint8_t>(local.scalar_type));
+        byte(static_cast<std::uint8_t>(local.array_element_type));
+        byte(local.record_view ? 1u : 0u);
+        byte(local.heap_owned ? 1u : 0u);
+        byte(local.int_array ? 1u : 0u);
+        byte(local.move_class ? 1u : 0u);
+        byte(local.new_class ? 1u : 0u);
+        byte(local.owner_mutable ? 1u : 0u);
+        byte(local.assignable ? 1u : 0u);
+        byte(local.field_mutable ? 1u : 0u);
+        expression(expression, local.initializer.get());
+        number(local.constructor_arguments.size());
+        for (const auto& arg : local.constructor_arguments)
+            expression(expression, arg.get());
+    };
+    const auto statement = [&](const auto& self,
+                               const Statement& stmt) -> void {
+        byte(static_cast<std::uint8_t>(stmt.kind));
+        number(stmt.offset);
+        text(stmt.receiver);
+        text(stmt.field);
+        byte(stmt.branch_local ? 1u : 0u);
+        if (stmt.branch_local) binding(*stmt.branch_local);
+        expression(expression, stmt.expression.get());
+        expression(expression, stmt.loop_step.get());
+        expression(expression, stmt.array_commit_length.get());
+        number(stmt.array_commit_values.size());
+        for (const auto& value : stmt.array_commit_values)
+            expression(expression, value.get());
+        expression(expression, stmt.condition.get());
+        expression(expression, stmt.condition_lhs.get());
+        expression(expression, stmt.condition_rhs.get());
+        number(stmt.then_statements.size());
+        for (const auto& child : stmt.then_statements) self(self, child);
+        number(stmt.else_statements.size());
+        for (const auto& child : stmt.else_statements) self(self, child);
+    };
+    // The fingerprint is a stale-AST detector, *not* an authenticator.
+    // A cryptographic hash cannot replace compiler authority or checked
+    // execution-context provenance.
     text(fn.name);
     text(fn.method_owner);
     text(fn.ready_await_actor);
@@ -416,25 +502,69 @@ inline std::uint64_t source_suspension_authority_fingerprint(
     for (const auto& param : fn.parameters) {
         text(param.name);
         text(param.class_name);
+        text(param.generic_type);
+        text(param.pending_type_alias);
+        text(param.sum_type);
+        byte(static_cast<std::uint8_t>(param.scalar_type));
         byte(static_cast<std::uint8_t>(param.mode));
     }
     number(fn.locals.size());
-    for (const auto& local : fn.locals) {
-        text(local.name);
-        text(local.class_name);
-        text(local.task_await_name);
-        text(local.future_await_name);
-        number(local.offset);
-        byte(local.record_view ? 1u : 0u);
-        byte(local.heap_owned ? 1u : 0u);
-        byte(local.int_array ? 1u : 0u);
-        byte(local.move_class ? 1u : 0u);
-        byte(local.new_class ? 1u : 0u);
+    for (const auto& local : fn.locals) binding(local);
+    number(fn.statements.size());
+    for (const auto& stmt : fn.statements) statement(statement, stmt);
+    number(fn.early_returns.size());
+    for (const auto& guard : fn.early_returns) {
+        number(guard.offset);
+        expression(expression, guard.condition.get());
+        expression(expression, guard.lhs.get());
+        expression(expression, guard.rhs.get());
+        expression(expression, guard.result.get());
     }
+    expression(expression, fn.result.get());
+    expression(expression, fn.caught_throw_value.get());
+    text(fn.catch_binding);
+    number(fn.caught_throw_defers.size());
+    for (const auto& stmt : fn.caught_throw_defers)
+        statement(statement, stmt);
+    number(fn.actor_spawns.size());
+    for (const auto& actor : fn.actor_spawns) {
+        text(actor.name);
+        text(actor.actor_type);
+    }
+    number(fn.actor_sends.size());
+    for (const auto& send : fn.actor_sends) {
+        text(send.reference);
+        number(send.offset);
+        expression(expression, send.payload.get());
+    }
+    number(fn.actor_stops.size());
+    for (const auto& stop : fn.actor_stops) text(stop);
+    number(fn.actor_actions.size());
+    for (const auto& action : fn.actor_actions) {
+        byte(static_cast<std::uint8_t>(action.kind));
+        number(action.index);
+    }
+    number(fn.actor_field_writes.size());
+    for (const auto& write : fn.actor_field_writes) {
+        text(write.field);
+        number(write.offset);
+        expression(expression, write.expression.get());
+    }
+    byte(fn.returns_void ? 1u : 0u);
+    byte(static_cast<std::uint8_t>(fn.return_type));
+    text(fn.pending_return_type_alias);
+    text(fn.return_class);
+    text(fn.return_sum);
+    byte(fn.async_source_i64 ? 1u : 0u);
+    byte(fn.native_internal ? 1u : 0u);
+    byte(fn.has_declared_effects ? 1u : 0u);
+    number(fn.declared_effects.bits);
     number(fn.source_tasks.size());
     for (const auto& task : fn.source_tasks) {
         text(task.name);
         byte(task.awaited ? 1u : 0u);
+        number(task.offset);
+        expression(expression, task.result.get());
     }
     number(fn.future_pipelines.size());
     for (const auto& pipeline : fn.future_pipelines) {
