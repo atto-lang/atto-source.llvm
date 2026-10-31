@@ -21,7 +21,10 @@ positive = [
     root / "positive-column-get.ores",
     root / "positive-column-bounded.ores",
 ]
-negative = root / "negative-out-of-bounds.ores"
+negative = [
+    root / "negative-out-of-bounds.ores",
+    root / "negative-two-column-out-of-bounds.ores",
+]
 
 def compiler_run(path, experimental=True):
     options = [args.compiler]
@@ -76,20 +79,30 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
         print("PASS: actual .ores -> physical columns -> LLVM IR -> native guest exit 42",
               filename.name)
 
-    bad = compiler_run(negative)
-    if bad.returncode:
-        raise AssertionError("out-of-bounds guest should compile to a runtime trap")
-    verify_ir(bad.stdout)
-    ir_path, executable = temp / "bounds.ll", temp / "bounds"
-    ir_path.write_text(bad.stdout, encoding="utf-8")
-    result = subprocess.run([args.clang, "-x", "ir", str(ir_path), "-o", str(executable)],
-                            capture_output=True, text=True, timeout=90, check=False)
-    if result.returncode:
-        raise AssertionError("bounds LLVM IR failed compilation: " + result.stderr)
-    execution = subprocess.run([str(executable)], cwd=temp,
-                               capture_output=True, timeout=15, check=False)
-    if execution.returncode == 0 or execution.returncode == 42:
-        raise AssertionError("out-of-bounds read was not trapped")
+    for case_id, bad_source in enumerate(negative):
+        bad = compiler_run(bad_source)
+        if bad.returncode:
+            raise AssertionError(
+                "out-of-bounds guest should compile to a runtime trap: "
+                + bad.stderr)
+        verify_ir(bad.stdout)
+        if case_id == 1 and "; typed MIR, experimental local i64 pair LLVM IR" not in bad.stdout:
+            raise AssertionError(
+                "two-column negative bounds fixture bypassed verified MIR codegen")
+        ir_path, executable = temp / f"bounds-{case_id}.ll", temp / f"bounds-{case_id}"
+        ir_path.write_text(bad.stdout, encoding="utf-8")
+        result = subprocess.run(
+            [args.clang, "-x", "ir", str(ir_path), "-o", str(executable)],
+            capture_output=True, text=True, timeout=90, check=False)
+        if result.returncode:
+            raise AssertionError(
+                "bounds LLVM IR failed compilation: " + result.stderr)
+        execution = subprocess.run(
+            [str(executable)], cwd=temp,
+            capture_output=True, timeout=15, check=False)
+        if execution.returncode == 0 or execution.returncode == 42:
+            raise AssertionError(
+                "out-of-bounds read was not trapped in " + bad_source.name)
 
     negative_sources = [
         ("define inverted class P as x:int; end\nfnc main():int{return 0;}",
