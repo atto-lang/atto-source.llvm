@@ -3,6 +3,7 @@ name: Native state-region actor lifetime exact-head
 on:
   pull_request:
     paths:
+      - 'CMakeLists.txt'
       - 'tests/state_region_actor_lifetime_pin_test.cpp'
       - 'src/main/cpp/oreslang/runtime/StateRegionActorLifetimePin.hpp'
       - 'src/main/cpp/oreslang/runtime/OresTaskBoundStateRegion.h'
