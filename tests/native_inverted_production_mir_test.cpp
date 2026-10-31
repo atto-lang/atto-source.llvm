@@ -139,5 +139,30 @@ int main() {
         reject([&]{ (void)verify_production_inverted_i64(forged); },
                "matching two-i64 schema");
     }
+    // The normal Program AST carries declaration classes that the restricted
+    // single-owner lowering does not consume. A forged/stale AST containing
+    // any such metadata must fail before emitting LLVM IR.
+    {
+        auto forged = make_source();
+        oreslang::NativeSumType sum;
+        sum.name = "HiddenOption";
+        forged.sum_types.push_back(std::move(sum));
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "requires one standalone local main");
+    }
+    {
+        auto forged = make_source();
+        forged.conforms.push_back("UnloweredCapability");
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "requires one standalone local main");
+    }
+    {
+        auto forged = make_source();
+        oreslang::TypeConstraintDescriptor descriptor;
+        descriptor.schema_id = "HiddenConstraint";
+        forged.type_constraint_descriptors.push_back(std::move(descriptor));
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "requires one standalone local main");
+    }
     return 0;
 }
