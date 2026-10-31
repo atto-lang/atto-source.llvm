@@ -68,6 +68,27 @@ int main() {
     REQUIRE(graph.namespaces.at({"foo@1", "c"}).source_units.size() == 3);
     REQUIRE(graph.imports.at({"app/main", "a"}).package_instance_id == "foo@1");
     REQUIRE(graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
+    // +/ is scoped to the manifest-verified physical importer's package.
+    // It must resolve to a sibling provider without a synthetic global
+    // package alias, and never select the same name in another package.
+    const auto local_graph = link_package_namespaces(
+        units, {}, {{"compute/math/add", "+/", "a", "local_a"}});
+    REQUIRE(local_graph.imports.at({"compute/math/add", "local_a"}).package_instance_id == "foo@1");
+    REQUIRE(resolve_package_namespace_scalar_call(
+        local_graph, "compute/math/add", "local_a", "double", {}).source_unit_id
+        == "compute/stats/double");
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            local_graph, "compute/math/add", "local_a", "foreign", {});
+    }, "not exported");
+    // A source from a DIFFERENT physical package cannot select foo's
+    // namespace merely by spelling the same +/ local alias.
+    const auto app_local = link_package_namespaces(
+        units, {}, {{"app/main", "+/", "a", "local_a"}});
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            app_local, "app/main", "local_a", "add", {});
+    }, "not exported");
     // A bound selector resolves to a physical provider, never a global
     // namespace/function name. This is typed host resolution only.
     const auto add_call = resolve_package_namespace_scalar_call(
