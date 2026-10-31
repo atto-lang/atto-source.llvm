@@ -15,6 +15,11 @@ namespace oreslang {
 // exact, already-verified package-instance pins.
 struct VerifiedPackageLockSnapshot {
     std::string root_package_instance_id;
+    // Exact immutable package instance -> exact manifest authority. This is
+    // serialization-neutral until Oreslang standardizes the lockfile format.
+    std::map<std::string, std::filesystem::path> package_manifests;
+    // Root-package dependency aliases for the first executable namespace
+    // vertical slice. Every target must name package_manifests exactly.
     std::map<std::string, std::string> dependency_aliases;
 };
 
