@@ -264,6 +264,57 @@ int main() {
     });
     row_writer.join(); row_reader.join();
     check(!row_bad.load());
+
+    // Dense bracket operations must be linearizable across concurrent
+    // swap-delete/reuse. The dense index zero ALWAYS exists (two live rows
+    // shrink temporarily to one); resolving a row handle and unlocking before
+    // get/set may spuriously report a stale handle during that interval.
+    Store racing;
+    racing.push(0.0f, 0, true);
+    racing.push(1.0f, 1, true);
+    std::atomic<bool> race_start{false};
+    std::atomic<bool> indexed_failed{false};
+    std::thread structural([&] {
+        while (!race_start.load(std::memory_order_acquire)) std::this_thread::yield();
+        try {
+            for (int n = 0; n < 4000; ++n) {
+                const auto victim = racing.index(0);
+                racing.erase_swap(victim);
+                racing.push(static_cast<float>(n + 2), n + 2, true);
+            }
+        } catch (const std::exception&) { indexed_failed.store(true); }
+    });
+    std::thread indexed_reader([&] {
+        race_start.store(true, std::memory_order_release);
+        try {
+            for (int n = 0; n < 16000; ++n)
+                (void)racing.read_index<1>(0);
+        } catch (const std::exception&) { indexed_failed.store(true); }
+    });
+    std::thread indexed_writer([&] {
+        while (!race_start.load(std::memory_order_acquire)) std::this_thread::yield();
+        try {
+            for (int n = 0; n < 16000; ++n)
+                racing.write_index<1>(0, static_cast<std::int64_t>(n));
+        } catch (const std::exception&) { indexed_failed.store(true); }
+    });
+    structural.join();
+    indexed_reader.join();
+    indexed_writer.join();
+    check(!indexed_failed.load() && racing.size() == 2);
+    {
+        auto borrowed = racing.borrow_read<1>();
+        (void)racing.read_index<1>(0);
+        expect<std::logic_error>([&] { racing.write_index<1>(0, 17); });
+    }
+    {
+        auto borrowed = racing.borrow_write<1>();
+        expect<std::logic_error>([&] { (void)racing.read_index<1>(0); });
+        expect<std::logic_error>([&] { racing.write_index<1>(0, 17); });
+    }
+    expect<std::out_of_range>([&] { (void)racing.read_index<1>(-1); });
+    expect<std::out_of_range>([&] { racing.write_index<1>(2, 17); });
+
     // A moved-out loan retains memory if its owner is destroyed.
     std::optional<Store::Loan<0, false>> carried;
     {
