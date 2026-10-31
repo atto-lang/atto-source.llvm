@@ -237,6 +237,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-request-context-test)
     set_tests_properties(native_http_request_context_pinning_host_only
         PROPERTIES TIMEOUT 45)
+    # Host-only C NIO admission ABI mock. It validates transactional watch
+    # registration and physical request lifetime, not kernel epoll behavior.
+    add_executable(oreslang-native-request-nio-watch-abi-test
+        tests/native_request_nio_watch_abi_test.cpp)
+    target_include_directories(oreslang-native-request-nio-watch-abi-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-request-nio-watch-abi-test
+        PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-request-nio-watch-abi-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_http_request_nio_watch_abi_host_only
+        COMMAND oreslang-native-request-nio-watch-abi-test)
+    set_tests_properties(native_http_request_nio_watch_abi_host_only
+        PROPERTIES TIMEOUT 30)
 
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
