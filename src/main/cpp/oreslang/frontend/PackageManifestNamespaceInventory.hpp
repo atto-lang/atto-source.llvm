@@ -11,11 +11,12 @@
 
 namespace oreslang {
 
-// Serialization-neutral immutable lock entry. The future standardized lockfile
-// parser should populate exactly this authority; executable namespace lowering
-// never infers package identity from project names, folders or namespace text.
+// Serialization-neutral immutable lock entry. Package identity binds one exact
+// installed dependency instance to one exact manifest and one declared
+// [packages.<key>] group within that manifest.
 struct VerifiedLockedPackageInstance {
     std::filesystem::path manifest_path;
+    std::string package_key;
     std::string manifest_sha256;
     // Manifest-relative source spelling -> exact SHA-256 content.
     std::map<std::string, std::string> source_sha256;
@@ -35,13 +36,15 @@ struct VerifiedPackageSourceMember {
 };
 
 // Strict schema-v2 package manifest subset needed by namespace source ownership.
-// Unknown package/source constructs fail closed rather than being ignored.
+// The manifest may declare multiple package groups; the lock chooses exactly
+// one group for each immutable PackageInstanceId.
 struct VerifiedPackageManifestV2 {
     std::filesystem::path manifest_path;
-    std::filesystem::path package_root;
+    std::filesystem::path project_root;
     std::string project_name;
     std::string manifest_sha256;
-    std::vector<VerifiedPackageSourceMember> source_files;
+    std::vector<std::filesystem::path> source_roots;
+    std::map<std::string, std::vector<VerifiedPackageSourceMember>> packages;
 };
 
 // Stable lowercase SHA-256 used to compare the already-verified lock snapshot
@@ -53,15 +56,15 @@ std::string namespace_inventory_sha256(std::string_view bytes);
 //   schema_version = "2"
 //   [project] name = "..."; root = "." or canonical relative path
 //   [source] roots = ["..."] (optional; defaults to ["."])
-//   [packages.<project-name>] files = ["...ores", ...]
+//   [packages.<key>] files = ["...ores", ...] (zero or more groups)
 // It never scans directories to discover package members.
 VerifiedPackageManifestV2 load_verified_package_manifest_v2(
     const std::filesystem::path& manifest_path,
     const std::function<std::string(const std::filesystem::path&)>& read_manifest);
 
 // Builds the exact pinned namespace compiler input from one root application
-// manifest, one or more verified dependency manifests, and an already-verified
-// package lock snapshot. No directory scan, ORES_PATHS/ORESLANG_PATH fallback,
+// manifest, verified dependency manifests, and an already-verified package
+// lock snapshot. No directory scan, ORES_PATHS/ORESLANG_PATH fallback,
 // current-working-directory fallback, or namespace spelling fallback is
 // permitted. Manifest and source SHA-256 values must match the lock snapshot.
 PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
