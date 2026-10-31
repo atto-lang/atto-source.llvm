@@ -785,6 +785,14 @@ if(BUILD_TESTING)
                 "${ORE_RT_AOT_CLANG}"
                 "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(native_orie_stdout_alias PROPERTIES TIMEOUT 180)
+        # Positive native i64 control plus explicit NO-IR rejections for
+        # fractional/scientific f64 tokens pending typed double lowering.
+        add_test(NAME native_f64_lexical_fail_closed
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_RT_AOT_CLANG}")
+        set_tests_properties(native_f64_lexical_fail_closed PROPERTIES TIMEOUT 120)
     endif()
 
     # Pure host resolver security test for canonical +/ project-root imports.
