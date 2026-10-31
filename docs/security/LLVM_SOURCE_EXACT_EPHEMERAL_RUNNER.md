@@ -35,3 +35,23 @@ Before checking out any untrusted PR source, the workflow uses its read-only Git
 Currently this means the new workflow **cannot execute**: source `main` is still unprotected, and the relevant PRs have no submitted independent approvals. The admin must first apply and verify repository protection, then a reviewer must approve the *current* tested code head. If the PR changes afterward, the approval must be renewed. This is an intentional security prerequisite, not a runner admission failure. Do not disable this gate to force execution.
 
 An approval obtained through a separate manual process must be independently checked against the exact GitHub PR head and reviewer identity. GitHub's commit-associated manual `workflow_dispatch` check still does not replace branch-protection required checks on the PR head.
+
+## Administrator JIT runner registration (local, off-Actions)
+
+After protected `main`, independent workflow review, and a repo-restricted runner group are **actually enforced**, an authorized administrator may execute `scripts/ci/prepare_source_ephemeral_jit.sh` on a trusted **operator workstation**, not inside Actions. The script requires the organization's exact selected-repository runner-group ID and an *existing empty mode-0700 directory* for output. It checks that the group permits precisely this repository and this workflow at `@refs/heads/main`, refuses public repositories, and requires the protected source `main` and reviewed workflow to exist.
+
+Example operator commands (illustrative only, not executed):
+
+```bash
+mkdir -m 700 -p "$HOME/.oreslang-one-job-runner"
+bash scripts/ci/prepare_source_ephemeral_jit.sh RUNNER_GROUP_ID \
+  "$HOME/.oreslang-one-job-runner/one-time-jit-config.b64"
+```
+
+Use an independently authenticated `gh` identity with organization **Self-hosted runners (write)** permission, scoped for this one administrative operation. **Never** put the administrative token in the runner VM, GitHub job secrets or logs. The script sends a single authorized `POST /orgs/ores-truffle-oreslang/actions/runners/generate-jitconfig` request only *after* all local policy checks pass; it writes the returned encoded JIT configuration to a newly created mode-0600 file, and prints no credential. Deliver the configuration securely to a dedicated, freshly provisioned, isolated Linux x64 runner VM with a verified GitHub Actions runner installation.
+
+Run the official runner with the one-time `--jitconfig` value only on that disposable guest; never emit the value through shell tracing, command logging or CI summaries. Enforce single-job deletion, external runner-log forwarding, VM destruction and credential/configuration-file disposal. Beware that operating-system process argument inspection may expose a JIT argument on a multi-user host, so use **single-tenant isolated machines**. The runner label must be `oreslang-llvm-ephemeral-v1` and the GitHub runner group must restrict both repository and workflow. No mixed/reused job environments are permitted.
+
+Official GitHub references: https://docs.github.com/en/rest/actions/self-hosted-runners and https://docs.github.com/en/actions/reference/security/secure-use and https://docs.github.com/en/rest/actions/self-hosted-runner-groups.
+
+**Validation limit:** The JIT script's shell syntax and five source-free mocked administration scenarios have been checked locally (one permitted, four denied). This does **not** confirm real organization's runner-group ID, plan eligibility, runner-image integrity, review enforcement, JIT registration, source JUnit/native execution or real GitHub management writes. No runner or secret was provisioned by this PR.
