@@ -122,7 +122,13 @@ negative unsupported_f64_parameter_abi 'pub fnc f(f64 value): int {
   return 42;
 }
 pub fnc main(): int { return 42; }'
+negative unsupported_branch_f64_local 'pub fnc main(): int {
+  if true; then
+    val f64 value = 0.3;
+    return 42;
+  else return 86; fi
+}'
 
-[[ "$pass" -eq 8 && "$reject" -eq 11 ]] ||
+[[ "$pass" -eq 8 && "$reject" -eq 12 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=8; NEGATIVE_NO_IR_PASS=11 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=8; NEGATIVE_NO_IR_PASS=12 (not arrays/solver)"
