@@ -16,6 +16,13 @@ on:
       - 'src/main/cpp/oreslang/runtime/RequestSlotTable.hpp'
       - 'tests/native_request_context_test.cpp'
       - 'tests/native_request_nio_watch_abi_test.cpp'
+      - 'tests/native_request_nio_epoll_integration_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVM.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorFuture.c'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactor.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorManager.hpp'
       - 'tests/native_task_cancellation_test.cpp'
       - 'tests/pinned_continuation_gate_test.cpp'
       - 'tests/native_http_exchange_test.cpp'
@@ -100,6 +107,37 @@ jobs:
             "${options[@]}" -I src/main/cpp \
             tests/pinned_continuation_gate_test.cpp \
             -o "$RUNNER_TEMP/native-http-pinned-continuation"
+      - name: Compile actual Linux VM epoll request-lifetime integration
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          FLAGS: ${{ matrix.flags }}
+        run: |
+          set -euo pipefail
+          read -r -a options <<< "$FLAGS"
+          for name in NativeOresVM NativeActorFuture; do
+            "$CC" -std=c11 -D_GNU_SOURCE -pthread -Wall -Wextra -Wpedantic -Werror \
+              "${options[@]}" -I src/main/cpp \
+              -c "src/main/cpp/oreslang/runtime/$name.c" \
+              -o "$RUNNER_TEMP/$name.o"
+          done
+          for name in NativeOresVMNio NativeEpollReactorABI; do
+            "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror \
+              "${options[@]}" -I src/main/cpp \
+              -c "src/main/cpp/oreslang/runtime/$name.cpp" \
+              -o "$RUNNER_TEMP/$name.o"
+          done
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror \
+            "${options[@]}" -I src/main/cpp \
+            tests/native_request_nio_epoll_integration_test.cpp \
+            "$RUNNER_TEMP/native-http-scheduler.o" \
+            "$RUNNER_TEMP/NativeOresVM.o" \
+            "$RUNNER_TEMP/NativeActorFuture.o" \
+            "$RUNNER_TEMP/NativeOresVMNio.o" \
+            "$RUNNER_TEMP/NativeEpollReactorABI.o" \
+            -o "$RUNNER_TEMP/native-request-nio-epoll"
+
       - name: Run exact-head scheduler and exchange tests
         shell: bash
         run: |
@@ -109,6 +147,7 @@ jobs:
           timeout 90s "$RUNNER_TEMP/native-http-request-context"
           timeout 40s "$RUNNER_TEMP/native-http-exchange"
           timeout 30s "$RUNNER_TEMP/native-request-nio-watch-abi"
+          timeout 30s "$RUNNER_TEMP/native-request-nio-epoll"
           timeout 60s "$RUNNER_TEMP/native-http-task-cancellation"
           timeout 60s "$RUNNER_TEMP/native-http-pinned-continuation"
           echo "HTTP_REQUEST_CONTEXT_EXACT_HEAD_PASS flavor=${{ matrix.flavor }}"
