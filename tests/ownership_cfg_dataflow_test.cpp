@@ -298,6 +298,83 @@ int main() {
     right_region.at("x").shared_region_requirements.at(600) = orders;
     assert(rejected([&] { join_into(left_region, right_region); }));
 
+    // Suspend is a compiler IR event for await/select/readch, not a new
+    // user-visible keyword. Without a proven pinned continuation, both
+    // lexical and region-backed loans must be retired before the boundary.
+    Graph suspended;
+    suspended.entry = {{"x", cell(kOwned)}, {"y", cell(kMoved)}};
+    suspended.blocks = {{{
+        {Kind::Suspend, ""},
+        {Kind::Read, "x"}
+    }, {}}};
+    verify(suspended); // No live loans; moved, unborrowed neighbors are safe.
+
+    suspended.blocks[0].operations = {
+        {Kind::BorrowShared, "x", 801},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseShared, "x", 801}
+    };
+    assert(rejected([&] { verify(suspended); }));
+    suspended.blocks[0].operations = {
+        {Kind::BorrowExclusive, "x", 802},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseExclusive, "x", 802}
+    };
+    assert(rejected([&] { verify(suspended); }));
+
+    // The same rule applies to task/actor-bound region loans. A symbolic
+    // region requirement never substitutes for an actual pin/frame proof.
+    suspended.blocks[0].operations = {
+        {Kind::BorrowShared, "x", 803, inventory},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseShared, "x", 803, inventory}
+    };
+    assert(rejected([&] { verify(suspended); }));
+    suspended.blocks[0].operations = {
+        {Kind::BorrowExclusive, "x", 804, inventory},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseExclusive, "x", 804, inventory}
+    };
+    assert(rejected([&] { verify(suspended); }));
+
+    suspended.blocks[0].operations = {
+        {Kind::BorrowShared, "x", 805, inventory},
+        {Kind::ReleaseShared, "x", 805, inventory},
+        {Kind::Suspend, ""},
+        {Kind::Move, "x"}
+    };
+    verify(suspended); // Proven release before await is admissible.
+    suspended.blocks[0].operations = {
+        {Kind::BorrowExclusive, "x", 806, inventory},
+        {Kind::ReleaseExclusive, "x", 806, inventory},
+        {Kind::Suspend, ""},
+        {Kind::Move, "x"}
+    };
+    verify(suspended);
+
+    // A suspension event cannot take a fabricated place or task/region
+    // requirement as an escape hatch for an otherwise live loan.
+    suspended.blocks[0].operations = {{Kind::Suspend, "x"}};
+    assert(rejected([&] { verify(suspended); }));
+    suspended.blocks[0].operations = {
+        {Kind::Suspend, "", std::nullopt, inventory}
+    };
+    assert(rejected([&] { verify(suspended); }));
+
+    // Branches that independently retire the same underlying loan are
+    // admitted; a leaked predecessor loan remains rejected at join/exit.
+    Graph branch_suspend;
+    branch_suspend.entry = {{"x", cell(kOwned)}};
+    branch_suspend.blocks = {
+        {{{Kind::BorrowShared, "x", 810}}, {1, 2}},
+        {{{Kind::ReleaseShared, "x", 810}}, {3}},
+        {{{Kind::ReleaseShared, "x", 810}}, {3}},
+        {{{Kind::Suspend, ""}, {Kind::Move, "x"}}, {}}
+    };
+    verify(branch_suspend);
+    branch_suspend.blocks[2].operations.clear();
+    assert(rejected([&] { verify(branch_suspend); }));
+
     // Token zero is the unique legacy entry-loan identity, not a value
     // that an independently executed branch may mint.
     Graph forged_entry;
@@ -396,6 +473,22 @@ int main() {
     State malformed_exclusive = {{"x", cell(kOwned)}};
     malformed_exclusive.at("x").exclusive_region_requirement = inventory;
     assert(rejected([&] { apply(op(Kind::Read, "x"), malformed_exclusive); }));
+
+    // Direct helper and join callers must not bypass the count/token or
+    // owner-live invariants that verify(Graph) normally checks at entry.
+    State inconsistent_count = {{"x", cell(kOwned)}};
+    inconsistent_count.at("x").shared_loans = 1;
+    assert(rejected([&] { apply(op(Kind::Read, "x"), inconsistent_count); }));
+    State stray_token = {{"x", cell(kOwned)}};
+    stray_token.at("x").shared_loan_ids.insert(811);
+    assert(rejected([&] { apply(op(Kind::Suspend, ""), stray_token); }));
+    State invalid_owner = {{"x", cell(kMoved)}};
+    invalid_owner.at("x").shared_loans = 1;
+    invalid_owner.at("x").shared_loan_ids.insert(812);
+    assert(rejected([&] { apply(op(Kind::Suspend, ""), invalid_owner); }));
+    State contradictory = {{"x", cell(kOwned)}};
+    contradictory.at("x").exclusive_loan_id = 813;
+    assert(rejected([&] { join_into(contradictory, contradictory); }));
 
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
