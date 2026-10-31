@@ -5157,6 +5157,9 @@ private:
                 validate_expression(
                     *fn.caught_error_try_result, params, functions);
             }
+            if (fn.caught_error_type_match_result)
+                validate_expression(
+                    *fn.caught_error_type_match_result, params, functions);
             for (const auto& guard : fn.early_returns) {
                 if (guard.condition) validate_expression(*guard.condition, params, functions);
                 else {
@@ -5320,6 +5323,9 @@ private:
             if (fn.caught_error_try_result)
                 require_scalar(*fn.caught_error_try_result, fn.return_type,
                     "native protected ErrorSlot return", scalar_types);
+            if (fn.caught_error_type_match_result)
+                require_scalar(*fn.caught_error_type_match_result, fn.return_type,
+                    "native ErrorSlot type-match return", scalar_types);
             for (const auto& guard : fn.early_returns) {
                 if (guard.condition) {
                     require_scalar(*guard.condition, ScalarType::Bool,
