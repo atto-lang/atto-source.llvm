@@ -89,3 +89,43 @@ jobs:
           echo "EXACT_HEAD_NATIVE_ACTOR_LIFETIME=$EXPECTED_HEAD"
           echo "COMPILER_GUEST_EXECUTED=false"
           echo "COMPILER_GUEST_PARITY=NOT_VERIFIED"
+
+  native-cmake-ctest:
+    # Verify the registered production CMake target/CTest path independently
+    # of the direct compiler matrix. This does not run guest .ores code.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exactly the source-repository PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Build production CMake actor lifetime target and execute registered CTest
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          if command -v llvm-config >/dev/null 2>&1; then
+            LLVM_CONFIG=llvm-config
+          elif command -v llvm-config-18 >/dev/null 2>&1; then
+            LLVM_CONFIG=llvm-config-18
+          else
+            echo "LLVM CMake prerequisites unavailable (runner/setup failure, not a test verdict)" >&2
+            exit 2
+          fi
+          LLVM_DIR="$("$LLVM_CONFIG" --cmakedir)"
+          test -f "$LLVM_DIR/LLVMConfig.cmake"
+          BUILD="$RUNNER_TEMP/ores-actor-lifetime-cmake"
+          cmake -S . -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            "-DLLVM_DIR=$LLVM_DIR" -DBUILD_TESTING=ON
+          cmake --build "$BUILD" --target oreslang-state-region-actor-lifetime-pin-test -j2
+          ctest --test-dir "$BUILD" --output-on-failure \
+            -R '^native_state_region_blocks_actor_arena_reclamation$'
+          echo "PRODUCTION_NATIVE_CTEST_HEAD=$EXPECTED_HEAD"
+          echo "COMPILED_ORES_GUEST_VERIFIED=false"
