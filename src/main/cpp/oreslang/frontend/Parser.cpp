@@ -4083,6 +4083,7 @@ private:
         require_expression_depth(depth, expr.offset);
         switch (expr.kind) {
             case Expression::Kind::Integer:
+            case Expression::Kind::Floating:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
                 return;
@@ -4242,7 +4243,7 @@ private:
     }
 
     static const char* scalar_type_name(ScalarType type) {
-        return type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
+        return type == ScalarType::F64 ? "f64" : type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
     }
 
     static ScalarType validate_scalar_expression(
@@ -4266,6 +4267,8 @@ private:
 
             case Expression::Kind::Integer:
                 return ScalarType::I64;
+            case Expression::Kind::Floating:
+                return expr.resolved_type = ScalarType::F64;
             case Expression::Kind::Boolean:
                 return ScalarType::Bool;
             case Expression::Kind::String:
@@ -4366,8 +4369,9 @@ private:
             case Expression::Kind::Negate: {
                 ScalarType operand = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
-                require_type(operand, ScalarType::I64, "unary '-'");
-                return ScalarType::I64;
+                if (operand != ScalarType::I64 && operand != ScalarType::F64)
+                    throw std::runtime_error("unary '-' requires int or f64");
+                return expr.resolved_type = operand;
             }
             case Expression::Kind::LogicalNot: {
                 ScalarType operand = validate_scalar_expression(
@@ -4387,8 +4391,9 @@ private:
                 auto right = validate_scalar_expression(*expr.right, variables, functions, depth + 1);
                 if (left == ScalarType::String) require_type(right, ScalarType::String, "string concatenation");
                 else {
-                    require_type(left, ScalarType::I64, "arithmetic");
-                    require_type(right, ScalarType::I64, "arithmetic");
+                    if (left != ScalarType::I64 && left != ScalarType::F64)
+                        throw std::runtime_error("arithmetic requires int or f64");
+                    require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
                 }
                 return expr.resolved_type = left;
             }
@@ -4399,9 +4404,11 @@ private:
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                require_type(left, ScalarType::I64, "arithmetic");
-                require_type(right, ScalarType::I64, "arithmetic");
-                return ScalarType::I64;
+                if (left != ScalarType::I64 && (left != ScalarType::F64 ||
+                        expr.kind == Expression::Kind::Remainder))
+                    throw std::runtime_error("arithmetic requires int or f64 (remainder int only)");
+                require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
+                return expr.resolved_type = left;
             }
             case Expression::Kind::Less:
             case Expression::Kind::LessEqual:
@@ -4411,9 +4418,10 @@ private:
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                require_type(left, ScalarType::I64, "ordered comparison");
-                require_type(right, ScalarType::I64, "ordered comparison");
-                return ScalarType::Bool;
+                if (left != ScalarType::I64 && left != ScalarType::F64)
+                    throw std::runtime_error("ordered comparison requires int or f64");
+                require_type(right, left, "ordered comparison; implicit int/f64 conversion prohibited");
+                return expr.resolved_type = ScalarType::Bool;
             }
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual: {
