@@ -222,6 +222,19 @@ int main() {
                     "embedded imports require verified v2 package linking");
     }
 
+    // A root importing file has no namespace header. It must nevertheless
+    // be rejected if it carries an unverified namespace AST. Check this
+    // BEFORE the no-namespace early exit in link_package_namespaces().
+    {
+        Program unchecked_root;
+        unchecked_root.namespace_imports.push_back(
+            {"billing", "payments", "+/", 0});
+        another = units;
+        another.push_back({"app/unchecked-root", "app@1", &unchecked_root});
+        must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                    "embedded imports require verified v2 package linking");
+    }
+
     // 7. Unlowered top-level AST families must never enter the scalar graph.
     {
         Program unsupported = make_source("a", "with_sum");
