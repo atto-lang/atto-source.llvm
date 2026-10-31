@@ -107,6 +107,41 @@ int main() {
         {Kind::Enum, "other::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
     REQUIRE(compare(color, imported) == PairStatus::DistinctEnums);
 
+    // Release-active input admission: enum payload layouts can arrive as
+    // integer-cast/malformed metadata, not only compiler-created enum values.
+    REQUIRE(!eligibleEnum({{static_cast<PayloadLayout>(255), {"int"}}}));
+    REQUIRE(!eligibleEnum({{static_cast<PayloadLayout>(-1), {"int"}}}));
+    REQUIRE(!eligibleEnum(std::vector<Variant>(
+        MaxEnumCases + 1, Variant{PayloadLayout::Unit, {}})));
+    REQUIRE(eligibleEnum(std::vector<Variant>(
+        MaxEnumCases, Variant{PayloadLayout::Unit, {}})));
+    REQUIRE(!eligibleEnum({{PayloadLayout::PrimitiveTuple,
+        std::vector<std::string>(MaxEnumPayloadFields + 1, "int")}}));
+    REQUIRE(eligibleEnum({{PayloadLayout::PrimitiveTuple,
+        std::vector<std::string>(MaxEnumPayloadFields, "int")}}));
+
+    // signature() and public aggregate-based compare()/select() must all
+    // refuse malformed kind, identity and over-budget signature shapes.
+    const Kind unknownKind = static_cast<Kind>(255);
+    rejects([&] { (void)signature("go", {{unknownKind, "unit::Color"}}, eligibleIds); });
+    const Signature forgedKind{"go", {{unknownKind, "unit::Color"}}};
+    const Signature forgedPrimitive{"go", {{Kind::Primitive, "UnregisteredType"}}};
+    const Signature forgedEmptyId{"go", {{Kind::Enum, ""}}};
+    const Signature forgedEmptyName{"", {{Kind::Enum, "unit::Color"}}};
+    const Signature forgedOversize{"go",
+        std::vector<Position>(MaxOverloadArity + 1,
+            Position{Kind::Enum, "unit::Color"})};
+    rejects([&] { (void)compare(forgedKind, color); });
+    rejects([&] { (void)compare(forgedPrimitive, color); });
+    rejects([&] { (void)compare(forgedEmptyId, color); });
+    rejects([&] { (void)compare(forgedEmptyName, color); });
+    rejects([&] { (void)compare(forgedOversize, arity1); });
+    rejects([&] { (void)select({forgedKind}, {}); });
+    rejects([&] { (void)select({forgedPrimitive}, {}); });
+    rejects([&] { (void)select({forgedEmptyId}, {}); });
+    rejects([&] { (void)select({forgedOversize}, {}); });
+    rejects([&] { (void)select({color, forgedKind}, {{0, "unit::Color"}}); });
+
     // This deliberately exercises only compiler-side keys, NOT LLVM source
     // parsing, AOT vtables, actor dispatch or guest execution.
     return 0;
