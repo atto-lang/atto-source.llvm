@@ -146,5 +146,51 @@ int main() {
     InvertedColumns<std::int64_t, std::int64_t> foreign;
     auto unrelated = foreign.push(1, 2);
     rejects([&] { (void)store.get<0>(unrelated); }, "foreign or invalid");
+
+    // Execute the same admitted straight-line HIR operation sequence on the
+    // *real* generational owner. The HIR itself is not executable guest IR:
+    // this differential is a host/backend-lowering contract only.
+    InvertedStructDecl two;
+    two.name = "Pair";
+    two.fields = {
+        InvertedStructField{"x", InvertedScalarKind::I64, true, 0},
+        InvertedStructField{"id", InvertedScalarKind::I64, false, 0}
+    };
+    LinearPlan admitted(Layout::from_decl(two), 2);
+    InvertedColumns<std::int64_t, std::int64_t> physical;
+    physical.reserve(2);
+    admitted.push(2);
+    const auto h0 = physical.push(17, 501);
+    admitted.push(2);
+    const auto h1 = physical.push(23, 502);
+    assert(admitted.length() == physical.size());
+    assert(admitted.write(0, "x") == 0);
+    physical.set<0>(h0, 30);
+    assert(admitted.read(0, "x") == 0);
+    assert(physical.get<0>(h0) == 30);
+    admitted.borrow_read("id");
+    {
+        auto physical_reader = physical.borrow_read<1>();
+        assert(physical_reader.get(1) == 502);
+        admitted.borrow_write("x"); // disjoint from the id reader
+        {
+            auto physical_writer = physical.borrow_write<0>();
+            physical_writer.set(1, 42);
+            assert(physical_writer.get(1) == 42);
+            rejects([&] { admitted.erase_swap(0); }, "structural operation conflicts");
+            rejects([&] { physical.erase_swap(h0); }, "cannot erase borrowed");
+        }
+        admitted.release_write("x");
+    }
+    admitted.release_read("id");
+    admitted.erase_swap(0);
+    physical.erase_swap(h0);
+    assert(admitted.length() == physical.size());
+    assert(admitted.length() == 1);
+    assert(admitted.read(0, "x") == 0);
+    assert(physical.get<0>(h1) == 42);
+    rejects([&] { (void)physical.get<0>(h0); }, "stale inverted row handle");
+    admitted.close();
+    assert(admitted.closed());
     return 0;
 }
