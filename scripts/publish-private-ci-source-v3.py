@@ -491,7 +491,7 @@ def _latest_review(repository, review_pr, reviewer_id, reviewer_login, label):
 def authorized_source_main_sha():
     """Require enforced protected source main for every private-source export."""
     branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
-    if branch.get("name") != SOURCE_BRANCH:
+    if not isinstance(branch, dict) or branch.get("name") != SOURCE_BRANCH:
         raise Denied("source main branch identity changed")
     if branch.get("protected") is not True:
         raise Denied("source main is not protected; private export denied")
@@ -500,15 +500,20 @@ def authorized_source_main_sha():
 
 def source_protection():
     repo = gh_api(f"repos/{SOURCE_REPO}")
-    if (repo.get("id") != SOURCE_REPO_ID
+    if (not isinstance(repo, dict)
+            or type(repo.get("id")) is not int
+            or repo.get("id") != SOURCE_REPO_ID
             or repo.get("full_name") != SOURCE_REPO
             or repo.get("private") is not True):
         raise Denied("source repository identity/privacy mismatch")
     branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
-    if (branch.get("name") != SOURCE_BRANCH
+    if (not isinstance(branch, dict)
+            or branch.get("name") != SOURCE_BRANCH
             or branch.get("protected") is not True):
         raise Denied("source main is not protected")
     protection = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}/protection")
+    if not isinstance(protection, dict):
+        raise Denied("source main branch protection metadata is invalid")
     reviews = protection.get("required_pull_request_reviews")
     if (not isinstance(reviews, dict)
             or reviews.get("require_code_owner_reviews") is not True
@@ -530,7 +535,10 @@ def source_protection():
                 or any(not isinstance(bypasses.get(k, []), list)
                        or bypasses.get(k) for k in ("users", "teams", "apps"))):
             raise Denied("source main has pull-request review bypasses")
-    return valid_sha(branch.get("commit", {}).get("sha"),
+    commit = branch.get("commit")
+    if not isinstance(commit, dict):
+        raise Denied("source protected-main commit metadata is invalid")
+    return valid_sha(commit.get("sha"),
                      "source protected-main SHA invalid")
 
 
@@ -937,10 +945,13 @@ def review_attested_carrier_main(repository, contract, branch):
 
 def checked_carrier_main(repository, contract):
     branch = gh_api(f"repos/{repository}/branches/main")
-    if branch.get("name") != "main":
+    if not isinstance(branch, dict) or branch.get("name") != "main":
         raise Denied("carrier main branch identity changed")
+    commit = branch.get("commit")
+    if not isinstance(commit, dict):
+        raise Denied("carrier main commit metadata invalid")
     base_sha = valid_sha(
-        branch.get("commit", {}).get("sha"), "carrier main SHA"
+        commit.get("sha"), "carrier main SHA"
     )
     if base_sha != contract["base_sha"]:
         raise Denied("carrier main advanced beyond reviewed base")
@@ -949,6 +960,8 @@ def checked_carrier_main(repository, contract):
         return review_attested_carrier_main(repository, contract, branch)
 
     protection = gh_api(f"repos/{repository}/branches/main/protection")
+    if not isinstance(protection, dict):
+        raise Denied("carrier main protection metadata invalid")
     reviews = protection.get("required_pull_request_reviews")
     if (not isinstance(reviews, dict)
             or reviews.get("require_code_owner_reviews") is not True
@@ -982,7 +995,9 @@ def checked_carrier_main(repository, contract):
 
 def checked_destination(repository, contract):
     repo = gh_api(f"repos/{repository}")
-    if (repo.get("id") != contract["repository_id"]
+    if (not isinstance(repo, dict)
+            or type(repo.get("id")) is not int
+            or repo.get("id") != contract["repository_id"]
             or repo.get("full_name") != repository
             or repo.get("private") is not True
             or repo.get("visibility") != "private"
@@ -993,9 +1008,12 @@ def checked_destination(repository, contract):
         raise Denied("carrier identity/state differs from protected contract")
     base_sha = checked_carrier_main(repository, contract)
     commit = gh_api(f"repos/{repository}/git/commits/{base_sha}")
-    base_tree = valid_sha(commit.get("tree", {}).get("sha"), "carrier base tree")
+    if not isinstance(commit, dict) or not isinstance(commit.get("tree"), dict):
+        raise Denied("carrier base commit/tree metadata invalid")
+    base_tree = valid_sha(commit["tree"].get("sha"), "carrier base tree")
     listing = gh_api(f"repos/{repository}/git/trees/{base_tree}?recursive=1")
-    if (listing.get("sha") != base_tree
+    if (not isinstance(listing, dict)
+            or listing.get("sha") != base_tree
             or listing.get("truncated") is not False
             or not isinstance(listing.get("tree"), list)):
         raise Denied("carrier base tree listing incomplete")
@@ -1009,7 +1027,8 @@ def checked_destination(repository, contract):
     workflow = gh_api(
         f"repos/{repository}/contents/{contract['workflow_path']}?ref={base_sha}"
     )
-    if (workflow.get("path") != contract["workflow_path"]
+    if (not isinstance(workflow, dict)
+            or workflow.get("path") != contract["workflow_path"]
             or workflow.get("type") != "file"
             or workflow.get("sha") != contract["workflow_blob_sha"]):
         raise Denied("carrier workflow differs from protected contract")
@@ -1017,7 +1036,8 @@ def checked_destination(repository, contract):
     plan = gh_api(
         f"repos/{repository}/contents/{contract['test_plan_path']}?ref={base_sha}"
     )
-    if (plan.get("path") != contract["test_plan_path"]
+    if (not isinstance(plan, dict)
+            or plan.get("path") != contract["test_plan_path"]
             or plan.get("type") != "file"
             or plan.get("encoding") != "base64"
             or plan.get("sha") != contract["test_plan_blob_sha"]):
@@ -1186,14 +1206,18 @@ def require_handoff_refs_absent(
 
 def recheck_destination_identity(repository, contract):
     repo = gh_api(f"repos/{repository}")
-    if (repo.get("id") != contract["repository_id"]
+    if (not isinstance(repo, dict)
+            or type(repo.get("id")) is not int
+            or repo.get("id") != contract["repository_id"]
             or repo.get("full_name") != repository
             or repo.get("private") is not True
             or repo.get("visibility") != "private"):
         raise Denied("carrier identity/privacy changed during transfer")
     branch = gh_api(f"repos/{repository}/branches/main")
-    if (branch.get("name") != "main"
-            or branch.get("commit", {}).get("sha") != contract["base_sha"]):
+    if (not isinstance(branch, dict)
+            or branch.get("name") != "main"
+            or not isinstance(branch.get("commit"), dict)
+            or branch["commit"].get("sha") != contract["base_sha"]):
         raise Denied("carrier main changed during transfer")
 
 
