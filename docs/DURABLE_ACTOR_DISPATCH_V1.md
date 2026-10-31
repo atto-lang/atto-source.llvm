@@ -145,3 +145,26 @@ source-free PostgreSQL run 41004508072 did pass on honeypot-r-us-test, but
 that historical result does not establish capacity at this moment. No private
 source was transferred to any alternate organization. The real Oreslang
 PostgreSQL migration and provider/actor effects remain unexecuted.
+
+## Bounded native libpq admission (host only)
+
+The LLVM host adapter uses `PQconnectdbParams` with an expanded trusted
+connection string followed by enforced final overrides:
+`connect_timeout=3` seconds, `statement_timeout=10000` ms and
+`lock_timeout=5000` ms. This prevents a connection string or environment
+variable from simply requesting unbounded connection/SQL lock admission.
+A separate source-backed linker-interception regression validates those
+parameters, including attempted `connect_timeout=0` and
+`statement_timeout=0` downgrades. GCC/Clang C++17 plus Clang
+ASan/UBSan local checks passed, with the committed adapter/test blobs
+matched to their local test copies.
+
+**Limitations:** `connect_timeout` applies per target host; a multi-host
+connection string may take longer. Server statement timeout does not provide
+a hard client-side deadline during an unreachable network or stalled TLS
+read. These blocking host calls must run on dedicated, bounded host I/O
+workers rather than the actor scheduler or critical state callbacks.
+No end-to-end hard-real-time dispatch claim follows from this change.
+
+No PostgreSQL server was available in the local verification container and
+the source-org exact-head Actions remain zero-step/not-executed.
