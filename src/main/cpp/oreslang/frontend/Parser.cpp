@@ -141,7 +141,7 @@ std::size_t template_close(std::string_view source, std::size_t from,
 bool reserved(std::string_view name) {
     // Keep these reserved even while their grammar is unsupported.
     static constexpr std::string_view words[] = {
-        "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
+        "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace", "ns",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
@@ -548,10 +548,11 @@ bool entry_builtin_name(std::string_view name) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
-                    bool experimental_rt_scalar_loop)
+                    bool experimental_rt_scalar_loop, bool pinned_namespace_mode = false)
         : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
-          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
+          pinned_namespace_mode_(pinned_namespace_mode) {}
 
     Program parse() {
         Program program;
@@ -561,20 +562,38 @@ public:
                 fail("native contract imports require a validated cross-unit linker");
             ModuleImport imported;
             imported.offset = token_.offset;
-            imported.selected_class = accept("class");
-            if (!imported.selected_class) require("module");
-            imported.selected_module = identifier();
-            imported.local_name = accept("as") ? identifier() : imported.selected_module;
+            imported.selected_namespace = accept("ns");
+            if (imported.selected_namespace) {
+                if (!pinned_namespace_mode_)
+                    fail("native import ns requires a verified pinned package namespace inventory");
+                imported.selected_module = identifier();
+                imported.local_name = imported.selected_module;
+                if (accept("as"))
+                    fail("native pinned namespace v1 does not admit a rebinding alias");
+            } else {
+                if (token_.text == "namespace")
+                    fail("native import namespace requires a verified manifest package index and per-provider linker");
+                imported.selected_class = accept("class");
+                if (!imported.selected_class) require("module");
+                imported.selected_module = identifier();
+                imported.local_name = accept("as") ? identifier() : imported.selected_module;
+            }
             if (!module_names_.insert(imported.local_name).second)
-                fail("duplicate imported module binding '" + imported.local_name + "'");
+                fail("duplicate imported binding '" + imported.local_name + "'");
             require("from");
-            if (token_.kind != Kind::String) fail("native module import requires a quoted source path");
+            if (token_.kind != Kind::String)
+                fail(imported.selected_namespace
+                    ? "native namespace import requires a quoted pkg:<alias> selector"
+                    : "native module import requires a quoted source path");
             imported.path = std::string(token_.text);
             if (imported.path.empty() || imported.path.size() > 4096)
                 fail("native import path must contain 1..4096 bytes");
             for (unsigned char ch : imported.path)
                 if (ch < 32 || ch == 127 || ch == '\\')
                     fail("native import path escapes/control characters unsupported");
+            if (imported.selected_namespace &&
+                    (imported.path.rfind("pkg:", 0) != 0 || imported.path.size() <= 4))
+                fail("native namespace import requires exact pkg:<alias> selector");
             advance();
             require(";");
             program.imports.push_back(std::move(imported));
@@ -718,7 +737,7 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         validate_type_only_declarations(program);
-        if (!program.namespace_name.empty() &&
+        if (!pinned_namespace_mode_ && !program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
@@ -3959,7 +3978,8 @@ private:
 
     std::unique_ptr<Expression> template_expression(std::string_view source,
                                                     std::size_t base_offset) {
-        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_);
+        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_,
+                      pinned_namespace_mode_);
         auto expr = nested.expression();
         if (nested.token_.kind != Kind::End)
             nested.fail("expected end of template interpolation expression");
@@ -5611,6 +5631,7 @@ private:
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    bool pinned_namespace_mode_;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
@@ -5777,9 +5798,9 @@ void resolve_future_pipeline_contracts(Program& program) {
 } // namespace
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
+                      bool experimental_rt_scalar_loop, bool pinned_namespace_mode) {
     Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop).parse();
+                             experimental_rt_scalar_loop, pinned_namespace_mode).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
