@@ -161,3 +161,41 @@ pins, not hashes minted from the same untrusted tree.
 These new tests must compile and execute in a real, pinned LLVM toolchain
 before they count as evidence. Neither permits the CLI to compile namespaces,
 and neither is the still-pending three-file LLVM guest exit-43 conformance.
+
+
+## Authenticated external namespace aliases (host-only lock slice)
+
+`VerifiedNamespaceDependencyLockV2.hpp` now accepts a bounded, deliberately
+restricted TOML **lockfile** with independently supplied lowercase SHA-256
+commitment, checked against a set of *already authenticated physical package
+instance IDs*. This is not a general-purpose TOML reader or proof that a
+caller-supplied hash is authoritative. The host must obtain the expected lock
+digest from a separately authorized package root and use a real SHA-256
+implementation. Supported syntax, one or more entries:
+
+```toml
+schema_version = "1"
+[[dependency]]
+importer = "v2:<64-lowercase-hex-manifest>:<64-lowercase-hex-sources>:app"
+alias = "checkout"
+target = "v2:<64-lowercase-hex-manifest>:<64-lowercase-hex-sources>:checkout"
+```
+
+Each `[[dependency]]` row must contain exactly `importer`, `alias`,
+`target`. Unknown keys, unresolved owner instances, self-links, duplicate
+alias bindings, unsupported TOML, oversized lockfile and SHA mismatches fail
+closed. The result has a private constructor and read-only alias bindings;
+it cannot be mutated after verification. The host-only
+`link_verified_namespace_snapshots_v2` accepts this optional sealed lock,
+**re-checks every importer and target against the actual physical snapshots
+of the current invocation**, and passes only those pins to
+`link_package_namespaces`. Without an approved lock, external aliases
+continue to reject; local `+/` continues to resolve only within the
+importer's own physical package.
+
+A standalone OpenSSL-backed lock verifier suite has locally executed 16/16
+cases under GCC, Clang, and ASan/UBSan with matching Git blob IDs; the graph
+integration fixture is authored but **not yet executed** on an exact-head
+native LLVM runner. This does **not** integrate an authoritative host lock
+store or enable guest namespace execution. Production compiler/codegen
+still rejects imports until typed, verified cross-file lowering exists.
