@@ -1,5 +1,7 @@
 #pragma once
 
+#include "oreslang/runtime/DbWalFrameV1.hpp"
+
 // POSIX host-only physical WAL sync gate; NOT compiled Oreslang guest.
 // A trusted runtime must supply an authenticated private directory FD, own
 // actor/isolate permissions and pin the physical I/O worker lifetime.
@@ -76,6 +78,24 @@ public:
 
     ~DbDurableWalFile() noexcept { close(); }
 
+    /**
+     * Strict WAL v1 append boundary. The tenant argument MUST be obtained
+     * from an authenticated context-issued shard grant, never from guest
+     * DATA. This validates the exact immutable buffer before file mutation.
+     * No guest commit receipt, replay or directory sync is implied.
+     */
+    SyncReceipt append_validated_and_sync(std::uint32_t tenant,
+                                          std::uint32_t generation,
+                                          std::uint32_t operation_id,
+                                          const std::uint8_t* frame,
+                                          std::size_t frame_size) {
+        DbWalFrameV1::require_matching(
+                frame, frame_size, tenant, generation, operation_id);
+        return append_and_sync(generation, operation_id, frame, frame_size);
+    }
+
+    // Low-level trusted physical primitive: callers entering from a DB
+    // shard actor MUST use append_validated_and_sync with real grant identity.
     SyncReceipt append_and_sync(std::uint32_t generation,
                                 std::uint32_t operation_id,
                                 const std::uint8_t* frame,
