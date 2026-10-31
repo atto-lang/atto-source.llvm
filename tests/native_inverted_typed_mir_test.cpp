@@ -1,6 +1,6 @@
 // MIR verifier and actual native InvertedColumns execution, not a mocked ABI.
 // This does not certify source-to-MIR lowering or the full oreslang-llvmc.
-#include "oreslang/types/InvertedTypedMir.hpp"
+#include "oreslang/types/InvertedNativeMirI64.hpp"
 #include <cassert>
 #include <cstdint>
 #include <limits>
