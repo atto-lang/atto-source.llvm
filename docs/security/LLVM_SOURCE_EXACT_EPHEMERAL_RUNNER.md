@@ -148,3 +148,29 @@ then proves that a repeated materialization refuses the nonempty worktree and
 never executes a configured Git smudge filter. This explicitly treats partial
 source materialization as a **denied/tainted job**, not a resumable checkout.
 The final source-free verifier/materializer matrix is 15 + 9 = 24 cases.
+
+## Enforced protected-main policy at all authorization points
+
+A `main.protected=true` badge alone is insufficient: protection may allow
+direct, unreviewed pushes or may omit required check enforcement. Both
+pre-checkout and post-execution authorization now read the actual source-main
+branch-protection endpoint, fail closed if inaccessible, and require:
+independent CODEOWNER reviews, stale approval dismissal, at least one approval,
+admin enforcement, no force pushes or deletions, empty reviewer bypass lists,
+and at least one strict required status check. The administrator's separate
+JIT-preparation helper must enforce the same requirements before generating
+one-time credentials.
+
+The source-free policy expression was exercised independently with 12 synthetic
+branch-protection cases: valid context/check-app configurations were admitted;
+weak review, bypass, no status checks, missing protections and non-strict
+required checks were denied. The trusted workflow's post-run mock includes
+19 negative authorization cases and the JIT mock includes added missing/empty/
+non-strict/malformed status-check failures.
+
+This is a **candidate security hardening change**, not a submitted independent
+review or proof that protected source main is configured. As of the audit
+on October 31, 2026, LLVM main reports unprotected; API reads of the
+protection and ruleset endpoints fail with HTTP 403. No runner, source export
+or guest execution is thereby authorized. No source organization administrator
+controls were modified.

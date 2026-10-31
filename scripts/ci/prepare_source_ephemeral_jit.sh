@@ -44,6 +44,12 @@ jq -e '
   and (.enforce_admins.enabled==true)
   and (.allow_force_pushes.enabled==false)
   and (.allow_deletions.enabled==false)
+  and (.required_status_checks | type=="object")
+  and (.required_status_checks.strict==true)
+  and (((.required_status_checks.contexts // []) | type)=="array")
+  and (((.required_status_checks.checks // []) | type)=="array")
+  and (((.required_status_checks.contexts // []) | length)>0 or
+       ((.required_status_checks.checks // []) | length)>0)
   and ([.required_pull_request_reviews.bypass_pull_request_allowances?
        | (.users // []), (.teams // []), (.apps // [])] | all(.==[]))
 ' <<< "$protection" >/dev/null || {

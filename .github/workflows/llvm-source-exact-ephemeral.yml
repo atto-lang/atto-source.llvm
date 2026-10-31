@@ -57,6 +57,26 @@ jobs:
           command -v gh
           protected_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
           test "$protected_main" = "true"
+          # A protected:true badge is NOT proof of enforced review or checks.
+          strong_main_policy="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection" --jq '
+            (.required_pull_request_reviews | type == "object") and
+            (.required_pull_request_reviews.require_code_owner_reviews == true) and
+            (.required_pull_request_reviews.dismiss_stale_reviews == true) and
+            (.required_pull_request_reviews.required_approving_review_count | type == "number") and
+            (.required_pull_request_reviews.required_approving_review_count >= 1) and
+            (.enforce_admins.enabled == true) and
+            (.allow_force_pushes.enabled == false) and
+            (.allow_deletions.enabled == false) and
+            (.required_status_checks | type == "object") and
+            (.required_status_checks.strict == true) and
+            (((.required_status_checks.contexts // []) | type) == "array") and
+            (((.required_status_checks.checks // []) | type) == "array") and
+            (((.required_status_checks.contexts // []) | length) > 0 or
+             ((.required_status_checks.checks // []) | length) > 0) and
+            ([.required_pull_request_reviews.bypass_pull_request_allowances? |
+              (.users // []), (.teams // []), (.apps // [])] | all(. == []))
+          ')"
+          test "$strong_main_policy" = "true"
           receipt="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
             --jq '[.head.sha, .head.repo.full_name, .state, (.head.repo.private|tostring), (.user.id|tostring)] | @tsv')"
           IFS=$'\t' read -r actual_sha actual_repo state private pr_author_id <<< "$receipt"
@@ -352,6 +372,25 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')" = "true"
+          strong_main_policy="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection" --jq '
+            (.required_pull_request_reviews | type == "object") and
+            (.required_pull_request_reviews.require_code_owner_reviews == true) and
+            (.required_pull_request_reviews.dismiss_stale_reviews == true) and
+            (.required_pull_request_reviews.required_approving_review_count | type == "number") and
+            (.required_pull_request_reviews.required_approving_review_count >= 1) and
+            (.enforce_admins.enabled == true) and
+            (.allow_force_pushes.enabled == false) and
+            (.allow_deletions.enabled == false) and
+            (.required_status_checks | type == "object") and
+            (.required_status_checks.strict == true) and
+            (((.required_status_checks.contexts // []) | type) == "array") and
+            (((.required_status_checks.checks // []) | type) == "array") and
+            (((.required_status_checks.contexts // []) | length) > 0 or
+             ((.required_status_checks.checks // []) | length) > 0) and
+            ([.required_pull_request_reviews.bypass_pull_request_allowances? |
+              (.users // []), (.teams // []), (.apps // [])] | all(. == []))
+          ')"
+          test "$strong_main_policy" = "true"
           receipt="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.head.sha, .head.repo.full_name, .state, (.head.repo.private|tostring), (.user.id|tostring)] | @tsv')"
           actual_sha="$(printf '%s' "$receipt" | cut -f1)"
           actual_repo="$(printf '%s' "$receipt" | cut -f2)"

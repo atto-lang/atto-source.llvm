@@ -59,6 +59,10 @@ assert_before() {
 trusted_step="$(extract_step 'Checkout trusted main for source-free workflow tests')"
 grep -qxF '          ref: ${{ github.sha }}' <<< "$trusted_step"
 grep -qxF '          persist-credentials: false' <<< "$trusted_step"
+admission_step="$(extract_step 'Verify open same-repo PR and exact immutable head before checkout')"
+grep -Fq 'repos/${GITHUB_REPOSITORY}/branches/main/protection' <<< "$admission_step"
+grep -Fq 'test "$strong_main_policy" = "true"' <<< "$admission_step"
+grep -Fq '.required_status_checks.strict == true' <<< "$admission_step"
 mock_step="$(extract_step 'Execute trusted source-free post-run authorization regression mocks')"
 grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$mock_step"
 grep -qxF '          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml' <<< "$mock_step"
@@ -166,6 +170,10 @@ block="$(awk '
   echo 'missing post-run attestation marker' >&2; exit 2;
 }
 bash -n <<< "$block"
+grep -Fq 'repos/${GITHUB_REPOSITORY}/branches/main/protection' <<< "$block"
+grep -Fq 'test "$strong_main_policy" = "true"' <<< "$block"
+grep -Fq '.required_status_checks.strict == true' <<< "$block"
+command -v jq >/dev/null
 export GITHUB_REPOSITORY="ores-truffle-oreslang/oreslang-source.llvm"
 export PR_NUMBER=1220
 export SOURCE_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -176,6 +184,7 @@ export FAKE_PR_STATE=open
 export FAKE_PR_PRIVATE=true
 export FAKE_AUTHOR_ID=7777
 export FAKE_PROTECTED=true
+export FAKE_POLICY_JSON='{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"required_status_checks":{"strict":true,"contexts":["llvm-security"],"checks":[]}}'
 export FAKE_REVIEW_STATE=APPROVED
 export FAKE_REVIEW_SHA="$SOURCE_SHA"
 export FAKE_REVIEWER_ID=11139560
@@ -188,6 +197,9 @@ gh() {
   case "${2:-}" in
     "repos/${GITHUB_REPOSITORY}/branches/main")
       printf '%s\n' "$FAKE_PROTECTED" ;;
+    "repos/${GITHUB_REPOSITORY}/branches/main/protection")
+      [[ "${3:-}" == --jq ]] || return 23
+      jq -r "${4:-}" <<< "$FAKE_POLICY_JSON" ;;
     "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
       printf '%s\t%s\t%s\t%s\t%s\n' "$FAKE_PR_SHA" "$FAKE_PR_REPO" "$FAKE_PR_STATE" "$FAKE_PR_PRIVATE" "$FAKE_AUTHOR_ID" ;;
     "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")
@@ -226,4 +238,12 @@ expect_deny 'review stale' FAKE_REVIEW_SHA bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 expect_deny 'unauthorized reviewer' FAKE_REVIEWER_ID 11139561
 expect_deny 'reviewer is author' FAKE_AUTHOR_ID 11139560
 expect_deny 'invalid author identity' FAKE_AUTHOR_ID invalid
-printf 'POSTRUN_MOCK_TESTS=%d PASS (1 allowed, 11 denied; no GitHub API calls)\n' "$runs"
+expect_deny 'weak CODEOWNER rule' FAKE_POLICY_JSON "$(jq -c '.required_pull_request_reviews.require_code_owner_reviews=false' <<< "$FAKE_POLICY_JSON")"
+expect_deny 'stale reviews accepted' FAKE_POLICY_JSON "$(jq -c '.required_pull_request_reviews.dismiss_stale_reviews=false' <<< "$FAKE_POLICY_JSON")"
+expect_deny 'administrator bypass' FAKE_POLICY_JSON "$(jq -c '.enforce_admins.enabled=false' <<< "$FAKE_POLICY_JSON")"
+expect_deny 'force-push allowed' FAKE_POLICY_JSON "$(jq -c '.allow_force_pushes.enabled=true' <<< "$FAKE_POLICY_JSON")"
+expect_deny 'status checks missing' FAKE_POLICY_JSON "$(jq -c 'del(.required_status_checks)' <<< "$FAKE_POLICY_JSON")"
+expect_deny 'status checks empty' FAKE_POLICY_JSON "$(jq -c '.required_status_checks.contexts=[]' <<< "$FAKE_POLICY_JSON")"
+expect_deny 'status checks non-strict' FAKE_POLICY_JSON "$(jq -c '.required_status_checks.strict=false' <<< "$FAKE_POLICY_JSON")"
+expect_deny 'review bypass app' FAKE_POLICY_JSON "$(jq -c '.required_pull_request_reviews.bypass_pull_request_allowances.apps=[{"slug":"bypass"}]' <<< "$FAKE_POLICY_JSON")"
+printf 'POSTRUN_MOCK_TESTS=%d PASS (1 allowed, 19 denied; no GitHub API calls)\n' "$runs"
