@@ -28,6 +28,9 @@ jobs:
       matrix:
         compiler: [gcc, clang]
         mode: [optimized, asan-ubsan]
+        include:
+          - compiler: gcc
+            mode: tsan
     steps:
       - name: Checkout exact source-repository head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -56,9 +59,17 @@ jobs:
           if [[ "$MODE" == optimized ]]; then
             FLAGS=(-O2 -DNDEBUG)
             LINK_FLAGS=()
-          else
+          elif [[ "$MODE" == asan-ubsan ]]; then
             FLAGS=(-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
             LINK_FLAGS=(-fsanitize=address,undefined)
+          elif [[ "$MODE" == tsan ]]; then
+            # Separately instrument the competing native completion observers;
+            # ThreadSanitizer cannot be combined with AddressSanitizer.
+            FLAGS=(-O1 -g -DNDEBUG -fsanitize=thread -fno-omit-frame-pointer)
+            LINK_FLAGS=(-fsanitize=thread)
+          else
+            echo "unsupported sanitizer mode: $MODE" >&2
+            exit 2
           fi
           "$CC" --version | head -n 1
           "$CXX" --version | head -n 1
