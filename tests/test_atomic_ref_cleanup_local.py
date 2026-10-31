@@ -193,6 +193,26 @@ class LocalGitAtomicRefCleanupTest(unittest.TestCase):
         actual = self.git("--git-dir", str(self.remote), "rev-parse", second).stdout.strip()
         self.assertEqual(actual, b, "competing writer ref deleted")
 
+    def test_two_ref_atomic_cleanup_rejects_concurrent_creation_of_previously_absent_ref(self):
+        # Publisher pre-read: source exists, authorization is absent.
+        # Competitor creates authorization before the atomic push.
+        # The empty expected-SHA lease must reject the ENTIRE transaction.
+        second = "refs/heads/ci/atomic-auth-marker"
+        absent = self.git("--git-dir", str(self.remote), "rev-parse",
+                          "--verify", second, check=False)
+        self.assertNotEqual(absent.returncode, 0)
+        self.git("--git-dir", str(self.remote), "update-ref", second, self.a)
+        result = self.git("-C", str(self.work), "push", "--porcelain", "--atomic",
+                          f"--force-with-lease={REF}:{self.a}",
+                          f"--force-with-lease={second}:",
+                          str(self.remote), f":{REF}", f":{second}", check=False)
+        self.assertNotEqual(result.returncode, 0,
+                            "new authorization ref unexpectedly accepted stale absent lease")
+        self.assertEqual(self.read(), self.a, "source ref was partly deleted")
+        actual = self.git("--git-dir", str(self.remote), "rev-parse",
+                          "--verify", second).stdout.strip()
+        self.assertEqual(actual, self.a, "new authorization ref was partly deleted")
+
     def test_atomic_two_ref_sha_lease_still_permits_aba(self):
         second = "refs/heads/ci/atomic-auth-marker"
         self.git("--git-dir", str(self.remote), "update-ref", second, self.a)
