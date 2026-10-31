@@ -3,6 +3,7 @@
 // despite syntactic admission the program cannot pass codegen validation.
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/InvertedSchemaMirAdmission.hpp"
+#include "oreslang/types/InvertedProductionSourceMir.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -79,6 +80,77 @@ end
 )ores");
     check(nested.inverted_structs.size() == 1 &&
           nested.inverted_structs[0].name == "Point", "module nested schema lost");
+
+    // The real production lexer recognizes the first executable two-column
+    // subset and constructs a typed source operation sequence (no adapter).
+    auto live = parse_program(R"ores(
+define inverted struct Position as
+    let x: int;
+    id: int;
+end
+fnc main(): int {
+    let rows = InvertedArray<Position>.with_capacity(3);
+    rows.push(11, 100);
+    rows.push(20, 101);
+    rows.set(1, x, 42);
+    rows.erase_swap(0);
+    return rows.get(0, x);
+}
+)ores");
+    check(live.functions.empty() && live.inverted_main.has_value(),
+          "production parsed inverted main not preserved");
+    check(live.inverted_main->schema_name == "Position" &&
+          live.inverted_main->owner_name == "rows" &&
+          live.inverted_main->capacity == 3,
+          "production inverted owner metadata corrupted");
+    check(live.inverted_main->operations.size() == 5,
+          "production inverted action order corrupted");
+    const auto verified = dop::mir::verify_production_inverted_i64(live);
+    check(verified.mir.instructions().size() == 7,
+          "production source did not produce full MIR and close");
+    check(verified.mir.instructions().back().kind == dop::hir::OpKind::Close,
+          "production main does not revoke local owner after read");
+    const auto ir = dop::mir::emit_native_i64_pair_ir(
+        verified.mir, verified.operands);
+    check(ir.find("define i32 @main()") != std::string::npos &&
+          ir.find("store volatile i1 false, ptr %alive") != std::string::npos &&
+          ir.find("call void @llvm.trap()") != std::string::npos,
+          "production verified MIR failed to emit checked native IR");
+
+    rejects([] {
+        (void)parse_program(R"ores(
+define inverted struct P as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(11, 22);
+    rows.set(0, id, 42);
+    return rows.get(0, x);
+}
+)ores");
+    }, "immutable inverted field cannot be written");
+    rejects([] {
+        (void)parse_program(R"ores(
+define inverted struct P as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(11, 22);
+    rows.erase_swap(0);
+    return rows.get(0, x);
+}
+fnc hidden(): int { return 0; }
+)ores");
+    }, "only source callable");
+    rejects([] {
+        (void)parse_program(R"ores(
+define inverted struct P as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(1, 2);
+    rows.erase_swap(1);
+    return rows.get(0, x);
+}
+)ores");
+    }, "outside current length");
 
     rejects([] {
         auto p = parse_unresolved_program(
