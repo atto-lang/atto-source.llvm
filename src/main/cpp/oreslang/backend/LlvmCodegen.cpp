@@ -2873,6 +2873,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions) {
         if (fn.c_export_u32_symbol.empty()) continue;
         if (wasm32_target || cortex_m_target || !source.module.empty() ||
+            source.functions.size() != 1 || !source.classes.empty() ||
+            !source.generators.empty() || !source.cooperative_loops.empty() ||
             fn.c_export_u32_symbol != "ores_browser_abi_version" ||
             fn.name == fn.c_export_u32_symbol || fn.name == "main" ||
             fn.name.find('.') != std::string::npos ||
