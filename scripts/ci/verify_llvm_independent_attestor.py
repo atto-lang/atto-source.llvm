@@ -34,6 +34,8 @@ SUITES = {
     ),
     "cgl-compat": (
         TOOLCHAIN, "Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF",
+        # Native CGL sanitizers are mandatory regardless of the optional guest flag.
+        "Execute linked CGL native tests with Clang ASan and UBSan",
     ),
     "security-v3": ("Run full V3 private-export security regressions (no export)",),
 }
@@ -43,7 +45,6 @@ SANITIZERS = {
         "Repeat real source actor compile-and-execution under ASan/UBSan",
         "Execute compiled ledger guests under Clang ASan and UBSan",
     ),
-    "cgl-compat": ("Execute linked CGL native tests with Clang ASan and UBSan",),
 }
 
 

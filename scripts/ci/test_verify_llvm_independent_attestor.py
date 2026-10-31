@@ -182,6 +182,25 @@ class AttestorSourceFreeTests(unittest.TestCase):
                 with self.assertRaises(attestor.Denied):
                     self.evaluate(env, data)
 
+    def test_cgl_native_sanitizers_required_even_when_guest_flag_false(self):
+        env, data = fixture(suite="cgl-compat", san=False)
+        jobs = data["repos/" + repo + "/actions/runs/100/attempts/2/jobs?per_page=100"]["jobs"]
+        source = jobs[0]
+        required = "Execute linked CGL native tests with Clang ASan and UBSan"
+        self.assertIn(required, attestor.required_steps("cgl-compat", False))
+        self.assertIn(required, attestor.required_steps("cgl-compat", True))
+        # A passing CGL guest smoke without native sanitizers must be denied.
+        source["steps"] = [step for step in source["steps"] if step["name"] != required]
+        with self.assertRaises(attestor.Denied):
+            self.evaluate(env, data)
+
+        env, data = fixture(suite="cgl-compat", san=False)
+        steps = data["repos/" + repo + "/actions/runs/100/attempts/2/jobs?per_page=100"]["jobs"][0]["steps"]
+        step = next(step for step in steps if step["name"] == required)
+        step["conclusion"] = "skipped"
+        with self.assertRaises(attestor.Denied):
+            self.evaluate(env, data)
+
     def test_spoofed_approval_marker_not_used(self):
         env, data = fixture()
         jobs = data["repos/" + repo + "/actions/runs/100/attempts/2/jobs?per_page=100"]["jobs"]
