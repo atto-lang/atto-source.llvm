@@ -33,8 +33,12 @@ def compiler_run(path, experimental=True):
 def verify_ir(ir):
     if "define i32 @main()" not in ir or "declare void @llvm.trap()" not in ir:
         raise AssertionError("guest column IR or checked trap missing")
-    if ir.count("alloca [") != 2 and ir.count("alloca [") != 1:
-        raise AssertionError("expected physical columns, not boxed row heap")
+    lanes = ir.count(" = alloca [")
+    if lanes not in (1, 2, 3):
+        raise AssertionError("expected only physical columns and optional row liveness lane")
+    if lanes == 3 and ("%generation = alloca [" not in ir
+                       or "%alive = alloca i1" not in ir):
+        raise AssertionError("third lane must be checked MIR live-row metadata")
     if "getelementptr inbounds [" not in ir:
         raise AssertionError("no physical column-index addressing")
     if "icmp ult i64" not in ir or "store i64" not in ir or "load i64" not in ir:
@@ -52,6 +56,11 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
         if result.returncode != 0:
             raise AssertionError(f"real .ores positive failed compilation: {result.stderr}")
         verify_ir(result.stdout)
+        if "; typed MIR, experimental local i64 pair LLVM IR" not in result.stdout:
+            raise AssertionError("two-i64 guest did not lower through verified typed MIR")
+        if "%generation = alloca [" not in result.stdout or (
+                "load i1, ptr %alive" not in result.stdout):
+            raise AssertionError("typed MIR guest omitted live-row or owner check")
         ir_path, executable = temp / f"positive-{i}.ll", temp / f"positive-{i}"
         ir_path.write_text(result.stdout, encoding="utf-8")
         compile_result = subprocess.run(
