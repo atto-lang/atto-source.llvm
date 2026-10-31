@@ -24,7 +24,7 @@ target_compile_features(oreslang-inverted-typed-plan-test PRIVATE cxx_std_20)
 target_link_libraries(oreslang-inverted-typed-plan-test PRIVATE Threads::Threads)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(oreslang-inverted-typed-plan-test PRIVATE
-        -Wall -Wextra -Wpedantic -Werror)
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
 endif()
 
 if(BUILD_TESTING)
