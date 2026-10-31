@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -476,6 +478,24 @@ struct InvertedStructDecl {
     std::size_t offset = 0;
 };
 
+// One strictly local and bounded source-to-MIR slice. These are parsed
+// production source operations, NOT LLVM IR or a compiler authorization;
+// an independent typed HIR/MIR verifier must admit the complete stream.
+struct InvertedSourceOperation {
+    enum class Kind { Push, WriteField, EraseSwap, ReturnRead };
+    Kind kind = Kind::Push;
+    std::size_t index = 0;
+    std::string field;
+    std::array<std::int64_t, 2> values{};
+    std::int64_t value = 0;
+};
+struct InvertedSourceMain {
+    std::string schema_name;
+    std::string owner_name;
+    std::size_t capacity = 0;
+    std::vector<InvertedSourceOperation> operations;
+};
+
 struct Program {
     std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
@@ -492,6 +512,8 @@ struct Program {
     std::vector<NativeSumType> sum_types;
     // Appended to preserve existing positional aggregate field ordering.
     std::vector<InvertedStructDecl> inverted_structs;
+    // Appended to avoid disrupting historical Program aggregate initialization.
+    std::optional<InvertedSourceMain> inverted_main;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
