@@ -17,6 +17,19 @@ set -euo pipefail
 case "${SYNTH_MODE:-normal}" in
   fail) echo 'synthetic helper failure' >&2; exit 1 ;;
   invalid-ir) printf 'not LLVM IR\n'; exit 0 ;;
+  helper-stderr) echo 'synthetic helper warning' >&2 ;;
+  noisy-guest)
+    cat <<'LLVM_IR'
+@.msg = private unnamed_addr constant [6 x i8] c"NOISE\00"
+declare i32 @puts(ptr)
+define i32 @main() {
+entry:
+  %line = getelementptr inbounds [6 x i8], ptr @.msg, i64 0, i64 0
+  call i32 @puts(ptr %line)
+  ret i32 43
+}
+LLVM_IR
+    exit 0 ;;
   *) ;;
 esac
 value=43
@@ -54,4 +67,7 @@ expect_failure wrong-exit 53 '--all-providers' 'pinned namespace guest exit mism
 run_harness 43 '' >/dev/null
 artifacts_exist
 expect_failure invalid-ir 43 '' 'did not emit a native main'
-echo 'SYNTHETIC_NAMESPACE_HARNESS_CLEANUP=PASS positive=3 negative=3 scope=NOT_ORESLANG_COMPILER_OR_GUEST'
+expect_failure helper-stderr 43 '' 'pinned namespace helper wrote stderr'
+expect_failure noisy-guest 43 '' 'pinned namespace guest produced output'
+expect_failure normal 99 '' 'unexpected pinned namespace guest oracle'
+echo 'SYNTHETIC_NAMESPACE_HARNESS_CLEANUP=PASS positive=3 negative=6 scope=NOT_ORESLANG_COMPILER_OR_GUEST'
