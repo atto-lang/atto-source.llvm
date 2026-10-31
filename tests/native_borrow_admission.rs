@@ -113,6 +113,8 @@ fn main() {
     let compiler = fs::canonicalize(&args[1]).expect("compiler path");
     let root = Scratch::new();
     let negatives = [
+        ("mut-share-scalar-reject", "pub fnc main(): int { let int v = 42; return rt mut share v; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
@@ -133,7 +135,7 @@ fn main() {
         check_case(&compiler, &root.0, name, source, None);
     }
     println!(
-        "PASS native borrow admission: eight no-IR/no-artifact denials, three real IR controls"
+        "PASS native borrow admission: ten no-IR/no-artifact denials, three real IR controls"
     );
 }
 
