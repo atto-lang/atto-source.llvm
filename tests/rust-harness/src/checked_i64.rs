@@ -190,6 +190,30 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         }
     }
 
+    for (name, fixture, diagnostic) in [
+        (
+            "host-error-type",
+            "tests/fixtures/numeric-v1/math-module-unsupported-error-type.ores",
+            "native ErrorSlot type test supports only ArithmeticOverflowError or Error",
+        ),
+        (
+            "opaque-error-binding",
+            "tests/fixtures/numeric-v1/math-module-error-binding-scalar-reject.ores",
+            "native ErrorSlot catch v1 requires an integer literal handler result",
+        ),
+    ] {
+        let rejected = run(compiler, [source_root.join(fixture).as_os_str()])?;
+        require(
+            !rejected.status.success()
+                && stdout(&rejected).trim().is_empty()
+                && stderr(&rejected).contains(diagnostic),
+            format!(
+                "{name}: ErrorSlot fail-closed diagnostic changed: {}",
+                stderr(&rejected)
+            ),
+        )?;
+    }
+
     // wasm32 admits only root-relative, leaf, pure-scalar user modules.
     // Compile the exact shared Math module graph without executing host code.
     let wasm_math = &module_cases[0].1;
