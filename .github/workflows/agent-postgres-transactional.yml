@@ -92,6 +92,13 @@ jobs:
         run: |
           set -euo pipefail
           export PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD"
+          # Source-backed, no live DB required: prove timeout parameters
+          # override an attempted conninfo downgrade before any connection.
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
+            contracts/v1/agent-dispatch/agent_pg_connection_timeout_test.cpp \
+            -Wl,--wrap=PQconnectdbParams -lpq -o "$RUNNER_TEMP/pg_timeout_contract"
+          "$RUNNER_TEMP/pg_timeout_contract"
           g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
             -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
             contracts/v1/agent-dispatch/pg_dispatch_integration_test.cpp \
