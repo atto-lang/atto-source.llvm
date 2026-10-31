@@ -218,7 +218,11 @@ public:
         return gate_.finish_resume(ticket);
     }
     bool try_retire(AsyncIoTicket ticket) {
-        std::lock_guard<std::mutex> lock(mu_);
+        // A scheduler retirement probe must not park behind a concurrent
+        // receipt admission/release. Contention is a retryable false, never
+        // evidence that the frame is safe to reclaim.
+        std::unique_lock<std::mutex> lock(mu_, std::try_to_lock);
+        if (!lock.owns_lock()) return false;
         for (const auto& slot : slots_) if (slot.live) return false;
         return gate_.try_retire(ticket); // retains same-word retirement fence
     }

@@ -444,8 +444,51 @@ int main() {
                   && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
               "racing admission allowed premature or duplicate retirement");
     }
-    // Receipt release and retirement share the adapter mutex; the underlying
-    // loan word still supplies the permanent CAS fence.
+    // Multiple borrowers drain receipts concurrently while a scheduler
+    // probes retirement. A final sentinel receipt must prevent reclamation,
+    // regardless of the mutex contention or the other releases' ordering.
+    {
+        AsyncIoTicket ticket{128, 17, 21};
+        BorrowerPinnedContinuationGate gate(ticket);
+        std::vector<BorrowerPinnedContinuationGate::Receipt> receipts;
+        for (std::uint64_t borrower = 1;
+             borrower <= BorrowerPinnedContinuationGate::max_receipts; ++borrower) {
+            auto receipt = gate.acquire(ticket, borrower,
+                BorrowerPinnedContinuationGate::Loan::shared);
+            check(receipt.has_value(), "concurrent receipt drain setup failed");
+            receipts.push_back(*receipt);
+        }
+        check(gate.settle(ticket, AsyncIoTerminal::cancelled)
+                && gate.broker_acknowledge(ticket)
+                && gate.try_claim_resume(ticket)
+                && gate.finish_resume(ticket),
+              "concurrent receipt drain cleanup incomplete");
+        std::atomic<bool> start{false};
+        std::atomic<unsigned> released{0};
+        auto drain = [&](std::size_t first, std::size_t last) {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            for (std::size_t i = first; i < last; ++i)
+                if (gate.release(ticket, static_cast<std::uint64_t>(i + 1), receipts[i]))
+                    released.fetch_add(1, std::memory_order_relaxed);
+        };
+        std::thread a(drain, 0, 21);
+        std::thread b(drain, 21, 42);
+        std::thread c(drain, 42, 63);
+        start.store(true, std::memory_order_release);
+        for (unsigned probe = 0; probe < 1024; ++probe)
+            check(!gate.try_retire(ticket),
+                  "retirement bypassed live sentinel receipt under contention");
+        a.join(); b.join(); c.join();
+        check(released.load(std::memory_order_relaxed) == 63
+                && gate.loan_state() == 1 && !gate.try_retire(ticket),
+              "concurrent borrower drain lost a receipt or retired prematurely");
+        check(gate.release(ticket, 64, receipts[63])
+                && gate.try_retire(ticket) && !gate.try_retire(ticket)
+                && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
+              "concurrent borrower drain failed permanent retirement fence");
+    }
+    // Receipt release and retirement serialize through the adapter mutex;
+    // retirement probes fail closed rather than waiting on contention.
     for (std::uint64_t round = 1; round <= 128; ++round) {
         AsyncIoTicket ticket{124, round, round};
         BorrowerPinnedContinuationGate gate(ticket);
