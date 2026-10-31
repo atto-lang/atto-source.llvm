@@ -80,13 +80,15 @@ public:
 
     static std::optional<TaskLease> retain_child_task(
             Context& context, Handle request, OresNativeActorRef owner,
+            const TaskCancellation::Ptr& expected_parent,
             TaskCancellation::Ptr child_authority) {
-        if(!child_authority) return std::nullopt;
+        if(!expected_parent || !child_authority) return std::nullopt;
         std::optional<Lease> retained;
-        // Admission and cancellation/retirement share the Task graph lock.
-        // The callback only acquires a request-registry pin; it does not
-        // execute guest code, invoke Task methods, or suspend.
-        const bool admitted=child_authority->with_active_authority([&] {
+        // Exact structured parent and cancellation/retirement share ONE Task
+        // graph-lock admission boundary. No unrelated Task can silently
+        // acquire another request's physical lease through this bridge.
+        // The callback only pins registry storage, never executes guest code.
+        const bool admitted=child_authority->with_active_child_of(expected_parent,[&] {
             retained=context.retain(request,owner);
             return bool(retained);
         });
