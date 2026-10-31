@@ -249,6 +249,24 @@ int main() {
             });
         }
 
+        // TOML tables are single authorities; reopening a known table cannot
+        // split validation across two parser states.
+        {
+            const auto dir = fixture.root / "duplicate-table";
+            write_text(dir / "src/x.ores",
+                "namespace x; pub fnc x(): int { return 1; }\n");
+            write_text(dir / ".ores.pkg.toml",
+                "schema_version = \"2\"\n"
+                "[project]\nname = \"dup-table\"\n"
+                "[source]\nroots = [\"src\"]\n"
+                "[source]\nimport_paths = []\n"
+                "[packages.main]\nfiles = [\"src/x.ores\"]\n");
+            must_fail("duplicate package manifest table [source]", [&] {
+                (void)oreslang::load_verified_package_manifest_v2(
+                    dir / ".ores.pkg.toml", read_text);
+            });
+        }
+
         // One physical file cannot acquire two package identities through
         // multiple manifest groups.
         {
@@ -306,6 +324,28 @@ int main() {
                 (void)oreslang::discover_verified_package_manifest_v2(
                     dir / "child/src/main.ores", read_text);
             });
+        }
+
+        // Two opaque package IDs cannot claim one physical manifest+group
+        // through hard-link aliases. Different groups in the same manifest are
+        // allowed, but the exact same group has one physical authority.
+        {
+            const auto alias = fixture.foo / ".ores.pkg.alias.toml";
+            std::error_code link_error;
+            fs::create_hard_link(
+                fixture.foo_manifest_path, alias, link_error);
+            if (!link_error) {
+                auto duplicate = fixture.lock;
+                auto entry =
+                    duplicate.package_instances.at("foo@sha:1111");
+                entry.manifest_path = alias;
+                duplicate.package_instances.emplace(
+                    "foo@sha:duplicate", std::move(entry));
+                must_fail("same manifest package group", [&] {
+                    (void)fixture.materialize(duplicate);
+                });
+                fs::remove(alias, link_error);
+            }
         }
 
         // Manifest authority is content-addressed.
