@@ -83,12 +83,10 @@ int main() {
     }, "not exported");
     // A source from a DIFFERENT physical package cannot select foo's
     // namespace merely by spelling the same +/ local alias.
-    const auto app_local = link_package_namespaces(
-        units, {}, {{"app/main", "+/", "a", "local_a"}});
     must_reject([&] {
-        (void)resolve_package_namespace_scalar_call(
-            app_local, "app/main", "local_a", "add", {});
-    }, "not exported");
+        (void)link_package_namespaces(
+            units, {}, {{"app/main", "+/", "a", "local_a"}});
+    }, "no cross-package fallback");
     // A bound selector resolves to a physical provider, never a global
     // namespace/function name. This is typed host resolution only.
     const auto add_call = resolve_package_namespace_scalar_call(
