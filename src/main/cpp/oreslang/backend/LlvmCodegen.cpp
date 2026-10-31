@@ -78,8 +78,22 @@ bool native_error_slot_scalar_program(const Program& source) {
             !source.conforms.empty() || !source.sum_types.empty() ||
             source.functions.empty())
         return false;
-    return std::all_of(source.functions.begin(), source.functions.end(),
-        native_error_slot_scalar_function);
+
+    // Keep the first executable slice deliberately narrower than general
+    // same-file calls: one root main plus statically linked leaf-module
+    // helpers. This proves cross-unit propagation for the canonical Math
+    // module without changing existing standalone helper-call IR contracts.
+    bool imported_helper = false;
+    for (const auto& fn : source.functions) {
+        if (!native_error_slot_scalar_function(fn))
+            return false;
+        if (fn.name == "main")
+            continue;
+        if (fn.name.rfind("__ores_module_", 0) != 0)
+            return false;
+        imported_helper = true;
+    }
+    return imported_helper;
 }
 
 // Owned i64 parameters receive stack slots so the only permitted loans can
