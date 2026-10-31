@@ -18,7 +18,7 @@ extract_step() {
 # input substitution would happen *before* shell parsing, enabling injection
 # if a later edit weakens trusted preflight. Inputs belong in step env only.
 awk '
-  /^        run: \\|[[:space:]]*$/ { in_run=1; next }
+  /^        run: \|[[:space:]]*$/ { in_run=1; next }
   in_run && /^      - name: / { in_run=0 }
   in_run && index($0, "${{") > 0 { bad=1 }
   END { exit bad ? 1 : 0 }
