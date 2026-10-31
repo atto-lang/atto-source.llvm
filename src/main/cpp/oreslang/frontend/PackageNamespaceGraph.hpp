@@ -113,6 +113,14 @@ inline bool namespace_pure_scalar_expression_at_depth(
     const auto type_is = [](const Expression* node, ScalarType type) {
         return node && node->resolved_type == type;
     };
+    const auto positional_arguments_only = [&] {
+        if (expression->argument_names.empty()) return true;
+        return expression->argument_names.size() == expression->arguments.size()
+            && std::all_of(
+                expression->argument_names.begin(),
+                expression->argument_names.end(),
+                [](const std::string& name) { return name.empty(); });
+    };
     switch (expression->kind) {
         case Expression::Kind::Integer:
             if (expression->resolved_type != ScalarType::I64
@@ -199,7 +207,7 @@ inline bool namespace_pure_scalar_expression_at_depth(
                     || !valid_flat_namespace_name(expression->name)
                     || expression->left || expression->right
                     || !no_ternary_children()
-                    || !expression->argument_names.empty()
+                    || !positional_arguments_only()
                     || expression->type_arguments_present
                     || !expression->type_arguments.empty())
                 return false;
@@ -210,10 +218,10 @@ inline bool namespace_pure_scalar_expression_at_depth(
     if (expression->resolved_type != ScalarType::I64
             && expression->resolved_type != ScalarType::Bool) return false;
     if (!expression->resolved_class.empty() || !expression->sum_type.empty()
-            || !expression->argument_names.empty()
             || !expression->type_arguments.empty() || expression->type_arguments_present)
         return false;
-    if (expression->kind != Expression::Kind::Call && !expression->arguments.empty())
+    if (expression->kind != Expression::Kind::Call
+            && (!expression->arguments.empty() || !expression->argument_names.empty()))
         return false;
     if (!namespace_pure_scalar_expression_at_depth(
             expression->left.get(), depth + 1, remaining_nodes, options)
