@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Compiler-backed source admission only: f64 literals must NOT produce i64 IR.
-# This is not f64 codegen or a floating-point parity test.
+# Real LLVM source -> IR -> Clang -> executable f64 scalar contract.
+# Positive cases MUST execute native guest code; negative cases must emit
+# no IR. This script is NOT an Array<f64>, Result, or ORIE solver receipt.
 set -euo pipefail
 umask 077
 export LC_ALL=C
@@ -10,58 +11,97 @@ compiler="$1"; clang="$2"
   { echo "Missing real LLVM compiler or Clang" >&2; exit 69; }
 scratch="$(mktemp -d)"
 trap 'rm -rf -- "$scratch"' EXIT
-checks=0
+pass=0
+reject=0
+
+positive() {
+  local name="$1" source="$2"
+  printf '%s\n' "$source" > "$scratch/$name.ores"
+  "$compiler" --target=host "$scratch/$name.ores" \
+    > "$scratch/$name.ll" 2> "$scratch/$name.compiler.stderr" ||
+    { echo "NATIVE_F64_COMPILER_REJECTED: $name" >&2
+      cat "$scratch/$name.compiler.stderr" >&2; exit 1; }
+  [[ -s "$scratch/$name.ll" && ! -s "$scratch/$name.compiler.stderr" ]] ||
+    { echo "NATIVE_F64_COMPILER_IR_OR_DIAGNOSTIC: $name" >&2; exit 1; }
+  "$clang" -x ir "$scratch/$name.ll" -o "$scratch/$name.native" \
+    > "$scratch/$name.link.stdout" 2> "$scratch/$name.link.stderr" ||
+    { echo "NATIVE_F64_LINK_FAILED: $name" >&2
+      cat "$scratch/$name.link.stderr" >&2; exit 1; }
+  [[ -x "$scratch/$name.native" && ! -s "$scratch/$name.link.stderr" ]] ||
+    { echo "NATIVE_F64_LINK_DIAGNOSTIC: $name" >&2; exit 1; }
+  local rc=0
+  "$scratch/$name.native" > "$scratch/$name.stdout" \
+    2> "$scratch/$name.stderr" || rc=$?
+  [[ "$rc" -eq 42 && ! -s "$scratch/$name.stdout" &&
+     ! -s "$scratch/$name.stderr" ]] ||
+    { echo "NATIVE_F64_EXIT_MISMATCH: $name rc=$rc" >&2; exit 1; }
+  pass=$((pass + 1))
+  echo "NATIVE_F64_GUEST_EXACT: $name"
+}
 
 negative() {
-  local name="$1" source="$2" diagnostic="$3"
+  local name="$1" source="$2"
   printf '%s\n' "$source" > "$scratch/$name.ores"
   if "$compiler" --target=host "$scratch/$name.ores" \
       > "$scratch/$name.ll" 2> "$scratch/$name.stderr"; then
-    echo "NATIVE_F64_FALSE_ADMISSION: $name" >&2; exit 1
+    echo "NATIVE_F64_FALSE_ACCEPT: $name" >&2; exit 1
   fi
-  [[ ! -s "$scratch/$name.ll" ]] ||
-    { echo "NATIVE_F64_PARTIAL_IR: $name" >&2; exit 1; }
-  grep -Fq -- "$diagnostic" "$scratch/$name.stderr" ||
-    { echo "NATIVE_F64_MISSING_DIAGNOSTIC: $name" >&2
-      cat "$scratch/$name.stderr" >&2; exit 1; }
-  checks=$((checks+1))
-  echo "NATIVE_F64_UNSUPPORTED_EXPLICIT: $name"
+  [[ ! -s "$scratch/$name.ll" && -s "$scratch/$name.stderr" ]] ||
+    { echo "NATIVE_F64_PARTIAL_IR_OR_MISSING_ERROR: $name" >&2; exit 1; }
+  reject=$((reject + 1))
+  echo "NATIVE_F64_REJECTED_NO_IR: $name"
 }
 
-# Positive control ensures the compiler isn't simply failing everything.
-printf '%s\n' 'pub fnc main(): int { return 42; }' > "$scratch/i64.ores"
-"$compiler" --target=host "$scratch/i64.ores" \
-  > "$scratch/i64.ll" 2> "$scratch/i64.compiler.stderr"
-[[ -s "$scratch/i64.ll" && ! -s "$scratch/i64.compiler.stderr" ]] ||
-  { echo 'NATIVE_F64_CONTROL_REJECTED' >&2; exit 1; }
-"$clang" -x ir "$scratch/i64.ll" -o "$scratch/i64.native" \
-  > "$scratch/i64.link.stdout" 2> "$scratch/i64.link.stderr"
-[[ -x "$scratch/i64.native" ]] ||
-  { echo 'NATIVE_F64_CONTROL_LINK_FAILED' >&2; exit 1; }
-rc=0
-"$scratch/i64.native" > "$scratch/i64.stdout" 2> "$scratch/i64.stderr" || rc=$?
-[[ "$rc" -eq 42 && ! -s "$scratch/i64.stdout" &&
-   ! -s "$scratch/i64.stderr" ]] ||
-  { echo 'NATIVE_F64_CONTROL_GUEST_FAILED' >&2; exit 1; }
-checks=$((checks+1))
-echo 'NATIVE_I64_POSITIVE_CONTROL_EXECUTED'
+positive scalar_local 'pub fnc main(): int {
+  val f64 value = 0.3;
+  if value > 0.0; then return 42; else return 86; fi
+}'
+positive scientific 'pub fnc main(): int {
+  val f64 value = 1E-2;
+  if value < 0.02; then return 42; else return 86; fi
+}'
+positive arithmetic 'pub fnc main(): int {
+  val f64 value = (2.5 + 1.5) * 3.0 - 1.0;
+  if value == 11.0; then return 42; else return 86; fi
+}'
+positive signed_zero 'pub fnc main(): int {
+  val f64 value = -0.0;
+  if value == 0.0; then return 42; else return 86; fi
+}'
+positive rounding 'pub fnc main(): int {
+  val f64 value = 0.1 + 0.2;
+  if value > 0.3; then return 42; else return 86; fi
+}'
+positive integer_control 'pub fnc main(): int { return 42; }'
 
-negative decimal \
-  'pub fnc main(): int { return 0.3; }' \
-  'native f64 literal requires typed IEEE-754 lowering; unsupported'
-negative scientific \
-  'pub fnc main(): int { return 1e2; }' \
-  'native f64 literal requires typed IEEE-754 lowering; unsupported'
-negative signed_exponent \
-  'pub fnc main(): int { return 1E-2; }' \
-  'native f64 literal requires typed IEEE-754 lowering; unsupported'
-negative tiny_fraction \
-  'pub fnc main(): int { return 0.000000001; }' \
-  'native f64 literal requires typed IEEE-754 lowering; unsupported'
-negative malformed_exponent \
-  'pub fnc main(): int { return 1e+; }' \
-  'malformed native floating exponent at byte'
+negative implicit_int_to_f64 'pub fnc main(): int {
+  val f64 value = 1;
+  return 42;
+}'
+negative mixed_add 'pub fnc main(): int {
+  val f64 value = 0.5 + 1;
+  return 42;
+}'
+negative mixed_ordered_compare 'pub fnc main(): int {
+  val f64 value = 0.5;
+  if value < 1; then return 42; else return 86; fi
+}'
+negative f64_to_integer_return 'pub fnc main(): int {
+  return 1.5;
+}'
+negative malformed_exponent 'pub fnc main(): int {
+  val f64 value = 1e+;
+  return 42;
+}'
+negative out_of_range 'pub fnc main(): int {
+  val f64 value = 1e9999;
+  return 42;
+}'
+negative implicit_bool_to_f64 'pub fnc main(): int {
+  val f64 value = true;
+  return 42;
+}'
 
-[[ "$checks" -eq 6 ]] ||
-  { echo "NATIVE_F64_INCOMPLETE_TEST_COUNT=$checks" >&2; exit 1; }
-echo 'NATIVE_F64_GATING: i64 control 1/1; five negative cases (no native f64 codegen)'
+[[ "$pass" -eq 6 && "$reject" -eq 7 ]] ||
+  { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=6; NEGATIVE_NO_IR_PASS=7 (not arrays/solver)"
