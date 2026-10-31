@@ -117,7 +117,7 @@ int main() {
             candidate.pinned_aliases["app@1"]["foo"] = "other@1";
             source(candidate, "app/main").source =
                 "import ns a from \"pkg:foo\"; "
-                "pub fnc main(): int { return a.aggregate(21); }\\n";
+                "pub fnc main(): int { return a.aggregate(21); }\n";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
                 "unknown namespace member or wrong arity");
