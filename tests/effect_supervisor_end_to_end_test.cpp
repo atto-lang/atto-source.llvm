@@ -24,6 +24,8 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     SupervisorFailureLane::Kind last = SupervisorFailureLane::Kind::Throw;
     SupervisorFailureLane::Kind last_origin = SupervisorFailureLane::Kind::Throw;
     std::uint32_t last_code = 0;
+    std::string last_actor;
+    std::string last_parent;
     SupervisorControlTurn::Decision decision = SupervisorControlTurn::Decision::Acknowledge;
 
     SupervisorControlTurn::Decision record(
@@ -33,6 +35,8 @@ struct Hooks final : SupervisorControlTurn::Hooks {
         last = kind;
         last_origin = failure.origin_kind;
         last_code = failure.origin_code;
+        last_actor = failure.actor.id;
+        last_parent = failure.parent_id;
         return decision;
     }
 
@@ -126,6 +130,34 @@ int main() {
     CHECK(hooks.escalations == 1);
     CHECK(parent.restarts_used() == 0);
     CHECK(parent.reserved_count() == 0);
+
+    // Checked arithmetic Throw is not catchable by the failing actor once it
+    // reaches the actor boundary. The shared escalation semantics promote it
+    // through Raise to Panic, publish only to the parent's priority CONTROL
+    // lane, and preserve original Throw + ArithmeticOverflowError(65537).
+    hooks.decision = SupervisorControlTurn::Decision::Acknowledge;
+    const Key overflowed{"child-overflow", 16};
+    parent.reserve_child(overflowed);
+    const int before_overflow_callbacks = hooks.callbacks;
+    const int before_overflow_user = hooks.user_turns;
+    CHECK(EffectSupervisorBridge::publish_terminal(
+        parent, overflowed,
+        {EffectKind::Throw,
+         static_cast<std::uint32_t>(
+             oreslang::NumericErrorCode::ArithmeticOverflowError)},
+        "ArithmeticOverflowError", "root-supervisor"));
+    CHECK(parent.urgent() && parent.pending_count() == 1);
+    CHECK(hooks.callbacks == before_overflow_callbacks);
+    CHECK(hooks.user_turns == before_overflow_user);
+    CHECK(parent.admit_turn(hooks, true) == Admitted::Control);
+    CHECK(hooks.callbacks == before_overflow_callbacks + 1);
+    CHECK(hooks.user_turns == before_overflow_user);
+    CHECK(hooks.last == SupervisorFailureLane::Kind::Panic);
+    CHECK(hooks.last_origin == SupervisorFailureLane::Kind::Throw);
+    CHECK(hooks.last_code == 65537u);
+    CHECK(hooks.last_actor == "child-overflow");
+    CHECK(hooks.last_parent == "root-supervisor");
+    CHECK(!parent.urgent() && parent.reserved_count() == 0);
 
     // An ordinary unhandled Raise is delivered as actor-terminal Panic,
     // preserving the original typed supervisor CONTROL provenance.

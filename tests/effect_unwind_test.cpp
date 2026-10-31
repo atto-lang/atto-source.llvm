@@ -233,6 +233,23 @@ int main() {
     CHECK(static_cast<std::uint32_t>(
         oreslang::NumericErrorCode::ArithmeticOverflowError) == 65537u);
 
+    constexpr EffectStatus overflow_throw{
+        EffectKind::Throw,
+        static_cast<std::uint32_t>(
+            oreslang::NumericErrorCode::ArithmeticOverflowError)};
+    constexpr auto overflow_raise =
+        oreslang::promote_unhandled_non_actor(overflow_throw);
+    static_assert(overflow_raise.kind == EffectKind::Raise);
+    static_assert(overflow_raise.code == 65537u);
+    constexpr auto overflow_panic =
+        oreslang::promote_unhandled_non_actor(overflow_raise);
+    static_assert(overflow_panic.kind == EffectKind::Panic);
+    static_assert(overflow_panic.code == 65537u);
+    constexpr auto overflow_terminal =
+        oreslang::escalate_unhandled_exception(overflow_throw);
+    static_assert(overflow_terminal.kind == EffectKind::Panic);
+    static_assert(overflow_terminal.code == 65537u);
+
     // Cross-frame i64 result ABI: a leaf overflow must survive arbitrary
     // ordinary forwarding frames without being converted to a host failure,
     // and an exact matching guest catch recovers to an ordinary return.

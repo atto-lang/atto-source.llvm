@@ -129,6 +129,31 @@ constexpr EffectStatus normalize_effect(EffectStatus status) noexcept {
 }
 
 /**
+ * One lexical unhandled-effect promotion at a non-actor boundary.
+ * Throw escapes ordinary catch as Raise; an unhandled Raise becomes Panic.
+ * Panic and non-exception control effects are already terminal at this layer.
+ * The typed error code is preserved verbatim.
+ */
+constexpr EffectStatus promote_unhandled_non_actor(
+        EffectStatus status) noexcept {
+    status = normalize_effect(status);
+    if (status.kind == EffectKind::Throw)
+        status.kind = EffectKind::Raise;
+    else if (status.kind == EffectKind::Raise)
+        status.kind = EffectKind::Panic;
+    return status;
+}
+
+/** Complete root/actor exceptional escalation to its terminal form. */
+constexpr EffectStatus escalate_unhandled_exception(
+        EffectStatus status) noexcept {
+    status = promote_unhandled_non_actor(status);
+    if (status.kind == EffectKind::Raise)
+        status = promote_unhandled_non_actor(status);
+    return status;
+}
+
+/**
  * Compiler-preallocated stack of lexical cleanup entries.
  * Never allocates on unwind, including the secondary failure log.
  */

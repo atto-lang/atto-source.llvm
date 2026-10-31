@@ -45,7 +45,8 @@ public:
         const EffectStatus canonical = normalize_effect(effect);
         if (canonical.kind == Effect::Return) return false;
         const Failure origin = original_kind(canonical.kind);
-        const Failure delivered = terminal_kind(canonical.kind);
+        const EffectStatus terminal = escalate_unhandled_exception(canonical);
+        const Failure delivered = terminal_kind(terminal.kind);
         const auto summary = forged
             ? std::string_view{"invalid native effect discriminant"} : diagnostic;
         return supervisor.publish_child(
@@ -69,7 +70,8 @@ public:
         const EffectStatus canonical = normalize_effect(effect);
         if (canonical.kind == Effect::Return) return false;
         const Failure origin = original_kind(canonical.kind);
-        const Failure delivered = terminal_kind(canonical.kind);
+        const EffectStatus terminal = escalate_unhandled_exception(canonical);
+        const Failure delivered = terminal_kind(terminal.kind);
         const auto summary = forged
             ? std::string_view{"invalid native effect discriminant"} : diagnostic;
         return lane.publish_preallocated(actor, delivered, summary, parent_id, origin, canonical.code);
@@ -94,9 +96,11 @@ private:
         // call frames continue propagating until their task/root boundary.
         using K = SupervisorFailureLane::Kind;
         switch (kind) {
+            case EffectKind::Panic: return K::Panic;
             case EffectKind::Throw:
             case EffectKind::Raise:
-            case EffectKind::Panic: return K::Panic;
+                throw std::invalid_argument(
+                    "actor terminal effect was not fully escalated");
             case EffectKind::Cancel: return K::Cancel;
             case EffectKind::Fatal:
             case EffectKind::ProcessExit: return K::HostFailure;

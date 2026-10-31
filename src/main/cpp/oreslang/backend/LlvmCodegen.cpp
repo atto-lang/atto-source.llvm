@@ -1267,9 +1267,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
     }
     auto effect_candidate = [&](const Function& fn) {
+        const bool root_main =
+            native_main && source.module.empty() && fn.name == "main";
         if (wasm32_target || cortex_m_target || !source.module.empty() ||
-                fn.exported || fn.native_internal || !fn.method_owner.empty() ||
-                fn.name == "main" || fn.returns_void ||
+                (fn.exported && !root_main) || fn.native_internal ||
+                !fn.method_owner.empty() || fn.returns_void ||
                 fn.return_type != ScalarType::I64 ||
                 !fn.return_class.empty() || !fn.result ||
                 fn.async_source_i64 || fn.caught_throw_value ||
@@ -3317,7 +3319,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.CreateRet(llvm::ConstantInt::get(i32, 1));
             builder.SetInsertPoint(ready);
         }
-        llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* guest_call = builder.CreateCall(guest);
+        const bool root_effect_result =
+            guest->getReturnType() == i64_effect_result_type;
+        llvm::Value* result = guest_call;
+        llvm::Value* root_kind = nullptr;
+        llvm::Value* root_code = nullptr;
+        if (root_effect_result) {
+            result = builder.CreateExtractValue(
+                guest_call, {0}, "root.effect.value");
+            root_kind = builder.CreateExtractValue(
+                guest_call, {1}, "root.effect.kind");
+            root_code = builder.CreateExtractValue(
+                guest_call, {2}, "root.effect.code");
+        }
+
+        // Root-owned runtimes close before process exceptional-control
+        // escalation. A guest failure must not skip task/record/string teardown.
         llvm::Value* tasks_ok = has_source_tasks
             ? builder.CreateICmpEQ(
                 builder.CreateCall(taskShutdown),
@@ -3332,15 +3350,80 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             : llvm::ConstantInt::getTrue(context);
         output_ok = builder.CreateAnd(output_ok, records_ok);
         output_ok = builder.CreateAnd(output_ok, tasks_ok);
-        if (main_it->returns_void) {
-            builder.CreateRet(builder.CreateSelect(output_ok, llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
+
+        auto emit_normal_process_return = [&](llvm::IRBuilder<>& out) {
+            if (main_it->returns_void) {
+                out.CreateRet(out.CreateSelect(
+                    output_ok, llvm::ConstantInt::get(i32, 0),
+                    llvm::ConstantInt::get(i32, 1)));
+            } else {
+                llvm::Value* valid = out.CreateICmpULE(
+                    result, llvm::ConstantInt::get(i64, 255),
+                    "valid.exit.status");
+                valid = out.CreateAnd(valid, output_ok);
+                llvm::Value* narrowed = out.CreateTrunc(result, i32);
+                out.CreateRet(out.CreateSelect(
+                    valid, narrowed, llvm::ConstantInt::get(i32, 1),
+                    "checked.exit.status"));
+            }
+        };
+
+        if (!root_effect_result) {
+            emit_normal_process_return(builder);
         } else {
-            llvm::Value* valid = builder.CreateICmpULE(
-                result, llvm::ConstantInt::get(i64, 255), "valid.exit.status");
-            valid = builder.CreateAnd(valid, output_ok);
-            llvm::Value* narrowed = builder.CreateTrunc(result, i32);
-            builder.CreateRet(builder.CreateSelect(valid, narrowed,
-                llvm::ConstantInt::get(i32, 1), "checked.exit.status"));
+            auto* returned = llvm::BasicBlock::Create(
+                context, "root.effect.return", host_main);
+            auto* thrown = llvm::BasicBlock::Create(
+                context, "root.effect.throw", host_main);
+            auto* raised = llvm::BasicBlock::Create(
+                context, "root.effect.raise", host_main);
+            auto* panicked = llvm::BasicBlock::Create(
+                context, "root.effect.panic", host_main);
+            auto* terminal = llvm::BasicBlock::Create(
+                context, "root.effect.terminal", host_main);
+            auto* invalid = llvm::BasicBlock::Create(
+                context, "root.effect.invalid", host_main);
+
+            auto* dispatch = builder.CreateSwitch(root_kind, invalid, 7);
+            dispatch->addCase(llvm::ConstantInt::get(
+                i64, static_cast<std::uint64_t>(EffectKind::Return)), returned);
+            dispatch->addCase(llvm::ConstantInt::get(
+                i64, static_cast<std::uint64_t>(EffectKind::Throw)), thrown);
+            dispatch->addCase(llvm::ConstantInt::get(
+                i64, static_cast<std::uint64_t>(EffectKind::Raise)), raised);
+            dispatch->addCase(llvm::ConstantInt::get(
+                i64, static_cast<std::uint64_t>(EffectKind::Panic)), panicked);
+            dispatch->addCase(llvm::ConstantInt::get(
+                i64, static_cast<std::uint64_t>(EffectKind::Cancel)), terminal);
+            dispatch->addCase(llvm::ConstantInt::get(
+                i64, static_cast<std::uint64_t>(EffectKind::Fatal)), terminal);
+            dispatch->addCase(llvm::ConstantInt::get(
+                i64, static_cast<std::uint64_t>(EffectKind::ProcessExit)), terminal);
+
+            builder.SetInsertPoint(returned);
+            emit_normal_process_return(builder);
+
+            // Ordinary uncaught source throw is promoted at the root:
+            // Throw -> Raise -> Panic. The error code remains in root_code;
+            // process ABI exposes only a failure exit status.
+            builder.SetInsertPoint(thrown);
+            builder.CreateBr(raised);
+            builder.SetInsertPoint(raised);
+            builder.CreateBr(panicked);
+            builder.SetInsertPoint(panicked);
+            // Preserve an explicit typed-code use at the process boundary.
+            // Zero is legal for generic Panic; numeric overflow carries 65537.
+            (void)builder.CreateICmpEQ(
+                root_code, llvm::ConstantInt::get(i64, 0),
+                "root.effect.code.present");
+            builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+
+            builder.SetInsertPoint(terminal);
+            builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+
+            builder.SetInsertPoint(invalid);
+            builder.CreateCall(native_trap(module));
+            builder.CreateUnreachable();
         }
     }
 

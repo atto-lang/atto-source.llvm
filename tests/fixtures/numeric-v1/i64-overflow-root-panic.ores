@@ -1,0 +1,9 @@
+fnc leaf():int{
+  return 9223372036854775807+1;
+}
+fnc middle():int{
+  return leaf();
+}
+pub fnc main():int{
+  return middle();
+}

@@ -164,6 +164,9 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("lazy-and", "pub fnc main():int{return (false && (9223372036854775807+1>0)) ? 0 : 42;}", 42),
         ("lazy-or", "pub fnc main():int{return (true || (9223372036854775807+1>0)) ? 42 : 0;}", 42),
         ("dynamic", "fnc add(int a,int b):int{return a+b;} pub fnc main():int{return add(40,2);}", 42),
+        ("dynamic-cross-frame-root-panic",
+         "fnc leaf():int{return 9223372036854775807+1;} fnc middle():int{return leaf();} pub fnc main():int{return middle();}",
+         1),
     ];
     let rejects = [
         ("bigint-type", "pub fnc main(bigint x):int{return 0;}"),
@@ -208,9 +211,6 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("dynamic-subtract", "fnc sub(int a,int b):int{return a-b;} pub fnc main():int{return sub(-9223372036854775808,1);}", "llvm.ssub.with.overflow.i64"),
         ("dynamic-multiply", "fnc mul(int a,int b):int{return a*b;} pub fnc main():int{return mul(3037000500,3037000500);}", "llvm.smul.with.overflow.i64"),
         ("dynamic-negate", "fnc neg(int a):int{return -a;} pub fnc main():int{return neg(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
-        ("dynamic-cross-frame-uncaught",
-         "fnc leaf():int{return 9223372036854775807+1;} fnc middle():int{return leaf();} pub fnc main():int{return middle();}",
-         "llvm.sadd.with.overflow.i64"),
     ];
     let mut executions = 0;
     for optimization in ["-O1", "-O2"] {
@@ -233,6 +233,19 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                     format!("{name}: missing ArithmeticOverflowError ABI code"))?;
                 require(emitted.contains("numeric.effect.kind"),
                     format!("{name}: missing typed Throw discriminant slot"))?;
+            }
+            if name == "dynamic-cross-frame-root-panic" {
+                let emitted = stdout(&compiled);
+                require(emitted.contains("root.effect.throw"),
+                    format!("{name}: missing root Throw promotion block"))?;
+                require(emitted.contains("root.effect.raise"),
+                    format!("{name}: missing root Raise promotion block"))?;
+                require(emitted.contains("root.effect.panic"),
+                    format!("{name}: missing root Panic block"))?;
+                require(emitted.contains("root.effect.code"),
+                    format!("{name}: root error code was not preserved"))?;
+                require(emitted.contains("{ i64, i64, i64 } @__oreslang_guest_main("),
+                    format!("{name}: guest main did not adopt internal effect ABI"))?;
             }
             if name == "portable-overflow-cross-frame-catch" {
                 let emitted = stdout(&compiled);
