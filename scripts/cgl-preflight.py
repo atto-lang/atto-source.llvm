@@ -148,8 +148,17 @@ def inspect_elf(path):
                 raise ValueError("ELF entry point is outside file-backed executable PT_LOAD")
             if kind == 3 and interp is None:
                 raise ValueError("ET_DYN without interpreter is not admitted by pilot")
-            if interp is not None and not os.path.isfile(interp):
-                raise ValueError("ELF interpreter not present on target host")
+            if interp is not None:
+                try:
+                    loader_stat = os.stat(interp)
+                except OSError:
+                    raise ValueError("ELF interpreter not present on target host") from None
+                # Match the Rust CGL preflight: an existing non-executable
+                # regular file must not be accepted as a dynamic loader.
+                if not stat.S_ISREG(loader_stat.st_mode) or not (
+                        loader_stat.st_mode &
+                        (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)):
+                    raise ValueError("ELF interpreter is not an executable regular file")
             return {"machine": machine, "type": "ET_EXEC" if kind == 2 else "ET_DYN",
                     "interpreter": interp}
     finally:
