@@ -50,6 +50,12 @@ int main() {
     assert(evaluate_dispatch_evidence(missing.data(), missing.size(), limits).failure ==
         EvidenceFailure::invalid_timestamp);
 
+    // Zero armed timestamp must not satisfy the missing first phase.
+    auto unarmed = normal;
+    unarmed[0].armed_ns = 0;
+    assert(evaluate_dispatch_evidence(unarmed.data(), unarmed.size(), limits).failure ==
+        EvidenceFailure::invalid_timestamp);
+
     auto early_notify = normal;
     early_notify[0].notified_ns = 104;
     assert(evaluate_dispatch_evidence(early_notify.data(), early_notify.size(), limits).failure ==
@@ -77,6 +83,12 @@ int main() {
     auto c = evaluate_dispatch_evidence(with_cancel.data(), with_cancel.size(),
                                         with_cancel_limits);
     assert(c.passes_observed_contract() && c.canceled == 1);
+
+    auto canceled_unarmed = with_cancel;
+    canceled_unarmed[2].armed_ns = 0;
+    assert(evaluate_dispatch_evidence(canceled_unarmed.data(), canceled_unarmed.size(),
+                                       with_cancel_limits).failure ==
+        EvidenceFailure::invalid_timestamp);
 
     auto invalid_cancel = with_cancel;
     invalid_cancel[2].user_start_ns = 315;
