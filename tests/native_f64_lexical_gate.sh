@@ -60,47 +60,58 @@ negative() {
 
 positive scalar_local 'pub fnc main(): int {
   val f64 value = 0.3;
-  if value > 0.0; then return 42; else return 86; fi
+  if value > 0.0; then return 42; fi
+  return 86;
 }'
 positive scientific 'pub fnc main(): int {
   val f64 value = 1E-2;
-  if value < 0.02; then return 42; else return 86; fi
+  if value < 0.02; then return 42; fi
+  return 86;
 }'
 positive arithmetic 'pub fnc main(): int {
   val f64 value = (2.5 + 1.5) * 3.0 - 1.0;
-  if value == 11.0; then return 42; else return 86; fi
+  if value == 11.0; then return 42; fi
+  return 86;
 }'
 positive division 'pub fnc main(): int {
   val f64 value = 7.0 / 2.0;
-  if value == 3.5; then return 42; else return 86; fi
+  if value == 3.5; then return 42; fi
+  return 86;
 }'
 positive simplex_rounding 'pub fnc main(): int {
   val f64 value = 0.3 * (0.7 / 0.3);
-  if value > 0.7; then return 42; else return 86; fi
+  if value > 0.7; then return 42; fi
+  return 86;
 }'
 positive signed_zero 'pub fnc main(): int {
   val f64 value = -0.0;
-  if value == 0.0; then return 42; else return 86; fi
+  if value == 0.0; then return 42; fi
+  return 86;
 }'
 positive rounding 'pub fnc main(): int {
   val f64 value = 0.1 + 0.2;
-  if value > 0.3; then return 42; else return 86; fi
+  if value > 0.3; then return 42; fi
+  return 86;
 }'
 positive nan_unordered_not_equal 'pub fnc main(): int {
   val f64 nan = 0.0 / 0.0;
-  if nan != nan; then return 42; else return 86; fi
+  if nan != nan; then return 42; fi
+  return 86;
 }'
 positive nan_ordered_false 'pub fnc main(): int {
   val f64 nan = 0.0 / 0.0;
-  if nan < 1.0; then return 86; else return 42; fi
+  if nan < 1.0; then return 86; fi
+  return 42;
 }'
 positive signed_zero_inverse 'pub fnc main(): int {
   val f64 inverse = 1.0 / (-0.0);
-  if inverse < 0.0; then return 42; else return 86; fi
+  if inverse < 0.0; then return 42; fi
+  return 86;
 }'
 positive positive_infinity 'pub fnc main(): int {
   val f64 infinity = 1.0 / 0.0;
-  if infinity > 1.0; then return 42; else return 86; fi
+  if infinity > 1.0; then return 42; fi
+  return 86;
 }'
 positive integer_control 'pub fnc main(): int { return 42; }'
 
@@ -114,7 +125,8 @@ negative mixed_add 'pub fnc main(): int {
 }'
 negative mixed_ordered_compare 'pub fnc main(): int {
   val f64 value = 0.5;
-  if value < 1; then return 42; else return 86; fi
+  if value < 1; then return 42; fi
+  return 86;
 }'
 negative f64_to_integer_return 'pub fnc main(): int {
   return 1.5;
