@@ -1,0 +1,32 @@
+name: Native tenant isolation + strict RT host evidence (non-certifying)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeTenantAdmission.hpp'
+      - 'src/main/cpp/oreslang/runtime/StrictHardRealtimeProfile.hpp'
+      - 'tests/native_tenant_isolate_rt_host_test.cpp'
+      - '.github/workflows/native-tenant-isolate-rt-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: GCC/Clang and sanitizer host regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            for opt in -O0 -O2; do
+              "$compiler" -std=c++17 "$opt" -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread -I src/main/cpp tests/native_tenant_isolate_rt_host_test.cpp -o "/tmp/ores-tenant-$(basename "$compiler")-$opt"
+              "/tmp/ores-tenant-$(basename "$compiler")-$opt"
+            done
+          done
+          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread -I src/main/cpp tests/native_tenant_isolate_rt_host_test.cpp -o /tmp/ores-tenant-asan
+          /tmp/ores-tenant-asan
+      - name: Evidence scope
+        run: |
+          echo 'HOST ONLY: No compiled .ores guest isolation, hard RT certification, OS sandbox, or backend parity evidence.'
