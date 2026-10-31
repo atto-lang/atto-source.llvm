@@ -490,6 +490,33 @@ int main() {
     contradictory.at("x").exclusive_loan_id = 813;
     assert(rejected([&] { join_into(contradictory, contradictory); }));
 
+    // Direct apply/join callers may not bypass the entry verifier by
+    // constructing malformed value masks or duplicating loan IDs on
+    // distinct places. These used to be validated only in verify(Graph).
+    State invalid_mask = {{"x", cell(static_cast<ValueMask>(0x80))}};
+    assert(rejected([&] { apply(op(Kind::Suspend, ""), invalid_mask); }));
+    assert(rejected([&] { join_into(invalid_mask, invalid_mask); }));
+    State over_limit = {{"x", cell(kOwned)}};
+    over_limit.at("x").shared_loans = 65536;
+    assert(rejected([&] { apply(op(Kind::Read, "x"), over_limit); }));
+
+    State two_places_same_loan = {
+        {"x", cell(kOwned)}, {"y", cell(kOwned)}
+    };
+    for (const auto* name : {"x", "y"}) {
+        auto& owner = two_places_same_loan.at(name);
+        owner.shared_loans = 1;
+        owner.shared_loan_ids.insert(987);
+    }
+    assert(rejected([&] { apply(op(Kind::Read, "x"), two_places_same_loan); }));
+    assert(rejected([&] {
+        join_into(two_places_same_loan, two_places_same_loan);
+    }));
+    two_places_same_loan.at("y").shared_loan_ids = {988};
+    apply(op(Kind::Read, "x"), two_places_same_loan);
+    State independent = two_places_same_loan;
+    assert(!join_into(independent, two_places_same_loan));
+
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
     Graph maybe_drop;
