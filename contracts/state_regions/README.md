@@ -226,6 +226,14 @@ touch `region_` during that attempt.
 
 The native regression now also races 32 pre-retirement completion observers and
 requires zero release receipts, `active()==true`, and one outstanding actor
-resource loan before the existing 32-way post-retirement one-winner test. These
-are authored exact-source tests; private source-org CI still requires a real
+resource loan before the existing 32-way post-retirement one-winner test.
+
+`active()` is observational rather than dereference authority. A false value is
+published only after the actor resource loan has been relinquished, so false means
+fully released. A true value is conservative and may include the winner's brief
+release-in-progress interval; completion observers are prevented from touching
+`region_` in that interval by the separate one-winner
+`release_probe_claimed_` fence.
+
+These are authored exact-source tests; private source-org CI still requires a real
 assigned runner before they count as native execution evidence.

@@ -94,14 +94,20 @@ public:
             return false;
         }
 
-        // Keep active_ true until after the resource loan is actually
-        // relinquished. This preserves its meaning for lifecycle observers:
-        // active()==true always implies this pin still owns actor lifetime.
+        // Publish fully-released only after relinquishing the resource loan.
+        // active()==false is therefore authoritative: this pin no longer owns
+        // actor lifetime. active()==true is deliberately conservative and may
+        // include the tiny release-in-progress window; it is never authority
+        // to dereference actor-owned storage. release_probe_claimed_ is the
+        // actual one-winner dereference fence for completion observers.
         actor_.release_resource_loan();
         active_.store(false, std::memory_order_release);
         return true;
     }
 
+    // Observational lifecycle state only. false means fully released; true
+    // means active-or-releasing. Callers must not use true as dereference
+    // authority for arena/region storage.
     bool active() const noexcept {
         return active_.load(std::memory_order_acquire);
     }
