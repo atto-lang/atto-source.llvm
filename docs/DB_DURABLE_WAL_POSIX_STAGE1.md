@@ -51,3 +51,26 @@ Local isolated g++17 500-iteration concurrent model test passed under
 using a matching local source copy; the exact-head CMake/CTest runner
 remains NOT_EXECUTED. Real OS resource lifetime and fdatasync/ACK
 semantics need additional integration tests.
+
+## Stage 1.2: native physical actor lifetime integration
+
+The host-only `DbWalPhysicalRetirement` bridge ties an admitted WAL
+gate to the existing `AsyncIoOperationLifecycle` and
+`AsyncIoActorLifetimePin`. It validates actor ID and the full
+generation *before* allowing physical-loan release (including rejecting a
+generation not representable by the WAL gate). A cancellation/timeout and
+unregister alone are insufficient. Only after
+`ready_to_reclaim()` succeeds may the bridge release the ActorRef
+resource loan and retire the WAL writer slot. A duplicate release
+fails closed; a mismatched incarnation is rejected in the constructor.
+
+`tests/native_db_wal_physical_pin_integration_test.cpp` uses a real
+`NativeActorGroup`, resource registry, actor retirement barrier and
+`get_done()` gate to assert that drain/close and actor retirement are
+blocked until the callback, kernel-registration and physical pin are
+retired. Registered CTest target:
+`native_db_wal_physical_pin_integration_host_only`.
+The test is authoring evidence until a real exact-head CMake/CTest
+runner executes it. This bridge is not yet called by a production WAL
+actor or guest I/O lowering; it has no physical descriptor ownership,
+sync receipt, commit ACK or crash/replay path.
