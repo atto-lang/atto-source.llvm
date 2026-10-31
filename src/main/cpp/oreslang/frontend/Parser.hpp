@@ -444,6 +444,7 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
+    bool selected_namespace = false;
     std::string selected_module;
     std::string local_name;
     std::string path;
@@ -486,7 +487,8 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
-                                 bool experimental_rt_scalar_loop = false);
+                                 bool experimental_rt_scalar_loop = false,
+                                 bool pinned_namespace_mode = false);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang
