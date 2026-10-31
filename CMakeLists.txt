@@ -67,6 +67,7 @@ if(BUILD_TESTING)
         tests/native_db_wal_authorized_writer_test.cpp)
     target_include_directories(oreslang-native-db-wal-authorized-writer-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-db-wal-authorized-writer-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-db-wal-authorized-writer-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_db_wal_authorized_writer_host_only
