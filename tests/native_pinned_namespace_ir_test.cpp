@@ -108,6 +108,21 @@ int main() {
                 "no cross-package fallback");
         }
 
+        // Isolate the package fallback invariant: both foo@1 and other@1
+        // contain namespace a. Without the second c import, a missing
+        // a.aggregate in other@1 must still reject; an accidental fallback
+        // into foo@1 would otherwise return a misleading successful 43.
+        {
+            auto candidate = make_program();
+            candidate.pinned_aliases["app@1"]["foo"] = "other@1";
+            source(candidate, "app/main").source =
+                "import ns a from \"pkg:foo\"; "
+                "pub fnc main(): int { return a.aggregate(21); }\\n";
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
+                "unknown namespace member or wrong arity");
+        }
+
         // Provider calls are same-package, same-namespace, exact-arity only.
         {
             auto candidate = make_program();
