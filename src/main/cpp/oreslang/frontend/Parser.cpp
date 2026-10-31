@@ -4468,7 +4468,7 @@ private:
                 if (when_true != when_false)
                     throw std::runtime_error("ternary arms require a common scalar type at byte " +
                         std::to_string(expr.offset));
-                return when_true;
+                return expr.resolved_type = when_true;
             }
         }
         throw std::runtime_error("internal invalid native scalar expression kind");
