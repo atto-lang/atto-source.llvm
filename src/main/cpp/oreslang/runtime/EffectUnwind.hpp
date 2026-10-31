@@ -60,6 +60,20 @@ struct I64EffectResult {
     EffectStatus effect{};
 };
 
+// The constexpr normalizer is defined below. The native scalar result ABI
+// uses it before full unwind-frame declaration; keep its dependency explicit.
+constexpr EffectStatus normalize_effect(EffectStatus status) noexcept;
+
+// A scalar Return MUST carry the canonical zero error code. A forged result
+// with Return plus a nonzero guest error code is not successful execution;
+// preserving it would silently erase ArithmeticOverflowError across calls.
+constexpr EffectStatus normalize_i64_result_effect(EffectStatus status) noexcept {
+    const auto normalized = normalize_effect(status);
+    if (normalized.kind == EffectKind::Return && normalized.code != 0)
+        return {EffectKind::Fatal, 0xFFFFFFFDu};
+    return normalized;
+}
+
 constexpr I64EffectResult i64_return(std::int64_t value) noexcept {
     return {value, {EffectKind::Return, 0}};
 }
@@ -70,19 +84,19 @@ constexpr I64EffectResult i64_throw(
 }
 
 constexpr bool i64_has_effect(I64EffectResult result) noexcept {
-    return normalize_effect(result.effect).kind != EffectKind::Return;
+    return normalize_i64_result_effect(result.effect).kind != EffectKind::Return;
 }
 
 constexpr I64EffectResult i64_forward(
         I64EffectResult result) noexcept {
-    result.effect = normalize_effect(result.effect);
+    result.effect = normalize_i64_result_effect(result.effect);
     if (result.effect.kind != EffectKind::Return) result.value = 0;
     return result;
 }
 
 constexpr bool i64_catch_matches(
         I64EffectResult result, std::uint32_t code) noexcept {
-    const auto status = normalize_effect(result.effect);
+    const auto status = normalize_i64_result_effect(result.effect);
     return status.kind == EffectKind::Throw && status.code == code;
 }
 
