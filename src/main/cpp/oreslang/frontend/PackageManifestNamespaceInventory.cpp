@@ -154,7 +154,11 @@ std::vector<std::string> parse_string_array(
         while (at < text.size() &&
                 std::isspace(static_cast<unsigned char>(text[at]))) ++at;
         if (at >= text.size()) fail(std::string(field) + " has malformed array");
-        if (text[at] == ']') break;
+        if (text[at] == ']') {
+            if (at + 1 != text.size())
+                fail(std::string(field) + " has trailing material after array");
+            break;
+        }
         if (text[at] != ',')
             fail(std::string(field) + " requires comma-separated strings");
         ++at;
@@ -582,8 +586,11 @@ VerifiedPackageManifestV2 load_verified_package_manifest_v2(
                 physical_root, spelled, relative);
             for (const auto& previous : all_members) {
                 std::error_code equivalent_error;
-                if (fs::equivalent(previous, physical, equivalent_error)
-                        && !equivalent_error)
+                const bool equivalent =
+                    fs::equivalent(previous, physical, equivalent_error);
+                if (equivalent_error)
+                    fail("cannot compare physical package source identities");
+                if (equivalent)
                     fail("source file belongs to more than one explicit package group");
             }
             all_members.push_back(physical);
@@ -718,7 +725,7 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
     std::vector<std::string> ordered_instances(
         selected_instances.begin(), selected_instances.end());
     std::sort(ordered_instances.begin(), ordered_instances.end());
-    std::set<std::string> physical_source_owners;
+    std::vector<fs::path> physical_source_owners;
     std::size_t aggregate_bytes = 0;
 
     for (const auto& instance_id : ordered_instances) {
@@ -737,9 +744,16 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
             });
 
         for (const auto* member : ordered_members) {
-            const std::string physical_id = member->physical_path.string();
-            if (!physical_source_owners.insert(physical_id).second)
-                fail("one physical source is owned by multiple locked package instances");
+            for (const auto& previous : physical_source_owners) {
+                std::error_code equivalent_error;
+                const bool equivalent = fs::equivalent(
+                    previous, member->physical_path, equivalent_error);
+                if (equivalent_error)
+                    fail("cannot compare locked physical source identities");
+                if (equivalent)
+                    fail("one physical source is owned by multiple locked package instances");
+            }
+            physical_source_owners.push_back(member->physical_path);
             const auto size = fs::file_size(member->physical_path, error);
             if (error || size > 8u * 1024u * 1024u - aggregate_bytes)
                 fail("locked namespace sources exceed 8 MiB aggregate budget");
