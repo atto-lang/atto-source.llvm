@@ -99,6 +99,20 @@ jobs:
             contracts/v1/agent-dispatch/agent_pg_connection_timeout_test.cpp \
             -Wl,--wrap=PQconnectdbParams -lpq -o "$RUNNER_TEMP/pg_timeout_contract"
           "$RUNNER_TEMP/pg_timeout_contract"
+          # Independent host-only libpq protocol proof: precise bound values,
+          # accepted/duplicate results, unknown DB error and no retry.
+          WRAP_FLAGS="-Wl,--wrap=PQconnectdbParams -Wl,--wrap=PQstatus -Wl,--wrap=PQtransactionStatus -Wl,--wrap=PQexecParams -Wl,--wrap=PQresultStatus -Wl,--wrap=PQntuples -Wl,--wrap=PQnfields -Wl,--wrap=PQgetisnull -Wl,--wrap=PQgetvalue -Wl,--wrap=PQclear -Wl,--wrap=PQfinish"
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
+            contracts/v1/agent-dispatch/agent_pg_parameterized_claim_test.cpp \
+            $WRAP_FLAGS -lpq -o "$RUNNER_TEMP/pg_parameterized_contract"
+          "$RUNNER_TEMP/pg_parameterized_contract"
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
+            contracts/v1/agent-dispatch/agent_pg_parameterized_claim_test.cpp \
+            $WRAP_FLAGS -lpq -o "$RUNNER_TEMP/pg_parameterized_asan"
+          ASAN_OPTIONS=detect_leaks=1 "$RUNNER_TEMP/pg_parameterized_asan"
           g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
             -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
             contracts/v1/agent-dispatch/pg_dispatch_integration_test.cpp \
