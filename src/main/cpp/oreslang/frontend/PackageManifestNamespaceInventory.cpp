@@ -629,12 +629,28 @@ VerifiedPackageManifestV2 discover_verified_package_manifest_v2(
 }
 
 PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
-        const VerifiedPackageManifestV2& root_manifest,
-        const std::vector<VerifiedPackageManifestV2>& dependency_manifests,
+        const fs::path& root_manifest_path,
+        const std::vector<fs::path>& dependency_manifest_paths,
         const VerifiedPackageLockSnapshot& lock,
         const fs::path& entry_source,
+        const std::function<std::string(const fs::path&)>& read_manifest,
         const std::function<std::string(const fs::path&)>& read_source) {
+    if (!read_manifest) fail("manifest reader is required");
     if (!read_source) fail("source reader is required");
+
+    const VerifiedPackageManifestV2 root_manifest =
+        load_verified_package_manifest_v2(root_manifest_path, read_manifest);
+    std::vector<VerifiedPackageManifestV2> dependency_manifests;
+    dependency_manifests.reserve(dependency_manifest_paths.size());
+    std::set<std::string> dependency_manifest_ids;
+    for (const auto& path : dependency_manifest_paths) {
+        auto manifest = load_verified_package_manifest_v2(path, read_manifest);
+        if (!dependency_manifest_ids.insert(manifest.manifest_path.string()).second)
+            fail("duplicate dependency manifest authority");
+        if (manifest.manifest_path == root_manifest.manifest_path)
+            fail("root manifest cannot also be supplied as dependency manifest");
+        dependency_manifests.push_back(std::move(manifest));
+    }
     if (!valid_package_instance_id(lock.root_package_instance_id))
         fail("invalid root PackageInstanceId");
     if (lock.package_instances.empty())
