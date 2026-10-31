@@ -115,9 +115,9 @@ fn main() {
     let negatives = [
         ("mut-share-scalar-reject", "pub fnc main(): int { let int v = 42; return rt mut share v; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
-        ("mut-share-parenthesized-owned-reject", "pub fnc main(): int { let int v = 42; return rt mut share (v); }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
-        ("mut-share-over-shared-handle-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt share v); }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
-        ("mut-share-over-mutable-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt mut borrow v); }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-parenthesized-owned-reject", "pub fnc main(): int { let int v = 42; return rt mut share (v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-over-shared-handle-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-over-mutable-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt mut borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
 
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
@@ -152,7 +152,7 @@ mod tests {
 
         let root = Scratch::new();
         let compiler = root.0.join("synthetic-compiler.sh");
-        fs::write(&compiler, format!("#!/bin/sh\\n{script_body}\\n")).unwrap();
+        fs::write(&compiler, format!("#!/bin/sh\n{script_body}\n")).unwrap();
         let mut permissions = fs::metadata(&compiler).unwrap().permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&compiler, permissions).unwrap();
@@ -161,7 +161,7 @@ mod tests {
                 &compiler,
                 &root.0,
                 "invalid-mutable-share",
-                "pub fnc main(): int { return rt mut share 42; }\\n",
+                "pub fnc main(): int { return rt mut share 42; }\n",
                 Some("bad ownership"),
             );
         });
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_ir_leak_even_on_failed_compile() {
         assert_rejected_fake_compiler(
-            "printf 'define i64 @main() {\\n'\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+            "printf 'define i64 @main() {\n'\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
@@ -180,14 +180,14 @@ mod tests {
     #[test]
     fn negative_admission_rejects_artifact_creation_on_failure() {
         assert_rejected_fake_compiler(
-            "touch unapproved.ll\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+            "touch unapproved.ll\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
     #[cfg(unix)]
     #[test]
     fn negative_admission_rejects_success_exit_with_diagnostic() {
-        assert_rejected_fake_compiler("printf 'bad ownership\\n' >&2\\nexit 0");
+        assert_rejected_fake_compiler("printf 'bad ownership\n' >&2\nexit 0");
     }
 
     #[test]
