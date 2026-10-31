@@ -185,3 +185,43 @@ harness passed 5,000 valid/mutated random frames.
 This is source-exact subset proof, NOT full LLVM CMake/CTest, real
 native .ores guest lowering, authenticated tenant authorizer,
 power-loss guarantee, replay or durable ACK.
+
+
+## Stage 1.7 — bounded ODB1 restart/replay preflight (31 Oct)
+
+New `DbWalReplayV1.hpp` uses pread against a trusted, stable
+exclusive-recovery descriptor. It allocates a bounded 1118-byte
+automatic array and validates full ODB1 v1 frames with the existing
+validator. The single-generation segment must begin at sequence 1,
+continue without gaps and use monotonically increasing operation IDs;
+mixed generation, corrupt complete records, duplicated IDs and
+sequence gaps fail closed. A final short header or partial frame is
+reported as `incomplete_tail=true` and last valid offset, **without**
+truncation or committing visitor results. The visitor MUST stage all
+effects until the entire recovery scan succeeds. It cannot be used for
+automatic checkpointing, power-failure proof, or guest durable ACK.
+
+The existing directory-relative locked `DbDurableWalFile` now has
+`scan_recovery(tenant,segment_generation)` for host-only scanning;
+the caller must independently own a trusted shard recovery fence.
+Tracked CTest `native_db_wal_replay_v1_host_only` covers a child
+process appending+fdatasync, parent fresh independent descriptor
+reopen, final partial record, complete checksum corruption, duplicate
+operation ID, sequence gap, tenant/generation denial, and recovery
+through the locked `DbDurableWalFile` owner. A test flaw was found
+and corrected: a fresh reopened descriptor begins at offset zero,
+so torn-tail injection now explicitly seeks EOF instead of overwriting
+an earlier acknowledged record. The corrected test then passed.
+
+**Actually executed locally:** exact Git blob source hashes,
+checked with `git hash-object`:
+`DbWalReplayV1.hpp` `6eaf33ca8c75bbf0ce04a6099e0be9c2cef12c16`,
+tracked test `add092f24eb6a83c69378bb50f6dde467ab6e8a8`,
+`DbDurableWalFile.hpp` `e137bf1838faba27d38cc067f460a2f53892d6df`,
+and frame validator `3d5964b1b09f1cee4b0469c12f8594b70558bf3f`.
+C++17 `-Wall -Wextra -Wpedantic -Werror -UNDEBUG` under
+ASan+UBSan+leak detection passed
+`POSIX_LOCKED_REPLAY_WRAPPER_ASAN_UBSAN_PASS`.
+This proves a narrow trusted host scan and process reopen, **NOT**
+full exact-tree CMake/CTest, real actor guest, physical power-cut,
+directory fsync or database durability.
