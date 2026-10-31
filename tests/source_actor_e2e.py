@@ -130,6 +130,12 @@ def main():
             "sealed handle_state requires contiguous critical[read/write] modifier",
         "source-isolated-actor-sealed-bracket-inner-spacing-reject.ores":
             "sealed handle_state requires contiguous critical[read/write] modifier",
+        "source-isolated-actor-sealed-bracket-trailing-spacing-reject.ores":
+            "sealed handle_state requires contiguous critical[read/write] modifier",
+        "source-isolated-actor-sealed-message-shadow-reject.ores":
+            "sealed actor message parameter shadows state field",
+        "source-isolated-actor-sealed-binding-shadow-message-reject.ores":
+            "native sealed state callback binding shadows message or state",
         "source-isolated-actor-sealed-multi-write-reject.ores":
             "native sealed callback v1 allows one write until atomic multi-field commit lowering",
         "source-isolated-actor-sealed-postcommit-overflow-reject.ores":
