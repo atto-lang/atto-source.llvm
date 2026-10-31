@@ -34,23 +34,35 @@ public:
           arena_(&arena),
           region_(&region),
           ticket_(ticket) {
-        OresArenaIdentity identity{};
-        if (!ores_actor_arena_identity(arena_, &identity)
-                || identity.owner != actor_.actor_id()
-                || identity.incarnation != actor_.generation()
-                || !ores_state_region_matches_actor_arena(region_, arena_))
-            throw std::invalid_argument(
-                "state-region actor lifetime pin identity mismatch");
-
-        const auto status = ores_state_region_ticket_retired(region_, ticket_);
-        if (status == ORES_STD_SYNC_RETRY)
-            throw std::runtime_error("state-region metadata busy");
-        if (status != ORES_STD_SYNC_EXECUTING)
-            throw std::invalid_argument(
-                "state-region lifetime pin requires a live ticket");
-
+        // Reserve physical actor ownership BEFORE inspecting arena identity
+        // or the state ticket. Otherwise a racing finalizer can reclaim the
+        // actor arena between a successful ticket query and the late retain.
+        // A terminal actor rejects this reservation before any arena deref.
         actor_.retain_resource_loan();
-        active_ = true;
+        try {
+            OresArenaIdentity identity{};
+            if (!ores_actor_arena_identity(arena_, &identity)
+                    || identity.owner != actor_.actor_id()
+                    || identity.incarnation != actor_.generation()
+                    || !ores_state_region_matches_actor_arena(region_, arena_))
+                throw std::invalid_argument(
+                    "state-region actor lifetime pin identity mismatch");
+
+            const auto status = ores_state_region_ticket_retired(region_, ticket_);
+            if (status == ORES_STD_SYNC_RETRY)
+                throw std::runtime_error("state-region metadata busy");
+            if (status != ORES_STD_SYNC_EXECUTING)
+                throw std::invalid_argument(
+                    "state-region lifetime pin requires a live ticket");
+
+            active_ = true;
+        } catch (...) {
+            // No constructor failure may leak or fabricate a resource loan.
+            // The native arena/region still require their trusted caller's
+            // own pre-construction lifetime guarantee.
+            actor_.release_resource_loan();
+            throw;
+        }
     }
 
     StateRegionActorLifetimePin(const StateRegionActorLifetimePin&) = delete;

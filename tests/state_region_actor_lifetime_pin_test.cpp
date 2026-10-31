@@ -80,9 +80,21 @@ int main() {
         rejected = true;
     }
     assert(rejected);
+    assert(stale.outstanding_resource_loans() == 0);
     stale_group.close();
     assert(stale.outstanding_resource_loans() == 0);
     stale.get_done().get();
+    // Once this unrelated actor has reached a terminal resource state,
+    // attempting a lifetime pin must fail *before* reading any arena fields.
+    bool terminal_rejected = false;
+    try {
+        StateRegionActorLifetimePin terminal(
+            stale, *arena, region, request.ticket);
+    } catch (const std::logic_error&) {
+        terminal_rejected = true;
+    }
+    assert(terminal_rejected);
+    assert(stale.outstanding_resource_loans() == 0);
 
     // Logical stop cannot physically reclaim the arena while the ticket lives.
     group.close();
