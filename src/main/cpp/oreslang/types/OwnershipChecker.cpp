@@ -265,6 +265,7 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
+        case Expression::Kind::Floating:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
             return;
@@ -422,6 +423,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
 void check_pure_guard(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
+        case Expression::Kind::Floating:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
         case Expression::Kind::Variable:
@@ -482,6 +484,8 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         case Expression::Kind::String:
         case Expression::Kind::Console:
             reject(expr, "native caught throw cannot own string region effects");
+        case Expression::Kind::Floating:
+            reject(expr, "native caught throw accepts int only, not f64");
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
             return;
