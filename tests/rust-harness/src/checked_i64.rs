@@ -89,6 +89,17 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                 stdout(&compiled).contains("llvm.ssub.with.overflow.i64"),
                 format!("{name}: imported stdlib Math lost checked negation lowering"),
             )?;
+            let module_ir = stdout(&compiled);
+            require(
+                module_ir.contains("i32 65537")
+                    && module_ir.contains("i8 1")
+                    && module_ir.contains("$error")
+                    && module_ir.contains("call.error.code")
+                    && module_ir.contains("error.propagate"),
+                format!(
+                    "{name}: imported Math did not thread NativeErrorSlotV1 through the linked scalar call"
+                ),
+            )?;
             fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
             let linked = run(
                 clang,
@@ -144,8 +155,12 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
     require(
         wasm_ir.contains("wasm32-unknown-unknown")
             && wasm_ir.contains("__ores_module_1.abs")
-            && wasm_ir.contains("llvm.ssub.with.overflow.i64"),
-        "stdlib Math wasm32 IR lost target, imported symbol, or checked negation",
+            && wasm_ir.contains("llvm.ssub.with.overflow.i64")
+            && wasm_ir.contains("i32 65537")
+            && wasm_ir.contains("i8 1")
+            && wasm_ir.contains("$error")
+            && wasm_ir.contains("call.error.code"),
+        "stdlib Math wasm32 IR lost target, imported symbol, checked negation, or NativeErrorSlotV1 propagation",
     )?;
 
     // Imported user modules are deliberately leaves: do not turn this narrow
@@ -181,7 +196,7 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ),
     )?;
 
-    println!("PASS {executions} actual native checked-i64 executions, O1/O2; no typed actor-error claim");
+    println!("PASS {executions} actual native checked-i64 executions, O1/O2; linked Math uses NativeErrorSlotV1 code 65537/effect throw, outer boundary still traps");
     Ok(())
 }
 
