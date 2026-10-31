@@ -439,16 +439,26 @@ inline PackageNamespaceGraph link_package_namespaces(
             throw std::invalid_argument("namespace importer lacks verified package ownership");
         const std::string& local_alias = imported.local_alias.empty()
             ? imported.namespace_name : imported.local_alias;
-        if (!valid_flat_namespace_name(imported.package_alias)
+        const bool same_package = imported.package_alias == "+/";
+        if ((!same_package && !valid_flat_namespace_name(imported.package_alias))
                 || !valid_flat_namespace_name(imported.namespace_name)
                 || !valid_flat_namespace_name(local_alias))
             throw std::invalid_argument("invalid namespace import alias or selector");
 
-        const auto alias_table = pinned_aliases.find(from->second);
-        if (alias_table == pinned_aliases.end()
-                || alias_table->second.count(imported.package_alias) == 0)
-            throw std::invalid_argument("undeclared pinned package alias for namespace import");
-        const std::string& target_package = alias_table->second.at(imported.package_alias);
+        // +/ is a project-root/package-local selection, never a global
+        // namespace search or an ambient filesystem directory. Its owner is
+        // the already verified physical importing unit's package instance.
+        // External aliases must instead be present in that instance's pins.
+        std::string target_package;
+        if (same_package) {
+            target_package = from->second;
+        } else {
+            const auto alias_table = pinned_aliases.find(from->second);
+            if (alias_table == pinned_aliases.end()
+                    || alias_table->second.count(imported.package_alias) == 0)
+                throw std::invalid_argument("undeclared pinned package alias for namespace import");
+            target_package = alias_table->second.at(imported.package_alias);
+        }
         if (verified_instances.count(target_package) == 0)
             throw std::invalid_argument("namespace import target lacks verified package inventory");
         PackageNamespaceKey target{target_package, imported.namespace_name};
