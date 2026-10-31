@@ -18,12 +18,27 @@
 // a real cryptographic SHA-256 implementation.
 namespace oreslang::frontend {
 
-struct VerifiedNamespaceManifestV2 {
-    std::map<std::string, std::vector<std::string>> package_files;
-    std::string manifest_sha256;
-    std::string sources_sha256;
-};
 using NamespaceSha256 = std::function<std::string(std::string_view)>;
+
+// Only the verifier can construct an admitted inventory. Returning mutable
+// maps here would let a caller silently add provider paths after checking the
+// manifest and source digest. This is a snapshot, not a builder.
+class VerifiedNamespaceManifestV2 {
+public:
+    const std::map<std::string, std::vector<std::string>>& package_files() const {
+        return package_files_;
+    }
+    const std::string& manifest_sha256() const { return manifest_sha256_; }
+    const std::string& sources_sha256() const { return sources_sha256_; }
+private:
+    VerifiedNamespaceManifestV2() = default;
+    std::map<std::string, std::vector<std::string>> package_files_;
+    std::string manifest_sha256_;
+    std::string sources_sha256_;
+    friend VerifiedNamespaceManifestV2 verify_namespace_manifest_v2(
+        std::string_view, std::string_view, const std::map<std::string, std::string>&,
+        std::string_view, const NamespaceSha256&);
+};
 
 inline bool namespace_v2_digest(std::string_view s) {
     if (s.size() != 64) return false;
@@ -119,7 +134,7 @@ inline VerifiedNamespaceManifestV2 verify_namespace_manifest_v2(
     bool saw_schema = false, saw_project_root = false;
     std::set<std::string> seen_packages, seen_files;
     VerifiedNamespaceManifestV2 result;
-    result.manifest_sha256 = std::string(expected_manifest_sha256);
+    result.manifest_sha256_ = std::string(expected_manifest_sha256);
     const auto parse_line = [&](std::string item, std::string& current_section,
             bool& version, bool& root, VerifiedNamespaceManifestV2& parsed,
             std::set<std::string>& packages, std::set<std::string>& files) {
@@ -145,12 +160,12 @@ inline VerifiedNamespaceManifestV2 verify_namespace_manifest_v2(
         } else if (current_section == "project" && key == "root" && value == "\".\"" && !root) {
             root = true;
         } else if (current_section.rfind("packages.", 0) == 0 && key == "files"
-                && parsed.package_files.count(current_section.substr(9)) == 0) {
+                && parsed.package_files_.count(current_section.substr(9)) == 0) {
             auto values = namespace_v2_parse_files(value);
             for (const auto& file : values)
                 if (!files.insert(file).second)
                     throw std::invalid_argument("v2 source belongs to multiple packages");
-            parsed.package_files.emplace(current_section.substr(9), std::move(values));
+            parsed.package_files_.emplace(current_section.substr(9), std::move(values));
         } else throw std::invalid_argument("v2 namespace manifest has unsupported or duplicate key");
     };
     std::size_t start = 0;
@@ -176,7 +191,7 @@ inline VerifiedNamespaceManifestV2 verify_namespace_manifest_v2(
         start = end + 1;
     }
     if (!pending.empty() || !saw_schema || !saw_project_root || seen_packages.empty()
-            || result.package_files.size() != seen_packages.size())
+            || result.package_files_.size() != seen_packages.size())
         throw std::invalid_argument("v2 namespace manifest is incomplete or unsupported");
     if (seen_files.size() != admitted_sources.size())
         throw std::invalid_argument("v2 authenticated source inventory is incomplete");
@@ -195,8 +210,8 @@ inline VerifiedNamespaceManifestV2 verify_namespace_manifest_v2(
             throw std::invalid_argument("v2 trusted SHA-256 hasher produced invalid digest");
         source_commitment += file + "\n" + digest + "\n";
     }
-    result.sources_sha256 = sha256(source_commitment);
-    if (result.sources_sha256 != expected_sources_sha256)
+    result.sources_sha256_ = sha256(source_commitment);
+    if (result.sources_sha256_ != expected_sources_sha256)
         throw std::invalid_argument("v2 authenticated source inventory SHA-256 mismatch");
     return result;
 }
