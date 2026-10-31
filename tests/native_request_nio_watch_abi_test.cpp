@@ -53,12 +53,16 @@ int main() {
     auto mismatch=valid;
     mismatch.watch.ticket++;
     CHECK(!physical->matches_completion(mismatch));
+    CHECK(!physical->observe_terminal_completion(mismatch));
     mismatch=valid;
     mismatch.watch.reactor++;
     CHECK(!physical->matches_completion(mismatch));
+    CHECK(!physical->observe_terminal_completion(mismatch));
     mismatch=valid;
     mismatch.fd=11;
     CHECK(!physical->matches_completion(mismatch));
+    CHECK(!physical->observe_terminal_completion(mismatch));
+    CHECK(gate.terminal()==AsyncIoTerminal::pending);
     CHECK(!Watch::register_watch(requests,*context,owner,gate,ticket,
                                   vm,10,1));
     CHECK(watch_calls==2 && !gate.try_retire(ticket));
@@ -66,7 +70,9 @@ int main() {
     CHECK(requests.available()==3);
     // A popped matching completion does not by itself prove broker quiescence.
     CHECK(!physical->physical.finish_after_broker_and_resume_quiescence());
-    CHECK(gate.settle(ticket,AsyncIoTerminal::cancelled));
+    CHECK(physical->observe_terminal_completion(valid));
+    CHECK(gate.terminal()==AsyncIoTerminal::success);
+    CHECK(!physical->observe_terminal_completion(valid));
     CHECK(!physical->physical.finish_after_broker_and_resume_quiescence());
     // Test host explicitly supplies broker ACK and scheduler cleanup.
     // Production must derive this from actual kernel-watch lifecycle.
