@@ -53,8 +53,57 @@ readelf -h "$work/version.so" | grep -q 'DYN' ||
   fail "AOT output is not a shared ELF object"
 nm -D --defined-only "$work/version.so" > "$work/exports" ||
   fail "ELF dynamic symbols unavailable"
-[[ "$(grep -Ec ' [TW] ores_browser_abi_version$' "$work/exports")" == 1 ]] ||
+[[ "$(grep -Ec ' [TW] ores_browser_abi_version
+! grep -Eq '[[:space:]]browser_native_abi_v1$' "$work/exports" ||
+  fail "private i64 guest was exposed to dynamic linking"
+! grep -Eq '[[:space:]]ores_browser_(open|dispatch|snapshot|close)$' "$work/exports" ||
+  fail "unsupported browser session export is present"
+
+cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+  tests/browser_c_abi_u32_host.c -ldl -o "$work/c-host" ||
+  fail "C11 host failed compilation"
+timeout --kill-after=5s 15s "$work/c-host" "$work/version.so" ||
+  fail "compiled Oreslang-to-C ABI execution failed"
+
+for fixture in \
+  browser-c-abi-version-u32-bad-symbol \
+  browser-c-abi-version-u32-private \
+  browser-c-abi-version-u32-bad-value \
+  browser-c-abi-version-u32-bad-signature \
+  browser-c-abi-version-u32-bad-type \
+  browser-c-abi-version-u32-symbol-clash \
+  browser-c-abi-version-u32-guest-spoof \
+  browser-c-abi-version-u32-overload \
+  browser-c-abi-version-u32-effectful \
+  browser-c-abi-version-u32-extra-guest \
+  browser-c-abi-version-u32-extra-declaration \
+  browser-c-abi-version-u32-duplicate
+do
+  if timeout --kill-after=5s 20s "$compiler" --target=host \
+    "tests/fixtures/$fixture.ores" > "$work/rejected.ll" 2> "$work/rejected.err"; then
+    fail "compiler wrongly accepted $fixture"
+  else
+    status="$?"
+    [[ "$status" != 124 && "$status" != 137 ]] ||
+      fail "compiler timed out rather than rejecting $fixture"
+  fi
+  [[ ! -s "$work/rejected.ll" ]] ||
+    fail "compiler emitted IR for rejected source $fixture"
+  grep -Fq 'C_EXPORT_U32_REJECT' "$work/rejected.err" ||
+    fail "fixture $fixture failed without the required rejection diagnostic"
+done
+echo 'REAL_ORESLANG_C_U32_ABI_NEGATIVE_TESTS_PASS'
+printf 'REAL_ORESLANG_C_U32_ABI_ACCEPTANCE source_sha=%s tree_sha=%s compiler_sha256=%s\n' \
+  "$head" "$tree" "$digest"
+ "$work/exports")" == 1 ]] ||
   fail "compiled C ABI symbol not uniquely exported"
+# The initial ABI may expose exactly one dynamically callable symbol.
+# Catch accidental extra exports from compiler lowering, aliases, globals,
+# runtime helpers, or the system linker rather than merely hiding them with
+# a version script. A future session ABI must explicitly update this oracle.
+awk '$3 != "ores_browser_abi_version" { bad = 1; print "UNEXPECTED_EXPORT:", $0 > "/dev/stderr" }
+     END { exit bad }' "$work/exports" ||
+  fail "native ELF exposed an unauthorized dynamic symbol"
 ! grep -Eq '[[:space:]]browser_native_abi_v1$' "$work/exports" ||
   fail "private i64 guest was exposed to dynamic linking"
 ! grep -Eq '[[:space:]]ores_browser_(open|dispatch|snapshot|close)$' "$work/exports" ||
