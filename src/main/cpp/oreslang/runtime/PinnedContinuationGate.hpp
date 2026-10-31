@@ -54,7 +54,7 @@ public:
     // One winner for completion, timeout, or cancellation. Cancellation does
     // NOT imply that the I/O broker has quiesced or that memory can be freed.
     bool settle(AsyncIoTicket ticket, AsyncIoTerminal outcome) noexcept {
-        if (!valid(ticket) || outcome == AsyncIoTerminal::pending) return false;
+        if (!valid(ticket) || !valid_async_io_terminal(outcome)) return false;
         AsyncIoTerminal old = AsyncIoTerminal::pending;
         return terminal_.compare_exchange_strong(old, outcome,
                 std::memory_order_acq_rel, std::memory_order_acquire);
