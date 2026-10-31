@@ -21,3 +21,9 @@ Choose `actor-llvm` for the compiled actor draft #1195. The job builds `oreslang
 The job first calls GitHub API with a transient read-only `GITHUB_TOKEN` solely to bind PR id/head/repo/private state. Token is **not** passed to the test steps; checkout uses `persist-credentials: false`. A passing job is source-head scoped and proves only the selected suite. An absent runner is **NOT_EXECUTED**; a synthetic provider Git-lease test is not a substitute.
 
 **Prerequisites not supplied here:** organization administrator runner registration, runner group restrictions, disposable VM policy, branch protection and independent reviewer approval.
+
+## Important: dispatch evidence is not a required PR-head status
+
+GitHub associates a manually dispatched workflow run with the selected **main** workflow ref; checking out a different immutable PR SHA inside the job does **not** automatically attach this job's status check to that PR commit. Keep required status checks on a genuinely PR-head-triggered workflow once private GitHub Actions admission is restored, or obtain independent source-SHA receipt verification and explicit security signoff. Never auto-merge the actor PR solely because this manual job passed.
+
+The source SHA, Git root tree, exact executed test step names and job/runner identity must be matched out of band before claiming backend execution. A missing runner, skipped job, incomplete job or zero-step failure is **NOT_EXECUTED**.
