@@ -53,7 +53,8 @@ bool valid_host_identity(const std::string& value) {
 // or a future materializer could accidentally interpret traversal syntax.
 bool valid_source_unit_id(const std::string& value) {
     if (!valid_host_identity(value) || value.front() == '/'
-            || value.find('\\') != std::string::npos) return false;
+            || value.find('\\') != std::string::npos
+            || value.find(':') != std::string::npos) return false;
     std::size_t begin = 0;
     while (begin < value.size()) {
         const auto end = value.find('/', begin);
