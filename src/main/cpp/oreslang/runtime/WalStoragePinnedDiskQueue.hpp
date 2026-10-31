@@ -53,6 +53,12 @@ public:
                                 Scope claimed, const std::vector<std::uint8_t>& frame) {
         if (!actor_.same_incarnation(actor))
             throw std::invalid_argument("foreign native actor incarnation");
+        // Fail-closed pre-admission check, NOT a supervisor STOP arbitration.
+        // The supervisor still MUST revoke this queue at STOP linearization.
+        if (!actor_.resource_admission_open()) {
+            queue_->revoke();
+            throw std::logic_error("native WAL actor stopped or detached");
+        }
         return queue_->submit(authenticated_issuer, claimed, frame);
     }
 

@@ -22,3 +22,18 @@ Local **host-only** GCC C++17 strict compilation and 11/11 checks passed five ti
 4. Execute exact-head real native compiler build and test with production headers, instrumented fault injection, crash/restart WAL replay, durable idempotency, guest `.ores` tests and Java parity. No claim of power-loss durability follows from `fdatasync` host tests.
 
 Keep draft and require independent approval/protected branches before merge. No private cross-organization mirror was performed. Zero-step Actions are runner-admission failures, not test evidence.
+
+## Stage 5 — native STOP admission fence
+
+`NativeActorRef.resource_admission_open()` checks the scheduler ticket's
+`stop_issued`, `detached_from_group`, `physically_done` and terminal resource
+bit without allocating. The pinned WAL queue rejects a stopped incarnation and
+revokes its worker. Tests assert open before STOP, closed after group.close(),
+and a negative post-close submit while preserving actor resource-loan retirement.
+
+Local GCC/Clang strict C++17 and GCC ASan/UBSan test-only shim: 14/14.
+**NOT EXECUTED** against the actual production ActorGroupLifecycle header;
+that separate exact-head gate must run before claiming native integration.
+This precheck alone cannot arbitrate STOP against a concurrent submit:
+the supervisor MUST call `revoke()` on STOP and retain kernel-operation
+lifetime pins and generation-fenced completion reconciliation.

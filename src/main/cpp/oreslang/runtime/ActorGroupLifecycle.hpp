@@ -42,6 +42,17 @@ public:
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     std::uint64_t generation() const noexcept { return generation_; }
 
+    // Runtime-only, lock-free negative admission check for new external I/O.
+    // Not a live physical-turn claim and NOT atomic with concurrent STOP:
+    // the supervisor must revoke its WAL queue when STOP linearizes.
+    bool resource_admission_open() const noexcept {
+        return !ticket_->stop_issued.load(std::memory_order_acquire)
+            && !ticket_->detached_from_group.load(std::memory_order_acquire)
+            && !ticket_->physically_done.load(std::memory_order_acquire)
+            && !(ticket_->resource_state.load(std::memory_order_acquire)
+                 & terminal_resource_bit);
+    }
+
     // Trusted native resource accounting for physical loans issued to this
     // actor generation. The top bit seals registration at finalization; a
     // successful registration cannot race past physical DONE. This is not a
