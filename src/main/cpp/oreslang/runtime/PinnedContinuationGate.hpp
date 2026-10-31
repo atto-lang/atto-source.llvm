@@ -18,6 +18,8 @@ public:
         return mode == Loan::shared || mode == Loan::exclusive;
     }
     static constexpr std::uint32_t exclusive_bit = 0x80000000u;
+    static constexpr std::uint32_t retirement_fence_bit = 0x40000000u;
+    static constexpr std::uint32_t control_bits = exclusive_bit | retirement_fence_bit;
     static constexpr std::uint32_t max_shared_loans = 1024;
 
     explicit PinnedContinuationGate(AsyncIoTicket ticket) noexcept : ticket_(ticket) {}
@@ -30,7 +32,7 @@ public:
             return false;
         std::uint32_t old = loans_.load(std::memory_order_acquire);
         for (;;) {
-            if (mode == Loan::exclusive ? old != 0 : (old & exclusive_bit) || old >= max_shared_loans)
+            if (mode == Loan::exclusive ? old != 0 : (old & control_bits) || old >= max_shared_loans)
                 return false;
             const std::uint32_t next = mode == Loan::exclusive ? exclusive_bit : old + 1;
             if (loans_.compare_exchange_weak(old, next,
@@ -50,7 +52,7 @@ public:
         std::uint32_t old = loans_.load(std::memory_order_acquire);
         for (;;) {
             if (mode == Loan::exclusive ? old != exclusive_bit
-                    : old == 0 || (old & exclusive_bit)) return false;
+                    : old == 0 || (old & control_bits)) return false;
             const std::uint32_t next = mode == Loan::exclusive ? 0 : old - 1;
             if (loans_.compare_exchange_weak(old, next,
                     std::memory_order_acq_rel, std::memory_order_acquire)) return true;
@@ -96,11 +98,16 @@ public:
     // the I/O broker ACK'd, and one guest cleanup/resume TURN FINISHED.
     bool try_retire(AsyncIoTicket ticket) noexcept {
         if (!valid(ticket) || !broker_quiesced_.load(std::memory_order_acquire)
-                || !resume_finished_.load(std::memory_order_acquire)
-                || loans_.load(std::memory_order_acquire) != 0) return false;
-        bool old = false;
-        return retired_.compare_exchange_strong(old, true,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+                || !resume_finished_.load(std::memory_order_acquire)) return false;
+        // Fence retirement in the SAME atomic word as loan admission.
+        // A separate loans_==0 check and retired_ CAS permits a stale
+        // acquirer to enter after physical retirement was authorized.
+        std::uint32_t expected = 0;
+        if (!loans_.compare_exchange_strong(expected, retirement_fence_bit,
+                std::memory_order_acq_rel, std::memory_order_acquire)) return false;
+        // This one-winner loan-word fence also claims retirement.
+        retired_.store(true, std::memory_order_release);
+        return true;
     }
 
     AsyncIoTerminal terminal() const noexcept { return terminal_.load(std::memory_order_acquire); }

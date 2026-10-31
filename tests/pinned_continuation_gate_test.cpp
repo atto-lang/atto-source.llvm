@@ -151,6 +151,45 @@ int main() {
         check(gate.finish_resume(token) && gate.try_retire(token),
               "guest cleanup or frame retirement missing");
     }
+    // Regression for stale loan acquisition racing frame retirement.
+    // Retirement must atomically occupy the same word as loan admission.
+    {
+        for (std::uint64_t round = 1; round <= 256; ++round) {
+            AsyncIoTicket token{77, round, round};
+            PinnedContinuationGate gate(token);
+            std::atomic<bool> stop{false};
+            std::thread acquirer([&] {
+                while (!stop.load(std::memory_order_acquire)) {
+                    if (gate.acquire(token, PinnedContinuationGate::Loan::shared)) {
+                        std::this_thread::yield();
+                        check(gate.release(token, PinnedContinuationGate::Loan::shared),
+                              "racing shared loan release failed");
+                    }
+                }
+            });
+            check(gate.settle(token, AsyncIoTerminal::cancelled)
+                    && gate.broker_acknowledge(token)
+                    && gate.try_claim_resume(token)
+                    && gate.finish_resume(token),
+                  "retirement race did not finish cleanup");
+            bool retired = false;
+            for (unsigned spins = 0; spins < 1000000 && !retired; ++spins) {
+                retired = gate.try_retire(token);
+                if (!retired) std::this_thread::yield();
+            }
+            stop.store(true, std::memory_order_release);
+            acquirer.join();
+            check(retired && gate.retired(), "retirement could not fence loans");
+            check(gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
+                  "retired frame lost atomic loan fence");
+            check(!gate.acquire(token, PinnedContinuationGate::Loan::shared)
+                    && !gate.acquire(token, PinnedContinuationGate::Loan::exclusive)
+                    && !gate.release(token, PinnedContinuationGate::Loan::shared)
+                    && !gate.release(token, PinnedContinuationGate::Loan::exclusive)
+                    && !gate.try_retire(token),
+                  "retired frame admitted loan mutation or duplicate retirement");
+        }
+    }
     {
         AsyncIoTicket token{4, 8, 2};
         PinnedContinuationGate gate(token);
