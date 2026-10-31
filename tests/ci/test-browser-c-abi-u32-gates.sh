@@ -5,6 +5,15 @@ set -euo pipefail
 export LC_ALL=C
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 cd "$root"
+# The acceptance script itself is source-reviewed only when a runner is
+# admitted. Detect malformed/duplicated test tails before building a compiler.
+bash -n scripts/verify-browser-c-abi-u32.sh
+[[ "$(grep -c '^for fixture in ' scripts/verify-browser-c-abi-u32.sh)" == 1 ]] ||
+  { echo 'BROKEN_BROWSER_U32_GATE: duplicate negative fixture loop' >&2; exit 1; }
+[[ "$(grep -c "^printf 'REAL_ORESLANG_C_U32_ABI_ACCEPTANCE" scripts/verify-browser-c-abi-u32.sh)" == 1 ]] ||
+  { echo 'BROKEN_BROWSER_U32_GATE: duplicate or missing acceptance marker' >&2; exit 1; }
+[[ "$(grep -c '^nm -D --defined-only ' scripts/verify-browser-c-abi-u32.sh)" == 1 ]] ||
+  { echo 'BROKEN_BROWSER_U32_GATE: duplicate or missing symbol audit' >&2; exit 1; }
 for tool in git cc clang readelf sha256sum timeout; do
   command -v "$tool" >/dev/null 2>&1 || { echo "NOT_EXECUTED: missing $tool"; exit 1; }
 done
