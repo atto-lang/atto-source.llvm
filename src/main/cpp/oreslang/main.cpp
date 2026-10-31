@@ -423,6 +423,18 @@ int main(int argc, char** argv) {
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
+        // A synchronous source slice is not proof of bounded worst-case
+        // execution, actor teardown, or hard-real-time preemption. Fail
+        // closed even for report/check modes; do not accidentally certify
+        // the new sealed-state ABI through ordinary scalar analysis.
+        const bool has_native_sealed_state = std::any_of(
+            ast.actors.begin(), ast.actors.end(),
+            [](const oreslang::ActorDecl& a) { return a.has_state_schema; });
+        if (has_native_sealed_state &&
+                (native_hard_rt_profile || rt_check_only || rt_report_seen))
+            throw std::runtime_error(
+                "native sealed actor-state guest v1 lacks hard-RT execution and cancellation certification");
+
         // The synchronous sealed actor-state implementation is backed by
         // the host OresVM execution lease and actor-owned heap. A Wasm Worker
         // or freestanding Cortex-M bootstrap cannot silently inherit those
