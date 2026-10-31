@@ -263,6 +263,85 @@ static void test_seal_revokes_dormant_and_waiting_but_not_running(void) {
           ORES_STD_SYNC_GRANTED);
 }
 
+static void test_writer_fairness_matrix_against_late_readers(void) {
+    const unsigned int counts[] = {3u, 7u, 15u};
+    for (unsigned int c = 0; c < sizeof(counts)/sizeof(counts[0]); ++c) {
+        const unsigned int late_count = counts[c];
+        ores_task_bound_state_region region =
+            ORES_TASK_BOUND_STATE_REGION_INIT(400u + late_count, 6u);
+        const ores_state_task_identity holder =
+            task(4u, 50u + late_count, 1u, 1u);
+        const ores_state_task_identity writer =
+            task(4u, 60u + late_count, 2u, 1u);
+        ores_state_task_identity late_owner[15];
+        ores_std_sync_result late[15];
+
+        ores_std_sync_result held =
+            request_retry(&region, holder, ORES_STD_READ);
+        CHECK(held.code == ORES_STD_SYNC_GRANTED);
+        start_retry(&region, holder, held.ticket);
+
+        ores_std_sync_result queued_writer =
+            request_retry(&region, writer, ORES_STD_WRITE);
+        CHECK(queued_writer.code == ORES_STD_SYNC_QUEUED);
+
+        for (unsigned int i = 0; i < late_count; ++i) {
+            late_owner[i] =
+                task(4u, 100u + late_count * 16u + i, 10u + i, 1u);
+            late[i] = request_retry(
+                &region, late_owner[i], ORES_STD_READ);
+            CHECK(late[i].code == ORES_STD_SYNC_QUEUED);
+            CHECK(queued_writer.ticket.sequence < late[i].ticket.sequence);
+            if (i != 0u)
+                CHECK(late[i - 1u].ticket.sequence < late[i].ticket.sequence);
+        }
+
+        // Releasing the initial reader must wake only the older writer.
+        end_retry(&region, holder, held.ticket);
+        ores_std_sync_result wake =
+            release_retry(&region, holder, held.ticket);
+        CHECK(wake.code == ORES_STD_SYNC_GRANTED);
+        CHECK(wake.failed_count == 0u);
+        CHECK(wake.admitted_count == 1u);
+        CHECK(ores_state_region_ticket_equal(
+            wake.admitted[0], queued_writer.ticket));
+
+        start_retry(&region, writer, queued_writer.ticket);
+        for (unsigned int i = 0; i < late_count; ++i)
+            CHECK(ores_state_region_start(
+                &region, late_owner[i], late[i].ticket) ==
+                ORES_STD_SYNC_QUEUED);
+
+        // Once the writer retires, the entire queued reader cohort may enter,
+        // but the exact wake list must preserve FIFO ticket order.
+        end_retry(&region, writer, queued_writer.ticket);
+        wake = release_retry(&region, writer, queued_writer.ticket);
+        CHECK(wake.code == ORES_STD_SYNC_GRANTED);
+        CHECK(wake.failed_count == 0u);
+        CHECK(wake.admitted_count == late_count);
+        for (unsigned int i = 0; i < late_count; ++i)
+            CHECK(ores_state_region_ticket_equal(
+                wake.admitted[i], late[i].ticket));
+
+        for (unsigned int i = 0; i < late_count; ++i)
+            start_retry(&region, late_owner[i], late[i].ticket);
+        for (unsigned int i = 0; i < late_count; ++i) {
+            end_retry(&region, late_owner[i], late[i].ticket);
+            CHECK(release_retry(
+                &region, late_owner[i], late[i].ticket).code ==
+                ORES_STD_SYNC_GRANTED);
+        }
+
+        ores_std_sync_result stop;
+        do { stop = ores_state_region_seal(&region); }
+        while (stop.code == ORES_STD_SYNC_RETRY);
+        CHECK(stop.code == ORES_STD_SYNC_GRANTED);
+        CHECK(stop.failed_count == 0u);
+        CHECK(ores_state_region_quiescent(&region) ==
+              ORES_STD_SYNC_GRANTED);
+    }
+}
+
 static void test_concurrent_task_bound_stress_matrix(void);
 
 typedef struct stress_arg {
@@ -374,6 +453,7 @@ int main(void) {
     test_foreign_region_and_generation();
     test_reader_cohort_writer_fairness_and_owner_binding();
     test_seal_revokes_dormant_and_waiting_but_not_running();
+    test_writer_fairness_matrix_against_late_readers();
     test_concurrent_task_bound_stress_matrix();
     puts("Oreslang task-bound state-region admission PASS");
     return 0;
