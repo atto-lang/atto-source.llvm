@@ -47,6 +47,240 @@ bool valid_host_identity(const std::string& value) {
     });
 }
 
+using ProviderSignatureKey = std::pair<std::string, std::size_t>;
+using ProviderSignatures = std::map<
+    frontend::PackageNamespaceKey,
+    std::map<ProviderSignatureKey, const Function*>>;
+
+const char* scalar_name(ScalarType type) {
+    return type == ScalarType::I64 ? "int"
+        : type == ScalarType::Bool ? "bool" : "non-scalar";
+}
+
+bool positional_call_arguments(const Expression& expression) {
+    if (expression.argument_names.empty()) return true;
+    return expression.argument_names.size() == expression.arguments.size()
+        && std::all_of(
+            expression.argument_names.begin(),
+            expression.argument_names.end(),
+            [](const std::string& name) { return name.empty(); });
+}
+
+const Function& resolve_provider_signature(
+        const ProviderSignatures& signatures,
+        const frontend::PackageNamespaceKey& key,
+        const std::string& name,
+        std::size_t arity) {
+    const auto family = signatures.find(key);
+    if (family == signatures.end())
+        fail("provider namespace has no typed export table");
+    const auto target = family->second.find({name, arity});
+    if (target == family->second.end())
+        fail("unknown namespace member or wrong arity '" + name + "'");
+    return *target->second;
+}
+
+ScalarType seed_provider_expression_type(
+        const frontend::PackageNamespaceKey& key,
+        Expression& expression,
+        const std::map<std::string, ScalarType>& bindings,
+        const ProviderSignatures& signatures,
+        std::size_t depth = 1) {
+    if (depth > frontend::kMaxNamespaceScalarExpressionDepth)
+        fail("provider scalar expression exceeds namespace depth limit");
+
+    const auto unary = [&](ScalarType expected, ScalarType result) {
+        if (!expression.left || expression.right)
+            fail("malformed provider unary scalar expression");
+        const auto actual = seed_provider_expression_type(
+            key, *expression.left, bindings, signatures, depth + 1);
+        if (actual != expected)
+            fail(std::string("provider unary operand requires ") +
+                 scalar_name(expected) + ", got " + scalar_name(actual));
+        return result;
+    };
+    const auto binary = [&](ScalarType expected, ScalarType result) {
+        if (!expression.left || !expression.right)
+            fail("malformed provider binary scalar expression");
+        const auto left = seed_provider_expression_type(
+            key, *expression.left, bindings, signatures, depth + 1);
+        const auto right = seed_provider_expression_type(
+            key, *expression.right, bindings, signatures, depth + 1);
+        if (left != expected || right != expected)
+            fail(std::string("provider binary operands require ") +
+                 scalar_name(expected));
+        return result;
+    };
+
+    ScalarType inferred = ScalarType::I64;
+    switch (expression.kind) {
+        case Expression::Kind::Integer:
+            inferred = ScalarType::I64;
+            break;
+        case Expression::Kind::Boolean:
+            inferred = ScalarType::Bool;
+            break;
+        case Expression::Kind::Variable: {
+            const auto binding = bindings.find(expression.name);
+            if (binding == bindings.end())
+                fail("provider scalar expression has unresolved binding '" +
+                     expression.name + "'");
+            inferred = binding->second;
+            break;
+        }
+        case Expression::Kind::Negate:
+            inferred = unary(ScalarType::I64, ScalarType::I64);
+            break;
+        case Expression::Kind::LogicalNot:
+            inferred = unary(ScalarType::Bool, ScalarType::Bool);
+            break;
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
+            inferred = binary(ScalarType::I64, ScalarType::I64);
+            break;
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual:
+            inferred = binary(ScalarType::I64, ScalarType::Bool);
+            break;
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
+            inferred = binary(ScalarType::Bool, ScalarType::Bool);
+            break;
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual: {
+            if (!expression.left || !expression.right)
+                fail("malformed provider equality expression");
+            const auto left = seed_provider_expression_type(
+                key, *expression.left, bindings, signatures, depth + 1);
+            const auto right = seed_provider_expression_type(
+                key, *expression.right, bindings, signatures, depth + 1);
+            if (left != right ||
+                    (left != ScalarType::I64 && left != ScalarType::Bool))
+                fail("provider equality operands require matching scalar types");
+            inferred = ScalarType::Bool;
+            break;
+        }
+        case Expression::Kind::Conditional: {
+            if (!expression.when_true || !expression.when_false)
+                fail("malformed provider conditional expression");
+            if (expression.condition) {
+                const auto condition = seed_provider_expression_type(
+                    key, *expression.condition, bindings, signatures, depth + 1);
+                if (condition != ScalarType::Bool)
+                    fail("provider conditional requires bool predicate");
+            } else {
+                if (!expression.condition_lhs || !expression.condition_rhs)
+                    fail("malformed legacy provider conditional comparison");
+                const auto left = seed_provider_expression_type(
+                    key, *expression.condition_lhs, bindings, signatures, depth + 1);
+                const auto right = seed_provider_expression_type(
+                    key, *expression.condition_rhs, bindings, signatures, depth + 1);
+                if (left != right)
+                    fail("provider conditional comparison types differ");
+            }
+            const auto when_true = seed_provider_expression_type(
+                key, *expression.when_true, bindings, signatures, depth + 1);
+            const auto when_false = seed_provider_expression_type(
+                key, *expression.when_false, bindings, signatures, depth + 1);
+            if (when_true != when_false)
+                fail("provider conditional branch types differ");
+            inferred = when_true;
+            break;
+        }
+        case Expression::Kind::Call: {
+            if (!frontend::valid_flat_namespace_name(expression.name)
+                    || !positional_call_arguments(expression)
+                    || expression.type_arguments_present
+                    || !expression.type_arguments.empty())
+                fail("provider calls require flat positional non-generic syntax");
+            const auto& target = resolve_provider_signature(
+                signatures, key, expression.name, expression.arguments.size());
+            if (target.returns_void ||
+                    (target.return_type != ScalarType::I64
+                     && target.return_type != ScalarType::Bool))
+                fail("provider call target requires scalar int/bool return");
+            for (std::size_t i = 0; i < target.parameters.size(); ++i) {
+                const auto& parameter = target.parameters[i];
+                if (parameter.mode != Parameter::Mode::Value
+                        || (parameter.scalar_type != ScalarType::I64
+                            && parameter.scalar_type != ScalarType::Bool)
+                        || !parameter.class_name.empty()
+                        || !parameter.generic_type.empty()
+                        || !parameter.pending_type_alias.empty()
+                        || !parameter.sum_type.empty())
+                    fail("provider call target has non-scalar parameter ABI");
+                const auto actual = seed_provider_expression_type(
+                    key, *expression.arguments[i], bindings, signatures, depth + 1);
+                if (actual != parameter.scalar_type)
+                    fail("provider argument requires " +
+                         std::string(scalar_name(parameter.scalar_type)) +
+                         ", got " + scalar_name(actual));
+            }
+            inferred = target.return_type;
+            break;
+        }
+        default:
+            fail("provider expression requires scalar namespace lowering");
+    }
+    expression.resolved_type = inferred;
+    return inferred;
+}
+
+ProviderSignatures build_and_seed_provider_types(
+        const std::vector<std::unique_ptr<PinnedUnit>>& units) {
+    ProviderSignatures signatures;
+    for (const auto& unit : units) {
+        if (unit->program.namespace_name.empty()) continue;
+        const frontend::PackageNamespaceKey key{
+            unit->package_instance_id, unit->program.namespace_name};
+        for (const auto& fn : unit->program.functions) {
+            if (!fn.exported) continue;
+            if (!signatures[key].emplace(
+                    ProviderSignatureKey{fn.name, fn.parameters.size()}, &fn).second)
+                fail("duplicate public namespace function/arity in same package instance");
+        }
+    }
+
+    for (const auto& unit : units) {
+        if (unit->program.namespace_name.empty()) continue;
+        const frontend::PackageNamespaceKey key{
+            unit->package_instance_id, unit->program.namespace_name};
+        for (auto& fn : unit->program.functions) {
+            if (!fn.exported) continue;
+            std::map<std::string, ScalarType> bindings;
+            for (const auto& parameter : fn.parameters) {
+                if ((parameter.scalar_type != ScalarType::I64
+                        && parameter.scalar_type != ScalarType::Bool)
+                        || !bindings.emplace(
+                            parameter.name, parameter.scalar_type).second)
+                    fail("provider function has invalid scalar parameter binding");
+            }
+            for (auto& local : fn.locals) {
+                if (local.initializer) {
+                    const auto actual = seed_provider_expression_type(
+                        key, *local.initializer, bindings, signatures);
+                    if (actual != local.scalar_type)
+                        fail("provider local initializer scalar type mismatch");
+                }
+                if (!bindings.emplace(local.name, local.scalar_type).second)
+                    fail("provider function has duplicate scalar local binding");
+            }
+            if (fn.result) {
+                const auto actual = seed_provider_expression_type(
+                    key, *fn.result, bindings, signatures);
+                if (!fn.returns_void && actual != fn.return_type)
+                    fail("provider function result scalar type mismatch");
+            }
+        }
+    }
+    return signatures;
+}
+
 void require_entry_scalar_surface(const Program& program) {
     if (!program.namespace_name.empty())
         fail("entry source cannot also contribute a namespace");
@@ -298,6 +532,12 @@ Program load_pinned_namespace_program(const PinnedNamespaceProgramInput& input) 
     }
     if (import_requests.empty())
         fail("entry source must import at least one pinned namespace");
+
+    // Seed unresolved parser expression types from a closed, same-namespace
+    // public signature table before the host graph checks scalar AST shape.
+    // The returned table is intentionally not package-discovery authority.
+    const auto provider_signatures = build_and_seed_provider_types(units);
+    (void)provider_signatures;
 
     // #1162's host model remains call-free by default. This executable path
     // opts in to structurally scalar calls, then resolves every admitted call
