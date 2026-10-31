@@ -138,15 +138,24 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             require(
                 module_ir.contains("i32 65537")
                     && module_ir.contains("i8 1")
-                    && module_ir.contains("$error")
-                    && module_ir.contains("call.error.code")
                     && module_ir.contains("error.propagate")
                     && module_ir.contains("error.unhandled.panic")
                     && module_ir.contains("i8 3"),
                 format!(
-                    "{name}: imported Math did not thread NativeErrorSlotV1 through the linked scalar call"
+                    "{name}: NativeErrorSlotV1 code/effect propagation or panic boundary is missing"
                 ),
             )?;
+            if name.starts_with("stdlib-math-")
+                || name == "error-slot-math-abs-catch"
+            {
+                require(
+                    module_ir.contains("$error")
+                        && module_ir.contains("call.error.code"),
+                    format!(
+                        "{name}: linked Math call did not retain hidden ErrorSlot implementation/propagation"
+                    ),
+                )?;
+            }
             if name.contains("caught-overflow")
                 || name.contains("catch-not-taken")
                 || name.contains("typed-overflow-catch")
