@@ -36,15 +36,9 @@ public:
     struct Handle { std::uint64_t incarnation; };
 
     NativeEtsScalarSet(Principal owner, Protection protection, std::size_t capacity)
-        : owner_(owner), protection_(protection), slots_(capacity),
-          incarnation_(next_incarnation()) {
-        if (!owner.valid() || capacity == 0 || capacity > 1048576)
-            throw std::invalid_argument("invalid ETS owner or capacity");
-        if (protection != Protection::private_table &&
-            protection != Protection::protected_table &&
-            protection != Protection::public_table)
-            throw std::invalid_argument("invalid ETS protection");
-    }
+        : owner_(owner), protection_(protection),
+          slots_(checked_capacity(owner, protection, capacity)),
+          incarnation_(next_incarnation()) {}
 
     NativeEtsScalarSet(const NativeEtsScalarSet&) = delete;
     NativeEtsScalarSet& operator=(const NativeEtsScalarSet&) = delete;
@@ -123,6 +117,17 @@ public:
     }
 
 private:
+    static std::size_t checked_capacity(Principal owner, Protection protection,
+                                        std::size_t capacity) {
+        if (!owner.valid() || capacity == 0 || capacity > 1048576)
+            throw std::invalid_argument("invalid ETS owner or capacity");
+        if (protection != Protection::private_table &&
+            protection != Protection::protected_table &&
+            protection != Protection::public_table)
+            throw std::invalid_argument("invalid ETS protection");
+        return capacity;
+    }
+
     struct Slot {
         bool occupied = false;
         std::uint64_t key = 0;
