@@ -418,6 +418,18 @@ int main() {
         fn.result->kind = Expression::Kind::Variable;
         fn.result->name = "foreign.symbol";
     }, "body expression");
+    // Remainder was removed from Oreslang's scalar language contract.
+    // Even a host-supplied, correctly typed legacy AST must not reintroduce
+    // that operator through the cross-unit namespace export surface.
+    reject_signature("removed_remainder_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Remainder;
+        fn.result->resolved_type = ScalarType::I64;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Integer;
+        fn.result->right = std::make_unique<Expression>();
+        fn.result->right->kind = Expression::Kind::Integer;
+    }, "body expression");
     reject_signature("add_bool_operand_export", [](Function& fn) {
         fn.result = std::make_unique<Expression>();
         fn.result->kind = Expression::Kind::Add;
