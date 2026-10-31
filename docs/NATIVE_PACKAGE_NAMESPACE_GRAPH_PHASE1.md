@@ -28,3 +28,36 @@ guest fixture returning 43; test misbinding, cycles, symlink escapes, stale ABI.
 
 Shared source-language design: oreslang-common-source PR #189.
 Java parser/source-graph counterpart: oreslang-source.java PR #2255.
+
+
+## Stacked executable overlay (#1224)
+
+Phase 1 remains **call-free by default**. The graph API now exposes an explicit
+`PackageNamespaceLinkOptions{true}` mode for the pinned executable linker.
+That option admits only structurally scalar, flat Call nodes; it does not make
+the host graph responsible for call target resolution.
+
+The pinned executable loader supplies the missing authority:
+
+- a closed host-authenticated source/package inventory and exact package alias pins;
+- exact `(PackageInstanceId, NamespaceName)` selection with no global/path fallback;
+- lexical namespace-binding shadow rejection;
+- same-namespace provider-to-provider **acyclic** call resolution;
+- no implicit cross-namespace or cross-package provider calls;
+- no private target access;
+- exact arity before whole-program type checking;
+- deterministic internal symbol assignment from sorted source identities;
+- provider implementations forced to LLVM internal linkage after graph authorization;
+- final ordinary scalar type/ownership validation after all call names are rewritten.
+
+The current provider-call slice is intentionally positional and int-returning.
+Call-free public bool exports remain part of the scalar graph, but bool-returning
+cross-file provider calls are deferred until the executable linker has an
+explicit pre-validation typed-call signature table rather than relying on the
+parser's unresolved default expression type.
+
+The executable regression changes namespace `a` into a three-file DAG:
+`aggregate/1 -> double/1 -> add/2`, while a different package instance also
+declares namespace `a` with a colliding `add/2`. The intended native result
+remains exit 43. Current source-org Actions still fail before runner steps, so
+this checked-in executable path is **not execution-qualified** yet.
