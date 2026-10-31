@@ -3,7 +3,10 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 using namespace oreslang::frontend;
+static_assert(!std::is_default_constructible<VerifiedNamespaceManifestV2>::value,
+              "unverified code must not forge an admitted inventory");
 static std::string sha(std::string_view bytes) {
     unsigned char digest[SHA256_DIGEST_LENGTH];
     SHA256(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size(), digest);
@@ -36,5 +39,27 @@ int main() {
                     "schema_version = \"2\"\n[project]\nroot = \"../\"\n[packages.checkout]\nfiles = [\"src/a.ores\"]\n"}) {
         reject([&]{admit(bad,{{"src/a.ores","ok"}},sha(bad),sha("irrelevant"));}); ++checked;
     }
+    // Two physical package declarations can coexist without assigning the
+    // same member to different owners. The digest covers the entire set.
+    const std::string multi = "schema_version = \"2\"\n[project]\nroot = \".\"\n"
+        "[packages.checkout]\nfiles = [\"src/billing/charge.ores\"]\n"
+        "[packages.other]\nfiles = [\"src/billing/refund.ores\"]\n";
+    if (admit(multi, sources, sha(multi), sha(commitment)).package_files().size() != 2)
+        throw std::runtime_error("valid multiple package inventories were rejected");
+    ++checked;
+    const std::string duplicated = "schema_version = \"2\"\n[project]\nroot = \".\"\n"
+        "[packages.checkout]\nfiles = [\"src/a.ores\"]\n"
+        "[packages.other]\nfiles = [\"src/a.ores\"]\n";
+    reject([&]{admit(duplicated, {{"src/a.ores", "ok"}}, sha(duplicated), sha("irrelevant"));}); ++checked;
+    reject([&]{admit(manifest, sources, std::string(64, 'A'), sha(commitment));}); ++checked;
+    reject([&]{verify_namespace_manifest_v2(manifest, sha(manifest), sources,
+             sha(commitment), NamespaceSha256{});}); ++checked;
+    reject([&]{admit(manifest, sources, sha(manifest), sha("wrong source pin"));}); ++checked;
+    const std::string duplicate_key = "schema_version = \"2\"\n[project]\nroot = \".\"\n"
+        "[packages.checkout]\nfiles = [\"src/a.ores\"]\nfiles = [\"src/a.ores\"]\n";
+    reject([&]{admit(duplicate_key, {{"src/a.ores", "ok"}},
+                     sha(duplicate_key), sha("irrelevant"));}); ++checked;
+    const std::string oversized = manifest + std::string(1024 * 1024, ' ');
+    reject([&]{admit(oversized, sources, sha(oversized), sha(commitment));}); ++checked;
     std::cout << "PASS v2 manifest inventory cases=" << checked << "\n";
 }
