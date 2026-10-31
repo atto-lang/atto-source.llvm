@@ -699,7 +699,18 @@ int main(){
         auto rejected_owner=owner; ++rejected_owner.generation;
         CHECK(!Work::retain_child_task(contexts,*h,rejected_owner,root,child));
         const AsyncIoTicket ticket{71,8,21};
-        PinnedContinuationGate gate(ticket);
+        PinnedContinuationGate unbound_gate(ticket);
+        CHECK(!Work::retain_async_io(contexts,*h,owner,unbound_gate,ticket));
+        CHECK(unbound_gate.request_binding_state()==0);
+        PinnedContinuationGate gate(ticket,{
+            owner.scheduler_domain,owner.actor_slot,owner.generation});
+        const OresNativeActorRef other_owner{71,5,8};
+        auto other_request=contexts.open(other_owner,Suite::info(911));
+        CHECK(other_request);
+        CHECK(!Work::retain_async_io(contexts,*other_request,other_owner,
+                                     gate,ticket));
+        CHECK(gate.request_binding_state()==0);
+        CHECK(contexts.close(*other_request,other_owner));
         CHECK(!Work::retain_async_io(contexts,*h,owner,gate,{71,8,22}));
         auto io=Work::retain_async_io(contexts,*h,owner,gate,ticket);CHECK(io);
         CHECK(gate.request_binding_state()==2);
