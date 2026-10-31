@@ -248,6 +248,52 @@ int main() {
                   "retired frame admitted loan mutation or duplicate retirement");
         }
     }
+    // Exclusive-loan release must linearize before the retirement fence.
+    // Race the two CAS operations; if retirement wins while the exclusive
+    // loan is live, the legitimate release will fail and this test fails.
+    {
+        for (std::uint64_t round = 1; round <= 256; ++round) {
+            AsyncIoTicket token{78, round, round};
+            PinnedContinuationGate gate(token);
+            check(gate.acquire(token, PinnedContinuationGate::Loan::exclusive),
+                  "exclusive race loan missing");
+            check(gate.settle(token, AsyncIoTerminal::cancelled)
+                    && gate.broker_acknowledge(token)
+                    && gate.try_claim_resume(token)
+                    && gate.finish_resume(token),
+                  "exclusive race cleanup incomplete");
+            check(!gate.try_retire(token),
+                  "exclusive live loan permitted retirement");
+            std::atomic<bool> start{false};
+            bool release_ok = false;
+            bool retirement_ok = false;
+            std::thread releaser([&] {
+                while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+                release_ok = gate.release(token, PinnedContinuationGate::Loan::exclusive);
+            });
+            std::thread retirer([&] {
+                while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+                for (unsigned attempt = 0; attempt < 2048; ++attempt) {
+                    if (gate.try_retire(token)) {
+                        retirement_ok = true;
+                        return;
+                    }
+                    std::this_thread::yield();
+                }
+            });
+            start.store(true, std::memory_order_release);
+            releaser.join();
+            retirer.join();
+            if (!retirement_ok) retirement_ok = gate.try_retire(token);
+            check(release_ok && retirement_ok && gate.retired()
+                    && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
+                  "exclusive loan release/retirement race violated fence");
+            check(!gate.acquire(token, PinnedContinuationGate::Loan::exclusive)
+                    && !gate.release(token, PinnedContinuationGate::Loan::exclusive)
+                    && !gate.try_retire(token),
+                  "exclusive loan mutated retired frame");
+        }
+    }
     {
         AsyncIoTicket token{4, 8, 2};
         PinnedContinuationGate gate(token);

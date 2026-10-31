@@ -21,6 +21,12 @@ public:
     static constexpr std::uint32_t retirement_fence_bit = 0x40000000u;
     static constexpr std::uint32_t control_bits = exclusive_bit | retirement_fence_bit;
     static constexpr std::uint32_t max_shared_loans = 1024;
+    // A future layout change must never overlap live shared counts with
+    // exclusive admission or the permanent retirement fence.
+    static_assert((exclusive_bit & retirement_fence_bit) == 0,
+                  "loan control bits must be disjoint");
+    static_assert(max_shared_loans > 0 && max_shared_loans < retirement_fence_bit,
+                  "shared loan bound must not reach a control bit");
 
     explicit PinnedContinuationGate(AsyncIoTicket ticket) noexcept : ticket_(ticket) {}
     PinnedContinuationGate(const PinnedContinuationGate&) = delete;
