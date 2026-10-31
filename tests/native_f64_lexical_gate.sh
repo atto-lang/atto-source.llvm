@@ -114,6 +114,16 @@ positive positive_infinity 'pub fnc main(): int {
   if infinity > 1.0; then return 42; fi
   return 86;
 }'
+positive f64_ternary_true 'pub fnc main(): int {
+  val f64 result = true ? 0.3 : 0.7;
+  if result == 0.3; then return 42; fi
+  return 86;
+}'
+positive f64_ternary_false 'pub fnc main(): int {
+  val f64 result = false ? 0.3 : 0.7;
+  if result == 0.7; then return 42; fi
+  return 86;
+}'
 positive integer_control 'pub fnc main(): int { return 42; }'
 
 negative implicit_int_to_f64 'pub fnc main(): int {
@@ -164,6 +174,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }' 'native branch-local f64 storage requires scoped double lowering'
 
-[[ "$pass" -eq 12 && "$reject" -eq 12 ]] ||
+[[ "$pass" -eq 14 && "$reject" -eq 12 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=12; NEGATIVE_NO_IR_PASS=12 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=14; NEGATIVE_NO_IR_PASS=12 (not arrays/solver)"
