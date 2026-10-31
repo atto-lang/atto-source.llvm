@@ -336,6 +336,21 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     return false;
 }
 
+bool native_error_try_tree(const Expression& expr, std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    if (native_pure_scalar_tree(expr, depth))
+        return true;
+    if (expr.kind != Expression::Kind::Call ||
+            expr.type_arguments_present)
+        return false;
+    return std::all_of(
+        expr.arguments.begin(), expr.arguments.end(),
+        [&](const auto& argument) {
+            return argument &&
+                native_error_try_tree(*argument, depth + 1);
+        });
+}
+
 bool native_capture_free_task_tree(
         const Expression& expr, std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
@@ -3079,53 +3094,84 @@ private:
         }
         require("return");
         if (!value.returns_void) {
-            value.result = expression();
+            auto terminal_result = expression();
             if (value.scalar_while &&
-                    (value.result->kind != Expression::Kind::Variable ||
-                     value.result->name != value.scalar_while->counter))
+                    (terminal_result->kind != Expression::Kind::Variable ||
+                     terminal_result->name != value.scalar_while->counter))
                 fail("experimental scalar loop must return the counter");
-            if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
-                fail("native protected try return requires nonthrowing scalar/field read");
+            if (terminal_try_finally &&
+                    !nonthrowing_protected_read(*terminal_result)) {
+                if (!native_error_try_tree(*terminal_result))
+                    fail("native protected try return requires a scalar ErrorSlot-compatible expression");
+                value.caught_error_try_result = std::move(terminal_result);
+            } else {
+                value.result = std::move(terminal_result);
+            }
         }
         if (!accept(";") && token_.text != "}") fail("expected ';' or closing return brace");
         if (terminal_try_finally) {
             require("}");
-            // Java/Graal syntax requires catch. This native subset has no
-            // throw-capable operations inside try; catch must be empty and
-            // remains unreachable until typed exceptional CFG is implemented.
             require("catch");
             require("(");
-            identifier();
+            const std::string terminal_catch_binding = identifier();
             require(")");
             require("{");
-            // Native try cannot throw: allow the Java-required catch return
-            // only as a literal sentinel. It is unreachable by construction,
-            // never lowered as a fake catch handler.
-            if (accept("return")) {
-                if (value.returns_void)
-                    fail("native nonthrowing catch return requires int result");
+
+            if (value.caught_error_try_result) {
+                // First guest ErrorSlot catch slice. The binding is kept as
+                // opaque Error identity metadata; reading fields/type identity
+                // is a later nominal-Error slice. For now the handler is an
+                // integer literal result and finally must be empty.
+                value.catch_binding = terminal_catch_binding;
+                for (const auto& param : value.parameters)
+                    if (param.name == value.catch_binding)
+                        fail("native ErrorSlot catch binding shadows parameter");
+                for (const auto& local : value.locals)
+                    if (local.name == value.catch_binding)
+                        fail("native ErrorSlot catch binding shadows local owner");
+                require("return");
                 if (token_.kind != Kind::Integer)
-                    fail("native nonthrowing catch requires only an integer literal return");
-                integer_literal();
+                    fail("native ErrorSlot catch v1 requires an integer literal handler result");
+                value.result = expression();
+                if (!value.result ||
+                        value.result->kind != Expression::Kind::Integer)
+                    fail("native ErrorSlot catch v1 requires an integer literal handler result");
                 require(";");
-            }
-            if (token_.text != "}")
-                fail("native nonthrowing catch requires only an optional integer literal return");
-            require("}");
-            require("finally");
-            require("{");
-            auto cleanup = branch_arm(true, false);
-            require("}");
-            // The protected region always exits via an evaluated scalar
-            // return. Lower its finally effects as scope-exit actions
-            // registered in reverse order: finally runs in source order,
-            // before any previously registered outer-scope defers.
-            for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
-                if (it->kind != Statement::Kind::Call &&
-                        it->kind != Statement::Kind::FieldWrite)
-                    fail("native finally permits only direct calls and class field writes");
-                it->kind = Statement::Kind::Defer;
-                value.statements.push_back(std::move(*it));
+                require("}");
+                require("finally");
+                require("{");
+                if (token_.text != "}")
+                    fail("native ErrorSlot catch v1 requires an empty finally block");
+                require("}");
+            } else {
+                // Nonthrowing protected returns retain the existing syntax
+                // compatibility path; the catch is unreachable by proof.
+                if (accept("return")) {
+                    if (value.returns_void)
+                        fail("native nonthrowing catch return requires int result");
+                    if (token_.kind != Kind::Integer)
+                        fail("native nonthrowing catch requires only an integer literal return");
+                    integer_literal();
+                    require(";");
+                }
+                if (token_.text != "}")
+                    fail("native nonthrowing catch requires only an optional integer literal return");
+                require("}");
+                require("finally");
+                require("{");
+                auto cleanup = branch_arm(true, false);
+                require("}");
+                // The protected region always exits via an evaluated scalar
+                // return. Lower its finally effects as scope-exit actions
+                // registered in reverse order: finally runs in source order,
+                // before any previously registered outer-scope defers.
+                for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
+                    if (it->kind != Statement::Kind::Call &&
+                            it->kind != Statement::Kind::FieldWrite)
+                        fail("native finally permits only direct calls and class field writes");
+                    it->kind = Statement::Kind::Defer;
+                    value.statements.push_back(std::move(*it));
+                }
             }
         }
         require("}");
@@ -5399,6 +5445,7 @@ private:
             for (auto& write : fn.actor_field_writes)
                 lower_extension_expression(write.expression, aliases);
             lower_extension_expression(fn.caught_throw_value, aliases);
+            lower_extension_expression(fn.caught_error_try_result, aliases);
             for (auto& deferred : fn.caught_throw_defers)
                 lower_extension_expression(deferred.expression, aliases);
             lower_extension_expression(fn.result, aliases);
