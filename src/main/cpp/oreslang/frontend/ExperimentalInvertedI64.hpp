@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include "oreslang/types/InvertedTypedPlan.hpp"
 #include <stdexcept>
 #include <system_error>
 #include <string>
@@ -84,6 +86,8 @@ class Compiler {
     std::string type_, owner_;
     std::vector<std::string> fields_;
     std::vector<bool> mutable_fields_;
+    oreslang::InvertedStructDecl typed_decl_;
+    std::optional<oreslang::dop::hir::LinearPlan> typed_plan_;
     std::size_t capacity_ = 0;
     std::string instructions_;
     std::size_t serial_ = 0;
@@ -171,6 +175,8 @@ class Compiler {
         need("inverted");
         need("struct");
         type_ = identifier();
+        typed_decl_.name = type_;
+        typed_decl_.exported = public_before || public_after;
         need("as");
         std::unordered_set<std::string> names;
         while (cur().text != "end") {
@@ -185,6 +191,9 @@ class Compiler {
             need(";");
             fields_.push_back(name);
             mutable_fields_.push_back(is_mutable);
+            typed_decl_.fields.push_back(oreslang::InvertedStructField{
+                name, oreslang::InvertedScalarKind::I64, is_mutable, start});
+
         }
         if (fields_.empty()) fail("empty inverted struct");
         need("end");
@@ -207,6 +216,10 @@ class Compiler {
         if (capacity_ * fields_.size() > 1024) fail("inverted row cell budget exceeded");
         need(")");
         need(";");
+        // Actual guest source reuses the same typed one-level compiler plan
+        // as the production AST. Runtime row bounds remain LLVM guards.
+        typed_plan_.emplace(
+            oreslang::dop::hir::Layout::from_decl(typed_decl_), capacity_);
         add("%length = alloca i64");
         add("store i64 0, ptr %length");
         for (std::size_t i = 0; i < fields_.size(); ++i) {
@@ -226,6 +239,7 @@ class Compiler {
                 values.push_back(integer());
             }
             need(")"); need(";");
+            typed_plan_->push(values.size());
             const auto length = temp();
             add(length + " = load i64, ptr %length");
             guard(length, std::to_string(capacity_));
@@ -239,11 +253,14 @@ class Compiler {
             const auto idx = index();
             need(",");
             const auto col = field();
+            // The field mutability decision now belongs to the typed plan,
+            // not a second source-adapter-specific bool gate.
             if (!mutable_fields_[col])
                 fail("immutable inverted field cannot be written after initialization");
             need(",");
             const auto value = integer();
             need(")"); need(";");
+            typed_plan_->write_runtime_checked(idx, fields_[col]);
             const auto address = pointer(col, row_index(idx));
             add("store i64 " + number(value) + ", ptr " + address);
         } else {
@@ -259,6 +276,7 @@ class Compiler {
         need(",");
         const auto col = field();
         need(")"); need(";");
+        typed_plan_->read_runtime_checked(idx, fields_[col]);
         const auto address = pointer(col, row_index(idx));
         const auto loaded = temp();
         add(loaded + " = load i64, ptr " + address);
