@@ -233,6 +233,39 @@ int main() {
     CHECK(static_cast<std::uint32_t>(
         oreslang::NumericErrorCode::ArithmeticOverflowError) == 65537u);
 
+    // Cross-frame i64 result ABI: a leaf overflow must survive arbitrary
+    // ordinary forwarding frames without being converted to a host failure,
+    // and an exact matching guest catch recovers to an ordinary return.
+    constexpr auto leaf_overflow = oreslang::i64_throw(
+        static_cast<std::uint32_t>(
+            oreslang::NumericErrorCode::ArithmeticOverflowError));
+    constexpr auto middle_frame = oreslang::i64_forward(leaf_overflow);
+    constexpr auto outer_frame = oreslang::i64_forward(middle_frame);
+    static_assert(outer_frame.effect.kind == EffectKind::Throw);
+    static_assert(outer_frame.effect.code == 65537u);
+    static_assert(outer_frame.value == 0);
+    static_assert(oreslang::i64_has_effect(outer_frame));
+    static_assert(oreslang::i64_catch_matches(outer_frame, 65537u));
+    constexpr auto recovered = oreslang::i64_recover(
+        outer_frame, 65537u, 42);
+    static_assert(recovered.effect.kind == EffectKind::Return);
+    static_assert(recovered.effect.code == 0u);
+    static_assert(recovered.value == 42);
+
+    // A nonmatching handler must preserve the original effect exactly.
+    constexpr auto not_recovered = oreslang::i64_recover(
+        outer_frame, 65538u, 7);
+    static_assert(not_recovered.effect.kind == EffectKind::Throw);
+    static_assert(not_recovered.effect.code == 65537u);
+    static_assert(not_recovered.value == 0);
+
+    // Forged effect discriminants fail closed as Fatal while crossing a frame.
+    constexpr auto forged_i64 = oreslang::i64_forward(
+        {99, {static_cast<EffectKind>(0xff), 12}});
+    static_assert(forged_i64.effect.kind == EffectKind::Fatal);
+    static_assert(forged_i64.effect.code == 0xFFFFFFFDu);
+    static_assert(forged_i64.value == 0);
+
     CHECK(oreslang::native_trap_admits(EffectKind::Throw));
     for (const EffectKind kind : kinds)
         if (kind != EffectKind::Throw)

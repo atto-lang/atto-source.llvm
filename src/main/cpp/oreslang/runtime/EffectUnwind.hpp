@@ -46,6 +46,55 @@ constexpr EffectStatus arithmetic_overflow_effect() noexcept {
             static_cast<std::uint32_t>(NumericErrorCode::ArithmeticOverflowError)};
 }
 
+/**
+ * Allocation-free i64 call-result carrier for native cross-frame effect
+ * propagation. A normal return carries kind Return/code 0. Exceptional
+ * results preserve the exact EffectStatus unchanged across ordinary frames.
+ *
+ * This is the ABI substrate only: general frontend/codegen call lowering still
+ * returns scalar i64 today and must opt into this carrier before claiming full
+ * cross-frame guest effect propagation.
+ */
+struct I64EffectResult {
+    std::int64_t value = 0;
+    EffectStatus effect{};
+};
+
+constexpr I64EffectResult i64_return(std::int64_t value) noexcept {
+    return {value, {EffectKind::Return, 0}};
+}
+
+constexpr I64EffectResult i64_throw(
+        std::uint32_t code) noexcept {
+    return {0, {EffectKind::Throw, code}};
+}
+
+constexpr bool i64_has_effect(I64EffectResult result) noexcept {
+    return normalize_effect(result.effect).kind != EffectKind::Return;
+}
+
+constexpr I64EffectResult i64_forward(
+        I64EffectResult result) noexcept {
+    result.effect = normalize_effect(result.effect);
+    if (result.effect.kind != EffectKind::Return) result.value = 0;
+    return result;
+}
+
+constexpr bool i64_catch_matches(
+        I64EffectResult result, std::uint32_t code) noexcept {
+    const auto status = normalize_effect(result.effect);
+    return status.kind == EffectKind::Throw && status.code == code;
+}
+
+constexpr I64EffectResult i64_recover(
+        I64EffectResult result,
+        std::uint32_t code,
+        std::int64_t recovered) noexcept {
+    return i64_catch_matches(result, code)
+        ? i64_return(recovered)
+        : i64_forward(result);
+}
+
 // Only recoverable ordinary source throws may be captured by trap. Control
 // signals and terminal failures must propagate even through deferred cleanup.
 constexpr bool native_trap_admits(EffectKind kind) noexcept {
