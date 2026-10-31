@@ -149,7 +149,6 @@ inline bool namespace_pure_scalar_expression_at_depth(
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
-        case Expression::Kind::Remainder:
             if (!type_is(expression->left.get(), ScalarType::I64)
                     || !type_is(expression->right.get(), ScalarType::I64)
                     || expression->resolved_type != ScalarType::I64
