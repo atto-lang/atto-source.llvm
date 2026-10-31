@@ -27,6 +27,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
 endif()
 
+add_executable(oreslang-inverted-mir-ir-guest
+    ../native_inverted_mir_llvm_guest.cpp)
+target_include_directories(oreslang-inverted-mir-ir-guest PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/main/cpp")
+set_target_properties(oreslang-inverted-mir-ir-guest PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(oreslang-inverted-mir-ir-guest PRIVATE
+    -Wall -Wextra -Wpedantic -Werror)
+
 add_executable(oreslang-inverted-mir-compiler17-test
     ../native_inverted_mir_compiler17_test.cpp)
 target_include_directories(oreslang-inverted-mir-compiler17-test PRIVATE
@@ -64,6 +73,11 @@ if(BUILD_TESTING)
     if(NOT ORE_LLVM_IR_CLANG)
         message(FATAL_ERROR "The source-to-native smoke needs a Clang IR linker")
     endif()
+    add_test(NAME inverted_verified_mir_ir_native_guest
+        COMMAND bash "${CMAKE_CURRENT_LIST_DIR}/../native_inverted_mir_ir_guest.sh"
+            "$<TARGET_FILE:oreslang-inverted-mir-ir-guest>"
+            "${ORE_LLVM_IR_CLANG}")
+    set_tests_properties(inverted_verified_mir_ir_native_guest PROPERTIES TIMEOUT 120)
     add_test(NAME inverted_i64_standalone_source_to_native
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_LIST_DIR}/../native_inverted_i64_guest.py"
