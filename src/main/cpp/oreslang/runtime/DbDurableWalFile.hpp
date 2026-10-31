@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/DbWalFrameV1.hpp"
 #include "oreslang/runtime/DbWalReplayV1.hpp"
+#include "oreslang/runtime/DbWalShardGrantRegistry.hpp"
 
 // POSIX host-only physical WAL sync gate; NOT compiled Oreslang guest.
 // A trusted runtime must supply an authenticated private directory FD, own
@@ -93,6 +94,56 @@ public:
         DbWalFrameV1::require_matching(
                 frame, frame_size, tenant, generation, operation_id);
         return append_and_sync(generation, operation_id, frame, frame_size);
+    }
+
+    /**
+     * Synchronous HOST-ONLY bridge: the authenticated caller passes a grant
+     * previously issued for THIS file's fstat identity. Under the registry
+     * lock, begin_write checks the complete grant and takes the physical
+     * gate's exclusive slot atomically against drain. The actual fdatasync
+     * executes while that slot is held. This worker retires it on BOTH
+     * success and failure, including a partially written/uncertain record.
+     *
+     * No guest DATA may supply the grant or caller actor identity. No async
+     * actor lifetime pin, guest ACK, or checkpoint publication is implied.
+     */
+    template<std::size_t Capacity>
+    SyncReceipt append_authorized_and_sync(
+            DbWalShardGrantRegistry<Capacity>& registry,
+            const typename DbWalShardGrantRegistry<Capacity>::Grant& grant,
+            std::uint64_t context_id, std::uint32_t tenant,
+            std::uint32_t shard, std::uint64_t actor_id,
+            std::uint32_t generation, std::uint32_t operation_id,
+            const std::uint8_t* frame, std::size_t frame_size) {
+        if (closed_ || uncertain_) throw std::logic_error(
+                "WAL physical file closed or uncertain");
+        struct stat info {};
+        if (::fstat(fd_, &info) != 0) throw_os_error("WAL authorization fstat");
+        if (!S_ISREG(info.st_mode) || info.st_nlink != 1)
+            throw std::logic_error("WAL physical file identity changed");
+        typename DbWalShardGrantRegistry<Capacity>::FileIdentity identity{
+            static_cast<std::uint64_t>(info.st_dev),
+            static_cast<std::uint64_t>(info.st_ino)};
+        if (!registry.begin_write(grant, context_id, tenant, shard,
+                actor_id, generation, identity))
+            throw std::logic_error("WAL shard grant admission refused");
+        // A started synchronous physical worker must NEVER release the slot
+        // based on a Future's logical cancellation. It owns retirement.
+        try {
+            auto receipt = append_validated_and_sync(
+                    tenant, generation, operation_id, frame, frame_size);
+            if (!registry.physical_write_retired(
+                    grant, context_id, actor_id, generation))
+                throw std::logic_error("WAL physical retirement unverified");
+            return receipt;
+        } catch (...) {
+            // If a previous retirement unexpectedly failed, preserve
+            // the gate rather than forging proof of physical completion.
+            if (registry.physical_write_retired(
+                    grant, context_id, actor_id, generation))
+                throw;
+            throw std::logic_error("WAL physical retirement lost; quarantine");
+        }
     }
 
     // Low-level trusted physical primitive: callers entering from a DB
