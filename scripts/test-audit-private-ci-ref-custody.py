@@ -44,6 +44,13 @@ class RefCustodyFailClosedSourceTest(unittest.TestCase):
             "    return True",
         ))
 
+    def test_guard_cannot_be_swallowed_by_try_except(self):
+        self.denied(self.changed(
+            "    require_atomic_ref_rollback()\\n    generation =",
+            "    try:\\n        require_atomic_ref_rollback()\\n"
+            "    except Denied:\\n        pass\\n    generation =",
+        ))
+
     def test_pre_guard_private_api_access_denied(self):
         self.denied(self.changed(
             "    require_atomic_ref_rollback()\n    generation =",
