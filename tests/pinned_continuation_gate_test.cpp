@@ -9,6 +9,33 @@ static void check(bool success, const char* description) {
     if (!success) throw std::runtime_error(description);
 }
 int main() {
+    // Exhaust all on-wire u8 terminal values. Only the five declared
+    // terminal outcomes may settle either the I/O admission or the pinned
+    // frame; a forged value must preserve pending and prohibit broker ACK,
+    // continuation resume, and physical retirement.
+    for (unsigned raw = 0; raw != 256; ++raw) {
+        const auto value = static_cast<AsyncIoTerminal>(raw);
+        const bool valid = raw >= 1 && raw <= 5;
+        check(valid_async_io_terminal(value) == valid,
+              "terminal discriminant admission changed");
+        AsyncIoTicket ticket{99, 7, static_cast<std::uint64_t>(raw + 1)};
+        AsyncIoCompletionGate io(ticket);
+        PinnedContinuationGate frame(ticket);
+        check(io.finish(ticket, value) == valid,
+              "I/O completion accepted an invalid terminal kind");
+        check(frame.settle(ticket, value) == valid,
+              "pinned actor frame accepted an invalid terminal kind");
+        check(io.terminal() == (valid ? value : AsyncIoTerminal::pending),
+              "invalid I/O completion corrupted terminal state");
+        check(frame.terminal() == (valid ? value : AsyncIoTerminal::pending),
+              "invalid frame completion corrupted terminal state");
+        if (!valid) {
+            check(!frame.broker_acknowledge(ticket) &&
+                  !frame.try_claim_resume(ticket) &&
+                  !frame.try_retire(ticket),
+                  "invalid completion authorized cleanup or retirement");
+        }
+    }
     for (std::uint64_t i = 1; i <= 1200; ++i) {
         AsyncIoTicket token{21, i + 40, i};
         PinnedContinuationGate gate(token);
