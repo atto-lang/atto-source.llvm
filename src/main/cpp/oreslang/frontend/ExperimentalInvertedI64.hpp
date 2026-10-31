@@ -85,7 +85,6 @@ class Compiler {
     std::size_t at_ = 0;
     std::string type_, owner_;
     std::vector<std::string> fields_;
-    std::vector<bool> mutable_fields_;
     oreslang::InvertedStructDecl typed_decl_;
     std::optional<oreslang::dop::hir::LinearPlan> typed_plan_;
     std::size_t capacity_ = 0;
@@ -182,6 +181,7 @@ class Compiler {
         while (cur().text != "end") {
             if (fields_.size() == 8) fail("inverted i64 field budget exceeded");
             const bool is_mutable = accept("let");
+            const auto field_offset = cur().offset;
             const auto name = identifier();
             if (!names.insert(name).second) fail("duplicate inverted field");
             need(":");
@@ -190,9 +190,8 @@ class Compiler {
             need("int");
             need(";");
             fields_.push_back(name);
-            mutable_fields_.push_back(is_mutable);
             typed_decl_.fields.push_back(oreslang::InvertedStructField{
-                name, oreslang::InvertedScalarKind::I64, is_mutable, start});
+                name, oreslang::InvertedScalarKind::I64, is_mutable, field_offset});
 
         }
         if (fields_.empty()) fail("empty inverted struct");
@@ -253,10 +252,6 @@ class Compiler {
             const auto idx = index();
             need(",");
             const auto col = field();
-            // The field mutability decision now belongs to the typed plan,
-            // not a second source-adapter-specific bool gate.
-            if (!mutable_fields_[col])
-                fail("immutable inverted field cannot be written after initialization");
             need(",");
             const auto value = integer();
             need(")"); need(";");
