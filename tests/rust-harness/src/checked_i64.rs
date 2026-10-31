@@ -120,6 +120,14 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         include_str!("../../fixtures/numeric-v1/math-i64-abs-min.ores");
     const SHARED_MATH_NEG_MIN: &str =
         include_str!("../../fixtures/numeric-v1/math-i64-neg-min.ores");
+    const SHARED_I64_ADD_OVERFLOW: &str =
+        include_str!("../../fixtures/numeric-v1/i64-add-overflow.ores");
+    const SHARED_I64_SUB_OVERFLOW: &str =
+        include_str!("../../fixtures/numeric-v1/i64-sub-overflow.ores");
+    const SHARED_I64_MUL_OVERFLOW: &str =
+        include_str!("../../fixtures/numeric-v1/i64-mul-overflow.ores");
+    const SHARED_I64_NEG_OVERFLOW: &str =
+        include_str!("../../fixtures/numeric-v1/i64-neg-overflow.ores");
     use std::{ffi::OsStr, fs, os::unix::process::ExitStatusExt};
     let temp = TempDir::new("ores-checked-i64-").map_err(|e| e.to_string())?;
     fs::write(temp.path.join("math-shadow.ores"),
@@ -176,10 +184,10 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
     }
 
     let negatives = [
-        ("add", "pub fnc main():int{return 9223372036854775807+1;}", "llvm.sadd.with.overflow.i64"),
-        ("subtract", "pub fnc main():int{return -9223372036854775808-1;}", "llvm.ssub.with.overflow.i64"),
-        ("multiply", "pub fnc main():int{return 3037000500*3037000500;}", "llvm.smul.with.overflow.i64"),
-        ("negate-min", "pub fnc main():int{return -(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
+        ("add", SHARED_I64_ADD_OVERFLOW, "llvm.sadd.with.overflow.i64"),
+        ("subtract", SHARED_I64_SUB_OVERFLOW, "llvm.ssub.with.overflow.i64"),
+        ("multiply", SHARED_I64_MUL_OVERFLOW, "llvm.smul.with.overflow.i64"),
+        ("negate-min", SHARED_I64_NEG_OVERFLOW, "llvm.ssub.with.overflow.i64"),
         ("portable-math-abs-min", SHARED_MATH_ABS_MIN, "llvm.ssub.with.overflow.i64"),
         ("portable-math-neg-min", SHARED_MATH_NEG_MIN, "llvm.ssub.with.overflow.i64"),
         ("math-abs-min", "pub fnc main():int{return Math.abs(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
