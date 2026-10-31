@@ -1246,6 +1246,42 @@ private:
         return result;
     }
 
+    /**
+     * Parse a bounded, typed sealed-state schema without admitting codegen.
+     * This is intentionally not the legacy actor scalar-field path. Runtime
+     * tickets and execution handles cannot be supplied in Oreslang syntax.
+     */
+    SealedStateSchemaDecl sealed_state_schema() {
+        SealedStateSchemaDecl schema;
+        schema.offset = token_.offset;
+        require("state");
+        require("{");
+        std::unordered_set<std::string> seen;
+        while (token_.text != "}") {
+            if (token_.kind == Kind::End)
+                fail("unterminated sealed actor state schema");
+            if (schema.fields.size() >= 16)
+                fail("native sealed actor state field limit exceeded (16)");
+            SealedStateFieldDecl field;
+            field.offset = token_.offset;
+            field.name = identifier();
+            if (!seen.insert(field.name).second)
+                fail("duplicate sealed actor state field '" + field.name + "'");
+            require(":");
+            if (!accept("int"))
+                fail("native sealed actor state schema currently recognizes int fields only");
+            field.type = ScalarType::I64;
+            require("=");
+            field.initial_i64 = signed_integer_literal();
+            require(";");
+            schema.fields.push_back(std::move(field));
+        }
+        require("}");
+        if (schema.fields.empty())
+            fail("empty sealed actor state schema is unsupported");
+        return schema;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -1257,6 +1293,9 @@ private:
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
+            // Preserve a typed AST boundary and validate the schema, but
+            // never silently lower it using legacy scalar actor fields.
+            actor.sealed_state = sealed_state_schema();
             fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
         }
         std::unordered_set<std::string> names;
