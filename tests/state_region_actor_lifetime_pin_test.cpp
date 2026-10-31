@@ -3,7 +3,10 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
 #include <chrono>
+#include <thread>
+#include <vector>
 #include <memory>
 #include <stdexcept>
 
@@ -156,7 +159,25 @@ int main() {
     CHECK(released.code == ORES_STD_SYNC_GRANTED);
     CHECK(ores_state_region_ticket_retired(
         &region, request.ticket) == ORES_STD_SYNC_GRANTED);
-    CHECK(pin.release_after_ticket_retirement());
+    // Real concurrent completion observers may both see a retired ticket.
+    // Exactly one may release the actor resource loan; all losing callbacks
+    // are inert. This must hold in Release (-DNDEBUG) and sanitizer builds.
+    constexpr int contenders = 32;
+    std::atomic<bool> start_completion{false};
+    std::atomic<int> completed_receipts{0};
+    std::vector<std::thread> completion_observers;
+    completion_observers.reserve(contenders);
+    for (int i = 0; i < contenders; ++i) {
+        completion_observers.emplace_back([&] {
+            while (!start_completion.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            if (pin.release_after_ticket_retirement())
+                completed_receipts.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+    start_completion.store(true, std::memory_order_release);
+    for (auto& observer : completion_observers) observer.join();
+    CHECK(completed_receipts.load(std::memory_order_relaxed) == 1);
     CHECK(!pin.active());
     CHECK(ref.outstanding_resource_loans() == 0);
     // A once-live but now retired exact ticket cannot reacquire arena
