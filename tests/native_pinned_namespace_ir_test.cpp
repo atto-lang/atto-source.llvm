@@ -39,7 +39,7 @@ PinnedNamespaceSourceInput& source(
 
 PinnedNamespaceProgramInput make_program() {
     PinnedNamespaceProgramInput input;
-    input.entry_source_unit_id = "app/main";
+    input.entry_source_unit_id = "app/src/main.ores";
     input.pinned_aliases = {
         {"app@1", {{"foo", "foo@1"}}}
     };
@@ -48,39 +48,33 @@ PinnedNamespaceProgramInput make_program() {
     // units to three package-local namespaces. Folder placement is irrelevant.
     // Namespace a deliberately forms an acyclic provider call chain across
     // three files: aggregate/1 -> double/1 -> add/2.
+    // Source bytes and source-unit paths are aligned with the immutable
+    // 12-unit common-source #197 corpus (contract Git blob 34b2f245000bc5965371e0b03f64ea8af0e5d78f).
     input.sources = {
-        {"foo/compute/math/add", "foo@1",
-            "namespace a; pub fnc add(int a, int b): int { return a + b; }\n"},
-        {"foo/compute/stats/double", "foo@1",
-            "namespace a; pub fnc double(int value): int { return add(value, value); }\n"},
-        {"foo/other/aggregation/aggregate", "foo@1",
-            "namespace a; pub fnc aggregate(int value): int { return double(value) + 1; }\n"},
-
-        {"foo/data/model", "foo@1",
-            "namespace b; pub fnc model_code(): int { return 1; }\n"},
-        {"foo/data/queries", "foo@1",
-            "namespace b; pub fnc query_code(): int { return 2; }\n"},
-        {"foo/data/storage", "foo@1",
-            "namespace b; pub fnc storage_code(): int { return 3; }\n"},
-        {"foo/data/validation", "foo@1",
-            "namespace b; pub fnc validation_code(): int { return 4; }\n"},
-
-        {"foo/api/routes", "foo@1",
-            "namespace c; pub fnc route_ok(int code): bool { return code eq 43; }\n"},
-        {"foo/api/handlers", "foo@1",
-            "namespace c; pub fnc handler_ok(int code): bool { return route_ok(code); }\n"},
-        {"foo/api/responses", "foo@1",
-            "namespace c; pub fnc response_delta(): int { return handler_ok(43) ? 0 : 1; }\n"},
-
-        // Same spelling and a colliding member in another package instance
-        // must stay isolated. The app pin selects foo@1 exactly.
-        {"other/colliding-a", "other@1",
-            "namespace a; pub fnc add(int a, int b): int { return 99; }\n"},
-
-        {"app/main", "app@1",
-            "import ns a from \"pkg:foo\";\n"
-            "import ns c from \"pkg:foo\";\n"
-            "pub fnc main(): int { return a.aggregate(21) + c.response_delta(); }\n"}
+        {"foo/src/compute/math.ores", "foo@1",
+            "namespace a;\npub fnc add(int a, int b): int { return a + b; }\n"},
+        {"foo/src/compute/stats.ores", "foo@1",
+            "namespace a;\npub fnc double(int value): int { return add(value, value); }\n"},
+        {"foo/src/compute/aggregation.ores", "foo@1",
+            "namespace a;\npub fnc aggregate(int value): int { return double(value) + 1; }\n"},
+        {"foo/src/data/models.ores", "foo@1",
+            "namespace b;\npub fnc model_code(): int { return 1; }\n"},
+        {"foo/src/data/queries.ores", "foo@1",
+            "namespace b;\npub fnc query_code(): int { return 2; }\n"},
+        {"foo/src/data/storage.ores", "foo@1",
+            "namespace b;\npub fnc storage_code(): int { return 3; }\n"},
+        {"foo/src/data/validation.ores", "foo@1",
+            "namespace b;\npub fnc validation_code(): int { return 4; }\n"},
+        {"foo/src/api/routes.ores", "foo@1",
+            "namespace c;\npub fnc route_ok(int code): bool { return code eq 43; }\n"},
+        {"foo/src/api/handlers.ores", "foo@1",
+            "namespace c;\npub fnc handler_ok(int code): bool { return route_ok(code); }\n"},
+        {"foo/src/api/responses.ores", "foo@1",
+            "namespace c;\npub fnc response_delta(): int { return handler_ok(43) ? 0 : 1; }\n"},
+        {"other/src/collision.ores", "other@1",
+            "namespace a;\npub fnc add(int a, int b): int { return 99; }\n"},
+        {"app/src/main.ores", "app@1",
+            "import ns a from \"pkg:foo\";\nimport ns c from \"pkg:foo\";\npub fnc main(): int { return a.aggregate(21) + c.response_delta(); }\n"}
     };
     return input;
 }
@@ -115,7 +109,7 @@ int main() {
         {
             auto candidate = make_program();
             candidate.pinned_aliases["app@1"]["foo"] = "other@1";
-            source(candidate, "app/main").source =
+            source(candidate, "app/src/main.ores").source =
                 "import ns a from \"pkg:foo\"; "
                 "pub fnc main(): int { return a.aggregate(21); }\n";
             require_rejection(
@@ -126,7 +120,7 @@ int main() {
         // Provider calls are same-package, same-namespace, exact-arity only.
         {
             auto candidate = make_program();
-            source(candidate, "foo/other/aggregation/aggregate").source =
+            source(candidate, "foo/src/compute/aggregation.ores").source =
                 "namespace a; pub fnc aggregate(int value): int { return missing(value); }\n";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
@@ -134,7 +128,7 @@ int main() {
         }
         {
             auto candidate = make_program();
-            source(candidate, "foo/compute/stats/double").source =
+            source(candidate, "foo/src/compute/stats.ores").source =
                 "namespace a; pub fnc double(int value): int { return add(value); }\n";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
@@ -145,7 +139,7 @@ int main() {
         // types and keeps named/generic provider calls outside this ABI slice.
         {
             auto candidate = make_program();
-            source(candidate, "foo/api/handlers").source =
+            source(candidate, "foo/src/api/handlers.ores").source =
                 "namespace c; pub fnc handler_ok(int code): bool { return route_ok(true); }\n";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
@@ -153,7 +147,7 @@ int main() {
         }
         {
             auto candidate = make_program();
-            source(candidate, "foo/api/handlers").source =
+            source(candidate, "foo/src/api/handlers.ores").source =
                 "namespace c; pub fnc handler_ok(int code): bool { return route_ok(code: code); }\n";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
@@ -164,7 +158,7 @@ int main() {
         // distinct identity and cannot be reached without explicit syntax.
         {
             auto candidate = make_program();
-            source(candidate, "foo/other/aggregation/aggregate").source =
+            source(candidate, "foo/src/compute/aggregation.ores").source =
                 "namespace a; pub fnc aggregate(int value): int { return route_code(); }\n";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
@@ -175,7 +169,7 @@ int main() {
         // rejected before final whole-program compiler validation/codegen.
         {
             auto candidate = make_program();
-            source(candidate, "foo/compute/math/add").source =
+            source(candidate, "foo/src/compute/math.ores").source =
                 "namespace a; pub fnc add(int a, int b): int { return aggregate(a); }\n";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
@@ -186,7 +180,7 @@ int main() {
         // either the entry source or another provider.
         {
             auto candidate = make_program();
-            source(candidate, "foo/other/aggregation/aggregate").source =
+            source(candidate, "foo/src/compute/aggregation.ores").source =
                 "namespace a; "
                 "fnc hidden(int value): int { return value; } "
                 "pub fnc aggregate(int value): int { return hidden(value); }\n";
@@ -196,7 +190,7 @@ int main() {
         }
         {
             auto candidate = make_program();
-            source(candidate, "app/main").source =
+            source(candidate, "app/src/main.ores").source =
                 "import ns a from \"pkg:foo\"; "
                 "pub fnc main(): int { return a.hidden(21); }\n";
             require_rejection(
@@ -208,7 +202,7 @@ int main() {
         // rewriting; namespace calls cannot bypass argument typing.
         {
             auto candidate = make_program();
-            source(candidate, "app/main").source =
+            source(candidate, "app/src/main.ores").source =
                 "import ns a from \"pkg:foo\"; "
                 "pub fnc main(): int { return a.add(true, 1); }\n";
             require_rejection(
@@ -221,7 +215,7 @@ int main() {
         // but this source-to-IR lowering intentionally admits positional only.
         {
             auto candidate = make_program();
-            source(candidate, "app/main").source =
+            source(candidate, "app/src/main.ores").source =
                 "import ns a from \"pkg:foo\"; "
                 "pub fnc main(): int { return a.add(a: 20, b: 23); }\n";
             require_rejection(
@@ -244,7 +238,7 @@ int main() {
         // entry function/parameter/local.
         {
             auto candidate = make_program();
-            source(candidate, "app/main").source =
+            source(candidate, "app/src/main.ores").source =
                 "import ns a from \"pkg:foo\"; "
                 "fnc a(): int { return 0; } "
                 "pub fnc main(): int { return a.aggregate(21); }\n";
@@ -257,7 +251,7 @@ int main() {
         // the parser before graph resolution.
         {
             auto candidate = make_program();
-            source(candidate, "app/main").source =
+            source(candidate, "app/src/main.ores").source =
                 "import ns a from \"pkg:foo\"; "
                 "import ns a from \"pkg:foo\"; "
                 "pub fnc main(): int { return a.aggregate(21); }\n";
@@ -267,7 +261,7 @@ int main() {
         }
         {
             auto candidate = make_program();
-            source(candidate, "app/main").source =
+            source(candidate, "app/src/main.ores").source =
                 "import ns a from \"foo\"; "
                 "pub fnc main(): int { return 0; }\n";
             require_rejection(
@@ -315,7 +309,7 @@ int main() {
         // when private. The namespace graph must reject it.
         {
             auto candidate = make_program();
-            source(candidate, "foo/compute/math/add").source =
+            source(candidate, "foo/src/compute/math.ores").source =
                 "namespace a; "
                 "fnc init(): int { return 0; } "
                 "pub fnc add(int a, int b): int { return a + b; }\n";
