@@ -80,6 +80,22 @@ positive rounding 'pub fnc main(): int {
   val f64 value = 0.1 + 0.2;
   if value > 0.3; then return 42; else return 86; fi
 }'
+positive nan_unordered_not_equal 'pub fnc main(): int {
+  val f64 nan = 0.0 / 0.0;
+  if nan != nan; then return 42; else return 86; fi
+}'
+positive nan_ordered_false 'pub fnc main(): int {
+  val f64 nan = 0.0 / 0.0;
+  if nan < 1.0; then return 86; else return 42; fi
+}'
+positive signed_zero_inverse 'pub fnc main(): int {
+  val f64 inverse = 1.0 / (-0.0);
+  if inverse < 0.0; then return 42; else return 86; fi
+}'
+positive positive_infinity 'pub fnc main(): int {
+  val f64 infinity = 1.0 / 0.0;
+  if infinity > 1.0; then return 42; else return 86; fi
+}'
 positive integer_control 'pub fnc main(): int { return 42; }'
 
 negative implicit_int_to_f64 'pub fnc main(): int {
@@ -129,6 +145,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }'
 
-[[ "$pass" -eq 8 && "$reject" -eq 12 ]] ||
+[[ "$pass" -eq 12 && "$reject" -eq 12 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=8; NEGATIVE_NO_IR_PASS=12 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=12; NEGATIVE_NO_IR_PASS=12 (not arrays/solver)"
