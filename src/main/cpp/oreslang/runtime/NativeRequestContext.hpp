@@ -132,6 +132,14 @@ private:
         --s->leases;
         if (!s->leases && s->phase == Phase::closing) recycle(*s);
     }
+    // Quiescence gate: after close, the exchange owner must be the ONLY
+    // remaining physical lease. Child Tasks and I/O completions each keep
+    // their own lease; they must exit before exchange-generation reuse.
+    bool sole_closing_lease(Handle h) noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto* s=locate(h);
+        return s && s->phase==Phase::closing && s->leases==1;
+    }
 public:
     class Lease final {
         friend class NativeRequestContext;
@@ -152,6 +160,9 @@ public:
         ~Lease(){reset();}
         void reset() noexcept {if (auto* p=std::exchange(table_,nullptr))p->release(handle_);}
         Handle handle() const noexcept {return table_ ? handle_ : Handle{};}
+        bool sole_closing_lease() const noexcept {
+            return table_ && table_->sole_closing_lease(handle_);
+        }
         explicit operator bool() const noexcept {return table_!=nullptr;}
     };
     // Physical ownership of an HTTP exchange, not merely a weak token.
@@ -171,18 +182,22 @@ public:
             token(src.token), exchange_(std::exchange(src.exchange_,nullptr)),
             pin_(std::move(src.pin_)) {}
         ExchangePin& operator=(ExchangePin&&) = delete;
+        bool ready_to_retire() const noexcept {
+            return exchange_ && pin_ &&
+                exchange_->phase()==NativeHttpExchange::Phase::reactor &&
+                pin_.sole_closing_lease();
+        }
         ~ExchangePin(){
             if(pin_) {
-                // The context's own physical lease must leave BEFORE the
-                // exchange's generation fence opens for another producer.
-                // Otherwise enqueue() can race the tail of this destructor
-                // while the prior generation is still physically retained.
-                if (!exchange_ ||
-                    exchange_->phase()!=NativeHttpExchange::Phase::reactor)
-                    std::terminate(); // release before terminal/reclaim
+                // Closing metadata is not physical quiescence: all child
+                // Task, continuation and I/O leases must drain first.
+                // Fail closed if an exchange owner drops the LAST pin early.
+                if (!ready_to_retire()) std::terminate();
+                // Drain the final context lease before opening the exchange
+                // generation fence to a new reactor admission.
                 pin_.reset();
                 if (!exchange_->release_physical_pin(token))
-                    std::terminate(); // never unlock another generation
+                    std::terminate(); // stale or prematurely reused exchange
             }
         }
     };
