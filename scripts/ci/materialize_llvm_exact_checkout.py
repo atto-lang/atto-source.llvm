@@ -117,7 +117,15 @@ def clear_skip_worktree(files):
                          input=indexed, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env())
     if run.returncode:
         raise Denied("could not clear sparse index flags")
-    result = subprocess.run(["git", "config", "--worktree", "core.sparseCheckout", "false"],
+    # actions/checkout v4 non-cone mode sets core.sparseCheckout locally;
+    # git sparse-checkout set --no-cone uses a separate worktree config.
+    extension = subprocess.run(["git", "config", "--local", "--bool", "--get",
+                                "extensions.worktreeConfig"], env=env(),
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if extension.returncode not in (0, 1):
+        raise Denied("could not inspect Git worktree configuration")
+    scope = "--worktree" if extension.stdout.strip() == b"true" else "--local"
+    result = subprocess.run(["git", "config", scope, "core.sparseCheckout", "false"],
                             env=env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
         raise Denied("could not disable sparse rules")

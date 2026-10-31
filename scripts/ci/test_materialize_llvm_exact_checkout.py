@@ -60,6 +60,19 @@ class SourceFreeSparseMaterialization(unittest.TestCase):
         self.assertIn('PASS', r.stdout)
         self.assertFalse(self.marker.exists())
 
+    def test_actions_checkout_v4_non_cone_local_config(self):
+        # Pinned checkout v4 sets core.sparseCheckout in LOCAL git config,
+        # unlike `git sparse-checkout set`, which enables worktreeConfig.
+        self.assertEqual(call(self.checkout, 'git', 'config', '--local', '--bool', '--get',
+                              'extensions.worktreeConfig', check=False).returncode, 0)
+        call(self.checkout, 'git', 'config', '--worktree', 'core.sparseCheckout', 'false')
+        call(self.checkout, 'git', 'config', '--local', 'extensions.worktreeConfig', 'false')
+        call(self.checkout, 'git', 'config', '--local', 'core.sparseCheckout', 'true')
+        self.materialize()
+        r=call(self.checkout, sys.executable, str(VERIFY), self.sha)
+        self.assertIn('PASS', r.stdout)
+        self.assertFalse(self.marker.exists())
+
     def test_reject_preexisting_untracked_file(self):
         (self.checkout / 'surprise').write_text('malicious')
         self.materialize(False)
