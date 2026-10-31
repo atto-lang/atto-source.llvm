@@ -365,13 +365,18 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         denied = v3.subprocess.CompletedProcess(
             ["git"], 1, "", "atomic transaction rejected"
         )
+        accepted = v3.subprocess.CompletedProcess(["git"], 0, "", "")
+        def run(argv, **_kwargs):
+            # Credential setup and local init succeed; only remote atomic
+            # cleanup is rejected. This reaches the actual denial path.
+            return denied if "push" in argv else accepted
         with (
             patch.object(v3, "live_ref_sha",
                          side_effect=[CARRIER_COMMIT, CARRIER_COMMIT, None, None]),
             patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
             patch.object(v3, "trusted_git_cli", return_value="/usr/bin/git"),
             patch.object(v3, "git_transport_environment", return_value={}),
-            patch.object(v3, "run_bounded_gh", return_value=denied),
+            patch.object(v3, "run_bounded_gh", side_effect=run),
             patch.object(v3, "_gh_ref_request") as rest,
         ):
             with self.assertRaisesRegex(v3.Denied, "failed or remained ambiguous"):
