@@ -153,12 +153,17 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind != Kind::Int && left.kind != Kind::String && left.kind != Kind::F64) fail(e.offset, "addition requires int, f64 or string");
                 return left;
             }
-            case E::Subtract: case E::Multiply: case E::Remainder: {
+            case E::Subtract: case E::Multiply: case E::Divide: case E::Remainder: {
                 const auto lhs = expression(*e.left, locals);
                 const auto rhs = expression(*e.right, locals);
                 require(lhs, rhs, e.offset, "arithmetic operand types must match (no int/f64 conversion)");
-                if (lhs.kind != Kind::Int && (lhs.kind != Kind::F64 || e.kind == E::Remainder))
+                if (e.kind == E::Divide) {
+                    if (lhs.kind != Kind::F64)
+                        fail(e.offset, "native division requires f64/f64 (int/int unsupported)");
+                } else if (lhs.kind != Kind::Int &&
+                           (lhs.kind != Kind::F64 || e.kind == E::Remainder)) {
                     fail(e.offset, "arithmetic requires int or f64 (remainder int only)");
+                }
                 return lhs;
             }
             case E::ArrayCall: {
