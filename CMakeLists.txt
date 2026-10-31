@@ -38,6 +38,7 @@ add_executable(oreslang-llvmc
 
 target_include_directories(oreslang-llvmc PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1"
     "${LLVM_INCLUDE_DIRS}"
 )
 add_definitions(${LLVM_DEFINITIONS})
