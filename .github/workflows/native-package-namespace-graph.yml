@@ -6,6 +6,7 @@ on:
       - 'CMakeLists.txt'
       - 'src/main/cpp/oreslang/frontend/PackageNamespaceGraph.hpp'
       - 'tests/native_package_namespace_graph_test.cpp'
+      - 'tests/project_root_import_test.cpp'
       - 'docs/NATIVE_PACKAGE_NAMESPACE_GRAPH_PHASE1.md'
       - '.github/workflows/native-package-namespace-graph.yml'
   workflow_dispatch:
@@ -41,6 +42,15 @@ jobs:
             -o /tmp/oreslang-native-package-namespace-graph-test
       - name: Execute exact-head host namespace package contract
         run: /tmp/oreslang-native-package-namespace-graph-test
+      - name: Compile and execute project-root manifest authority regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ matrix.compiler }}" -std=c++17 -O2 -UNDEBUG \
+            -Wall -Wextra -Wpedantic -Werror \
+            -I src/main/cpp tests/project_root_import_test.cpp \
+            -o /tmp/oreslang-project-root-import-test
+          /tmp/oreslang-project-root-import-test
   clang-sanitized-host-contract:
     # Source-only graph admission. This is not compiled Oreslang guest parity.
     runs-on: ubuntu-latest
@@ -64,7 +74,9 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)"
           for path in src/main/cpp/oreslang/frontend/PackageNamespaceGraph.hpp \
                       src/main/cpp/oreslang/frontend/Parser.hpp \
-                      tests/native_package_namespace_graph_test.cpp; do
+                      tests/native_package_namespace_graph_test.cpp \
+                      src/main/cpp/oreslang/frontend/ProjectRootImport.hpp \
+                      tests/project_root_import_test.cpp; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
           done
           echo "EXACT_HOST_HEAD=$EXPECTED_HEAD EXACT_HOST_TREE=$(git rev-parse 'HEAD^{tree}')"
@@ -77,3 +89,12 @@ jobs:
             -I src/main/cpp tests/native_package_namespace_graph_test.cpp \
             -o /tmp/oreslang-native-package-namespace-sanitized
           /tmp/oreslang-native-package-namespace-sanitized
+      - name: Compile and execute Clang ASan/UBSan project-root marker regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -I src/main/cpp tests/project_root_import_test.cpp \
+            -o /tmp/oreslang-project-root-import-sanitized
+          /tmp/oreslang-project-root-import-sanitized
