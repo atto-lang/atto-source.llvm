@@ -21,3 +21,11 @@ The MIR guard flags record obligations, not proof that production LLVM code gene
 1. Run exact-HEAD C++20 standalone and full LLVM compiler CTest with real repository headers, both GCC and Clang, plus ASan/UBSan.
 2. Implement codegen from verified MIR into explicit LLVM IR checked owner/row ABI; prove guards are emitted before every access.
 3. Add CFG/dataflow loan joins, task pinning and physical quiescence, then Java parity and the shared backend guest fixtures.
+
+## Compiler C++17 / native executor C++20 split (later hardening)
+
+The MIR verifier moved to **src/main/cpp/oreslang/types/InvertedTypedMir.hpp**, which no longer imports the native C++20 column runtime. It can be included by the real oreslang-llvmc C++17 frontend and backend. The real checked C++20 bridge is now **src/main/cpp/oreslang/types/InvertedNativeMirI64.hpp**; only host/native test targets include it. The new **native_inverted_mir_compiler17_test.cpp** is compiled in strict C++17 (no GNU extensions) as a separate CTest target **inverted_mir_compiler_cpp17**.
+
+The explicitly flagged .ores-to-LLVM-IR source adapter now calls the same verified MIR Module::lower on its typed HIR sequence and rejects generation of IR if its emitted runtime index-guard count differs from MIR push/read/write operations. This remains an experimental source path: the real production parser still rejects inverted declarations before generating code, and the MIR verifier does not itself prove the emitted row-generation checks or actor-lifetime pinning.
+
+Locally, the new MIR design compiled under GCC and Clang C++17/C++20 using **stand-in** planner/runtime interfaces; this is a syntax smoke only, not a passing run of exact GitHub source against the real Oreslang C++20 native headers. All current-HEAD real-repo build/CTest and AOT/guest parity gates are still NOT_EXECUTED because GitHub hosted Actions jobs fail with zero executed steps.
