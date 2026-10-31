@@ -276,6 +276,9 @@ inline PackageNamespaceGraph link_package_namespaces(
             throw std::invalid_argument("module wrapper cannot declare a file namespace");
         if (!program.imports.empty())
             throw std::invalid_argument("native namespace unresolved module imports require checked dependency lowering");
+        if (!program.namespace_imports.empty())
+            throw std::invalid_argument(
+                "native namespace embedded imports require verified v2 package linking");
 
         // Reject unlowered top-level declarations before registering the
         // namespace; no nominal/constraint/loop ABI can enter this scalar graph.
