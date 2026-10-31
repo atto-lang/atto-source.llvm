@@ -1894,6 +1894,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-inverted-typed-hir-test)
     set_tests_properties(inverted_typed_hir_and_checked_owner PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-inverted-typed-mir-test
+        tests/native_inverted_typed_mir_test.cpp)
+    target_include_directories(oreslang-inverted-typed-mir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-inverted-typed-mir-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-inverted-typed-mir-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-inverted-typed-mir-test PRIVATE Threads::Threads)
+    add_test(NAME inverted_typed_mir_native_columns
+        COMMAND oreslang-inverted-typed-mir-test)
+    set_tests_properties(inverted_typed_mir_native_columns PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
     target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-dop-inverted-columns-test PRIVATE cxx_std_20)
