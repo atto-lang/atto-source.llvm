@@ -2858,6 +2858,30 @@ private:
                         fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
                     if (!then_form) require("}");
+
+                    // Canonical formatter form may make this if the entire
+                    // function result:
+                    //   if cond; do return a; else return b; fi
+                    // Represent it with the existing lazy Conditional
+                    // expression rather than inventing a second return CFG.
+                    if (then_form && value.return_class.empty() &&
+                            !terminal_try_finally && accept("else")) {
+                        require("return");
+                        auto fallback = expression();
+                        require(";");
+                        require("fi");
+                        if (token_.text != "}")
+                            fail("terminal if/do/fi return must end the function");
+                        auto result = make_expression(
+                            Expression::Kind::Conditional, offset);
+                        result->condition = std::move(guard.condition);
+                        result->when_true = std::move(guard.result);
+                        result->when_false = std::move(fallback);
+                        value.result = std::move(result);
+                        require("}");
+                        return value;
+                    }
+
                     require("fi");
                     if (then_form && value.return_class.empty() && !terminal_try_finally) {
                         if (return_guards_started)
