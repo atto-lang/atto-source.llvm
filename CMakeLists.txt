@@ -1903,6 +1903,18 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-inverted-mir-ir-guest PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
 
+    add_executable(oreslang-inverted-schema-mir-preflight-test
+        tests/native_inverted_schema_mir_preflight_test.cpp)
+    target_include_directories(oreslang-inverted-schema-mir-preflight-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-inverted-schema-mir-preflight-test PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(oreslang-inverted-schema-mir-preflight-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME inverted_production_schema_mir_preflight
+        COMMAND oreslang-inverted-schema-mir-preflight-test)
+    set_tests_properties(inverted_production_schema_mir_preflight PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-inverted-mir-compiler17-test
         tests/native_inverted_mir_compiler17_test.cpp)
     target_include_directories(oreslang-inverted-mir-compiler17-test PRIVATE
