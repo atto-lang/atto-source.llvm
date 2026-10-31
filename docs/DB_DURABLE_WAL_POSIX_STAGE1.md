@@ -105,3 +105,46 @@ actual fstat values and the physical descriptor before calling issue().
 No Oreslang guest exposure, async file dispatch, kernel proof of close,
 ACK, persistence/replay or Java differential execution is provided.
 Exact-head CMake/CTest and sanitizer tests are **NOT EXECUTED**.
+
+## Stage 1.5 — atomic WAL admission versus drain (locally executed)
+
+`DbWalShardGrantRegistry::can_write` is now explicitly a **diagnostic
+observation**, never authority to dispatch a write. Two separate calls
+(`can_write`, then `DbWalOwnerRetirementGate::admit`) could have allowed
+a drain to interleave. New `begin_write` checks the context, shard,
+tenant, actor, generation, file identity, registry epoch and ACTIVE state
+under the registry lock, then atomically acquires the bound physical
+gate's active slot before releasing that lock. `drain` uses the same
+lock order, making write versus drain linearizable. The trusted physical
+worker may release a DRAINING in-flight write with
+`physical_write_retired`, without confusing logical Future completion
+with physical I/O retirement. Move-assignment of `Grant` is prohibited
+to avoid silently orphaning a live slot.
+
+The tracked `native_db_wal_shard_grant_registry_test.cpp` includes
+positive and negative admission, stale actor/generation, capacity,
+duplicate shard/file, physical-retirement and 2-thread drain/write tests.
+
+**New local evidence (NOT hosted or guest):** source SHA
+`d03a40dc7549ffce0d30a5090f53e0e315c43c5a`.
+Manually reconstructed source files were checked using `git hash-object`
+against their *exact GitHub blob SHA*:
+`DbWalOwnerRetirementGate.hpp` `c041c5ffd177688d04f5248c3d8ecd98552032f4`,
+`DbWalShardGrantRegistry.hpp` `80ea864efef1d3d627ef1f35143e569e30279cff`,
+`native_db_wal_shard_grant_registry_test.cpp` `2f71d647cb9ca8fea98ad1e52b40c0a5c80e8646`.
+The **tracked exact-blob test passed** locally with
+`g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread
+-fsanitize=address,undefined -fno-omit-frame-pointer`
+and `ASAN_OPTIONS=detect_leaks=1`,
+`UBSAN_OPTIONS=halt_on_error=1`.
+A separate host harness passed 1,000 concurrent drain/write/close rounds
+under the same sanitizers. These prove only the isolated host registry
+subset; full exact-tree CMake, TSan, compiler-generated guest, and
+disk/restart proof remain NOT_EXECUTED.
+
+Runner-capacity searches on 31 October used **source-free** canaries
+in private `akrion-sim/akrion-sim-sync` and
+`agent-pontifex/agent-pontifex-docs`; both jobs failed before
+runner assignment (`runner_id=0`, zero steps). Recent `voxletra-e2e`
+and `scintilla-run-e2e` runs likewise had zero steps. No private
+Oreslang source was transferred to an unverified runner.
