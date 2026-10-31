@@ -130,6 +130,13 @@ class RefCustodyFailClosedSourceTest(unittest.TestCase):
             'publisher_enabled = True\nif __name__ == "__main__":',
         ))
 
+    def test_duplicate_denied_class_cannot_shadow_exception(self):
+        self.denied(self.changed(
+            'class Denied(RuntimeError):\n    pass',
+            'class Denied(RuntimeError):\n    pass\n\n'
+            'class Denied(RuntimeError):\n    pass',
+        ))
+
     def test_guard_decorator_denied(self):
         self.denied(self.changed(
             'def require_atomic_ref_rollback():',
