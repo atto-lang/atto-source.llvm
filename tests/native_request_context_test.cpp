@@ -692,9 +692,12 @@ int main(){
         auto root=TaskCancellation::root();
         auto child=root->child();
         auto grandchild=child->child();
-        auto task=Work::retain_child_task(contexts,*h,owner,child);CHECK(task);
+        auto unrelated_parent=TaskCancellation::root();
+        CHECK(!Work::retain_child_task(contexts,*h,owner,
+                                      unrelated_parent,child));
+        auto task=Work::retain_child_task(contexts,*h,owner,root,child);CHECK(task);
         auto rejected_owner=owner; ++rejected_owner.generation;
-        CHECK(!Work::retain_child_task(contexts,*h,rejected_owner,child));
+        CHECK(!Work::retain_child_task(contexts,*h,rejected_owner,root,child));
         const AsyncIoTicket ticket{71,8,21};
         PinnedContinuationGate gate(ticket);
         CHECK(!Work::retain_async_io(contexts,*h,owner,gate,{71,8,22}));
@@ -706,7 +709,7 @@ int main(){
         }));
         CHECK(contexts.close(*h,owner));
         CHECK(!pinned->ready_to_retire());
-        CHECK(!Work::retain_child_task(contexts,*h,owner,child));
+        CHECK(!Work::retain_child_task(contexts,*h,owner,root,child));
         CHECK(!Work::retain_async_io(contexts,*h,owner,gate,ticket));
         CHECK(root->cancel("request-disconnect"));
         CHECK(child->is_cancelled() && grandchild->is_cancelled());
