@@ -148,7 +148,21 @@ public:
                     // local function or crosses suspension. No pointer emitted.
                     break;
                 case OpKind::Close:
-                    emit("store i1 false, ptr %alive"); break;
+                    // The native checked-column owner clears row payloads
+                    // on teardown. Match that contract in this *bounded*
+                    // stack-local IR slice: revoke owner state first, then
+                    // volatile-scrub every physical cell and live-slot marker.
+                    // Volatile prevents the optimizer eliding dead-stack
+                    // erasure; no guest pointer, loan or handle can escape.
+                    emit("store volatile i1 false, ptr %alive");
+                    for (std::size_t cell = 0; cell < cap_; ++cell) {
+                        for (const auto* lane : {"%col0", "%col1", "%generation"}) {
+                            emit("store volatile i64 0, ptr " +
+                                 slot_ptr(lane, std::to_string(cell)));
+                        }
+                    }
+                    emit("store volatile i64 0, ptr %length");
+                    break;
                 default: throw std::logic_error("unsupported MIR opcode in LLVM IR emitter");
             }
         }
