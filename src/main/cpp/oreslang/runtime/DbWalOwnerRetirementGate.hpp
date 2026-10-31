@@ -62,6 +62,10 @@ public:
         phase_ = Phase::closed;
     }
 
+    bool owns(std::uint64_t actor_id, std::uint32_t generation) const noexcept {
+        return matches(actor_id, generation);
+    }
+
     Phase phase() const {
         std::lock_guard<std::mutex> guard(mu_);
         return phase_;
