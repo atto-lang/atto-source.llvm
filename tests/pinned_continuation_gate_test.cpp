@@ -113,7 +113,11 @@ int main() {
         std::thread registrar([&] {
             while(!start.load(std::memory_order_acquire))
                 std::this_thread::yield();
-            bound.store(gate.try_bind_request(token),std::memory_order_release);
+            const bool reserved=gate.try_bind_request(token);
+            if(reserved)
+                check(gate.commit_request_binding(token),
+                      "request reservation failed irreversible publication");
+            bound.store(reserved,std::memory_order_release);
         });
         std::thread cleanup([&] {
             while(!start.load(std::memory_order_acquire))
@@ -130,7 +134,7 @@ int main() {
         registrar.join(); cleanup.join();
         if(bound.load(std::memory_order_acquire)) {
             check(!normal_retired.load(std::memory_order_acquire) &&
-                  gate.request_binding_state()==1,
+                  gate.request_binding_state()==2,
                   "normal retirement escaped a live request binding");
             check(!gate.try_bind_request(token) &&
                   !gate.try_retire(token),
@@ -141,10 +145,10 @@ int main() {
             if(!normal_retired.load(std::memory_order_acquire))
                 check(gate.try_retire(token),
                       "rejected binding stranded terminal operation");
-            check(gate.request_binding_state()==2,
+            check(gate.request_binding_state()==3,
                   "unbound operation not terminally retired");
         }
-        check(gate.retired() && gate.request_binding_state()==2 &&
+        check(gate.retired() && gate.request_binding_state()==3 &&
               !gate.try_bind_request(token) &&
               !gate.try_retire_bound_request(token) &&
               !gate.try_retire(token),
@@ -163,8 +167,12 @@ int main() {
         check(gate.abort_request_binding(token) &&
               gate.request_binding_state()==0,
               "failed registry admission did not release its reservation");
-        check(gate.try_bind_request(token),
-              "aborted, unpublished bind cannot retry");
+        check(gate.try_bind_request(token) &&
+              gate.commit_request_binding(token),
+              "aborted, unpublished bind cannot retry and publish");
+        check(!gate.abort_request_binding(token) &&
+              gate.request_binding_state()==2,
+              "published request was illegally unbound");
         check(gate.settle(token,AsyncIoTerminal::cancelled) &&
               gate.broker_acknowledge(token) &&
               gate.try_claim_resume(token) && gate.finish_resume(token),
