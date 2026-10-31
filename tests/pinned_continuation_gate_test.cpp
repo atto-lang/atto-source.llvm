@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
+#include <vector>
 
 using namespace oreslang::runtime;
 static void check(bool success, const char* description) {
@@ -306,5 +308,103 @@ int main() {
               gate.broker_acknowledge(token) && gate.try_claim_resume(token) &&
               gate.finish_resume(token) && gate.try_retire(token),
               "bounded frame leaked after completion");
+    }
+
+    // Host-only borrower receipts: operation identity is not release authority.
+    {
+        static_assert(!std::is_default_constructible_v<BorrowerPinnedContinuationGate::Receipt>,
+                      "receipts must be issued by the gate");
+        AsyncIoTicket ticket{121, 5, 9};
+        BorrowerPinnedContinuationGate gate(ticket);
+        auto a = gate.acquire(ticket, 101, BorrowerPinnedContinuationGate::Loan::shared);
+        auto b = gate.acquire(ticket, 202, BorrowerPinnedContinuationGate::Loan::shared);
+        check(a.has_value() && b.has_value() && gate.loan_state() == 2,
+              "distinct borrower receipts not admitted");
+        check(!gate.release(ticket, 202, *a) && gate.loan_state() == 2,
+              "wrong borrower consumed another borrower's receipt");
+        check(!gate.release({121, 6, 9}, 101, *a) && gate.loan_state() == 2,
+              "stale generation consumed receipt");
+        check(!gate.release({121, 5, 10}, 101, *a) && gate.loan_state() == 2,
+              "stale operation consumed receipt");
+        check(gate.settle(ticket, AsyncIoTerminal::cancelled)
+                  && gate.broker_acknowledge(ticket)
+                  && gate.try_claim_resume(ticket)
+                  && gate.finish_resume(ticket)
+                  && !gate.try_retire(ticket),
+              "live receipts permitted retirement");
+        check(gate.release(ticket, 101, *a) && !gate.release(ticket, 101, *a),
+              "duplicate receipt release was not rejected");
+        check(!gate.try_retire(ticket) && gate.release(ticket, 202, *b)
+                  && gate.try_retire(ticket) && !gate.try_retire(ticket),
+              "borrower receipt retirement fence failed");
+        check(!gate.acquire(ticket, 303, BorrowerPinnedContinuationGate::Loan::shared)
+                  && !gate.release(ticket, 202, *b),
+              "retired frame accepted receipt mutation");
+    }
+    {
+        AsyncIoTicket ticket{122, 6, 10};
+        BorrowerPinnedContinuationGate gate(ticket);
+        auto x = gate.acquire(ticket, 401, BorrowerPinnedContinuationGate::Loan::exclusive);
+        check(x.has_value() && !gate.acquire(ticket, 402, BorrowerPinnedContinuationGate::Loan::shared),
+              "exclusive borrower admitted conflicting loan");
+        check(!gate.release(ticket, 402, *x) && gate.loan_state() == PinnedContinuationGate::exclusive_bit,
+              "wrong exclusive borrower released loan");
+        check(gate.settle(ticket, AsyncIoTerminal::success)
+                  && gate.broker_acknowledge(ticket)
+                  && gate.try_claim_resume(ticket)
+                  && gate.finish_resume(ticket)
+                  && !gate.try_retire(ticket)
+                  && gate.release(ticket, 401, *x)
+                  && gate.try_retire(ticket),
+              "exclusive receipt cleanup failed");
+    }
+    {
+        AsyncIoTicket ticket{123, 7, 11};
+        BorrowerPinnedContinuationGate gate(ticket);
+        std::vector<BorrowerPinnedContinuationGate::Receipt> receipts;
+        for (std::size_t i = 0; i < BorrowerPinnedContinuationGate::max_receipts; ++i) {
+            auto r = gate.acquire(ticket, i + 1, BorrowerPinnedContinuationGate::Loan::shared);
+            check(r.has_value(), "receipt capacity admitted fewer than bound");
+            receipts.push_back(*r);
+        }
+        check(!gate.acquire(ticket, 999, BorrowerPinnedContinuationGate::Loan::shared)
+                  && gate.loan_state() == BorrowerPinnedContinuationGate::max_receipts,
+              "receipt registry overflow did not fail closed");
+        for (std::size_t i = 0; i < receipts.size(); ++i)
+            check(gate.release(ticket, i + 1, receipts[i]), "receipt registry leaked loan");
+        check(gate.settle(ticket, AsyncIoTerminal::closed)
+                  && gate.broker_acknowledge(ticket)
+                  && gate.try_claim_resume(ticket)
+                  && gate.finish_resume(ticket)
+                  && gate.try_retire(ticket), "bounded registry failed to retire");
+    }
+    // Receipt release and retirement share the adapter mutex; the underlying
+    // loan word still supplies the permanent CAS fence.
+    for (std::uint64_t round = 1; round <= 128; ++round) {
+        AsyncIoTicket ticket{124, round, round};
+        BorrowerPinnedContinuationGate gate(ticket);
+        auto receipt = gate.acquire(ticket, 500, BorrowerPinnedContinuationGate::Loan::shared);
+        check(receipt.has_value(), "racing receipt missing");
+        check(gate.settle(ticket, AsyncIoTerminal::cancelled)
+                  && gate.broker_acknowledge(ticket)
+                  && gate.try_claim_resume(ticket)
+                  && gate.finish_resume(ticket), "racing cleanup incomplete");
+        std::atomic<bool> start{false};
+        bool released = false;
+        std::thread releaser([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            released = gate.release(ticket, 500, *receipt);
+        });
+        start.store(true, std::memory_order_release);
+        bool retired = false;
+        for (unsigned attempt = 0; attempt < 100000 && !retired; ++attempt) {
+            retired = gate.try_retire(ticket);
+            if (!retired) std::this_thread::yield();
+        }
+        releaser.join();
+        if (!retired) retired = gate.try_retire(ticket);
+        check(released && retired && gate.retired()
+                  && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
+              "borrower receipt release/retirement race violated fence");
     }
 }

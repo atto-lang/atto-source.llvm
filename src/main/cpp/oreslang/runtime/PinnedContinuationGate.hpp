@@ -2,6 +2,10 @@
 #include "oreslang/runtime/AsyncIoCompletionGate.hpp"
 #include <atomic>
 #include <cstdint>
+#include <array>
+#include <cstddef>
+#include <mutex>
+#include <optional>
 
 namespace oreslang::runtime {
 
@@ -135,4 +139,101 @@ private:
     std::atomic<bool> resume_finished_{false};
     std::atomic<bool> retired_{false};
 };
+
+    
+// Host-only borrower-scoped adapter. The operation ticket alone is not
+// release authority. Keep the underlying gate PRIVATE: exposing it would
+// allow callers to bypass receipt validation via release(ticket, mode).
+// Borrower IDs are trusted runtime identities, not cryptographic principals;
+// do not expose this adapter directly to untrusted FFI callers.
+class BorrowerPinnedContinuationGate final {
+public:
+    using Loan = PinnedContinuationGate::Loan;
+    static constexpr std::size_t max_receipts = 64;
+
+    class Receipt final {
+    public:
+        Receipt(const Receipt&) = default;
+        Receipt& operator=(const Receipt&) = default;
+    private:
+        friend class BorrowerPinnedContinuationGate;
+        Receipt(std::size_t slot, std::uint64_t serial,
+                std::uint64_t borrower, Loan mode) noexcept
+            : slot_(slot), serial_(serial), borrower_(borrower), mode_(mode) {}
+        std::size_t slot_;
+        std::uint64_t serial_;
+        std::uint64_t borrower_;
+        Loan mode_;
+    };
+
+    explicit BorrowerPinnedContinuationGate(AsyncIoTicket ticket) noexcept
+        : gate_(ticket) {}
+    BorrowerPinnedContinuationGate(const BorrowerPinnedContinuationGate&) = delete;
+    BorrowerPinnedContinuationGate& operator=(const BorrowerPinnedContinuationGate&) = delete;
+
+    std::optional<Receipt> acquire(AsyncIoTicket ticket, std::uint64_t borrower,
+                                   Loan mode) {
+        if (borrower == 0 || !PinnedContinuationGate::valid_loan_mode(mode))
+            return std::nullopt;
+        std::lock_guard<std::mutex> lock(mu_);
+        if (next_serial_ == UINT64_MAX) return std::nullopt; // never reuse an identity
+        for (std::size_t i = 0; i < slots_.size(); ++i) {
+            if (slots_[i].live) continue;
+            if (!gate_.acquire(ticket, mode)) return std::nullopt;
+            const auto serial = ++next_serial_;
+            slots_[i] = Slot{serial, borrower, mode, true};
+            return Receipt(i, serial, borrower, mode);
+        }
+        return std::nullopt; // bounded admission; no allocation or silent overflow
+    }
+
+    bool release(AsyncIoTicket ticket, std::uint64_t borrower,
+                 const Receipt& receipt) {
+        if (borrower == 0 || borrower != receipt.borrower_
+                || receipt.slot_ >= slots_.size()) return false;
+        std::lock_guard<std::mutex> lock(mu_);
+        auto& slot = slots_[receipt.slot_];
+        if (!slot.live || slot.serial != receipt.serial_
+                || slot.borrower != borrower || slot.mode != receipt.mode_)
+            return false;
+        // A wrong ticket or generation must not consume the receipt.
+        if (!gate_.release(ticket, slot.mode)) return false;
+        slot.live = false;
+        return true;
+    }
+
+    bool settle(AsyncIoTicket ticket, AsyncIoTerminal outcome) noexcept {
+        return gate_.settle(ticket, outcome);
+    }
+    bool broker_acknowledge(AsyncIoTicket ticket) noexcept {
+        return gate_.broker_acknowledge(ticket);
+    }
+    bool try_claim_resume(AsyncIoTicket ticket) noexcept {
+        return gate_.try_claim_resume(ticket);
+    }
+    bool finish_resume(AsyncIoTicket ticket) noexcept {
+        return gate_.finish_resume(ticket);
+    }
+    bool try_retire(AsyncIoTicket ticket) {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (const auto& slot : slots_) if (slot.live) return false;
+        return gate_.try_retire(ticket); // retains same-word retirement fence
+    }
+    bool retired() const noexcept { return gate_.retired(); }
+    std::uint32_t loan_state() const noexcept { return gate_.loan_state(); }
+    AsyncIoTerminal terminal() const noexcept { return gate_.terminal(); }
+
+private:
+    struct Slot {
+        std::uint64_t serial = 0;
+        std::uint64_t borrower = 0;
+        Loan mode = Loan::shared;
+        bool live = false;
+    };
+    PinnedContinuationGate gate_;
+    std::mutex mu_;
+    std::array<Slot, max_receipts> slots_{};
+    std::uint64_t next_serial_ = 0;
+};
+
 } // namespace oreslang::runtime
