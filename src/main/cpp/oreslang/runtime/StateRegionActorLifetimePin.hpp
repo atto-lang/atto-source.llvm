@@ -4,6 +4,7 @@
 #include "oreslang/runtime/ActorArena.h"
 #include "oreslang/runtime/OresTaskBoundStateRegion.h"
 
+#include <atomic>
 #include <stdexcept>
 #include <utility>
 
@@ -55,7 +56,7 @@ public:
                 throw std::invalid_argument(
                     "state-region lifetime pin requires a live ticket");
 
-            active_ = true;
+            active_.store(true, std::memory_order_release);
         } catch (...) {
             // No constructor failure may leak or fabricate a resource loan.
             // The native arena/region still require their trusted caller's
@@ -73,22 +74,29 @@ public:
     ~StateRegionActorLifetimePin() noexcept = default;
 
     bool release_after_ticket_retirement() noexcept {
-        if (!active_) return false;
+        if (!active_.load(std::memory_order_acquire)) return false;
         const auto status = ores_state_region_ticket_retired(region_, ticket_);
         if (status != ORES_STD_SYNC_GRANTED) return false;
+        // Duplicate/competing supervisor and completion observers may both
+        // see ticket retirement. Only ONE may retire its actor resource loan:
+        // releasing twice would otherwise hit NativeActorRef's fatal
+        // underflow path. The actor loan remains held until this winner
+        // actually calls release_resource_loan().
+        if (!active_.exchange(false, std::memory_order_acq_rel)) return false;
         actor_.release_resource_loan();
-        active_ = false;
         return true;
     }
 
-    bool active() const noexcept { return active_; }
+    bool active() const noexcept {
+        return active_.load(std::memory_order_acquire);
+    }
 
 private:
     NativeActorRef actor_;
     OresActorArena* arena_ = nullptr;
     ores_task_bound_state_region* region_ = nullptr;
     ores_std_ticket ticket_{};
-    bool active_ = false;
+    std::atomic<bool> active_{false};
 };
 
 } // namespace oreslang::runtime
