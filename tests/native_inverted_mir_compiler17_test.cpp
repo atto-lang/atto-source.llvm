@@ -1,6 +1,7 @@
 // Production compiler ABI boundary: compile and run under strict C++17,
 // with NO dependency on native C++20 column runtime headers.
 #include "oreslang/types/InvertedTypedMir.hpp"
+#include "oreslang/types/InvertedMirLlvmI64.hpp"
 #include <cassert>
 #include <cstdint>
 #include <limits>
@@ -60,5 +61,24 @@ int main() {
     with_loan.close();
     (void)Module::lower(with_loan);
     reject([&] { with_loan.suspend(); }, "closed inverted HIR owner");
+
+    // The C++17 LLVM-IR emitter can be retained across compiler functions.
+    // SSA numbering, operand cursors and the previous last-read value must
+    // never carry over, even after a failing compilation transaction.
+    I64PairLlvmEmitter emitter(2);
+    const I64PairIrOperands original_inputs{{{5, 20}}, {42}};
+    const auto initial_ir = emitter.build(code, original_inputs);
+    assert(initial_ir.find("define i32 @main()") != std::string::npos);
+    LinearPlan next_plan(layout, 2);
+    next_plan.push(2);
+    next_plan.read_runtime_checked(0, "id");
+    const auto next_module = Module::lower(next_plan);
+    const I64PairIrOperands next_inputs{{{9, 77}}, {}};
+    const auto reference_ir = I64PairLlvmEmitter(2).build(next_module, next_inputs);
+    assert(emitter.build(next_module, next_inputs) == reference_ir);
+    reject([&] {
+        (void)emitter.build(code, I64PairIrOperands{{}, {42}});
+    }, "missing MIR LLVM push operands");
+    assert(emitter.build(next_module, next_inputs) == reference_ir);
     return 0;
 }
