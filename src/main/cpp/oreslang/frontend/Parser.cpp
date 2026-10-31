@@ -301,7 +301,7 @@ bool nonthrowing_protected_read(const Expression& expr) {
 }
 
 // Pure here means no calls, mutations, ownership transfers or suspension.
- // Checked add/sub/mul/neg/abs may still produce ArithmeticOverflowError.
+// Checked add/sub/mul/neg/abs may still produce ArithmeticOverflowError.
 bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     if (nonthrowing_protected_read(expr)) return true;
@@ -3104,9 +3104,9 @@ private:
         if (!accept(";") && token_.text != "}") fail("expected ';' or closing return brace");
         if (terminal_try_finally) {
             require("}");
-            // Java/Graal syntax requires catch. This native subset has no
-            // throw-capable operations inside try; catch must be empty and
-            // remains unreachable until typed exceptional CFG is implemented.
+            // Java/Graal syntax requires catch. A protected checked-i64
+            // arithmetic return may now enter the typed numeric Throw CFG;
+            // a proved-nonthrowing protected return keeps catch unreachable.
             require("catch");
             require("(");
             const std::string terminal_catch_binding = identifier();
