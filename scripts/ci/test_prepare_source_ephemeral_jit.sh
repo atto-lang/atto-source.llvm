@@ -84,6 +84,21 @@ MOCK_SCENARIO=success bash "$helper" 7 "$temp/secure/valid.b64" >"$temp/log"
 ! grep -q '0000000000000000' "$temp/log" || exit 1
 if MOCK_SCENARIO=success bash "$helper" 7 "$temp/secure/valid.b64" >"$temp/log" 2>&1; then exit 1; fi
 echo 'PASS: one-time secure config and no overwrite'
+# Clean attestor is a distinct one-job disposable VM, never the guest VM.
+if MOCK_SCENARIO=success bash "$helper" 7 "$temp/secure/invalid-mode.b64" --untrusted >"$temp/log" 2>&1; then
+  echo 'UNSAFE_JIT_UNKNOWN_RUNNER_MODE_ACCEPTED' >&2; exit 1
+fi
+[[ ! -e "$temp/secure/invalid-mode.b64" ]] || exit 1
+EXPECTED_LABEL=oreslang-llvm-attestor-ephemeral-v1 MOCK_SCENARIO=success \
+  bash "$helper" 7 "$temp/secure/attestor.b64" --attestor >"$temp/log"
+[[ -s "$temp/secure/attestor.b64" && "$(stat -c %a "$temp/secure/attestor.b64")" == 600 ]] || exit 1
+grep -qxF 'RUNNER_LABEL=oreslang-llvm-attestor-ephemeral-v1' "$temp/log"
+if EXPECTED_LABEL=oreslang-llvm-attestor-ephemeral-v1 MOCK_SCENARIO=success \
+  bash "$helper" 7 "$temp/secure/attestor.b64" --attestor >"$temp/log" 2>&1; then
+  echo 'UNSAFE_JIT_ATTESTOR_CREDENTIAL_OVERWRITE' >&2; exit 1
+fi
+echo 'PASS: attestor isolated label, invalid mode denied, one-time secret'
+
 # The helper's pre-JIT integrity hash must NEVER execute Git clean filters.
 # Mock API's expected SHA is deliberately computed with --no-filters too.
 mkdir -p "$temp/filter-repo"
