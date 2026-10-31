@@ -286,6 +286,38 @@ int main() {
     static_assert(canonical_success.value == 42);
     static_assert(!oreslang::i64_has_effect(canonical_success));
 
+    // Cross-frame error forwarding is not a general effect-swallowing catch.
+    // In particular, escalation, cancellation, panic, exit and forged tags
+    // must not be recovered by a handler for ArithmeticOverflowError.
+    for (const EffectKind kind : {
+             EffectKind::Raise, EffectKind::Panic, EffectKind::Cancel,
+             EffectKind::Fatal, EffectKind::ProcessExit}) {
+        oreslang::I64EffectResult incoming_effect{
+            937, {kind, 65537u}};
+        CHECK(oreslang::i64_has_effect(incoming_effect));
+        CHECK(!oreslang::i64_catch_matches(incoming_effect, 65537u));
+        const auto passed = oreslang::i64_forward(incoming_effect);
+        CHECK(passed.effect.kind == kind);
+        CHECK(passed.effect.code == 65537u);
+        CHECK(passed.value == 0);
+        const auto forbidden_catch =
+            oreslang::i64_recover(incoming_effect, 65537u, 42);
+        CHECK(forbidden_catch.effect.kind == kind);
+        CHECK(forbidden_catch.effect.code == 65537u);
+        CHECK(forbidden_catch.value == 0);
+    }
+    // Every malformed byte-sized discriminant is Fatal through two frames.
+    // Neither normal execution nor typed catch may revive an invalid value.
+    for (unsigned tag = 7; tag < 256; ++tag) {
+        const auto invalid = oreslang::I64EffectResult{
+            1, {static_cast<EffectKind>(tag), 65537u}};
+        const auto twice = oreslang::i64_forward(oreslang::i64_forward(invalid));
+        CHECK(twice.effect.kind == EffectKind::Fatal);
+        CHECK(twice.effect.code == 0xFFFFFFFDu);
+        CHECK(twice.value == 0);
+        CHECK(!oreslang::i64_catch_matches(invalid, 65537u));
+    }
+
     CHECK(oreslang::native_trap_admits(EffectKind::Throw));
     for (const EffectKind kind : kinds)
         if (kind != EffectKind::Throw)
