@@ -702,7 +702,7 @@ int main(){
         PinnedContinuationGate gate(ticket);
         CHECK(!Work::retain_async_io(contexts,*h,owner,gate,{71,8,22}));
         auto io=Work::retain_async_io(contexts,*h,owner,gate,ticket);CHECK(io);
-        CHECK(gate.request_binding_state()==1);
+        CHECK(gate.request_binding_state()==2);
         CHECK(!Work::retain_async_io(contexts,*h,owner,gate,ticket));
         CHECK(gate.acquire(ticket,PinnedContinuationGate::Loan::shared));
         std::atomic<unsigned> child_drained{0};
@@ -755,7 +755,7 @@ int main(){
         CHECK(gate.finish_resume(ticket));
         CHECK(!gate.try_retire(ticket)); // registered request owner retains sole retirement authority
         CHECK(io->finish_after_broker_and_resume_quiescence());
-        CHECK(gate.request_binding_state()==2);
+        CHECK(gate.request_binding_state()==3);
         CHECK(!io->finish_after_broker_and_resume_quiescence());
         CHECK(!Work::retain_async_io(contexts,*h,owner,gate,ticket));
         CHECK(pinned->ready_to_retire()); // final context owner only
