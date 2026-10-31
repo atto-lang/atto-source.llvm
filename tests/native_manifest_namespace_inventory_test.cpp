@@ -180,7 +180,8 @@ struct Fixture {
     oreslang::PinnedNamespaceProgramInput materialize(
             const oreslang::VerifiedPackageLockSnapshot& snapshot) const {
         return oreslang::build_pinned_namespace_program_from_manifests(
-            app_manifest, {foo_manifest}, snapshot, app_main, read_text);
+            app_manifest_path, {foo_manifest_path}, snapshot, app_main,
+            read_text, read_text);
     }
 };
 
@@ -317,6 +318,19 @@ int main() {
             });
         }
 
+        // The build boundary reparses the current manifest bytes rather than
+        // trusting a previously constructed C++ manifest object.
+        {
+            const auto original = read_text(fixture.foo_manifest_path);
+            write_text(
+                fixture.foo_manifest_path,
+                original + "# stale-after-lock\n");
+            must_fail("manifest SHA-256 mismatch", [&] {
+                (void)fixture.materialize(fixture.lock);
+            });
+            write_text(fixture.foo_manifest_path, original);
+        }
+
         // Membership list is part of the lock, not rediscovered from disk.
         {
             auto stale = fixture.lock;
@@ -364,8 +378,9 @@ int main() {
         // The entry must be a member of the exact root package group.
         must_fail("entry source is not a member", [&] {
             (void)oreslang::build_pinned_namespace_program_from_manifests(
-                fixture.app_manifest, {fixture.foo_manifest}, fixture.lock,
-                fixture.foo / "src/compute/math.ores", read_text);
+                fixture.app_manifest_path, {fixture.foo_manifest_path},
+                fixture.lock, fixture.foo / "src/compute/math.ores",
+                read_text, read_text);
         });
 
         // Same manifest, different packages.<key> is a distinct package
