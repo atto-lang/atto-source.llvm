@@ -150,80 +150,31 @@ for san_needle in \
 done
 assert_before 'Require exact tree and preinstalled native toolchain' 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF'
 assert_before 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF' 'Execute linked CGL native tests with Clang ASan and UBSan'
-assert_before 'Execute linked CGL native tests with Clang ASan and UBSan' 'Post-run attestation of current PR head and independent reviewer'
+assert_before 'Execute linked CGL native tests with Clang ASan and UBSan' 'Exact-source result scope (never a carrier export approval)'
 printf 'SOURCEFREE_CGL_NATIVE_ELF_SANITIZER_WORKFLOW_CONTRACT=PASS\n'
 
-block="$(awk '
-  /^      - name: Post-run attestation of current PR head and independent reviewer$/ { in_step=1; next }
-  in_step && /^      - name: / { exit }
-  in_step && /^        if: success\(\)$/ { gated=1 }
-  in_step && /^        run: \|$/ { in_block=1; next }
-  in_step && in_block && /^          / { print substr($0,11); next }
-  in_step && in_block && /^$/ { print ""; next }
-  END { if (!gated || !in_block) exit 12 }
-' "$workflow")"
-[[ "$block" == *POST_EXECUTION_EXACT_PR_HEAD_REVIEW=PASS* ]] || {
-  echo 'missing post-run attestation marker' >&2; exit 2;
-}
-bash -n <<< "$block"
-export GITHUB_REPOSITORY="ores-truffle-oreslang/oreslang-source.llvm"
-export PR_NUMBER=1220
-export SOURCE_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-export FAKE_HEAD="$SOURCE_SHA"
-export FAKE_PR_SHA="$SOURCE_SHA"
-export FAKE_PR_REPO="$GITHUB_REPOSITORY"
-export FAKE_PR_STATE=open
-export FAKE_PR_PRIVATE=true
-export FAKE_AUTHOR_ID=7777
-export FAKE_PROTECTED=true
-export FAKE_REVIEW_STATE=APPROVED
-export FAKE_REVIEW_SHA="$SOURCE_SHA"
-export FAKE_REVIEWER_ID=11139560
-git() {
-  [[ "${1:-}" == rev-parse && "${2:-}" == HEAD && "$#" -eq 2 ]] || return 19
-  printf '%s\n' "$FAKE_HEAD"
-}
-gh() {
-  [[ "${1:-}" == api ]] || return 21
-  case "${2:-}" in
-    "repos/${GITHUB_REPOSITORY}/branches/main")
-      printf '%s\n' "$FAKE_PROTECTED" ;;
-    "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
-      printf '%s\t%s\t%s\t%s\t%s\n' "$FAKE_PR_SHA" "$FAKE_PR_REPO" "$FAKE_PR_STATE" "$FAKE_PR_PRIVATE" "$FAKE_AUTHOR_ID" ;;
-    "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")
-      printf '%s\t%s\t%s\n' "$FAKE_REVIEW_STATE" "$FAKE_REVIEW_SHA" "$FAKE_REVIEWER_ID" ;;
-    *) return 22 ;;
-  esac
-}
-export -f git gh
-runs=0
-if bash -c "$block" >/dev/null 2>&1; then
-  ((runs+=1))
-else
-  echo 'valid exact-head independently approved result unexpectedly denied' >&2; exit 1
+# Refuse any authorization marker after PR-controlled code on the same runner.
+if grep -Fq 'Post-run attestation of current PR head and independent reviewer' "$workflow" ||
+   grep -Fq 'POST_EXECUTION_EXACT_PR_HEAD_REVIEW=PASS' "$workflow"; then
+  echo 'insecure same-job postrun authorization still present' >&2; exit 1
 fi
-expect_deny() {
-  local label="$1" key="$2" value="$3" previous
-  previous="${!key}"
-  printf -v "$key" '%s' "$value"
-  export "$key"
-  if bash -c "$block" >/dev/null 2>&1; then
-    echo "insecurely allowed case: $label" >&2
-    return 1
-  fi
-  printf -v "$key" '%s' "$previous"
-  export "$key"
-  ((runs+=1))
-}
-expect_deny 'unprotected main' FAKE_PROTECTED false
-expect_deny 'checkout SHA changed' FAKE_HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-expect_deny 'PR head moved' FAKE_PR_SHA bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-expect_deny 'foreign source repo' FAKE_PR_REPO foreign/repository
-expect_deny 'PR closed' FAKE_PR_STATE closed
-expect_deny 'PR made public' FAKE_PR_PRIVATE false
-expect_deny 'review dismissed' FAKE_REVIEW_STATE DISMISSED
-expect_deny 'review stale' FAKE_REVIEW_SHA bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-expect_deny 'unauthorized reviewer' FAKE_REVIEWER_ID 11139561
-expect_deny 'reviewer is author' FAKE_AUTHOR_ID 11139560
-expect_deny 'invalid author identity' FAKE_AUTHOR_ID invalid
-printf 'POSTRUN_MOCK_TESTS=%d PASS (1 allowed, 11 denied; no GitHub API calls)\n' "$runs"
+grep -qxF '  independent-postrun-attestation:' "$workflow"
+grep -qxF '    needs: [source-exact-validation]' "$workflow"
+grep -qxF '    runs-on: [self-hosted, linux, x64, oreslang-llvm-attestor-ephemeral-v1]' "$workflow"
+grep -qxF '      actions: read' "$workflow"
+grep -qxF '      pull-requests: read' "$workflow"
+attest_checkout="$(extract_step 'Checkout reviewed protected main only (no PR source)')"
+grep -qxF '          ref: ${{ github.sha }}' <<< "$attest_checkout"
+grep -qxF '          persist-credentials: false' <<< "$attest_checkout"
+attest_preflight="$(extract_step 'Verify attestor source identity and run offline negative regression')"
+grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$attest_preflight"
+grep -qxF '          python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py' <<< "$attest_preflight"
+attest_final="$(extract_step 'Independently verify current exact head approval and actual source job steps')"
+grep -qxF '          GH_TOKEN: ${{ github.token }}' <<< "$attest_final"
+grep -qxF '          PYTHONOPTIMIZE=0 python3 -I -B scripts/ci/verify_llvm_independent_attestor.py' <<< "$attest_final"
+if grep -Fq 'ref: SOURCE_${{ github.sha }}' <<< "$attest_checkout"; then
+  echo 'fresh attestor tries to checkout PR source' >&2; exit 1
+fi
+assert_before 'Exact-source result scope (never a carrier export approval)' 'Checkout reviewed protected main only (no PR source)'
+assert_before 'Checkout reviewed protected main only (no PR source)' 'Independently verify current exact head approval and actual source job steps'
+printf 'FRESH_POSTRUN_INDEPENDENT_ATTESTOR_CONTRACT=PASS\n'
