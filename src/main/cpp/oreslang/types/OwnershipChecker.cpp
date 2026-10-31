@@ -195,6 +195,52 @@ void release(const Loan& loan, Locals& locals) {
     else --source.shared_loans;
 }
 
+// Source-level suspension is an actual ownership CFG event. This deliberately
+// rejects borrowed parameters even when we cannot yet prove their final use
+// precedes await; a later NLL pass can relax that restriction soundly.
+void verify_source_suspension(const Locals& locals, std::size_t offset,
+                              const std::string& boundary) {
+    ownership::Graph graph;
+    std::uint64_t next_loan = 1;
+    for (const auto& [name, owner] : locals) {
+        if (owner.shared_loans > 65535u)
+            throw std::runtime_error(
+                "ownership violation: too many source loans at suspension");
+        ownership::PlaceState place;
+        place.possible = owner.moved ? ownership::kMoved : ownership::kOwned;
+        for (std::size_t i = 0; i < owner.shared_loans; ++i) {
+            place.shared_loan_ids.insert(next_loan++);
+            ++place.shared_loans;
+        }
+        if (owner.exclusive_loan) {
+            place.exclusive_loan = true;
+            place.exclusive_loan_id = next_loan++;
+        }
+        // Borrowed source parameters are externally owned references.
+        // Immutable record snapshots marked record_view are not live loans.
+        if (owner.mode == Mode::Borrow && !owner.record_view) {
+            place.shared_loan_ids.insert(next_loan++);
+            ++place.shared_loans;
+        } else if (owner.mode == Mode::BorrowMut && !owner.record_view) {
+            if (place.exclusive_loan)
+                throw std::runtime_error(
+                    "ownership violation: nested unproven exclusive suspension loan");
+            place.exclusive_loan = true;
+            place.exclusive_loan_id = next_loan++;
+        }
+        graph.entry.emplace(name, std::move(place));
+    }
+    graph.blocks.resize(1);
+    graph.blocks[0].operations.push_back(
+        {ownership::Operation::Kind::Suspend, ""});
+    try {
+        ownership::verify(graph);
+    } catch (const std::runtime_error& error) {
+        throw std::runtime_error(std::string(error.what()) +
+            " at source " + boundary + " byte " + std::to_string(offset));
+    }
+}
+
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
     const auto found = functions.find(native_function_slot(expr.name, expr.arguments.size()));
     if (found == functions.end())
@@ -543,11 +589,16 @@ void validate_i64_ownership(Program& program) {
     // A re-validation attempt must revoke every stale lowering authorization
     // before checking anything. Failed ownership admission therefore cannot
     // leave executable Future-pipeline authority from an earlier pass.
-    for (auto& function : program.functions)
+    for (auto& function : program.functions) {
+        // Revalidation must revoke both Future and suspension authority;
+        // a failed pass can never leave a stale compiled-await privilege.
+        function.suspension_ownership_admitted = false;
+        function.suspension_authority_fingerprint = 0;
         for (auto& pipeline : function.future_pipelines) {
             pipeline.ownership_admitted = false;
             pipeline.ownership_authority_fingerprint = 0;
         }
+    }
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
@@ -714,6 +765,10 @@ void validate_i64_ownership(Program& program) {
                 if (!task_exists)
                     throw std::runtime_error(
                         "ownership violation: Task<int> await lost producer provenance");
+                // The await is a physical scheduler suspension, not merely
+                // a scalar binding. Verify caller-owned loans *before* the
+                // Task result is introduced to lexical ownership state.
+                verify_source_suspension(locals, binding.offset, "Task<int> await");
                 // Capture-free producer transfers no caller owner or borrow.
                 // The awaited scalar becomes an ordinary owned stack value.
             } else if (!binding.future_await_name.empty()) {
@@ -732,6 +787,7 @@ void validate_i64_ownership(Program& program) {
                     throw std::runtime_error(
                         "ownership violation: Future<int> await lost pipeline provenance");
                 types::validate_future_pipeline_chain(future->plans);
+                verify_source_suspension(locals, binding.offset, "Future<int> await");
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
@@ -857,6 +913,14 @@ void validate_i64_ownership(Program& program) {
             }
             locals.emplace(binding.name, std::move(entry));
         }
+        // ActorRef readiness and get_done are genuine CONTROL-path awaits,
+        // even though no local result binding is created at this site.
+        if (!function.ready_await_actor.empty())
+            verify_source_suspension(locals, function.ready_await_offset,
+                                     "ActorRef get_ready");
+        if (!function.done_await_actor.empty())
+            verify_source_suspension(locals, function.done_await_offset,
+                                     "ActorRef get_done");
         std::vector<const Statement*> deferred_effects;
         // Provenance for an array field is tracked as a single compile-time
         // shadow handle in this first native slice. Branch-specific moves
@@ -1413,12 +1477,20 @@ void validate_i64_ownership(Program& program) {
                     "failed closed");
         }
     }
-    for (auto& function : program.functions)
+    for (auto& function : program.functions) {
         for (auto& pipeline : function.future_pipelines) {
             pipeline.ownership_authority_fingerprint =
                 future_pipeline_authority_fingerprint(pipeline);
             pipeline.ownership_admitted = true;
         }
+        // Commit suspension authority only after every function's ownership
+        // and Future pipeline admission has completed successfully.
+        if (has_source_suspension(function)) {
+            function.suspension_authority_fingerprint =
+                source_suspension_authority_fingerprint(function);
+            function.suspension_ownership_admitted = true;
+        }
+    }
 }
 
 } // namespace oreslang
