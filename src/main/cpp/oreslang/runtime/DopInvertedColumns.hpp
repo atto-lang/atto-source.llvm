@@ -112,6 +112,23 @@ class InvertedColumns {
             throw std::out_of_range("stale inverted row handle");
         return slot.row;
     }
+    // All dense-index column operations hold this lock until the actual
+    // read/write finishes. Re-resolving via index()+get()/set() would leave a
+    // TOCTOU gap where erase_swap recycles the row's slot.
+    static std::size_t checked_dense_row(const State& s, std::int64_t index) {
+        ensure_open(s);
+        if (index < 0 || index > std::numeric_limits<std::int32_t>::max() ||
+                static_cast<std::uint64_t>(index) >= s.row_slots.size())
+            throw std::out_of_range("inverted row index outside current length");
+        const auto row = static_cast<std::size_t>(index);
+        const auto slot_index = s.row_slots[row];
+        if (slot_index >= s.slots.size())
+            throw std::logic_error("corrupt inverted dense-row mapping");
+        const auto& slot = s.slots[slot_index];
+        if (!slot.live || slot.row != row || slot.generation == 0)
+            throw std::logic_error("corrupt inverted dense-row mapping");
+        return row;
+    }
     template<std::size_t... I>
     static void reserve_columns(State& s, std::size_t n, std::index_sequence<I...>) {
         (std::get<I>(s.columns).reserve(n), ...);
@@ -258,18 +275,9 @@ public:
      */
     Handle index(std::int64_t row_index) const {
         std::lock_guard<std::mutex> lock(state_->mutex);
-        ensure_open(*state_);
-        if (row_index < 0
-                || row_index > std::numeric_limits<std::int32_t>::max()
-                || static_cast<std::size_t>(row_index) >= state_->row_slots.size())
-            throw std::out_of_range("inverted row index outside current length");
-        const auto slot_index =
-                state_->row_slots[static_cast<std::size_t>(row_index)];
-        if (slot_index >= state_->slots.size())
-            throw std::logic_error("corrupt inverted dense-row mapping");
+        const auto row = checked_dense_row(*state_, row_index);
+        const auto slot_index = state_->row_slots[row];
         const auto& slot = state_->slots[slot_index];
-        if (!slot.live || slot.row != static_cast<std::size_t>(row_index))
-            throw std::logic_error("corrupt inverted dense-row mapping");
         return Handle{state_->issuer, state_->owner, slot_index, slot.generation};
     }
 
@@ -281,7 +289,11 @@ public:
     auto read_index(std::int64_t row_index) const
             -> std::tuple_element_t<I, std::tuple<Fields...>> {
         static_assert(I < field_count);
-        return get<I>(index(row_index));
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I])
+            throw std::logic_error("column has a mutable loan");
+        return std::get<I>(state_->columns)[row];
     }
 
     /**
@@ -292,7 +304,12 @@ public:
             std::int64_t row_index,
             std::tuple_element_t<I, std::tuple<Fields...>> value) {
         static_assert(I < field_count);
-        set<I>(index(row_index), value);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I] || state_->readers[I])
+            throw std::logic_error("column has an outstanding loan");
+        validate_field(value);
+        std::get<I>(state_->columns)[row] = value;
     }
 
     /**
