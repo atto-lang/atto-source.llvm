@@ -42,7 +42,7 @@ case "$1" in
     if [[ "${MOCK_SCENARIO:-}" == stale_helper ]]; then
       echo "0000000000000000000000000000000000000000"
     else
-      git hash-object -- "$EXPECTED_HELPER_PATH"
+      git hash-object --no-filters -- "$EXPECTED_HELPER_PATH"
     fi ;;
   "repos/$EXPECTED_REPO/contents/.github/workflows/$EXPECTED_WORKFLOW?ref=main")
     jq -n --arg path ".github/workflows/$EXPECTED_WORKFLOW" '{path:$path,type:"file"}' ;;
@@ -84,4 +84,28 @@ MOCK_SCENARIO=success bash "$helper" 7 "$temp/secure/valid.b64" >"$temp/log"
 ! grep -q '0000000000000000' "$temp/log" || exit 1
 if MOCK_SCENARIO=success bash "$helper" 7 "$temp/secure/valid.b64" >"$temp/log" 2>&1; then exit 1; fi
 echo 'PASS: one-time secure config and no overwrite'
+# The helper's pre-JIT integrity hash must NEVER execute Git clean filters.
+# Mock API's expected SHA is deliberately computed with --no-filters too.
+mkdir -p "$temp/filter-repo"
+git -C "$temp/filter-repo" init -q
+cp "$helper" "$temp/filter-repo/prepare_source_ephemeral_jit.sh"
+printf '%s\n' 'prepare_source_ephemeral_jit.sh filter=tripwire' > "$temp/filter-repo/.gitattributes"
+git -C "$temp/filter-repo" config filter.tripwire.clean "sh -c 'touch $temp/filter-ran; cat'"
+old_expected_helper="$EXPECTED_HELPER_PATH"
+EXPECTED_HELPER_PATH="$temp/filter-repo/prepare_source_ephemeral_jit.sh"
+export EXPECTED_HELPER_PATH
+(
+  cd "$temp/filter-repo"
+  MOCK_SCENARIO=success bash "$EXPECTED_HELPER_PATH" 7 "$temp/secure/filter-safe.b64" >"$temp/filter-log" 2>&1
+)
+[[ -s "$temp/secure/filter-safe.b64" && ! -e "$temp/filter-ran" ]] || {
+  echo 'UNSAFE_JIT_HASH_FILTER_EXECUTED_OR_CREDENTIAL_MISSING' >&2
+  exit 1
+}
+# Positive control ensures the adversarial filter really is executable.
+git -C "$temp/filter-repo" hash-object -- "$EXPECTED_HELPER_PATH" >/dev/null
+[[ -e "$temp/filter-ran" ]] || { echo 'inert malicious Git filter fixture' >&2; exit 1; }
+EXPECTED_HELPER_PATH="$old_expected_helper"
+export EXPECTED_HELPER_PATH
+echo 'PASS: admin helper integrity hash ignores malicious clean filter'
 echo 'SOURCEFREE_MOCK_JIT_ADMISSION=PASS'

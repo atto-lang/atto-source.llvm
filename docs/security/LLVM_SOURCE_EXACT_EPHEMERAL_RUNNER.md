@@ -80,7 +80,7 @@ The test harness replaces `gh` with a local stub. It exercises unprotected main,
 
 ### Additional admission security checks
 
-The administrative helper does not accept a GitHub branch response containing only `protected: true` as sufficient. It reads live source-main branch protection and requires enabled independent CODEOWNER review, stale-review dismissal, administrator enforcement, and no force-push, branch deletion, or explicit PR-review bypass. It refuses to generate a JIT credential if any required control is absent. It additionally computes `git hash-object` of its own local script and checks it against the reviewed immutable blob at `/scripts/ci/prepare_source_ephemeral_jit.sh` on protected `main`, so an unreviewed or modified workstation copy cannot generate the runner credential. Treat the local helper as untrusted until this byte-exact check succeeds.
+The administrative helper does not accept a GitHub branch response containing only `protected: true` as sufficient. It reads live source-main branch protection and requires enabled independent CODEOWNER review, stale-review dismissal, administrator enforcement, and no force-push, branch deletion, or explicit PR-review bypass. It refuses to generate a JIT credential if any required control is absent. It additionally computes filter-free `git hash-object --no-filters` of its own local script and checks it against the reviewed immutable blob at `/scripts/ci/prepare_source_ephemeral_jit.sh` on protected `main`, so an unreviewed or modified workstation copy cannot generate the runner credential. Treat the local helper as untrusted until this byte-exact check succeeds.
 
 **Executed local evidence:** the committed script and checked-in mock test both matched their GitHub blob SHA exactly; `bash -n` passed and the test runner returned `SOURCEFREE_MOCK_JIT_ADMISSION=PASS`. No live runner-authorization API calls were made. This does not authorize executing PR code without independent approval.
 
@@ -128,3 +128,14 @@ disposable VM is outside this preflight's guarantee. This mechanism does not
 authorize cross-organization export or runner registration. Admin-protected
 source main, independently approved exact PR head and source-local disposable
 runner remain mandatory.
+
+### Administrator helper clean-filter safety
+
+The trusted workstation's helper integrity gate must hash its raw local script
+bytes, not run repository-configured clean filters before generating an
+administrative JIT registration credential. Use `git hash-object --no-filters --
+"$0"`; the source-free mocked JIT test now sets an executable hostile clean
+filter on the helper path and proves that approved admission leaves the filter
+marker absent. A separate positive control verifies that ordinary `git
+hash-object` would have executed it. The mock never issues real GitHub calls
+or provisions a runner. No source-export policy is changed.

@@ -53,7 +53,7 @@ jq -e '
 # Validate exactly the immutable Git blob of this script on protected source main.
 command -v git >/dev/null
 trusted_helper_sha="$(gh api "repos/${repository}/contents/scripts/ci/prepare_source_ephemeral_jit.sh?ref=main" --jq '.sha')"
-local_helper_sha="$(git hash-object -- "$0")"
+local_helper_sha="$(git hash-object --no-filters -- "$0")"
 [[ "$trusted_helper_sha" =~ ^[0-9a-f]{40}$ && "$local_helper_sha" == "$trusted_helper_sha" ]] || {
   echo "DENIED: local admin helper differs from protected reviewed main" >&2; exit 1;
 }
