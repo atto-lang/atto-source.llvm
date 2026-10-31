@@ -441,6 +441,36 @@ int main() {
                 another, pins, {request}, PackageNamespaceLinkOptions{true})
                 .namespaces.at({"foo@1", "a"}).exports.size() == 4);
 
+    // Parser positional calls retain an argument_names vector containing empty
+    // slots. Those are positional metadata, not named arguments.
+    Program positional_call = make_source("a", "positional_call");
+    Parameter positional_parameter;
+    positional_parameter.name = "value";
+    positional_call.functions.front().parameters.push_back(positional_parameter);
+    positional_call.functions.front().result = std::make_unique<Expression>();
+    positional_call.functions.front().result->kind = Expression::Kind::Call;
+    positional_call.functions.front().result->name = "callee";
+    positional_call.functions.front().result->resolved_type = ScalarType::I64;
+    positional_call.functions.front().result->arguments.emplace_back(
+        std::make_unique<Expression>());
+    positional_call.functions.front().result->arguments.back()->kind =
+        Expression::Kind::Variable;
+    positional_call.functions.front().result->arguments.back()->name = "value";
+    positional_call.functions.front().result->arguments.back()->resolved_type =
+        ScalarType::I64;
+    positional_call.functions.front().result->argument_names.emplace_back();
+    another = units;
+    another.push_back({"foo/positional_call", "foo@1", &positional_call});
+    REQUIRE(link_package_namespaces(
+                another, pins, {request}, PackageNamespaceLinkOptions{true})
+                .namespaces.at({"foo@1", "a"}).exports.size() == 4);
+
+    positional_call.functions.front().result->argument_names.front() = "value";
+    must_reject([&] {
+        (void)link_package_namespaces(
+            another, pins, {request}, PackageNamespaceLinkOptions{true});
+    }, "body expression");
+
     Program dotted_call = make_source("a", "dotted_call");
     dotted_call.functions.front().result = std::make_unique<Expression>();
     dotted_call.functions.front().result->kind = Expression::Kind::Call;
