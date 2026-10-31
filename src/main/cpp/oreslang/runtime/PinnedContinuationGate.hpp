@@ -97,6 +97,9 @@ public:
                 std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
+    // Trusted host bridges may only attach a physical request lease to the
+    // exact I/O generation/operation minted by this already-owned gate.
+    bool matches_ticket(AsyncIoTicket ticket) const noexcept { return valid(ticket); }
     AsyncIoTerminal terminal() const noexcept { return terminal_.load(std::memory_order_acquire); }
     bool retired() const noexcept { return retired_.load(std::memory_order_acquire); }
     std::uint32_t loan_state() const noexcept { return loans_.load(std::memory_order_acquire); }
