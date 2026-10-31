@@ -20,7 +20,7 @@ int main() {
     auto admit=[&](std::string_view m, std::map<std::string,std::string> s, std::string_view msha,std::string_view ssha){return verify_namespace_manifest_v2(m,msha,s,ssha,sha);};
     int checked=0;
     auto p=admit(manifest,sources,sha(manifest),sha(commitment));
-    if(p.package_files.at("checkout").size()!=2 || p.sources_sha256 != sha(commitment))
+    if(p.package_files().at("checkout").size()!=2 || p.sources_sha256() != sha(commitment))
         throw std::runtime_error("positive v2 inventory wrong");
     ++checked;
     reject([&]{admit(manifest,sources,sha("tampered"),sha(commitment));}); ++checked;
