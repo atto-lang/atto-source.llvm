@@ -27,7 +27,21 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
 endif()
 
+add_executable(oreslang-inverted-typed-mir-test
+    ../native_inverted_typed_mir_test.cpp)
+target_include_directories(oreslang-inverted-typed-mir-test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/main/cpp")
+target_compile_features(oreslang-inverted-typed-mir-test PRIVATE cxx_std_20)
+target_link_libraries(oreslang-inverted-typed-mir-test PRIVATE Threads::Threads)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(oreslang-inverted-typed-mir-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+endif()
+
 if(BUILD_TESTING)
+    add_test(NAME inverted_typed_mir_native_columns
+        COMMAND oreslang-inverted-typed-mir-test)
+    set_tests_properties(inverted_typed_mir_native_columns PROPERTIES TIMEOUT 30)
     add_test(NAME inverted_typed_hir_and_native_owner
         COMMAND oreslang-inverted-typed-plan-test)
     set_tests_properties(inverted_typed_hir_and_native_owner PROPERTIES TIMEOUT 30)
