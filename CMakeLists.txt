@@ -1126,6 +1126,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_source_critical_nested_guest_rejected
         source-critical-nested-guest-unlowered.ores
         --diagnostic "nested native sealed actor critical loans require reentrancy analysis")
+    oreslang_contract_test(native_source_critical_read_local_still_unlowered
+        sealed-state-critical-read-local-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
     oreslang_contract_test(native_source_critical_read_mutation_rejected
         sealed-state-critical-read-mutation.ores
         --diagnostic "native sealed actor critical read callback cannot mutate state")
