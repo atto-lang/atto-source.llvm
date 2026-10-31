@@ -1888,7 +1888,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-inverted-typed-hir-test PRIVATE cxx_std_20)
     target_compile_options(oreslang-inverted-typed-hir-test PRIVATE
-        -Wall -Wextra -Wpedantic -Werror)
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
     target_link_libraries(oreslang-inverted-typed-hir-test PRIVATE Threads::Threads)
     add_test(NAME inverted_typed_hir_and_checked_owner
         COMMAND oreslang-inverted-typed-hir-test)
