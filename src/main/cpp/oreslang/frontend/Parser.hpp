@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -373,12 +374,41 @@ struct Function {
     std::string return_sum;
 };
 
+/**
+ * Typed sealed state is deliberately a distinct AST node from the legacy
+ * scalar actor fields. These declarations do NOT authorize source execution.
+ * Concrete runtime region/actor/task identities must never enter this AST.
+ */
+struct SealedStateFieldDecl {
+    std::string name;
+    ScalarType type = ScalarType::I64;
+    std::int64_t initial_i64 = 0;
+    std::size_t offset = 0;
+};
+
+struct SealedStateSchemaDecl {
+    std::size_t offset = 0;
+    std::vector<SealedStateFieldDecl> fields;
+};
+
+/** Symbolic lexical state-loan requirement for future compiler lowering. */
+struct CriticalStateAccessDecl {
+    enum class Mode : std::uint8_t { Read, Write };
+    Mode mode = Mode::Read;
+    std::string state_parameter;
+    std::size_t offset = 0;
+    // No numeric execution id, actor generation, loan slot or raw pointer:
+    // the compiler emits a symbolic requirement; runtime mints authority.
+};
+
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
 enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct ActorDecl {
     std::string name;
-    std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
+    std::vector<LocalBinding> fields; // legacy bounded actor-confined integer slots
+    std::optional<SealedStateSchemaDecl> sealed_state; // source-only, not lowered yet
+    std::vector<CriticalStateAccessDecl> critical_state_uses; // symbolic, never runtime ids
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
