@@ -43,6 +43,64 @@ int main() {
         }
         check(frame.loan_state() == 0, "loan discriminant test leaked a loan");
     }
+    // A ticket is an exact actor-incarnation AND operation identity, not
+    // just an operation number. Reject stale/foreign and zero-valued tokens
+    // at every transition, including after cleanup and retirement.
+    {
+        AsyncIoTicket token{111, 222, 333};
+        const AsyncIoTicket invalid[] = {
+            {0, 222, 333}, {111, 0, 333}, {111, 222, 0},
+            {112, 222, 333}, {111, 223, 333}, {111, 222, 334}
+        };
+        PinnedContinuationGate gate(token);
+        AsyncIoCompletionGate io(token);
+        check(gate.acquire(token, PinnedContinuationGate::Loan::shared),
+              "valid loan for stale-ticket controls missing");
+        for (const auto stale : invalid) {
+            check(!gate.acquire(stale, PinnedContinuationGate::Loan::shared)
+                    && !gate.release(stale, PinnedContinuationGate::Loan::shared)
+                    && !gate.settle(stale, AsyncIoTerminal::success)
+                    && !gate.broker_acknowledge(stale)
+                    && !gate.try_claim_resume(stale)
+                    && !gate.finish_resume(stale)
+                    && !gate.try_retire(stale)
+                    && !io.finish(stale, AsyncIoTerminal::success),
+                  "foreign or zero ticket authorized a transition");
+            check(gate.loan_state() == 1
+                    && gate.terminal() == AsyncIoTerminal::pending
+                    && io.terminal() == AsyncIoTerminal::pending,
+                  "foreign ticket mutated pending actor frame");
+        }
+        check(gate.settle(token, AsyncIoTerminal::cancelled)
+                && io.finish(token, AsyncIoTerminal::cancelled),
+              "valid ticket failed to settle");
+        for (const auto stale : invalid) {
+            check(!gate.broker_acknowledge(stale)
+                    && !gate.try_claim_resume(stale)
+                    && !gate.finish_resume(stale)
+                    && !gate.try_retire(stale),
+                  "stale ticket advanced settled frame cleanup");
+        }
+        check(gate.broker_acknowledge(token) && gate.try_claim_resume(token),
+              "valid ticket could not claim cleanup");
+        for (const auto stale : invalid) {
+            check(!gate.finish_resume(stale) && !gate.try_retire(stale),
+                  "foreign ticket completed another actor's cleanup");
+        }
+        check(gate.finish_resume(token)
+                && gate.release(token, PinnedContinuationGate::Loan::shared)
+                && gate.try_retire(token),
+              "valid cleanup could not retire frame");
+        for (const auto stale : invalid) {
+            check(!gate.acquire(stale, PinnedContinuationGate::Loan::shared)
+                    && !gate.release(stale, PinnedContinuationGate::Loan::shared)
+                    && !gate.try_retire(stale),
+                  "foreign ticket mutated retired frame");
+        }
+        check(gate.retired()
+                && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
+              "retirement fence lost after stale-ticket attempts");
+    }
     // Exhaust all on-wire u8 terminal values. Only the five declared
     // terminal outcomes may settle either the I/O admission or the pinned
     // frame; a forged value must preserve pending and prohibit broker ACK,
