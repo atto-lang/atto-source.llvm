@@ -54,6 +54,10 @@ int main(){
     auto first=frame(7,4,1,42);
     auto wrong_tenant=frame(8,4,1,42);
     denies([&]{(void)wal->append_authorized_and_sync(registry,*issued,
+        56,7,3,101,4,42,first.data(),first.size());});
+    denies([&]{(void)wal->append_authorized_and_sync(registry,*issued,
+        55,7,3,101,5,42,first.data(),first.size());});
+    denies([&]{(void)wal->append_authorized_and_sync(registry,*issued,
         55,8,3,101,4,42,first.data(),first.size());});
     denies([&]{(void)wal->append_authorized_and_sync(registry,*issued,
         55,7,4,101,4,42,first.data(),first.size());});
