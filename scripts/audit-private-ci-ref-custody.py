@@ -66,6 +66,81 @@ def source_literals(node):
     }
 
 
+def audit_module_root(tree):
+    """Reject dynamic module-scope overrides of the publisher deny gate.
+
+    The real publisher intentionally declares only imports, uppercase
+    constants, one Denied exception class, functions, and its exact CLI
+    entry point. No runtime module-level exec, assignment to a function,
+    alias import, decorator, or conditional rebinding is permitted.
+    """
+    main_guards = 0
+    for index, statement in enumerate(tree.body):
+        if (index == 0 and isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)):
+            continue
+        if isinstance(statement, (ast.Import, ast.ImportFrom)):
+            names = [
+                alias.asname or alias.name.split(".", 1)[0]
+                for alias in statement.names
+            ]
+            require(all(name not in {
+                "require_atomic_ref_rollback", "publish", "Denied",
+                "delete_exact_ref", "_gh_ref_request",
+                "delete_handoff_refs_atomic"
+            } for name in names), "protected function shadowed by import")
+            continue
+        if isinstance(statement, ast.Assign):
+            require(len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name)
+                    and statement.targets[0].id.isupper(),
+                    "module assignment may only declare uppercase constants")
+            continue
+        if isinstance(statement, ast.ClassDef):
+            require(statement.name == "Denied"
+                    and not statement.decorator_list,
+                    "unexpected or decorated module class")
+            continue
+        if isinstance(statement, ast.FunctionDef):
+            require(not statement.decorator_list,
+                    "publisher functions must not have decorators")
+            continue
+        require(isinstance(statement, ast.If),
+                "unexpected module-scope statement")
+        main_guards += 1
+        require(main_guards == 1 and index == len(tree.body) - 1
+                and not statement.orelse,
+                "CLI entry must be unique and last")
+        test = statement.test
+        require(isinstance(test, ast.Compare)
+                and isinstance(test.left, ast.Name)
+                and test.left.id == "__name__"
+                and len(test.ops) == 1
+                and isinstance(test.ops[0], ast.Eq)
+                and len(test.comparators) == 1
+                and isinstance(test.comparators[0], ast.Constant)
+                and test.comparators[0].value == "__main__",
+                "module conditional must be exact CLI entry")
+        require(len(statement.body) == 1
+                and isinstance(statement.body[0], ast.Expr),
+                "CLI entry must have exactly one expression")
+        call = statement.body[0].value
+        require(isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "sys"
+                and call.func.attr == "exit"
+                and len(call.args) == 1 and not call.keywords
+                and isinstance(call.args[0], ast.Call)
+                and isinstance(call.args[0].func, ast.Name)
+                and call.args[0].func.id == "main"
+                and not call.args[0].args
+                and not call.args[0].keywords,
+                "CLI entry must invoke only sys.exit(main())")
+    require(main_guards == 1, "publisher CLI entry missing")
+
+
 def audit_source(source):
     require(isinstance(source, str), "source must be UTF-8 text")
     require(len(source.encode("utf-8")) <= 512 * 1024,
@@ -74,6 +149,7 @@ def audit_source(source):
         tree = ast.parse(source)
     except (SyntaxError, ValueError) as exc:
         raise CustodyContractError("publisher syntax is invalid") from exc
+    audit_module_root(tree)
 
     guard = function(tree, "require_atomic_ref_rollback")
     guard_body = guard.body
