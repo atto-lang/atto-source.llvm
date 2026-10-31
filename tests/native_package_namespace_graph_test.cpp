@@ -68,6 +68,37 @@ int main() {
     REQUIRE(graph.namespaces.at({"foo@1", "c"}).source_units.size() == 3);
     REQUIRE(graph.imports.at({"app/main", "a"}).package_instance_id == "foo@1");
     REQUIRE(graph.namespaces.at({"foo@1", "a"}).exports.size() == 3);
+    // A bound selector resolves to a physical provider, never a global
+    // namespace/function name. This is typed host resolution only.
+    const auto add_call = resolve_package_namespace_scalar_call(
+        graph, "app/main", "a", "add", {});
+    REQUIRE(add_call.owner.package_instance_id == "foo@1");
+    REQUIRE(add_call.owner.name == "a");
+    REQUIRE(add_call.source_unit_id == "compute/math/add");
+    REQUIRE(add_call.function_name == "add");
+    REQUIRE(add_call.return_type == ScalarType::I64);
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            graph, "app/main", "missing", "add", {});
+    }, "no verified import binding");
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            graph, "other/a", "a", "add", {});
+    }, "no verified import binding");
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            graph, "app/main", "a", "not_exported", {});
+    }, "not exported");
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            graph, "app/main", "a", "add", {ScalarType::I64});
+    }, "wrong value arity");
+    // No implicit namespace-wide or cross-package fallback to a same-spelling
+    // function declared by another package or another namespace.
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            graph, "app/main", "a", "foreign", {});
+    }, "not exported");
 
     // 2. Source declarations in a second package sharing "a" cannot merge.
     Program other = make_source("a", "foreign");
@@ -179,6 +210,14 @@ int main() {
     another.push_back({"foo/bool_value", "foo@1", &bool_signature});
     const auto scalar_graph = link_package_namespaces(another, pins, {request});
     REQUIRE(scalar_graph.namespaces.at({"foo@1", "a"}).exports.size() == 4);
+    const auto bool_call = resolve_package_namespace_scalar_call(
+        scalar_graph, "app/main", "a", "bool_value", {ScalarType::Bool});
+    REQUIRE(bool_call.source_unit_id == "foo/bool_value");
+    REQUIRE(bool_call.return_type == ScalarType::Bool);
+    must_reject([&] {
+        (void)resolve_package_namespace_scalar_call(
+            scalar_graph, "app/main", "a", "bool_value", {ScalarType::I64});
+    }, "argument type mismatch");
 
     const auto reject_signature = [&](const std::string& name,
                                       const auto& mutate, const std::string& reason) {
