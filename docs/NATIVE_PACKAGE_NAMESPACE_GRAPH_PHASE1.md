@@ -66,3 +66,30 @@ stale ABI.
 
 Shared source-language design: oreslang-common-source PR #189.
 Java parser/source-graph counterpart: oreslang-source.java PR #2255.
+
+
+## Restricted v2 manifest/source digest admission (host only)
+
+`frontend/VerifiedNamespaceManifestV2.hpp` introduces a conservative,
+self-contained, C++17 inventory verifier. It accepts **immutable bytes supplied
+by a separately checked physical-file loader**, a real SHA-256 callback, and
+two independently pinned lowercase SHA-256 commitments (manifest and complete
+source inventory). It refuses an incomplete or extra file, changed source
+bytes, noncanonical paths, duplicate package membership, malformed or
+duplicate manifest keys, excess file/manifest byte budgets, and unsupported
+TOML constructs. The source digest uses the same sorted
+`relative/path.ores + "\\n" + SHA256(file_bytes) + "\\n"` framing as
+the Java manifest admission contract. Its return value is immutable after
+verification. The focus test uses OpenSSL SHA-256 rather than a synthetic
+source digest.
+
+**The admitted TOML subset is intentionally narrow:** exactly
+`schema_version = "2"`, `[project] root = "."`, and one or more
+`[packages.NAME] files = [...] ` declarations, including multiline arrays.
+It rejects external `namespace_dependencies`, alternate roots and unknown
+sections/keys until the **full** v2 parser, package lock/source-pin authority
+and physical source identity graph are integrated. A caller may not mint the
+expected hashes from arbitrary untrusted input and call that authentication.
+This host verifier does **not** open files, establish filesystem authority,
+validate runtime `.ores` semantics, resolve package aliases, or generate LLVM
+IR. The native executable loader still rejects namespace imports.
