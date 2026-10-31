@@ -155,3 +155,28 @@ jobs, all without an assigned runner and all with zero steps. The test is
 authored, not executable CI evidence until a runner actually compiles it.
 Previous local exact-source standalone `state_region.hpp` prototype tests
 are narrower and do not establish the new actor-lifetime integration.
+
+
+## Concurrent physical retirement receipt — 2026-10-31 (current draft)
+
+`StateRegionActorLifetimePin::release_after_ticket_retirement()` used a
+plain `bool active_`, so competing trusted completion observers could both
+see the retired ticket and decrement the same `NativeActorRef` resource
+loan. NativeActorRef intentionally terminates on underflow; a duplicate
+completion must therefore never reach it. The pin now uses an
+`std::atomic<bool>` with an `exchange(false, acq_rel)` claim after the
+generation-checked ticket has actually retired. Exactly one callback may
+call `release_resource_loan()`; all losing observers do nothing.
+
+The existing native arena integration test now races **32 completion
+observers** against the same retired ticket and requires one (and only one)
+successful actor resource loan release. The exact-head workflow includes a
+separate GCC `-fsanitize=thread` matrix leg in addition to GCC/Clang
+optimized and ASan+UBSan configurations; these are not mixed together.
+
+**Evidence boundary:** the new concurrent release tests and TSan workflow
+are **authored, not executed** on the current private source head. Existing
+GCC/Clang local PASS results concern the unchanged standalone scalar
+prototype, not this new actor-lifetime code. All source-org native test
+jobs still fail prior to runner assignment; the first policy/billing/admission
+reason requires an organization administrator, not a compiler fix.
