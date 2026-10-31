@@ -43,5 +43,24 @@ int main(){
     denied([&]{auth("schema_version = \"1\"\n[[dependency]]\nimporter = \""+a+"\"\nalias = \"checkout\"\ntarget = \""+b+"\" # comment\n");});++cases;
     denied([&]{auth("schema_version = \"1\"\n"+entry+"[unexpected]\n");});++cases;
     denied([&]{auth(std::string(65537,'x'));});++cases;
+    // Additional cross-package pin hardening: a syntactically valid but
+    // physically unadmitted target cannot appear in the verified alias map.
+    const std::string unlisted="v2:"+std::string(64,'e')+":"+std::string(64,'f')+":other";
+    denied([&]{auth(good+"[[dependency]]\nimporter = \""+a+"\"\nalias = \"backup\"\ntarget = \""+unlisted+"\"\n");});++cases;
+    // Neither can an unadmitted importer acquire authority over a valid target.
+    denied([&]{auth(good+"[[dependency]]\nimporter = \""+unlisted+"\"\nalias = \"backup\"\ntarget = \""+b+"\"\n");});++cases;
+    // Aliases must be canonical identifiers, not numeric or reserved path forms.
+    denied([&]{auth("schema_version = \"1\"\n[[dependency]]\nimporter = \""+a+"\"\nalias = \"1checkout\"\ntarget = \""+b+"\"\n");});++cases;
+    // Repeated schema assignments after a dependency entry are not ignored.
+    denied([&]{auth(good+"schema_version = \"1\"\n");});++cases;
+    // A digest-shaped owner with uppercase hex is not a canonical package ID.
+    const std::string wrong_case="v2:"+std::string(64,'A')+":"+std::string(64,'b')+":app";
+    denied([&]{verify_namespace_dependency_lock_v2(good,sha(good),{a,b,wrong_case},sha);});++cases;
+    // Two distinct aliases from the same verified importer may share one
+    // exact target without weakening the physical package identity check.
+    const auto two=auth(good+"[[dependency]]\nimporter = \""+a+"\"\nalias = \"backup\"\ntarget = \""+b+"\"\n");
+    if(two.alias_pins().at(a).size()!=2 || two.alias_pins().at(a).at("backup")!=b)
+        throw std::runtime_error("distinct pinned aliases were not preserved");
+    ++cases;
     std::cout<<"PASS independently pinned namespace dependency lock cases="<<cases<<"\n";
 }
