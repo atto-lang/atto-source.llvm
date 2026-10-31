@@ -5117,6 +5117,12 @@ private:
                     throw std::runtime_error("duplicate caught throw binding '" +
                         fn.catch_binding + "'");
             }
+            if (fn.caught_error_try_result) {
+                // The Error binding is opaque in v1, but the protected
+                // expression must resolve every call by exact name/arity.
+                validate_expression(
+                    *fn.caught_error_try_result, params, functions);
+            }
             for (const auto& guard : fn.early_returns) {
                 if (guard.condition) validate_expression(*guard.condition, params, functions);
                 else {
@@ -5277,6 +5283,9 @@ private:
             if (fn.caught_throw_value)
                 require_scalar(*fn.caught_throw_value, ScalarType::I64,
                     "native thrown scalar", scalar_types);
+            if (fn.caught_error_try_result)
+                require_scalar(*fn.caught_error_try_result, fn.return_type,
+                    "native protected ErrorSlot return", scalar_types);
             for (const auto& guard : fn.early_returns) {
                 if (guard.condition) {
                     require_scalar(*guard.condition, ScalarType::Bool,
