@@ -54,6 +54,10 @@ struct PipelineEffectSummary {
         if (!effects.valid() || !stage.valid())
             throw std::invalid_argument(
                 "Future pipeline effect summary contains unknown effect bits");
+        if (provenance != PipelineEffectProvenance::CompleteStatic
+                && provenance != PipelineEffectProvenance::UpstreamFutureUnknown)
+            throw std::invalid_argument(
+                "Future pipeline effect summary contains unknown provenance");
         return {effects.united(stage), provenance};
     }
 };
@@ -96,6 +100,16 @@ inline bool has_exceptional_pipeline_effects(FunctionEffects effects) noexcept {
 inline void require_pipeline_input_traits(
         PipelineInputOwnership ownership,
         const AutoType& type) {
+    // This helper is also callable outside full plan validation. Never
+    // interpret a stale/unknown ownership proof as an owned Send-only edge.
+    switch (ownership) {
+        case PipelineInputOwnership::BorrowedUpstreamSharedPayload:
+        case PipelineInputOwnership::ConsumedUpstreamOwnedPayload:
+        case PipelineInputOwnership::OwnedPipelineValue:
+            break;
+        default:
+            throw std::invalid_argument("Future pipeline unknown input ownership");
+    }
     const Capabilities caps = infer_auto_traits(type);
     if (ownership == PipelineInputOwnership::BorrowedUpstreamSharedPayload) {
         if (!caps.send || !caps.share)

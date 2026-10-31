@@ -196,6 +196,11 @@ int main() {
     rejected([&] {
         validate_future_pipeline_plan(malformed_input);
     }, "unknown input ownership");
+    // Direct callers of the trait helper must not bypass the plan-level gate.
+    rejected([&] {
+        require_pipeline_input_traits(
+            static_cast<PipelineInputOwnership>(0xff), boxed(scalar()));
+    }, "unknown input ownership");
     rejected([&] {
         (void)publish_future_pipeline_plan(malformed_input, admission(malformed_input));
     }, "unknown input ownership");
@@ -220,6 +225,12 @@ int main() {
 
     // Unknown upstream effect provenance survives both rt take and later edges.
     const FunctionEffects none{};
+    auto malformed_summary = pipeline_root_effects(none, false);
+    malformed_summary.provenance =
+        static_cast<PipelineEffectProvenance>(0xff);
+    rejected([&] {
+        (void)malformed_summary.extend(none);
+    }, "unknown provenance");
     const auto opaque = pipeline_root_effects(none, false);
     assert(opaque.provenance ==
         PipelineEffectProvenance::UpstreamFutureUnknown);
