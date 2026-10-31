@@ -71,5 +71,5 @@ int main() {
             "pub fnc main():int{return 1;}\n");
     }, "duplicate imported namespace binding");
 
-    std::cout << "PASS verified namespace host-parser/executable boundary cases=11\n";
+    std::cout << "PASS verified namespace host-parser/executable boundary cases=12\n";
 }
