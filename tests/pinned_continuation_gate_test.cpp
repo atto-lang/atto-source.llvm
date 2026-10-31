@@ -399,6 +399,51 @@ int main() {
               "stale receipt consumed reused slot");
         check(first.release(ticket, 77, *reused), "reused slot could not release");
     }
+    // Cancellation/completion racing admission must either reject a new
+    // receipt or leave a real, releasable loan that blocks retirement.
+    // Invalid borrower and loan modes must never allocate a registry slot.
+    for (std::uint64_t round = 1; round <= 256; ++round) {
+        AsyncIoTicket ticket{126, round, round};
+        BorrowerPinnedContinuationGate gate(ticket);
+        const auto mode = round % 2 ? BorrowerPinnedContinuationGate::Loan::shared
+                                    : BorrowerPinnedContinuationGate::Loan::exclusive;
+        const auto invalid_mode = static_cast<BorrowerPinnedContinuationGate::Loan>(255);
+        check(!gate.acquire(ticket, 0, mode)
+                  && !gate.acquire(ticket, round, invalid_mode)
+                  && gate.loan_state() == 0,
+              "invalid borrower or loan mode mutated receipt registry");
+        std::atomic<bool> start{false};
+        std::optional<BorrowerPinnedContinuationGate::Receipt> acquired;
+        std::thread acquirer([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            acquired = gate.acquire(ticket, round, mode);
+        });
+        start.store(true, std::memory_order_release);
+        const auto outcome = round % 2 ? AsyncIoTerminal::cancelled
+                                        : AsyncIoTerminal::success;
+        check(gate.settle(ticket, outcome),
+              "racing terminal settlement lost its one winner");
+        acquirer.join();
+        check(gate.terminal() == outcome
+                  && !gate.acquire(ticket, round + 1, mode),
+              "settled gate admitted a new borrower");
+        check(gate.broker_acknowledge(ticket)
+                  && gate.try_claim_resume(ticket)
+                  && gate.finish_resume(ticket),
+              "racing admission cleanup did not finish");
+        if (acquired) {
+            check(!gate.try_retire(ticket),
+                  "racing admission receipt did not pin frame");
+            check(!gate.release(ticket, round + 1, *acquired),
+                  "foreign borrower consumed racing receipt");
+            check(gate.release(ticket, round, *acquired)
+                      && !gate.release(ticket, round, *acquired),
+                  "racing receipt was leaked or double-released");
+        }
+        check(gate.try_retire(ticket) && !gate.try_retire(ticket)
+                  && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
+              "racing admission allowed premature or duplicate retirement");
+    }
     // Receipt release and retirement share the adapter mutex; the underlying
     // loan word still supplies the permanent CAS fence.
     for (std::uint64_t round = 1; round <= 128; ++round) {
