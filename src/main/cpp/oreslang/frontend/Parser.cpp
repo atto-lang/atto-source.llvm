@@ -5843,6 +5843,16 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
+    // A host-only, parsed namespace AST is not a codegen authorization.
+    // Prevent callers of the general validator from taking a parsed v2
+    // namespace source around the default frontend's executable gate.
+    if (!program.namespace_imports.empty() ||
+            (!program.namespace_name.empty() &&
+                (!program.functions.empty() || !program.classes.empty() ||
+                 !program.actors.empty() || !program.contracts.empty() ||
+                 !program.cooperative_loops.empty() || !program.generators.empty())))
+        throw std::runtime_error(
+            "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: verified namespace AST requires typed cross-unit lowering");
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
