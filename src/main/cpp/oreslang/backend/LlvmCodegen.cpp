@@ -173,6 +173,35 @@ llvm::AllocaInst* entry_alloca(llvm::IRBuilder<>& builder, llvm::Type* type, llv
     return slots.CreateAlloca(type, count, name);
 }
 
+void clear_native_error_slot(llvm::IRBuilder<>& builder,
+                             llvm::StructType* type,
+                             llvm::Value* slot) {
+    builder.CreateStore(
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(builder.getContext()), 0),
+        builder.CreateStructGEP(type, slot, 0, "error.code.addr"));
+    builder.CreateStore(
+        llvm::ConstantInt::get(llvm::Type::getInt8Ty(builder.getContext()), 0),
+        builder.CreateStructGEP(type, slot, 1, "error.effect.addr"));
+    builder.CreateStore(
+        llvm::ConstantInt::get(llvm::Type::getInt8Ty(builder.getContext()), 0),
+        builder.CreateStructGEP(type, slot, 2, "error.flags.addr"));
+    builder.CreateStore(
+        llvm::ConstantInt::get(llvm::Type::getInt16Ty(builder.getContext()), 0),
+        builder.CreateStructGEP(type, slot, 3, "error.reserved.addr"));
+    builder.CreateStore(
+        llvm::ConstantInt::get(llvm::Type::getInt64Ty(builder.getContext()), 0),
+        builder.CreateStructGEP(type, slot, 4, "error.payload.addr"));
+}
+
+llvm::Value* load_native_error_code(llvm::IRBuilder<>& builder,
+                                    llvm::StructType* type,
+                                    llvm::Value* slot,
+                                    const llvm::Twine& name) {
+    return builder.CreateLoad(
+        llvm::Type::getInt32Ty(builder.getContext()),
+        builder.CreateStructGEP(type, slot, 0, name + ".addr"), name);
+}
+
 llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
                                       llvm::Intrinsic::ID operation,
                                       llvm::Value* left, llvm::Value* right,
@@ -1153,6 +1182,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
     for (const auto& type : source.sum_types) record_schemas.emplace(type.name, record_schemas.size() + 1);
 
+    // The first NativeErrorSlotV1 execution profile is intentionally whole-
+    // program and scalar-only. Public symbols keep their existing ABI through
+    // wrappers; internal calls target hidden-slot implementations.
+    const bool error_slot_mode = native_error_slot_scalar_program(source);
+    llvm::StructType* error_slot_type = error_slot_mode
+        ? llvm::StructType::get(
+            context,
+            {llvm::Type::getInt32Ty(context), llvm::Type::getInt8Ty(context),
+             llvm::Type::getInt8Ty(context), llvm::Type::getInt16Ty(context),
+             i64},
+            false)
+        : nullptr;
+    std::unordered_set<std::string> error_slot_functions;
+
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
@@ -1186,30 +1229,120 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         const bool owning = class_owns_arrays(fn.return_class);
         owning_results.emplace(native_function_slot(fn.name, fn.parameters.size()), owning);
         if (owning) { argument_types.push_back(native_ptr); argument_types.push_back(native_ptr); }
-        llvm::FunctionType* signature = llvm::FunctionType::get(
+        const auto linkage = (fn.native_internal || fn.async_source_i64)
+            ? llvm::Function::InternalLinkage
+            : llvm::Function::ExternalLinkage;
+        llvm::FunctionType* public_signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
-        llvm::Function* declaration = llvm::Function::Create(
-            signature,
-            (fn.native_internal || fn.async_source_i64)
-                ? llvm::Function::InternalLinkage
-                : llvm::Function::ExternalLinkage,
-            symbol, module);
+        const std::string function_slot =
+            native_function_slot(fn.name, fn.parameters.size());
+        const bool hidden_error_slot = error_slot_mode && fn.name != "main";
+        llvm::Function* public_wrapper = nullptr;
+        llvm::Function* declaration = nullptr;
+        if (hidden_error_slot) {
+            public_wrapper = llvm::Function::Create(
+                public_signature, linkage, symbol, module);
+            argument_types.push_back(native_ptr);
+            auto* implementation_signature = llvm::FunctionType::get(
+                i64, argument_types, false);
+            declaration = llvm::Function::Create(
+                implementation_signature, llvm::Function::InternalLinkage,
+                symbol + "$error", module);
+            error_slot_functions.insert(function_slot);
+
+            // Preserve the original symbol ABI for host/external callers.
+            // The wrapper creates one stack-owned ErrorSlot and converts any
+            // still-unhandled guest error to the historical fail-closed trap.
+            auto* wrapper_entry = llvm::BasicBlock::Create(
+                context, "entry", public_wrapper);
+            llvm::IRBuilder<> wrapper_builder(wrapper_entry);
+            auto* wrapper_slot = wrapper_builder.CreateAlloca(
+                error_slot_type, nullptr, "error.slot");
+            clear_native_error_slot(
+                wrapper_builder, error_slot_type, wrapper_slot);
+            std::vector<llvm::Value*> wrapper_args;
+            for (auto& argument : public_wrapper->args())
+                wrapper_args.push_back(&argument);
+            wrapper_args.push_back(wrapper_slot);
+            auto* wrapped_result = wrapper_builder.CreateCall(
+                declaration, wrapper_args, "error.impl.result");
+            auto* wrapper_code = load_native_error_code(
+                wrapper_builder, error_slot_type, wrapper_slot,
+                "error.wrapper.code");
+            auto* wrapper_failed = llvm::BasicBlock::Create(
+                context, "error.wrapper.unhandled", public_wrapper);
+            auto* wrapper_ok = llvm::BasicBlock::Create(
+                context, "error.wrapper.ok", public_wrapper);
+            wrapper_builder.CreateCondBr(
+                wrapper_builder.CreateICmpNE(
+                    wrapper_code,
+                    llvm::ConstantInt::get(wrapper_code->getType(), 0)),
+                wrapper_failed, wrapper_ok);
+            wrapper_builder.SetInsertPoint(wrapper_failed);
+            wrapper_builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                &module, llvm::Intrinsic::trap));
+            wrapper_builder.CreateUnreachable();
+            wrapper_builder.SetInsertPoint(wrapper_ok);
+            wrapper_builder.CreateRet(wrapped_result);
+        } else {
+            declaration = llvm::Function::Create(
+                public_signature, linkage, symbol, module);
+        }
+
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args()) {
-            if (label_index < fn.parameters.size()) formal.setName(fn.parameters[label_index].name);
-            else if (label_index < fn.parameters.size() + hidden.size())
-                formal.setName("$region." + fn.parameters[hidden.at(label_index - fn.parameters.size())].name);
-            else formal.setName(label_index == fn.parameters.size() + hidden.size() ? "$result" : "$result.region");
+            if (label_index < fn.parameters.size()) {
+                formal.setName(fn.parameters[label_index].name);
+            } else if (label_index < fn.parameters.size() + hidden.size()) {
+                formal.setName(
+                    "$region." +
+                    fn.parameters[hidden.at(
+                        label_index - fn.parameters.size())].name);
+            } else if (hidden_error_slot &&
+                    label_index == fn.parameters.size() + hidden.size() +
+                        (owning ? 2u : 0u)) {
+                formal.setName("$error.slot");
+            } else {
+                formal.setName(
+                    label_index == fn.parameters.size() + hidden.size()
+                        ? "$result" : "$result.region");
+            }
             ++label_index;
         }
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
+        declarations.emplace(function_slot, declaration);
     }
     for (const auto& fn : source.functions) {
-        llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
+        const std::string function_slot =
+            native_function_slot(fn.name, fn.parameters.size());
+        llvm::Function* function = declarations.at(function_slot);
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
+
+        llvm::Value* native_error_slot = nullptr;
+        llvm::BasicBlock* native_error_return = nullptr;
+        if (error_slot_mode) {
+            if (error_slot_functions.count(function_slot)) {
+                native_error_slot = function->getArg(fn.parameters.size());
+            } else {
+                native_error_slot = builder.CreateAlloca(
+                    error_slot_type, nullptr, "error.slot");
+                clear_native_error_slot(
+                    builder, error_slot_type, native_error_slot);
+            }
+            native_error_return = llvm::BasicBlock::Create(
+                context, "error.propagate", function);
+            llvm::IRBuilder<> error_builder(native_error_return);
+            if (error_slot_functions.count(function_slot)) {
+                error_builder.CreateRet(llvm::ConstantInt::get(i64, 0));
+            } else {
+                error_builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                    &module, llvm::Intrinsic::trap));
+                error_builder.CreateUnreachable();
+            }
+        }
+
         std::unordered_map<std::string, llvm::Value*> storage;
         std::unordered_map<std::string, llvm::Value*> field_storage;
         std::unordered_map<std::string, llvm::Value*> class_array_regions;
@@ -1396,6 +1529,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
             &record_classes, &record_schemas, record_new, record_get, record_check,
             &class_array_regions, &class_array_parameters, &owning_results};
+        region_moves.error_slot_type = error_slot_type;
+        region_moves.error_slot = native_error_slot;
+        region_moves.error_return = native_error_return;
+        region_moves.error_slot_functions = &error_slot_functions;
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
