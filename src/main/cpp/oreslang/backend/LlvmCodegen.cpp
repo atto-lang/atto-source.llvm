@@ -796,7 +796,7 @@ llvm::Value* lower(const Expression& expr,
                 builder.CreateBr(target);
             };
 
-            if (moves->arithmetic_overflow_target) {
+            if (moves && moves->arithmetic_overflow_target) {
                 auto* caught = llvm::BasicBlock::Create(
                     builder.getContext(), "call.effect.overflow.catch", parent);
                 auto* uncaught = llvm::BasicBlock::Create(
@@ -830,7 +830,7 @@ llvm::Value* lower(const Expression& expr,
                         llvm::Intrinsic::trap));
                     builder.CreateUnreachable();
                 }
-            } else if (moves->effect_propagate_target) {
+            } else if (moves && moves->effect_propagate_target) {
                 emit_propagation(
                     moves->effect_propagate_target,
                     moves->effect_kind_slot,
