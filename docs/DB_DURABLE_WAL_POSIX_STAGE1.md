@@ -74,3 +74,34 @@ The test is authoring evidence until a real exact-head CMake/CTest
 runner executes it. This bridge is not yet called by a production WAL
 actor or guest I/O lowering; it has no physical descriptor ownership,
 sync receipt, commit ACK or crash/replay path.
+
+## Stage 1.4 — bounded native shard authority
+
+The new host-only `DbWalShardGrantRegistry<Capacity>` defaults to a
+32-slot fixed `std::array` and performs no per-grant heap/GC allocation.
+It is a CONTROL-plane mutex-protected model, **NOT** a hard-real-time
+admission primitive. A grant is move-only and bound to one registry
+identity, context number, tenant/shard, actor ID, actor generation,
+monotonic slot epoch, exact fstat device/inode tuple, and the previously
+bound `DbWalOwnerRetirementGate` object. One shard and one physical file
+identity can each have at most one active/draining/closing grant. A stale
+epoch, incorrect registry/context/actor/generation/file, or a sealed
+registry fails closed. A shard remains reserved while draining or
+closing. Retirement requires the *same* bound gate to report closed
+with no active operations; a forged/mismatched different gate is rejected.
+Epoch exhaustion permanently fences new issuance instead of wrapping.
+
+`tests/native_db_wal_shard_grant_registry_test.cpp` includes capacity,
+cross-context, stale epoch, duplicate shard/file, wrong tenant/actor,
+generation mismatch, concurrent drain, premature close, physical-gate
+identity, and context-seal checks. Registered as CTest
+`native_db_wal_shard_grant_host_only` (build target
+`oreslang-native-db-wal-shard-grant-test`).
+
+This is a **host control-plane model only**. Issue parameters are NOT
+authenticated, nor is the gate a cryptographic/OS-issued file handle;
+the trusted runtime must validate actor identity, tenant authority,
+actual fstat values and the physical descriptor before calling issue().
+No Oreslang guest exposure, async file dispatch, kernel proof of close,
+ACK, persistence/replay or Java differential execution is provided.
+Exact-head CMake/CTest and sanitizer tests are **NOT EXECUTED**.
