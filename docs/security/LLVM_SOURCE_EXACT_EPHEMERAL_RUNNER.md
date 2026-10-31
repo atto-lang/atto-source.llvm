@@ -93,7 +93,7 @@ Main-file hash checks use `git hash-object --no-filters`, not a filter-applying
 Git operation. The verifier uses Git raw tree/index metadata and batched
 raw blob reads, no-follow regular file opening, and rejects index/content/mode
 drift, untracked and ignored files, symlinks, gitlinks, FIFOs and hardlinks.
-The 13 synthetic Git tests include an actively malicious clean filter: the
+The 15 verifier tests include an actively malicious clean filter: the
 verifier does not execute it, while `git diff` does.
 
 This is **post-checkout** integrity evidence only. The checkout operation
@@ -139,3 +139,12 @@ filter on the helper path and proves that approved admission leaves the filter
 marker absent. A separate positive control verifies that ordinary `git
 hash-object` would have executed it. The mock never issues real GitHub calls
 or provisions a runner. No source-export policy is changed.
+
+### Partial raw-blob materialization is fail-closed
+
+The source-free materializer suite now includes nine cases. Its budget-failure
+regression intentionally aborts after a tracked raw blob was already created,
+then proves that a repeated materialization refuses the nonempty worktree and
+never executes a configured Git smudge filter. This explicitly treats partial
+source materialization as a **denied/tainted job**, not a resumable checkout.
+The final source-free verifier/materializer matrix is 15 + 9 = 24 cases.
