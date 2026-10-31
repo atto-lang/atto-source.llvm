@@ -34,6 +34,12 @@ case "$1" in
     else
       echo '{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
     fi ;;
+  "repos/$EXPECTED_REPO/contents/scripts/ci/prepare_source_ephemeral_jit.sh?ref=main")
+    if [[ "${MOCK_SCENARIO:-}" == stale_helper ]]; then
+      echo "0000000000000000000000000000000000000000"
+    else
+      git hash-object -- "$EXPECTED_HELPER_PATH"
+    fi ;;
   "repos/$EXPECTED_REPO/contents/.github/workflows/$EXPECTED_WORKFLOW?ref=main")
     jq -n --arg path ".github/workflows/$EXPECTED_WORKFLOW" '{path:$path,type:"file"}' ;;
   orgs/ores-truffle-oreslang/actions/runner-groups/7)
@@ -57,8 +63,9 @@ EXPECTED_REPO="ores-truffle-oreslang/oreslang-source.llvm"
 EXPECTED_WORKFLOW="llvm-source-exact-ephemeral.yml"
 EXPECTED_LABEL="oreslang-llvm-ephemeral-v1"
 export PATH="$temp/bin:$original_path"
-export EXPECTED_REPO EXPECTED_WORKFLOW EXPECTED_LABEL
-for scenario in unprotected weak_review admin_bypass overbroad_group extra_repository post_failure; do
+EXPECTED_HELPER_PATH="$helper"
+export EXPECTED_REPO EXPECTED_WORKFLOW EXPECTED_LABEL EXPECTED_HELPER_PATH
+for scenario in unprotected weak_review admin_bypass stale_helper overbroad_group extra_repository post_failure; do
   if MOCK_SCENARIO="$scenario" bash "$helper" 7 "$temp/secure/$scenario.b64" >"$temp/log" 2>&1; then
     echo "UNSAFE_JIT_ADMISSION=$scenario" >&2; exit 1
   fi
