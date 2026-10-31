@@ -1407,8 +1407,11 @@ private:
                     fail("native sealed callback requires a return");
                 if (access != "write")
                     fail("critical-read callback cannot mutate sealed actor state");
-                if (method.actor_field_writes.size() >= 16)
-                    fail("native sealed state callback exceeds 16 field writes");
+                // There is no multi-field transaction/rollback lowering
+                // yet. Reject a second write rather than commit a prefix
+                // and then trap while evaluating a later checked expression.
+                if (!method.actor_field_writes.empty())
+                    fail("native sealed callback v1 allows one write until atomic multi-field commit lowering");
                 require(binding);
                 require(".");
                 ActorFieldWrite write;
@@ -1428,6 +1431,14 @@ private:
                 fail("native sealed state callback suspend requires generation-fenced continuation lowering");
             method.result = expression();
             check_sealed_expression(*method.result);
+            // After the single heap commit, even checked arithmetic could
+            // trap and leave a partially observed callback. Restrict the
+            // return to a nonthrowing scalar load/constant until we can
+            // stage the entire callback's return and writes transactionally.
+            if (!method.actor_field_writes.empty() &&
+                    method.result->kind != Expression::Kind::Variable &&
+                    method.result->kind != Expression::Kind::Integer)
+                fail("native sealed write callback requires nonthrowing scalar return after commit");
             require(";");
             require("}");
             require(")");
