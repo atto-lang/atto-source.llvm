@@ -485,6 +485,7 @@ bool native_constructor_scalar_tree(const Expression& expr,
 std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     auto result = make_expression(source.kind, source.offset);
     result->integer = source.integer;
+    result->floating = source.floating;
     result->boolean = source.boolean;
     result->resolved_type = source.resolved_type;
     result->resolved_class = source.resolved_class;
@@ -2165,10 +2166,10 @@ private:
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "f64" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
-                binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                binding.scalar_type = accept("bool") ? ScalarType::Bool : accept("f64") ? ScalarType::F64 : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
                 binding.name = identifier();
                 require("=");
@@ -3650,10 +3651,21 @@ private:
             return inner;
         }
         if (token_.kind == Kind::Floating) {
-            // Do not forge a guest f64 by boxing/reinterpreting an i64.
-            // An actual f64 AST, type domain and LLVM double lowering must
-            // be implemented together before positive source admission.
-            fail("native f64 literal requires typed IEEE-754 lowering; unsupported");
+            // Locale-independent, bounded, once-rounded IEEE binary64 input.
+            // Preserve f64 identity throughout checking and LLVM lowering.
+            const std::string_view literal = token_.text;
+            if (literal.find('_') != std::string_view::npos)
+                fail("native f64 literal does not admit digit separators");
+            double number = 0.0;
+            const auto parsed = std::from_chars(literal.data(),
+                literal.data() + literal.size(), number, std::chars_format::general);
+            if (parsed.ec != std::errc{} ||
+                    parsed.ptr != literal.data() + literal.size())
+                fail("native f64 literal outside finite binary64 range or malformed");
+            auto expr = make_expression(Expression::Kind::Floating, offset);
+            expr->floating = number;
+            advance();
+            return expr;
         }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
