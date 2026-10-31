@@ -24,11 +24,15 @@ public:
     struct AcceptedWatch final {
         OresNativeNioWatch watch{};
         int fd=-1;
+        const AsyncIoTicket operation;
+        PinnedContinuationGate* operation_gate=nullptr;
         typename Work::IoLease physical;
 
-        AcceptedWatch(OresNativeNioWatch w,int file,
+        AcceptedWatch(OresNativeNioWatch w,int file,AsyncIoTicket op,
+                      PinnedContinuationGate& gate,
                       typename Work::IoLease&& pin) noexcept
-            :watch(w),fd(file),physical(std::move(pin)) {}
+            :watch(w),fd(file),operation(op),operation_gate(&gate),
+             physical(std::move(pin)) {}
         AcceptedWatch(const AcceptedWatch&)=delete;
         AcceptedWatch& operator=(const AcceptedWatch&)=delete;
         AcceptedWatch(AcceptedWatch&&)=default;
@@ -42,6 +46,25 @@ public:
                 event.watch.ticket==watch.ticket &&
                 event.watch.reactor==watch.reactor &&
                 event.fd==fd;
+        }
+        // Observing one exact terminal NIO record arbitrates the operation's
+        // logical outcome, never the physical broker ACK. The broker must
+        // independently certify that it cannot touch buffers or callback
+        // again before the request lease may physically retire.
+        bool observe_terminal_completion(
+                const OresNativeNioCompletion& event) noexcept {
+            if(!operation_gate || !matches_completion(event)) return false;
+            AsyncIoTerminal outcome;
+            switch(event.outcome) {
+                case ORES_NATIVE_NIO_READY:
+                    outcome=AsyncIoTerminal::success;break;
+                case ORES_NATIVE_NIO_CANCELLED:
+                    outcome=AsyncIoTerminal::cancelled;break;
+                case ORES_NATIVE_NIO_STOPPED:
+                    outcome=AsyncIoTerminal::closed;break;
+                default:return false;
+            }
+            return operation_gate->settle(operation,outcome);
         }
     };
 
@@ -62,7 +85,7 @@ public:
                 return ok;
             });
         if(!physical) return std::nullopt;
-        return AcceptedWatch(accepted,fd,std::move(*physical));
+        return AcceptedWatch(accepted,fd,operation,gate,std::move(*physical));
     }
 };
 
