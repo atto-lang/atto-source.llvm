@@ -3585,6 +3585,12 @@ private:
         }
         if (accept("stdio")) {
             require(".");
+            // The canonical stream spelling used by Oreslang application
+            // sources is stdio.stdout.println/print. Resolve only the
+            // literal stdout stream at parse time and reuse the exact
+            // legacy stdio.println/print AST, effect and ownership path.
+            // No dynamic stream object or blocking I/O fallback exists.
+            if (accept("stdout")) require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
             expr->name = identifier();
             if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
