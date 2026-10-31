@@ -31,6 +31,18 @@ struct PackageNamespaceExport {
     std::string source_unit_id;
     std::string name;
     std::size_t arity = 0;
+    ScalarType return_type = ScalarType::I64;
+    std::vector<ScalarType> parameter_types;
+};
+
+// A checked compile-time call target, not a runtime namespace object or an
+// LLVM symbol. The source-unit identity is the only valid bridge to future
+// authenticated cross-unit codegen. No implicit argument type conversions.
+struct PackageNamespaceScalarTarget {
+    PackageNamespaceKey owner;
+    std::string source_unit_id;
+    std::string function_name;
+    ScalarType return_type = ScalarType::I64;
 };
 
 struct PackageNamespaceGroup {
@@ -400,7 +412,13 @@ inline PackageNamespaceGraph link_package_namespaces(
             const auto signature = std::make_pair(fn.name, fn.parameters.size());
             if (!signatures[key].insert(signature).second)
                 throw std::invalid_argument("duplicate public namespace function/arity in same package instance");
-            group.exports.push_back({unit.source_unit_id, fn.name, fn.parameters.size()});
+            std::vector<ScalarType> parameter_types;
+            parameter_types.reserve(fn.parameters.size());
+            for (const auto& param : fn.parameters)
+                parameter_types.push_back(param.scalar_type);
+            group.exports.push_back({unit.source_unit_id, fn.name,
+                                     fn.parameters.size(), fn.return_type,
+                                     std::move(parameter_types)});
         }
     }
 
@@ -437,6 +455,48 @@ inline PackageNamespaceGraph link_package_namespaces(
             throw std::invalid_argument("duplicate lexical namespace import binding");
     }
     return result;
+}
+
+// Resolution is intentionally based only on an already checked graph and an
+// existing import edge. This function never reads a source file, scans the
+// filesystem, synthesizes a module symbol or falls back across packages.
+// The caller may use the exact source-unit target for later native lowering,
+// but this phase-one host graph does NOT emit LLVM IR.
+inline PackageNamespaceScalarTarget resolve_package_namespace_scalar_call(
+        const PackageNamespaceGraph& graph,
+        const std::string& importer_source_unit_id,
+        const std::string& local_namespace,
+        const std::string& function_name,
+        const std::vector<ScalarType>& argument_types) {
+    if (!valid_flat_namespace_name(local_namespace)
+            || !valid_flat_namespace_name(function_name))
+        throw std::invalid_argument("invalid qualified namespace scalar call");
+    const auto bound = graph.imports.find(
+        std::make_pair(importer_source_unit_id, local_namespace));
+    if (bound == graph.imports.end())
+        throw std::invalid_argument("qualified namespace has no verified import binding");
+    const auto group = graph.namespaces.find(bound->second);
+    if (group == graph.namespaces.end())
+        throw std::invalid_argument("resolved namespace provider inventory is missing");
+    bool saw_name = false;
+    bool saw_arity = false;
+    for (const auto& symbol : group->second.exports) {
+        if (symbol.name != function_name) continue;
+        saw_name = true;
+        if (symbol.arity != argument_types.size()) continue;
+        saw_arity = true;
+        if (symbol.parameter_types != argument_types)
+            throw std::invalid_argument("namespace scalar call argument type mismatch");
+        if (symbol.source_unit_id.empty()
+                || !group->second.source_units.count(symbol.source_unit_id))
+            throw std::invalid_argument("namespace scalar call provider identity is not verified");
+        return {bound->second, symbol.source_unit_id, symbol.name, symbol.return_type};
+    }
+    if (saw_arity)
+        throw std::invalid_argument("namespace scalar call has no matching parameter types");
+    if (saw_name)
+        throw std::invalid_argument("namespace scalar call has wrong value arity");
+    throw std::invalid_argument("qualified namespace function is not exported");
 }
 
 } // namespace oreslang::frontend
