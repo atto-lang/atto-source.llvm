@@ -440,6 +440,17 @@ int main() {
     // Remainder was removed from Oreslang's scalar language contract.
     // Even a host-supplied, correctly typed legacy AST must not reintroduce
     // that operator through the cross-unit namespace export surface.
+    reject_signature("removed_logical_xor_export", [](Function& fn) {
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::LogicalXor;
+        fn.result->resolved_type = ScalarType::Bool;
+        fn.result->left = std::make_unique<Expression>();
+        fn.result->left->kind = Expression::Kind::Boolean;
+        fn.result->left->resolved_type = ScalarType::Bool;
+        fn.result->right = std::make_unique<Expression>();
+        fn.result->right->kind = Expression::Kind::Boolean;
+        fn.result->right->resolved_type = ScalarType::Bool;
+    }, "body expression");
     reject_signature("removed_remainder_export", [](Function& fn) {
         fn.result = std::make_unique<Expression>();
         fn.result->kind = Expression::Kind::Remainder;
