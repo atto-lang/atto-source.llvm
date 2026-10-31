@@ -283,6 +283,8 @@ int main(int argc, char** argv) {
                  std::string("foo//source.ores"),
                  std::string("/absolute/source.ores"),
                  std::string("foo/"),
+                 std::string("C:/escaped.ores"),
+                 std::string("foo:bar.ores"),
                  std::string("foo") + '\\' + "other.ores"}) {
             auto candidate = make_program();
             candidate.sources.front().source_unit_id = invalid;
@@ -292,7 +294,7 @@ int main(int argc, char** argv) {
         }
         {
             auto candidate = make_program();
-            candidate.entry_source_unit_id = "../app/src/main.ores";
+            candidate.entry_source_unit_id = "C:/app/src/main.ores";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
                 "noncanonical entry source unit identity");
