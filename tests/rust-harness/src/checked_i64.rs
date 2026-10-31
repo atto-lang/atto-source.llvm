@@ -140,7 +140,9 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
                     && module_ir.contains("i8 1")
                     && module_ir.contains("$error")
                     && module_ir.contains("call.error.code")
-                    && module_ir.contains("error.propagate"),
+                    && module_ir.contains("error.propagate")
+                    && module_ir.contains("error.unhandled.panic")
+                    && module_ir.contains("i8 3"),
                 format!(
                     "{name}: imported Math did not thread NativeErrorSlotV1 through the linked scalar call"
                 ),
@@ -264,7 +266,9 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             && wasm_ir.contains("i32 65537")
             && wasm_ir.contains("i8 1")
             && wasm_ir.contains("$error")
-            && wasm_ir.contains("call.error.code"),
+            && wasm_ir.contains("call.error.code")
+            && wasm_ir.contains("error.unhandled.panic")
+            && wasm_ir.contains("i8 3"),
         "stdlib Math wasm32 IR lost target, imported symbol, checked negation, or NativeErrorSlotV1 propagation",
     )?;
 
