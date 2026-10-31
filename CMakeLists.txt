@@ -614,6 +614,23 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
+        # Host-only independently pinned dependency alias contract.
+        # This proves fail-closed lock parsing, NOT executable namespaces.
+        add_executable(oreslang-native-verified-namespace-dependency-lock-v2-test
+            tests/native_verified_namespace_dependency_lock_v2_test.cpp)
+        target_include_directories(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_verified_namespace_dependency_lock_v2_host_only
+            COMMAND oreslang-native-verified-namespace-dependency-lock-v2-test)
+        set_tests_properties(native_verified_namespace_dependency_lock_v2_host_only
+            PROPERTIES TIMEOUT 15)
         # Real production Parser.cpp + physical v2 snapshot + verified owner
         # graph, without authorizing native guest namespace execution.
         add_executable(oreslang-native-verified-namespace-real-parser-v2-test
