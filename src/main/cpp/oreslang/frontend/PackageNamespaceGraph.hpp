@@ -60,6 +60,10 @@ struct NamespaceImportRequest {
     std::string importer_source_unit_id;
     std::string package_alias;
     std::string namespace_name;
+    // Optional lexical "as" name. An empty alias means the source namespace
+    // name. Distinct pinned package instances may export the same namespace
+    // and must remain independently addressable by explicit local aliases.
+    std::string local_alias;
 };
 
 using PackageAliasPins =
@@ -434,8 +438,11 @@ inline PackageNamespaceGraph link_package_namespaces(
         const auto from = owner_by_source.find(imported.importer_source_unit_id);
         if (from == owner_by_source.end())
             throw std::invalid_argument("namespace importer lacks verified package ownership");
+        const std::string& local_alias = imported.local_alias.empty()
+            ? imported.namespace_name : imported.local_alias;
         if (!valid_flat_namespace_name(imported.package_alias)
-                || !valid_flat_namespace_name(imported.namespace_name))
+                || !valid_flat_namespace_name(imported.namespace_name)
+                || !valid_flat_namespace_name(local_alias))
             throw std::invalid_argument("invalid namespace import alias or selector");
 
         const auto alias_table = pinned_aliases.find(from->second);
@@ -450,7 +457,7 @@ inline PackageNamespaceGraph link_package_namespaces(
             throw std::invalid_argument("namespace absent in selected package; no cross-package fallback");
 
         if (!result.imports.emplace(
-                std::make_pair(imported.importer_source_unit_id, imported.namespace_name),
+                std::make_pair(imported.importer_source_unit_id, local_alias),
                 std::move(target)).second)
             throw std::invalid_argument("duplicate lexical namespace import binding");
     }
