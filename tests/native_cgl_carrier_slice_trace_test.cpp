@@ -36,6 +36,25 @@ static void until_complete(const ActorState& state, std::uint64_t desired) {
     }
 }
 int main() {
+    // An empty or malformed trace cannot be represented as complete coverage.
+    CglCarrierDispatchTrace empty;
+    assert(!empty.complete_after_join());
+    assert(!empty.matches_expected_after_join(1));
+    assert(!empty.append({0, 1, 0, true, 1, 2}));
+    assert(!empty.append({1, 0, 0, true, 1, 2}));
+    assert(!empty.append({1, 1, 0, true, 0, 2}));
+    assert(!empty.append({1, 1, 0, true, 3, 2}));
+    assert(empty.invalid_after_join() == 4);
+    assert(empty.dropped_after_join() == 0);
+    assert(empty.append({1, 1, 0, true, 1, 2}));
+    assert(!empty.complete_after_join());
+    assert(!empty.matches_expected_after_join(1));
+    CglCarrierDispatchTrace single_valid;
+    assert(single_valid.append({1, 1, 0, true, 1, 2}));
+    assert(single_valid.complete_after_join());
+    assert(single_valid.matches_expected_after_join(1));
+    assert(!single_valid.matches_expected_after_join(2));
+
     ActorState state;
     CglCarrierDispatchTrace trace;
     MultiActorCarrier carrier;
@@ -53,6 +72,7 @@ int main() {
     assert(carrier.stats().protocol_failures == 0);
     assert(trace.recorded_after_join() == CglCarrierDispatchTrace::capacity);
     assert(trace.dropped_after_join() == 12);
+    assert(trace.invalid_after_join() == 0);
     assert(!trace.complete_after_join());
     assert(!trace.matches_expected_after_join(CglCarrierDispatchTrace::capacity));
     std::array<CglCarrierDispatchTrace::Sample, CglCarrierDispatchTrace::capacity> samples{};
