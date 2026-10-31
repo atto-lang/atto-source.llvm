@@ -70,7 +70,8 @@ public:
         ~IoLease() { if(pin_) std::terminate(); }
 
         bool finish_after_broker_and_resume_quiescence() noexcept {
-            if(!pin_ || !gate_ || !gate_->try_retire(ticket_)) return false;
+            if(!pin_ || !gate_ ||
+                !gate_->try_retire_bound_request(ticket_)) return false;
             pin_.reset();
             gate_=nullptr;
             return true;
@@ -99,14 +100,17 @@ public:
     static std::optional<IoLease> retain_async_io(
             Context& context, Handle request, OresNativeActorRef owner,
             PinnedContinuationGate& gate, AsyncIoTicket ticket) {
-        if(!gate.matches_ticket(ticket) ||
-            gate.terminal()!=AsyncIoTerminal::pending || gate.retired())
-            return std::nullopt;
+        // Atomic binding is the I/O retirement linearization boundary.
+        // A ready-to-retire operation can never be attached to a new request;
+        // the normal gate retirement path cannot pass an attached physical pin.
+        if(!gate.try_bind_request(ticket)) return std::nullopt;
         auto pin=context.retain(request,owner);
-        if(!pin || gate.terminal()!=AsyncIoTerminal::pending ||
-            gate.retired()) return std::nullopt;
-        // A concurrent settle after the final check is safe: it will still
-        // require broker ACK, finished resume, zero loans and try_retire().
+        if(!pin || gate.terminal()!=AsyncIoTerminal::pending) {
+            if(!gate.abort_request_binding(ticket)) std::terminate();
+            return std::nullopt;
+        }
+        // Settlement after publication is safe: only this IoLease can retire
+        // the bound operation after the broker and resume have quiesced.
         return IoLease(gate,ticket,std::move(*pin));
     }
 };
