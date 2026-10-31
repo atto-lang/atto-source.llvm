@@ -126,6 +126,61 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         }
     }
 
+    // wasm32 admits only root-relative, leaf, pure-scalar user modules.
+    // Compile the exact shared Math module graph without executing host code.
+    let wasm_math = &module_cases[0].1;
+    let wasm_compiled = run(
+        compiler,
+        [OsStr::new("--target=wasm32"), wasm_math.as_os_str()],
+    )?;
+    require(
+        wasm_compiled.status.success(),
+        format!(
+            "stdlib Math wasm32 module compile failed: {}",
+            stderr(&wasm_compiled)
+        ),
+    )?;
+    let wasm_ir = stdout(&wasm_compiled);
+    require(
+        wasm_ir.contains("wasm32-unknown-unknown")
+            && wasm_ir.contains("__ores_module_1.abs")
+            && wasm_ir.contains("llvm.ssub.with.overflow.i64"),
+        "stdlib Math wasm32 IR lost target, imported symbol, or checked negation",
+    )?;
+
+    // Imported user modules are deliberately leaves: do not turn this narrow
+    // scalar gate into a general freestanding package graph.
+    let nested_dir = temp.path.join("wasm-nested-user-modules");
+    fs::create_dir_all(&nested_dir).map_err(|e| e.to_string())?;
+    let nested_main = nested_dir.join("main.ores");
+    fs::write(
+        &nested_main,
+        "import module Lib from \"./lib\"; pub fnc main():int{return Lib.answer();}",
+    ).map_err(|e| e.to_string())?;
+    fs::write(
+        nested_dir.join("lib.ores"),
+        "import module Nested from \"./nested\"; define module Lib as pub fnc answer():int{return Nested.answer();} end",
+    ).map_err(|e| e.to_string())?;
+    fs::write(
+        nested_dir.join("nested.ores"),
+        "define module Nested as pub fnc answer():int{return 42;} end",
+    ).map_err(|e| e.to_string())?;
+    let nested = run(
+        compiler,
+        [OsStr::new("--target=wasm32"), nested_main.as_os_str()],
+    )?;
+    require(
+        !nested.status.success()
+            && stdout(&nested).trim().is_empty()
+            && stderr(&nested).contains(
+                "freestanding user module must be a leaf pure-scalar i64 library"
+            ),
+        format!(
+            "nested wasm32 user module graph did not fail closed: {}",
+            stderr(&nested)
+        ),
+    )?;
+
     println!("PASS {executions} actual native checked-i64 executions, O1/O2; no typed actor-error claim");
     Ok(())
 }
