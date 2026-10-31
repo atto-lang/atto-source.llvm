@@ -8,6 +8,7 @@ on:
       - 'src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/native_inverted_production_guest.sh'
+      - 'tests/native_inverted_production_mir_test.cpp'
       - 'tests/native_inverted_schema_mir_preflight_test.cpp'
       - 'tests/native_inverted_struct_ast_test.cpp'
       - 'src/main/cpp/oreslang/types/InvertedMirLlvmI64.hpp'
