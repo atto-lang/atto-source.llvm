@@ -4,6 +4,9 @@ on:
     paths:
       - 'src/main/cpp/oreslang/types/InvertedTypedPlan.hpp'
       - 'src/main/cpp/oreslang/types/InvertedTypedMir.hpp'
+      - 'src/main/cpp/oreslang/types/InvertedMirLlvmI64.hpp'
+      - 'tests/native_inverted_mir_llvm_guest.cpp'
+      - 'tests/native_inverted_mir_ir_guest.sh'
       - 'src/main/cpp/oreslang/types/InvertedNativeMirI64.hpp'
       - 'tests/native_inverted_mir_compiler17_test.cpp'
       - 'tests/native_inverted_typed_mir_test.cpp'
