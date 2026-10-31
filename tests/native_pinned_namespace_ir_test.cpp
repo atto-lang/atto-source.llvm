@@ -269,6 +269,31 @@ int main() {
                 "exact pkg:<alias> selector");
         }
 
+        // Even host-supplied in-memory source IDs must be canonical logical
+        // relative identities: no hidden aliases or future filesystem escape.
+        // This is not a claim of filesystem confinement or manifest admission.
+        for (const std::string invalid : {
+                 std::string("../foo/source.ores"),
+                 std::string("foo/../source.ores"),
+                 std::string("foo/./source.ores"),
+                 std::string("foo//source.ores"),
+                 std::string("/absolute/source.ores"),
+                 std::string("foo/"),
+                 std::string("foo") + '\\' + "other.ores"}) {
+            auto candidate = make_program();
+            candidate.sources.front().source_unit_id = invalid;
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
+                "noncanonical source unit identity");
+        }
+        {
+            auto candidate = make_program();
+            candidate.entry_source_unit_id = "../app/src/main.ores";
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
+                "noncanonical entry source unit identity");
+        }
+
         // Host-supplied identities and inventory budgets are bounded before
         // they can influence graph construction or generated symbols.
         {
