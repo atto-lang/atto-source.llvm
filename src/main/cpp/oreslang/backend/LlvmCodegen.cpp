@@ -1294,11 +1294,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions)
         effect_results.emplace(
             native_function_slot(fn.name, fn.parameters.size()), false);
-    for (const auto& fn : source.functions)
-        if (effect_candidate(fn) &&
+    for (const auto& fn : source.functions) {
+        const bool root_main =
+            native_main && source.module.empty() && fn.name == "main";
+        if (effect_candidate(fn) && !root_main &&
                 expression_has_direct_checked_overflow(*fn.result))
             effect_results.at(
                 native_function_slot(fn.name, fn.parameters.size())) = true;
+    }
     for (std::size_t pass = 0; pass < source.functions.size(); ++pass) {
         bool changed = false;
         for (const auto& fn : source.functions) {

@@ -134,6 +134,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         include_str!("../../fixtures/numeric-v1/i64-overflow-typed-catch.ores");
     const SHARED_I64_OVERFLOW_CROSS_FRAME_CATCH: &str =
         include_str!("../../fixtures/numeric-v1/i64-overflow-cross-frame-catch.ores");
+    const SHARED_I64_OVERFLOW_ROOT_PANIC: &str =
+        include_str!("../../fixtures/numeric-v1/i64-overflow-root-panic.ores");
     use std::{ffi::OsStr, fs, os::unix::process::ExitStatusExt};
     let temp = TempDir::new("ores-checked-i64-").map_err(|e| e.to_string())?;
     fs::write(temp.path.join("math-shadow.ores"),
@@ -165,7 +167,7 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("lazy-or", "pub fnc main():int{return (true || (9223372036854775807+1>0)) ? 42 : 0;}", 42),
         ("dynamic", "fnc add(int a,int b):int{return a+b;} pub fnc main():int{return add(40,2);}", 42),
         ("dynamic-cross-frame-root-panic",
-         "fnc leaf():int{return 9223372036854775807+1;} fnc middle():int{return leaf();} pub fnc main():int{return middle();}",
+         SHARED_I64_OVERFLOW_ROOT_PANIC,
          1),
     ];
     let rejects = [
