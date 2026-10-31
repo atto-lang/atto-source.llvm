@@ -4,7 +4,9 @@
 #include "oreslang/runtime/DbWalOwnerRetirementGate.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <mutex>
+#include <stdexcept>
 
 namespace oreslang::runtime {
 
@@ -20,7 +22,15 @@ public:
     DbWalPhysicalRetirement(DbWalOwnerRetirementGate& gate,
             AsyncIoOperationLifecycle& lifecycle,
             AsyncIoActorLifetimePin& pin)
-        : gate_(gate), lifecycle_(lifecycle), pin_(pin) {}
+        : gate_(gate), lifecycle_(lifecycle), pin_(pin) {
+        const auto& id = lifecycle_.ticket();
+        if (id.generation > std::numeric_limits<std::uint32_t>::max()
+                || !gate_.owns(id.actor_id,
+                        static_cast<std::uint32_t>(id.generation))
+                || !gate_.active())
+            throw std::invalid_argument(
+                "DB WAL physical pin does not match active owner incarnation");
+    }
 
     DbWalPhysicalRetirement(const DbWalPhysicalRetirement&) = delete;
     DbWalPhysicalRetirement& operator=(const DbWalPhysicalRetirement&) = delete;
