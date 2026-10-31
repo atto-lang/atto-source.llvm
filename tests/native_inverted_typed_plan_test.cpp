@@ -111,6 +111,15 @@ int main() {
     quota.push(4);
     rejects([&] { quota.push(4); }, "capacity exceeded");
 
+    // Compiler work is bounded and exhaustion cannot publish an extra HIR op.
+    LinearPlan budget(schema, 1);
+    budget.push(4);
+    for (std::size_t i = budget.operations().size(); i < 4096; ++i)
+        budget.read(0, "id");
+    assert(budget.operations().size() == 4096);
+    rejects([&] { budget.read(0, "id"); }, "HIR operation budget exceeded");
+    assert(budget.operations().size() == 4096);
+
     // Cross-check the actual native owner semantics separately. Compile-time
     // HIR mutability rules are stronger than this untyped host API. Call only
     // source-admitted operations (and deliberately test stale handle guards).
