@@ -72,6 +72,14 @@ def main():
             'b.ores': 'define module B as pub fnc answer(borrow int x):int{return rt copy x;} end',
         }, 42),
     ]
+    # Executable precursor for namespace linking: two physical provider
+    # source files are compiled into one native guest. These are existing
+    # module imports, NOT import namespace and NOT package/manifest admission.
+    positives.append(('cross-file-scalar-43', {
+        'main.ores': 'import module Charges from "./charges"; import module Balances from "./balances"; pub fnc main():int{return Charges.charge(40)+Balances.balance();}',
+        'charges.ores': 'define module Charges as pub fnc charge(int cents):int{return cents+1;} end',
+        'balances.ores': 'define module Balances as pub fnc balance():int{return 2;} end',
+    }, 43))
     positives.append(('project-root', {
         'main.ores': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
         '.ores.pkg.toml': 'schema_version = "1"\n',
@@ -132,6 +140,17 @@ def main():
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
+            if name == 'cross-file-scalar-43':
+                # A successful native process alone would not prove each
+                # provider was compiled and called through the correct ABI.
+                for signature in ('define i64 @__ores_module_1.charge(',
+                                  'define i64 @__ores_module_2.balance('):
+                    if signature not in result.stdout:
+                        raise AssertionError(('missing physical provider IR', signature))
+                for call in ('call i64 @__ores_module_1.charge(',
+                             'call i64 @__ores_module_2.balance('):
+                    if call not in result.stdout:
+                        raise AssertionError(('missing cross-file scalar call', call))
             (directory/'guest.ll').write_text(result.stdout)
             built = run([a.clang, str(directory/'guest.ll'), '-O2', '-o', str(directory/'guest')])
             if built.returncode: raise AssertionError((name, built.stderr))
