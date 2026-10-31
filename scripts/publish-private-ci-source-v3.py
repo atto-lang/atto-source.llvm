@@ -1005,22 +1005,38 @@ def exact_source_tree(source_pr, source_commit):
     # base64 blob response.
     declared = []
     declared_total = 0
+    # Reject ambiguous paths and malformed *directory* entries before
+    # downloading even one private blob. PurePosixPath alone normalizes
+    # duplicate slashes and dot segments, so compare with the raw spelling.
+    seen_paths = set()
     for entry in entries:
         if not isinstance(entry, dict):
             raise Denied("malformed source tree entry")
-        kind = entry.get("type")
-        if kind == "tree":
-            continue
-        mode = entry.get("mode")
         path = entry.get("path")
-        if kind != "blob" or mode not in ("100644", "100755"):
-            raise Denied("source tree contains symlink/submodule/unsupported mode")
         if not isinstance(path, str) or not path:
             raise Denied("source tree path invalid")
-        parts = PurePosixPath(path).parts
-        if (path.startswith("/") or ".." in parts or ".git" in parts
-                or "\\" in path or any(ord(c) < 32 or ord(c) == 127 for c in path)):
+        canonical = PurePosixPath(path)
+        parts = canonical.parts
+        if (not parts or path.startswith("/")
+                or canonical.as_posix() != path
+                or any(part.casefold() == ".git" or part in (".", "..")
+                       for part in parts)
+                or "\\" in path
+                or any(ord(c) < 32 or ord(c) == 127 for c in path)):
             raise Denied("source tree path unsafe")
+        identity = path.casefold()
+        if identity in seen_paths:
+            raise Denied("source tree contains duplicate/case-colliding path")
+        seen_paths.add(identity)
+        kind = entry.get("type")
+        mode = entry.get("mode")
+        if kind == "tree":
+            if mode != "040000":
+                raise Denied("source tree directory mode invalid")
+            valid_sha(entry.get("sha"), "source directory SHA")
+            continue
+        if kind != "blob" or mode not in ("100644", "100755"):
+            raise Denied("source tree contains symlink/submodule/unsupported mode")
         sha = valid_sha(entry.get("sha"), "source blob SHA")
         size = entry.get("size")
         if (not isinstance(size, int) or isinstance(size, bool)
