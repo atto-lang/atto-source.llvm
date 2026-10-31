@@ -623,6 +623,12 @@ int main(){
         Registry contexts;
         const OresNativeActorRef owner{91,2,5};
         auto h=contexts.open(owner,Suite::info(800));CHECK(h);
+        NativeHttpExchange exchange;
+        auto pinned=contexts.attach_exchange(exchange,*h,owner);CHECK(pinned);
+        const auto original=pinned->token();
+        CHECK(exchange.rollback(original)); // rejected before mailbox admission
+        CHECK(!pinned->ready_to_retire()); // request is not yet closed
+        CHECK(!exchange.enqueue(owner)); // physical owner still live
         auto child=contexts.retain(*h,owner);CHECK(child);
         auto io=contexts.retain(*h,owner);CHECK(io);
         std::atomic<unsigned> started{0},release_order{0},done{0};
@@ -646,14 +652,25 @@ int main(){
             std::this_thread::yield();
         CHECK(contexts.close(*h,owner));
         CHECK(contexts.available()==15);
+        CHECK(!pinned->ready_to_retire()); // two physical descendants remain
         CHECK(!contexts.lookup(*h,owner));
         CHECK(!contexts.retain(*h,owner));
         release_order.store(1,std::memory_order_release);
         child_thread.join();
         CHECK(done==1 && contexts.available()==15);
+        CHECK(!pinned->ready_to_retire()); // I/O callback still owns a lease
+        CHECK(!exchange.enqueue(owner));
         release_order.store(2,std::memory_order_release);
         io_thread.join();
-        CHECK(done==2 && contexts.available()==16);
+        CHECK(done==2 && contexts.available()==15);
+        CHECK(pinned->ready_to_retire()); // only exchange owner remains
+        CHECK(!exchange.enqueue(owner));
+        pinned.reset(); // drop last context lease BEFORE exchange reuse fence
+        CHECK(contexts.available()==16);
+        CHECK(exchange.enqueue(owner));
+        const auto reused=exchange.token();
+        CHECK(reused.generation>original.generation);
+        CHECK(exchange.rollback(reused));
         const auto next=contexts.open(owner,Suite::info(801));CHECK(next);
         CHECK(next->value!=h->value);
         CHECK(!contexts.lookup(*h,owner));
