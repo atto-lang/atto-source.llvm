@@ -30,6 +30,7 @@ public:
     bool matches_request_owner(RequestOwner owner) const noexcept {
         return request_owner_.scheduler_domain != 0 &&
             request_owner_.generation != 0 &&
+            ticket_.generation == request_owner_.generation &&
             request_owner_.scheduler_domain == owner.scheduler_domain &&
             request_owner_.actor_slot == owner.actor_slot &&
             request_owner_.generation == owner.generation;
