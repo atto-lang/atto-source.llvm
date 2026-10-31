@@ -63,8 +63,8 @@ ticket's authenticated retirement.
 | Host-only native actor arena, ticket generation, pin retirement | Foundations exist, not full guest program proof |
 | CFG loan identity, joins, exclusive/shared aliases, exit checks | Prototype verifier; source event emission incomplete |
 | CFG explicit unpinned suspension rejection | Added by this stacked patch, pending exact-head execution |
-| Native source `await/select` -> CFG Suspend | **Not wired**; unsupported paths must fail closed |
-| Positive pinned-frame borrow across suspension | **Not implemented** |
+| Source Task/Future i64 and ActorRef lifecycle awaits -> checked CFG suspension | **Wired in restricted source ownership pass**, pending exact-head build and native execution |
+| General `select`/channel/generator suspension -> checked CFG | **Not wired**; unsupported paths must fail closed |\n| Positive pinned-frame borrow across suspension | **Not implemented** |
 | Finalizer/unwind/cancellation drop glue after all tickets retire | **Not verified end-to-end** |
 | Real `.ores` -> LLVM IR -> linked native binary without tracing GC | **Not verified for this feature** |
 | ASan/UBSan, NDEBUG, allocation/latency and no-tracing-GC audit | **Required exact-head tests** |
@@ -82,7 +82,7 @@ c++ -std=c++17 -O1 -g -fsanitize=address,undefined \
 /tmp/ores-ownership-cfg-san
 ```
 
-Next: emit trusted lifetime events from typed source, add source-positive and
+Next: extend trusted lifetime events beyond restricted Task/Future/ActorRef awaits, add source-positive and
 source-negative fixtures, then build and execute native binaries against real
 actor/scheduler shutdown with allocation instrumentation and sanitizers.
 The prior standalone zero-`operator new` 100,000-mutation smoke does not prove
@@ -91,3 +91,23 @@ whole-program no-GC, no-heap-allocation, or real-time guarantees.
 **Security:** do not export private repository source to a carrier organization
 until the protected-main destination allowlist and exact snapshot are
 independently approved. More GitHub Actions minutes are not permission to copy.
+
+## 2026-10-30 source-wiring follow-up on stacked PR #1226
+
+The actual LLVM source ownership pass now translates its currently accepted
+`Task<int>` and `Future<int>` result-await bindings, and direct/typed
+`ActorRef.get_ready/get_done` lifecycle awaits, into a checked synthetic
+ownership CFG `Suspend` boundary **at the source admission point**. It
+captures active loans and conservatively treats borrowed function parameters
+as live external loans. This denies unproven borrowed parameters across awaits
+until a source NLL/outlives pass can prove their actual last use. The pass
+revokes old suspension authority before revalidation and publishes an
+internal snapshot fingerprint only after full compilation-unit ownership
+validation. LLVM emission rejects a missing/stale approval *before* IR setup.
+
+This is not generalized MIR edge emission, nor positive pinned-frame support:
+`select`, channel waits and generators are still unsupported. The new
+`native_source_suspension_lifetime_authority` CTest checks that fingerprint
+invalidates on await/parameter changes. Existing native source actor/task/
+Future compilation and executable fixtures provide a regression gate for the
+admitted no-loan path. The test is checked in, not an exact-head executed pass.
