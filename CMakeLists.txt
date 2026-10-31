@@ -29,6 +29,7 @@ add_executable(oreslang-llvmc
     src/main/cpp/oreslang/main.cpp
     src/main/cpp/oreslang/frontend/Parser.cpp
     src/main/cpp/oreslang/frontend/ModuleLoader.cpp
+    src/main/cpp/oreslang/frontend/PinnedNamespaceLoader.cpp
     src/main/cpp/oreslang/frontend/MethodResolver.cpp
     src/main/cpp/oreslang/types/NativeScalarTypes.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
@@ -4479,4 +4480,44 @@ if(BUILD_TESTING)
     add_test(NAME native_select_continuation_generation_fence
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
+endif()
+
+
+# Executable pinned package namespace lowering. This is intentionally separate
+# from ordinary filesystem discovery: the test driver supplies a closed,
+# package-owned source graph and exact alias pins, then requires real
+# LLVM-IR -> Clang -> native exit-43 execution.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-pinned-namespace-ir-test
+        tests/native_pinned_namespace_ir_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/PinnedNamespaceLoader.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp
+        src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+        src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
+    target_include_directories(oreslang-native-pinned-namespace-ir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-pinned-namespace-ir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-pinned-namespace-ir-test PRIVATE ${ORE_LLVM_LIBS})
+    add_test(NAME native_pinned_namespace_package_exit_43
+        COMMAND "${CMAKE_COMMAND}"
+            "-DHELPER=$<TARGET_FILE:oreslang-native-pinned-namespace-ir-test>"
+            "-DCLANG=${ORE_SOURCE_I64_CLANG}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/pinned-namespace-execution"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/pinned_namespace_execution.cmake")
+    set_tests_properties(native_pinned_namespace_package_exit_43 PROPERTIES TIMEOUT 60)
+
+    # Preserve #1179's fail-closed lifecycle/default-loader behavior while the
+    # explicit pinned namespace API is enabled only for verified host inputs.
+    add_test(NAME native_namespace_lifecycle_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DCLANG=${ORE_SOURCE_I64_CLANG}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/namespace-parity"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/namespace_lifecycle_parity.cmake")
+    set_tests_properties(native_namespace_lifecycle_fail_closed PROPERTIES TIMEOUT 60)
 endif()
