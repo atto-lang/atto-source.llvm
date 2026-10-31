@@ -25,38 +25,62 @@ native guest exit 0, and exact piped output for three positive
 programs. Three unsupported stream spellings must fail compilation
 with no emitted IR.
 
-## First f64 lexer stage (NOT native lowering)
+## First typed native f64 lexical scalar slice (source implementation; UNEXECUTED)
 
-The lexer now distinguishes a complete decimal/scientific numeric token
-from an integer token followed by a dot or exponent identifier. This
-prevents `0.3` from appearing as a partial i64 expression and `1e2`
-from appearing as integer `1`. A lexical malformed exponent such as
-`1e+` fails explicitly. Complete floating literals are then rejected
-with `native f64 literal requires typed IEEE-754 lowering; unsupported`.
-No `f64` AST/type identity, conversion rule, comparison, arithmetic or
-LLVM `double` lowering has been claimed or implemented.
+The lexer distinguishes complete decimal and scientific f64 tokens. The
+native AST now stores the separately typed binary64 value as a `double`
+rather than inventing an i64 representation. `std::from_chars` performs a
+locale-independent conversion: malformed or out-of-range literals fail
+before LLVM IR emission; implicit coercion between int and f64 is forbidden.
 
-`tests/native_f64_lexical_gate.sh` has one **actual executable i64
-positive control** (must exit 42) and five f64 source-negative cases
-that must return nonzero and produce **no LLVM IR**. The exact
-compiler-backed test is registered as `native_f64_lexical_fail_closed`
-in CTest. A passing test is **negative admission evidence**, not an
-implemented floating-point feature.
+The first supported scope is **finite f64 literals, explicit typed lexical
+locals, unary negation, addition, subtraction, multiplication, equality and
+ordered comparisons**. The scalar parser's type pass and independent
+`NativeScalarTypes` checker agree on source type identity. The ownership
+checker admits f64 literals/pure comparisons but forbids using a float as
+an int-only caught-throw payload.
+
+Codegen lowers these values as actual LLVM `double`, with f64 stack slots,
+`fadd`, `fsub`, `fmul`, `fneg`, and `fcmp` operations rather than
+bit-casting them to the signed-i64 ABI. Comparisons produce a canonical i64
+bool. Ordered relational predicates are false on NaN; inequality uses
+IEEE unordered-not-equal. No fast-math assumptions are introduced by this
+patch.
+
+`tests/native_f64_lexical_gate.sh`, now registered in CTest as
+`native_f64_scalar_e2e`, requires **six actually compiled/linked/executed
+guest programs** (five f64 checks and one signed-i64 control) to terminate
+with exit 42 and empty output. Seven deliberately invalid source programs
+must fail with no LLVM IR, including int-to-f64 coercion, mixed arithmetic,
+mixed comparison, malformed exponent and overflowed numeric literals.
+These cases are **authored but not executed on an authorized LLVM runner**:
+no native f64 PASS, compiler parity or numerical correctness receipt
+can yet be claimed.
+
+### Explicit exclusions
+
+This is not a general f64 ABI: floating-point function parameters/returns,
+class fields, f64 sum payloads and owned `Array<f64>` need separate
+type/ownership/data-layout integration. Float division and f32 are not yet
+lowered; int/int division retains its existing native fail-closed behavior.
+Exhaustive IEEE bit-vector compatibility, denormals, FP exception behavior,
+NaN payloads, signed zero and optimization-level differential tests remain
+independent acceptance gates. Numeric routines in ORIE need more than this
+scalar slice.
 
 ## Next upstream milestones
 
-1. Add distinct `f64` AST, lexical literal storage and explicit type
-   checking. Enforce the language's **no implicit conversions** rule.
-2. Lower correctly typed finite f64 arithmetic and ordered comparisons
-   to LLVM IR using IEEE semantics. Check NaN/infinity/signed-zero,
-   rounding, unsupported operations and exact-return ABI.
-3. Run positive/negative actual guest programs on a trusted runner with
-   exact source SHA/tree, compiler binary digest, executed CTest jobs,
-   IR/native artifact hashes, exit codes and diagnostics.
-4. Extend owned `Array<f64>` representation and lifetime checking
-   separately; do not pretend `Array<int>` ABI proves float arrays.
-5. Run ORIE's feature matrix (6/6), then its 13 Oreslang application
-   fixtures, followed by independent numerical oracles.
+1. **Execute the current native f64 scalar CTest** against an authorized,
+   pinned LLVM compiler and correct any real parser/type/codegen errors.
+   Then run IEEE differential cases at multiple optimization levels.
+2. Extend the floating ABI to explicitly typed parameters/returns and
+   independently define the division, NaN/infinity and FP exception rules.
+3. Implement checked owned `Array<f64>` storage, borrows, lifetime and
+   element ABI. Existing `Array<int>` runtime is not a proof of this.
+4. Require exact source SHA/tree, compiler binary digest, executed CI
+   steps, IR/native artifact hashes, exit codes and diagnostics.
+5. Run ORIE's six-feature matrix and 13 real application guests, then
+   independent numerical oracles and branch protection/review gates.
 
 Tracked at [LLVM issue #453](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/453)
 and [LLVM issue #428](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/428).
