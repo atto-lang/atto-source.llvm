@@ -27,6 +27,8 @@ constexpr std::size_t kMaxManifestPathBytes = 4096;
 constexpr std::size_t kMaxPackageGroups = 128;
 constexpr std::size_t kMaxPackageFiles = 128;
 constexpr std::size_t kMaxPackageInstanceBytes = 1024;
+constexpr std::size_t kMaxLockedPackageInstances = 128;
+constexpr std::size_t kMaxLockedNamespaceSources = 128;
 
 [[noreturn]] void fail(const std::string& reason) {
     throw std::runtime_error("verified package namespace inventory: " + reason);
@@ -667,6 +669,13 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
     if (!read_manifest) fail("manifest reader is required");
     if (!read_source) fail("source reader is required");
 
+    if (dependency_manifest_paths.size() >= kMaxLockedPackageInstances)
+        fail("too many dependency manifests for pinned namespace inventory");
+    if (lock.package_instances.size() > kMaxLockedPackageInstances)
+        fail("verified package lock exceeds 128 package instances");
+    if (lock.dependency_aliases.size() >= kMaxLockedPackageInstances)
+        fail("root package exceeds 127 dependency aliases");
+
     const VerifiedPackageManifestV2 root_manifest =
         load_verified_package_manifest_v2(root_manifest_path, read_manifest);
     std::vector<VerifiedPackageManifestV2> dependency_manifests;
@@ -745,6 +754,7 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
     }
 
     std::map<std::string, PackageSelection> selections;
+    std::size_t selected_source_count = 0;
     for (const auto& instance_id : selected_instances) {
         const auto& entry = lock.package_instances.at(instance_id);
         const fs::path physical_manifest =
@@ -760,6 +770,10 @@ PinnedNamespaceProgramInput build_pinned_namespace_program_from_manifests(
             fail("locked package key is absent from manifest");
         if (entry.source_sha256.size() != package->second.size())
             fail("stale package lock: source membership set mismatch");
+        if (package->second.size() >
+                kMaxLockedNamespaceSources - selected_source_count)
+            fail("locked namespace inventory exceeds 128 selected sources");
+        selected_source_count += package->second.size();
         for (const auto& member : package->second) {
             const auto digest = entry.source_sha256.find(
                 member.manifest_relative_path);
