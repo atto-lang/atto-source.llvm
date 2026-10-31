@@ -184,6 +184,7 @@ def reject_conditional_gate_bypass(sections):
 REQUIRED_EXECUTED_COMMANDS = {
     "actor-ledger-contract": (
         "python3 -B tests/test_actor_ledger_workflow_inputs.py",
+        "python3 -I -B tests/test_actor_ledger_native_runner_refusals.py",
         '"build/actor-ledger-gate/test-${cxx//+/p}"',
         '"build/actor-ledger-gate/stress-${cxx//+/p}"',
         '"build/actor-ledger-gate/fence-${cxx//+/p}"',
