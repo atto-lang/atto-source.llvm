@@ -8,6 +8,15 @@ if [[ $# -ne 1 || ! "$1" =~ ^[a-f0-9]{40}$ ]]; then
   exit 64
 fi
 expected_sha=$1
+# No caller-controlled Git repository or config redirection may alter the
+# checked-out root, index, object store, or comparison semantics.
+if [[ -n "${GIT_DIR:-}" || -n "${GIT_WORK_TREE:-}" || -n "${GIT_COMMON_DIR:-}" \
+   || -n "${GIT_INDEX_FILE:-}" || -n "${GIT_OBJECT_DIRECTORY:-}" \
+   || -n "${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}" \
+   || -n "${GIT_CONFIG_PARAMETERS:-}" || "${GIT_CONFIG_COUNT:-0}" != 0 ]]; then
+  echo 'REFUSAL: unsafe caller Git environment' >&2
+  exit 65
+fi
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 cd "$root"
 
@@ -22,6 +31,7 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
 fi
 
 source_paths=(
+  scripts/ci/run_actor_ledger_native_exact_head.sh
   src/main/cpp/oreslang/runtime/NativeActorScheduler.c
   src/main/cpp/oreslang/runtime/NativeActorScheduler.h
   src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
@@ -45,7 +55,7 @@ for path in "${source_paths[@]}"; do
 done
 
 # This audits the entire workflow input closure, not merely the above shortlist.
-python3 -B tests/test_actor_ledger_workflow_inputs.py
+PYTHONOPTIMIZE=0 PYTHONNOUSERSITE=1 python3 -I -B tests/test_actor_ledger_workflow_inputs.py
 for tool in gcc g++ clang clang++; do command -v "$tool" >/dev/null; done
 command -v timeout >/dev/null || { echo 'REFUSAL: GNU timeout required' >&2; exit 69; }
 work=$(mktemp -d "${TMPDIR:-/tmp}/ores-ledger-native.XXXXXXXX")
