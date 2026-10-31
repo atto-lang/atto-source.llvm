@@ -3558,6 +3558,31 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-vm-nio-lifecycle-test)
     set_tests_properties(native_vm_nio_lifecycle_and_rt_prestart
         PROPERTIES TIMEOUT 30)
+    # Actual Linux VM/NIO epoll readiness and cancellation with a physically
+    # pinned request. This uses real kernel epoll, not the ABI fake broker.
+    # The final guest-continuation cleanup turn remains host-driven.
+    add_executable(oreslang-native-request-nio-epoll-integration-test
+        tests/native_request_nio_epoll_integration_test.cpp
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+        src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+    target_include_directories(oreslang-native-request-nio-epoll-integration-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-request-nio-epoll-integration-test
+        PROPERTIES LINKER_LANGUAGE CXX)
+    target_compile_features(oreslang-native-request-nio-epoll-integration-test
+        PRIVATE c_std_11 cxx_std_17)
+    target_link_libraries(oreslang-native-request-nio-epoll-integration-test
+        PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-request-nio-epoll-integration-test
+        PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>
+                $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_http_request_nio_real_epoll_physical_quiescence
+        COMMAND oreslang-native-request-nio-epoll-integration-test)
+    set_tests_properties(native_http_request_nio_real_epoll_physical_quiescence
+        PROPERTIES TIMEOUT 30)
 endif()
 
 # This compiles the REAL native frontend parser and ownership checker,
