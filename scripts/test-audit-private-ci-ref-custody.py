@@ -104,6 +104,50 @@ class RefCustodyFailClosedSourceTest(unittest.TestCase):
             "    require_atomic_ref_rollback()\n    generation =",
         ))
 
+    def test_top_level_guard_rebinding_denied(self):
+        self.denied(self.changed(
+            'if __name__ == "__main__":',
+            'require_atomic_ref_rollback = lambda: None\n'
+            'if __name__ == "__main__":',
+        ))
+
+    def test_top_level_dynamic_exec_denied(self):
+        self.denied(self.changed(
+            'if __name__ == "__main__":',
+            'exec("require_atomic_ref_rollback = lambda: None")\n'
+            'if __name__ == "__main__":',
+        ))
+
+    def test_top_level_import_alias_override_denied(self):
+        self.denied(self.changed(
+            'import argparse\n',
+            'import argparse\nimport os as require_atomic_ref_rollback\n',
+        ))
+
+    def test_top_level_lowercase_variable_denied(self):
+        self.denied(self.changed(
+            'if __name__ == "__main__":',
+            'publisher_enabled = True\nif __name__ == "__main__":',
+        ))
+
+    def test_guard_decorator_denied(self):
+        self.denied(self.changed(
+            'def require_atomic_ref_rollback():',
+            '@staticmethod\ndef require_atomic_ref_rollback():',
+        ))
+
+    def test_cli_entry_additional_call_denied(self):
+        self.denied(self.changed(
+            '    sys.exit(main())',
+            '    require_atomic_ref_rollback()\n    sys.exit(main())',
+        ))
+
+    def test_cli_entry_changed_from_main_denied(self):
+        self.denied(self.changed(
+            '    sys.exit(main())',
+            '    main()',
+        ))
+
     def test_syntax_error_denied(self):
         self.denied("def publish(:\n")
 
