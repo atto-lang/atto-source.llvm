@@ -444,6 +444,42 @@ int main() {
                   && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
               "racing admission allowed premature or duplicate retirement");
     }
+    // Two threads holding copies of ONE receipt must not both consume it.
+    // The registry removal and loan decrement must linearize exactly once,
+    // even when both callers present the same valid borrower identity.
+    for (std::uint64_t round = 1; round <= 128; ++round) {
+        AsyncIoTicket ticket{129, round, round};
+        BorrowerPinnedContinuationGate gate(ticket);
+        auto receipt = gate.acquire(ticket, 77,
+            BorrowerPinnedContinuationGate::Loan::shared);
+        check(receipt.has_value() && gate.loan_state() == 1,
+              "duplicate-release race setup failed");
+        std::atomic<bool> start{false};
+        std::atomic<unsigned> wins{0};
+        auto release_same = [&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            if (gate.release(ticket, 77, *receipt))
+                wins.fetch_add(1, std::memory_order_relaxed);
+        };
+        std::thread a(release_same);
+        std::thread b(release_same);
+        start.store(true, std::memory_order_release);
+        a.join();
+        b.join();
+        check(wins.load(std::memory_order_relaxed) == 1
+                && gate.loan_state() == 0
+                && !gate.release(ticket, 77, *receipt),
+              "concurrent duplicate receipt released twice or leaked loan");
+        check(gate.settle(ticket, AsyncIoTerminal::cancelled)
+                && gate.broker_acknowledge(ticket)
+                && gate.try_claim_resume(ticket)
+                && gate.finish_resume(ticket)
+                && gate.try_retire(ticket)
+                && !gate.try_retire(ticket)
+                && gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
+              "duplicate-release race violated retirement fence");
+    }
     // Multiple borrowers drain receipts concurrently while a scheduler
     // probes retirement. A final sentinel receipt must prevent reclamation,
     // regardless of the mutex contention or the other releases' ordering.
