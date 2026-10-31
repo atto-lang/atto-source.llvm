@@ -58,7 +58,33 @@ static void* try_worker(void* arg) {
     return NULL;
 }
 
+/* Distinct actor-owned mailboxes must permit physically simultaneous turns.
+ * This does not authorize concurrent entries on any one mailbox. */
+typedef struct {
+    OresNativeActorMailbox* lane;
+    atomic_int* entered;
+    atomic_int* active;
+    atomic_int* peak;
+    atomic_int* release;
+} IndependentArgs;
+static void* independent_worker(void* raw) {
+    IndependentArgs* a = (IndependentArgs*)raw;
+    if (!ores_native_actor_mailbox_enter(a->lane)) return (void*)(uintptr_t)1;
+    int now = atomic_fetch_add(a->active, 1) + 1;
+    int previous = atomic_load(a->peak);
+    while (now > previous &&
+           !atomic_compare_exchange_weak(a->peak, &previous, now)) { }
+    atomic_fetch_add(a->entered, 1);
+    while (!atomic_load(a->release)) nap();
+    atomic_fetch_sub(a->active, 1);
+    ores_native_actor_mailbox_leave(a->lane);
+    return NULL;
+}
+
 int main(void) {
+    /* Invalid capacities must not allocate an actor mailbox. */
+    check(ores_native_actor_mailbox_open(0) == NULL);
+    check(ores_native_actor_mailbox_open(65537) == NULL);
     OresNativeActorMailbox* lane=ores_native_actor_mailbox_open(THREADS+1);
     check(lane != NULL);
     atomic_int active=0, max_active=0, finished=0, order_index=0;
@@ -142,6 +168,43 @@ int main(void) {
     check(ores_native_actor_mailbox_try_enter(probe)==0);
     check(ores_native_actor_mailbox_try_destroy(probe)==1);
 
-    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 capacity=1 retire_wake=1 try_admission=1");
+    OresNativeActorMailbox* isolated_a = ores_native_actor_mailbox_open(1);
+    OresNativeActorMailbox* isolated_b = ores_native_actor_mailbox_open(1);
+    check(isolated_a != NULL && isolated_b != NULL);
+    atomic_int distinct_entered = 0, distinct_active = 0, distinct_peak = 0;
+    atomic_int distinct_release = 0;
+    IndependentArgs independent[2] = {
+        {isolated_a, &distinct_entered, &distinct_active, &distinct_peak, &distinct_release},
+        {isolated_b, &distinct_entered, &distinct_active, &distinct_peak, &distinct_release}
+    };
+    pthread_t carriers[2];
+    for (int i = 0; i < 2; i++)
+        check(pthread_create(&carriers[i], NULL, independent_worker, &independent[i]) == 0);
+    int observed_two_live = 0;
+    for (int i = 0; i < 5000; i++) {
+        if (atomic_load(&distinct_entered) == 2) {
+            observed_two_live = 1;
+            break;
+        }
+        nap();
+    }
+    /* Release both carriers on timeout so the test never strands its threads. */
+    atomic_store(&distinct_release, 1);
+    for (int i = 0; i < 2; i++) {
+        void* status = NULL;
+        check(pthread_join(carriers[i], &status) == 0);
+        check(status == NULL);
+    }
+    check(observed_two_live);
+    check(atomic_load(&distinct_peak) == 2);
+    check(atomic_load(&distinct_active) == 0);
+    check(ores_native_actor_mailbox_pending(isolated_a) == 0);
+    check(ores_native_actor_mailbox_pending(isolated_b) == 0);
+    ores_native_actor_mailbox_retire(isolated_a);
+    ores_native_actor_mailbox_retire(isolated_b);
+    check(ores_native_actor_mailbox_try_destroy(isolated_a) == 1);
+    check(ores_native_actor_mailbox_try_destroy(isolated_b) == 1);
+
+    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 distinct_mailbox_overlap=2 capacity=1 retire_wake=1 try_admission=1");
     return 0;
 }
