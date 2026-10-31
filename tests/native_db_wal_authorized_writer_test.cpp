@@ -4,7 +4,9 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <atomic>
 #include <stdexcept>
+#include <thread>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -72,7 +74,35 @@ int main(){
     denies([&]{(void)wal->append_authorized_and_sync(registry,*issued,
         55,7,3,101,4,43,corrupt.data(),corrupt.size());});
     assert(!gate.active() && wal->file_size()==31);
+
+    // Linearize actual physical append admission against concurrent drain.
+    // A write that wins must finish fdatasync before physical retirement;
+    // a drain that wins must prevent the second write entirely.
+    auto second=frame(7,4,2,43);
+    std::atomic<bool> start{false};
+    std::atomic<bool> appended{false};
+    std::thread writer([&]{
+        while(!start.load(std::memory_order_acquire)) std::this_thread::yield();
+        try {
+            auto r=wal->append_authorized_and_sync(registry,*issued,
+                55,7,3,101,4,43,second.data(),second.size());
+            assert(r.before==31 && r.after==62);
+            appended.store(true,std::memory_order_release);
+        } catch(const std::logic_error&) {
+            // Valid only if the drain won admission.
+        }
+    });
+    std::thread drainer([&]{
+        while(!start.load(std::memory_order_acquire)) std::this_thread::yield();
+        (void)registry.drain(*issued,55,101,4);
+    });
+    start.store(true,std::memory_order_release);
+    writer.join();
+    drainer.join();
+    assert(!gate.active());
     assert(registry.drain(*issued,55,101,4));
+    assert(wal->file_size()==(appended.load() ? 62U : 31U));
+
     denies([&]{(void)wal->append_authorized_and_sync(registry,*issued,
         55,7,3,101,4,43,corrupt.data(),corrupt.size());});
     assert(registry.begin_close(*issued,55,101,4));
