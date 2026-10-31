@@ -22,7 +22,6 @@ class I64PairLlvmEmitter final {
     std::size_t pushes_ = 0;
     std::size_t writes_ = 0;
     std::string last_read_ = "0";
-    bool closed_ = false;
 
     std::string temp() { return "%m" + std::to_string(++next_); }
     std::string label() { return "mblock" + std::to_string(++next_); }
@@ -70,6 +69,15 @@ public:
             throw std::invalid_argument("experimental MIR LLVM columns capacity must be 1..256");
     }
     std::string build(const Module& module, const I64PairIrOperands& args) {
+        // A compiler may reuse this emitter for several functions/units.
+        // Each build is an independent verified MIR lowering transaction.
+        // Never carry prior SSA names, input cursors or return values into
+        // the next guest IR, including after a failed build.
+        code_.clear();
+        next_ = 0;
+        pushes_ = 0;
+        writes_ = 0;
+        last_read_ = "0";
         if (module.layout().columns() != 2 ||
             module.layout().column(0).type != InvertedScalarKind::I64 ||
             module.layout().column(1).type != InvertedScalarKind::I64 ||
@@ -140,7 +148,7 @@ public:
                     // local function or crosses suspension. No pointer emitted.
                     break;
                 case OpKind::Close:
-                    emit("store i1 false, ptr %alive"); closed_ = true; break;
+                    emit("store i1 false, ptr %alive"); break;
                 default: throw std::logic_error("unsupported MIR opcode in LLVM IR emitter");
             }
         }
