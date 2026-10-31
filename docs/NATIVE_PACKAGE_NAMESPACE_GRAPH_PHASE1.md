@@ -93,3 +93,37 @@ expected hashes from arbitrary untrusted input and call that authentication.
 This host verifier does **not** open files, establish filesystem authority,
 validate runtime `.ores` semantics, resolve package aliases, or generate LLVM
 IR. The native executable loader still rejects namespace imports.
+
+
+## Descriptor-to-verified namespace-owner bridge (host-only)
+
+`NamespacePhysicalSourceV2.hpp` now compares the last source path entry
+against the already opened descriptor's inode/metadata **after** reading,
+preventing a same-byte regular-file replacement during that capture from
+silently passing the checked boundary. A deterministic test opens the old
+inode, renames an identical-byte replacement onto its pathname, and proves
+the old pathname identity is rejected. POSIX path checking cannot provide an
+atomic filesystem freeze; no stage may re-open file paths after the verified
+snapshot is published.
+
+`VerifiedNamespaceGraphV2.hpp` now takes one or more authenticated,
+immutable `VerifiedNamespaceSourceSnapshotV2` values and a **trusted host
+source parser callback**. It generates package and physical source-unit IDs
+from the pinned manifest/source SHA-256 commitments plus package key and
+manifest-member relative path. The callback receives the **captured bytes**,
+not the mutable source path. It binds lexical `import namespace ... as ...
+from "+/"` AST edges to their verified owner's package instance and
+passes the resulting checked graph to `PackageNamespaceGraph.hpp`.
+Duplicate source identities, unlisted sources, unverified module imports,
+source-count overflow, duplicate lexical aliases and all external package
+alias imports fail closed. Those external dependencies require a separately
+verified lock/pin authority before they can be admitted.
+
+The focused `native_verified_namespace_graph_v2_test.cpp` currently uses a
+fixture host callback constructing scalar ASTs from fixed text labels. This
+**does not** demonstrate the production compiler parser, real Oreslang
+source semantics, actual LLVM lowering or a three-file guest returning 43.
+The CLI's existing parser/loader gate for executable namespace imports is
+unchanged and remains fail-closed. GCC, Clang and sanitized compilation of
+the new host graph test must be recorded from executing, exact-head CI or a
+complete local private checkout before treating that bridge as qualified.
