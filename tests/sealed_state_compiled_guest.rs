@@ -111,6 +111,25 @@ fn expect_target_denial(o: &Options, target: &str, kind: &str) -> Result<(), Str
     }
     Ok(())
 }
+fn expect_realtime_denial(o: &Options, flag: &str, kind: &str) -> Result<(), String> {
+    let source = fixture(&o.root, &format!("source-isolated-actor-sealed-{kind}.ores"));
+    let result = output(
+        &o.compiler,
+        &[arg(flag), arg(source.as_os_str())],
+        false,
+    )?;
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    if result.status.success()
+        || !result.stdout.is_empty()
+        || !stderr.contains("native sealed actor-state guest v1 lacks hard-RT execution and cancellation certification")
+    {
+        return Err(format!(
+            "{flag}/{kind}: uncertified sealed state entered hard-RT mode; code={:?}; stderr={stderr}",
+            result.status.code()
+        ));
+    }
+    Ok(())
+}
 fn verify_guest_ir(ir: &str, kind: &str) -> Result<(), String> {
     if !ir.starts_with("; ModuleID") || ir.contains("gc.statepoint") || ir.contains("gc.relocate") {
         return Err("missing native LLVM module or unexpected tracing GC".into());
@@ -193,6 +212,11 @@ fn main_result() -> Result<(), String> {
     for target in ["wasm32", "thumbv7m-none-eabi"] {
         for kind in ["read", "write"] {
             expect_target_denial(&o, target, kind)?;
+        }
+    }
+    for flag in ["--profile=native-hard-rt", "--rt-check"] {
+        for kind in ["read", "write"] {
+            expect_realtime_denial(&o, flag, kind)?;
         }
     }
     let workspace = Workspace::new()?;
