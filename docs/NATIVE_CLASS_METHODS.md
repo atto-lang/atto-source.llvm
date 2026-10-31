@@ -50,9 +50,10 @@ admission/order checks.
 This is not general object/async lowering. Classes remain stack-owned with up
 to 16 scalar fields; returning objects, nested object fields, inheritance,
 virtual/static/generic methods, escaping bound methods, String/Array receiver
-storage, actor placement and suspension remain unimplemented. Explicit read
-receiver syntax, field/method name collisions and effect-qualified methods are
-rejected until their typed rules are lowered. Mutable receivers are borrowed
+storage, actor placement and suspension remain unimplemented. Inline
+read receivers (`read(self, int n)`) are supported, but legacy split
+read-only receivers (`read(self)(int n)`) are not. Field/method name collisions
+and effect-qualified methods are rejected until their typed rules are lowered. Mutable receivers are borrowed
 before arguments; two-phase receiver reservation is not claimed, so a nested
 argument that borrows that same mutable receiver fails closed.
 
@@ -68,3 +69,28 @@ loans and actor-send disambiguation. Eleven identical positive programs also run
 in Java. Three qualified imported-construction cases are native-only evidence:
 the current Java runtime rejects `new Lib.Class()` despite parsing/typechecking
 that form. This is recorded rather than presented as cross-backend parity.
+
+## LLVM-independent receiver contract test
+
+The full `oreslang-llvmc` build requires LLVM development headers and
+`LLVMConfig.cmake`. For a genuine, **host-only** test of the compiler-owned
+receiver-erasure helper without LLVM development libraries, use:
+
+```sh
+cmake -S . -B build-receiver-slot -G Ninja \
+  -DORES_RECEIVER_SLOT_HOST_ONLY=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-receiver-slot --parallel
+ctest --test-dir build-receiver-slot --output-on-failure
+```
+
+This compiles the exact `native_receiver_slot_test.cpp` source as C++20,
+sweeps all 1,025 value arities from 0 through 1,024, and checks selector
+uniqueness and the maximum `size_t` boundary. `BUILD_TESTING=OFF` is
+intentionally rejected in this mode. For an ASan/UBSan run, configure a
+separate build directory with `CMAKE_CXX_FLAGS=-fsanitize=address,undefined`
+and `CMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined`.
+
+**This does not build `oreslang-llvmc` or execute guest Oreslang source.**
+The full native compiler and `tests/native_class_methods.py` remain required
+for backend parity. The option defaults to `OFF` and does not weaken the
+LLVM dependency in ordinary builds.
