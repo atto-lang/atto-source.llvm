@@ -175,7 +175,6 @@ inline bool namespace_pure_scalar_expression_at_depth(
             break;
         case Expression::Kind::LogicalAnd:
         case Expression::Kind::LogicalOr:
-        case Expression::Kind::LogicalXor:
             if (!type_is(expression->left.get(), ScalarType::Bool)
                     || !type_is(expression->right.get(), ScalarType::Bool)
                     || expression->resolved_type != ScalarType::Bool
