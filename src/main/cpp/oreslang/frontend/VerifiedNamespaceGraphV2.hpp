@@ -103,4 +103,16 @@ inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
     return link_package_namespaces(owned, {}, imports);
 }
 
+// Production parser composition is deliberately host-only and returns only
+// the checked owner graph. The AST and captures never enter executable LLVM
+// lowering through this path. Once exact-head tests qualify the parser
+// bridge, codegen must still authorize each scalar call independently.
+inline PackageNamespaceGraph link_verified_native_namespace_snapshots_v2(
+        const std::vector<VerifiedNamespacePackageInputV2>& bundles) {
+    return link_verified_namespace_snapshots_v2(
+        bundles, [](std::string_view captured_source) {
+            return parse_verified_namespace_source_unresolved(captured_source);
+        });
+}
+
 } // namespace oreslang::frontend
