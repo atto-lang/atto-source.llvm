@@ -65,6 +65,31 @@ int main() {
         ref, *arena, region, request.ticket);
     assert(pin.active());
     assert(ref.outstanding_resource_loans() == 1);
+    // A syntactically valid ticket of the correct scope must still prove
+    // exact live-binding identity; simply sharing an arena is insufficient.
+    auto forged_ticket = request.ticket;
+    ++forged_ticket.sequence;
+    bool forged_rejected = false;
+    try {
+        StateRegionActorLifetimePin forged(
+            ref, *arena, region, forged_ticket);
+    } catch (const std::invalid_argument&) {
+        forged_rejected = true;
+    }
+    assert(forged_rejected);
+    assert(ref.outstanding_resource_loans() == 1);
+    // A different region cannot launder an otherwise valid actor ticket.
+    ores_task_bound_state_region unbound_region =
+        ORES_TASK_BOUND_STATE_REGION_UNBOUND_INIT;
+    bool foreign_region_rejected = false;
+    try {
+        StateRegionActorLifetimePin foreign(
+            ref, *arena, unbound_region, request.ticket);
+    } catch (const std::invalid_argument&) {
+        foreign_region_rejected = true;
+    }
+    assert(foreign_region_rejected);
+    assert(ref.outstanding_resource_loans() == 1);
     assert(ores_state_region_start(&region, owner, request.ticket)
            == ORES_STD_SYNC_GRANTED);
 
@@ -122,6 +147,17 @@ int main() {
         &region, request.ticket) == ORES_STD_SYNC_GRANTED);
     assert(pin.release_after_ticket_retirement());
     assert(!pin.active());
+    assert(ref.outstanding_resource_loans() == 0);
+    // A once-live but now retired exact ticket cannot reacquire arena
+    // lifetime, even before the resource registry's final close runs.
+    bool retired_ticket_rejected = false;
+    try {
+        StateRegionActorLifetimePin replay(
+            ref, *arena, region, request.ticket);
+    } catch (const std::invalid_argument&) {
+        retired_ticket_rejected = true;
+    }
+    assert(retired_ticket_rejected);
     assert(ref.outstanding_resource_loans() == 0);
 
     assert(owned.poll() == NativeActorRetirementBarrier::Poll::completed);
