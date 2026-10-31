@@ -14,6 +14,7 @@ on:
       - 'tests/native_pinned_namespace_ir_test.cpp'
       - 'tests/pinned_namespace_execution.cmake'
       - 'tests/namespace_lifecycle_parity.cmake'
+      - 'docs/NATIVE_PACKAGE_NAMESPACE_GRAPH_PHASE1.md'
       - 'CMakeLists.txt'
       - '.github/workflows/native-pinned-package-namespace.yml'
   workflow_dispatch:
@@ -47,9 +48,17 @@ jobs:
       - name: Configure focused native namespace gates
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 
-      - name: Build compiler and pinned namespace driver
-        run: cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-pinned-namespace-ir-test
+      - name: Build compiler, host graph, and pinned namespace driver
+        run: cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-namespace-package-index-test oreslang-native-pinned-namespace-ir-test
 
-      - name: Execute pinned namespace and fail-closed lifecycle gates
+      - name: Verify focused CTest gates are actually registered
+        shell: bash
         run: |
-          ctest --test-dir build --output-on-failure --timeout 90             -R '^(native_pinned_namespace_package_exit_43|native_namespace_lifecycle_fail_closed)$'
+          set -euo pipefail
+          ctest --test-dir build --show-only=json-v1 > build/namespace-ctest.json
+          grep -Fq '"name" : "native_namespace_package_identity_source_only"' build/namespace-ctest.json
+          grep -Fq '"name" : "native_pinned_namespace_package_exit_43"' build/namespace-ctest.json
+          grep -Fq '"name" : "native_namespace_lifecycle_fail_closed"' build/namespace-ctest.json
+
+      - name: Execute graph boundary, pinned namespace, and lifecycle gates
+        run: ctest --test-dir build --output-on-failure --timeout 90 -R '^(native_namespace_package_identity_source_only|native_pinned_namespace_package_exit_43|native_namespace_lifecycle_fail_closed)$'
