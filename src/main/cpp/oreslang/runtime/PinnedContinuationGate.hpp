@@ -15,7 +15,25 @@ public:
     static constexpr std::uint32_t exclusive_bit = 0x80000000u;
     static constexpr std::uint32_t max_shared_loans = 1024;
 
+    // A fully identified host actor is bound at I/O registration, not
+    // supplied later by an arbitrary callback. The legacy ticket-only gate
+    // remains valid for non-request operations, but cannot own an HTTP
+    // request lease without this complete actor-incarnation identity.
+    struct RequestOwner final {
+        std::uint64_t scheduler_domain;
+        std::uint64_t actor_slot;
+        std::uint64_t generation;
+    };
     explicit PinnedContinuationGate(AsyncIoTicket ticket) noexcept : ticket_(ticket) {}
+    PinnedContinuationGate(AsyncIoTicket ticket, RequestOwner owner) noexcept
+        : ticket_(ticket), request_owner_(owner) {}
+    bool matches_request_owner(RequestOwner owner) const noexcept {
+        return request_owner_.scheduler_domain != 0 &&
+            request_owner_.generation != 0 &&
+            request_owner_.scheduler_domain == owner.scheduler_domain &&
+            request_owner_.actor_slot == owner.actor_slot &&
+            request_owner_.generation == owner.generation;
+    }
     PinnedContinuationGate(const PinnedContinuationGate&) = delete;
     PinnedContinuationGate& operator=(const PinnedContinuationGate&) = delete;
 
@@ -180,6 +198,7 @@ private:
             && ticket.operation_id == ticket_.operation_id;
     }
     const AsyncIoTicket ticket_;
+    const RequestOwner request_owner_{0,0,0};
     std::atomic<AsyncIoTerminal> terminal_{AsyncIoTerminal::pending};
     std::atomic<std::uint32_t> loans_{0};
     std::atomic<bool> broker_quiesced_{false};
