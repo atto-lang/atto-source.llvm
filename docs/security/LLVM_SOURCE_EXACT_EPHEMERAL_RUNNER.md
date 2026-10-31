@@ -95,3 +95,30 @@ itself must run with sanitized Git config, no reusable secrets and a disposable
 source-organization runner. Filesystem mutation after the check is not
 prevented. No run, source transfer, compiler execution or export approval
 is inferred from the source-free tests.
+
+## Pre-materialization smudge-filter isolation
+
+The PR-object fetch uses pinned `actions/checkout@11bd719...` with
+`sparse-checkout-cone-mode: false` and **the two literal sparse patterns**
+`/*` then `!/*`: all tracked files are excluded *before Git checkout*.
+The explicit `blob:limit=134217728` partial-clone filter fetches the blobs
+within the trusted materializer's 128 MiB per-blob budget, without leaving a
+persisted checkout token; out-of-budget and missing blobs deny execution.
+
+Trusted-main source-free tests validate this Git behavior against a malicious
+configured smudge filter, including binary bytes, executable bits, symlinks,
+pre-existing unexpected paths, hostile Git environment overrides and direct
+post-materialization execution of the exact-checkout verifier. The trusted
+materializer is copied by `git cat-file blob HEAD:...` to `$RUNNER_TEMP`
+*before* fetching the PR. It refuses to run unless the source checkout contains
+**only** its real `.git` directory and every indexed source entry is
+skip-worktree. It then writes regular source files directly from Git blob bytes,
+using no-follow/exclusive filesystem operations and strict object budgets.
+Only then does it clear index skip-worktree bits and run the existing
+raw-blob integrity verifier.
+
+A later unauthorized filesystem change or an attacker who compromises the
+disposable VM is outside this preflight's guarantee. This mechanism does not
+authorize cross-organization export or runner registration. Admin-protected
+source main, independently approved exact PR head and source-local disposable
+runner remain mandatory.

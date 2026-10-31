@@ -90,6 +90,8 @@ jobs:
 
       - name: Execute trusted source-free post-run authorization regression mocks
         shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -99,13 +101,17 @@ jobs:
             "$(git rev-parse HEAD:.github/workflows/llvm-source-exact-ephemeral.yml)"
           test "$(git hash-object --no-filters scripts/ci/verify_llvm_exact_checkout.py)" = "$(git rev-parse HEAD:scripts/ci/verify_llvm_exact_checkout.py)"
           test "$(git hash-object --no-filters scripts/ci/test_verify_llvm_exact_checkout.py)" = "$(git rev-parse HEAD:scripts/ci/test_verify_llvm_exact_checkout.py)"
+          test "$(git hash-object --no-filters scripts/ci/materialize_llvm_exact_checkout.py)" = "$(git rev-parse HEAD:scripts/ci/materialize_llvm_exact_checkout.py)"
+          test "$(git hash-object --no-filters scripts/ci/test_materialize_llvm_exact_checkout.py)" = "$(git rev-parse HEAD:scripts/ci/test_materialize_llvm_exact_checkout.py)"
           git cat-file blob HEAD:scripts/ci/verify_llvm_exact_checkout.py > "$RUNNER_TEMP/verify_llvm_exact_checkout.py"
-          chmod 0500 "$RUNNER_TEMP/verify_llvm_exact_checkout.py"
+          git cat-file blob HEAD:scripts/ci/materialize_llvm_exact_checkout.py > "$RUNNER_TEMP/materialize_llvm_exact_checkout.py"
+          chmod 0500 "$RUNNER_TEMP/verify_llvm_exact_checkout.py" "$RUNNER_TEMP/materialize_llvm_exact_checkout.py"
           python3 scripts/ci/test_verify_llvm_exact_checkout.py
+          python3 scripts/ci/test_materialize_llvm_exact_checkout.py
           bash -n scripts/ci/test_llvm_source_exact_postrun.sh
           bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml
 
-      - name: Checkout pinned source tree (never persist auth)
+      - name: Fetch pinned PR objects into empty sparse checkout (never persist auth)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.source_sha }}
@@ -113,6 +119,13 @@ jobs:
           persist-credentials: false
           submodules: false
           lfs: false
+          # All source paths are sparse-excluded BEFORE checkout: no smudge.
+          # Fetch every blob admitted by the materializer's 128 MiB limit.
+          filter: blob:limit=134217728
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/*
 
       - name: Require exact tree and preinstalled native toolchain
         shell: bash
@@ -124,6 +137,9 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = 'self-hosted'
           command -v python3
           test -f "$RUNNER_TEMP/verify_llvm_exact_checkout.py"
+          test -f "$RUNNER_TEMP/materialize_llvm_exact_checkout.py"
+          # The trusted materializer refuses any PR files checked out before it.
+          python3 "$RUNNER_TEMP/materialize_llvm_exact_checkout.py" "$SOURCE_SHA"
           python3 "$RUNNER_TEMP/verify_llvm_exact_checkout.py" "$SOURCE_SHA"
           echo "EXACT_SOURCE_COMMIT=$SOURCE_SHA"
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"

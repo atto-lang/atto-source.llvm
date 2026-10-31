@@ -63,20 +63,29 @@ mock_step="$(extract_step 'Execute trusted source-free post-run authorization re
 grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$mock_step"
 grep -qxF '          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml' <<< "$mock_step"
 grep -qxF '          python3 scripts/ci/test_verify_llvm_exact_checkout.py' <<< "$mock_step"
+grep -qxF '          python3 scripts/ci/test_materialize_llvm_exact_checkout.py' <<< "$mock_step"
+grep -qxF '          git cat-file blob HEAD:scripts/ci/materialize_llvm_exact_checkout.py > "$RUNNER_TEMP/materialize_llvm_exact_checkout.py"' <<< "$mock_step"
+grep -Fq -- 'git hash-object --no-filters scripts/ci/materialize_llvm_exact_checkout.py' <<< "$mock_step"
 grep -qxF '          git cat-file blob HEAD:scripts/ci/verify_llvm_exact_checkout.py > "$RUNNER_TEMP/verify_llvm_exact_checkout.py"' <<< "$mock_step"
 grep -Fq -- 'git hash-object --no-filters scripts/ci/verify_llvm_exact_checkout.py' <<< "$mock_step"
 exact_step="$(extract_step 'Require exact tree and preinstalled native toolchain')"
 grep -qxF '          python3 "$RUNNER_TEMP/verify_llvm_exact_checkout.py" "$SOURCE_SHA"' <<< "$exact_step"
+grep -qxF '          python3 "$RUNNER_TEMP/materialize_llvm_exact_checkout.py" "$SOURCE_SHA"' <<< "$exact_step"
 if grep -Fq 'git diff --quiet' <<< "$exact_step"; then
   echo 'unsafe Git diff in exact-source preflight' >&2; exit 1
 fi
-pr_checkout="$(extract_step 'Checkout pinned source tree (never persist auth)')"
+pr_checkout="$(extract_step 'Fetch pinned PR objects into empty sparse checkout (never persist auth)')"
 grep -qxF '          ref: ${{ inputs.source_sha }}' <<< "$pr_checkout"
 grep -qxF '          persist-credentials: false' <<< "$pr_checkout"
+grep -qxF '          filter: blob:limit=134217728' <<< "$pr_checkout"
+grep -qxF '          sparse-checkout-cone-mode: false' <<< "$pr_checkout"
+grep -qxF '          sparse-checkout: |' <<< "$pr_checkout"
+grep -qxF '            /*' <<< "$pr_checkout"
+grep -qxF '            !/*' <<< "$pr_checkout"
 assert_before 'Verify open same-repo PR and exact immutable head before checkout' 'Checkout trusted main for source-free workflow tests'
 assert_before 'Checkout trusted main for source-free workflow tests' 'Execute trusted source-free post-run authorization regression mocks'
-assert_before 'Execute trusted source-free post-run authorization regression mocks' 'Checkout pinned source tree (never persist auth)'
-assert_before 'Checkout pinned source tree (never persist auth)' 'Require exact tree and preinstalled native toolchain'
+assert_before 'Execute trusted source-free post-run authorization regression mocks' 'Fetch pinned PR objects into empty sparse checkout (never persist auth)'
+assert_before 'Fetch pinned PR objects into empty sparse checkout (never persist auth)' 'Require exact tree and preinstalled native toolchain'
 assert_before 'Require exact tree and preinstalled native toolchain' 'Run real ledger, scheduler STOP and pinned physical-heap native suite'
 assert_before 'Run real ledger, scheduler STOP and pinned physical-heap native suite' 'Build actual Oreslang source compiler against LLVM'
 printf 'SOURCEFREE_TRUSTED_CHECKOUT_AND_NATIVE_BEFORE_BUILD=PASS\n'
