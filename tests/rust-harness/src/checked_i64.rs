@@ -234,9 +234,9 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             }
             if name == "portable-overflow-cross-frame-catch" {
                 let emitted = stdout(&compiled);
-                require(emitted.contains("define { i64, i64, i64 } @leaf("),
+                require(emitted.contains("{ i64, i64, i64 } @leaf("),
                     format!("{name}: leaf did not adopt effect-result ABI"))?;
-                require(emitted.contains("define { i64, i64, i64 } @middle("),
+                require(emitted.contains("{ i64, i64, i64 } @middle("),
                     format!("{name}: middle did not adopt transitive effect-result ABI"))?;
                 require(emitted.contains("call.effect.propagate"),
                     format!("{name}: missing cross-frame propagation CFG"))?;

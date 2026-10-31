@@ -45,8 +45,9 @@ std::string field_key(const std::string& receiver, const std::string& field) {
 // caller-owned slot pointers: passing them to nested borrowed parameters is
 // a checked, call-scoped reborrow with no new allocation. Neither address
 // can escape as a result:
-// native functions return only i64, and the ownership pass restricts rt borrow
-// to nonescaping call arguments.
+// ordinary native functions return i64; the restricted private effect ABI
+// returns {value,kind,code}. The ownership pass restricts rt borrow to
+// nonescaping call arguments in either case.
 struct RegionMoveLowering {
     llvm::Value* region = nullptr;
     llvm::FunctionCallee read;
@@ -77,10 +78,9 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
-    // Restricted native i64 effect-return ABI. The map identifies callees
-    // whose LLVM return type is {value, kind, code}; target/slots describe
-    // the current frame's generic propagation edge.
-    const std::unordered_map<std::string, bool>* effect_results = nullptr;
+    // Restricted native i64 effect-return ABI. Callee return type identifies
+    // {value,kind,code}; target/slots describe the current frame's generic
+    // propagation edge.
     llvm::StructType* i64_effect_result_type = nullptr;
     llvm::BasicBlock* effect_propagate_target = nullptr;
     llvm::Value* effect_kind_slot = nullptr;
@@ -755,13 +755,15 @@ llvm::Value* lower(const Expression& expr,
             }
             llvm::Value* call = builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
-            const std::string slot =
-                native_function_slot(expr.name, expr.arguments.size());
-            const bool effect_result = moves && moves->effect_results &&
-                moves->effect_results->at(slot);
-            if (!effect_result) return call;
-            if (!moves->i64_effect_result_type ||
-                    callee->getReturnType() != moves->i64_effect_result_type)
+            auto* effect_type =
+                llvm::dyn_cast<llvm::StructType>(callee->getReturnType());
+            if (!effect_type) return call;
+            if (effect_type->getNumElements() != 3 ||
+                    effect_type->getElementType(0) != i64 ||
+                    effect_type->getElementType(1) != i64 ||
+                    effect_type->getElementType(2) != i64 ||
+                    (moves && moves->i64_effect_result_type &&
+                     effect_type != moves->i64_effect_result_type))
                 throw std::runtime_error(
                     "native effect-result callee has mismatched LLVM ABI");
 
@@ -1265,7 +1267,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
     }
     auto effect_candidate = [&](const Function& fn) {
-        if (wasm32_target || cortex_m_target || fn.exported ||
+        if (wasm32_target || cortex_m_target || !source.module.empty() ||
+                fn.exported || fn.native_internal || !fn.method_owner.empty() ||
                 fn.name == "main" || fn.returns_void ||
                 fn.return_type != ScalarType::I64 ||
                 !fn.return_class.empty() || !fn.result ||
@@ -1350,7 +1353,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             result_type, argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            (fn.native_internal || fn.async_source_i64)
+            (effect_returning || fn.native_internal || fn.async_source_i64)
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
@@ -1557,7 +1560,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
             &record_classes, &record_schemas, record_new, record_get, record_check,
             &class_array_regions, &class_array_parameters, &owning_results};
-        region_moves.effect_results = &effect_results;
         region_moves.i64_effect_result_type = i64_effect_result_type;
         llvm::BasicBlock* effect_return_block = nullptr;
         llvm::Value* frame_effect_kind = nullptr;
