@@ -365,6 +365,14 @@ if(BUILD_TESTING)
             --clang "${ORES_INVERTED_GUEST_CLANG}"
             --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inverted-i64")
     set_tests_properties(native_inverted_i64_guest PROPERTIES TIMEOUT 180)
+    # Actual default compiler and production Program AST path, not the
+    # --experimental-inverted-i64 guest adapter. LLVM IR is linked and run.
+    add_test(NAME native_inverted_production_source_to_native
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inverted_production_guest.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORES_INVERTED_GUEST_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inverted-i64")
+    set_tests_properties(native_inverted_production_source_to_native
+        PROPERTIES TIMEOUT 180)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
