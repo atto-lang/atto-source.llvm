@@ -180,3 +180,30 @@ GCC/Clang local PASS results concern the unchanged standalone scalar
 prototype, not this new actor-lifetime code. All source-org native test
 jobs still fail prior to runner assignment; the first policy/billing/admission
 reason requires an organization administrator, not a compiler fix.
+
+
+## Current-blob isolated native pin verification — 2026-10-31
+
+Locally reconstructed the exact `StateRegionActorLifetimePin.hpp` blob
+`6d31457293157e87df261140885f13f46b19a977` byte-for-byte from
+the source repository and compiled it with stubbed `NativeActorRef`,
+`OresActorArena`, and task-ticket gate **only in the local test harness**.
+The exact, real C++ header was not rewritten or simulated. These stubs are
+NOT the private source runtime, so this is **isolated class-level evidence**:
+
+- GCC 14.2: `-O2 -DNDEBUG` and ASan+UBSan **PASS**
+- Clang 17: `-O2 -DNDEBUG` and ASan+UBSan **PASS**
+- GCC 14.2: `-fsanitize=thread` **PASS**
+
+Each of the five configurations executed 300 pin epochs with 32 competing
+completion observers per epoch. The harness required **one** successful
+release, zero outstanding actor resource loans, rejection of a previously
+retired ticket and rollback on mismatched actor-incarnation admission.
+Output: `EXACT_HEADER_STUBBED_RUNTIME_PASS checks=2400 cycles=300
+completion_threads_per_cycle=32`.
+
+This **does not** execute the production `ActorGroupLifecycle.hpp` loan
+counter, real task-bound gate, native arena destruction or full CMake/CTest.
+It cannot certify complete actor-state retirement, hard real-time, or guest
+compiler behavior. The actual source-org 5-job matrix remains unassigned
+and zero-step.
