@@ -46,6 +46,15 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(oreslang-native-error-slot-v1-test
+        contracts/v1/native-error-slot-v1-test.cpp)
+    target_compile_features(oreslang-native-error-slot-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-error-slot-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_error_slot_v1_layout_contract
+        COMMAND oreslang-native-error-slot-v1-test)
+    set_tests_properties(native_error_slot_v1_layout_contract PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
