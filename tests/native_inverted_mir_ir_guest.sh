@@ -34,12 +34,20 @@ rc=$?
 set -e
 if [ "$rc" -ne 42 ]; then echo "FAIL: closed MIR native exit: $rc"; exit 1; fi
 "$emitter" bounds "$scratch/bounds.ll"
+for guard in 'icmp ult i64' 'call void @llvm.trap()'; do
+ if ! grep -Fq "$guard" "$scratch/bounds.ll"; then
+   echo "FAIL: bounds MIR omitted guard $guard"; exit 1
+ fi
+done
 "$clang" -x ir "$scratch/bounds.ll" -o "$scratch/bounds"
 set +e
 (ulimit -c 0; "$scratch/bounds" >/dev/null 2>&1) >/dev/null 2>&1
 rc=$?
 set -e
-if [ "$rc" -eq 0 ] || [ "$rc" -eq 42 ]; then echo "FAIL: out-of-bounds MIR did not trap: $rc"; exit 1; fi
+# Require an actual LLVM trap signal, not an arbitrary nonzero exit.
+if [ "$rc" -ne 132 ] && [ "$rc" -ne 133 ]; then
+  echo "FAIL: bounds MIR did not terminate with SIGILL/SIGTRAP: $rc"; exit 1
+fi
 for rejected in immutable missing-operand; do
  if "$emitter" "$rejected" "$scratch/$rejected.ll" >/dev/null 2>&1; then
    echo "FAIL: MIR compiler admitted $rejected"; exit 1
