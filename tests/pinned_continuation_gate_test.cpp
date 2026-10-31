@@ -9,6 +9,23 @@ static void check(bool success, const char* description) {
     if (!success) throw std::runtime_error(description);
 }
 int main() {
+    // Complete scheduler-domain / actor-slot / generation identity is
+    // required for HTTP request physical leases, even if a legacy IO ticket
+    // happens to share the same numeric actor_id and operation generation.
+    {
+        const AsyncIoTicket t{42,7,15};
+        PinnedContinuationGate plain(t);
+        check(!plain.matches_request_owner({42,3,7}),
+              "ticket-only I/O gate accidentally authorized request ownership");
+        PinnedContinuationGate actor_bound(t,{42,3,7});
+        check(actor_bound.matches_request_owner({42,3,7}),
+              "registered complete owner identity was lost");
+        check(!actor_bound.matches_request_owner({42,4,7}) &&
+              !actor_bound.matches_request_owner({42,3,8}) &&
+              !actor_bound.matches_request_owner({43,3,7}) &&
+              !actor_bound.matches_request_owner({0,3,7}),
+              "foreign actor slot, domain or incarnation acquired I/O request authority");
+    }
     for (std::uint64_t i = 1; i <= 1200; ++i) {
         AsyncIoTicket token{21, i + 40, i};
         PinnedContinuationGate gate(token);
