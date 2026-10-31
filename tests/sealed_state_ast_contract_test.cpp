@@ -43,15 +43,22 @@ int main() {
     loan.mode = CriticalStateAccessDecl::Mode::Read;
     loan.state_parameter = "s";
     loan.offset = 43;
+    loan.read_fields.push_back("revision");
     actor.critical_state_uses.push_back(loan);
     loan.mode = CriticalStateAccessDecl::Mode::Write;
     loan.offset = 64;
+    loan.written_fields.push_back("revision");
     actor.critical_state_uses.push_back(loan);
 
     REQUIRE(actor.critical_state_uses.size() == 2);
     REQUIRE(actor.critical_state_uses[0].mode == CriticalStateAccessDecl::Mode::Read);
     REQUIRE(actor.critical_state_uses[1].mode == CriticalStateAccessDecl::Mode::Write);
     REQUIRE(actor.critical_state_uses[0].state_parameter == "s");
+    REQUIRE(actor.critical_state_uses[0].read_fields.size() == 1);
+    REQUIRE(actor.critical_state_uses[0].written_fields.empty());
+    REQUIRE(actor.critical_state_uses[1].read_fields.size() == 1);
+    REQUIRE(actor.critical_state_uses[1].written_fields.size() == 1);
+    REQUIRE(actor.critical_state_uses[1].written_fields[0] == "revision");
     REQUIRE(actor.fields.empty());  // no fallthrough to legacy unsound fields
     std::puts("SEALED_STATE_TYPED_AST_CONTRACT_PASS");
 }
