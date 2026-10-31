@@ -56,21 +56,28 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
             throw std::out_of_range("production inverted row index exceeds signed i64");
         switch (operation.kind) {
             case InvertedSourceOperation::Kind::Push:
-                if (!operation.field.empty())
-                    throw std::invalid_argument("inverted push cannot target a field");
+                if (!operation.field.empty() || operation.index != 0 ||
+                        operation.value != 0)
+                    throw std::invalid_argument("invalid inverted push source metadata");
                 plan.push(2);
                 operands.rows.push_back(operation.values);
                 break;
             case InvertedSourceOperation::Kind::WriteField:
+                if (operation.values != std::array<std::int64_t, 2>{})
+                    throw std::invalid_argument("invalid inverted write source metadata");
                 plan.write_runtime_checked(operation.index, operation.field);
                 operands.writes.push_back(operation.value);
                 break;
             case InvertedSourceOperation::Kind::EraseSwap:
-                if (!operation.field.empty())
-                    throw std::invalid_argument("inverted erase cannot target a field");
+                if (!operation.field.empty() || operation.value != 0 ||
+                        operation.values != std::array<std::int64_t, 2>{})
+                    throw std::invalid_argument("invalid inverted erase source metadata");
                 plan.erase_swap(operation.index);
                 break;
             case InvertedSourceOperation::Kind::ReturnRead:
+                if (operation.value != 0 ||
+                        operation.values != std::array<std::int64_t, 2>{})
+                    throw std::invalid_argument("invalid inverted return source metadata");
                 if (i + 1 != source.operations.size())
                     throw std::logic_error("production inverted terminal read must be last");
                 plan.read_runtime_checked(operation.index, operation.field);
