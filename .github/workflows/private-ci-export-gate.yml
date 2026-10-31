@@ -1,15 +1,8 @@
 name: Private CI export authorization self-test
 on:
+  # Required status checks must report for every PR, including docs-only PRs.
+  # Otherwise a path-filtered required check creates an unmergeable PR.
   pull_request:
-    paths:
-      - scripts/private_ci_export_gate.py
-      - tests/test_private_ci_export_gate.py
-      - tests/test_atomic_ref_cleanup_local.py
-      - scripts/publish-private-ci-source-v3.py
-      - scripts/test-publish-private-ci-source-v3.py
-      - .github/private-ci-approved-repositories.txt
-      - .github/private-ci-carrier-contracts.json
-      - .github/workflows/private-ci-export-gate.yml
   push:
     branches: [main]
     paths:
