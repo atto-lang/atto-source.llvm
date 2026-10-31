@@ -2535,6 +2535,9 @@ if(BUILD_TESTING)
         --diagnostic "positional argument cannot follow named argument")
     oreslang_contract_test(native_named_call_mut_borrow_conflict named-call-mut-borrow-after-loan-reject.ores
         --diagnostic "field read conflicts with active mutable borrow")
+    oreslang_contract_test(native_named_member_positional_array_baseline
+        named-member-array-positional-main.ores
+        --ir "define i64 @__oreslang_guest_main")
     # Member-call parsing is a separate syntax path. It must enforce the
     # same duplicate/ordering constraints as direct calls, and native array
     # operations must reject labels until signature-aware permutation exists.
