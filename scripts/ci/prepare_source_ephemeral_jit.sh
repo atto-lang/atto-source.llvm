@@ -49,6 +49,14 @@ jq -e '
 ' <<< "$protection" >/dev/null || {
   echo "DENIED: protected main does not enforce CODEOWNER/stale/admin/no-bypass" >&2; exit 1;
 }
+# Refuse a modified local provisioner, even if main workflow is reviewed.
+# Validate exactly the immutable Git blob of this script on protected source main.
+command -v git >/dev/null
+trusted_helper_sha="$(gh api "repos/${repository}/contents/scripts/ci/prepare_source_ephemeral_jit.sh?ref=main" --jq '.sha')"
+local_helper_sha="$(git hash-object -- "$0")"
+[[ "$trusted_helper_sha" =~ ^[0-9a-f]{40}$ && "$local_helper_sha" == "$trusted_helper_sha" ]] || {
+  echo "DENIED: local admin helper differs from protected reviewed main" >&2; exit 1;
+}
 workflow_meta="$(gh api "repos/${repository}/contents/.github/workflows/${workflow_file}?ref=main")"
 jq -e --arg path ".github/workflows/$workflow_file" '.path==$path and .type=="file"' \
   <<< "$workflow_meta" >/dev/null || { echo "DENIED: main workflow not present" >&2; exit 1; }
