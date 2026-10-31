@@ -39,6 +39,49 @@ std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
 }
 
+constexpr std::uint32_t kArithmeticOverflowErrorCode = 65537u;
+constexpr std::uint8_t kErrorEffectThrow = 1u;
+
+bool native_error_slot_scalar_function(const Function& fn) {
+    if (fn.returns_void || fn.return_type != ScalarType::I64 ||
+            !fn.pending_return_type_alias.empty() || !fn.return_class.empty() ||
+            !fn.return_sum.empty() || !fn.generic_parameters.empty() ||
+            !fn.locals.empty() || !fn.statements.empty() ||
+            !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+            !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+            fn.async_source_i64 || !fn.ready_await_actor.empty() ||
+            !fn.done_await_actor.empty() || !fn.ready_future_name.empty() ||
+            !fn.ready_future_actor.empty() || !fn.actor_sends.empty() ||
+            !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+            !fn.actor_field_writes.empty() || fn.scalar_while ||
+            fn.caught_throw_value || !fn.catch_binding.empty() ||
+            !fn.caught_throw_defers.empty() || !fn.method_owner.empty() ||
+            fn.has_declared_effects || !fn.result)
+        return false;
+    return std::all_of(fn.parameters.begin(), fn.parameters.end(),
+        [](const Parameter& parameter) {
+            return parameter.mode == Parameter::Mode::Value &&
+                parameter.scalar_type == ScalarType::I64 &&
+                parameter.class_name.empty() &&
+                parameter.generic_type.empty() &&
+                parameter.pending_type_alias.empty() &&
+                parameter.sum_type.empty();
+        });
+}
+
+bool native_error_slot_scalar_program(const Program& source) {
+    if (!source.imports.empty() || !source.cooperative_loops.empty() ||
+            !source.generators.empty() || !source.namespace_name.empty() ||
+            !source.classes.empty() || !source.actors.empty() ||
+            !source.contracts.empty() || !source.type_only_declarations.empty() ||
+            !source.type_constraint_descriptors.empty() ||
+            !source.conforms.empty() || !source.sum_types.empty() ||
+            source.functions.empty())
+        return false;
+    return std::all_of(source.functions.begin(), source.functions.end(),
+        native_error_slot_scalar_function);
+}
+
 // Owned i64 parameters receive stack slots so the only permitted loans can
 // pass their addresses through the call ABI. Borrowed inputs already hold
 // caller-owned slot pointers: passing them to nested borrowed parameters is
@@ -71,6 +114,15 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+
+    // First allocation-free native guest Error propagation slice. Enabled
+    // only for a whole-program pure synchronous scalar profile so no actor,
+    // task, ownership, cleanup or public ABI edge can accidentally observe a
+    // partially-threaded error continuation.
+    llvm::StructType* error_slot_type = nullptr;
+    llvm::Value* error_slot = nullptr;
+    llvm::BasicBlock* error_return = nullptr;
+    const std::unordered_set<std::string>* error_slot_functions = nullptr;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -124,22 +176,56 @@ llvm::AllocaInst* entry_alloca(llvm::IRBuilder<>& builder, llvm::Type* type, llv
 llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
                                       llvm::Intrinsic::ID operation,
                                       llvm::Value* left, llvm::Value* right,
-                                      const std::string& name) {
+                                      const std::string& name,
+                                      const RegionMoveLowering* moves) {
     // Source int follows the shared no-wrapping i64 contract. Use defined
-    // overflow intrinsics, never poison-producing nsw arithmetic. A target
-    // trap is the current failure ABI; typed actor errors remain separate.
+    // overflow intrinsics, never poison-producing nsw arithmetic. In the
+    // conservative pure-scalar profile, overflow publishes the shared
+    // NativeErrorSlotV1 identity and returns through the hidden error
+    // continuation. Every other profile retains the previous target trap
+    // until its cleanup/effect ABI is threaded end-to-end.
     auto* module = builder.GetInsertBlock()->getModule();
     auto* parent = builder.GetInsertBlock()->getParent();
     auto* intrinsic = llvm::Intrinsic::getDeclaration(module, operation, {left->getType()});
     auto* pair = builder.CreateCall(intrinsic, {left, right}, name + ".checked");
     auto* value = builder.CreateExtractValue(pair, {0}, name + ".value");
     auto* overflow = builder.CreateExtractValue(pair, {1}, name + ".overflow");
-    auto* failed = llvm::BasicBlock::Create(builder.getContext(), name + ".trap", parent);
+    auto* failed = llvm::BasicBlock::Create(builder.getContext(), name + ".overflow", parent);
     auto* proceed = llvm::BasicBlock::Create(builder.getContext(), name + ".ok", parent);
     builder.CreateCondBr(overflow, failed, proceed);
     builder.SetInsertPoint(failed);
-    builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
-    builder.CreateUnreachable();
+    if (moves && moves->error_slot_type && moves->error_slot &&
+            moves->error_return) {
+        auto* i32 = llvm::Type::getInt32Ty(builder.getContext());
+        auto* i8 = llvm::Type::getInt8Ty(builder.getContext());
+        auto* i16 = llvm::Type::getInt16Ty(builder.getContext());
+        auto* i64 = llvm::Type::getInt64Ty(builder.getContext());
+        builder.CreateStore(
+            llvm::ConstantInt::get(i32, kArithmeticOverflowErrorCode),
+            builder.CreateStructGEP(moves->error_slot_type,
+                                    moves->error_slot, 0, name + ".error.code"));
+        builder.CreateStore(
+            llvm::ConstantInt::get(i8, kErrorEffectThrow),
+            builder.CreateStructGEP(moves->error_slot_type,
+                                    moves->error_slot, 1, name + ".error.effect"));
+        builder.CreateStore(
+            llvm::ConstantInt::get(i8, 0),
+            builder.CreateStructGEP(moves->error_slot_type,
+                                    moves->error_slot, 2, name + ".error.flags"));
+        builder.CreateStore(
+            llvm::ConstantInt::get(i16, 0),
+            builder.CreateStructGEP(moves->error_slot_type,
+                                    moves->error_slot, 3, name + ".error.reserved"));
+        builder.CreateStore(
+            llvm::ConstantInt::get(i64, 0),
+            builder.CreateStructGEP(moves->error_slot_type,
+                                    moves->error_slot, 4, name + ".error.payload"));
+        builder.CreateBr(moves->error_return);
+    } else {
+        builder.CreateCall(
+            llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+        builder.CreateUnreachable();
+    }
     builder.SetInsertPoint(proceed);
     return value;
 }
@@ -369,7 +455,7 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
-                llvm::ConstantInt::get(i64, 0), value, "neg");
+                llvm::ConstantInt::get(i64, 0), value, "neg", moves);
         }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
@@ -409,19 +495,19 @@ llvm::Value* lower(const Expression& expr,
                 return builder.CreateCall(runtime, {left, right}, "string.concat");
             }
             return checked_signed_arithmetic(builder, llvm::Intrinsic::sadd_with_overflow,
-                left, right, "add");
+                left, right, "add", moves);
         }
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
-                left, right, "sub");
+                left, right, "sub", moves);
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
-                left, right, "mul");
+                left, right, "mul", moves);
         }
         case Expression::Kind::Remainder: {
             // The frontend normalizes syntactically signed literal divisors.
@@ -574,7 +660,12 @@ llvm::Value* lower(const Expression& expr,
                 ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
             const bool owning = moves && moves->owning_results &&
                 moves->owning_results->at(native_function_slot(expr.name, expr.arguments.size()));
-            if (callee->arg_size() != expr.arguments.size() + hidden.size() + (owning ? 2 : 0)) {
+            const std::string call_slot =
+                native_function_slot(expr.name, expr.arguments.size());
+            const bool error_slot_call = moves && moves->error_slot_functions &&
+                moves->error_slot_functions->count(call_slot);
+            if (callee->arg_size() != expr.arguments.size() + hidden.size() +
+                    (owning ? 2 : 0) + (error_slot_call ? 1 : 0)) {
                 throw std::runtime_error("native named call argument count mismatch");
             }
             if (!expr.argument_names.empty()
@@ -632,8 +723,37 @@ llvm::Value* lower(const Expression& expr,
                 ordered.push_back(moves->result_destination);
                 ordered.push_back(moves->result_region);
             }
-            return builder.CreateCall(callee, ordered,
+            if (error_slot_call) {
+                if (!moves->error_slot || !moves->error_slot_type ||
+                        !moves->error_return)
+                    throw std::runtime_error(
+                        "native error-slot call lacks caller continuation");
+                ordered.push_back(moves->error_slot);
+            }
+            auto* call = builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
+            if (error_slot_call) {
+                auto* code = builder.CreateLoad(
+                    llvm::Type::getInt32Ty(builder.getContext()),
+                    builder.CreateStructGEP(
+                        moves->error_slot_type, moves->error_slot, 0,
+                        "call.error.code.addr"),
+                    "call.error.code");
+                auto* failed = llvm::BasicBlock::Create(
+                    builder.getContext(), "call.error.propagate",
+                    builder.GetInsertBlock()->getParent());
+                auto* ok = llvm::BasicBlock::Create(
+                    builder.getContext(), "call.error.ok",
+                    builder.GetInsertBlock()->getParent());
+                builder.CreateCondBr(
+                    builder.CreateICmpNE(
+                        code, llvm::ConstantInt::get(code->getType(), 0)),
+                    failed, ok);
+                builder.SetInsertPoint(failed);
+                builder.CreateBr(moves->error_return);
+                builder.SetInsertPoint(ok);
+            }
+            return call;
         }
     }
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
