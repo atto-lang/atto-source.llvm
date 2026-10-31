@@ -65,4 +65,4 @@ jobs:
           grep -Fq '"name" : "native_namespace_lifecycle_fail_closed"' build/namespace-ctest.json
 
       - name: Execute graph, direct-pinned, locked-manifest, and lifecycle gates
-        run: ctest --test-dir build --output-on-failure --timeout 90 -R '^(native_namespace_package_identity_source_only|native_pinned_namespace_package_exit_43|native_locked_manifest_namespace_exit_43|native_namespace_lifecycle_fail_closed)
+        run: ctest --test-dir build --output-on-failure --timeout 90 -R 'native_namespace_package_identity_source_only|native_pinned_namespace_package_exit_43|native_locked_manifest_namespace_exit_43|native_namespace_lifecycle_fail_closed'
