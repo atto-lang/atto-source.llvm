@@ -3,6 +3,7 @@
 // Compiles a bounded Oreslang i64 inverted struct and its explicit InvertedArray
 // into physical LLVM IR columns. Main compiler admission remains fail-closed.
 // This source-only adapter must be retired when the typed HIR/MIR path lands.
+#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <optional>
 #include "oreslang/types/InvertedTypedPlan.hpp"
 #include "oreslang/types/InvertedTypedMir.hpp"
+#include "oreslang/types/InvertedMirLlvmI64.hpp"
 #include <stdexcept>
 #include <system_error>
 #include <string>
@@ -88,6 +90,8 @@ class Compiler {
     std::vector<std::string> fields_;
     oreslang::InvertedStructDecl typed_decl_;
     std::optional<oreslang::dop::hir::LinearPlan> typed_plan_;
+    std::vector<std::array<std::int64_t, 2>> mir_rows_;
+    std::vector<std::int64_t> mir_writes_;
     std::size_t capacity_ = 0;
     std::string instructions_;
     std::size_t serial_ = 0;
@@ -240,6 +244,10 @@ class Compiler {
             }
             need(")"); need(";");
             typed_plan_->push(values.size());
+            // The two-column slice uses verified MIR as the sole source of
+            // LLVM IR; retain each guest operand in source evaluation order.
+            if (fields_.size() == 2)
+                mir_rows_.push_back({values[0], values[1]});
             const auto length = temp();
             add(length + " = load i64, ptr %length");
             guard(length, std::to_string(capacity_));
@@ -257,6 +265,7 @@ class Compiler {
             const auto value = integer();
             need(")"); need(";");
             typed_plan_->write_runtime_checked(idx, fields_[col]);
+            if (fields_.size() == 2) mir_writes_.push_back(value);
             const auto address = pointer(col, row_index(idx));
             add("store i64 " + number(value) + ", ptr " + address);
         } else {
@@ -294,6 +303,16 @@ public:
         // MIR before returning ANY LLVM IR. Main production codegen still
         // rejects these declarations; this is explicitly opt-in.
         const auto verified_mir = oreslang::dop::mir::Module::lower(*typed_plan_);
+        if (fields_.size() == 2) {
+            // Real source -> checked HIR -> independently verified MIR ->
+            // emitter-owned physical LLVM IR. This path remains opt-in:
+            // regular production source admission stays fail closed.
+            return oreslang::dop::mir::emit_native_i64_pair_ir(
+                verified_mir, oreslang::dop::mir::I64PairIrOperands{
+                    mir_rows_, mir_writes_});
+        }
+        // One or 3..8 columns still use the older, explicitly experimental
+        // checked source adapter; do not imply general MIR codegen parity.
         std::size_t expected_bounds = 0;
         for (const auto& op : verified_mir.instructions()) {
             if (op.kind == oreslang::dop::hir::OpKind::Push ||
