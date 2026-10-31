@@ -38,17 +38,27 @@ if ! grep -Fq 'call void @llvm.trap()' "$tmp/bounds.ll" ||
     exit 1
 fi
 "$clang" -O2 -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
-set +e
-(ulimit -c 0; "$tmp/bounds" >/dev/null 2>&1) >/dev/null 2>&1
-actual=$?
-set -e
-# llvm.trap must terminate by a trap signal (SIGILL or SIGTRAP),
-# not any nonzero status such as a missing binary, loader failure or abort.
-# On Bash/Linux these two signals produce 128+4 and 128+5.
-if [ "$actual" -ne 132 ] && [ "$actual" -ne 133 ]; then
-    echo "FAIL: production bounds guest did not terminate with SIGILL/SIGTRAP (exit $actual)" >&2
-    exit 1
-fi
+# A shell status of 132/133 is ambiguous: a program can return that exit code
+# without receiving SIGILL/SIGTRAP. Python retains the actual signal number.
+python3 - "$tmp/bounds" <<'PY'
+import resource
+import signal
+import subprocess
+import sys
+
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+try:
+    result = subprocess.run(
+        [sys.argv[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=15, check=False
+    )
+except (OSError, subprocess.TimeoutExpired) as exc:
+    raise SystemExit(f"FAIL: bounds guest did not execute: {exc}")
+if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
+    raise SystemExit(
+        f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
+    )
+PY
 
 # All unsupported source must reject before emitting a single byte of IR.
 cat > "$tmp/immutable.ores" <<'ORES'

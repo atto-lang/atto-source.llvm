@@ -40,14 +40,27 @@ for guard in 'icmp ult i64' 'call void @llvm.trap()'; do
  fi
 done
 "$clang" -x ir "$scratch/bounds.ll" -o "$scratch/bounds"
-set +e
-(ulimit -c 0; "$scratch/bounds" >/dev/null 2>&1) >/dev/null 2>&1
-rc=$?
-set -e
-# Require an actual LLVM trap signal, not an arbitrary nonzero exit.
-if [ "$rc" -ne 132 ] && [ "$rc" -ne 133 ]; then
-  echo "FAIL: bounds MIR did not terminate with SIGILL/SIGTRAP: $rc"; exit 1
-fi
+# A shell status of 132/133 is ambiguous: a program can return that exit code
+# without receiving SIGILL/SIGTRAP. Python retains the actual signal number.
+python3 - "$scratch/bounds" <<'PY'
+import resource
+import signal
+import subprocess
+import sys
+
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+try:
+    result = subprocess.run(
+        [sys.argv[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=15, check=False
+    )
+except (OSError, subprocess.TimeoutExpired) as exc:
+    raise SystemExit(f"FAIL: bounds guest did not execute: {exc}")
+if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
+    raise SystemExit(
+        f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
+    )
+PY
 for rejected in immutable missing-operand; do
  if "$emitter" "$rejected" "$scratch/$rejected.ll" >/dev/null 2>&1; then
    echo "FAIL: MIR compiler admitted $rejected"; exit 1

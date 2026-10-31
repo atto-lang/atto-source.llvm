@@ -97,3 +97,63 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           ctest --test-dir build/inverted-i64-standalone --output-on-failure --timeout 180
+
+  production-compiler-and-guest:
+    name: production oreslang-llvmc / ${{ matrix.compiler }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang-18
+            cxx: clang++-18
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact production source commit and tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+      - name: Install native LLVM SDK and Ninja
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends llvm-18-dev clang-18 ninja-build
+          test -f /usr/lib/llvm-18/lib/cmake/llvm/LLVMConfig.cmake
+      - name: Configure complete native project, not the standalone adapter
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/inverted-production -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+            -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+      - name: Build actual production compiler and narrow admission targets
+        run: |
+          cmake --build build/inverted-production --parallel 2 --target \
+            oreslang-llvmc oreslang-native-inverted-struct-ast-test \
+            oreslang-inverted-production-mir-test
+      - name: Execute default-compiler guest, parser AST and MIR regressions
+        run: |
+          ctest --test-dir build/inverted-production \
+            -R 'native_inverted_(production_source_to_native|struct_schema_ast)|inverted_production_source_mir_cpp17' \
+            --output-on-failure --timeout 180
+      - name: Build full native CTest tree
+        run: cmake --build build/inverted-production --parallel 2
+      - name: Execute complete native CTest suite
+        run: ctest --test-dir build/inverted-production --output-on-failure --timeout 180 -j 2
