@@ -26,6 +26,14 @@ case "$1" in
     jq -n --arg repo "$EXPECTED_REPO" '{id:123,full_name:$repo,private:true,archived:false,disabled:false,fork:false}' ;;
   "repos/$EXPECTED_REPO/branches/main")
     if [[ "${MOCK_SCENARIO:-}" == unprotected ]]; then echo '{"name":"main","protected":false}'; else echo '{"name":"main","protected":true}'; fi ;;
+  "repos/$EXPECTED_REPO/branches/main/protection")
+    if [[ "${MOCK_SCENARIO:-}" == weak_review ]]; then
+      echo '{"required_pull_request_reviews":{"require_code_owner_reviews":false,"dismiss_stale_reviews":true,"required_approving_review_count":1},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
+    elif [[ "${MOCK_SCENARIO:-}" == admin_bypass ]]; then
+      echo '{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[{"login":"admin"}],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
+    else
+      echo '{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
+    fi ;;
   "repos/$EXPECTED_REPO/contents/.github/workflows/$EXPECTED_WORKFLOW?ref=main")
     jq -n --arg path ".github/workflows/$EXPECTED_WORKFLOW" '{path:$path,type:"file"}' ;;
   orgs/ores-truffle-oreslang/actions/runner-groups/7)
@@ -50,7 +58,7 @@ EXPECTED_WORKFLOW="llvm-source-exact-ephemeral.yml"
 EXPECTED_LABEL="oreslang-llvm-ephemeral-v1"
 export PATH="$temp/bin:$original_path"
 export EXPECTED_REPO EXPECTED_WORKFLOW EXPECTED_LABEL
-for scenario in unprotected overbroad_group extra_repository post_failure; do
+for scenario in unprotected weak_review admin_bypass overbroad_group extra_repository post_failure; do
   if MOCK_SCENARIO="$scenario" bash "$helper" 7 "$temp/secure/$scenario.b64" >"$temp/log" 2>&1; then
     echo "UNSAFE_JIT_ADMISSION=$scenario" >&2; exit 1
   fi
