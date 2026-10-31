@@ -37,16 +37,32 @@ unique IR definitions and native call sites. The test then removes the source fi
 before executing the AOT binary. This proves an existing *module* codegen primitive
 only when the compiler-backed workflow actually executes.
 
-Neither the typed namespace resolver nor that executable **module-import** fixture
-parses `import namespace`, verifies its v2 package/lockfile, invokes the namespace
-resolver from the CLI pipeline or lowers an actual namespace guest call. No native
-namespace execution result is claimed.
+The native parser now **recognizes** the syntax
+`import namespace billing as payments from "+/";` and the analogous quoted
+pinned alias selector, capturing a distinct `NamespaceImportSyntax` record.
+It validates basic lexical selector bounds and local alias collisions.
+**It always rejects nonempty namespace imports before emitting IR.**
+The native `ModuleLoader` and host namespace graph independently reject
+unverified embedded namespace-import AST records, so future parser changes
+cannot silently reuse module-import source authority. Compiler-negative
+fixtures assert no LLVM output for unverified imports, traversal selectors,
+empty selectors and conflicting aliases. Parser recognition is not package
+authentication or executable namespace support.
 
-Required next vertical slice: package-format source inventory + pinned aliases;
-parse exact import ns a from 'pkg:foo'; with a typed AST selector; compile all
-verified namespace files with safe canonical identity; check exports/visibility
-and callable types; lower qualified cross-unit call to LLVM; execute actual
-guest fixture returning 43; test misbinding, cycles, symlink escapes, stale ABI.
+The separate **module-import** guest fixture does not verify a v2 namespace
+manifest/lockfile, connect the host namespace resolver to the compiler, or
+lower any actual namespace guest call. No native namespace execution result
+is claimed. The existing v1 project-root importer also now refuses symlinked
+package manifest markers, including same-directory aliases; it is **not**
+a substitute for authenticated v2 package admission.
+
+Required next vertical slice: strict v2 package-format source inventory,
+immutable source digests and pinned aliases; bind the parsed namespace AST to
+that inventory; compile all verified namespace sources under physical owner
+identity; check exports/visibility and callable types; lower qualified
+cross-unit scalar calls to LLVM; execute an actual namespace guest fixture
+returning 43; test misbinding, init lifecycle, cycles, symlink escapes and
+stale ABI.
 
 Shared source-language design: oreslang-common-source PR #189.
 Java parser/source-graph counterpart: oreslang-source.java PR #2255.
