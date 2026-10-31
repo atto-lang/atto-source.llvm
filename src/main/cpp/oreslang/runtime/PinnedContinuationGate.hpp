@@ -86,15 +86,64 @@ public:
                 std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
-    // Must be called by the lifetime owner AFTER all live loans were released,
-    // the I/O broker ACK'd, and one guest cleanup/resume TURN FINISHED.
+    // Atomic request-binding admission and retirement use ONE state word.
+    // 0 = no binding, 1 = one live request-owned physical lease,
+    // 2 = retired. This prevents a newly attached request from racing
+    // try_retire(), and prohibits two distinct requests sharing one I/O gate.
+    // No mutex, allocation, or guest execution occurs in these operations.
+    bool try_bind_request(AsyncIoTicket ticket) noexcept {
+        if (!valid(ticket) ||
+            terminal_.load(std::memory_order_acquire) != AsyncIoTerminal::pending)
+            return false;
+        unsigned expected=0;
+        if (!request_binding_.compare_exchange_strong(
+                expected,1,std::memory_order_acq_rel,
+                std::memory_order_acquire)) return false;
+        if (terminal_.load(std::memory_order_acquire) != AsyncIoTerminal::pending) {
+            abort_request_binding(ticket);
+            return false;
+        }
+        return true;
+    }
+
+    // Only the admission producer may call this BEFORE publishing an IoLease,
+    // if request registry pinning failed or terminal state changed mid-bind.
+    // An already-published request lease MUST use try_retire_bound_request().
+    bool abort_request_binding(AsyncIoTicket ticket) noexcept {
+        if (!valid(ticket)) return false;
+        unsigned expected=1;
+        return request_binding_.compare_exchange_strong(
+                expected,0,std::memory_order_acq_rel,
+                std::memory_order_acquire);
+    }
+
+    // Must be called by the lifetime owner AFTER live loans release, broker
+    // ACK and a distinct guest cleanup/resume turn FINISHED.
     bool try_retire(AsyncIoTicket ticket) noexcept {
-        if (!valid(ticket) || !broker_quiesced_.load(std::memory_order_acquire)
-                || !resume_finished_.load(std::memory_order_acquire)
-                || loans_.load(std::memory_order_acquire) != 0) return false;
-        bool old = false;
-        return retired_.compare_exchange_strong(old, true,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+        if (!ready_to_retire(ticket)) return false;
+        unsigned expected=0;
+        if (!request_binding_.compare_exchange_strong(
+                expected,2,std::memory_order_acq_rel,
+                std::memory_order_acquire)) return false;
+        retired_.store(true,std::memory_order_release);
+        return true;
+    }
+
+    // Physical owner of a registered request: never release its registry pin
+    // until retirement has acknowledged the exact bound operation. The normal
+    // try_retire path cannot retire an I/O gate with a live request pin.
+    bool try_retire_bound_request(AsyncIoTicket ticket) noexcept {
+        if (!ready_to_retire(ticket)) return false;
+        unsigned expected=1;
+        if (!request_binding_.compare_exchange_strong(
+                expected,2,std::memory_order_acq_rel,
+                std::memory_order_acquire)) return false;
+        retired_.store(true,std::memory_order_release);
+        return true;
+    }
+
+    unsigned request_binding_state() const noexcept {
+        return request_binding_.load(std::memory_order_acquire);
     }
 
     // Trusted host bridges may only attach a physical request lease to the
@@ -105,6 +154,13 @@ public:
     std::uint32_t loan_state() const noexcept { return loans_.load(std::memory_order_acquire); }
 
 private:
+    bool ready_to_retire(AsyncIoTicket ticket) const noexcept {
+        return valid(ticket) &&
+            broker_quiesced_.load(std::memory_order_acquire) &&
+            resume_finished_.load(std::memory_order_acquire) &&
+            loans_.load(std::memory_order_acquire)==0;
+    }
+
     bool valid(AsyncIoTicket ticket) const noexcept {
         return ticket.actor_id && ticket.generation && ticket.operation_id
             && ticket.actor_id == ticket_.actor_id
@@ -118,5 +174,6 @@ private:
     std::atomic<bool> resume_claimed_{false};
     std::atomic<bool> resume_finished_{false};
     std::atomic<bool> retired_{false};
+    std::atomic<unsigned> request_binding_{0};
 };
 } // namespace oreslang::runtime
