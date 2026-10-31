@@ -61,6 +61,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-db-wal-physical-pin-integration-test)
     set_tests_properties(native_db_wal_physical_pin_integration_host_only
         PROPERTIES TIMEOUT 30)
+    # Trusted host-only validated ODB1 append/fdatasync and process reopen.
+    # No guest authority, commit ACK or physical power-cut proof.
+    add_executable(oreslang-native-db-wal-validated-append-test
+        tests/native_db_wal_validated_append_test.cpp)
+    target_include_directories(oreslang-native-db-wal-validated-append-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-db-wal-validated-append-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_validated_append_host_only
+        COMMAND oreslang-native-db-wal-validated-append-test)
+    set_tests_properties(native_db_wal_validated_append_host_only PROPERTIES TIMEOUT 30)
     # Host-only ODB1 v1 frame integrity and shard identity checks.
     # This is not authenticated guest WAL append or durable ACK evidence.
     add_executable(oreslang-native-db-wal-frame-v1-test
