@@ -10,6 +10,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/CriticalStateLoan.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp'
       - 'tests/actor_state_scope_test.c'
+      - 'tests/contract.py'
       - 'tests/source_actor_e2e.py'
       - 'tests/native_isolated_sealed_state_compiled_guest.py'
       - 'tests/sealed_state_compiled_guest.rs'
@@ -17,6 +18,14 @@ on:
       - 'tests/native_isolated_sealed_state_scheduler_guest_test.c'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVM.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorFuture.c'
+      - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.c'
+      - 'src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c'
+      - 'src/main/cpp/oreslang/runtime/NativeContinuationStore.c'
+      - 'src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c'
+      - 'src/main/cpp/oreslang/runtime/NativeLogicalTrace.c'
       - 'tests/critical_handle_state_contract_test.cpp'
       - 'tests/critical_state_loan_bridge_test.cpp'
       - 'tests/native_actor_execution_ledger_test.cpp'
@@ -129,10 +138,19 @@ jobs:
             tests/native_isolated_sealed_state_scheduler_guest_test.c \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+            src/main/cpp/oreslang/runtime/NativeOresVM.c \
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c \
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c \
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c \
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c \
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c \
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c \
             tests/fixtures/source-isolated-actor-sealed-write.ores \
             tests/fixtures/source-isolated-actor-sealed-read.ores \
             tests/fixtures/source-isolated-actor-sealed-write-bracket.ores \
             tests/fixtures/source-isolated-actor-sealed-read-bracket.ores \
+            tests/fixtures/source-isolated-actor-sealed-bracket-spacing-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-bracket-inner-spacing-reject.ores \
             tests/fixtures/source-isolated-actor-sealed-write-actor-only.ores \
             tests/fixtures/source-isolated-actor-sealed-read-actor-only.ores \
             tests/fixtures/source-isolated-actor-sealed-read-mutation-reject.ores \

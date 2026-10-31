@@ -1342,8 +1342,18 @@ private:
                 if (token_.offset != critical_offset + 9)
                     fail("sealed handle_state requires contiguous critical-read/write modifier");
                 access = identifier();
-            } else if (accept("[")) {
+            } else if (token_.text == "[") {
+                if (token_.offset != critical_offset + 8)
+                    fail("sealed handle_state requires contiguous critical[read/write] modifier");
+                const std::size_t bracket_offset = token_.offset;
+                require("[");
+                if (token_.offset != bracket_offset + 1)
+                    fail("sealed handle_state requires contiguous critical[read/write] modifier");
+                const std::size_t access_offset = token_.offset;
                 access = identifier();
+                if (token_.text != "]" ||
+                        token_.offset != access_offset + access.size())
+                    fail("sealed handle_state requires contiguous critical[read/write] modifier");
                 require("]");
             } else {
                 fail("native sealed handle_state requires critical-read/write or critical[read/write]");
