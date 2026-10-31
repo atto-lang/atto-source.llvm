@@ -1,9 +1,11 @@
 #pragma once
 
 #include "oreslang/frontend/PackageNamespaceGraph.hpp"
+#include "oreslang/frontend/VerifiedNamespaceDependencyLockV2.hpp"
 #include "oreslang/frontend/VerifiedNamespaceSourceSnapshotV2.hpp"
 #include <functional>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -21,12 +23,13 @@ struct VerifiedNamespacePackageInputV2 {
     const VerifiedNamespaceSourceSnapshotV2* snapshot = nullptr;
 };
 
-// Single- and multi-package same-workspace verification. External alias
-// imports must remain denied until a pinned dependency lock/source graph
-// authenticates the alias-to-package-instance relation.
+// External aliases are admitted only through a sealed lockfile whose hash
+// was independently authorized. The owner set MUST still match the
+// physically verified snapshots supplied in this specific invocation.
 inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
         const std::vector<VerifiedNamespacePackageInputV2>& bundles,
-        const NamespaceParseCapturedSourceV2& parse_captured_source) {
+        const NamespaceParseCapturedSourceV2& parse_captured_source,
+        const VerifiedNamespaceDependencyLockV2* verified_lock = nullptr) {
     if (!parse_captured_source || bundles.empty() || bundles.size() > 33)
         throw std::invalid_argument("v2 namespace requires bounded verified snapshots and host parser");
 
@@ -34,6 +37,7 @@ inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
     std::vector<std::pair<std::string, std::string>> owned_ids;
     std::vector<const std::string*> captured_bytes;
     std::map<std::string, std::string> observed_owner;
+    std::set<std::string> physical_owners;
     for (const auto& bundle : bundles) {
         if (!bundle.snapshot)
             throw std::invalid_argument("v2 namespace package snapshot missing");
@@ -54,6 +58,7 @@ inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
             // header, source path, working directory or global spelling.
             const std::string owner = "v2:" + verified.manifest_sha256() + ":"
                 + verified.sources_sha256() + ":" + entry.first;
+            physical_owners.insert(owner);
             for (const auto& relative : entry.second) {
                 const auto found = files.find(relative);
                 if (found == files.end())
@@ -68,6 +73,16 @@ inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
     }
     if (owned_ids.size() != source_count)
         throw std::invalid_argument("v2 namespace source inventory does not equal captured bytes");
+    if (verified_lock) {
+        for (const auto& [importer, aliases] : verified_lock->alias_pins()) {
+            if (!physical_owners.count(importer))
+                throw std::invalid_argument("v2 namespace locked importer lacks physical verified snapshot");
+            for (const auto& [alias, provider] : aliases) {
+                if (!namespace_lock_name_v2(alias) || !physical_owners.count(provider))
+                    throw std::invalid_argument("v2 namespace locked target lacks physical verified snapshot");
+            }
+        }
+    }
 
     // Reserve storage before linking: PackageNamespaceGraph takes temporary
     // pointers into these checked native ASTs and must not observe reallocations.
@@ -79,9 +94,16 @@ inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
         if (!program.imports.empty())
             throw std::invalid_argument("v2 namespace legacy module imports lack verified ownership");
         for (const auto& imported : program.namespace_imports) {
-            if (imported.package_selector != "+/")
-                throw std::invalid_argument(
-                    "v2 namespace external dependency imports require verified lockfile pins");
+            if (imported.package_selector != "+/") {
+                if (!verified_lock)
+                    throw std::invalid_argument(
+                        "v2 namespace external dependency imports require verified lockfile pins");
+                const auto owner = verified_lock->alias_pins().find(owned_ids[i].second);
+                if (owner == verified_lock->alias_pins().end() ||
+                        owner->second.count(imported.package_selector) == 0)
+                    throw std::invalid_argument(
+                        "v2 namespace external dependency imports require verified lockfile pins");
+            }
             imports.push_back({owned_ids[i].first, imported.package_selector,
                 imported.namespace_name, imported.local_name});
             if (imports.size() > 4096)
@@ -98,9 +120,11 @@ inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
     for (std::size_t i = 0; i < owned_ids.size(); ++i)
         owned.push_back({owned_ids[i].first, owned_ids[i].second, &parsed[i]});
 
-    // No ambient package alias map. The separate v2 dependency pin/lock
-    // authority must be implemented and verified before adding external pins.
-    return link_package_namespaces(owned, {}, imports);
+    // Never infer an alias from source spelling or a global provider search.
+    // The lock is independently pinned and has been checked against all
+    // physical owner instances before becoming a graph input.
+    return link_package_namespaces(
+        owned, verified_lock ? verified_lock->alias_pins() : PackageAliasPins{}, imports);
 }
 
 // Production parser composition is deliberately host-only and returns only
@@ -108,11 +132,12 @@ inline PackageNamespaceGraph link_verified_namespace_snapshots_v2(
 // lowering through this path. Once exact-head tests qualify the parser
 // bridge, codegen must still authorize each scalar call independently.
 inline PackageNamespaceGraph link_verified_native_namespace_snapshots_v2(
-        const std::vector<VerifiedNamespacePackageInputV2>& bundles) {
+        const std::vector<VerifiedNamespacePackageInputV2>& bundles,
+        const VerifiedNamespaceDependencyLockV2* verified_lock = nullptr) {
     return link_verified_namespace_snapshots_v2(
         bundles, [](std::string_view captured_source) {
             return parse_verified_namespace_source_unresolved(captured_source);
-        });
+        }, verified_lock);
 }
 
 } // namespace oreslang::frontend
