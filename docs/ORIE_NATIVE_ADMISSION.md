@@ -50,17 +50,17 @@ patch.
 `tests/native_f64_lexical_gate.sh`, now registered in CTest as
 `native_f64_scalar_e2e`, requires **eight actually compiled/linked/executed
 guest programs** (seven f64 checks and one signed-i64 control) to terminate
-with exit 42 and empty output. Eleven deliberately invalid source programs
+with exit 42 and empty output. Twelve deliberately invalid source programs
 must fail with no LLVM IR, including int-to-f64 coercion, mixed arithmetic,
 mixed comparison, integer or mixed-type division, unsupported function f64
-ABIs, malformed exponent and overflowed numeric literals.
+ABIs, branch-local f64 owners, malformed exponent and overflowed literals.
 These cases are **authored but not executed on an authorized LLVM runner**:
 no native f64 PASS, compiler parity or numerical correctness receipt
 can yet be claimed.
 
 ### Explicit exclusions
 
-This is not a general f64 ABI: floating-point function parameters/returns,
+This is not a general f64 ABI: floating-point function parameters/returns, branch-local double lifetime slots,
 class fields, f64 sum payloads and owned `Array<f64>` need separate
 type/ownership/data-layout integration. Floating-point function division is only admitted for f64/f64 expressions
 in lexical code; f32 and typed f64 function interfaces are not yet lowered.
