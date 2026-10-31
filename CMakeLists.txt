@@ -1602,7 +1602,9 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         # Real compiled Oreslang guest + native scheduler and heap turns.
         # The test runner uses standard-library Rust (no new Python harness).
-        find_program(ORE_SEALED_STATE_RUSTC NAMES rustc)
+        # The compiled actor-state guest suite is a required test gate.
+        # Missing Rust cannot silently suppress the two CTests.
+        find_program(ORE_SEALED_STATE_RUSTC NAMES rustc REQUIRED)
         if(ORE_SEALED_STATE_RUSTC)
             set(ORE_SEALED_STATE_DRIVER
                 "${CMAKE_CURRENT_BINARY_DIR}/oreslang-sealed-state-guest")
