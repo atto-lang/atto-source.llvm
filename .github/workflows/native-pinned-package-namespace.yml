@@ -10,6 +10,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/PinnedNamespaceLoader.cpp'
       - 'src/main/cpp/oreslang/backend/**'
       - 'src/main/cpp/oreslang/types/**'
+      - 'tests/native_package_namespace_graph_test.cpp'
       - 'tests/native_pinned_namespace_ir_test.cpp'
       - 'tests/pinned_namespace_execution.cmake'
       - 'tests/namespace_lifecycle_parity.cmake'
