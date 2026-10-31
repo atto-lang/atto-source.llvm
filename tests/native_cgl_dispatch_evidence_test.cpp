@@ -5,7 +5,7 @@
 
 using namespace ores::cgl;
 using T = DispatchTrace;
-static constexpr EvidenceLimits limits{17, 4, 20, 40, 8, 2, 0, true};
+static constexpr EvidenceLimits limits{17, 4, 20, 40, 8, 2, 2, 0, true};
 static constexpr T ok1{17, 4, 1, 100, 105, 200, 110, 120, 124, 0, 2, false};
 static constexpr T ok2{17, 4, 2, 200, 210, 310, 230, 250, 280, 0, 3, false};
 
@@ -24,7 +24,7 @@ int main() {
     late_start[1].user_start_ns = 311;
     late_start[1].user_finish_ns = 312;
     auto missed = evaluate_dispatch_evidence(late_start.data(), late_start.size(),
-        EvidenceLimits{17, 4, 100, 120, 8, 2, 0, true});
+        EvidenceLimits{17, 4, 100, 120, 8, 2, 2, 0, true});
     assert(missed.failure == EvidenceFailure::deadline_miss);
     assert(missed.deadline_misses == 1);
 
@@ -33,7 +33,7 @@ int main() {
     after_due[1].user_start_ns = 260;
     after_due[1].user_finish_ns = 270;
     auto due_missed = evaluate_dispatch_evidence(after_due.data(), after_due.size(),
-        EvidenceLimits{17, 4, 50, 40, 8, 2, 0, true});
+        EvidenceLimits{17, 4, 50, 40, 8, 2, 2, 0, true});
     assert(due_missed.failure == EvidenceFailure::due_to_start);
     assert(due_missed.due_to_start_misses == 1);
 
@@ -72,12 +72,15 @@ int main() {
 
     const T canceled{17, 4, 3, 300, 305, 450, 310, 0, 0, 325, 1, true};
     const std::array<T, 3> with_cancel{ok1, ok2, canceled};
-    auto c = evaluate_dispatch_evidence(with_cancel.data(), with_cancel.size(), limits);
+    auto with_cancel_limits = limits;
+    with_cancel_limits.expected_total_records = 3;
+    auto c = evaluate_dispatch_evidence(with_cancel.data(), with_cancel.size(),
+                                        with_cancel_limits);
     assert(c.passes_observed_contract() && c.canceled == 1);
 
     auto invalid_cancel = with_cancel;
     invalid_cancel[2].user_start_ns = 315;
-    assert(evaluate_dispatch_evidence(invalid_cancel.data(), invalid_cancel.size(), limits).failure ==
+    assert(evaluate_dispatch_evidence(invalid_cancel.data(), invalid_cancel.size(), with_cancel_limits).failure ==
         EvidenceFailure::invalid_cancellation);
 
     auto dropped = limits;
@@ -89,10 +92,21 @@ int main() {
     assert(evaluate_dispatch_evidence(normal.data(), normal.size(), incomplete).failure ==
         EvidenceFailure::trace_loss);
 
+    // The independent ticket ledger knows 3 winners but only 2 samples
+    // arrived. The old minimum-completed rule incorrectly allowed this.
+    auto silent_truncation = limits;
+    silent_truncation.expected_total_records = 3;
+    assert(evaluate_dispatch_evidence(normal.data(), normal.size(), silent_truncation).failure ==
+        EvidenceFailure::trace_loss);
+    auto impossible_config = limits;
+    impossible_config.expected_total_records = 1; // less than min_completed=2
+    assert(evaluate_dispatch_evidence(normal.data(), normal.size(), impossible_config).failure ==
+        EvidenceFailure::invalid_config);
+
     auto only_one = evaluate_dispatch_evidence(normal.data(), 1, limits);
     assert(only_one.failure == EvidenceFailure::no_coverage);
     assert(evaluate_dispatch_evidence(nullptr, 0, limits).failure == EvidenceFailure::no_coverage);
-    assert(evaluate_dispatch_evidence(normal.data(), normal.size(), EvidenceLimits{0, 4, 20, 40, 8, 2, 0, true}).failure ==
+    assert(evaluate_dispatch_evidence(normal.data(), normal.size(), EvidenceLimits{0, 4, 20, 40, 8, 2, 2, 0, true}).failure ==
         EvidenceFailure::invalid_config);
 
     auto out_of_order = normal;
