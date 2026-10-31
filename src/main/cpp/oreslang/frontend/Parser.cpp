@@ -3122,6 +3122,8 @@ private:
                     if (local.name == terminal_catch_binding)
                         fail("native checked overflow binding shadows local owner");
                 value.catch_binding = terminal_catch_binding;
+                if (token_.text != "return")
+                    fail("native checked overflow catch exposes NumericErrorCode only; nominal Error object/type-test lowering is not implemented");
                 require("return");
                 value.caught_checked_overflow_result = expression();
                 if (!nonthrowing_protected_read(

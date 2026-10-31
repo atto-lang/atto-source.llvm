@@ -130,6 +130,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         include_str!("../../fixtures/numeric-v1/i64-neg-overflow.ores");
     const SHARED_I64_OVERFLOW_CATCH: &str =
         include_str!("../../fixtures/numeric-v1/i64-overflow-catch.ores");
+    const SHARED_I64_OVERFLOW_TYPED_CATCH: &str =
+        include_str!("../../fixtures/numeric-v1/i64-overflow-typed-catch.ores");
     use std::{ffi::OsStr, fs, os::unix::process::ExitStatusExt};
     let temp = TempDir::new("ores-checked-i64-").map_err(|e| e.to_string())?;
     fs::write(temp.path.join("math-shadow.ores"),
@@ -175,6 +177,7 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("math-abs-two-args", "pub fnc main():int{return Math.abs(1,2);}"),
         ("math-neg-two-args", "pub fnc main():int{return Math.neg(1,2);}"),
         ("math-unknown-intrinsic", "pub fnc main():int{return Math.pow(2);}"),
+        ("portable-overflow-typed-catch", SHARED_I64_OVERFLOW_TYPED_CATCH),
     ];
     for (name, source) in rejects {
         let input = temp.path.join(format!("{name}-reject.ores"));
