@@ -63,7 +63,7 @@ struct NamespaceImportRequest {
     // Optional lexical "as" name. An empty alias means the source namespace
     // name. Distinct pinned package instances may export the same namespace
     // and must remain independently addressable by explicit local aliases.
-    std::string local_alias;
+    std::string local_alias{};
 };
 
 using PackageAliasPins =
