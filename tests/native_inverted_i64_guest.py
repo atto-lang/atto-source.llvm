@@ -7,6 +7,7 @@ It compiles actual .ores inputs using oreslang-llvmc, then executes clang IR.
 """
 import argparse
 import pathlib
+import signal
 import subprocess
 import tempfile
 
@@ -106,9 +107,13 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
         execution = subprocess.run(
             [str(executable)], cwd=temp,
             capture_output=True, timeout=15, check=False)
-        if execution.returncode == 0 or execution.returncode == 42:
+        # subprocess exposes signal termination as a negative signal
+        # number; this cannot be forged by returning a nonzero exit status.
+        # LLVM trap lowers to SIGILL or SIGTRAP on supported Linux targets.
+        if execution.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
             raise AssertionError(
-                "out-of-bounds read was not trapped in " + bad_source.name)
+                "out-of-bounds read did not signal SIGILL/SIGTRAP in "
+                + bad_source.name + ": " + str(execution.returncode))
 
     negative_sources = [
         ("define inverted class P as x:int; end\nfnc main():int{return 0;}",
