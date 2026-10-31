@@ -54,7 +54,8 @@ bool native_error_slot_scalar_function(const Function& fn) {
             !fn.ready_future_actor.empty() || !fn.actor_sends.empty() ||
             !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
             !fn.actor_field_writes.empty() || fn.scalar_while ||
-            fn.caught_throw_value || !fn.catch_binding.empty() ||
+            fn.caught_throw_value ||
+            (!fn.catch_binding.empty() && !fn.caught_error_try_result) ||
             !fn.caught_throw_defers.empty() || !fn.method_owner.empty() ||
             fn.has_declared_effects || !fn.result)
         return false;
@@ -2526,11 +2527,71 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (fn.early_returns.empty() && deferred_effects.empty() && !structured_returns) {
             // Maintain stable native IR (ret i64 42, for example) for
             // functions without a multi-exit cleanup obligation.
-            llvm::Value* result = awaited_result
-                ? awaited_result
-                : (fn.result
-                    ? lower_return(*fn.result)
-                    : nullptr);
+            llvm::Value* result = nullptr;
+            if (fn.caught_error_try_result) {
+                if (!error_slot_mode || !native_error_slot ||
+                        !error_slot_type || !native_error_return)
+                    throw std::runtime_error(
+                        "native ErrorSlot catch requires linked pure-scalar error ABI");
+
+                auto* caught = llvm::BasicBlock::Create(
+                    context, "error.catch", function);
+                auto* catch_consume = llvm::BasicBlock::Create(
+                    context, "error.catch.consume", function);
+                auto* catch_merge = llvm::BasicBlock::Create(
+                    context, "error.catch.merge", function);
+
+                RegionMoveLowering protected_moves = region_moves;
+                protected_moves.error_return = caught;
+                auto* protected_result = lower(
+                    *fn.caught_error_try_result, builder, i64,
+                    storage, field_storage, declarations, &protected_moves);
+                auto* protected_exit = builder.GetInsertBlock();
+                builder.CreateBr(catch_merge);
+
+                builder.SetInsertPoint(caught);
+                auto* caught_code = load_native_error_code(
+                    builder, error_slot_type, native_error_slot,
+                    "caught.error.code");
+                auto* caught_effect = builder.CreateLoad(
+                    llvm::Type::getInt8Ty(context),
+                    builder.CreateStructGEP(
+                        error_slot_type, native_error_slot, 1,
+                        "caught.error.effect.addr"),
+                    "caught.error.effect");
+                auto* is_error = builder.CreateICmpNE(
+                    caught_code,
+                    llvm::ConstantInt::get(caught_code->getType(), 0),
+                    "caught.error.present");
+                auto* is_throw = builder.CreateICmpEQ(
+                    caught_effect,
+                    llvm::ConstantInt::get(caught_effect->getType(),
+                                           kErrorEffectThrow),
+                    "caught.error.throw");
+                builder.CreateCondBr(
+                    builder.CreateAnd(is_error, is_throw,
+                                      "caught.error.consumable"),
+                    catch_consume, native_error_return);
+
+                builder.SetInsertPoint(catch_consume);
+                clear_native_error_slot(
+                    builder, error_slot_type, native_error_slot);
+                auto* caught_result = lower_return(*fn.result);
+                auto* caught_exit = builder.GetInsertBlock();
+                builder.CreateBr(catch_merge);
+
+                builder.SetInsertPoint(catch_merge);
+                auto* merged = builder.CreatePHI(i64, 2, "error.catch.result");
+                merged->addIncoming(protected_result, protected_exit);
+                merged->addIncoming(caught_result, caught_exit);
+                result = merged;
+            } else {
+                result = awaited_result
+                    ? awaited_result
+                    : (fn.result
+                        ? lower_return(*fn.result)
+                        : nullptr);
+            }
             emit_lexical_cleanup();
             if (fn.returns_void) builder.CreateRetVoid();
             else builder.CreateRet(result);
