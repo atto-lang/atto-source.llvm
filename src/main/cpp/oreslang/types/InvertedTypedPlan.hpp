@@ -125,6 +125,10 @@ class LinearPlan final {
             throw std::out_of_range("inverted row index outside current length");
     }
     void append(OpKind kind, std::size_t column = 0, std::size_t row = 0) {
+        // Bound compiler-memory and dataflow work. This is an admission
+        // guard, not a runtime allocation cap or a proven loop bound.
+        if (operations_.size() >= 4096)
+            throw std::overflow_error("inverted typed HIR operation budget exceeded");
         operations_.push_back(Operation{kind, column, row});
     }
 public:
