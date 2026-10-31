@@ -58,6 +58,26 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-namespace-package-index-test)
     set_tests_properties(native_namespace_package_identity_source_only PROPERTIES TIMEOUT 15)
 
+    # ACTUAL production Parser.cpp boundary, not the source-only graph's
+    # synthetic Program fixtures. No native namespace guest/IR is enabled.
+    add_executable(oreslang-native-verified-namespace-parser-v2-test
+        tests/native_verified_namespace_parser_v2_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_verified_namespace_parser_v2_host_only
+        COMMAND oreslang-native-verified-namespace-parser-v2-test)
+    set_tests_properties(native_verified_namespace_parser_v2_host_only
+        PROPERTIES TIMEOUT 30)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
