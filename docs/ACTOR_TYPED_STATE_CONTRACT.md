@@ -210,9 +210,16 @@ checks prevent metadata-only declarations from using the actor backend.
 The generated i64 arithmetic uses LLVM checked overflow intrinsics.
 
 The draft has exact-head host tests, compiled guest C turn tests, source
-actor scheduler E2E and ASan/UBSan scripts. These tests are *registered but
-not proven executed* until a real, nonzero-step runner finishes; source
-org Actions currently fail before runner assignment.
+actor scheduler E2E and ASan/UBSan scripts. The deterministic bridge requires
+two compiler-emitted callbacks under distinct actor heap turns and validates
+a loss-free read/write access trace. A second bridge schedules **two** DATA
+messages, waits for actual compiled guest handler execution, and requires
+processed=2, abandoned=0 before accepting STOP and reclaiming the heap.
+Wasm32 and Cortex-M execution remain explicitly fail-closed.
+
+These tests are *registered but not proven executed* until a real,
+nonzero-step runner finishes; source org Actions currently fail before runner
+assignment. A local Python regex-only smoke check is not LLVM guest proof.
 
 **Not yet supported:** `bool` state lowering, `critical` shorthand,
 multiple methods/callbacks, general callback expressions, state-capability
