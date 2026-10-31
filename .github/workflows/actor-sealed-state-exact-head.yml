@@ -131,6 +131,8 @@ jobs:
             src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
             tests/fixtures/source-isolated-actor-sealed-write.ores \
             tests/fixtures/source-isolated-actor-sealed-read.ores \
+            tests/fixtures/source-isolated-actor-sealed-write-bracket.ores \
+            tests/fixtures/source-isolated-actor-sealed-read-bracket.ores \
             tests/fixtures/source-isolated-actor-sealed-write-actor-only.ores \
             tests/fixtures/source-isolated-actor-sealed-read-actor-only.ores \
             tests/fixtures/source-isolated-actor-sealed-read-mutation-reject.ores \
