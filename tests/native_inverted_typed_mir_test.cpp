@@ -93,6 +93,35 @@ int main() {
     reject([&] { (void)Module::verify_external(schema, 3, forged); },
            "runtime index exceeds signed i64");
 
+    // All values returned by snapshot are detached from the owner: closing
+    // the native store cannot invalidate the previously copied result.
+    LinearPlan closed(schema, 1);
+    closed.push(2);
+    closed.snapshot(0);
+    closed.close();
+    const auto closed_result = execute_native_i64_pair(
+        Module::lower(closed), I64PairInputs{{{7, 101}}, {}});
+    assert(closed_result.live_rows == 0);
+    assert(closed_result.snapshots.size() == 1);
+    assert(closed_result.snapshots[0] ==
+           (std::array<std::int64_t, 2>{7, 101}));
+    reject([&] { closed.read_runtime_checked(0, "x"); },
+           "closed inverted HIR owner");
+
+    // Two independent logical readers share the lane's checked native read
+    // lease. The second release must not attempt a second native release.
+    LinearPlan readers(schema, 1);
+    readers.push(2);
+    readers.borrow_read("id");
+    readers.borrow_read("id");
+    readers.release_read("id");
+    readers.release_read("id");
+    readers.snapshot(0);
+    const auto read_result = execute_native_i64_pair(
+        Module::lower(readers), I64PairInputs{{{31, 503}}, {}});
+    assert(read_result.snapshots.size() == 1);
+    assert(read_result.snapshots[0][1] == 503);
+
     LinearPlan no_owner_pin(schema, 1);
     no_owner_pin.push(2);
     reject([&] { no_owner_pin.suspend(); }, "cannot cross suspension");
