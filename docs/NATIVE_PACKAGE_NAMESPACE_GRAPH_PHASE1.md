@@ -95,13 +95,21 @@ whose entries contain:
 - exact manifest-relative source membership and SHA-256 for every selected file;
 - root-package dependency alias -> exact PackageInstanceId pins.
 
-The adapter compares the bytes actually consumed by compilation against those
-SHA-256 values. A stale manifest, changed source, changed membership list,
-unknown alias target, wrong package group, unreferenced dependency manifest, or
-physical source claimed by two locked package instances fails before namespace
-linking. `pkg:` namespace resolution never consults `ORES_PATHS`,
-`ORESLANG_PATH`, cwd, directory names, project names, or namespace spelling as
-fallback authority.
+The adapter reparses and re-hashes the **current manifest files inside the
+materialization call** rather than trusting a caller-constructed parsed manifest
+object. It compares those exact manifest bytes and every selected source body
+against the lock SHA-256 values. A stale manifest, changed source, changed
+membership list, unknown alias target, wrong package group, unreferenced
+dependency manifest, duplicate physical manifest/group authority, or physical
+source claimed by two locked package instances fails before namespace linking.
+Manifest authority comparisons use physical filesystem identity, so hard-link
+aliases cannot mint a second package authority. `pkg:` namespace resolution
+never consults `ORES_PATHS`, `ORESLANG_PATH`, cwd, directory names, project
+names, or namespace spelling as fallback authority.
+
+Admission is bounded before source reads: at most 128 lock package instances,
+127 root dependency aliases, 127 supplied dependency manifests, and 128 selected
+source units total, with the existing 8 MiB aggregate source budget retained.
 
 Nearest modern manifest discovery starts from the **physical entry source**.
 A nearer legacy `.oreslangc.cfg.toml` is an independent boundary and blocks
