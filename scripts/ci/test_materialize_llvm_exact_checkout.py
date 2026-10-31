@@ -73,6 +73,19 @@ class SourceFreeSparseMaterialization(unittest.TestCase):
         self.assertIn('PASS', r.stdout)
         self.assertFalse(self.marker.exists())
 
+    def test_partial_budget_failure_rejects_retry(self):
+        # Simulate an object-budget rejection after the first raw blob was
+        # written; a partial checkout must never be accepted on retry.
+        env = os.environ.copy()
+        env['PYTHONPATH'] = str(MATERIALIZE.parent)
+        command = 'import materialize_llvm_exact_checkout as m; m.MAX_TOTAL=30; m.main()'
+        result = call(self.checkout, sys.executable, '-c', command, self.sha,
+                      check=False, env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.checkout / '.gitattributes').is_file())
+        self.assertFalse(self.marker.exists())
+        self.materialize(False)
+
     def test_reject_preexisting_untracked_file(self):
         (self.checkout / 'surprise').write_text('malicious')
         self.materialize(False)
