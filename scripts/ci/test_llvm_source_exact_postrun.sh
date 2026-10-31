@@ -111,6 +111,7 @@ cgl_require() {
 }
 for source_path in \
   tests/test_cgl_preflight.py \
+  tests/test_cgl_smoke_bounded.py \
   tests/fixtures/forward-call-main.ores \
   tests/native_cgl_host_admission_test.cpp \
   tests/native_cgl_dispatch_evidence_test.cpp \
@@ -136,12 +137,14 @@ for ctest_name in \
   cgl_require "$ctest_name"
 done
 cgl_require "PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_preflight.py -v"
+cgl_require "PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_smoke_bounded.py -v"
 cgl_require 'ctest --test-dir build-cgl-source-exact --output-on-failure'
 cgl_require '--no-tests=error -R "^${named_test}$"'
 cgl_require 'bash scripts/cgl-native-smoke.sh "$PWD/build-cgl-source-exact"'
 cgl_require 'CGL_SOURCE_TO_ELF_EXIT42_AND_CTEST_EXECUTED_FOR_SHA=$SOURCE_SHA'
 grep -qxF "        if: inputs.suite == 'cgl-compat'" <<< "$cgl_step"
-grep -qxF "        if: inputs.suite == 'cgl-compat' && inputs.run_sanitizers" <<< "$cgl_san_step"
+# A false run_sanitizers input must not bypass CGL native sanitizer evidence.
+grep -qxF "        if: inputs.suite == 'cgl-compat'" <<< "$cgl_san_step"
 for san_needle in \
   '-DCMAKE_CXX_COMPILER=clang++' \
   '-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"' \
