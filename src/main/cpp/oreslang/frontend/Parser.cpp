@@ -23,7 +23,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, String, Template, Symbol, End };
+enum class Kind { Identifier, Integer, Floating, String, Template, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -240,7 +240,31 @@ public:
             while (at_ < source_.size() && (digit(source_[at_]) || source_[at_] == '_')) {
                 ++at_;
             }
-            return {Kind::Integer, source_.substr(start, at_ - start), start};
+            bool floating = false;
+            // Preserve the complete decimal/scientific numeric token. Before
+            // typed IEEE f64 lowering exists, never parse 0.3 as integer 0
+            // followed by unrelated member tokens or truncate 1e10 to 1.
+            if (at_ + 1 < source_.size() && source_[at_] == '.' &&
+                    digit(source_[at_ + 1])) {
+                floating = true;
+                ++at_;
+                while (at_ < source_.size() &&
+                        (digit(source_[at_]) || source_[at_] == '_')) ++at_;
+            }
+            if (at_ < source_.size() &&
+                    (source_[at_] == 'e' || source_[at_] == 'E')) {
+                floating = true;
+                ++at_;
+                if (at_ < source_.size() &&
+                        (source_[at_] == '+' || source_[at_] == '-')) ++at_;
+                if (at_ == source_.size() || !digit(source_[at_]))
+                    throw std::runtime_error("malformed native floating exponent at byte " +
+                                             std::to_string(start));
+                while (at_ < source_.size() &&
+                        (digit(source_[at_]) || source_[at_] == '_')) ++at_;
+            }
+            return {floating ? Kind::Floating : Kind::Integer,
+                    source_.substr(start, at_ - start), start};
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
@@ -3624,6 +3648,12 @@ private:
             }
             require(")");
             return inner;
+        }
+        if (token_.kind == Kind::Floating) {
+            // Do not forge a guest f64 by boxing/reinterpreting an i64.
+            // An actual f64 AST, type domain and LLVM double lowering must
+            // be implemented together before positive source admission.
+            fail("native f64 literal requires typed IEEE-754 lowering; unsupported");
         }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
