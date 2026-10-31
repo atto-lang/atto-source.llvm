@@ -6,7 +6,7 @@
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
-#include "oreslang/types/InvertedSchemaMirAdmission.hpp"
+#include "oreslang/types/InvertedProductionSourceMir.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 
 #include <algorithm>
@@ -660,6 +660,17 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            if (program.inverted_main)
+                fail("production inverted main must be the only source callable");
+            if (!program.inverted_structs.empty() &&
+                    looks_like_inverted_main()) {
+                if (program.inverted_structs.size() != 1 || wrapped_module ||
+                        !program.functions.empty() || !program.classes.empty() ||
+                        !program.actors.empty() || !program.generators.empty())
+                    fail("production inverted i64 requires one standalone schema and main");
+                program.inverted_main = inverted_source_main(program.inverted_structs.front());
+                continue;
+            }
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
             if (at_type_only_introducer()) {
@@ -768,6 +779,92 @@ public:
 
 private:
     std::unordered_set<std::string> inverted_struct_names_;
+
+    // Structural lexer lookahead is only a dispatch hint, never authorization:
+    // the full source is still consumed and checked below. Other functions
+    // following an inverted declaration retain the legacy fail-closed path.
+    bool looks_like_inverted_main() const {
+        if (token_.text != "fnc") return false;
+        Lexer probe = lexer_;
+        for (std::size_t i = 0; i < 32; ++i) {
+            const auto next = probe.next();
+            if (next.kind == Kind::End || next.text == "}") return false;
+            if (next.text == "InvertedArray") return true;
+        }
+        return false;
+    }
+
+    std::size_t inverted_source_index() {
+        const auto n = signed_integer_literal();
+        if (n < 0 || static_cast<std::uint64_t>(n) >
+                         static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+            fail("production inverted row index must fit nonnegative size_t");
+        return static_cast<std::size_t>(n);
+    }
+
+    InvertedSourceMain inverted_source_main(const InvertedStructDecl& decl) {
+        if (decl.fields.size() != 2 ||
+                decl.fields[0].type != InvertedScalarKind::I64 ||
+                decl.fields[1].type != InvertedScalarKind::I64)
+            fail("production inverted main requires precisely two i64 fields");
+        InvertedSourceMain result;
+        result.schema_name = decl.name;
+        require("fnc"); require("main"); require("("); require(")");
+        require(":"); require("int"); require("{");
+        require("let");
+        result.owner_name = identifier();
+        require("=");
+        require("InvertedArray"); require("<");
+        if (identifier() != decl.name)
+            fail("production inverted collection nominal schema mismatch");
+        require(">"); require("."); require("with_capacity"); require("(");
+        result.capacity = inverted_source_index();
+        if (result.capacity == 0 || result.capacity > 256)
+            fail("production inverted capacity must be 1..256");
+        require(")"); require(";");
+        while (true) {
+            if (token_.kind == Kind::End || result.operations.size() == 1024)
+                fail("production inverted main missing return or operation budget exceeded");
+            InvertedSourceOperation op;
+            if (accept("return")) {
+                if (identifier() != result.owner_name)
+                    fail("production inverted return must read the local owner");
+                require("."); require("get"); require("(");
+                op.kind = InvertedSourceOperation::Kind::ReturnRead;
+                op.index = inverted_source_index();
+                require(",");
+                op.field = identifier();
+                require(")"); require(";");
+                result.operations.push_back(std::move(op));
+                require("}");
+                return result;
+            }
+            if (identifier() != result.owner_name)
+                fail("production inverted operation must target the local owner");
+            require(".");
+            if (accept("push")) {
+                op.kind = InvertedSourceOperation::Kind::Push;
+                require("(");
+                op.values[0] = signed_integer_literal();
+                require(",");
+                op.values[1] = signed_integer_literal();
+                require(")");
+            } else if (accept("set")) {
+                op.kind = InvertedSourceOperation::Kind::WriteField;
+                require("("); op.index = inverted_source_index();
+                require(","); op.field = identifier(); require(",");
+                op.value = signed_integer_literal(); require(")");
+            } else if (accept("erase_swap")) {
+                op.kind = InvertedSourceOperation::Kind::EraseSwap;
+                require("("); op.index = inverted_source_index(); require(")");
+            } else {
+                fail("production inverted supports only push, set, erase_swap and terminal get");
+            }
+            require(";");
+            result.operations.push_back(std::move(op));
+        }
+    }
+
     InvertedStructDecl inverted_struct_declaration(bool exported) {
         InvertedStructDecl decl;
         decl.exported = exported;
@@ -5860,6 +5957,12 @@ void resolve_and_validate_program(Program& program) {
         const auto schemas = dop::mir::preflight_inverted_schemas(program);
         if (schemas.size() != program.inverted_structs.size())
             throw std::logic_error("native inverted schema preflight incomplete");
+        if (program.inverted_main) {
+            // Production source is admitted only after full independent MIR
+            // verification. The emitter re-verifies by consuming that MIR.
+            (void)dop::mir::verify_production_inverted_i64(program);
+            return;
+        }
         throw std::runtime_error(
             "native inverted struct schema parsed but typed SoA HIR/MIR ownership lowering is not implemented");
     }
