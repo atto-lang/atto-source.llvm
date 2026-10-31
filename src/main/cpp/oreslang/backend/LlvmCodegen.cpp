@@ -568,9 +568,12 @@ llvm::Value* lower(const Expression& expr,
                     storage, field_storage, functions, moves);
                 llvm::Value* rhs = lower(*expr.condition_rhs, builder, i64,
                     storage, field_storage, functions, moves);
-                conditionValue = builder.CreateZExt(
-                    builder.CreateICmpEQ(lhs, rhs, "ternary.eq.i1"),
-                    i64, "ternary.eq");
+                if (lhs->getType() != rhs->getType())
+                    throw std::runtime_error("native ternary equality operands differ in LLVM type");
+                llvm::Value* equal = lhs->getType()->isFloatingPointTy()
+                    ? builder.CreateFCmpOEQ(lhs, rhs, "ternary.eq.f64.i1")
+                    : builder.CreateICmpEQ(lhs, rhs, "ternary.eq.i64.i1");
+                conditionValue = builder.CreateZExt(equal, i64, "ternary.eq");
             }
             llvm::Value* condition = builder.CreateICmpNE(
                 conditionValue, llvm::ConstantInt::get(i64, 0), "ternary.cond.i1");
@@ -596,7 +599,12 @@ llvm::Value* lower(const Expression& expr,
             builder.CreateBr(merge);
 
             builder.SetInsertPoint(merge);
-            auto* value = builder.CreatePHI(i64, 2, "ternary.value");
+            llvm::Type* arm_type = expr.resolved_type == ScalarType::F64
+                ? builder.getDoubleTy() : i64;
+            if (trueValue->getType() != arm_type ||
+                    falseValue->getType() != arm_type)
+                throw std::runtime_error("native ternary arm LLVM types violate checked scalar identity");
+            auto* value = builder.CreatePHI(arm_type, 2, "ternary.value");
             value->addIncoming(trueValue, trueExit);
             value->addIncoming(falseValue, falseExit);
             return value;
