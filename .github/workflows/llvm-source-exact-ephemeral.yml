@@ -76,6 +76,28 @@ jobs:
           test "$reviewer_id" = "11139560"
           test "$reviewer_id" != "$pr_author_id"
           echo "PROTECTED_MAIN_AND_INDEPENDENT_EXACT_HEAD_REVIEW=PASS"
+      # These mock tests are part of trusted main, NOT the untrusted PR source.
+      - name: Checkout trusted main for source-free workflow tests
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Execute trusted source-free post-run authorization regression mocks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object scripts/ci/test_llvm_source_exact_postrun.sh)" = \
+            "$(git rev-parse HEAD:scripts/ci/test_llvm_source_exact_postrun.sh)"
+          test "$(git hash-object .github/workflows/llvm-source-exact-ephemeral.yml)" = \
+            "$(git rev-parse HEAD:.github/workflows/llvm-source-exact-ephemeral.yml)"
+          bash -n scripts/ci/test_llvm_source_exact_postrun.sh
+          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml
+
       - name: Checkout pinned source tree (never persist auth)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -98,13 +120,6 @@ jobs:
           command -v python3
           echo "EXACT_SOURCE_COMMIT=$SOURCE_SHA"
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
-
-      - name: Execute source-free post-run authorization regression mocks
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash -n scripts/ci/test_llvm_source_exact_postrun.sh
-          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml
 
       - name: Run full V3 private-export security regressions (no export)
         if: inputs.suite == 'security-v3'
@@ -135,15 +150,6 @@ jobs:
           clang --version
           llvm-config --version
 
-      - name: Build actual Oreslang source compiler against LLVM
-        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S . -B build-source-exact -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
-          cmake --build build-source-exact --target oreslang-llvmc --parallel 2
-          test -x build-source-exact/oreslang-llvmc
-
       - name: Run real ledger, scheduler STOP and pinned physical-heap native suite
         if: inputs.suite == 'actor-ledger'
         shell: bash
@@ -155,6 +161,15 @@ jobs:
           # even if optional guest sanitizer execution is not selected.
           test -x scripts/ci/run_actor_ledger_native_exact_head.sh
           bash scripts/ci/run_actor_ledger_native_exact_head.sh "$SOURCE_SHA"
+
+      - name: Build actual Oreslang source compiler against LLVM
+        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-source-exact -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
+          cmake --build build-source-exact --target oreslang-llvmc --parallel 2
+          test -x build-source-exact/oreslang-llvmc
 
       - name: Compile and execute real Oreslang source actor fixtures
         if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger'

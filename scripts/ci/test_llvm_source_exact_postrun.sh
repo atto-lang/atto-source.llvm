@@ -39,6 +39,40 @@ grep -qxF "        if: inputs.suite == 'actor-ledger' && inputs.run_sanitizers" 
 grep -qxF '          PYTHONOPTIMIZE=0 python3 tests/native_actor_compiled_guest_ledger.py \' <<< "$san_step"
 printf 'SOURCEFREE_ACTOR_LEDGER_WORKFLOW_CONTRACT=PASS\n'
 
+# The mock tests belong to trusted main, not a PR-provided checkout. Also,
+# native acceptance must run before CMake writes build-source-exact because the
+# pinned native runner rejects any untracked/dirty source tree.
+step_line() {
+  local name="$1"
+  awk -v wanted="$name" '$0 == "      - name: " wanted { print NR; exit }' "$workflow"
+}
+assert_before() {
+  local left="$1" right="$2" left_n right_n
+  left_n="$(step_line "$left")"
+  right_n="$(step_line "$right")"
+  [[ "$left_n" =~ ^[1-9][0-9]*$ && "$right_n" =~ ^[1-9][0-9]*$ &&
+     "$left_n" -lt "$right_n" ]] || {
+    echo "source-exact step order invalid: $left must precede $right" >&2
+    exit 1
+  }
+}
+trusted_step="$(extract_step 'Checkout trusted main for source-free workflow tests')"
+grep -qxF '          ref: \${{ github.sha }}' <<< "$trusted_step"
+grep -qxF '          persist-credentials: false' <<< "$trusted_step"
+mock_step="$(extract_step 'Execute trusted source-free post-run authorization regression mocks')"
+grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$mock_step"
+grep -qxF '          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml' <<< "$mock_step"
+pr_checkout="$(extract_step 'Checkout pinned source tree (never persist auth)')"
+grep -qxF '          ref: \${{ inputs.source_sha }}' <<< "$pr_checkout"
+grep -qxF '          persist-credentials: false' <<< "$pr_checkout"
+assert_before 'Verify open same-repo PR and exact immutable head before checkout' 'Checkout trusted main for source-free workflow tests'
+assert_before 'Checkout trusted main for source-free workflow tests' 'Execute trusted source-free post-run authorization regression mocks'
+assert_before 'Execute trusted source-free post-run authorization regression mocks' 'Checkout pinned source tree (never persist auth)'
+assert_before 'Checkout pinned source tree (never persist auth)' 'Require exact tree and preinstalled native toolchain'
+assert_before 'Require exact tree and preinstalled native toolchain' 'Run real ledger, scheduler STOP and pinned physical-heap native suite'
+assert_before 'Run real ledger, scheduler STOP and pinned physical-heap native suite' 'Build actual Oreslang source compiler against LLVM'
+printf 'SOURCEFREE_TRUSTED_CHECKOUT_AND_NATIVE_BEFORE_BUILD=PASS\n'
+
 block="$(awk '
   /^      - name: Post-run attestation of current PR head and independent reviewer$/ { in_step=1; next }
   in_step && /^      - name: / { exit }
