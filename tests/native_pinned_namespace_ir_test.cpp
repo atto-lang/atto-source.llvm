@@ -126,6 +126,25 @@ int main() {
                 "unknown namespace member or wrong arity");
         }
 
+        // The pre-graph signature pass validates provider scalar argument
+        // types and keeps named/generic provider calls outside this ABI slice.
+        {
+            auto candidate = make_program();
+            source(candidate, "foo/api/handlers").source =
+                "namespace c; pub fnc handler_ok(int code): bool { return route_ok(true); }\n";
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
+                "provider argument requires int, got bool");
+        }
+        {
+            auto candidate = make_program();
+            source(candidate, "foo/api/handlers").source =
+                "namespace c; pub fnc handler_ok(int code): bool { return route_ok(code: code); }\n";
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
+                "provider calls require flat positional non-generic syntax");
+        }
+
         // Same package is not enough: another namespace in foo@1 is still a
         // distinct identity and cannot be reached without explicit syntax.
         {
