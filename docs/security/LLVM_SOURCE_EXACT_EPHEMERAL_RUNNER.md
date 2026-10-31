@@ -27,3 +27,11 @@ The job first calls GitHub API with a transient read-only `GITHUB_TOKEN` solely 
 GitHub associates a manually dispatched workflow run with the selected **main** workflow ref; checking out a different immutable PR SHA inside the job does **not** automatically attach this job's status check to that PR commit. Keep required status checks on a genuinely PR-head-triggered workflow once private GitHub Actions admission is restored, or obtain independent source-SHA receipt verification and explicit security signoff. Never auto-merge the actor PR solely because this manual job passed.
 
 The source SHA, Git root tree, exact executed test step names and job/runner identity must be matched out of band before claiming backend execution. A missing runner, skipped job, incomplete job or zero-step failure is **NOT_EXECUTED**.
+
+## Preflight now fails closed until protected main and reviewed PR head
+
+Before checking out any untrusted PR source, the workflow uses its read-only GitHub token to verify that the source organization's `main` branch reports `protected: true`. Merely dispatching from `main` is insufficient. The workflow also reads the most recent **submitted** review by the dedicated `ORESoftware` identity (up to 99 records) and requires `APPROVED` at exactly the requested PR-head commit, with reviewer and author identities distinct. Missing/ambiguous/oversized review histories, stale commits, changes requested after approval, dismissal, unprotected main, and mismatched source repository all deny execution before checkout.
+
+Currently this means the new workflow **cannot execute**: source `main` is still unprotected, and the relevant PRs have no submitted independent approvals. The admin must first apply and verify repository protection, then a reviewer must approve the *current* tested code head. If the PR changes afterward, the approval must be renewed. This is an intentional security prerequisite, not a runner admission failure. Do not disable this gate to force execution.
+
+An approval obtained through a separate manual process must be independently checked against the exact GitHub PR head and reviewer identity. GitHub's commit-associated manual `workflow_dispatch` check still does not replace branch-protection required checks on the PR head.
