@@ -4875,7 +4875,7 @@ private:
                         !fn.future_pipelines.empty() ||
                         !fn.ready_await_actor.empty() ||
                         !fn.done_await_actor.empty() ||
-                        fn.scalar_while || fn.caught_throw_value ||
+                        fn.scalar_while || fn.caught_throw_value || fn.caught_error_try_result ||
                         !fn.result)
                     throw std::runtime_error(
                         "native async Future<int> v1 callable must be private, "
@@ -4893,7 +4893,7 @@ private:
                         !fn.source_tasks.empty() ||
                         !fn.generic_parameters.empty() ||
                         fn.has_declared_effects ||
-                        fn.scalar_while || fn.caught_throw_value ||
+                        fn.scalar_while || fn.caught_throw_value || fn.caught_error_try_result ||
                         !fn.actor_spawns.empty() ||
                         !fn.actor_actions.empty() ||
                         !fn.actor_field_writes.empty() ||
@@ -5747,7 +5747,7 @@ void resolve_future_pipeline_contracts(Program& program) {
                 !producer.future_pipelines.empty() ||
                 !producer.ready_await_actor.empty() ||
                 !producer.done_await_actor.empty() ||
-                producer.scalar_while || producer.caught_throw_value ||
+                producer.scalar_while || producer.caught_throw_value || producer.caught_error_try_result ||
                 !producer.result)
             throw std::runtime_error(
                 "native async Future<int> v1 callable must be capture-free, "
@@ -5795,7 +5795,7 @@ void resolve_future_pipeline_contracts(Program& program) {
                         !stage.future_pipelines.empty() ||
                         !stage.ready_await_actor.empty() ||
                         !stage.done_await_actor.empty() ||
-                        stage.scalar_while || stage.caught_throw_value ||
+                        stage.scalar_while || stage.caught_throw_value || stage.caught_error_try_result ||
                         !stage.result ||
                         !native_pure_scalar_tree(*stage.result))
                     throw std::runtime_error(
