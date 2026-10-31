@@ -5,6 +5,11 @@ emitter="$1"; clang="$2"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 "$emitter" positive "$scratch/positive.ll"
+for guard in 'icmp ult i64' 'icmp ne i64' 'load i1, ptr %alive' 'call void @llvm.trap()'; do
+ if ! grep -Fq "$guard" "$scratch/positive.ll"; then
+   echo "FAIL: checked MIR IR missing guard $guard"; exit 1
+ fi
+done
 "$clang" -x ir "$scratch/positive.ll" -o "$scratch/positive"
 set +e
 "$scratch/positive" >/dev/null 2>&1
