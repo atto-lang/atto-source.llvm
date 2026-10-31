@@ -450,6 +450,17 @@ struct ModuleImport {
     std::size_t offset = 0;
 };
 
+// Syntax-only namespace import. No host, AOT or guest namespace authority is
+// obtained from a parsed source string. The backend must reject this record
+// until a verified v2 package manifest/lockfile graph supplies immutable
+// source ownership, pins and typed physical-provider resolution.
+struct NamespaceImportSyntax {
+    std::string namespace_name;
+    std::string local_name;
+    std::string package_selector;
+    std::size_t offset = 0;
+};
+
 struct TypeConstraintDescriptor {
     std::string schema_id;
     std::string qualified_type_name;
@@ -461,6 +472,7 @@ struct TypeConstraintDescriptor {
 
 struct Program {
     std::vector<ModuleImport> imports;
+    std::vector<NamespaceImportSyntax> namespace_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
     std::string namespace_name;
