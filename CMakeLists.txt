@@ -1669,6 +1669,29 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-actor-membership-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_multi_group_membership COMMAND oreslang-native-actor-membership-test)
     set_tests_properties(native_actor_multi_group_membership PROPERTIES TIMEOUT 20)
+    # Host-only ETS scalar set and pg-style membership snapshots; neither
+    # proves source lowering, distributed pg or VM/IsolateVM admission.
+    add_executable(oreslang-native-ets-scalar-set-test
+        tests/native_ets_scalar_set_test.cpp)
+    target_include_directories(oreslang-native-ets-scalar-set-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ets-scalar-set-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-ets-scalar-set-test PRIVATE Threads::Threads)
+    add_test(NAME native_ets_host_scalar_acl_lifetime
+        COMMAND oreslang-native-ets-scalar-set-test)
+    set_tests_properties(native_ets_host_scalar_acl_lifetime PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-pg-snapshot-test
+        tests/native_pg_membership_snapshot_test.cpp)
+    target_include_directories(oreslang-native-pg-snapshot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-pg-snapshot-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-pg-snapshot-test PRIVATE Threads::Threads)
+    add_test(NAME native_pg_host_membership_snapshot
+        COMMAND oreslang-native-pg-snapshot-test)
+    set_tests_properties(native_pg_host_membership_snapshot PROPERTIES TIMEOUT 30)
     # Host-only CONTROL timer queue: no guest callback, no source async lowering.
     # Expiry tickets are held until exactly-once claim/discard, including
     # accounting for polled-but-not-yet-dispatched timers.
