@@ -371,7 +371,79 @@ struct Function {
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
+    // Trusted ownership pass must approve every source await before LLVM
+    // emission. A nonzero fingerprint binds approval to the source shape.
+    bool suspension_ownership_admitted = false;
+    std::uint64_t suspension_authority_fingerprint = 0;
 };
+
+// Internal compiler-only lifetime authority: no user-supplied bypass flag.
+inline bool has_source_suspension(const Function& fn) noexcept {
+    if (!fn.ready_await_actor.empty() || !fn.done_await_actor.empty()) return true;
+    for (const auto& local : fn.locals)
+        if (!local.task_await_name.empty() || !local.future_await_name.empty())
+            return true;
+    return false;
+}
+
+inline std::uint64_t source_suspension_authority_fingerprint(
+        const Function& fn) noexcept {
+    // FNV-1a protects against accidental post-check AST reshaping. Not a
+    // cryptographic capability, nor proof of a pinned continuation.
+    std::uint64_t hash = UINT64_C(1469598103934665603);
+    const auto byte = [&](std::uint8_t value) {
+        hash ^= value;
+        hash *= UINT64_C(1099511628211);
+    };
+    const auto number = [&](std::uint64_t v) {
+        for (unsigned i = 0; i < 64; i += 8)
+            byte(static_cast<std::uint8_t>(v >> i));
+    };
+    const auto text = [&](std::string_view value) {
+        number(value.size());
+        for (const unsigned char ch : value) byte(ch);
+    };
+    text(fn.name);
+    text(fn.method_owner);
+    text(fn.ready_await_actor);
+    text(fn.done_await_actor);
+    number(fn.ready_await_offset);
+    number(fn.done_await_offset);
+    byte(static_cast<std::uint8_t>(fn.ready_await_form));
+    text(fn.ready_future_name);
+    text(fn.ready_future_actor);
+    number(fn.parameters.size());
+    for (const auto& param : fn.parameters) {
+        text(param.name);
+        text(param.class_name);
+        byte(static_cast<std::uint8_t>(param.mode));
+    }
+    number(fn.locals.size());
+    for (const auto& local : fn.locals) {
+        text(local.name);
+        text(local.class_name);
+        text(local.task_await_name);
+        text(local.future_await_name);
+        number(local.offset);
+        byte(local.record_view ? 1u : 0u);
+        byte(local.heap_owned ? 1u : 0u);
+        byte(local.int_array ? 1u : 0u);
+        byte(local.move_class ? 1u : 0u);
+        byte(local.new_class ? 1u : 0u);
+    }
+    number(fn.source_tasks.size());
+    for (const auto& task : fn.source_tasks) {
+        text(task.name);
+        byte(task.awaited ? 1u : 0u);
+    }
+    number(fn.future_pipelines.size());
+    for (const auto& pipeline : fn.future_pipelines) {
+        text(pipeline.name);
+        byte(pipeline.awaited ? 1u : 0u);
+        number(future_pipeline_authority_fingerprint(pipeline));
+    }
+    return hash ? hash : UINT64_C(1);
+}
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
 enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
