@@ -209,6 +209,19 @@ int main() {
                     "unresolved module imports");
     }
 
+    // A syntactically valid, host-injected namespace import is also not a
+    // verified physical package dependency. Do not silently discard its AST
+    // while constructing a different (apparently authenticated) graph.
+    {
+        Program unverified = make_source("a", "with_unverified_namespace");
+        unverified.namespace_imports.push_back(
+            {"billing", "payments", "+/", 0});
+        another = units;
+        another.push_back({"foo/unverified_namespace", "foo@1", &unverified});
+        must_reject([&] { (void)link_package_namespaces(another, pins, {request}); },
+                    "embedded imports require verified v2 package linking");
+    }
+
     // 7. Unlowered top-level AST families must never enter the scalar graph.
     {
         Program unsupported = make_source("a", "with_sum");
