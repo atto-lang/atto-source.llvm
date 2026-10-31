@@ -50,13 +50,14 @@ native_reject() {
   local name="$1" source="$2" diagnostic="$3"
   local program="$scratch/$name.ores" ir="$scratch/$name.ll"
   printf '%s\n' "$source" > "$program"
-  if "$compiler" --target=host "$program" \
-       > "$ir" 2> "$scratch/$name.compiler.stderr"; then
-    echo "NATIVE_STDOUT_FALSE_ACCEPT: $name" >&2
-    exit 1
-  fi
+  local compile_rc=0
+  "$compiler" --target=host "$program" \
+       > "$ir" 2> "$scratch/$name.compiler.stderr" || compile_rc=$?
+  [[ "$compile_rc" -eq 1 ]] ||
+    { echo "NATIVE_STDOUT_NOT_A_SOURCE_REJECTION: $name rc=$compile_rc" >&2; exit 1; }
   [[ ! -s "$ir" ]] || { echo "NATIVE_STDOUT_PARTIAL_IR: $name" >&2; exit 1; }
-  grep -Fq -- "$diagnostic" "$scratch/$name.compiler.stderr" ||
+  grep -q '^oreslang-llvmc: ' "$scratch/$name.compiler.stderr" &&
+    grep -Fq -- "$diagnostic" "$scratch/$name.compiler.stderr" ||
     { echo "NATIVE_STDOUT_WRONG_DIAGNOSTIC: $name" >&2
       cat "$scratch/$name.compiler.stderr" >&2; exit 1; }
   checks=$((checks+1))
