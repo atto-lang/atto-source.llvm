@@ -201,6 +201,19 @@ int main() {
                 "requires int, got bool");
         }
 
+        // Entry calls must not smuggle named arguments through the pinned
+        // scalar namespace ABI. The general parser may understand named calls,
+        // but this source-to-IR lowering intentionally admits positional only.
+        {
+            auto candidate = make_program();
+            source(candidate, "app/main").source =
+                "import ns a from \"pkg:foo\"; "
+                "pub fnc main(): int { return a.add(a: 20, b: 23); }\\n";
+            require_rejection(
+                [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
+                "entry namespace calls require flat positional non-generic syntax");
+        }
+
         // Duplicate public signature in one package namespace stays forbidden.
         {
             auto candidate = make_program();
