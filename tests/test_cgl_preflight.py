@@ -167,7 +167,7 @@ class CGLAdmissionTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                             ValueError, "executable regular file"):
                         self.inspect(elf(kind=3,
-                                         interpreter=os.fsencode(target) + b"\\0"))
+                                         interpreter=os.fsencode(target) + b"\0"))
 
     def test_accept_pie_with_host_interpreter(self):
         interp = "/lib64/ld-linux-x86-64.so.2"
