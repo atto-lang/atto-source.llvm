@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/DbWalFrameV1.hpp"
+#include "oreslang/runtime/DbWalReplayV1.hpp"
 
 // POSIX host-only physical WAL sync gate; NOT compiled Oreslang guest.
 // A trusted runtime must supply an authenticated private directory FD, own
@@ -133,6 +134,20 @@ public:
         return SyncReceipt{generation_, operation_id,
                 static_cast<std::uint64_t>(start),
                 static_cast<std::uint64_t>(start) + frame_size};
+    }
+
+    /**
+     * Host-only, read-only replay preflight through this locked, trusted
+     * directory-relative file handle. The segment generation can predate
+     * the current new owner's generation. NEVER issue guest ACK or auto-truncate.
+     * Caller must own the higher-level exclusive shard recovery fence.
+     */
+    DbWalReplayV1::Report scan_recovery(
+            std::uint32_t tenant, std::uint32_t segment_generation) const {
+        if (closed_ || uncertain_)
+            throw std::logic_error("WAL closed/unknown; cannot scan");
+        return DbWalReplayV1::scan(fd_, tenant, segment_generation,
+                [](const std::uint8_t*, std::size_t, std::uint64_t) {});
     }
 
     std::uint64_t file_size() const {
