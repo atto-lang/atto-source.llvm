@@ -159,7 +159,15 @@ int main() {
         write_text(dir/"main.ores", "");
         write_text(dir/"lib.ores", "");
         fs::create_symlink(outside, dir/".ores.pkg.toml");
-        must_fail("manifest symlink escape", "must reside within package directory",
+        must_fail("manifest symlink escape", "regular non-symlink file",
+                  [&] { (void)resolve(dir/"main.ores", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "dangling-manifest";
+        write_text(dir/"main.ores", "");
+        write_text(dir/"lib.ores", "");
+        fs::create_symlink(dir/"missing.toml", dir/".ores.pkg.toml");
+        must_fail("dangling manifest marker", "regular non-symlink file",
                   [&] { (void)resolve(dir/"main.ores", "+/lib"); });
     }
     {
@@ -168,17 +176,21 @@ int main() {
         write_text(dir/"main.ores", "");
         write_text(dir/"lib.ores", "");
         fs::create_symlink(dir/"manifest-target.toml", dir/".ores.pkg.toml");
-        bool saw_canonical = false;
-        const auto target = oreslang::resolve_project_root_import(
-            dir/"main.ores", "+/lib",
-            [&](const fs::path& manifest) {
-                if (fs::is_symlink(fs::symlink_status(manifest)))
-                    throw std::runtime_error("manifest reader received unresolved symlink");
-                saw_canonical = fs::equivalent(manifest, dir/"manifest-target.toml");
-                return read_manifest(manifest);
+        // A same-directory symlink used to be accepted after canonicalization.
+        // It is still mutable package authority even if its current target
+        // remains in this directory, so the reader must not be invoked.
+        bool reader_invoked = false;
+        must_fail("same-directory manifest symlink", "regular non-symlink file",
+            [&] {
+                (void)oreslang::resolve_project_root_import(
+                    dir/"main.ores", "+/lib",
+                    [&](const fs::path& manifest) {
+                        reader_invoked = true;
+                        return read_manifest(manifest);
+                    });
             });
-        if (!saw_canonical || target != fs::canonical(dir/"lib.ores"))
-            throw std::runtime_error("manifest canonical read binding mismatch");
+        if (reader_invoked)
+            throw std::runtime_error("symlinked manifest reached reader");
     }
 #endif
     {
