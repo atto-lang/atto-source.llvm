@@ -66,11 +66,11 @@ PinnedNamespaceProgramInput make_program() {
             "namespace b; pub fnc validation_code(): int { return 4; }\n"},
 
         {"foo/api/routes", "foo@1",
-            "namespace c; pub fnc route_code(): int { return 5; }\n"},
+            "namespace c; pub fnc route_ok(int code): bool { return code eq 43; }\n"},
         {"foo/api/handlers", "foo@1",
-            "namespace c; pub fnc handler_code(): int { return 6; }\n"},
+            "namespace c; pub fnc handler_ok(int code): bool { return route_ok(code); }\n"},
         {"foo/api/responses", "foo@1",
-            "namespace c; pub fnc response_code(): int { return 7; }\n"},
+            "namespace c; pub fnc response_delta(): int { return handler_ok(43) ? 0 : 1; }\n"},
 
         // Same spelling and a colliding member in another package instance
         // must stay isolated. The app pin selects foo@1 exactly.
@@ -79,7 +79,8 @@ PinnedNamespaceProgramInput make_program() {
 
         {"app/main", "app@1",
             "import ns a from \"pkg:foo\";\n"
-            "pub fnc main(): int { return a.aggregate(21); }\n"}
+            "import ns c from \"pkg:foo\";\n"
+            "pub fnc main(): int { return a.aggregate(21) + c.response_delta(); }\n"}
     };
     return input;
 }
@@ -98,13 +99,13 @@ int main() {
         }
 
         // A pin to the other same-named namespace is exact, not unioned with
-        // foo@1. It lacks aggregate/1 and cannot satisfy the entry call.
+        // foo@1. It also lacks namespace c; neither import may fall back.
         {
             auto candidate = make_program();
             candidate.pinned_aliases["app@1"]["foo"] = "other@1";
             require_rejection(
                 [&] { (void)oreslang::load_pinned_namespace_program(candidate); },
-                "unknown namespace member or wrong arity");
+                "no cross-package fallback");
         }
 
         // Provider calls are same-package, same-namespace, exact-arity only.
