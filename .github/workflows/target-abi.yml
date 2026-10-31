@@ -16,7 +16,21 @@ jobs:
         compiler: [g++, clang++]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert pinned exact-head source and tree identity
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          actual_head="$(git rev-parse --verify HEAD)"
+          actual_tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          printf 'SOURCE_HEAD=%s\nSOURCE_TREE=%s\n' "$actual_head" "$actual_tree"
+          test "$actual_head" = "$EXPECTED_HEAD"
       - name: Compile and execute exact ABI/DOP safety suites with ASan and UBSan
         env:
           CXX_BIN: ${{ matrix.compiler }}
