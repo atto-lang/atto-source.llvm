@@ -27,13 +27,17 @@ case "$1" in
   "repos/$EXPECTED_REPO/branches/main")
     if [[ "${MOCK_SCENARIO:-}" == unprotected ]]; then echo '{"name":"main","protected":false}'; else echo '{"name":"main","protected":true}'; fi ;;
   "repos/$EXPECTED_REPO/branches/main/protection")
-    if [[ "${MOCK_SCENARIO:-}" == weak_review ]]; then
-      echo '{"required_pull_request_reviews":{"require_code_owner_reviews":false,"dismiss_stale_reviews":true,"required_approving_review_count":1},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
-    elif [[ "${MOCK_SCENARIO:-}" == admin_bypass ]]; then
-      echo '{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[{"login":"admin"}],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
-    else
-      echo '{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
-    fi ;;
+    good_protection='{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false}}'
+    case "${MOCK_SCENARIO:-}" in
+      weak_review) jq -c '.required_pull_request_reviews.require_code_owner_reviews=false' <<< "$good_protection" ;;
+      admin_bypass) jq -c '.required_pull_request_reviews.bypass_pull_request_allowances.users=[{"login":"admin"}]' <<< "$good_protection" ;;
+      stale_review) jq -c '.required_pull_request_reviews.dismiss_stale_reviews=false' <<< "$good_protection" ;;
+      no_admin_enforcement) jq -c '.enforce_admins.enabled=false' <<< "$good_protection" ;;
+      force_push_allowed) jq -c '.allow_force_pushes.enabled=true' <<< "$good_protection" ;;
+      delete_allowed) jq -c '.allow_deletions.enabled=true' <<< "$good_protection" ;;
+      app_bypass) jq -c '.required_pull_request_reviews.bypass_pull_request_allowances.apps=[{"slug":"bypass-app"}]' <<< "$good_protection" ;;
+      *) printf '%s\n' "$good_protection" ;;
+    esac ;;
   "repos/$EXPECTED_REPO/contents/scripts/ci/prepare_source_ephemeral_jit.sh?ref=main")
     if [[ "${MOCK_SCENARIO:-}" == stale_helper ]]; then
       echo "0000000000000000000000000000000000000000"
@@ -65,7 +69,7 @@ EXPECTED_LABEL="oreslang-llvm-ephemeral-v1"
 export PATH="$temp/bin:$original_path"
 EXPECTED_HELPER_PATH="$helper"
 export EXPECTED_REPO EXPECTED_WORKFLOW EXPECTED_LABEL EXPECTED_HELPER_PATH
-for scenario in unprotected weak_review admin_bypass stale_helper overbroad_group extra_repository post_failure; do
+for scenario in unprotected weak_review admin_bypass stale_review no_admin_enforcement force_push_allowed delete_allowed app_bypass stale_helper overbroad_group extra_repository post_failure; do
   if MOCK_SCENARIO="$scenario" bash "$helper" 7 "$temp/secure/$scenario.b64" >"$temp/log" 2>&1; then
     echo "UNSAFE_JIT_ADMISSION=$scenario" >&2; exit 1
   fi
