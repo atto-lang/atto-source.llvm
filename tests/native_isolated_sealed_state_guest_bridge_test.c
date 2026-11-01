@@ -30,6 +30,22 @@ int main(int argc, char** argv) {
     oreslang_actor_Counter_init(heap, turn.domain, turn.epoch);
     ores_actor_i64_heap_leave(heap, turn);
 
+    /* Independent same-kind actor: distinct native heap and turn authority.
+     * Invoke the SAME compiler-generated guest code against its private state.
+     * This is a synchronous guest+heap proof, not scheduler or async parity. */
+    OresActorI64Heap* survivor = ores_actor_i64_heap_open(913, 1, 1);
+    require(survivor != NULL && survivor != heap);
+    OresActorTurn survivor_turn = ores_actor_i64_heap_enter(survivor, 913, 1);
+    require(survivor_turn.domain != actor_domain);
+    oreslang_actor_Counter_init(
+        survivor, survivor_turn.domain, survivor_turn.epoch);
+    ores_actor_i64_heap_leave(survivor, survivor_turn);
+    survivor_turn = ores_actor_i64_heap_enter(survivor, 913, 1);
+    const int64_t survivor_first = oreslang_actor_Counter_on_message(
+        survivor, survivor_turn.domain, survivor_turn.epoch, 3);
+    ores_actor_i64_heap_leave(survivor, survivor_turn);
+    require(survivor_first == (writing ? 3 : 10));
+
     turn = ores_actor_i64_heap_enter(heap, 912, 1);
     require(turn.domain == actor_domain && turn.epoch == init_epoch + 1);
     const uint64_t first_epoch = turn.epoch;
@@ -82,6 +98,16 @@ int main(int argc, char** argv) {
     }
     ores_actor_i64_heap_retire(heap);
     require(ores_actor_i64_heap_try_destroy(heap));
+
+    /* Reclaim actor A while actor B is still live; B's private state and
+     * compiled handler must remain functional after A's native deallocation. */
+    survivor_turn = ores_actor_i64_heap_enter(survivor, 913, 1);
+    const int64_t survivor_second = oreslang_actor_Counter_on_message(
+        survivor, survivor_turn.domain, survivor_turn.epoch, 4);
+    ores_actor_i64_heap_leave(survivor, survivor_turn);
+    require(survivor_second == (writing ? 7 : 11));
+    ores_actor_i64_heap_retire(survivor);
+    require(ores_actor_i64_heap_try_destroy(survivor));
     puts(writing ? "COMPILED_SEALED_WRITE_GUEST_PASS"
                  : "COMPILED_SEALED_READ_GUEST_PASS");
     return 0;
