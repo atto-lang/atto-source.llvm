@@ -2123,6 +2123,18 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-logical-mutex-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-logical-mutex-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_mutex_fifo_and_cancellation COMMAND oreslang-logical-mutex-test)
+    # Standalone native gate retirement and cancellation race witness.
+    # Not a compiled guest critical statement or cross-backend parity claim.
+    add_executable(oreslang-critical-retirement-stress-test
+        tests/critical_gate_retirement_stress_test.cpp)
+    target_include_directories(oreslang-critical-retirement-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-critical-retirement-stress-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-critical-retirement-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_critical_gate_retirement_stress
+        COMMAND oreslang-critical-retirement-stress-test)
+    set_tests_properties(native_critical_gate_retirement_stress PROPERTIES TIMEOUT 35)
     # Host policy only; guest exceptional effects remain rejected.
     add_executable(oreslang-native-exception-policy-test tests/native_exception_policy_test.cpp)
     target_include_directories(oreslang-native-exception-policy-test PRIVATE
