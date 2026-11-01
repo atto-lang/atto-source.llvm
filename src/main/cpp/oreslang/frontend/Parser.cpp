@@ -463,6 +463,7 @@ std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     result->integer = source.integer;
     result->boolean = source.boolean;
     result->resolved_type = source.resolved_type;
+    result->cast_target = source.cast_target;
     result->resolved_class = source.resolved_class;
     result->name = source.name;
     result->argument_names = source.argument_names;
@@ -2375,7 +2376,9 @@ private:
                     continue;
                 }
                 if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
-                if (!explicit_type) fail("scalar local requires an explicit ': int' or ': bool' type");
+                // Unannotated scalar locals use the *actual* initializer type;
+                // no default-to-i64 or conversion on a failed inference.
+                binding.inferred_scalar = !explicit_type;
                 binding.initializer = expression();
             }
             require(";");
@@ -2420,6 +2423,14 @@ private:
                     if (accept(scalar)) return scalar;
                 return type_identifier();
             };
+            if (token_.kind == Kind::Identifier && peek_next().text == "=") {
+                // Branch-local inferred binding: const x = expression;
+                // resolved against the predecessor's checked type environment.
+                local->name = identifier();
+                local->inferred_scalar = true;
+                require("="); local->initializer = expression(); require(";");
+                statement.branch_local = std::move(local); return statement;
+            }
             const std::string first = type_name(); std::string type;
             if (accept(":")) { local->name = first; type = type_name(); }
             else { type = first; local->name = identifier(); }
@@ -3188,8 +3199,26 @@ private:
 
     std::unique_ptr<Expression> comparison() {
         auto left = additive();
-        while (token_.text == "<" || token_.text == "<=" ||
-                token_.text == ">" || token_.text == ">=") {
+        while (true) {
+            // Match Java comparison precedence. A checked scalar identity cast
+            // is a proof, never a numeric/string conversion or a bitcast.
+            if (token_.text == "as") {
+                const auto offset = token_.offset;
+                advance();
+                if (accept("?"))
+                    fail("native as? requires Option<T> checked-cast lowering");
+                auto cast = make_expression(Expression::Kind::Cast, offset);
+                if (accept("int")) cast->cast_target = ScalarType::I64;
+                else if (accept("bool")) cast->cast_target = ScalarType::Bool;
+                else if (accept("string") || accept("String"))
+                    cast->cast_target = ScalarType::String;
+                else fail("native checked cast requires int, bool or string; nominal/dynamic casts need runtime type checks");
+                cast->left = std::move(left);
+                left = std::move(cast);
+                continue;
+            }
+            if (token_.text != "<" && token_.text != "<=" &&
+                    token_.text != ">" && token_.text != ">=") break;
             const auto offset = token_.offset;
             const auto op = token_.text;
             advance();
@@ -4154,6 +4183,9 @@ private:
                 }
                 return;
             }
+            case Expression::Kind::Cast:
+                validate_expression(*expr.left, parameters, functions, depth + 1);
+                return;
             case Expression::Kind::Negate:
             case Expression::Kind::LogicalNot:
             case Expression::Kind::Copy:
@@ -4314,6 +4346,16 @@ private:
                 // placeholder here lets statement-position void calls reuse the
                 // exact same typed argument binder.
                 return signature.returns_void ? ScalarType::I64 : signature.return_type;
+            }
+            case Expression::Kind::Cast: {
+                const ScalarType actual = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                if (actual != expr.cast_target)
+                    throw std::runtime_error("impossible native cast: " +
+                        std::string(scalar_type_name(actual)) + " as " +
+                        scalar_type_name(expr.cast_target) + " at byte " +
+                        std::to_string(expr.offset));
+                return expr.resolved_type = expr.cast_target;
             }
             case Expression::Kind::Negate: {
                 ScalarType operand = validate_scalar_expression(
@@ -5115,8 +5157,12 @@ private:
                     if (!binding.initializer)
                         throw std::runtime_error(
                             "native scalar local requires an initializer");
-                    require_scalar(*binding.initializer, binding.scalar_type,
-                        "native scalar local initializer", scalar_types);
+                    if (binding.inferred_scalar)
+                        binding.scalar_type = validate_scalar_expression(
+                            *binding.initializer, scalar_types, functions);
+                    else
+                        require_scalar(*binding.initializer, binding.scalar_type,
+                            "native scalar local initializer", scalar_types);
                 }
                 scalar_types.emplace(binding.name, binding.scalar_type);
             }
@@ -5177,8 +5223,14 @@ private:
                 }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
                     const LocalBinding& local = *stmt.branch_local;
-                    if (local.initializer) require_scalar(*local.initializer, local.scalar_type,
-                        "native branch-local initializer", env);
+                    if (local.initializer) {
+                        if (local.inferred_scalar)
+                            local.scalar_type = validate_scalar_expression(
+                                *local.initializer, env, functions);
+                        else
+                            require_scalar(*local.initializer, local.scalar_type,
+                                "native branch-local initializer", env);
+                    }
                     scoped_type(local, env);
                     return;
                 }
