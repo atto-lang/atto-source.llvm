@@ -99,11 +99,14 @@ static int resume_begin_checked(
      * which also drops the retained parent; only the claim winner survives.
      */
     OresNativeContinuationRecord claimed;
-    const int claim_ok = requires_ready
-        ? ores_native_continuation_store_try_claim_ready_resume(
-            continuations, link.continuation, &claimed)
-        : ores_native_continuation_store_try_claim_resume(
-            continuations, link.continuation, &claimed);
+    const int claim_ok = requires_ready && current_code_generation != 0
+        ? ores_native_continuation_store_try_claim_ready_current_code(
+            continuations, link.continuation, current_code_generation, &claimed)
+        : requires_ready
+            ? ores_native_continuation_store_try_claim_ready_resume(
+                continuations, link.continuation, &claimed)
+            : ores_native_continuation_store_try_claim_resume(
+                continuations, link.continuation, &claimed);
     if (!claim_ok) {
         (void)ores_native_execution_context_store_release(
             executions, execution);
