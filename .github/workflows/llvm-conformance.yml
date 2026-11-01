@@ -13,7 +13,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify AI smoke admission unit tests
         run: python3 scripts/test_ai_conformance_smoke.py
       - name: Prepare Python schema validator
@@ -44,6 +47,17 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
+      - name: Verify canonical six native Oreslang scalar fixtures on exact PR head
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          export ORESLANG_LLVMC="$PWD/build/oreslang-llvmc"
+          export ORESLANG_LLVM_COMPILER_SHA256="$(sha256sum "$ORESLANG_LLVMC" | cut -d ' ' -f 1)"
+          bash -n scripts/verify-portable-scalar.sh
+          bash scripts/verify-portable-scalar.sh
       - name: Check REAL carrier admission and handler traces
         run: python3 contracts/v1/semantics/traces/native_probe.py --binary ./build/oreslang-actor-trace-test --repeat 12 --timeout 15
       - name: Check normative LLVM admissions
