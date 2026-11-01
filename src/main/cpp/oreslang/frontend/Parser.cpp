@@ -4637,6 +4637,46 @@ private:
                         std::any_of(fn.parameters.begin(), fn.parameters.end(),
                             [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
                 throw std::runtime_error("native f64 class method ABI not yet admitted");
+            const bool has_f64_function_abi = fn.return_type == ScalarType::F64 ||
+                std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                    [](const Parameter& p) { return p.scalar_type == ScalarType::F64; });
+            if (has_f64_function_abi) {
+                // First ABI slice is pure scalar: no owner/borrow/actor
+                // continuation or generic return may travel as an IEEE value.
+                if (!fn.generic_parameters.empty() || !fn.return_class.empty() ||
+                        !fn.return_sum.empty() || fn.has_declared_effects ||
+                        !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                        !fn.actor_field_writes.empty() || !fn.source_tasks.empty() ||
+                        !fn.future_pipelines.empty() || !fn.ready_await_actor.empty() ||
+                        !fn.done_await_actor.empty() || fn.scalar_while ||
+                        fn.caught_throw_value || !fn.caught_throw_defers.empty())
+                    throw std::runtime_error("native f64 function ABI requires pure synchronous scalar frame");
+                for (const auto& param : fn.parameters)
+                    if (param.mode != Parameter::Mode::Value ||
+                            !param.class_name.empty() || !param.generic_type.empty() ||
+                            !param.sum_type.empty())
+                        throw std::runtime_error("native f64 function ABI forbids borrowed or owned parameters");
+                for (const auto& local : fn.locals)
+                    if (local.heap_owned || local.int_array || local.new_class ||
+                            local.move_class || local.record_view ||
+                            !local.class_name.empty() || !local.task_await_name.empty() ||
+                            !local.future_await_name.empty())
+                        throw std::runtime_error("native f64 function ABI forbids owned local storage");
+                std::function<bool(const Statement&)> scalar_statement =
+                    [&](const Statement& statement) {
+                        const bool supported = statement.kind == Statement::Kind::ScopedLocal ||
+                            statement.kind == Statement::Kind::ScalarWrite ||
+                            statement.kind == Statement::Kind::Conditional ||
+                            statement.kind == Statement::Kind::Return;
+                        return supported &&
+                            std::all_of(statement.then_statements.begin(),
+                                statement.then_statements.end(), scalar_statement) &&
+                            std::all_of(statement.else_statements.begin(),
+                                statement.else_statements.end(), scalar_statement);
+                    };
+                if (!std::all_of(fn.statements.begin(), fn.statements.end(), scalar_statement))
+                    throw std::runtime_error("native f64 function ABI requires scalar-only structured statements");
+            }
             NativeCallSignature signature;
             signature.generics = fn.generic_parameters;
             for (const auto& param : fn.parameters) {
