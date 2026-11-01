@@ -128,6 +128,24 @@ int main() {
                 ORES_RT_ARENA_OK,
             "persistent read");
     require(observed == value, "persistent value");
+    // Reinitialization while the physical carrier owns a turn would erase
+    // the allocator, epoch and slot data. It must reject before touching any
+    // bytes, even when a new owner/domain is supplied.
+    const std::uint64_t active_epoch = arena.epoch;
+    const std::size_t active_free_count = arena.free_count;
+    require(ores_rt_actor_arena_init(
+                &arena, storage.data(), storage.size(),
+                88, 11, 3, 4, 64, 4096) == ORES_RT_ARENA_BUSY,
+            "active carrier cannot reinitialize its arena");
+    require(arena.domain == 77 && arena.epoch == active_epoch &&
+                arena.free_count == active_free_count && arena.active,
+            "rejected reinit preserves owner epoch and allocation capacity");
+    observed = 0;
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_OK && observed == value,
+            "failed active reinit preserves the live allocation and carrier");
+
 
     // A stale or malicious host adapter must not be able to turn an arena
     // data-copy into corruption of private slot, scratch or control metadata.
