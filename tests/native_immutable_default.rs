@@ -36,6 +36,9 @@ fn run() -> Result<(), String> {
         ("const-colon", "const x: int = 7; return x;", 7),
         ("dependent-default", "int x = 7; int y = x * 3; return y;", 21),
         ("readonly-result", "int x = 7; return x + 1;", 8),
+        ("bool-readonly", "bool flag = true; return 7;", 7),
+        ("const-dependency", "const x = 7; const y = x + 1; return y;", 8),
+        ("let-rebinding-control", "let int x = 7; x = 8; return x;", 8),
     ];
     let negatives: &[(&str, &str)] = &[
         ("rebind", "int x = 7; x = 8; return x;"),
@@ -45,6 +48,8 @@ fn run() -> Result<(), String> {
         ("self-reference", "int x = x + 1; return x;"),
         ("duplicate", "int x = 7; int x = 8; return x;"),
         ("missing-initializer", "int x; return 7;"),
+        ("const-rebind", "const x = 7; x = 8; return x;"),
+        ("bool-mismatch", "bool flag = 7; return 7;"),
     ];
     for (name, body, expected) in positives {
         let src = dir.join(format!("{name}.ores"));
