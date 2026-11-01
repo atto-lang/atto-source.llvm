@@ -136,6 +136,14 @@ def main():
             "sealed actor message parameter shadows state field",
         "source-isolated-actor-sealed-binding-shadow-message-reject.ores":
             "native sealed state callback binding shadows message or state",
+        "source-isolated-actor-sealed-bracket-read-mutation-reject.ores":
+            "critical-read callback cannot mutate sealed actor state",
+        "source-isolated-actor-sealed-binding-shadow-state-reject.ores":
+            "native sealed state callback binding shadows message or state",
+        "source-isolated-actor-sealed-bracket-unknown-mode-reject.ores":
+            "native sealed handle_state requires read or write mode",
+        "source-isolated-actor-sealed-bracket-uppercase-mode-reject.ores":
+            "native sealed handle_state requires read or write mode",
         "source-isolated-actor-sealed-multi-write-reject.ores":
             "native sealed callback v1 allows one write until atomic multi-field commit lowering",
         "source-isolated-actor-sealed-postcommit-overflow-reject.ores":
