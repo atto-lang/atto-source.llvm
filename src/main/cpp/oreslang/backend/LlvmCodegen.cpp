@@ -1768,7 +1768,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; llvm::Value* array_shadow = nullptr; };
         auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
             const bool record = !local.class_name.empty();
-            llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name)) : i64;
+            // Branch-scoped f64 must use a real double slot, not an i64 carrier.
+            // The same lexical lifetime/CFG cleanup applies to an eight-byte float.
+            llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name))
+                : local.scalar_type == ScalarType::F64 ? static_cast<llvm::Type*>(builder.getDoubleTy()) : i64;
             const std::size_t bytes = record ? record_classes.at(local.class_name)->fields.size() * 8 : 8;
             // Allocate once per native invocation, never on every back-edge.
             llvm::IRBuilder<> entry_slots(&function->getEntryBlock(), function->getEntryBlock().begin());
@@ -1796,7 +1799,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     if (!field_storage.emplace(key, address).second) throw std::runtime_error("scoped record field collision");
                     result.fields.push_back(key);
                 }
-            } else builder.CreateStore(init, slot);
+            } else {
+                if (local.scalar_type == ScalarType::F64 &&
+                        (!init || init->getType() != builder.getDoubleTy()))
+                    throw std::runtime_error("native scoped f64 initializer requires LLVM double");
+                builder.CreateStore(init, slot);
+            }
             if (!storage.emplace(local.name, slot).second) throw std::runtime_error("scoped value shadows existing storage");
             if (record) result.subobjects = register_subobjects(local.name, local.class_name, slot);
             return result;
