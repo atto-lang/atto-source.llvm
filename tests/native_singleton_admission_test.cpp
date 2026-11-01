@@ -25,6 +25,17 @@ int main() {
     denied("pub define singleton Settings as end\n");
     denied("define module app as\n define singleton Settings as end\nend\n");
 
+    // Identical Oreslang source bytes as the shared state-container candidates.
+    // A parser that merely chokes on @Inject after singleton is not sufficient:
+    // ORES-SINGLETON-UNSUPPORTED must be raised before body or trait lowering.
+    denied("define singleton StateBank implements Stateful<BankState> as\n"
+           "    @Inject\n"
+           "    state: MutableStateContainer<BankState>\n"
+           "end\n");
+    denied("define singleton StateBank as\n"
+           "    state { let count: int = 0 }\n"
+           "end\n");
+
     // singleton is contextual: ordinary callable names and comments stay legal.
     const auto program = parse_program(
         "// define singleton CommentOnly as end\n"
