@@ -2129,7 +2129,17 @@ private:
             require(";");
             return true;
         };
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+        auto type_first_scalar_local = [&]() {
+            if (token_.text != "int" && token_.text != "bool" &&
+                    token_.text != "string" && token_.text != "String")
+                return false;
+            Lexer look = lexer_;
+            const auto name = look.next();
+            const auto equal = look.next();
+            return name.kind == Kind::Identifier && equal.text == "=";
+        };
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
+                token_.text == "stdio" || array_effect_ahead() || type_first_scalar_local()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -2141,7 +2151,16 @@ private:
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+            if (type_first_scalar_local()) {
+                binding.owner_mutable = false;
+                binding.assignable = false;
+                binding.scalar_type = accept("bool") ? ScalarType::Bool :
+                    (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                if (binding.scalar_type == ScalarType::I64) require("int");
+                binding.name = identifier();
+                require("=");
+                binding.initializer = expression();
+            } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";

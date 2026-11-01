@@ -46,6 +46,9 @@ def main():
     # These are native Oreslang guest programs, not host-language arithmetic
     # stand-ins. All accepted programs must emit IR, link and exit 42.
     positive.extend([
+        ('five-backend-type-first-immutable', 'pub fnc main():int{int x=7;const y=x;const int z=y as int;return z+35;}'),
+        ('type-first-bool-immutable', 'pub fnc main():int{bool flag=true;if(flag){return 42;}fi return 0;}'),
+        ('type-first-int-expression', 'pub fnc main():int{int x=(2+5) as int;return x+35;}'),
         ('inferred-int', 'pub fnc main():int{const x=7;return x+35;}'),
         ('explicit-vs-cast', 'pub fnc main():int{const int a=7;const b=7 as int;return a+b+28;}'),
         ('annotation-vs-cast', 'pub fnc main():int{const a:int=7;const b=7 as int;return a+b+28;}'),
@@ -115,6 +118,8 @@ def main():
         ('generic-bool', 'fnc id<T>(T n):T{return n;}pub fnc main():int{return id(true);}'),
     ]
     negative.extend([
+        ('type-first-int-rejects-bool', 'pub fnc main():int{int x=true;return 0;}'),
+        ('type-first-bool-rejects-int', 'pub fnc main():int{bool x=7;return 0;}'),
         ('cast-int-to-bool', 'pub fnc main():int{const x=7 as bool;return 0;}'),
         ('cast-bool-to-int', 'pub fnc main():int{const x=true as int;return 0;}'),
         ('cast-string-to-int', 'pub fnc main():int{const x="7" as int;return 0;}'),
@@ -179,6 +184,8 @@ def main():
     }
     ownership_diagnostics.update(scalar_diagnostics)
     ownership_diagnostics.update({
+        'type-first-int-rejects-bool': 'native scalar local initializer requires int, got bool',
+        'type-first-bool-rejects-int': 'native scalar local initializer requires bool, got int',
         'cast-int-to-bool': 'impossible native cast: int as bool',
         'cast-bool-to-int': 'impossible native cast: bool as int',
         'cast-string-to-int': 'impossible native cast: string as int',
