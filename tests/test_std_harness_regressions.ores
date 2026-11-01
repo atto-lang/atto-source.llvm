@@ -4,9 +4,15 @@ fnc exact_i64_above_float_precision(): TestOutcome {
   return expect_equal_int(9007199254740993 - 9007199254740992, 1,
     "signed i64 subtraction must not route through f64");
 }
+fnc minimum_i64_increment_exact(): TestOutcome {
+  val int minimum = -9223372036854775807 - 1;
+  return expect_equal_int(minimum + 1, -9223372036854775807,
+    "i64 minimum plus one must not silently overflow");
+}
 pub routine main(): void {
   val TestSuite suite = new TestSuite("llvm-guest-semantics", arr[
-    new TestCase("exact_i64_above_float_precision", exact_i64_above_float_precision, false, "")
+    new TestCase("exact_i64_above_float_precision", exact_i64_above_float_precision, false, ""),
+    new TestCase("minimum_i64_increment_exact", minimum_i64_increment_exact, false, "")
   ]);
   val TestOptions options = new TestOptions("", false, true);
   val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
