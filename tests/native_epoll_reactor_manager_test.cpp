@@ -354,6 +354,48 @@ int main() {
         ::close(endpoints[0]);
         ::close(endpoints[1]);
     }
+    {
+        // Pipe read and write endpoints share the same inode, yet are
+        // independent directions. A conservative inode-only alias guard
+        // must not prevent full-duplex reactor event admission on pipes.
+        NativeEpollReactorManager manager(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        int endpoints[2]{-1, -1};
+        check(::pipe2(endpoints, O_NONBLOCK | O_CLOEXEC) == 0);
+        auto reader = manager.try_watch(endpoints[0], EPOLLIN);
+        check(reader.has_value());
+        auto writer = manager.try_watch(endpoints[1], EPOLLOUT);
+        check(writer.has_value());
+        const int reader_alias = ::dup(endpoints[0]);
+        const int writer_alias = ::dup(endpoints[1]);
+        check(reader_alias >= 0 && writer_alias >= 0);
+        check(!manager.try_watch(reader_alias, EPOLLIN).has_value());
+        check(!manager.try_watch(writer_alias, EPOLLOUT).has_value());
+        manager.stop();
+        ::close(reader_alias);
+        ::close(writer_alias);
+        ::close(endpoints[0]);
+        ::close(endpoints[1]);
+    }
+    {
+        // dup2 can overwrite a numeric FD while retaining the original
+        // underlying socket. It must not bypass the ownership claim.
+        NativeEpollReactorManager manager(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        int endpoints[2]{-1, -1};
+        check(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+            0, endpoints) == 0);
+        const int alias = ::dup(endpoints[0]);
+        check(alias >= 0 && alias != endpoints[0]);
+        check(::dup2(endpoints[0], alias) == alias);
+        auto watch = manager.try_watch(endpoints[0], EPOLLIN);
+        check(watch.has_value());
+        check(!manager.try_watch(alias, EPOLLOUT).has_value());
+        manager.stop();
+        ::close(alias);
+        ::close(endpoints[0]);
+        ::close(endpoints[1]);
+    }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
     catch (const std::invalid_argument&) { bad = true; }
