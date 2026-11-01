@@ -32,7 +32,16 @@ int main() {
     require(zero.status == Report::Status::recipient_limit && attempted == 0);
     auto full = native_pg_try_broadcast(m, 7, 2, accept);
     require(full.status == Report::Status::recipient_limit &&
-            full.snapshot_members == 3 && attempted == 0);
+            full.snapshot_members == 0 && attempted == 0);
+    auto too_small = m.snapshot_group_limited(7, 2);
+    require(too_small.status == Registry::SnapshotStatus::recipient_limit &&
+            !too_small.snapshot);
+    auto not_found = m.snapshot_group_limited(99, 3);
+    require(not_found.status == Registry::SnapshotStatus::group_missing &&
+            !not_found.snapshot);
+    auto bounded = m.snapshot_group_limited(7, 3);
+    require(bounded.status == Registry::SnapshotStatus::ok &&
+            bounded.snapshot && bounded.snapshot->members.size() == 3);
     auto complete = native_pg_try_broadcast(m, 7, 3, accept);
     require(complete.status == Report::Status::ok &&
             complete.snapshot_members == 3 && complete.accepted == 3 &&
