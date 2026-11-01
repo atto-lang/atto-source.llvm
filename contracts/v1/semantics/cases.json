@@ -234,6 +234,39 @@
         "llvm": "required",
         "graal": "required"
       }
+    },
+    {
+      "id": "native.oresllm-zero-product",
+      "feature": "numeric.oresllm-zero-product",
+      "source": "fixtures/oresllm-zero-product.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-nested-arithmetic",
+      "feature": "numeric.oresllm-nested-arithmetic",
+      "source": "fixtures/oresllm-nested-arithmetic.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-subtract-self",
+      "feature": "numeric.oresllm-subtract-self",
+      "source": "fixtures/oresllm-subtract-self.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
     }
   ]
 }
