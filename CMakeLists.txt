@@ -1704,6 +1704,17 @@ if(BUILD_TESTING)
     add_test(NAME native_ets_insert_new_and_retire_race
         COMMAND oreslang-native-ets-linearization-test)
     set_tests_properties(native_ets_insert_new_and_retire_race PROPERTIES TIMEOUT 45)
+    add_executable(oreslang-native-ets-versioned-cas-test
+        tests/native_ets_versioned_cas_test.cpp)
+    target_include_directories(oreslang-native-ets-versioned-cas-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ets-versioned-cas-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-ets-versioned-cas-test PRIVATE Threads::Threads)
+    add_test(NAME native_ets_aba_versioned_cas_contention
+        COMMAND oreslang-native-ets-versioned-cas-test)
+    set_tests_properties(native_ets_aba_versioned_cas_contention
+        PROPERTIES TIMEOUT 45)
 
     add_executable(oreslang-native-pg-broadcast-test
         tests/native_pg_broadcast_test.cpp)
