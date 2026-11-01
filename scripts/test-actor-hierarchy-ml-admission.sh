@@ -6,7 +6,8 @@ set -Eeuo pipefail
 [[ $# -eq 3 ]] || { echo "usage: $0 ORESLANG_LLVMC CLANG SOURCE_ROOT" >&2; exit 2; }
 compiler="$1"; clang="$2"; root="$3"
 [[ -x "$compiler" ]] || { echo "missing actual LLVM source compiler" >&2; exit 2; }
-[[ -x "$clang" ]] || { echo "missing Clang" >&2; exit 2; }
+clang="$(command -v "$clang" || true)"
+[[ -n "$clang" && -x "$clang" ]] || { echo "missing Clang" >&2; exit 2; }
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 # d(0.5*(w*x-target)^2)/dw = (w*x-target)*x.
