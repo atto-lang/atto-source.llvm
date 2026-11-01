@@ -316,7 +316,10 @@ int main() {
         seed ^= seed << 17U;
         return seed;
     };
-    for (int i = 0; i < 8192; ++i) {
+    // Increase the reproducible full-width differential corpus. The
+    // unsigned-magnitude oracle is independent of the implementation's
+    // signed remainder and avoids undefined MIN/-1 division.
+    for (int i = 0; i < 60000; ++i) {
         const auto a_bits = next_bits();
         const auto b_bits = next_bits();
         I a = 0, b = 0;
