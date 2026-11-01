@@ -516,6 +516,10 @@ static void open_group_locked(void) {
     group.continuations = ores_native_continuation_store_open(
         SOURCE_TRACE_CONTINUATIONS, group.executions);
     ensure(group.continuations != NULL);
+    /* The traced source compiler emits one bootstrap image. Register that
+     * image with the runtime before any actor or continuation is admitted. */
+    ensure(ores_native_continuation_store_rotate_code_generation(
+        group.continuations, SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION));
 
     OresNativeVMConfig cfg = {0};
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
