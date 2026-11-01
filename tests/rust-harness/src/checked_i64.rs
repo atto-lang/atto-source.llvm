@@ -19,6 +19,11 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("lazy-and", "pub fnc main():int{return (false && (9223372036854775807+1>0)) ? 0 : 42;}", 42),
         ("lazy-or", "pub fnc main():int{return (true || (9223372036854775807+1>0)) ? 42 : 0;}", 42),
         ("dynamic", "fnc add(int a,int b):int{return a+b;} pub fnc main():int{return add(40,2);}", 42),
+        // Oreslana bounded ledger arithmetic canaries: genuine LLVM IR,
+        // Clang native executable and exact process exit in BOTH O1/O2.
+        ("oreslana-zero", "pub fnc main():int{return (4096-64)+(32*2)-4096;}", 0),
+        ("oreslana-nonzero", "pub fnc main():int{return 73;}", 73),
+        ("oreslana-max-bounded", "pub fnc main():int{return (9223372036854775807-9223372036854775800)*6;}", 42),
     ];
     let negatives = [
         ("add", "pub fnc main():int{return 9223372036854775807+1;}", "llvm.sadd.with.overflow.i64"),
@@ -29,6 +34,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("dynamic-subtract", "fnc sub(int a,int b):int{return a-b;} pub fnc main():int{return sub(-9223372036854775808,1);}", "llvm.ssub.with.overflow.i64"),
         ("dynamic-multiply", "fnc mul(int a,int b):int{return a*b;} pub fnc main():int{return mul(3037000500,3037000500);}", "llvm.smul.with.overflow.i64"),
         ("dynamic-negate", "fnc neg(int a):int{return -a;} pub fnc main():int{return neg(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
+        // Intermediate overflow is not redeemed by a later zero multiply.
+        ("oreslana-overflow-before-zero", "pub fnc main():int{return (9223372036854775807+1)*0;}", "llvm.sadd.with.overflow.i64"),
     ];
     let mut executions = 0;
     for optimization in ["-O1", "-O2"] {
