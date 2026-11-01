@@ -28,6 +28,7 @@ jobs:
           git diff --quiet
           test -z "$(git ls-files --others --exclude-standard)"
           test "$(git hash-object contracts/v1/hpc-finance/risk-gate-v1.tsv)" = cec489c1f7603617797340dd1b4a71cc85acfebd
+          test "$(git hash-object contracts/v1/hpc-finance/guest-manifest.json)" = 062cff056919708b2cc9e6f9a6f4cb6ec00661e8
           printf 'LLVM_HPC_HOST_SOURCE_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute strict C++17 host oracle plus mutation cases
         shell: bash
