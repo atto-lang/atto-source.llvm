@@ -43,18 +43,19 @@ shared-memory capability remains mandatory under the runtime's isolate policy.
 
 ## Compiler tests
 
-Java: `MutableShareCompilerTest` verifies distinct AST forms, shared-handle
-runtime identity via protected writes, exclusive borrow conflicts, invalid
-scalars/objects/local mutexes/borrows/generics, forged nominals, and malformed
-spellings. These tests must run under Maven/JUnit; source-only assertions
-do not establish execution.
+Java: `MutableShareCompilerTest` has 30 authored JUnit tests covering distinct
+AST forms, runtime handle identity (including nested sharing), exclusive-loan
+non-upgrade, invalid mutable objects/local mutexes/borrows/generics, forged
+nominals, restricted-operand admission order, nested capability denial, and
+malformed spellings. These tests must run under Maven/JUnit; source-only
+assertions do not establish execution.
 
 LLVM: `native_borrow_admission` contains 12 `rt mut share` compiler-negative
 contexts (20 native borrow denials total) and four real-IR positive controls,
 including a canonical `rt mut borrow` control. Negative cases demand the
 dedicated `rt mut share` diagnostic, **zero emitted IR**, no artifacts inside
 or beside the scratch fixture, and a normal nonzero compiler exit (not a crash).
-The Rust harness also has 14 source-free adversarial/predicate unit tests.
+The Rust harness also has 17 authored source-free adversarial/predicate unit tests, including stderr IR, fast-exit output-budget, signal-termination, and parent-scratch artifact canaries.
 These additions require exact-head execution; earlier successful CI runs
 do not verify later commits. Native guarded `SharedMutex<T>` lowering remains
 unimplemented; a parser rejection is *not* native shared-mutable support.
