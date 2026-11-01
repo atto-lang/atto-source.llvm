@@ -1341,7 +1341,9 @@ private:
             const std::size_t critical_offset = token_.offset;
             require("critical");
             std::string access;
-            if (token_.text == "-" && token_.offset == critical_offset + 8) {
+            if (token_.text == "-") {
+                if (token_.offset != critical_offset + 8)
+                    fail("sealed handle_state requires contiguous critical-read/write modifier");
                 require("-");
                 if (token_.offset != critical_offset + 9)
                     fail("sealed handle_state requires contiguous critical-read/write modifier");
