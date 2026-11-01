@@ -3972,6 +3972,30 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-vm-nio-lifecycle-test)
     set_tests_properties(native_vm_nio_lifecycle_and_rt_prestart
         PROPERTIES TIMEOUT 30)
+    # One host process, zero VM-created pthreads: ETS, pg, control wake and
+    # attached-but-idle epoll must not secretly start scheduler/reactor workers.
+    add_executable(oreslang-native-vm-ets-pg-cold-boot-test
+        tests/native_vm_ets_pg_cold_boot_test.cpp
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+        src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+    target_include_directories(oreslang-native-vm-ets-pg-cold-boot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-vm-ets-pg-cold-boot-test PRIVATE
+        c_std_11 cxx_std_17)
+    set_target_properties(oreslang-native-vm-ets-pg-cold-boot-test PROPERTIES
+        LINKER_LANGUAGE CXX)
+    target_link_libraries(oreslang-native-vm-ets-pg-cold-boot-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-vm-ets-pg-cold-boot-test PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>
+        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_vm_ets_pg_zero_cold_threads
+        COMMAND oreslang-native-vm-ets-pg-cold-boot-test)
+    set_tests_properties(native_vm_ets_pg_zero_cold_threads
+        PROPERTIES TIMEOUT 30)
 endif()
 
 # This compiles the REAL native frontend parser and ownership checker,
