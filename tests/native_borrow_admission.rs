@@ -119,9 +119,9 @@ fn main() {
         ("mut-share-over-shared-handle-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-over-mutable-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt mut borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
 
-        ("mut-share-local-binding-reject", "pub fnc main(): int { let int v = 42; let int alias = rt mut share v; return alias; }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
-        ("mut-share-function-argument-reject", "fnc consume(int x): int { return x; }\\npub fnc main(): int { let int v = 42; return consume(rt mut share v); }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
-        ("mut-share-nested-group-reject", "pub fnc main(): int { let int v = 42; return rt mut share ((v)); }\\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-local-binding-reject", "pub fnc main(): int { let int v = 42; let int alias = rt mut share v; return alias; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-function-argument-reject", "fnc consume(int x): int { return x; }\npub fnc main(): int { let int v = 42; return consume(rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-nested-group-reject", "pub fnc main(): int { let int v = 42; return rt mut share ((v)); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
 
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_non_ir_stdout_even_with_correct_diagnostic() {
         assert_rejected_fake_compiler(
-            "printf 'compilation failed\\n'\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+            "printf 'compilation failed\n'\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_nested_output_directory() {
         assert_rejected_fake_compiler(
-            "mkdir -p generated/objects\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+            "mkdir -p generated/objects\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_extra_symlink_artifact() {
         assert_rejected_fake_compiler(
-            "ln -s input.ores output.ll\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+            "ln -s input.ores output.ll\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_mixed_ir_and_failure_banner() {
         assert_rejected_fake_compiler(
-            "printf '; ownership failed\\ndefine i64 @main() {\\n'\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+            "printf '; ownership failed\ndefine i64 @main() {\n'\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
