@@ -84,20 +84,39 @@ public:
             table_epoch_ + 1, next_incarnation()
         };
         handoff_ = ticket;
+        retired_owner_confirmed_ = false;
         return ticket;
+    }
+
+    // The OresVM must call this only after independently authenticating
+    // that the physical old actor's turn/Task/FFI leases are terminated and
+    // its actor registry entry has retired. A caller-supplied Principal is
+    // NOT that authentication. This flag prevents the host proof from
+    // accidentally accepting an ACK while an old worker can still write.
+    bool confirm_owner_retired(
+            HeirReceipt receipt, Principal verified_deceased) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!live_ || !handoff_ || retired_owner_confirmed_
+            || !(verified_deceased == handoff_->deceased_owner)
+            || !receipt_matches(receipt, *handoff_))
+            return false;
+        retired_owner_confirmed_ = true;
+        return true;
     }
 
     // Trusted CONTROL ACK: the owner is swapped only after the externally
     // authenticated successor is ready. No dual-writer interval exists.
     bool acknowledge_heir(HeirReceipt receipt, Principal verified_heir) {
         std::lock_guard<std::mutex> lock(mu_);
-        if (!live_ || !handoff_ || !(verified_heir == handoff_->successor)
+        if (!live_ || !handoff_ || !retired_owner_confirmed_
+            || !(verified_heir == handoff_->successor)
             || !receipt_matches(receipt, *handoff_))
             return false;
         revoked_[revoked_count_++] = owner_;
         owner_ = verified_heir;
         table_epoch_ = handoff_->table_epoch;
         handoff_.reset();
+        retired_owner_confirmed_ = false;
         return true;
     }
 
@@ -107,6 +126,7 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         if (!handoff_ || !receipt_matches(receipt, *handoff_)) return false;
         handoff_.reset();
+        retired_owner_confirmed_ = false;
         live_ = false;
         for (auto& slot : slots_) slot = Slot{};
         return true;
@@ -296,6 +316,7 @@ private:
     std::uint64_t version_ = 0;
     std::uint64_t table_epoch_ = 1;
     std::optional<HeirReceipt> handoff_;
+    bool retired_owner_confirmed_ = false;
     // Bounded revoked owner identities prevent a stale PUBLIC actor from
     // regaining access after a later heir receives the same table.
     // At capacity, further owner transfer fails closed until the runtime
