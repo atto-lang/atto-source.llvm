@@ -158,9 +158,12 @@ fn check_intermediate_overflow(
     ])?;
     require_success(&format!("{name} link"), &linked)?;
     let result = call(&executable, &[])?;
-    if result.status.success() || !result.stdout.is_empty() {
+    // Require the compiler's expected nonzero status, not SIGSEGV/SIGILL or
+    // any arbitrary crash: a signal-based failure is not a checked-i64 proof.
+    if result.status.code() != Some(1) || !result.stdout.is_empty() {
         return Err(format!(
-            "{name}: signed64 overflow was accepted or produced guest stdout"
+            "{name}: signed64 overflow did not return checked failure code 1, got {:?}",
+            result.status.code()
         ));
     }
     println!("GUEST_OVERFLOW_TRAP {name} observed_status={:?}", result.status.code());
