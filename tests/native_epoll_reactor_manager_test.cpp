@@ -416,6 +416,53 @@ int main() {
         ::close(endpoints[0]);
         ::close(endpoints[1]);
     }
+    {
+        // Native physical stream proof: a socketpair endpoint cannot be
+        // watched twice for separate read/write ownership, even when the
+        // second caller supplies a duplicated numeric FD. The opposite
+        // endpoint is independent. Completion consumption releases the
+        // exact original claim; no guest TCP pooling is implied.
+        NativeEpollReactorManager manager(2,
+            NativeEpollReactorManager::Profile::preallocated_rt, 2);
+        int endpoints[2]{-1, -1};
+        check(::socketpair(AF_UNIX,
+            SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, endpoints) == 0);
+        const int alias = ::dup(endpoints[0]);
+        check(alias >= 0 && alias != endpoints[0]);
+        const auto original = manager.try_watch(endpoints[0], EPOLLIN);
+        check(original.has_value());
+        check(!manager.try_watch(endpoints[0], EPOLLOUT).has_value());
+        check(!manager.try_watch(alias, EPOLLIN).has_value());
+        check(!manager.try_watch(alias, EPOLLOUT).has_value());
+        const auto independent = manager.try_watch(endpoints[1], EPOLLIN);
+        check(independent.has_value());
+        check(::write(endpoints[1], "x", 1) == 1);
+        bool consumed = false;
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(3);
+        while (!consumed && std::chrono::steady_clock::now() < deadline) {
+            const auto event = manager.try_pop();
+            if (!event) { std::this_thread::yield(); continue; }
+            check(event->reactor == original->reactor);
+            check(event->event.ticket.value == original->ticket.value);
+            check(event->event.outcome ==
+                NativeEpollReactor::Outcome::ready);
+            consumed = true;
+        }
+        check(consumed);
+        // Reuse is allowed only after that exact terminal event is popped.
+        std::optional<NativeEpollReactorManager::Watch> replacement;
+        for (int retry = 0; retry < 2000 && !replacement; ++retry) {
+            replacement = manager.try_watch(alias, EPOLLIN);
+            if (!replacement) std::this_thread::yield();
+        }
+        check(replacement.has_value());
+        check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+        manager.stop();
+        ::close(alias);
+        ::close(endpoints[0]);
+        ::close(endpoints[1]);
+    }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
     catch (const std::invalid_argument&) { bad = true; }
