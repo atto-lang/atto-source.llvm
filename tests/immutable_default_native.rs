@@ -25,13 +25,21 @@ fn check(source: &Path, compiler: &Path, clang: &Path, expected_exit: Option<i32
     if input.contains(&0) || std::str::from_utf8(&input).is_err() {
         return Err(format!("malformed UTF-8 source: {}", source.display()));
     }
-    let compiler_result = Command::new(compiler).arg(source).output().map_err(|e| e.to_string())?;
+    // Snapshot the exact source bytes before the guest compiler opens them:
+    // source file mutation after admission must not change this test case.
+    let snapshot = temp.0.join(format!("{index}.ores"));
+    fs::write(&snapshot, &input).map_err(|e| e.to_string())?;
+    let compiler_result = Command::new(compiler).arg(&snapshot).output().map_err(|e| e.to_string())?;
     match expected_exit {
         None => {
-            if compiler_result.status.success() || !compiler_result.stdout.is_empty() ||
-               compiler_result.stderr.is_empty() {
-                return Err(format!("negative case did not fail before IR publication: {} ({:?})",
-                    source.display(), compiler_result.status));
+            let stderr = String::from_utf8_lossy(&compiler_result.stderr);
+            if compiler_result.status.code() != Some(1) ||
+                !compiler_result.stdout.is_empty() ||
+                !stderr.starts_with("oreslang-llvmc: ") ||
+                ["AddressSanitizer", "UndefinedBehaviorSanitizer", "stack trace", "segmentation fault",
+                 "internal compiler error"].iter().any(|marker| stderr.contains(marker)) {
+                return Err(format!("negative case was not a checked compiler-owned rejection: {} ({:?}): {}",
+                    source.display(), compiler_result.status, stderr));
             }
             println!("ADMISSION_REJECT {}", source.display());
             Ok(())
@@ -70,7 +78,8 @@ fn run() -> Result<(), String> {
     let compiler = PathBuf::from(&args[1]);
     let clang = PathBuf::from(&args[2]);
     let root = PathBuf::from(&args[3]);
-    if !compiler.is_file() || !clang.is_file() || !root.is_dir() {
+    if !compiler.is_absolute() || !clang.is_absolute() ||
+        !compiler.is_file() || !clang.is_file() || !root.is_dir() {
         return Err("required native compiler, clang, or source fixtures missing".into());
     }
     let tmp = TempDir::create()?;
