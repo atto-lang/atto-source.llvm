@@ -46,6 +46,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Fail-closed host-level type resolver checks; these do not claim guest
+    # Option/Result/trap native parity without compiler-backed .ores execution.
+    add_executable(oreslang-native-sum-payload-admission-test
+        tests/native_sum_payload_admission_test.cpp)
+    target_include_directories(oreslang-native-sum-payload-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-sum-payload-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_sum_payload_type_admission
+        COMMAND oreslang-native-sum-payload-admission-test)
+    set_tests_properties(native_sum_payload_type_admission PROPERTIES TIMEOUT 20)
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
