@@ -35,12 +35,17 @@ int main(int argc, char** argv) {
      * This is a synchronous guest+heap proof, not scheduler or async parity. */
     OresActorI64Heap* survivor = ores_actor_i64_heap_open(913, 1, 1);
     require(survivor != NULL && survivor != heap);
+    require(ores_actor_i64_heap_trace_enable(survivor, 16));
     OresActorTurn survivor_turn = ores_actor_i64_heap_enter(survivor, 913, 1);
     require(survivor_turn.domain != actor_domain);
+    const uint64_t survivor_domain = survivor_turn.domain;
+    const uint64_t survivor_init_epoch = survivor_turn.epoch;
     oreslang_actor_Counter_init(
         survivor, survivor_turn.domain, survivor_turn.epoch);
     ores_actor_i64_heap_leave(survivor, survivor_turn);
     survivor_turn = ores_actor_i64_heap_enter(survivor, 913, 1);
+    const uint64_t survivor_first_epoch = survivor_turn.epoch;
+    require(survivor_first_epoch == survivor_init_epoch + 1);
     const int64_t survivor_first = oreslang_actor_Counter_on_message(
         survivor, survivor_turn.domain, survivor_turn.epoch, 3);
     ores_actor_i64_heap_leave(survivor, survivor_turn);
@@ -102,10 +107,33 @@ int main(int argc, char** argv) {
     /* Reclaim actor A while actor B is still live; B's private state and
      * compiled handler must remain functional after A's native deallocation. */
     survivor_turn = ores_actor_i64_heap_enter(survivor, 913, 1);
+    const uint64_t survivor_second_epoch = survivor_turn.epoch;
+    require(survivor_second_epoch == survivor_first_epoch + 1);
     const int64_t survivor_second = oreslang_actor_Counter_on_message(
         survivor, survivor_turn.domain, survivor_turn.epoch, 4);
     ores_actor_i64_heap_leave(survivor, survivor_turn);
     require(survivor_second == (writing ? 7 : 11));
+    /* Verify that a second independently allocated heap saw the exact
+     * compiler-produced field traffic, including post-neighbor reclamation.
+     * A's trace must not satisfy B's trace oracle or disguise missing turns. */
+    OresActorHeapAccessEvent survivor_events[16] = {0};
+    OresActorHeapAccessSummary survivor_summary = {0};
+    require(ores_actor_i64_heap_trace_snapshot(
+        survivor, survivor_events, 16, &survivor_summary));
+    require(survivor_summary.enabled == 1 && survivor_summary.dropped == 0
+        && survivor_summary.stored == expected_count
+        && survivor_summary.capacity == 16);
+    for (uint32_t i = 0; i < expected_count; ++i) {
+        const OresActorHeapAccessEvent* e = &survivor_events[i];
+        require(e->kind == expected_kinds[i]);
+        require(e->actor_id == 913 && e->incarnation == 1
+            && e->domain == survivor_domain && e->domain != actor_domain
+            && e->slot_index == 0 && e->slot_generation == 1);
+        const uint64_t expected_epoch = i == 0 ? survivor_init_epoch
+            : (writing ? (i <= 2 ? survivor_first_epoch : survivor_second_epoch)
+                       : (i == 1 ? survivor_first_epoch : survivor_second_epoch));
+        require(e->turn_epoch == expected_epoch);
+    }
     ores_actor_i64_heap_retire(survivor);
     require(ores_actor_i64_heap_try_destroy(survivor));
     puts(writing ? "COMPILED_SEALED_WRITE_GUEST_PASS"
