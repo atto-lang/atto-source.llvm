@@ -51,6 +51,22 @@ public:
     CriticalGate(const CriticalGate&) = delete;
     CriticalGate& operator=(const CriticalGate&) = delete;
 
+    /**
+     * Uncontended, synchronous try-critical admission. It NEVER creates a
+     * queued ticket: contention is an empty Token, including if an earlier
+     * FIFO waiter exists. No guest continuation runs under mu_. Only the
+     * owning scheduler may subsequently execute a protected body.
+     */
+    [[nodiscard]] Token try_request() {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (owner_ || !waiting_.empty()) return {};
+        if (issued_ == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("critical ticket sequence exhausted");
+        }
+        owner_ = Token(scope_, ++issued_);
+        return owner_;
+    }
+
     /** Never blocks a scheduler carrier; requests a unique logical ticket. */
     [[nodiscard]] Request request() {
         std::lock_guard<std::mutex> lock(mu_);
