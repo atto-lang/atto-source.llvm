@@ -40,6 +40,13 @@ static void owner_death_handoff_preserves_data_and_excludes_dual_writers() {
     assert(!table.retire_owner(owner));
     assert(!table.retire_owner_with_heir(owner, peer));
     assert(table.lookup(identity, heir, 7).status == Table::Status::denied);
+    // Even the correct heir cannot publish before the trusted OresVM has
+    // separately verified old actor retirement and outstanding lease drain.
+    assert(!table.acknowledge_heir(*receipt, heir));
+    assert(!table.confirm_owner_retired(forgery, owner));
+    assert(!table.confirm_owner_retired(*receipt, peer));
+    assert(table.confirm_owner_retired(*receipt, owner));
+    assert(!table.confirm_owner_retired(*receipt, owner));
 
     assert(table.acknowledge_heir(*receipt, heir));
     assert(table.table_epoch() == 2);
@@ -95,6 +102,8 @@ static void public_table_blocks_all_previous_dead_generations() {
         auto ticket = table.retire_owner_with_heir(owner, heir);
         assert(ticket.has_value());
         assert(table.lookup(h, owner, 1).status == Table::Status::denied);
+        assert(!table.acknowledge_heir(*ticket, heir));
+        assert(table.confirm_owner_retired(*ticket, owner));
         assert(table.acknowledge_heir(*ticket, heir));
         assert(table.lookup(h, owner, 1).status == Table::Status::denied);
         assert(table.insert(h, owner, 1, 1000) == Table::Status::denied);
@@ -123,6 +132,8 @@ static void stale_table_handle_and_wrong_runtime_always_reject() {
     auto receipt = table.retire_owner_with_heir(owner, heir);
     assert(receipt.has_value());
     assert(!table.acknowledge_heir(*receipt, owner));
+    assert(!table.acknowledge_heir(*receipt, heir));
+    assert(table.confirm_owner_retired(*receipt, owner));
     assert(table.acknowledge_heir(*receipt, heir));
     assert(table.lookup(bad, heir, 5).status == Table::Status::invalid);
     assert(table.lookup(handle, owner, 5).status == Table::Status::denied);
