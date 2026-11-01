@@ -37,6 +37,17 @@ def expected_prefix_last(name, actor_index, processed):
         "source-isolated-actor-sealed-write-bracket.ores",
     }:
         return sum(range(1, processed + 1))
+    if name == "source-isolated-actor-sealed-write-return-message.ores":
+        return processed
+    if name == "source-isolated-actor-sealed-write-return-constant.ores":
+        return 17
+    if name == "source-isolated-actor-sealed-write-subtract.ores":
+        return 10 - sum(range(1, processed + 1))
+    if name == "source-isolated-actor-sealed-write-multiply.ores":
+        value = 2
+        for n in range(1, processed + 1):
+            value *= n
+        return value
     if name in {
         "source-isolated-actor-sealed-read.ores",
         "source-isolated-actor-sealed-read-bracket.ores",
@@ -97,6 +108,10 @@ def main():
         ("source-isolated-actor-sealed-read.ores", 1, 2, 9),
         ("source-isolated-actor-sealed-write-bracket.ores", 1, 2, 3),
         ("source-isolated-actor-sealed-read-bracket.ores", 1, 2, 9),
+        ("source-isolated-actor-sealed-write-return-message.ores", 1, 2, 2),
+        ("source-isolated-actor-sealed-write-return-constant.ores", 1, 2, 17),
+        ("source-isolated-actor-sealed-write-subtract.ores", 1, 2, 7),
+        ("source-isolated-actor-sealed-write-multiply.ores", 1, 2, 4),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
@@ -231,13 +246,23 @@ def main():
                 assert "ores_actor_i64_heap_field_read" in guest.stdout, name
                 writes = [line for line in guest.stdout.splitlines()
                           if "call void @ores_actor_i64_heap_field_write(" in line]
-                is_write = name in {
-                    "source-isolated-actor-sealed-write.ores",
-                    "source-isolated-actor-sealed-write-bracket.ores",
+                write_overflow_intrinsics = {
+                    "source-isolated-actor-sealed-write.ores":
+                        "llvm.sadd.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-bracket.ores":
+                        "llvm.sadd.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-return-message.ores":
+                        "llvm.sadd.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-return-constant.ores":
+                        "llvm.sadd.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-subtract.ores":
+                        "llvm.ssub.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-multiply.ores":
+                        "llvm.smul.with.overflow.i64",
                 }
-                if is_write:
+                if name in write_overflow_intrinsics:
                     assert len(writes) == 1, (name, writes)
-                    assert "llvm.sadd.with.overflow.i64" in guest.stdout, name
+                    assert write_overflow_intrinsics[name] in guest.stdout, name
                 else:
                     assert not writes, (name, writes)
             if name not in {

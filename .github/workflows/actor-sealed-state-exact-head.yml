@@ -149,6 +149,10 @@ jobs:
             tests/fixtures/source-isolated-actor-sealed-read.ores \
             tests/fixtures/source-isolated-actor-sealed-write-bracket.ores \
             tests/fixtures/source-isolated-actor-sealed-read-bracket.ores \
+            tests/fixtures/source-isolated-actor-sealed-write-return-message.ores \
+            tests/fixtures/source-isolated-actor-sealed-write-return-constant.ores \
+            tests/fixtures/source-isolated-actor-sealed-write-subtract.ores \
+            tests/fixtures/source-isolated-actor-sealed-write-multiply.ores \
             tests/fixtures/source-isolated-actor-sealed-bracket-spacing-reject.ores \
             tests/fixtures/source-isolated-actor-sealed-bracket-inner-spacing-reject.ores \
             tests/fixtures/source-isolated-actor-sealed-bracket-trailing-spacing-reject.ores \

@@ -1,0 +1,16 @@
+define isolated actor Counter as
+    state { count: int = 2; }
+    pub on_message(int value): int {
+        return self.handle_state(critical-write |s| -> {
+            s.count = s.count * value;
+            return s.count;
+        });
+    }
+end
+pub fnc main(): int {
+    const worker = spawn Counter();
+    worker.send(1);
+    worker.send(2);
+    stop worker;
+    return 43;
+}
