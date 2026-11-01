@@ -41,3 +41,35 @@ Separate ASan/UBSan run is in the accompanying workflow. A zero-step Actions run
 - Emit per-actor state/heap and typed ownership from the real LLVM parser/MIR, then run source-derived positive and negative `.ores` fixtures with strict native AOT and ASan/UBSan.
 - Prove actor ZERO-GC on the linked native artifact, bounded per-turn allocation/cleanup and WCET with named RTOS/kernel/CPU configuration; qualify hard RT only after nonzero-step exact-head evidence.
 - Extend 49-case conformance ledger with detailed Java/LLVM/NET/WASM results and explicit `unsupported` vs `not_executed` statuses, without treating host-only tests as guest parity.
+
+## Follow-up hardening: admission ceilings and concurrency regression (2026-11-01)
+
+- The first host constructor used overflow-safe multiplication but accepted any
+  representable allocation size. A trusted-host misconfiguration could request
+  excessive native memory before the VM even started. Cap aggregate private
+  actor backing to 64 MiB, tenant slots to 4096 and actor slots per tenant to
+  4096 in this experimental prototype. Invalid configurations throw before
+  any allocation. This is an internal **prototype default**, not a production
+  tenant RSS cap, target hard-RT arena reservation, or external cgroup quota.
+- New `tests/native_tenant_isolate_race_test.cpp`: deny zero/overflow/oversize
+  capacity, reject foreign/stale handles and OOB/null reads, reenter while
+  active, prove move-assignment pin transfer, 300 generational retire/reopen
+  iterations, simultaneous unique opens, 12 same-actor contenders, 200
+  enter-vs-STOP races, and memory scrub before reactivation.
+- New `tests/native_tenant_rt_denial_matrix_test.cpp`: independently negate all
+  13 safety evidence predicates and all three resource admission counters,
+  and exercise near-deadline, zero, period mismatch, and unsigned overflow
+  cases. Its synthetic all-true positive case checks **only** the function's
+  arithmetic and boolean gate, never validates real physical evidence.
+- Source-local workflow now includes three C++ suites, GCC+Clang O0/O2 and
+  GCC ASan/UBSan repeats. The old original host fixture is retained.
+- Local execution in the working container: GCC 14 and Clang 17, O0/O2 for
+  the two new suites: 8/8 combinations pass. GCC ASan+UBSan race test passed.
+  The exact GitHub PR head and new workflow run remain NOT_EXECUTED until a
+  nonzero-step runner receipt is inspected. This local proof is limited to
+  host-only source, not the full repo compiler or linked native guest.
+
+**Unchanged release holds:** no direct integration with `NativeOresVM`, no
+actual `.ores` actor lowering, no independent scheduler/WCET artifacts, and
+no claim of secure hostile-tenant or hard-real-time execution. Avoid private
+source transfer while independent security approvals are outstanding.

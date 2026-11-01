@@ -46,6 +46,12 @@ class NativeTenantAdmission final {
     };
 
 public:
+    // Experimental trusted-host quota, not a per-tenant RSS or OS cgroup limit.
+    // Keep construction bounded before allocating any tenant backing memory.
+    static constexpr std::size_t kMaxTenants = 4096;
+    static constexpr std::size_t kMaxActorSlotsPerTenant = 4096;
+    static constexpr std::size_t kMaxArenaBytes = 64u * 1024u * 1024u;
+
     struct Handle final {
         std::size_t slot = 0;
         std::uint64_t generation = 0;
@@ -129,12 +135,16 @@ public:
     NativeTenantAdmission(std::size_t max_tenants,
                           std::size_t actors_per_tenant,
                           std::size_t actor_region_bytes) {
-        if (max_tenants == 0 || max_tenants > 4096 ||
-            actors_per_tenant == 0 || actor_region_bytes == 0 ||
+        if (max_tenants == 0 || max_tenants > kMaxTenants ||
+            actors_per_tenant == 0 ||
+            actors_per_tenant > kMaxActorSlotsPerTenant ||
+            actor_region_bytes == 0 ||
             actors_per_tenant >
                 std::numeric_limits<std::size_t>::max() / actor_region_bytes ||
             max_tenants > std::numeric_limits<std::size_t>::max() /
-                (actors_per_tenant * actor_region_bytes))
+                (actors_per_tenant * actor_region_bytes) ||
+            max_tenants * (actors_per_tenant * actor_region_bytes) >
+                kMaxArenaBytes)
             throw std::invalid_argument("unbounded native tenant admission");
         state_ = std::make_shared<State>(max_tenants, actors_per_tenant,
                                          actor_region_bytes);
