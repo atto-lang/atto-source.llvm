@@ -1,0 +1,1 @@
+fnc plus(int n):int{return n+1;}\npub fnc main():int{const x=plus(41);return x;}\n

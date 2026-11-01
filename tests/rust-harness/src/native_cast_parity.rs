@@ -13,6 +13,8 @@ pub fn run_cases(compiler: &Path, clang: &Path, fixture_root: &Path) -> Result<(
         ("47-grouped-cast-multiply.ores", "9ebc3f7bc230557fe2f2639172883bb2f4589464"),
         ("48-readonly-local-cast.ores", "87d0773504e0d22fc3cf1ee76755b36a2fc415c6"),
         ("49-const-typed-identity.ores", "bff7c6070008c5c6a8b3316e8a289f93d3f8c5b3"),
+        ("50-runtime-const-helper.ores", "25f2d66fee55390c0a8fadc892ffaa83681f963b"),
+        ("51-type-first-helper.ores", "25f789b94fce07a0a419dd04e95f4a6a11734612"),
     ];
     for (filename, expected_blob) in cases {
         let source = fixture_root.join(filename);
@@ -64,6 +66,39 @@ pub fn run_cases(compiler: &Path, clang: &Path, fixture_root: &Path) -> Result<(
         }
     }
 
+    let negative_fixtures = [
+        ("52-type-first-reassign.ores", "18a35160524ba7c92ccd011495f935d8523a8e75", None),
+        ("53-type-first-type-mismatch.ores", "2b1e2fcf0c388200217951de36f5a22df4fcd059", Some("requires int, got bool")),
+        ("54-type-first-self-reference.ores", "081dc150d7a39cbf20b930bdbba1bd23e91bdf4d", None),
+        ("55-type-first-missing-initializer.ores", "de8d59c0f5a97dcdbec6d957cc60462d184e28ac", None),
+    ];
+    for (filename, expected_blob, diagnostic) in negative_fixtures {
+        let source = fixture_root.join(filename);
+        let meta = fs::symlink_metadata(&source).map_err(|e| format!("{filename}: {e}"))?;
+        require(meta.file_type().is_file(), format!("{filename}: source must be regular"))?;
+        let blob = run(
+            Path::new("git"),
+            [OsStr::new("hash-object"), OsStr::new("--"), source.as_os_str()],
+        )?;
+        require(
+            blob.status.success() && stdout(&blob).trim() == expected_blob,
+            format!("{filename}: exact Git blob mismatch: {}", stderr(&blob)),
+        )?;
+        let rejected = run(compiler, [source.as_os_str()])?;
+        let rejected_stderr = stderr(&rejected);
+        require(
+            !rejected.status.success()
+                && rejected.stdout.is_empty()
+                && rejected_stderr.starts_with("oreslang-llvmc: ")
+                && diagnostic.map_or(true, |needle| rejected_stderr.contains(needle)),
+            format!(
+                "{filename}: expected compiler-owned rejection, status={:?}, stderr={}",
+                rejected.status.code(),
+                rejected_stderr
+            ),
+        )?;
+    }
+
     for (name, source_text, diagnostic) in [
         (
             "int-as-bool",
@@ -90,7 +125,7 @@ pub fn run_cases(compiler: &Path, clang: &Path, fixture_root: &Path) -> Result<(
         )?;
     }
     println!(
-        "LLVM checked i64 identity: five pinned .ores programs, two optimization levels, two negative casts"
+        "LLVM checked i64 identity: seven pinned positive .ores programs at -O0/-O2, four pinned immutable-default negatives, two negative casts"
     );
     Ok(())
 }
