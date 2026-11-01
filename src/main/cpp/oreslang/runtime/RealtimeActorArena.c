@@ -240,7 +240,9 @@ OresRtArenaStatus ores_rt_actor_arena_enter(
     uint64_t owner,
     uint64_t incarnation,
     OresRtArenaTurn* out_turn) {
-    if (!arena || !out_turn) return ORES_RT_ARENA_INVALID;
+    if (!arena || !out_turn ||
+        !external_buffer_ok(arena, out_turn, sizeof(*out_turn)))
+        return ORES_RT_ARENA_INVALID;
     if (arena->retired) return ORES_RT_ARENA_RETIRED;
     if (!arena->sealed) return ORES_RT_ARENA_NOT_SEALED;
     if (arena->active || ores_rt_carrier_arena != NULL)
@@ -280,7 +282,9 @@ OresRtArenaStatus ores_rt_actor_arena_alloc(
     OresRtArenaHandle* out_handle) {
     OresRtArenaStatus status = require_turn(arena, turn);
     if (status != ORES_RT_ARENA_OK) return status;
-    if (!out_handle || bytes == 0 || bytes > arena->slot_bytes)
+    if (!out_handle ||
+        !external_buffer_ok(arena, out_handle, sizeof(*out_handle)) ||
+        bytes == 0 || bytes > arena->slot_bytes)
         return ORES_RT_ARENA_INVALID;
     if (arena->free_count == 0)
         return ORES_RT_ARENA_CAPACITY;
@@ -381,7 +385,9 @@ OresRtArenaStatus ores_rt_actor_arena_scratch_alloc(
     OresRtArenaScratch* out_scratch) {
     OresRtArenaStatus status = require_turn(arena, turn);
     if (status != ORES_RT_ARENA_OK) return status;
-    if (!out_scratch || bytes == 0 || alignment == 0 ||
+    if (!out_scratch ||
+        !external_buffer_ok(arena, out_scratch, sizeof(*out_scratch)) ||
+        bytes == 0 || alignment == 0 ||
         (alignment & (alignment - 1)) != 0 ||
         alignment > _Alignof(max_align_t)) {
         return ORES_RT_ARENA_INVALID;
