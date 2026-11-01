@@ -82,6 +82,14 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
         }
         thread::sleep(Duration::from_millis(10));
     };
+    // The running-process check can race a compiler that exits immediately.
+    // Enforce the output budget again before reading any potentially huge file.
+    for stream_path in [&stdout_path, &stderr_path] {
+        assert!(
+            fs::metadata(stream_path).unwrap().len() <= 1024 * 1024,
+            "{name}: compiler exceeded final output budget"
+        );
+    }
     let stdout = fs::read_to_string(stdout_path).unwrap();
     let stderr = fs::read_to_string(stderr_path).unwrap();
     assert!(
@@ -106,6 +114,16 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
         assert!(
             stderr.contains(expected),
             "{name}: expected {expected:?}, got {stderr}"
+        );
+        assert!(
+            !has_definition(&stderr)
+                && !stderr.lines().any(|line| {
+                    let trimmed = line.trim_start();
+                    trimmed.starts_with("; ModuleID")
+                        || trimmed.starts_with("source_filename =")
+                        || trimmed.starts_with("target triple =")
+                }),
+            "{name}: rejected source leaked LLVM IR to stderr: {stderr}"
         );
         assert_eq!(entries(&dir), before, "{name}: rejection created artifacts");
         assert_eq!(
@@ -299,6 +317,30 @@ mod tests {
     fn negative_admission_rejects_signal_termination_with_matching_diagnostic() {
         assert_rejected_fake_compiler(
             "printf 'bad ownership\n' >&2\nkill -KILL $",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_llvm_ir_written_to_stderr() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\\ndefine i64 @main() {\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_partial_module_header_on_stderr() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\\n; ModuleID = fake\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_output_over_budget_after_fast_exit() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\\n' >&2\\ndd if=/dev/zero bs=1024 count=1025 2>/dev/null\\nexit 2",
         );
     }
 
