@@ -792,7 +792,9 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh"
                 "$<TARGET_FILE:oreslang-llvmc>"
                 "${ORE_RT_AOT_CLANG}")
-        set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 120)
+        # The real f64 compiler ABI gate now compiles/links 28 native guests
+        # and separately checks 19 rejected sources with no emitted IR.
+        set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 300)
     endif()
 
     # Pure host resolver security test for canonical +/ project-root imports.
