@@ -1,5 +1,23 @@
 # Native Oreslang DB POSIX WAL physical sync — stage 1
 
+## Stage 1.8 — reject malformed truncated WAL headers
+
+The host replay scanner now checks all available magic/version, tenant,
+generation and next-sequence prefix bytes before classifying short tails
+as incomplete. A complete header is checked for kind, ordered operation,
+and bounded key/value lengths before the possibly truncated payload can
+be treated as an incomplete final record. A corrupt full/header-only
+tail is a hard failure, never an invitation to truncate a foreign
+operation. Recovery remains read-only: no automatic truncate or ACK.
+
+The tracked C++17 regression tests all 30 legitimate truncated frame
+prefix lengths, nine malformed header cases and single-byte invalid
+magic, while checking that rejected bytes stay on disk for forensic
+recovery. Exact-tree CTest/sanitizer execution, compiled guest and
+OS/power-cut recovery are still separate promotion gates.
+
+
+
 ## Parent-directory WAL creation sync (stage 1.7, host-only)
 
 `DbDurableWalFile::open_trusted` now requires `fsync(directory_fd)`

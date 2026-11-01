@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <stdexcept>
 #include <vector>
 #include <fcntl.h>
@@ -86,6 +87,46 @@ int main(){
     rejects([&]{ DbWalReplayV1::scan(fd,7,5,[](auto,auto,auto){}); });
     auto repaired=DbWalReplayV1::scan(fd,7,4,[](auto,auto,auto){});
     assert(repaired.records==2 && repaired.valid_bytes==62);
+    // Legitimate final-frame prefixes remain repairable, without mutation.
+    for (std::size_t n = 1; n < third.size(); ++n) {
+        assert(::ftruncate(fd,62)==0);
+        assert(::pwrite(fd,third.data(),n,62)==static_cast<ssize_t>(n));
+        auto partial = DbWalReplayV1::scan(
+                fd,7,4,[](auto,auto,auto){});
+        assert(partial.records==2 && partial.valid_bytes==62);
+        assert(partial.incomplete_tail);
+        struct stat current{};
+        assert(::fstat(fd,&current)==0 &&
+                current.st_size==static_cast<off_t>(62+n));
+    }
+    assert(::ftruncate(fd,62)==0);
+    std::uint8_t wrong_magic = 0;
+    assert(::pwrite(fd,&wrong_magic,1,62)==1);
+    rejects([&]{ DbWalReplayV1::scan(
+            fd,7,4,[](auto,auto,auto){}); });
+
+    for (unsigned field : {0U,4U,5U,6U,10U,14U,18U,22U,24U}) {
+        auto damaged=third;
+        switch (field) {
+        case 0: damaged[0]=0; break;
+        case 4: damaged[4]=0; break;
+        case 5: damaged[5]=3; break;
+        case 6: u32(damaged,6,8); break;
+        case 10: u32(damaged,10,5); break;
+        case 14: u32(damaged,14,4); break;
+        case 18: u32(damaged,18,42); break;
+        case 22: u16(damaged,22,0); break;
+        case 24: u16(damaged,24,65535); break;
+        default: std::abort();
+        }
+        assert(::ftruncate(fd,62)==0);
+        assert(::pwrite(fd,damaged.data(),26,62)==26);
+        rejects([&]{ DbWalReplayV1::scan(
+                fd,7,4,[](auto,auto,auto){}); });
+        struct stat current{};
+        assert(::fstat(fd,&current)==0 && current.st_size==88);
+    }
+    assert(::ftruncate(fd,62)==0);
     // Exercise the production-style trusted directory-relative locked
     // owner wrapper as a separate generation after full process reopen.
     int root=::open("/tmp", O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
