@@ -39,6 +39,8 @@ public:
     LogicalMutex& operator=(const LogicalMutex&) = delete;
 
     [[nodiscard]] Request request() { return queue_.request(); }
+    /** Immediate try-critical admission: empty when busy, never queued. */
+    [[nodiscard]] Token try_request() { return queue_.try_request(); }
     [[nodiscard]] bool owns(Token token) const { return queue_.holds(token); }
     [[nodiscard]] std::size_t waiting() const { return queue_.waiting(); }
 
