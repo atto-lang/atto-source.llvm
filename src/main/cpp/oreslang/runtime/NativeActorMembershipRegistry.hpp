@@ -100,7 +100,7 @@ public:
         if (groups_.size() >= max_groups_)
             throw std::logic_error("cooperation group registry capacity exceeded");
         const std::uint64_t epoch = next_epoch_locked();
-        groups_.emplace(group_id, GroupRecord{epoch, max_members, {}});
+        groups_.emplace(group_id, GroupRecord{epoch, epoch, max_members, {}});
         return JoinCapability(instance_id_, group_id, epoch);
     }
 
@@ -205,17 +205,35 @@ public:
         std::uint64_t registry_incarnation;
         std::uint64_t group_id;
         std::uint64_t join_epoch;
+        std::uint64_t group_incarnation; // stable on rotate_join, new on close/create
         std::vector<Member> members;
     };
     std::optional<Snapshot> snapshot_group(std::uint64_t group_id) const {
         std::lock_guard<std::mutex> guard(mutex_);
         const auto it = groups_.find(group_id);
         if (it == groups_.end()) return std::nullopt;
-        Snapshot result{runtime_id_, instance_id_, group_id, it->second.epoch, {}};
+        Snapshot result{runtime_id_, instance_id_, group_id, it->second.epoch,
+                        it->second.incarnation, {}};
         result.members.reserve(it->second.members.size());
         for (const auto& actor : it->second.members)
             result.members.push_back(Member{actor.first, actor.second});
         return result;
+    }
+
+    // Revalidate a *snapshot's group incarnation*, not just the numeric ID.
+    // A closed and recreated group may reuse the same ID; an old broadcast
+    // must never target members of its replacement. Rotation of join permits
+    // deliberately leaves this membership check valid for existing members.
+    // This is a host-only point-in-time check. Actual mailbox admission must
+    // independently enforce generation, STOP, quotas and authorization.
+    bool contains_snapshot_member(const Snapshot& snapshot, Member member) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (snapshot.runtime_id != runtime_id_ ||
+            snapshot.registry_incarnation != instance_id_) return false;
+        const auto it = groups_.find(snapshot.group_id);
+        return it != groups_.end() &&
+            it->second.incarnation == snapshot.group_incarnation &&
+            it->second.members.count(ActorKey{member.actor_id, member.generation}) != 0;
     }
 
     std::size_t member_count(std::uint64_t group_id) const {
@@ -240,6 +258,7 @@ private:
     };
     struct GroupRecord {
         std::uint64_t epoch;
+        std::uint64_t incarnation;
         std::size_t max_members;
         std::set<ActorKey> members;
     };
