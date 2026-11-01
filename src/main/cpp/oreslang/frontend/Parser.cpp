@@ -1286,7 +1286,17 @@ private:
         // Match the Java frontend's declaration spelling contract. The native
         // actor subset still lowers only on_message(int) and cannot admit
         // arbitrary methods, static fnc members or suspension frames.
-        if (token_.text == "suspend" || token_.text == "suspends") {
+        if (token_.text == "suspend" || token_.text == "suspends" ||
+            token_.text == "critical") {
+            Lexer lookahead = lexer_;
+            const auto next = lookahead.next();
+            if ((token_.text == "critical" &&
+                    (next.text == "suspends" || next.text == "suspend")) ||
+                ((token_.text == "suspends" || token_.text == "suspend") &&
+                    next.text == "critical"))
+                fail("E_CALLABLE_MODIFIERS: critical suspends actor method is forbidden");
+            if (token_.text == "critical")
+                fail("E_CRITICAL_UNSUPPORTED: native critical actor method needs checked owned guard admission");
             fail("native suspends actor method requires continuation lowering");
         }
         // Actor method modifiers have their own admission boundary. Do not
@@ -1778,6 +1788,19 @@ private:
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
             fail("native execution domain lowering unsupported");
         }
+        if (token_.text == "suspends" || token_.text == "suspend" ||
+            token_.text == "critical") {
+            // A lexical lookahead is safe: lexer_ is a value holding only
+            // the immutable source and cursor. Never consume parser state to
+            // classify this prohibited modifier pair.
+            Lexer lookahead = lexer_;
+            const auto next = lookahead.next();
+            if ((token_.text == "critical" &&
+                    (next.text == "suspends" || next.text == "suspend")) ||
+                ((token_.text == "suspends" || token_.text == "suspend") &&
+                    next.text == "critical"))
+                fail("E_CALLABLE_MODIFIERS: critical suspends fnc is forbidden");
+        }
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
@@ -1787,7 +1810,7 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         if (token_.text == "critical") {
-            fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
+            fail("E_CRITICAL_UNSUPPORTED: native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
