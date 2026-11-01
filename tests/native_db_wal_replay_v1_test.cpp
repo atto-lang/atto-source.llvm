@@ -1,3 +1,8 @@
+// CTest must not silently skip assert-based WAL test oracles under -DNDEBUG.
+// This source compiles actual checks even when a Release build defines NDEBUG.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "oreslang/runtime/DbWalReplayV1.hpp"
 #include "oreslang/runtime/DbDurableWalFile.hpp"
 #include <array>
