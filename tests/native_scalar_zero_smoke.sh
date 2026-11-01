@@ -53,5 +53,14 @@ if "$compiler" "$invalid" > "$work/invalid.ll" 2> "$work/invalid.stderr"; then
 fi
 [[ ! -s "$work/invalid.ll" && -s "$work/invalid.stderr" ]] ||
   { echo "negative source must fail closed without IR" >&2; exit 1; }
+# Valid Oreslang with a deliberately incorrect expected value must execute
+# with nonzero status; this proves that an assertion mutation cannot pass.
+printf 'pub fnc main():int{return (2 + 3 * 4) - 13;}\\n' > "$work/mutant.ores"
+"$compiler" "$work/mutant.ores" > "$work/mutant.ll" 2> "$work/mutant.compiler-stderr"
+[[ -s "$work/mutant.ll" ]] || { echo "mutant produced no LLVM IR" >&2; exit 1; }
+clang -x ir "$work/mutant.ll" -o "$work/mutant.bin"
+if "$work/mutant.bin" > "$work/mutant.stdout" 2> "$work/mutant.stderr"; then mutant_status=0; else mutant_status=$?; fi
+[[ "$mutant_status" -eq 1 && ! -s "$work/mutant.stdout" && ! -s "$work/mutant.stderr" ]] ||
+  { echo "native Oreslang nonzero mutation was not detected" >&2; exit 1; }
 [[ "$tested" -eq 5 ]]
 echo "LLVM_NATIVE_SCALAR_ZERO executed=5 rejected=1 full_std_test_harness=unverified"
