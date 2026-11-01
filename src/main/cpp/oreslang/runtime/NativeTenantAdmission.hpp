@@ -26,6 +26,7 @@ class NativeTenantAdmission final {
         Phase phase = Phase::stopped;
         std::uint64_t generation = 0;
         std::size_t active_turns = 0;
+        bool host_closed = false;
     };
     struct State final {
         const std::size_t slots;
@@ -55,6 +56,26 @@ public:
     struct Handle final {
         std::size_t slot = 0;
         std::uint64_t generation = 0;
+        // A same-numbered generation in another NativeOresVM must never
+        // admit this handle. Weak provenance avoids a registry lifetime leak.
+        // This is an identity fence, never an authentication credential.
+        Handle() = default;
+        // Two-field construction is retained for legacy negative fixtures,
+        // but it produces an unscoped handle that can never be admitted.
+        Handle(std::size_t slot_value, std::uint64_t generation_value) noexcept
+            : slot(slot_value), generation(generation_value) {}
+    private:
+        friend class NativeTenantAdmission;
+        Handle(std::size_t slot_value, std::uint64_t generation_value,
+               const std::shared_ptr<State>& owner) noexcept
+            : slot(slot_value), generation(generation_value),
+              issued_slot_(slot_value), issued_generation_(generation_value),
+              registry_(owner) {}
+        // Private issued values prevent a copied token from being retargeted
+        // by rewriting its public diagnostic slot/generation fields.
+        std::size_t issued_slot_ = std::numeric_limits<std::size_t>::max();
+        std::uint64_t issued_generation_ = 0;
+        std::weak_ptr<const State> registry_;
     };
 
     class Turn final {
@@ -101,7 +122,8 @@ public:
             std::lock_guard<std::mutex> guard(slot.mutex);
             // Quiescing permits already-admitted turns to finish; STOP does
             // not revoke their memory while the physical execution is active.
-            if (slot.generation != generation_ ||
+            // Destruction of the owning host revokes even pinned turn access.
+            if (slot.host_closed || slot.generation != generation_ ||
                 slot.phase == Phase::stopped ||
                 !slot.active_actors[actor_]) return false;
             std::uint8_t* where =
@@ -152,8 +174,22 @@ public:
     NativeTenantAdmission(const NativeTenantAdmission&) = delete;
     NativeTenantAdmission& operator=(const NativeTenantAdmission&) = delete;
 
-    // A handle is an opaque host-side fencing token, NOT authentication.
+    // Owner destruction is off-carrier and requires external synchronization
+    // with concurrent calls on this registry. Existing pins keep state alive
+    // until RAII release, but may not read/write after owner destruction.
+    ~NativeTenantAdmission() noexcept {
+        if (!state_) return;
+        for (std::size_t i = 0; i < state_->slots; ++i) {
+            Slot& slot = state_->entries[i];
+            std::lock_guard<std::mutex> guard(slot.mutex);
+            slot.host_closed = true;
+            if (slot.phase == Phase::running) slot.phase = Phase::quiescing;
+        }
+    }
+
+    // A handle is a trusted-host identity/fencing token, NOT authentication.
     // The ingress broker must authenticate and authorize tenant identity.
+    // Matching slot+generation is insufficient across separate registries.
     std::optional<Handle> open() {
         for (std::size_t i = 0; i < state_->slots; ++i) {
             Slot& slot = state_->entries[i];
@@ -163,17 +199,18 @@ public:
                 continue;
             ++slot.generation;
             slot.phase = Phase::running;
-            return Handle{i, slot.generation};
+            return Handle{i, slot.generation, state_};
         }
         return std::nullopt;
     }
 
     std::optional<Turn> enter(Handle handle, std::size_t actor_index) {
-        if (handle.slot >= state_->slots || actor_index >= state_->actors ||
-            handle.generation == 0) return std::nullopt;
+        if (!owns(handle) || handle.slot >= state_->slots ||
+            actor_index >= state_->actors || handle.generation == 0)
+            return std::nullopt;
         Slot& slot = state_->entries[handle.slot];
         std::lock_guard<std::mutex> guard(slot.mutex);
-        if (slot.phase != Phase::running ||
+        if (slot.host_closed || slot.phase != Phase::running ||
             slot.generation != handle.generation ||
             slot.active_actors[actor_index]) return std::nullopt;
         slot.active_actors[actor_index] = true;
@@ -182,11 +219,11 @@ public:
     }
 
     bool request_stop(Handle handle) {
-        if (handle.slot >= state_->slots || handle.generation == 0)
-            return false;
+        if (!owns(handle) || handle.slot >= state_->slots ||
+            handle.generation == 0) return false;
         Slot& slot = state_->entries[handle.slot];
         std::lock_guard<std::mutex> guard(slot.mutex);
-        if (slot.generation != handle.generation ||
+        if (slot.host_closed || slot.generation != handle.generation ||
             slot.phase != Phase::running) return false;
         slot.phase = Phase::quiescing;
         return true;
@@ -195,11 +232,11 @@ public:
     // Trusted off-carrier supervisor operation; scrub is not RT bounded.
     // Never recycle a tenant while an actor turn holds a physical lease.
     bool finish_stop(Handle handle) {
-        if (handle.slot >= state_->slots || handle.generation == 0)
-            return false;
+        if (!owns(handle) || handle.slot >= state_->slots ||
+            handle.generation == 0) return false;
         Slot& slot = state_->entries[handle.slot];
         std::lock_guard<std::mutex> guard(slot.mutex);
-        if (slot.generation != handle.generation ||
+        if (slot.host_closed || slot.generation != handle.generation ||
             slot.phase != Phase::quiescing || slot.active_turns != 0)
             return false;
         std::memset(slot.arena.get(), 0,
@@ -209,6 +246,13 @@ public:
     }
 
 private:
+    bool owns(const Handle& handle) const noexcept {
+        const auto lifetime = handle.registry_.lock();
+        return lifetime && lifetime.get() == state_.get() &&
+            handle.generation != 0 &&
+            handle.slot == handle.issued_slot_ &&
+            handle.generation == handle.issued_generation_;
+    }
     std::shared_ptr<State> state_;
 };
 

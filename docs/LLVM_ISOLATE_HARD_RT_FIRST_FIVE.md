@@ -73,3 +73,44 @@ Separate ASan/UBSan run is in the accompanying workflow. A zero-step Actions run
 actual `.ores` actor lowering, no independent scheduler/WCET artifacts, and
 no claim of secure hostile-tenant or hard-real-time execution. Avoid private
 source transfer while independent security approvals are outstanding.
+
+## Follow-up: registry-scoped handle provenance and shutdown revocation
+
+The original v0 `Handle{slot, generation}` could collide with a live tenant
+in another host registry using the same slot and generation. This was not
+authentication, but it was a real host-side identity confusion bug.
+
+- Each admitted handle now carries a private weak reference to its issuing
+  registry state and private immutable-at-issuance copies of slot/generation.
+  `enter`, `request_stop` and `finish_stop` reject foreign, missing and
+  retargeted provenance before accessing a tenant slot.
+- Public two-field constructor remains for negative/legacy host fixtures;
+  it does **not** mint authority and is deliberately rejected. Callers must
+  obtain a real handle from the trusted host `open` method.
+- Host wrapper destruction sets each slot's `host_closed` flag under its
+  mutex, revoking new read/write operations by previously admitted turns.
+  Turn pins keep the backing state alive for RAII release, avoiding a UAF.
+  Registry destructor is a trusted off-carrier operation. Concurrent calls
+  to the registry object during its destruction are not supported; external
+  lifetime coordination remains mandatory.
+- Added `tests/native_tenant_registry_provenance_test.cpp` covering matched
+  slot+generation across two registries, same-registry slot retargeting to a
+  live sibling tenant, generation upgrade to a real restarted tenant, bare
+  forged handles, cross-registry STOP/finish rejection, post-owner-destruction
+  retained-turn read/write rejection, private memory independence and 16
+  concurrently executing registries with cross-registry negative probes.
+
+**Local verification:** GCC 14 and Clang 17 at `-O0` and `-O2` each passed
+the new source-exact host suite (4/4 combinations). GCC and Clang
+`-fsanitize=undefined` passed five runs each (10/10); GCC combined
+AddressSanitizer+UndefinedBehaviorSanitizer passed one more run. This
+evidence is isolated host-side C++ only, not exact-head CI or compiled
+`.ores` source. The new header and suite blobs were independently matched
+against the local `git hash-object` outputs.
+
+**Boundary remains:** copying somebody else's valid handle is possible in
+trusted host code, so this is not a secret bearer token or tenant
+authentication. A trusted policy broker must check tenant membership and
+permissions on every ingress. Independent OS process boundaries remain
+necessary for malicious native tenants; RT qualification still requires
+separate timing and native artifact evidence.
