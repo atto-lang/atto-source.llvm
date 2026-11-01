@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/socket.h>
 using namespace oreslang::runtime;
 static void check(bool good) { if (!good) throw std::runtime_error("reactor manager test failed"); }
 int main() {
@@ -212,6 +213,61 @@ int main() {
         }
         check(stopped_records == count);
         for (auto& p : fds) { ::close(p[0]); ::close(p[1]); }
+    }
+
+    {
+        // dup() preserves the underlying open file description. Checking
+        // only numeric FD equality allows two actors/reactors to consume
+        // the same TCP bytes through distinct epoll registrations.
+        for (const bool socket_mode : {false, true}) {
+            NativeEpollReactorManager manager(2,
+                NativeEpollReactorManager::Profile::preallocated_rt, 2);
+            int endpoints[2]{-1, -1};
+            if (socket_mode) {
+                check(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                    0, endpoints) == 0);
+            } else {
+                check(::pipe2(endpoints, O_NONBLOCK | O_CLOEXEC) == 0);
+            }
+            const int alias = ::dup(endpoints[0]);
+            check(alias >= 0);
+            auto original = manager.try_watch(endpoints[0], EPOLLIN);
+            check(original.has_value());
+            // Same socket/pipe inode, different FD value: must fail closed.
+            check(!manager.try_watch(alias, EPOLLIN).has_value());
+            check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+            bool cancelled = false;
+            for (int attempt = 0; attempt < 2000 && !cancelled; ++attempt) {
+                cancelled = manager.try_cancel(*original);
+                if (!cancelled) std::this_thread::yield();
+            }
+            check(cancelled);
+            std::optional<NativeEpollReactorManager::Completion> terminal;
+            const auto deadline = std::chrono::steady_clock::now()
+                + std::chrono::seconds(3);
+            while (!terminal && std::chrono::steady_clock::now() < deadline) {
+                terminal = manager.try_pop();
+                if (!terminal) std::this_thread::yield();
+            }
+            check(terminal.has_value());
+            check(terminal->event.ticket.value == original->ticket.value);
+            check(terminal->event.outcome == NativeEpollReactor::Outcome::cancelled);
+            // The alias becomes admissible only AFTER terminal consumption.
+            std::optional<NativeEpollReactorManager::Watch> next;
+            for (int retry = 0; retry < 2000 && !next; ++retry) {
+                next = manager.try_watch(alias, EPOLLIN);
+                if (!next) std::this_thread::yield();
+            }
+            check(next.has_value());
+            check(next->ticket.value != original->ticket.value
+                || next->reactor != original->reactor);
+            // Alias ownership also fences the original FD in reverse.
+            check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+            manager.stop();
+            ::close(alias);
+            ::close(endpoints[0]);
+            ::close(endpoints[1]);
+        }
     }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
