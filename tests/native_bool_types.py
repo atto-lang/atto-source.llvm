@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source bool stays distinct from int across loans, objects and module linking."""
 import argparse
+import hashlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -230,11 +231,33 @@ def main():
         'identity-then-optional': 'native as? requires Option<T> checked-cast lowering',
         'identity-then-bool-arithmetic': 'arithmetic requires int, got bool',
     })
+    # Two exact-byte Oreslang guest files copied into Java, LLVM, Wasm,
+    # Cranelift and .NET. Git blob verification is source provenance only;
+    # the compiler/linker/guest loop below supplies separate execution proof.
+    native_contract = Path(__file__).resolve().parents[1] / 'contracts' / 'v1'
+    for name, file_name, expected_sha, accepted in [
+        ('portable-v2-positive', 'portable-checked-cast-positive-v2.ores',
+         '1a80e07da1289c87d04454866883f4e06cfc8d77', True),
+        ('portable-v2-negative', 'portable-checked-cast-negative-v2.ores',
+         'ecc4ccea80f016243e38f351df60cfad9eb6e136', False),
+    ]:
+        path = native_contract / file_name
+        require(path.is_file() and not path.is_symlink(), (name, 'unsafe fixture'))
+        data = path.read_bytes()
+        require(0 < len(data) < 1024, (name, 'unbounded fixture'))
+        blob = hashlib.sha1(b'blob ' + str(len(data)).encode('ascii') + b'\\0' + data).hexdigest()
+        require(blob == expected_sha, (name, 'source-byte drift', blob))
+        source_text = data.decode('utf-8')
+        if accepted:
+            positive.append((name, source_text))
+        else:
+            negative.append((name, source_text))
+            ownership_diagnostics[name] = 'impossible native cast: int as bool'
     compared = 0
     with tempfile.TemporaryDirectory(prefix='ores-native-bool-') as tmp:
         root = Path(tmp)
         for name, code in positive:
-            source = root / (name + '.ores'); source.write_text(code)
+            source = root / (name + '.ores'); source.write_bytes(code.encode('utf-8'))
             compiled = run([args.compiler, str(source)])
             require(compiled.returncode == 0, (name, compiled.stderr))
             ir = root / (name + '.ll'); ir.write_text(compiled.stdout)
