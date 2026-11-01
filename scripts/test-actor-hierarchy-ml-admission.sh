@@ -12,7 +12,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 # d(0.5*(w*x-target)^2)/dw = (w*x-target)*x.
 # w=2,x=1,target=42,lr=1 yields a numeric update of 42.
-# Exact reviewed guest source is carried byte-identically by all five toolchains.
+# Verify the exact reviewed bytes before touching any compiler. A local
+# fixture with the same result but different syntax is NOT source parity.
+printf '%s\n' 'pub fnc main(): int { return 2 - 1 * (2 * 1 - 42) * 1; }' |
+  cmp -s - "$root/tests/fixtures/actor-ml-scalar-step.ores" || {
+    echo "shared scalar guest fixture differs from reviewed byte sequence" >&2
+    exit 1
+  }
 cp -- "$root/tests/fixtures/actor-ml-scalar-step.ores" "$tmp/linear_update.ores"
 "$compiler" --target=host "$tmp/linear_update.ores" >"$tmp/linear_update.ll" 2>"$tmp/positive.err"
 [[ -s "$tmp/linear_update.ll" ]] || { echo "LLVM compiler did not produce scalar IR" >&2; exit 1; }
