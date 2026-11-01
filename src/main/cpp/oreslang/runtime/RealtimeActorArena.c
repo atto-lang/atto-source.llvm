@@ -107,6 +107,29 @@ static int span_ok(size_t length, size_t offset, size_t bytes) {
     return offset <= length && bytes <= length - offset;
 }
 
+/*
+ * Public read/write buffers must never alias either the arena's private
+ * backing or its live control object. Aliasing could corrupt slot metadata,
+ * tenant identity or free-stack state even for an otherwise valid turn.
+ * Use checked integer ranges; no allocator, lock or libc copy is involved.
+ */
+static int disjoint_span(const void* start, size_t length,
+                         const void* protected_start, size_t protected_length) {
+    const uintptr_t a = (uintptr_t)start;
+    const uintptr_t b = (uintptr_t)protected_start;
+    if (length > UINTPTR_MAX - a ||
+            protected_length > UINTPTR_MAX - b) return 0;
+    return (a + length <= b || b + protected_length <= a);
+}
+
+static int external_buffer_ok(const OresRealtimeActorArena* arena,
+                              const void* buffer, size_t bytes) {
+    if (bytes == 0) return 1;
+    if (!buffer) return 0;
+    return disjoint_span(buffer, bytes, arena->backing, arena->arena_bytes) &&
+           disjoint_span(buffer, bytes, arena, sizeof(*arena));
+}
+
 OresRtArenaStatus ores_rt_actor_arena_init(
     OresRealtimeActorArena* arena,
     void* backing,
@@ -293,7 +316,8 @@ OresRtArenaStatus ores_rt_actor_arena_read(
     OresRealtimeArenaSlot* slot = NULL;
     status = require_handle(arena, handle, &slot);
     if (status != ORES_RT_ARENA_OK) return status;
-    if (!span_ok(slot->length, offset, bytes) || (bytes != 0 && !out))
+    if (!span_ok(slot->length, offset, bytes) ||
+            !external_buffer_ok(arena, out, bytes))
         return ORES_RT_ARENA_INVALID;
     if (bytes != 0) {
         rt_copy(out,
@@ -315,7 +339,8 @@ OresRtArenaStatus ores_rt_actor_arena_write(
     OresRealtimeArenaSlot* slot = NULL;
     status = require_handle(arena, handle, &slot);
     if (status != ORES_RT_ARENA_OK) return status;
-    if (!span_ok(slot->length, offset, bytes) || (bytes != 0 && !src))
+    if (!span_ok(slot->length, offset, bytes) ||
+            !external_buffer_ok(arena, src, bytes))
         return ORES_RT_ARENA_INVALID;
     if (bytes != 0) {
         rt_copy(arena->slab + (size_t)handle.index * arena->slot_stride + offset,
@@ -404,7 +429,8 @@ OresRtArenaStatus ores_rt_actor_arena_scratch_read(
     if (status != ORES_RT_ARENA_OK) return status;
     status = require_scratch(arena, scratch, offset, bytes);
     if (status != ORES_RT_ARENA_OK) return status;
-    if (bytes != 0 && !out) return ORES_RT_ARENA_INVALID;
+    if (!external_buffer_ok(arena, out, bytes))
+        return ORES_RT_ARENA_INVALID;
     if (bytes != 0)
         rt_copy(out, arena->scratch + (size_t)scratch.offset + offset, bytes);
     return ORES_RT_ARENA_OK;
@@ -421,7 +447,8 @@ OresRtArenaStatus ores_rt_actor_arena_scratch_write(
     if (status != ORES_RT_ARENA_OK) return status;
     status = require_scratch(arena, scratch, offset, bytes);
     if (status != ORES_RT_ARENA_OK) return status;
-    if (bytes != 0 && !src) return ORES_RT_ARENA_INVALID;
+    if (!external_buffer_ok(arena, src, bytes))
+        return ORES_RT_ARENA_INVALID;
     if (bytes != 0)
         rt_copy(arena->scratch + (size_t)scratch.offset + offset, src, bytes);
     return ORES_RT_ARENA_OK;
