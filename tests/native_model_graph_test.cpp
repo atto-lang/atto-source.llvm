@@ -232,6 +232,20 @@ int main() {
     assert(canonical_program.model_runs.size() == 1);
     assert(canonical_program.model_runs.front().configured_graph_digest ==
            program.model_runs.front().configured_graph_digest);
+    // The native lexer must terminate line comments at CR as well as LF.
+    // Source-formatting comments must not alter the model graph or receipt.
+    for (const std::string separator : {"\r", "\r\n", "\n"}) {
+        std::string with_comment = source;
+        with_comment.insert(visibility_at,
+                            "// ignored before the model declaration" + separator);
+        const auto parsed = oreslang::parse_program(with_comment);
+        assert(parsed.models.size() == 1);
+        assert(parsed.model_runs.size() == 1);
+        assert(parsed.models.front().graph_digest ==
+               program.models.front().graph_digest);
+        assert(parsed.model_runs.front().configured_graph_digest ==
+               program.model_runs.front().configured_graph_digest);
+    }
     assert(program.models.front().name == "PriceAdjust");
     assert(program.models.front().graph_digest ==
            "6c5e66eb67149e59c7d4d2d962b5671850ee3298f729214127d1452cb8d5ca21");
