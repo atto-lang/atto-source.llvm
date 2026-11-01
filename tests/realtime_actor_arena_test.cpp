@@ -48,6 +48,11 @@ int main() {
                 reinterpret_cast<OresRtArenaTurn*>(&arena)) ==
                 ORES_RT_ARENA_INVALID,
             "turn token cannot overwrite arena identity");
+    auto* invalid_turn_out = reinterpret_cast<OresRtArenaTurn*>(
+        std::numeric_limits<std::uintptr_t>::max() - 3);
+    require(ores_rt_actor_arena_enter(
+                &arena, 11, 3, invalid_turn_out) == ORES_RT_ARENA_INVALID,
+            "overflowing turn output pointer must reject before epoch");
     require(arena.epoch == 0 && !arena.active,
             "forged output tokens cannot advance turn epoch");
     require(ores_rt_actor_arena_enter(&arena, 99, 3, &turn) ==
@@ -73,6 +78,11 @@ int main() {
                 reinterpret_cast<OresRtArenaHandle*>(&arena)) ==
                 ORES_RT_ARENA_INVALID,
             "allocation token cannot overwrite actor control");
+    auto* invalid_handle_out = reinterpret_cast<OresRtArenaHandle*>(
+        std::numeric_limits<std::uintptr_t>::max() - 3);
+    require(ores_rt_actor_arena_alloc(
+                &arena, turn, 16, invalid_handle_out) == ORES_RT_ARENA_INVALID,
+            "overflowing handle output pointer must reject");
     require(arena.free_count == initial_free_count,
             "rejected allocation output cannot consume free-list slot");
 
@@ -87,6 +97,12 @@ int main() {
                 reinterpret_cast<OresRtArenaScratch*>(&arena)) ==
                 ORES_RT_ARENA_INVALID,
             "scratch token cannot overwrite actor control");
+    auto* invalid_scratch_out = reinterpret_cast<OresRtArenaScratch*>(
+        std::numeric_limits<std::uintptr_t>::max() - 3);
+    require(ores_rt_actor_arena_scratch_alloc(
+                &arena, turn, 16, alignof(std::uint64_t),
+                invalid_scratch_out) == ORES_RT_ARENA_INVALID,
+            "overflowing scratch output pointer must reject");
     require(arena.scratch_top == initial_scratch_top,
             "rejected scratch output cannot consume capacity");
 
