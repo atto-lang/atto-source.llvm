@@ -211,6 +211,33 @@ pub fnc main(): int {
   if inverse(-0.0) < 0.0; then return 42; fi
   return 86;
 }'
+positive f64_abi_named_reorder 'fnc weighted(f64 x, f64 bias): f64 {
+  return x + bias;
+}
+pub fnc main(): int {
+  if weighted(bias: 1.0, x: 41.0) == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_forward_call 'fnc first(f64 x): f64 { return later(x); }
+fnc later(f64 x): f64 { return x + 1.0; }
+pub fnc main(): int {
+  if first(41.0) == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_ternary_return 'fnc choose_value(bool use_first): f64 {
+  return use_first ? 42.0 : 86.0;
+}
+pub fnc main(): int {
+  if choose_value(true) == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_bool_return 'fnc matches(f64 value): bool {
+  return value == 42.0;
+}
+pub fnc main(): int {
+  if matches(42.0); then return 42; fi
+  return 86;
+}'
 positive oresllm_scalar_gradient 'pub fnc main(): int {
   val f64 weight = 5.0;
   val f64 x = 3.0;
@@ -302,11 +329,26 @@ negative mixed_division 'pub fnc main(): int {
   val f64 value = 7.0 / 2;
   return 42;
 }' 'f64 division (no implicit int conversion)'
-negative unsupported_f64_return_abi 'pub fnc main(): f64 { return 0.3; }' 'native f64 return ABI not yet admitted'
-negative unsupported_f64_parameter_abi 'pub fnc f(f64 value): int {
+negative f64_abi_bool_to_float_return 'fnc wrong_result(f64 value): f64 {
+  return true;
+}
+pub fnc main(): int { return 42; }' 'native function return requires f64, got bool'
+negative f64_abi_bool_argument 'fnc only_f64(f64 value): int {
   return 42;
 }
-pub fnc main(): int { return 42; }' 'native f64 function parameter ABI not yet admitted'
+pub fnc main(): int { return only_f64(true); }' "argument 'value' requires f64, got bool"
+negative f64_abi_named_bool_argument 'fnc offset(f64 x, f64 bias): f64 {
+  return x + bias;
+}
+pub fnc main(): int {
+  val f64 y = offset(bias: true, x: 42.0);
+  return 42;
+}' "argument 'bias' requires f64, got bool"
+negative f64_abi_guarded_wrong_return 'fnc guarded(f64 x): f64 {
+  if x > 0.0; then return 42; fi
+  return 42.0;
+}
+pub fnc main(): int { return 42; }' 'native guarded return requires f64, got int'
 negative scoped_f64_wrong_initializer 'pub fnc main(): int {
   if true; then
     val f64 value = 1;
@@ -323,6 +365,6 @@ negative scoped_f64_wrong_assignment 'pub fnc main(): int {
   return 86;
 }' 'native scalar assignment requires f64'
 
-[[ "$pass" -eq 28 && "$reject" -eq 19 ]] ||
+[[ "$pass" -eq 32 && "$reject" -eq 21 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=28; NEGATIVE_NO_IR_PASS=19 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=32; NEGATIVE_NO_IR_PASS=21 (not arrays/solver)"
