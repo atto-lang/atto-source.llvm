@@ -19,6 +19,8 @@
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
+/* Current source actor bootstrap supports a single immutable code image. */
+#define SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION UINT64_C(1)
 
 typedef struct {
     uint64_t magic;
@@ -220,7 +222,7 @@ static void root_suspend_turn(void) {
         origin,
         no_parent,
         ORES_CONTINUATION_BOUNDARY_AWAIT,
-        1,
+        SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION,
         frame->source_token,
         &frame->link));
 
@@ -262,11 +264,12 @@ static void root_resume_turn(void) {
 
     OresNativeExecutionHandle resumed = {0, 0};
     OresNativeExecutionContext logical = {0};
-    ensure(ores_native_await_trace_ready_resume_begin(
+    ensure(ores_native_await_trace_ready_resume_begin_current_code(
         group.executions,
         group.continuations,
         physical.id,
         link,
+        SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION,
         &resumed,
         &logical));
 
