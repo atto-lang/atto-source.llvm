@@ -60,6 +60,8 @@ def main():
         ('call-inference', 'fnc seven():int{return 7;}pub fnc main():int{const x=seven();return x+35;}'),
         ('call-cast', 'fnc seven():int{return 7;}pub fnc main():int{const x=seven() as int;return x+35;}'),
         ('branch-inference', 'pub fnc main():int{if(true){const x=7 as int;return x+35;}fi return 0;}'),
+        ('scalar-alias-cast', 'declare type Code=int;pub fnc main():int{const x=7 as Code;return x+35;}'),
+        ('scalar-alias-bool-cast', 'declare type Flag=bool;pub fnc main():int{const yes=true as Flag;if(yes){return 42;}fi return 0;}'),
         ('mutable-inferred-scalar', 'pub fnc main():int{let x=7 as int;x=42;return x;}'),
     ])
     negative = [
@@ -94,6 +96,7 @@ def main():
         ('inferred-bool-into-int', 'pub fnc main():int{const x=true;const int y=x;return 0;}'),
         ('inferred-int-into-bool', 'pub fnc main():int{const x=7;const bool y=x;return 0;}'),
         ('cast-does-not-convert', 'pub fnc main():int{const x=7 as bool as int;return 0;}'),
+        ('scalar-alias-cast-mismatch', 'declare type Flag=bool;pub fnc main():int{const x=7 as Flag;return 0;}'),
         ('inferred-bool-arithmetic', 'pub fnc main():int{const x=true;return x+1;}'),
     ])
     negative.extend([
@@ -133,10 +136,11 @@ def main():
         'cast-string-to-int': 'impossible native cast: string as int',
         'cast-int-to-string': 'impossible native cast: int as string',
         'cast-optional-no-lowering': 'native as? requires Option<T> checked-cast lowering',
-        'cast-nominal-no-lowering': 'native checked cast requires int, bool or string',
+        'cast-nominal-no-lowering': 'native checked cast requires a scalar or checked scalar alias',
         'inferred-bool-into-int': 'native scalar local initializer requires int, got bool',
         'inferred-int-into-bool': 'native scalar local initializer requires bool, got int',
         'cast-does-not-convert': 'impossible native cast: int as bool',
+        'scalar-alias-cast-mismatch': 'impossible native cast: int as bool',
         'inferred-bool-arithmetic': 'arithmetic requires int, got bool',
     })
     compared = 0
