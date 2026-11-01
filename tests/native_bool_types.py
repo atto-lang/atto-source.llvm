@@ -245,7 +245,7 @@ def main():
         require(path.is_file() and not path.is_symlink(), (name, 'unsafe fixture'))
         data = path.read_bytes()
         require(0 < len(data) < 1024, (name, 'unbounded fixture'))
-        blob = hashlib.sha1(b'blob ' + str(len(data)).encode('ascii') + b'\\0' + data).hexdigest()
+        blob = hashlib.sha1(b'blob ' + str(len(data)).encode('ascii') + b'\0' + data).hexdigest()
         require(blob == expected_sha, (name, 'source-byte drift', blob))
         source_text = data.decode('utf-8')
         if accepted:
