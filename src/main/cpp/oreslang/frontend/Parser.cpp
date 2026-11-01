@@ -69,7 +69,9 @@ public:
             const unsigned char ch = static_cast<unsigned char>(source_[at_]);
             if (std::isspace(ch)) { ++at_; continue; }
             if (source_.substr(at_, 2) == "//") {
-                const auto end = source_.find('\n', at_ + 2);
+                // CR-only and CRLF line endings are source line breaks too.
+                // Do not swallow a following `define model` declaration.
+                const auto end = source_.find_first_of("\r\n", at_ + 2);
                 at_ = end == std::string_view::npos ? source_.size() : end;
                 continue;
             }
