@@ -41,5 +41,4 @@ jobs:
         run: |
           cmake -S . -B build-locality -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="$(llvm-config --cmakedir)"
           cmake --build build-locality --target oreslang-native-actor-ready-queue-test -j2
-          ctest --test-dir build-locality -R '^native_actor_nonblocking_ready_queue
- -V --output-on-failure
+          ctest --test-dir build-locality --output-on-failure -R native_actor_nonblocking_ready_queue
