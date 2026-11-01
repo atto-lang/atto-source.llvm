@@ -267,6 +267,61 @@
         "llvm": "required",
         "graal": "required"
       }
+    },
+    {
+      "id": "native.oresllm-budget-budget-headroom",
+      "feature": "numeric.oresllm-budget-extension-budget-headroom",
+      "source": "fixtures/oresllm-budget-budget-headroom.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-near-max-budget",
+      "feature": "numeric.oresllm-budget-extension-near-max-budget",
+      "source": "fixtures/oresllm-budget-near-max-budget.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-staged-subtractions",
+      "feature": "numeric.oresllm-budget-extension-staged-subtractions",
+      "source": "fixtures/oresllm-budget-staged-subtractions.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-negative-product",
+      "feature": "numeric.oresllm-budget-extension-negative-product",
+      "source": "fixtures/oresllm-budget-negative-product.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-min-plus-zero",
+      "feature": "numeric.oresllm-budget-extension-min-plus-zero",
+      "source": "fixtures/oresllm-budget-min-plus-zero.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
     }
   ]
 }
