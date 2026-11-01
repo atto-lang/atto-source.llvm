@@ -328,6 +328,35 @@ int main() {
                 &arena, turn, stale_scratch, 0, &value, sizeof(value)) ==
                 ORES_RT_ARENA_STALE,
             "scratch domain forgery must reject");
+    // Impossible offset/length tokens must reject prior to any pointer
+    // arithmetic or external copy, even when domain and epoch are genuine.
+    stale_scratch = scratch;
+    stale_scratch.offset = std::numeric_limits<std::uint64_t>::max();
+    stale_scratch.length = std::numeric_limits<std::uint64_t>::max();
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, stale_scratch, 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_STALE,
+            "overflow-sized forged scratch extent cannot be read");
+    require(ores_rt_actor_arena_scratch_write(
+                &arena, turn, stale_scratch, 0, &value, sizeof(value)) ==
+                ORES_RT_ARENA_STALE,
+            "overflow-sized forged scratch extent cannot be written");
+    stale_scratch = scratch;
+    stale_scratch.length = std::numeric_limits<std::uint64_t>::max();
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, stale_scratch, 0, &observed, 1) ==
+                ORES_RT_ARENA_STALE,
+            "in-bounds scratch start with oversized length must reject");
+    require(ores_rt_actor_arena_scratch_write(
+                &arena, turn, scratch,
+                std::numeric_limits<std::size_t>::max(), &value, 1) ==
+                ORES_RT_ARENA_INVALID,
+            "huge per-scratch write offset must reject without wrapping");
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, scratch,
+                std::numeric_limits<std::size_t>::max(), &observed, 1) ==
+                ORES_RT_ARENA_INVALID,
+            "huge per-scratch read offset must reject without wrapping");
     observed = 0;
     require(ores_rt_actor_arena_scratch_read(
                 &arena, turn, scratch, 0, &observed, sizeof(observed)) ==
