@@ -3578,6 +3578,13 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING AND ORE_CLANG)
+    add_test(NAME native_actor_hierarchy_ml_source_gate
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-actor-hierarchy-ml-admission.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_actor_hierarchy_ml_source_gate PROPERTIES TIMEOUT 40)
+endif()
+
+if(BUILD_TESTING AND ORE_CLANG)
     add_test(NAME native_aot_driver
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-driver
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
