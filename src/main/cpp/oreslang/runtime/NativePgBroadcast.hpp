@@ -33,19 +33,23 @@ NativePgBroadcastReport native_pg_try_broadcast(
                   std::uint64_t, std::uint64_t>,
                   "pg send adapter must be noexcept and return bool");
     using Report = NativePgBroadcastReport;
-    if (max_recipients == 0) return {Report::Status::recipient_limit, 0, 0, 0, 0};
-    auto snapshot = registry.snapshot_group(group_id);
-    if (!snapshot) return {Report::Status::group_missing, 0, 0, 0, 0};
-    if (snapshot->members.size() > max_recipients)
-        return {Report::Status::recipient_limit, snapshot->members.size(), 0, 0, 0};
+    // Budget the snapshot *inside* the registry lock, before allocation.
+    // No unbounded group copy is allowed merely to discover an over-limit
+    // fanout; this also avoids an unsynchronized count-then-copy race.
+    auto selection = registry.snapshot_group_limited(group_id, max_recipients);
+    if (selection.status == NativeActorMembershipRegistry::SnapshotStatus::group_missing)
+        return {Report::Status::group_missing, 0, 0, 0, 0};
+    if (selection.status == NativeActorMembershipRegistry::SnapshotStatus::recipient_limit)
+        return {Report::Status::recipient_limit, 0, 0, 0, 0};
+    const auto& snapshot = *selection.snapshot;
     Report report;
-    report.snapshot_members = snapshot->members.size();
-    for (const auto& member : snapshot->members) {
+    report.snapshot_members = snapshot.members.size();
+    for (const auto& member : snapshot.members) {
         // Closing/recreating a numeric group ID or retiring an actor cannot
         // authenticate the old member after the fact. A group membership may
         // still change immediately AFTER this check, so the mailbox gate is
         // independently authoritative.
-        if (!registry.contains_snapshot_member(*snapshot, member)) {
+        if (!registry.contains_snapshot_member(snapshot, member)) {
             ++report.stale;
             continue;
         }
