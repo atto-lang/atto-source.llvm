@@ -18,6 +18,18 @@ CORPUS = Path(__file__).resolve().parents[1] / "contracts/v1/source-i64/portable
 ADMITTED = ("precedence","grouping","signed-multiplication","subtraction")
 OTHERS = ("negative-result","max-minus-one","signed-minimum")
 NEGATIVES = ("3/2","9223372036854775808")
+# Shared parity expressions 34..41; native executable exit is the real oracle.
+WAVE_SCALARS = (
+    ("34", "(2 + 3) * 8 + 2"),
+    ("35", "-(-42)"),
+    ("36", "(100 - 16) - 42"),
+    ("37", "-7 * -6"),
+    ("38", "(7 - 14) * -6"),
+    ("39", "9223372036854775807 - 9223372036854775765"),
+    ("40", "-9223372036854775808 + 9223372036854775807 + 43"),
+    ("41", "2 * (3 + 4) * 3"),
+)
+
 
 def require(good,message):
     if not good:raise RuntimeError(message)
@@ -88,6 +100,24 @@ def main():
                                  "source_sha256":hashlib.sha256(src.read_bytes()).hexdigest(),
                                  "llvm_ir_sha256":hashlib.sha256(compiled.stdout).hexdigest(),
                                  "native_executable_sha256":hashlib.sha256(exe.read_bytes()).hexdigest()})
+        # Candidate five-backend scalar subset. Each case must link and execute;
+        # a source-only parse, zero-step CI or host evaluation is not a pass.
+        for case_id, expr in WAVE_SCALARS:
+            src.write_text("pub fnc main(): int { return "+expr+"; }\\n".replace("\\n", "\n"), encoding="utf-8")
+            compiled=run([str(compiler),str(src)])
+            require(compiled.returncode==0 and b"define i32 @main(" in compiled.stdout,
+                    "native LLVM compile rejected wave case "+case_id+" "+repr(compiled.stderr[:1024]))
+            ir.write_bytes(compiled.stdout)
+            linked=run([str(clang),"-O0","-x","ir",str(ir),"-o",str(exe)])
+            require(linked.returncode==0 and exe.is_file(),
+                    "Clang link failed wave case "+case_id+" "+repr(linked.stderr[:1024]))
+            observed=run([str(exe)])
+            require(observed.returncode==42 and observed.stdout==b"" and observed.stderr==b"",
+                    "native LLVM runtime wave mismatch "+case_id)
+            observations.append({"case":"wave/"+case_id,"observed_exit":observed.returncode,
+                                 "source_sha256":hashlib.sha256(src.read_bytes()).hexdigest(),
+                                 "llvm_ir_sha256":hashlib.sha256(compiled.stdout).hexdigest(),
+                                 "native_executable_sha256":hashlib.sha256(exe.read_bytes()).hexdigest()})
         for expr in NEGATIVES:
             src.write_text("pub fnc main():int{return "+expr+";}\n",encoding="utf-8")
             rejected=run([str(compiler),str(src)])
@@ -96,7 +126,7 @@ def main():
     print(json.dumps({"kind":"native-llvm-compiled-os-exit-subset",
                       "source_corpus_blob":BLOB,"source_corpus_sha256":BYTES_SHA256,
                       "compiler_sha256":compiler_sha256,"clang_sha256":clang_sha256,
-                      "executed_cases":len(observations),
+                      "executed_cases":len(observations), "wave_scalar_cases":len(WAVE_SCALARS),
                       "total_corpus_cases":7,"unexecuted_due_to_lossy_exit":list(OTHERS),
                       "skipped_tests":0,"observed":observations},
                      sort_keys=True))
