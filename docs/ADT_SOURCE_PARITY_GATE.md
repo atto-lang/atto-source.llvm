@@ -26,7 +26,7 @@ nominal qualified owner identity, finite product/sum exhaustiveness,
 checked layout and constructor lowering, then change the six **accept**
 or **semantic-reject** expectations to true verified compiler diagnostics,
 native IR/Clang execution and ASan/UBSan evidence. Promote only after all
-24 canonical cases pass on the same exact-source revision and
+36 canonical cases pass on the same exact-source revision and
 independent CI review; a zero-step workflow counts as runner admission
 failure, never a test outcome. The CTest reservation and host wire models
 do not certify .NET or Wasm runtime parity.
