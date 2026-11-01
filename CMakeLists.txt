@@ -859,12 +859,12 @@ if(BUILD_TESTING)
         --diagnostic "native suspend gen* requires scheduler-owned async iterator continuation lowering")
     foreach(generator_case IN ITEMS
             legacy-fnc legacy-routine legacy-async-fnc)
-        add_test(NAME native_generator_v1_${generator_case}_failclosed
-            COMMAND "$<TARGET_FILE:oreslang-llvmc>"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generator-v1-${generator_case}-reject.ores")
-        set_tests_properties(native_generator_v1_${generator_case}_failclosed PROPERTIES
-            WILL_FAIL TRUE
-            PASS_REGULAR_EXPRESSION "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering")
+        # The contract harness verifies exit=1, the exact rejection diagnostic
+        # on stderr, and zero stdout. CTest must not invert failures with
+        # WILL_FAIL, which would also allow unrelated crashes to appear green.
+        oreslang_contract_test(native_generator_v1_${generator_case}_failclosed
+            generator-v1-${generator_case}-reject.ores
+            --diagnostic "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering")
     endforeach()
 
     add_executable(oreslang-ownership-cfg-dataflow-test
