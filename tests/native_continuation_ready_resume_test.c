@@ -504,6 +504,77 @@ int main(void) {
     check(ores_native_continuation_store_release(
         continuations, cancelled_link.continuation));
 
+
+    /*
+     * Runtime-owned image generation is the admission authority. A code
+     * upgrade atomically fences both the guarded and legacy READY claim
+     * paths, even if a producer published READY just before rotation.
+     */
+    check(ores_native_continuation_store_rotate_code_generation(
+        continuations, 77));
+    check(ores_native_continuation_store_current_code_generation(
+        continuations) == 77);
+    check(!ores_native_continuation_store_rotate_code_generation(
+        continuations, 77));
+    check(!ores_native_continuation_store_rotate_code_generation(
+        continuations, 0));
+    trace_origin_context.id.execution = 13;
+    check(ores_native_execution_context_store_insert(
+        executions, &trace_origin_context, &trace_origin));
+    OresNativeSuspensionLink old_image_link = {0};
+    check(ores_native_await_trace_suspend(
+        executions, continuations, trace_origin,
+        (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 77, 1400, &old_image_link));
+    check(ores_native_execution_context_store_release(executions, trace_origin));
+    check(ores_native_continuation_store_notify_ready(
+        continuations, old_image_link.continuation));
+    check(ores_native_continuation_store_rotate_code_generation(
+        continuations, 78));
+    check(ores_native_continuation_store_current_code_generation(
+        continuations) == 78);
+    resumed = (OresNativeExecutionHandle){0, 0};
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 14},
+        old_image_link, 77, &resumed, NULL));
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 14},
+        old_image_link, 78, &resumed, NULL));
+    check(!ores_native_await_trace_ready_resume_begin(
+        executions, continuations, (OresNativeExecutionId){88, 14},
+        old_image_link, &resumed, NULL));
+    check(!ores_native_store_handle_valid(resumed));
+    check(ores_native_continuation_store_get(
+        continuations, old_image_link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_cancel(
+        continuations, old_image_link.continuation));
+    check(ores_native_continuation_store_release(
+        continuations, old_image_link.continuation));
+
+    OresNativeContinuationHandle current_image = {0, 0};
+    check(ores_native_continuation_store_publish(
+        continuations, execution, (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 78, 1401, &current_image));
+    check(ores_native_continuation_store_notify_ready(
+        continuations, current_image));
+    check(ores_native_continuation_store_try_claim_ready_current_code(
+        continuations, current_image, 78, NULL));
+    check(!ores_native_continuation_store_rotate_code_generation(
+        continuations, 79)); /* active physical claim pins the old image */
+    check(ores_native_continuation_store_current_code_generation(
+        continuations) == 78);
+    check(ores_native_continuation_store_finish_resume(
+        continuations, current_image));
+    check(ores_native_continuation_store_release(
+        continuations, current_image));
+    check(ores_native_continuation_store_rotate_code_generation(
+        continuations, 79));
+    OresNativeContinuationHandle rejected_image = {0, 0};
+    check(!ores_native_continuation_store_publish(
+        continuations, execution, (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 78, 1402, &rejected_image));
+    check(ores_native_continuation_store_live(continuations) == 0);
     check(ores_native_continuation_store_live(continuations) == 0);
     check(ores_native_continuation_store_close(continuations));
     check(ores_native_execution_context_store_release(executions, execution));
