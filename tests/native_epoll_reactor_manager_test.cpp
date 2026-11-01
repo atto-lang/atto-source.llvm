@@ -8,6 +8,9 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <cerrno>
 using namespace oreslang::runtime;
 static void check(bool good) { if (!good) throw std::runtime_error("reactor manager test failed"); }
 int main() {
@@ -462,6 +465,78 @@ int main() {
         ::close(alias);
         ::close(endpoints[0]);
         ::close(endpoints[1]);
+    }
+    {
+        // Real AF_INET loopback rather than socketpair: an epoll watch on
+        // the connected TCP stream excludes dup() aliases until its terminal
+        // record is consumed, while the accepted peer is independent.
+        // This remains HOST reactor proof, NOT actor-owned pool integration.
+        int listener = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        check(listener >= 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_port = 0;
+        address.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
+        check(::bind(listener, reinterpret_cast<sockaddr*>(&address),
+                     sizeof(address)) == 0);
+        check(::listen(listener, 4) == 0);
+        socklen_t address_length = sizeof(address);
+        check(::getsockname(listener, reinterpret_cast<sockaddr*>(&address),
+                            &address_length) == 0);
+        int client = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        check(client >= 0);
+        int connect_result = ::connect(client,
+            reinterpret_cast<sockaddr*>(&address), sizeof(address));
+        check(connect_result == 0 || (connect_result == -1 && errno == EINPROGRESS));
+        pollfd outgoing{client, POLLOUT, 0};
+        check(::poll(&outgoing, 1, 3000) == 1);
+        int connect_error = 0;
+        socklen_t connect_length = sizeof(connect_error);
+        check(::getsockopt(client, SOL_SOCKET, SO_ERROR,
+            &connect_error, &connect_length) == 0 && connect_error == 0);
+        pollfd listening{listener, POLLIN, 0};
+        check(::poll(&listening, 1, 3000) == 1);
+        int accepted = ::accept4(listener, nullptr, nullptr,
+                                 SOCK_NONBLOCK | SOCK_CLOEXEC);
+        check(accepted >= 0);
+        int alias = ::dup(client);
+        check(alias >= 0 && alias != client);
+        NativeEpollReactorManager manager(2,
+            NativeEpollReactorManager::Profile::preallocated_rt, 2);
+        auto original = manager.try_watch(client, EPOLLIN);
+        check(original.has_value());
+        auto peer_watch = manager.try_watch(accepted, EPOLLIN);
+        check(peer_watch.has_value());
+        check(!manager.try_watch(alias, EPOLLIN).has_value());
+        check(::write(accepted, "xy", 2) == 2);
+        std::optional<NativeEpollReactorManager::Completion> completed;
+        const auto deadline = std::chrono::steady_clock::now()
+                            + std::chrono::seconds(3);
+        while (!completed && std::chrono::steady_clock::now() < deadline) {
+            completed = manager.try_pop();
+            if (!completed) std::this_thread::yield();
+        }
+        check(completed.has_value());
+        check(completed->reactor == original->reactor &&
+              completed->event.ticket.value == original->ticket.value);
+        // Only after the terminal event has been consumed can manager
+        // bookkeeping release this claim. A FUTURE actor-owner ACK fence
+        // must be layered on top; it is not implemented by this manager.
+        char payload[2]{};
+        check(::read(client, payload, 2) == 2);
+        check(payload[0] == 'x' && payload[1] == 'y');
+        std::optional<NativeEpollReactorManager::Watch> reacquired;
+        for (int retry = 0; retry < 2000 && !reacquired; ++retry) {
+            reacquired = manager.try_watch(alias, EPOLLIN);
+            if (!reacquired) std::this_thread::yield();
+        }
+        check(reacquired.has_value());
+        check(!manager.try_watch(client, EPOLLIN).has_value());
+        manager.stop();
+        ::close(alias);
+        ::close(accepted);
+        ::close(client);
+        ::close(listener);
     }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
