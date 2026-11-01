@@ -4351,6 +4351,14 @@ private:
                 return signature.returns_void ? ScalarType::I64 : signature.return_type;
             }
             case Expression::Kind::Cast: {
+                // An untagged sum/record/array handle is not a scalar. Never
+                // let its current i64 machine representation masquerade as int.
+                if (expr.left->kind == Expression::Kind::SumConstruct ||
+                        expr.left->kind == Expression::Kind::SumAccess ||
+                        expr.left->kind == Expression::Kind::RecordConstruct ||
+                        expr.left->kind == Expression::Kind::ArrayCall)
+                    throw std::runtime_error(
+                        "native scalar cast cannot reinterpret a nominal or aggregate handle");
                 const ScalarType actual = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 if (actual != expr.cast_target)
@@ -5108,6 +5116,57 @@ private:
             using TypeMap = std::unordered_map<std::string, ScalarType>;
             TypeMap scalar_types;
 
+            // Local scalar inference is not a machine-word inference. Refuse
+            // untagged handles and class/sum variables even though the backend
+            // physically represents them with an i64. An explicit nominal
+            // binding must retain the nominal type and ownership contract.
+            std::function<void(const Expression&, std::size_t)> check_inferred_scalar_shape;
+            check_inferred_scalar_shape = [&](const Expression& expr, std::size_t depth) {
+                require_expression_depth(depth, expr.offset);
+                using K = Expression::Kind;
+                if (expr.kind == K::SumConstruct || expr.kind == K::SumAccess ||
+                        expr.kind == K::RecordConstruct || expr.kind == K::ArrayCall ||
+                        expr.kind == K::Borrow || expr.kind == K::BorrowMut)
+                    throw std::runtime_error(
+                        "native inferred scalar cannot reinterpret a nominal/aggregate/borrow handle");
+                if (expr.kind == K::Variable) {
+                    for (const auto& source : fn.locals)
+                        if (source.name == expr.name &&
+                                (!source.sum_type.empty() || !source.class_name.empty() ||
+                                 source.int_array || source.heap_owned))
+                            throw std::runtime_error(
+                                "native inferred scalar cannot erase owner/nominal type of '" +
+                                expr.name + "'");
+                    for (const auto& source : fn.parameters)
+                        if (source.name == expr.name &&
+                                (!source.sum_type.empty() || !source.class_name.empty()))
+                            throw std::runtime_error(
+                                "native inferred scalar cannot erase parameter nominal type");
+                    for (const auto& spawn : fn.actor_spawns)
+                        if (spawn.name == expr.name)
+                            throw std::runtime_error(
+                                "native inferred scalar cannot erase ActorRef identity");
+                }
+                if (expr.kind == K::Call) {
+                    auto matched = std::find_if(program.functions.begin(),
+                        program.functions.end(), [&](const Function& candidate) {
+                            return candidate.name == expr.name &&
+                                candidate.parameters.size() == expr.arguments.size();
+                        });
+                    if (matched == program.functions.end() || matched->returns_void ||
+                            !matched->return_class.empty() || !matched->return_sum.empty())
+                        throw std::runtime_error(
+                            "native inferred scalar call lacks a proven scalar return");
+                }
+                auto child = [&](const std::unique_ptr<Expression>& value) {
+                    if (value) check_inferred_scalar_shape(*value, depth + 1);
+                };
+                child(expr.left); child(expr.right); child(expr.condition);
+                child(expr.condition_lhs); child(expr.condition_rhs);
+                child(expr.when_true); child(expr.when_false);
+                for (const auto& arg : expr.arguments) child(arg);
+            };
+
             auto class_scalars = [&](const std::string& owner, const std::string& type) {
                 if (type.empty()) return;
                 for (const auto& leaf : layouts.at(type).leaves) {
@@ -5160,10 +5219,11 @@ private:
                     if (!binding.initializer)
                         throw std::runtime_error(
                             "native scalar local requires an initializer");
-                    if (binding.inferred_scalar)
+                    if (binding.inferred_scalar) {
+                        check_inferred_scalar_shape(*binding.initializer, 1);
                         binding.scalar_type = validate_scalar_expression(
                             *binding.initializer, scalar_types, functions);
-                    else
+                    } else
                         require_scalar(*binding.initializer, binding.scalar_type,
                             "native scalar local initializer", scalar_types);
                 }
@@ -5227,10 +5287,11 @@ private:
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
                     const LocalBinding& local = *stmt.branch_local;
                     if (local.initializer) {
-                        if (local.inferred_scalar)
+                        if (local.inferred_scalar) {
+                            check_inferred_scalar_shape(*local.initializer, 1);
                             local.scalar_type = validate_scalar_expression(
                                 *local.initializer, env, functions);
-                        else
+                        } else
                             require_scalar(*local.initializer, local.scalar_type,
                                 "native branch-local initializer", env);
                     }
