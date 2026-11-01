@@ -192,6 +192,17 @@
       }
     },
     {
+      "id": "native.oresllm-scalar-gradient",
+      "feature": "numeric.oresllm-scalar-gradient",
+      "source": "fixtures/oresllm-scalar-gradient.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
       "id": "native.oresllm-signed-product",
       "feature": "numeric.oresllm-scalar-signed-product",
       "source": "fixtures/oresllm-signed-product.ores",
