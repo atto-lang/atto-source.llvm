@@ -14,7 +14,15 @@ const expectedFixtures={
   'max-minus-one':'pub fnc main(): int { return 43 + ((9223372036854775807 - 1) - 9223372036854775807); }\n',
   'zero-product':'pub fnc main(): int { return 42 + ((-7 * 0) - 0); }\n',
   'nested-arithmetic':'pub fnc main(): int { return 42 + (((2 + 3) * (10 - 2)) - 40); }\n',
-  'subtract-self':'pub fnc main(): int { return 42 + ((9223372036854775807 - 9223372036854775807) - 0); }\n'
+  'subtract-self':'pub fnc main(): int { return 42 + ((9223372036854775807 - 9223372036854775807) - 0); }\n',
+  'zero-add':"pub fnc main(): int { return 42 + (0 + 0); }\n",
+  'signed-subtract':"pub fnc main(): int { return 42 + ((1 - 9) + 8); }\n",
+  'left-associative':"pub fnc main(): int { return 42 + (((17 - 2) * 3) - 45); }\n",
+  'zero-times-max':"pub fnc main(): int { return 42 + ((0 * 9223372036854775807) - 0); }\n",
+  'over-2pow53':"pub fnc main(): int { return 42 + ((9007199254740993 + 1) - 9007199254740994); }\n",
+  "min-max-cancel":"pub fnc main(): int { return 42 + ((-9223372036854775808 + 9223372036854775807) + 1); }\n",
+  "near-square":"pub fnc main(): int { return 42 + ((3037000499 * 3037000499) - 9223372030926249001); }\n",
+  "over53-cancel":"pub fnc main(): int { return 42 + ((9007199254740993 - 9007199254740992) - 1); }\n"
 };
 const backend=existsSync('pom.xml')?'java':
   existsSync('CMakeLists.txt')?'llvm':
