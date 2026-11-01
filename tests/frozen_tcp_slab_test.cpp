@@ -31,6 +31,7 @@ int main() {
     assert(slab.read_byte(*second,3).value()==128);
     assert(slab.release_pin(*second));
     assert(slab.freed() && slab.pin_count()==0);
+    assert(slab.size()==5); // Metadata survives freed native backing.
     bool rejected=false;
     try {
         FrozenTcpSlab overflow(std::vector<std::uint8_t>(FrozenTcpSlab::max_bytes+1,0));
@@ -41,6 +42,7 @@ int main() {
     assert(empty_pin && !empty.read_byte(*empty_pin,0));
     empty.retire();
     assert(empty.release_pin(*empty_pin) && empty.freed());
+    assert(empty.size()==0 && !empty.try_pin());
     // RAII release and move preserve exactly one lifetime pin.
     FrozenTcpSlab moved(std::vector<std::uint8_t>{17});
     {
@@ -51,6 +53,12 @@ int main() {
         moved.retire();
     }
     assert(moved.freed());
+    assert(moved.size()==1);
+    FrozenTcpSlab immediate(std::vector<std::uint8_t>{9,10});
+    immediate.retire();
+    immediate.retire();
+    assert(immediate.freed() && immediate.size()==2);
+    assert(!immediate.try_pin());
 
     // Move-only pin keeps the snapshot alive after its host owner is dropped.
     std::optional<FrozenTcpSlab::Pin> surviving;
