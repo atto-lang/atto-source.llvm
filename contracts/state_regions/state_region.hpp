@@ -3,7 +3,10 @@
 #include <limits>
 
 namespace ores::state {
-enum class Status : uint8_t { ok, retired, conflicting_access, bad_release, busy };
+enum class Status : uint8_t {
+    ok, retired, conflicting_access, bad_release, busy,
+    invalid_mode, version_exhausted
+};
 enum class Mode : uint8_t { read, write };
 
 // Embedded in owner-controlled storage; no GC, heap allocation or hidden locks.
@@ -16,6 +19,9 @@ struct Region {
     uint64_t version = 0;
 
     Status acquire(Mode mode) noexcept {
+        // Forged/invalid enum discriminants must never be treated as read.
+        if (mode != Mode::read && mode != Mode::write)
+            return Status::invalid_mode;
         if (retired) return Status::retired;
         if (mode == Mode::write) {
             if (writer || readers) return Status::conflicting_access;
@@ -28,8 +34,14 @@ struct Region {
         return Status::ok;
     }
     Status release(Mode mode) noexcept {
+        if (mode != Mode::read && mode != Mode::write)
+            return Status::invalid_mode;
         if (mode == Mode::write) {
             if (!writer) return Status::bad_release;
+            // An exhausted epoch cannot wrap to zero and authorize an ABA
+            // stale witness. Leave the loan physically held (fail closed).
+            if (version == std::numeric_limits<uint64_t>::max())
+                return Status::version_exhausted;
             writer = false;
             ++version;
         } else {
