@@ -1,6 +1,7 @@
 #include "oreslang/runtime/ActorResourceRegistry.hpp"
 #include "oreslang/runtime/LogicalMutex.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -277,6 +278,58 @@ int main() {
     assert(rejected);
     bounded.retire();
     assert(bounded.try_reclaim().status == Reclaim::complete);
+
+    // AF03/AF05: registered resource callbacks execute only after actor
+    // admission has been fenced, and successful registrations are each
+    // delivered exactly once even when retirement races eight host callers.
+    for (std::uint64_t round=0; round<64; ++round) {
+        ActorResourceRegistry registrationRace(9300 + round, 1, 8);
+        std::array<std::atomic<bool>,8> accepted{};
+        std::array<std::atomic<unsigned>,8> delivered{};
+        std::array<std::thread,8> writers;
+        std::atomic<bool> go{false};
+        for (std::size_t i=0; i<writers.size(); ++i) {
+            writers[i] = std::thread([&,i] {
+                while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+                try {
+                    registrationRace.register_resource(Kind::timer, [&,i] {
+                        delivered[i].fetch_add(1, std::memory_order_release);
+                    });
+                    accepted[i].store(true, std::memory_order_release);
+                } catch (const std::logic_error&) {
+                    // Retirement linearized first: no registration accepted.
+                }
+            });
+        }
+        go.store(true, std::memory_order_release);
+        registrationRace.retire();
+        for (auto& writer : writers) writer.join();
+        const auto retired = registrationRace.try_reclaim();
+        assert(retired.status == Reclaim::complete);
+        assert(registrationRace.try_reclaim().status == Reclaim::complete);
+        for (std::size_t i=0; i<writers.size(); ++i)
+            assert(delivered[i].load(std::memory_order_acquire) ==
+                (accepted[i].load(std::memory_order_acquire) ? 1u : 0u));
+    }
+
+    // AF13/AF16: a resource callback can retire a DIFFERENT actor registry.
+    // The source registry must not hold its own lock while executing closers.
+    ActorResourceRegistry parentCascade(9400, 1, 2);
+    ActorResourceRegistry childCascade(9401, 1, 2);
+    std::atomic<unsigned> parentCalled{0}, childCalled{0};
+    childCascade.register_resource(Kind::file, [&] { ++childCalled; });
+    parentCascade.register_resource(Kind::ffi_callback, [&] {
+        assert(parentCascade.phase() == Phase::closing);
+        childCascade.retire();
+        const auto result = childCascade.try_reclaim();
+        assert(result.status == Reclaim::complete && result.closed == 1);
+        ++parentCalled;
+    });
+    parentCascade.retire();
+    assert(parentCascade.try_reclaim().status == Reclaim::complete);
+    assert(parentCascade.try_reclaim().status == Reclaim::complete);
+    assert(parentCalled == 1 && childCalled == 1);
+    assert(childCascade.try_reclaim().status == Reclaim::complete);
 
     ActorResourceRegistry tokenBound(18, 1, 1);
     std::vector<ActorResourceRegistry::Ticket> outstanding;
