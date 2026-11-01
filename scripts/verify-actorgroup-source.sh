@@ -39,6 +39,7 @@ required_tests=(
   reject_guest_actor_group_join
   reject_guest_actor_group_shadow
   native_actor_multi_group_membership
+  native_actor_pubsub_admission
   native_actor_group_managed_worker_readiness
   source_actor_compiled_native_lifecycle
   source_actor_compiled_native_asan_ubsan
@@ -67,6 +68,14 @@ c++ -std=c++17 -pthread -O1 -g -Wall -Wextra -Wpedantic -Werror \
   -o "$sanitized"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
   UBSAN_OPTIONS=halt_on_error=1 "$sanitized"
+
+pubsub_sanitized="$sanitized_dir/native_actor_pubsub_test"
+c++ -std=c++17 -pthread -O1 -g -Wall -Wextra -Wpedantic -Werror \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -I src/main/cpp tests/native_actor_pubsub_test.cpp \
+  -o "$pubsub_sanitized"
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+  UBSAN_OPTIONS=halt_on_error=1 "$pubsub_sanitized"
 
 if [[ "${ORESLANG_ACTORGROUP_FULL:-0}" == 1 ]]; then
   ctest --test-dir "$build_dir" --output-on-failure
