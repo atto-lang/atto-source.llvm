@@ -43,6 +43,25 @@ def main():
         ('branch-local-bool', FLAG+'fnc exercise(borrow mut Flag f):bool{if(true eq false){const ready:bool=false;f.set(ready);}else{const ready:bool=true;f.set(ready);}fi return f.read();}pub fnc main():int{let mut Flag f=new Flag();const ready:bool=exercise(rt mut borrow f);if(ready){return 42;}fi return 0;}'),
         ('take-local', 'pub fnc main():int{val original:bool=true;const moved:bool=rt take original;if(moved){return 42;}fi return 0;}'),
     ]
+    # These are native Oreslang guest programs, not host-language arithmetic
+    # stand-ins. All accepted programs must emit IR, link and exit 42.
+    positive.extend([
+        ('inferred-int', 'pub fnc main():int{const x=7;return x+35;}'),
+        ('explicit-vs-cast', 'pub fnc main():int{const int a=7;const b=7 as int;return a+b+28;}'),
+        ('annotation-vs-cast', 'pub fnc main():int{const a:int=7;const b=7 as int;return a+b+28;}'),
+        ('parenthesized-cast', 'pub fnc main():int{const a=(2+5) as int;return a+35;}'),
+        ('cast-then-add', 'pub fnc main():int{const a=(7 as int)+35;return a;}'),
+        ('inferred-reference', 'pub fnc main():int{const a=7;const b=a as int;return b+35;}'),
+        ('inferred-boolean', 'pub fnc main():int{const yes=true; if(yes){return 42;}fi return 0;}'),
+        ('cast-boolean', 'pub fnc main():int{const yes=true as bool; if(yes){return 42;}fi return 0;}'),
+        ('comparison-cast', 'pub fnc main():int{const yes=(7 eq 7) as bool;if(yes){return 42;}fi return 0;}'),
+        ('conditional-inference', 'pub fnc main():int{const x=(true?7:8);return x+35;}'),
+        ('conditional-cast', 'pub fnc main():int{const x=(true?7:8) as int;return x+35;}'),
+        ('call-inference', 'fnc seven():int{return 7;}pub fnc main():int{const x=seven();return x+35;}'),
+        ('call-cast', 'fnc seven():int{return 7;}pub fnc main():int{const x=seven() as int;return x+35;}'),
+        ('branch-inference', 'pub fnc main():int{if(true){const x=7 as int;return x+35;}fi return 0;}'),
+        ('mutable-inferred-scalar', 'pub fnc main():int{let x=7 as int;x=42;return x;}'),
+    ])
     negative = [
         ('bool-as-int', 'pub fnc main():int{return true;}'),
         ('int-as-bool', 'fnc bad():bool{return 1;}pub fnc main():int{return 0;}'),
@@ -65,6 +84,18 @@ def main():
         ('array-bool', 'pub fnc main():int{let mut Array<int> a=new Array<int>();a.add(true);return 0;}'),
         ('generic-bool', 'fnc id<T>(T n):T{return n;}pub fnc main():int{return id(true);}'),
     ]
+    negative.extend([
+        ('cast-int-to-bool', 'pub fnc main():int{const x=7 as bool;return 0;}'),
+        ('cast-bool-to-int', 'pub fnc main():int{const x=true as int;return 0;}'),
+        ('cast-string-to-int', 'pub fnc main():int{const x="7" as int;return 0;}'),
+        ('cast-int-to-string', 'pub fnc main():int{const x=7 as string;return 0;}'),
+        ('cast-optional-no-lowering', 'pub fnc main():int{const x=7 as? int;return 0;}'),
+        ('cast-nominal-no-lowering', 'pub fnc main():int{const x=7 as NotAType;return 0;}'),
+        ('inferred-bool-into-int', 'pub fnc main():int{const x=true;const int y=x;return 0;}'),
+        ('inferred-int-into-bool', 'pub fnc main():int{const x=7;const bool y=x;return 0;}'),
+        ('cast-does-not-convert', 'pub fnc main():int{const x=7 as bool as int;return 0;}'),
+        ('inferred-bool-arithmetic', 'pub fnc main():int{const x=true;return x+1;}'),
+    ])
     negative.extend([
         ('exclusive-alias', 'fnc pair(borrow mut bool a,borrow mut bool b):int{return 42;}pub fnc main():int{val flag:bool=true;return pair(rt mut borrow flag,rt mut borrow flag);}'),
         ('shared-exclusive-alias', 'fnc pair(borrow bool a,borrow mut bool b):int{return 42;}pub fnc main():int{val flag:bool=true;return pair(rt borrow flag,rt mut borrow flag);}'),
@@ -96,6 +127,18 @@ def main():
         'array-bool': 'native Array<int> arguments require int, got bool',
     }
     ownership_diagnostics.update(scalar_diagnostics)
+    ownership_diagnostics.update({
+        'cast-int-to-bool': 'impossible native cast: int as bool',
+        'cast-bool-to-int': 'impossible native cast: bool as int',
+        'cast-string-to-int': 'impossible native cast: string as int',
+        'cast-int-to-string': 'impossible native cast: int as string',
+        'cast-optional-no-lowering': 'native as? requires Option<T> checked-cast lowering',
+        'cast-nominal-no-lowering': 'native checked cast requires int, bool or string',
+        'inferred-bool-into-int': 'native scalar local initializer requires int, got bool',
+        'inferred-int-into-bool': 'native scalar local initializer requires bool, got int',
+        'cast-does-not-convert': 'impossible native cast: int as bool',
+        'inferred-bool-arithmetic': 'arithmetic requires int, got bool',
+    })
     compared = 0
     with tempfile.TemporaryDirectory(prefix='ores-native-bool-') as tmp:
         root = Path(tmp)
