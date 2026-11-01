@@ -43,7 +43,13 @@ public:
     [[nodiscard]] std::optional<Token> try_request() { return queue_.try_request(); }
     // Retire only queued tickets; a live protected callback must finish
     // before its state/arena is reclaimed.
-    [[nodiscard]] std::size_t retire() { return queue_.retire(); }
+    [[nodiscard]] std::size_t retire() {
+        // Match with_owner/release lock order. Once retired, even a formerly
+        // admitted but not-yet-executing token cannot enter a new callback.
+        // An already-active callback remains physically pinned to its owner.
+        std::lock_guard<std::mutex> lock(lease_mu_);
+        return queue_.retire();
+    }
     [[nodiscard]] bool retired() const { return queue_.retired(); }
     [[nodiscard]] bool quiescent() const { return queue_.quiescent(); }
     [[nodiscard]] bool owns(Token token) const { return queue_.holds(token); }
@@ -77,6 +83,9 @@ public:
             std::lock_guard<std::mutex> lock(lease_mu_);
             if (!queue_.holds(token)) {
                 throw std::logic_error("native logical mutex access without owning ticket");
+            }
+            if (queue_.retired()) {
+                throw std::logic_error("retired logical mutex cannot enter new protected body");
             }
             if (active_) {
                 throw std::logic_error("simultaneous logical mutex protected callbacks");

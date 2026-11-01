@@ -106,13 +106,42 @@ int main() {
         check(pending.admission == Admission::queued, "logical mutex pending slot absent");
         check(protectedState.retire() == 1, "logical mutex failed to revoke waiter");
         check(!protectedState.quiescent(), "live logical callback marked quiescent");
-        protectedState.with_owner(*owner, [](int& value) { value += 5; });
+        bool deniedAfterRetirement = false;
+        try {
+            protectedState.with_owner(*owner, [](int& value) { value += 5; });
+        } catch (const std::logic_error&) {
+            deniedAfterRetirement = true;
+        }
+        check(deniedAfterRetirement, "retired owner began new protected callback");
         check(!protectedState.release(pending.token), "revoked logical ticket released owner");
         check(!protectedState.release(*owner), "retired logical mutex handed off owner");
         check(protectedState.quiescent(), "logical mutex not quiescent after callback retirement");
         bool reject = false;
         try { (void)protectedState.request(); } catch (const std::logic_error&) { reject = true; }
         check(reject, "retired logical mutex permitted new admission");
+    }
+
+    // Race retirement against an executing native protected callback.
+    // Retirement must not reclaim active state or admit another callback.
+    for (int i = 0; i < 128; ++i) {
+        LogicalMutex<int> gate(0);
+        auto owner = gate.try_request();
+        check(owner.has_value(), "race setup missing owner");
+        std::atomic<bool> inside{false}, finish{false};
+        std::thread worker([&] {
+            gate.with_owner(*owner, [&](int& value) {
+                inside.store(true, std::memory_order_release);
+                while (!finish.load(std::memory_order_acquire)) std::this_thread::yield();
+                ++value;
+            });
+        });
+        while (!inside.load(std::memory_order_acquire)) std::this_thread::yield();
+        check(gate.retire() == 0, "retirement with active owner revoked callback");
+        check(!gate.quiescent(), "retirement reclaimed an active protected body");
+        finish.store(true, std::memory_order_release);
+        worker.join();
+        check(!gate.release(*owner), "retired callback handed off owner");
+        check(gate.quiescent(), "retired callback failed to quiesce");
     }
     return 0;
 }

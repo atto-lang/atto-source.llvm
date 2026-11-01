@@ -120,7 +120,9 @@ int main() {
         check(gate.release(*fast) == queued.token, "FIFO handoff lost");
         check(!gate.try_request().has_value(), "try_request displaced new owner");
         check(!gate.release(queued.token), "final try_request test leaked waiter");
-        check(gate.try_request().has_value(), "gate did not become usable again");
+        auto last = gate.try_request();
+        check(last.has_value(), "gate did not become usable again");
+        check(!gate.release(*last), "last try-enter unexpectedly handed off");
     }
 
     // Retiring an incarnation revokes its waiting tickets but never
