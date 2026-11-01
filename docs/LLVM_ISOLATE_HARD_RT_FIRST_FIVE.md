@@ -114,3 +114,26 @@ authentication. A trusted policy broker must check tenant membership and
 permissions on every ingress. Independent OS process boundaries remain
 necessary for malicious native tenants; RT qualification still requires
 separate timing and native artifact evidence.
+
+## Follow-up: deterministic multi-VM state-machine regression
+
+The new `tests/native_tenant_state_machine_test.cpp` executes 30,000
+deterministically seeded transitions over four independent VM registries with
+four tenant slots and three actors each. Its separately maintained lifecycle
+model asserts actual host outcomes for open/enter, per-actor physical turn
+admission, read/write content isolation, request_stop, quiescent finish_stop,
+fresh-generation zeroing, stale/foreign handle rejection and public token
+retargeting. The test includes minimum coverage thresholds, so a degenerate
+operation schedule cannot pass vacuously.
+
+Local source-exact proof: GCC 14 / Clang 17 O0/O2 compiled and ran all
+four configurations; GCC ASan+UBSan and Clang UBSan also passed (one and
+three executions, respectively). The fixture's Git object SHA was checked
+against the locally executed bytes. This is non-certifying HOST-ONLY
+reference-model evidence: it does not execute compiled `.ores` guest source,
+does not prove a real VM scheduler/supervisor integration, and does not
+qualify LLVM hard real time.
+
+Next executable promotion requires separately authorized source-org runner
+admission (at least one step), then actual source-to-native actor guest
+tests, CONTROL/DATA priority and mailbox/failure retirement integration.
