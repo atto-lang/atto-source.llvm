@@ -12,9 +12,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 # d(0.5*(w*x-target)^2)/dw = (w*x-target)*x.
 # w=2,x=1,target=42,lr=1 yields a numeric update of 42.
-cat >"$tmp/linear_update.ores" <<'ORES'
-fnc main():int{return 2-1*(2*1-42)*1;}
-ORES
+# Exact reviewed guest source is carried byte-identically by all five toolchains.
+cp -- "$root/tests/fixtures/actor-ml-scalar-step.ores" "$tmp/linear_update.ores"
 "$compiler" --target=host "$tmp/linear_update.ores" >"$tmp/linear_update.ll" 2>"$tmp/positive.err"
 [[ -s "$tmp/linear_update.ll" ]] || { echo "LLVM compiler did not produce scalar IR" >&2; exit 1; }
 "$clang" -O0 -x ir "$tmp/linear_update.ll" -o "$tmp/linear_update"
