@@ -97,5 +97,22 @@ int main() {
         mutex.with_owner(unwinding.token, [](int&) { throw std::runtime_error("guest failure"); });
     } catch (const std::runtime_error&) {}
     check(!mutex.release(unwinding.token), "exception must retire callback lease");
+    {
+        LogicalMutex<int> protectedState(10);
+        auto owner = protectedState.try_request();
+        check(owner.has_value(), "idle logical mutex try_request failed");
+        check(!protectedState.try_request().has_value(), "busy logical mutex try_request succeeded");
+        auto pending = protectedState.request();
+        check(pending.admission == Admission::queued, "logical mutex pending slot absent");
+        check(protectedState.retire() == 1, "logical mutex failed to revoke waiter");
+        check(!protectedState.quiescent(), "live logical callback marked quiescent");
+        protectedState.with_owner(*owner, [](int& value) { value += 5; });
+        check(!protectedState.release(pending.token), "revoked logical ticket released owner");
+        check(!protectedState.release(*owner), "retired logical mutex handed off owner");
+        check(protectedState.quiescent(), "logical mutex not quiescent after callback retirement");
+        bool reject = false;
+        try { (void)protectedState.request(); } catch (const std::logic_error&) { reject = true; }
+        check(reject, "retired logical mutex permitted new admission");
+    }
     return 0;
 }

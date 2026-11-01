@@ -105,5 +105,49 @@ int main() {
 
     (void)first.release(fresh.token);
     (void)second.release(independent.token);
+
+    // A nonqueueing try enter never grows a FIFO queue and never outruns
+    // an already queued ticket. A successful fast path can be released.
+    {
+        CriticalGate gate;
+        auto fast = gate.try_request();
+        check(fast.has_value(), "idle try_request must acquire");
+        check(!gate.try_request().has_value(), "busy try_request acquired owner");
+        check(gate.waiting() == 0, "try_request enqueued a waiter");
+        const auto queued = gate.request();
+        check(queued.admission == Admission::queued, "expected queued waiter");
+        check(!gate.try_request().has_value(), "try_request bypassed FIFO waiter");
+        check(gate.release(*fast) == queued.token, "FIFO handoff lost");
+        check(!gate.try_request().has_value(), "try_request displaced new owner");
+        check(!gate.release(queued.token), "final try_request test leaked waiter");
+        check(gate.try_request().has_value(), "gate did not become usable again");
+    }
+
+    // Retiring an incarnation revokes its waiting tickets but never
+    // releases or reclaims the active body before physical quiescence.
+    {
+        CriticalGate gate;
+        auto active = gate.try_request();
+        check(active.has_value(), "retirement setup has no owner");
+        auto queuedA = gate.request();
+        auto queuedB = gate.request();
+        check(gate.retire() == 2, "retire did not revoke two queued tickets");
+        check(gate.retired(), "retire state absent");
+        check(!gate.quiescent(), "active owner declared physically quiescent");
+        check(gate.waiting() == 0, "retired queued tickets retained capacity");
+        check(!gate.release(queuedA.token), "stale queued ticket released owner");
+        check(!gate.release(queuedB.token), "second stale ticket released owner");
+        check(gate.holds(*active), "active protected body prematurely revoked");
+        bool reject = false;
+        try { (void)gate.request(); } catch (const std::logic_error&) { reject = true; }
+        check(reject, "retired gate admitted queued request");
+        reject = false;
+        try { (void)gate.try_request(); } catch (const std::logic_error&) { reject = true; }
+        check(reject, "retired gate admitted try-request");
+        check(gate.retire() == 0, "duplicate retirement changed state");
+        check(!gate.release(*active), "retired owner was handed to a waiter");
+        check(gate.quiescent(), "retired gate did not become quiescent");
+        check(!gate.holds(*active), "stale active ticket retained owner after exit");
+    }
     return 0;
 }

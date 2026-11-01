@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <optional>
+#include <utility>
 #include <mutex>
 #include <stdexcept>
 
@@ -45,15 +47,14 @@ public:
     };
     static constexpr std::size_t max_waiters = 8192;
 
-    CriticalGate() : scope_(next_scope_.fetch_add(1, std::memory_order_relaxed) + 1) {
-        if (scope_ == 0) throw std::overflow_error("critical scope ids exhausted");
-    }
+    CriticalGate() : scope_(issue_scope()) {}
     CriticalGate(const CriticalGate&) = delete;
     CriticalGate& operator=(const CriticalGate&) = delete;
 
     /** Never blocks a scheduler carrier; requests a unique logical ticket. */
     [[nodiscard]] Request request() {
         std::lock_guard<std::mutex> lock(mu_);
+        if (retired_) throw std::logic_error("critical gate retired");
         const bool available = !owner_ && waiting_.empty();
         if (!available && waiting_.size() >= max_waiters) {
             throw std::overflow_error("critical waiter limit exceeded");
@@ -68,6 +69,47 @@ public:
         }
         waiting_.push_back(token);
         return {token, Admission::queued};
+    }
+
+    /**
+     * Nonqueuing, nonblocking try-enter. Failure also covers concurrent host
+     * metadata ownership: a carrier never parks on the short bookkeeping lock.
+     * A queued waiter cannot be overtaken even when the owner has retired.
+     */
+    [[nodiscard]] std::optional<Token> try_request() {
+        std::unique_lock<std::mutex> lock(mu_, std::try_to_lock);
+        if (!lock.owns_lock()) return std::nullopt;
+        if (retired_) throw std::logic_error("critical gate retired");
+        if (owner_ || !waiting_.empty()) return std::nullopt;
+        if (issued_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("critical ticket sequence exhausted");
+        owner_ = Token(scope_, ++issued_);
+        return owner_;
+    }
+
+    /**
+     * Revoke queued continuations on STOP/restart/hotload. Retirement does
+     * NOT release a physically active protected body or prove quiescence.
+     * The scheduler owns cancellation notifications and must separately
+     * retire the rejected logical continuations.
+     */
+    [[nodiscard]] std::size_t retire() {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (retired_) return 0;
+        retired_ = true;
+        const std::size_t rejected = waiting_.size();
+        waiting_.clear();
+        return rejected;
+    }
+
+    [[nodiscard]] bool retired() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return retired_;
+    }
+
+    [[nodiscard]] bool quiescent() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return retired_ && !owner_ && waiting_.empty();
     }
 
     /**
@@ -88,7 +130,7 @@ public:
             return {}; // idempotent stale/duplicate release
         }
         owner_ = {};
-        if (waiting_.empty()) return {};
+        if (retired_ || waiting_.empty()) return {};
         owner_ = waiting_.front();
         waiting_.pop_front();
         return owner_;
@@ -105,6 +147,17 @@ public:
     }
 
 private:
+    [[nodiscard]] static std::uint64_t issue_scope() {
+        auto current = next_scope_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (current == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("critical scope ids exhausted");
+            if (next_scope_.compare_exchange_weak(current, current + 1,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                return current + 1;
+        }
+    }
+
     void validate(Token token) const {
         if (!token || token.scope_ != scope_ || token.sequence_ > issued_) {
             throw std::invalid_argument("foreign or invalid critical ticket");
@@ -115,6 +168,7 @@ private:
     const std::uint64_t scope_;
     mutable std::mutex mu_;
     std::uint64_t issued_ = 0;
+    bool retired_ = false;
     Token owner_;
     std::deque<Token> waiting_;
 };

@@ -39,6 +39,13 @@ public:
     LogicalMutex& operator=(const LogicalMutex&) = delete;
 
     [[nodiscard]] Request request() { return queue_.request(); }
+    // try_request is an immediate admission attempt, never a waiter.
+    [[nodiscard]] std::optional<Token> try_request() { return queue_.try_request(); }
+    // Retire only queued tickets; a live protected callback must finish
+    // before its state/arena is reclaimed.
+    [[nodiscard]] std::size_t retire() { return queue_.retire(); }
+    [[nodiscard]] bool retired() const { return queue_.retired(); }
+    [[nodiscard]] bool quiescent() const { return queue_.quiescent(); }
     [[nodiscard]] bool owns(Token token) const { return queue_.holds(token); }
     [[nodiscard]] std::size_t waiting() const { return queue_.waiting(); }
 
