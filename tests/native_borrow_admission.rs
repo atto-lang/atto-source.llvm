@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_signal_termination_with_matching_diagnostic() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\n' >&2\nkill -KILL $",
+            "printf 'bad ownership\n' >&2\nkill -KILL $$",
         );
     }
 
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_llvm_ir_written_to_stderr() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\\ndefine i64 @main() {\\n' >&2\\nexit 2",
+            "printf 'bad ownership\ndefine i64 @main() {\n' >&2\nexit 2",
         );
     }
 
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_partial_module_header_on_stderr() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\\n; ModuleID = fake\\n' >&2\\nexit 2",
+            "printf 'bad ownership\n; ModuleID = fake\n' >&2\nexit 2",
         );
     }
 
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_output_over_budget_after_fast_exit() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\\n' >&2\\ndd if=/dev/zero bs=1024 count=1025 2>/dev/null\\nexit 2",
+            "printf 'bad ownership\n' >&2\ndd if=/dev/zero bs=1024 count=1025 2>/dev/null\nexit 2",
         );
     }
 
