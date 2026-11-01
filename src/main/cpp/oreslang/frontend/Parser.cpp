@@ -4286,7 +4286,10 @@ private:
                 // Non-scalar class/array/actor names are rejected by ownership
                 // if used as scalar values; treat their placeholder as i64 here
                 // only so field/borrow syntax can reach that stricter pass.
-                return found == variables.end() ? ScalarType::I64 : found->second;
+                // Codegen loads based on resolved_type: keep the actual
+                // source F64 in the AST, not its default i64 annotation.
+                return expr.resolved_type = found == variables.end()
+                    ? ScalarType::I64 : found->second;
             }
             case Expression::Kind::Field: {
                 if (expr.left) {
