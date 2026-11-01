@@ -608,6 +608,8 @@ public:
                 type_only_declaration(program, true, exported);
                 continue;
             }
+            if (token_.text == "supervisor")
+                fail("NATIVE_SUPERVISOR_UNSUPPORTED: source supervisor requires immutable typed Failure and compiler-owned CONTROL lowering");
             if (token_.text == "model")
                 fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
             if (accept("enum")) {
@@ -690,6 +692,8 @@ public:
                     type_only_declaration(program, true, public_class);
                     continue;
                 }
+                if (token_.text == "supervisor")
+                    fail("NATIVE_SUPERVISOR_UNSUPPORTED: source supervisor requires immutable typed Failure and compiler-owned CONTROL lowering");
                 if (token_.text == "model")
                     fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
