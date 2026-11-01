@@ -126,6 +126,20 @@ int main(){
         struct stat current{};
         assert(::fstat(fd,&current)==0 && current.st_size==88);
     }
+    // Check the 12 identity/sequence u32 prefix bytes before they form a
+    // complete header field; otherwise a corrupt short tail is misclassified.
+    for (unsigned position=6; position<=17; ++position) {
+        auto damaged=third;
+        damaged[position] ^= 1;
+        const std::size_t n=position+1U;
+        assert(::ftruncate(fd,62)==0);
+        assert(::pwrite(fd,damaged.data(),n,62)==static_cast<ssize_t>(n));
+        rejects([&]{ DbWalReplayV1::scan(
+                fd,7,4,[](auto,auto,auto){}); });
+        struct stat current{};
+        assert(::fstat(fd,&current)==0 &&
+                current.st_size==static_cast<off_t>(62+n));
+    }
     assert(::ftruncate(fd,62)==0);
     // Exercise the production-style trusted directory-relative locked
     // owner wrapper as a separate generation after full process reopen.
