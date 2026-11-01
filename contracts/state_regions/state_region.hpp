@@ -25,6 +25,10 @@ struct Region {
         if (retired) return Status::retired;
         if (mode == Mode::write) {
             if (writer || readers) return Status::conflicting_access;
+            // A writer acquired at the exhausted epoch could never release
+            // without wrapping its generation. Deny admission instead.
+            if (version == std::numeric_limits<uint64_t>::max())
+                return Status::version_exhausted;
             writer = true;
         } else {
             if (writer || readers == std::numeric_limits<uint32_t>::max())
