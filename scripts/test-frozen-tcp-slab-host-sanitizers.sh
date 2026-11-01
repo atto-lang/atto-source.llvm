@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-g++}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-"$CXX" -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic \
+"$CXX" -std=c++20 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
   -I"$ROOT/src/main/cpp" "$ROOT/tests/frozen_tcp_slab_test.cpp" \
   -o "$WORK/frozen_tcp_slab_test"
