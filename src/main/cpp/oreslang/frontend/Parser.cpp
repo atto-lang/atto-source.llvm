@@ -2129,7 +2129,10 @@ private:
             require(";");
             return true;
         };
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
+                token_.text == "int" || token_.text == "bool" ||
+                token_.text == "String" || token_.text == "string" ||
+                token_.text == "stdio" || array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -2140,11 +2143,18 @@ private:
             LocalBinding binding;
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            const bool default_readonly = token_.text == "int" || token_.text == "bool" ||
+                token_.text == "String" || token_.text == "string";
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
-                const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
-                binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
+            if (default_readonly || ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
+                // A bare typed local is fixed and readonly, but unlike a
+                // standalone constexpr 'const' its initializer may run.
+                const std::string mode = default_readonly ? "default-readonly" : std::string(token_.text);
+                if (!default_readonly) advance();
+                if (mode == "let") accept("mut");
+                binding.owner_mutable = mode == "val" || mode == "let";
+                binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
                 binding.name = identifier();
@@ -2399,9 +2409,12 @@ private:
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
+            const bool default_readonly = token_.text == "int" || token_.text == "bool" ||
+                token_.text == "String" || token_.text == "string";
             const bool mutable_slot = token_.text == "let";
-            const bool mutable_referent = token_.text != "const";
-            advance(); const bool explicit_mutable = mutable_slot && accept("mut");
+            const bool mutable_referent = !default_readonly && token_.text != "const";
+            if (!default_readonly) advance();
+            const bool explicit_mutable = mutable_slot && accept("mut");
             if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
             auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
             local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
@@ -2545,7 +2558,9 @@ private:
                         fail("native statement follows terminal return");
                     continue;
                 }
-                if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+                if (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
+                        token_.text == "int" || token_.text == "bool" ||
+                        token_.text == "String" || token_.text == "string") {
                     actions.push_back(scoped_local());
                     continue;
                 }
