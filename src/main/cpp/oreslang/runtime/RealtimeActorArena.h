@@ -89,6 +89,9 @@ size_t ores_rt_actor_arena_required_bytes(
 /*
  * Initializes an arena inside caller-owned, max_align_t-aligned storage.
  * The entire required region is zeroed here, before the hard-RT window.
+ * Reinitializing this arena from its currently admitted carrier fails BUSY
+ * without changing allocator or turn state. The caller must serialize all
+ * initialization against other carriers (single-carrier ownership contract).
  */
 OresRtArenaStatus ores_rt_actor_arena_init(
     OresRealtimeActorArena* arena,
