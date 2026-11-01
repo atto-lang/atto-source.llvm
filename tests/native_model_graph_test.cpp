@@ -399,6 +399,28 @@ int main() {
            oreslang::Expression::Kind::Call);
     assert(zero_formal.functions.back().result->name == "AddDelta");
 
+    // A nominal model type must not alias a second type with the same graph.
+    const std::string distinct_nominal_models = R"ores(
+        fnc Identity(int input): int { return input; }
+        define model x as
+            Identity()
+        end
+        define model y as
+            Identity()
+        end
+        pub fnc main(): int { return x().run(42); }
+    )ores";
+    const auto two_models = oreslang::parse_program(distinct_nominal_models);
+    assert(two_models.models.size() == 2);
+    assert(two_models.models[0].name == "x");
+    assert(two_models.models[1].name == "y");
+    assert(two_models.models[0].portable_profile == "model-core-i64-v1");
+    assert(two_models.models[1].portable_profile == "model-core-i64-v1");
+    assert(two_models.models[0].graph_digest != two_models.models[1].graph_digest);
+    assert(two_models.model_runs.size() == 1);
+    assert(two_models.model_runs.front().blueprint_graph_digest ==
+           two_models.models[0].graph_digest);
+
     const std::string negative_literal_source = R"ores(
         fnc AddDelta(int delta, int input): int {
             return input + delta;
