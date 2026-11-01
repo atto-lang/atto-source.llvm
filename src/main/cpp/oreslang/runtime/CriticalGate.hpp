@@ -6,6 +6,7 @@
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 
 namespace oreslang::runtime {
@@ -51,9 +52,25 @@ public:
     CriticalGate(const CriticalGate&) = delete;
     CriticalGate& operator=(const CriticalGate&) = delete;
 
-    /** Never blocks a scheduler carrier; requests a unique logical ticket. */
+    /**
+     * Immediate acquisition for source "try critical" lowering. Never enqueues
+     * and does not wait for the internal short bookkeeping mutex, either.
+     * Failure is not a ticket and cannot later acquire a guard.
+     */
+    [[nodiscard]] std::optional<Token> try_request() {
+        std::unique_lock<std::mutex> lock(mu_, std::try_to_lock);
+        if (!lock || closed_ || owner_ || !waiting_.empty())
+            return std::nullopt;
+        if (issued_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("critical ticket sequence exhausted");
+        owner_ = Token(scope_, ++issued_);
+        return owner_;
+    }
+
+    /** Briefly synchronizes ticket admission; never holds an OS mutex in guest code. */
     [[nodiscard]] Request request() {
         std::lock_guard<std::mutex> lock(mu_);
+        if (closed_) throw std::logic_error("critical gate retired");
         const bool available = !owner_ && waiting_.empty();
         if (!available && waiting_.size() >= max_waiters) {
             throw std::overflow_error("critical waiter limit exceeded");
@@ -78,6 +95,7 @@ public:
     [[nodiscard]] Token release(Token token) {
         std::lock_guard<std::mutex> lock(mu_);
         validate(token);
+        if (closed_) return {};
         if (owner_ != token) {
             for (auto it = waiting_.begin(); it != waiting_.end(); ++it) {
                 if (*it == token) {
@@ -96,12 +114,30 @@ public:
 
     [[nodiscard]] bool holds(Token token) const {
         std::lock_guard<std::mutex> lock(mu_);
-        return token && token.scope_ == scope_ && owner_ == token;
+        return !closed_ && token && token.scope_ == scope_ && owner_ == token;
     }
 
     [[nodiscard]] std::size_t waiting() const {
         std::lock_guard<std::mutex> lock(mu_);
         return waiting_.size();
+    }
+
+    /**
+     * Revoke owner and queued tickets at actor-generation retirement. Caller
+     * MUST first quiesce the physically running body: this fences future
+     * admission but cannot interrupt a guest critical mutation mid-instruction.
+     * No callbacks run under the bookkeeping mutex.
+     */
+    void retire() {
+        std::lock_guard<std::mutex> lock(mu_);
+        closed_ = true;
+        owner_ = {};
+        waiting_.clear();
+    }
+
+    [[nodiscard]] bool retired() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return closed_;
     }
 
 private:
@@ -115,6 +151,7 @@ private:
     const std::uint64_t scope_;
     mutable std::mutex mu_;
     std::uint64_t issued_ = 0;
+    bool closed_ = false;
     Token owner_;
     std::deque<Token> waiting_;
 };
