@@ -150,6 +150,67 @@ positive scoped_f64_mutation 'pub fnc main(): int {
   return 86;
 }'
 positive integer_control 'pub fnc main(): int { return 42; }'
+positive f64_abi_gradient 'fnc gradient(f64 weight, f64 x, f64 target): f64 {
+  return 2.0 * (weight * x + 1.0 - target) * x;
+}
+pub fnc main(): int {
+  val f64 actual = gradient(5.0, 3.0, 9.0);
+  if actual == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_nested_call 'fnc twice(f64 value): f64 { return value * 2.0; }
+fnc fourfold(f64 value): f64 { return twice(value) + twice(value); }
+pub fnc main(): int {
+  if fourfold(10.5) == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_mixed_args 'fnc shifted(f64 weight, int bias): f64 {
+  return weight + 0.5;
+}
+pub fnc main(): int {
+  val f64 value = shifted(41.5, 0);
+  if value == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_return_local 'fnc pass_through(f64 input): f64 {
+  val f64 local = input + 0.0;
+  return local;
+}
+pub fnc main(): int {
+  if pass_through(42.0) == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_guarded_return 'fnc select(f64 candidate): f64 {
+  if candidate > 0.0; then return 42.0; fi
+  return 86.0;
+}
+pub fnc main(): int {
+  if select(1.0) == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_branch_return 'fnc branch(f64 seed): f64 {
+  if true; then
+    val f64 value = seed + 1.0;
+    return value;
+  fi
+  return 86.0;
+}
+pub fnc main(): int {
+  if branch(41.0) == 42.0; then return 42; fi
+  return 86;
+}'
+positive f64_abi_int_result 'fnc compare(f64 input): int {
+  if input == 42.0; then return 42; fi
+  return 86;
+}
+pub fnc main(): int { return compare(42.0); }'
+positive f64_abi_signed_zero 'fnc inverse(f64 value): f64 {
+  return 1.0 / value;
+}
+pub fnc main(): int {
+  if inverse(-0.0) < 0.0; then return 42; fi
+  return 86;
+}'
 positive oresllm_scalar_gradient 'pub fnc main(): int {
   val f64 weight = 5.0;
   val f64 x = 3.0;
@@ -179,6 +240,32 @@ positive oresllm_scoped_gradient 'pub fnc main(): int {
   return 86;
 }'
 
+negative f64_abi_main_return 'pub fnc main(): f64 {
+  return 42.0;
+}' 'native main does not admit f64 process ABI'
+negative f64_abi_main_parameter 'pub fnc main(f64 value): int {
+  return 42;
+}' 'native main does not admit f64 process ABI'
+negative f64_abi_borrow_parameter 'fnc unproven(borrow f64 value): f64 {
+  return value;
+}
+pub fnc main(): int { return 42; }' 'native f64 parameter must be passed by value'
+negative f64_abi_argument_mismatch 'fnc pass_through(f64 value): f64 {
+  return value;
+}
+pub fnc main(): int {
+  val f64 result = pass_through(42);
+  return 42;
+}' "argument 'value' requires f64, got int"
+negative f64_abi_return_mismatch 'fnc wrong(f64 value): f64 {
+  return 42;
+}
+pub fnc main(): int { return 42; }' 'native function return requires f64, got int'
+negative f64_abi_no_implicit_downcast 'fnc wrong(int value): int { return value; }
+pub fnc main(): int {
+  val int result = wrong(42.0);
+  return result;
+}' "argument 'value' requires int, got f64"
 negative implicit_int_to_f64 'pub fnc main(): int {
   val f64 value = 1;
   return 42;
@@ -236,6 +323,6 @@ negative scoped_f64_wrong_assignment 'pub fnc main(): int {
   return 86;
 }' 'native scalar assignment requires f64'
 
-[[ "$pass" -eq 20 && "$reject" -eq 13 ]] ||
+[[ "$pass" -eq 28 && "$reject" -eq 19 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=20; NEGATIVE_NO_IR_PASS=13 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=28; NEGATIVE_NO_IR_PASS=19 (not arrays/solver)"
