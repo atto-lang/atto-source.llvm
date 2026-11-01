@@ -1,4 +1,4 @@
-//! Real compiler admission: twenty denials and three genuine IR controls.
+//! Real compiler admission: twenty denials and four genuine IR controls.
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -155,13 +155,14 @@ fn main() {
     }
     for (name, source) in [
         ("valid-shared-borrow", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt borrow v); }\n"),
+        ("valid-exclusive-mutable-borrow", "fnc read(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut borrow v); }\n"),
         ("valid-owned-scalar-call", "fnc consume(int x): int { return x; }\npub fnc main(): int { return consume(42); }\n"),
         ("valid-owned-constructor", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let Box box = new Box(42); return box.read(); }\n"),
     ] {
         check_case(&compiler, &root.0, name, source, None);
     }
     println!(
-        "PASS native borrow admission: twenty no-IR/no-artifact denials, three real IR controls"
+        "PASS native borrow admission: twenty no-IR/no-artifact denials, four real IR controls"
     );
 }
 
