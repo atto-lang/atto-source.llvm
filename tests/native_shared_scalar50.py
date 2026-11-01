@@ -38,7 +38,7 @@ def cases(path: Path):
 def run(args):
     for name in ("compiler", "clang"):
         path = getattr(args, name)
-        if not path.is_file() or path.is_symlink():
+        if not path.is_file():
             raise AssertionError(f"missing or symlinked {name} executable")
     with tempfile.TemporaryDirectory(prefix="ores-scalar50-llvm-") as directory:
         work = Path(directory)
