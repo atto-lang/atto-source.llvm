@@ -46,6 +46,21 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Real LLVM-generated guest arithmetic through a Linux shared-object ABI
+    # probe. This is five pinned scalar source programs, NOT proxy data plane.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_program(PROXY_LB_CLANG clang)
+        if(PROXY_LB_CLANG)
+            add_test(NAME proxy_lb_native_scalar_guest_i64
+                COMMAND bash
+                  "${CMAKE_CURRENT_SOURCE_DIR}/tests/proxy_lb_scalar_native.sh"
+                  $<TARGET_FILE:oreslang-llvmc>
+                  "${PROXY_LB_CLANG}"
+                  "${CMAKE_CXX_COMPILER}")
+            set_tests_properties(proxy_lb_native_scalar_guest_i64
+                PROPERTIES TIMEOUT 90)
+        endif()
+    endif()
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
