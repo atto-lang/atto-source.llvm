@@ -1,5 +1,9 @@
 #include "oreslang/runtime/FrozenTcpSlab.hpp"
 #include <cassert>
+#include <array>
+#include <atomic>
+#include <memory>
+#include <thread>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -47,5 +51,50 @@ int main() {
         moved.retire();
     }
     assert(moved.freed());
+
+    // Move-only pin keeps the snapshot alive after its host owner is dropped.
+    std::optional<FrozenTcpSlab::Pin> surviving;
+    {
+        auto temporary = std::make_unique<FrozenTcpSlab>(
+            std::vector<std::uint8_t>{42});
+        auto token = temporary->try_pin();
+        assert(token);
+        surviving.emplace(std::move(*token));
+    }
+    surviving.reset(); // ASan checks that this is not use-after-free.
+
+    // Eight host threads hold independent pins across retirement. No thread
+    // may access freed bytes, and retirement must wait for all pins to unwind.
+    FrozenTcpSlab concurrent(std::vector<std::uint8_t>{0,1,127,128,255});
+    std::atomic<int> ready{0};
+    std::atomic<int> failures{0};
+    std::atomic<bool> proceed{false};
+    std::array<std::thread, 8> readers;
+    for (auto& worker : readers) {
+        worker = std::thread([&]() {
+            auto pinned = concurrent.try_pin();
+            if (!pinned) {
+                failures.fetch_add(1, std::memory_order_relaxed);
+                ready.fetch_add(1, std::memory_order_release);
+                return;
+            }
+            ready.fetch_add(1, std::memory_order_release);
+            while (!proceed.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            for (int i = 0; i < 1024; ++i) {
+                if (concurrent.read_byte(*pinned,3) != 128)
+                    failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    while (ready.load(std::memory_order_acquire) != 8)
+        std::this_thread::yield();
+    concurrent.retire();
+    assert(!concurrent.try_pin());
+    assert(!concurrent.freed());
+    proceed.store(true, std::memory_order_release);
+    for (auto& worker : readers) worker.join();
+    assert(concurrent.freed() && concurrent.pin_count() == 0);
+    assert(failures.load(std::memory_order_relaxed) == 0);
     return 0;
 }
