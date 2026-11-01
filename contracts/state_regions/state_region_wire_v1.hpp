@@ -2,6 +2,7 @@
 // v1 JSON/WASM interoperable *metadata*, never a runtime access capability.
 // The native task-bound gate must still authenticate the live scheduler ticket.
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace ores::state::wire {
@@ -80,7 +81,10 @@ struct Provenance {
             execution_generation == r.execution_generation &&
             loan_id == r.loan_id && place == r.place && kind == r.kind;
     }
-    constexpr Provenance release_record() const noexcept {
+    // Unlike a raw copy, only a valid BORROW receipt can derive a release.
+    // std::optional is a by-value, allocation-free failure channel.
+    constexpr std::optional<Provenance> release_record() const noexcept {
+        if (!valid() || action != Action::borrow) return std::nullopt;
         Provenance copy = *this;
         copy.action = Action::release;
         return copy;
