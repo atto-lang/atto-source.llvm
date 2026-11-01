@@ -98,6 +98,8 @@ def main():
         ('cast-does-not-convert', 'pub fnc main():int{const x=7 as bool as int;return 0;}'),
         ('scalar-alias-cast-mismatch', 'declare type Flag=bool;pub fnc main():int{const x=7 as Flag;return 0;}'),
         ('cast-move-use-after-move', 'pub fnc main():int{val x=7;const moved=(rt take x) as int;return x;}'),
+        ('inference-rejects-sum-handle', 'pub fnc main():int{const Option<int> wrapped=Some(7);const x=wrapped;return 0;}'),
+        ('cast-rejects-sum-handle', 'pub fnc main():int{const Option<int> wrapped=Some(7);const int x=wrapped as int;return 0;}'),
         ('inferred-bool-arithmetic', 'pub fnc main():int{const x=true;return x+1;}'),
     ])
     negative.extend([
@@ -143,6 +145,8 @@ def main():
         'cast-does-not-convert': 'impossible native cast: int as bool',
         'scalar-alias-cast-mismatch': 'impossible native cast: int as bool',
         'cast-move-use-after-move': 'use of explicitly moved int',
+        'inference-rejects-sum-handle': "native inferred scalar cannot erase owner/nominal type of 'wrapped'",
+        'cast-rejects-sum-handle': "native inferred scalar cannot erase owner/nominal type of 'wrapped'",
         'inferred-bool-arithmetic': 'arithmetic requires int, got bool',
     })
     compared = 0
