@@ -1380,6 +1380,15 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(arithmetic_precedence return-arithmetic.ores
             --run 28 --clang "${ORE_CLANG}")
+        # Same scalar source semantics exercised by the Java compiler,
+        # Cranelift native JIT and .NET checked-i64 reference/CIL suites.
+        # These tests must compile generated IR and execute native guests.
+        oreslang_contract_test(cross_backend_scalar_precedence
+            scalar-cross-precedence-run.ores --run 14 --clang "${ORE_CLANG}")
+        oreslang_contract_test(cross_backend_scalar_parentheses
+            scalar-cross-parentheses-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(cross_backend_scalar_left_associativity
+            scalar-cross-left-assoc-run.ores --run 30 --clang "${ORE_CLANG}")
     else()
         add_test(NAME arithmetic_precedence COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
