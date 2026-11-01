@@ -374,6 +374,31 @@ int main() {
     assert(min_run.model_runs.front().configuration.front() ==
            std::numeric_limits<std::int64_t>::min());
 
+    // No-formal shorthand is canonical syntax, with the same portable
+    // non-ML pure scalar chain admitted by the Java guest regression.
+    const std::string zero_formal_source = R"ores(
+        fnc Identity(int input): int { return input; }
+        fnc AddDelta(int delta, int input): int { return input + delta; }
+        define model x as
+            Identity()
+            AddDelta(2)
+        end
+        pub fnc main(): int { return x().run(40); }
+    )ores";
+    auto zero_formal = oreslang::parse_program(zero_formal_source);
+    assert(zero_formal.models.size() == 1);
+    assert(zero_formal.models.front().name == "x");
+    assert(zero_formal.models.front().parameters.empty());
+    assert(zero_formal.models.front().operations.size() == 2);
+    assert(zero_formal.models.front().portable_profile == "model-core-i64-v1");
+    assert(zero_formal.model_runs.size() == 1);
+    assert(zero_formal.model_runs.front().configuration.empty());
+    assert(zero_formal.model_runs.front().configured_graph_digest.size() == 64);
+    assert(zero_formal.functions.back().result);
+    assert(zero_formal.functions.back().result->kind ==
+           oreslang::Expression::Kind::Call);
+    assert(zero_formal.functions.back().result->name == "AddDelta");
+
     const std::string negative_literal_source = R"ores(
         fnc AddDelta(int delta, int input): int {
             return input + delta;
