@@ -258,7 +258,11 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        // A single pipe is the lexical delimiter for compiler-owned
+        // sealed-state callbacks (|state|). Keep || as the earlier
+        // two-character logical-or token above; admitting | here does not
+        // enable a guest bitwise/operator surface.
+        if (std::string_view("(){},:;+-*/%=.<>@?!|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
