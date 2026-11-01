@@ -17,11 +17,21 @@ namespace oreslang::runtime {
  */
 class FrozenTcpSlab final {
     struct State {
-        explicit State(const std::vector<std::uint8_t>& input) : bytes(input) {}
-        const std::vector<std::uint8_t> bytes;
+        explicit State(const std::vector<std::uint8_t>& input)
+            : logical_size(input.size()), bytes(input) {}
+        const std::size_t logical_size;
+        std::vector<std::uint8_t> bytes;
         mutable std::mutex mutex;
         std::size_t pins = 0;
         bool retiring = false;
+        void maybe_release() noexcept {
+            // Swap with an empty vector only after all pins have released.
+            // This relinquishes allocation, not cryptographic zeroization.
+            if (retiring && pins == 0) {
+                std::vector<std::uint8_t> empty;
+                bytes.swap(empty);
+            }
+        }
     };
 public:
     static constexpr std::size_t max_bytes = 1024 * 1024;
@@ -41,6 +51,7 @@ public:
             std::lock_guard<std::mutex> lock(state_->mutex);
             --state_->pins;
             active_ = false;
+            state_->maybe_release();
         }
     };
     explicit FrozenTcpSlab(const std::vector<std::uint8_t>& input) {
@@ -51,7 +62,7 @@ public:
     FrozenTcpSlab& operator=(const FrozenTcpSlab&) = delete;
     ~FrozenTcpSlab() noexcept { retire(); }
 
-    std::size_t size() const noexcept { return state_->bytes.size(); }
+    std::size_t size() const noexcept { return state_->logical_size; }
     std::optional<Pin> try_pin() {
         std::lock_guard<std::mutex> lock(state_->mutex);
         if (state_->retiring || state_->pins == SIZE_MAX) return std::nullopt;
@@ -69,11 +80,13 @@ public:
         if (!pin.active_ || pin.state_.get() != state_.get()) return false;
         pin.active_ = false;
         --state_->pins;
+        state_->maybe_release();
         return true;
     }
     void retire() noexcept {
         std::lock_guard<std::mutex> lock(state_->mutex);
         state_->retiring = true;
+        state_->maybe_release();
     }
     bool freed() const {
         std::lock_guard<std::mutex> lock(state_->mutex);
