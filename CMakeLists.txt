@@ -336,6 +336,14 @@ if(BUILD_TESTING)
     set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
     # Constrained compiler-owned alias/trait/interface type declarations:
     # exact source syntax, no runtime value, and fail-closed unsupported types.
+    # Executes the actual native compiler; all critical source stays fail-closed
+    # until scheduler-owned guard and continuation lowering is available.
+    add_test(NAME native_critical_suspends_v1_source_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_critical_suspends_v1_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_critical_suspends_v1_source_admission PROPERTIES TIMEOUT 240)
+
     add_test(NAME native_type_only_declaration_boundaries
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_only_declarations.py"
