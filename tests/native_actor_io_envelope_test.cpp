@@ -9,6 +9,7 @@
 #include <vector>
 
 using oreslang::runtime::ActorIoAuthority;
+using oreslang::runtime::ActorIoTextPair;
 using oreslang::runtime::NativeActorIoEnvelope;
 
 template <class F>
@@ -43,12 +44,21 @@ int main() {
     assert(io.try_read_output(auth, read, sizeof(read), read_len));
     assert(read_len == 2 && read[0] == 4 && read[1] == 5);
 
-    std::string_view first;
-    std::string_view second;
-    assert(io.try_read_error(auth, first, second));
-    assert(first == "E_PARSE" && second == "bad token");
-    assert(io.try_read_event(auth, first, second));
-    assert(first == "ready" && second == "v1");
+    ActorIoTextPair<32> diagnostic;
+    ActorIoTextPair<32> event;
+    assert(io.try_read_error(auth, diagnostic));
+    assert(diagnostic.first_view() == "E_PARSE" &&
+           diagnostic.second_view() == "bad token");
+    assert(io.try_read_event(auth, event));
+    assert(event.first_view() == "ready" &&
+           event.second_view() == "v1");
+
+    // A popped record owns its text and survives later queue mutations.
+    assert(io.try_emit_error(auth, "E_ONE", "first"));
+    assert(io.try_read_error(auth, diagnostic));
+    assert(io.try_emit_error(auth, "E_TWO", "second"));
+    assert(diagnostic.first_view() == "E_ONE" &&
+           diagnostic.second_view() == "first");
 
     std::array<std::pair<std::string_view, std::string_view>, 4> metadata{};
     metadata[0] = {"trace_id", "abc"};
@@ -65,8 +75,16 @@ int main() {
     assert(!io.try_write_output(auth, full, sizeof(full)));
     assert(io.try_emit_event(auth, "progress", "still-live"));
 
+    // Restart must erase old-generation queued bytes and metadata.
+    assert(io.try_write_output(auth, output, sizeof(output)));
+    assert(io.try_emit_event(auth, "old", "generation"));
     const auto stale = auth;
     const auto fresh = io.restart(2, 1002);
+    assert(!io.try_read_output(fresh, read, sizeof(read), read_len));
+    ActorIoTextPair<32> cleared_event;
+    assert(!io.try_read_event(fresh, cleared_event));
+    assert(io.metadata_version(fresh) == 1);
+    assert(!io.metadata_value(fresh, "trace_id").has_value());
     expect_stale([&] { (void)io.metadata_version(stale); });
     expect_stale([&] { (void)io.try_write_output(stale, output, sizeof(output)); });
     assert(io.try_write_output(fresh, output, sizeof(output)));
