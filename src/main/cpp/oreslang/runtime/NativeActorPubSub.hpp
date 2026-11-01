@@ -134,20 +134,9 @@ public:
         });
     }
 
-    /** Trusted runtime/supervisor publication, never exposed as guest authority. */
-    PublishReceipt publish_system(
-            std::uint64_t group_id,
-            const std::string& name,
-            const T& value) {
-        return memberships_.with_locked_view([&](const auto& memberships) {
-            if (!memberships.group_exists(group_id))
-                throw std::logic_error("unknown or closed ActorGroup");
-            std::lock_guard<std::mutex> guard(mutex_);
-            TopicRecord& topic = require_topic_locked(group_id, name);
-            prune_stale_locked(group_id, topic, memberships);
-            return publish_locked(topic, value);
-        });
-    }
+    // No publish_system bypass on the general admission surface: the host
+    // must supply authenticated supervisor/CONTROL authority through a
+    // separately reviewed, non-guest API before system publications exist.
 
     std::optional<T> try_read(
             std::uint64_t group_id,
