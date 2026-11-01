@@ -277,6 +277,83 @@ int main() {
             ::close(endpoints[1]);
         }
     }
+    {
+        // Stress duplicate references to ONE socket file description across
+        // eight racing host producers. A separate socketpair endpoint remains
+        // independently watchable. This exercises the manager's bounded
+        // nonparking transport identity gate, not guest actor authority.
+        NativeEpollReactorManager manager(2,
+            NativeEpollReactorManager::Profile::preallocated_rt, 2);
+        int endpoints[2]{-1, -1};
+        check(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+            0, endpoints) == 0);
+        constexpr std::size_t aliases_count = 8;
+        std::array<int, aliases_count> aliases{};
+        for (auto& alias : aliases) {
+            alias = ::dup(endpoints[0]);
+            check(alias >= 0 && alias != endpoints[0]);
+        }
+        auto watch = manager.try_watch(endpoints[0], EPOLLIN);
+        check(watch.has_value());
+        auto separate = manager.try_watch(endpoints[1], EPOLLIN);
+        check(separate.has_value());
+        std::atomic<unsigned> unsafe_alias_claims{0};
+        std::array<std::thread, aliases_count> threads;
+        for (std::size_t i = 0; i < aliases_count; ++i) {
+            threads[i] = std::thread([&, i] {
+                for (unsigned attempt = 0; attempt < 128; ++attempt) {
+                    if (manager.try_watch(aliases[i], attempt % 2
+                            ? EPOLLOUT : EPOLLIN).has_value()) {
+                        unsafe_alias_claims.fetch_add(1,
+                            std::memory_order_relaxed);
+                    }
+                }
+            });
+        }
+        for (auto& thread : threads) thread.join();
+        check(unsafe_alias_claims.load(std::memory_order_acquire) == 0);
+        // Successful cancellation does not instantly release ownership:
+        // the terminal completion MUST first be consumed.
+        bool cancelled = false;
+        for (int retry = 0;retry < 2000 && !cancelled;++retry) {
+            cancelled = manager.try_cancel(*watch);
+            if (!cancelled) std::this_thread::yield();
+        }
+        check(cancelled);
+        for (int i = 0; i < 32; ++i) {
+            check(!manager.try_watch(aliases[0], EPOLLIN).has_value());
+        }
+        bool consumed = false;
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(3);
+        while (!consumed && std::chrono::steady_clock::now() < deadline) {
+            auto terminal = manager.try_pop();
+            if (!terminal) {
+                std::this_thread::yield();
+                continue;
+            }
+            if (terminal->reactor == watch->reactor
+                && terminal->event.ticket.value == watch->ticket.value) {
+                check(terminal->event.outcome ==
+                    NativeEpollReactor::Outcome::cancelled);
+                consumed = true;
+            } else {
+                check(false); // separate opposite endpoint is still pending
+            }
+        }
+        check(consumed);
+        std::optional<NativeEpollReactorManager::Watch> reused;
+        for (int retry = 0;retry < 2000 && !reused;++retry) {
+            reused = manager.try_watch(aliases[0], EPOLLIN);
+            if (!reused) std::this_thread::yield();
+        }
+        check(reused.has_value());
+        check(!manager.try_watch(endpoints[0], EPOLLOUT).has_value());
+        manager.stop();
+        for (const int alias : aliases) ::close(alias);
+        ::close(endpoints[0]);
+        ::close(endpoints[1]);
+    }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
     catch (const std::invalid_argument&) { bad = true; }
