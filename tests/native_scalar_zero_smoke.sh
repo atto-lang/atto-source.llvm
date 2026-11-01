@@ -55,7 +55,7 @@ fi
   { echo "negative source must fail closed without IR" >&2; exit 1; }
 # Valid Oreslang with a deliberately incorrect expected value must execute
 # with nonzero status; this proves that an assertion mutation cannot pass.
-printf 'pub fnc main():int{return (2 + 3 * 4) - 13;}\\n' > "$work/mutant.ores"
+printf 'pub fnc main():int{return (2 + 3 * 4) - 13;}\n' > "$work/mutant.ores"
 "$compiler" "$work/mutant.ores" > "$work/mutant.ll" 2> "$work/mutant.compiler-stderr"
 [[ -s "$work/mutant.ll" ]] || { echo "mutant produced no LLVM IR" >&2; exit 1; }
 clang -x ir "$work/mutant.ll" -o "$work/mutant.bin"
