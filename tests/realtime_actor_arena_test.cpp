@@ -35,6 +35,21 @@ int main() {
             "unsealed arena must reject entry");
     require(ores_rt_actor_arena_seal(&arena, 4096) == ORES_RT_ARENA_OK,
             "arena seal");
+    // Output capabilities are writable memory too. Reject pointers into the
+    // private backing or the arena's own identity/control header before
+    // incrementing the physical-turn epoch.
+    require(ores_rt_actor_arena_enter(
+                &arena, 11, 3,
+                reinterpret_cast<OresRtArenaTurn*>(arena.slab)) ==
+                ORES_RT_ARENA_INVALID,
+            "turn token cannot be written into private slab");
+    require(ores_rt_actor_arena_enter(
+                &arena, 11, 3,
+                reinterpret_cast<OresRtArenaTurn*>(&arena)) ==
+                ORES_RT_ARENA_INVALID,
+            "turn token cannot overwrite arena identity");
+    require(arena.epoch == 0 && !arena.active,
+            "forged output tokens cannot advance turn epoch");
     require(ores_rt_actor_arena_enter(&arena, 99, 3, &turn) ==
                 ORES_RT_ARENA_WRONG_OWNER,
             "wrong owner");
@@ -46,6 +61,34 @@ int main() {
     require(ores_rt_actor_arena_enter(&arena, 11, 3, &second) ==
                 ORES_RT_ARENA_BUSY,
             "double enter");
+
+    const auto initial_free_count = arena.free_count;
+    require(ores_rt_actor_arena_alloc(
+                &arena, turn, 16,
+                reinterpret_cast<OresRtArenaHandle*>(arena.slab)) ==
+                ORES_RT_ARENA_INVALID,
+            "allocation token cannot overwrite actor slab");
+    require(ores_rt_actor_arena_alloc(
+                &arena, turn, 16,
+                reinterpret_cast<OresRtArenaHandle*>(&arena)) ==
+                ORES_RT_ARENA_INVALID,
+            "allocation token cannot overwrite actor control");
+    require(arena.free_count == initial_free_count,
+            "rejected allocation output cannot consume free-list slot");
+
+    const auto initial_scratch_top = arena.scratch_top;
+    require(ores_rt_actor_arena_scratch_alloc(
+                &arena, turn, 16, alignof(std::uint64_t),
+                reinterpret_cast<OresRtArenaScratch*>(arena.scratch)) ==
+                ORES_RT_ARENA_INVALID,
+            "scratch token cannot overwrite private scratch");
+    require(ores_rt_actor_arena_scratch_alloc(
+                &arena, turn, 16, alignof(std::uint64_t),
+                reinterpret_cast<OresRtArenaScratch*>(&arena)) ==
+                ORES_RT_ARENA_INVALID,
+            "scratch token cannot overwrite actor control");
+    require(arena.scratch_top == initial_scratch_top,
+            "rejected scratch output cannot consume capacity");
 
     std::array<OresRtArenaHandle, 4> handles{};
     for (auto& handle : handles) {
