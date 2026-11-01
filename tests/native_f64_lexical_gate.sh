@@ -124,6 +124,31 @@ positive f64_ternary_false 'pub fnc main(): int {
   if result == 0.7; then return 42; fi
   return 86;
 }'
+positive scoped_f64_then 'pub fnc main(): int {
+  if true; then
+    val f64 weight = 0.5;
+    val f64 prediction = weight * 4.0;
+    if prediction == 2.0; then return 42; fi
+  fi
+  return 86;
+}'
+positive scoped_f64_else 'pub fnc main(): int {
+  if false; then
+    return 86;
+  else
+    val f64 value = 7.0 / 2.0;
+    if value == 3.5; then return 42; fi
+  fi
+  return 86;
+}'
+positive scoped_f64_mutation 'pub fnc main(): int {
+  if true; then
+    let f64 weight = 0.5;
+    weight = weight + 0.25;
+    if weight == 0.75; then return 42; fi
+  fi
+  return 86;
+}'
 positive integer_control 'pub fnc main(): int { return 42; }'
 
 negative implicit_int_to_f64 'pub fnc main(): int {
@@ -167,13 +192,22 @@ negative unsupported_f64_parameter_abi 'pub fnc f(f64 value): int {
   return 42;
 }
 pub fnc main(): int { return 42; }' 'native f64 function parameter ABI not yet admitted'
-negative unsupported_branch_f64_local 'pub fnc main(): int {
+negative scoped_f64_wrong_initializer 'pub fnc main(): int {
   if true; then
-    val f64 value = 0.3;
+    val f64 value = 1;
     return 42;
-  else return 86; fi
-}' 'native branch-local f64 storage requires scoped double lowering'
+  fi
+  return 86;
+}' 'native branch-local initializer requires f64'
+negative scoped_f64_wrong_assignment 'pub fnc main(): int {
+  if true; then
+    let f64 value = 1.5;
+    value = 2;
+    return 42;
+  fi
+  return 86;
+}' 'native scalar assignment requires f64'
 
-[[ "$pass" -eq 14 && "$reject" -eq 12 ]] ||
+[[ "$pass" -eq 17 && "$reject" -eq 13 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=14; NEGATIVE_NO_IR_PASS=12 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=17; NEGATIVE_NO_IR_PASS=13 (not arrays/solver)"
