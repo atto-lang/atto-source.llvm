@@ -92,6 +92,14 @@ def main():
         ('chained-identity-multiplication', 'pub fnc main():int{return (7 as int as int)*6;}' ),
         ('identity-through-const-reference', 'pub fnc main():int{const x=7 as int;const y=x as int;return y*6;}' ),
     ])
+    positive.extend([
+        ('ssa-let-multiwrite', 'pub fnc main():int{let x=7;x=x+1;x=x+34;return x;}'),
+        ('ssa-let-runtime-const-snapshot', 'pub fnc main():int{let x=7;const snap=x;x=42;return snap+35;}'),
+        ('ssa-let-runtime-val-snapshot', 'pub fnc main():int{let x=7;val snap=x;x=42;return snap+35;}'),
+        ('ssa-let-cast-snapshot', 'pub fnc main():int{let x=7;const snap=x as int;x=42;return snap+35;}'),
+        ('ssa-let-casted-write', 'pub fnc main():int{let x=7 as int;x=(x+35) as int;return x;}'),
+        ('ssa-let-from-immutable', 'pub fnc main():int{const base=7;let x=base;x=42;return x;}'),
+    ])
     negative = [
         ('bool-as-int', 'pub fnc main():int{return true;}'),
         ('five-backend-int-to-bool', 'pub fnc main():int{return 7 as bool;}'),
