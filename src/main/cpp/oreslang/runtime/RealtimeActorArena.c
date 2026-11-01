@@ -142,6 +142,13 @@ OresRtArenaStatus ores_rt_actor_arena_init(
     size_t scratch_bytes) {
     if (!arena || !backing || domain == 0 || owner == 0 || incarnation == 0)
         return ORES_RT_ARENA_INVALID;
+    // Do not reset an active carrier arena. Checking the TLS binding (rather
+    // than reading uninitialized arena fields) is safe for first-time init,
+    // and prevents a turn from losing its identity/free-list mid-execution.
+    // Cross-thread concurrent reinitialization is outside the documented
+    // single-carrier scheduler contract and must be prevented by the owner.
+    if (ores_rt_carrier_arena == arena)
+        return ORES_RT_ARENA_BUSY;
 
     const size_t alignment = _Alignof(max_align_t);
     if (((uintptr_t)backing & (uintptr_t)(alignment - 1)) != 0)
