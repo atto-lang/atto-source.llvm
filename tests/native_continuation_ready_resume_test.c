@@ -123,6 +123,28 @@ static void race_pair(RaceArgs* first, RaceArgs* second) {
     check(pthread_join(two, NULL) == 0);
 }
 
+typedef struct {
+    OresNativeContinuationStore* store;
+    OresNativeContinuationHandle handle;
+    atomic_int* go;
+    uint64_t generation;
+    int rotate;
+    int won;
+} ImageRaceArgs;
+
+static void* image_race_contender(void* raw) {
+    ImageRaceArgs* args = (ImageRaceArgs*)raw;
+    while (!atomic_load_explicit(args->go, memory_order_acquire)) {
+        /* Bounded native test only; production workers do not spin. */
+    }
+    args->won = args->rotate
+        ? ores_native_continuation_store_rotate_code_generation(
+            args->store, args->generation + 1)
+        : ores_native_continuation_store_try_claim_ready_current_code(
+            args->store, args->handle, args->generation, NULL);
+    return NULL;
+}
+
 static OresNativeContinuationHandle publish(
         OresNativeContinuationStore* continuations,
         OresNativeExecutionHandle execution) {
@@ -575,6 +597,54 @@ int main(void) {
         continuations, execution, (OresNativeContinuationHandle){0, 0},
         ORES_CONTINUATION_BOUNDARY_AWAIT, 78, 1402, &rejected_image));
     check(ores_native_continuation_store_live(continuations) == 0);
+    /*
+     * Race upgrade against READY consumption: rotation and claim must
+     * linearize under the SAME store mutex. The losing side cannot steal
+     * an old code image or report a second physical resume.
+     */
+    for (uint64_t generation = 79; generation < 143; ++generation) {
+        OresNativeContinuationHandle handle = {0, 0};
+        check(ores_native_continuation_store_publish(
+            continuations, execution,
+            (OresNativeContinuationHandle){0, 0},
+            ORES_CONTINUATION_BOUNDARY_AWAIT,
+            generation, 1500 + generation, &handle));
+        check(ores_native_continuation_store_notify_ready(
+            continuations, handle));
+        atomic_int go = ATOMIC_VAR_INIT(0);
+        ImageRaceArgs claim = {
+            continuations, handle, &go, generation, 0, 0
+        };
+        ImageRaceArgs rotation = {
+            continuations, handle, &go, generation, 1, 0
+        };
+        pthread_t claiming, upgrading;
+        check(pthread_create(&claiming, NULL, image_race_contender,
+            &claim) == 0);
+        check(pthread_create(&upgrading, NULL, image_race_contender,
+            &rotation) == 0);
+        atomic_store_explicit(&go, 1, memory_order_release);
+        check(pthread_join(claiming, NULL) == 0);
+        check(pthread_join(upgrading, NULL) == 0);
+        check(claim.won + rotation.won == 1);
+        if (claim.won) {
+            check(ores_native_continuation_store_finish_resume(
+                continuations, handle));
+        } else {
+            check(ores_native_continuation_store_cancel(
+                continuations, handle));
+        }
+        check(ores_native_continuation_store_release(
+            continuations, handle));
+        if (claim.won) {
+            check(ores_native_continuation_store_rotate_code_generation(
+                continuations, generation + 1));
+        }
+        check(ores_native_continuation_store_current_code_generation(
+            continuations) == generation + 1);
+        check(!ores_native_continuation_store_try_claim_ready_current_code(
+            continuations, handle, generation, NULL));
+    }
     check(ores_native_continuation_store_live(continuations) == 0);
     check(ores_native_continuation_store_close(continuations));
     check(ores_native_execution_context_store_release(executions, execution));
