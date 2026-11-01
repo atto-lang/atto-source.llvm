@@ -57,6 +57,32 @@ OresNativeContinuationStore* ores_native_continuation_store_open(
  * The execution store must outlive this continuation store. */
 int ores_native_continuation_store_close(OresNativeContinuationStore* store);
 
+/*
+ * Trusted-code-image admission registry. Zero means the legacy unconfigured
+ * store; a configured generation can only increase, never wrap or roll back.
+ * Rotation is denied while any continuation is CLAIMED (physical guest
+ * execution may still own it). The caller must separately quiesce non-
+ * continuation guest turns before unloading an old executable image.
+ * Old PENDING/READY frames remain cancellable but cannot be claimed.
+ */
+int ores_native_continuation_store_rotate_code_generation(
+    OresNativeContinuationStore* store, uint64_t next_generation);
+
+uint64_t ores_native_continuation_store_current_code_generation(
+    OresNativeContinuationStore* store);
+
+/*
+ * Atomically compare the registry generation AND continuation generation
+ * while claiming READY. A stale or forged expected generation never consumes
+ * a resume claim. This closes the read/claim race during code rotation.
+ */
+int ores_native_continuation_store_try_claim_ready_current_code(
+    OresNativeContinuationStore* store,
+    OresNativeContinuationHandle handle,
+    uint64_t expected_generation,
+    OresNativeContinuationRecord* out);
+
+
 int ores_native_continuation_store_publish(
     OresNativeContinuationStore* store,
     OresNativeExecutionHandle execution,
