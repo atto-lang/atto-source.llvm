@@ -24,7 +24,10 @@ namespace oreslang {
  */
 class SupervisorControlTurn final {
 public:
-    enum class Decision : std::uint8_t { Acknowledge, Escalate, Restart };
+    enum class Decision : std::uint8_t { Acknowledge, Escalate, Restart, Stop };
+    // An explicit host receipt is required. Uncertain means the operation
+    // MAY have occurred; never implicitly retry or acknowledge its child.
+    enum class StopReceipt : std::uint8_t { Acknowledged, Uncertain };
     enum class Admitted : std::uint8_t { None, Control, User };
 
     struct Hooks {
@@ -36,6 +39,12 @@ public:
         virtual Decision on_host_failure(const SupervisorFailureLane::Failure&) = 0;
         virtual void on_escalate(const SupervisorFailureLane::Failure&) = 0;
         virtual bool on_restart(const SupervisorFailureLane::Failure&) = 0;
+        // Default fails closed for existing hosts without an authenticated
+        // STOP implementation. Must only return Acknowledged after physical
+        // finalization and authoritative host receipt.
+        virtual StopReceipt on_stop(const SupervisorFailureLane::Failure&) {
+            return StopReceipt::Uncertain;
+        }
         virtual void on_user_turn() = 0;
     };
 
@@ -87,6 +96,28 @@ public:
         return child_failures_.pending_count() != 0;
     }
 
+    // A stopped child remains in-flight and keeps its reserved capacity when
+    // the STOP effect is uncertain. No subsequent turns may run until the
+    // trusted owner reconciles that exact actor incarnation.
+    bool stop_quarantined() const noexcept { return stop_pending_.has_value(); }
+
+    void confirm_stopped(const SupervisorFailureLane::ActorKey& child) {
+        if (lease_.test_and_set(std::memory_order_acquire)) {
+            throw std::logic_error("overlapping native supervisor STOP reconciliation");
+        }
+        struct Release {
+            std::atomic_flag& lease;
+            ~Release() { lease.clear(std::memory_order_release); }
+        } release{lease_};
+        if (!stop_pending_ || stop_pending_->id != child.id
+                || stop_pending_->generation != child.generation) {
+            throw std::logic_error("unmatched native supervisor STOP receipt");
+        }
+        // Only trusted host code may assert authoritative STOP acknowledgment.
+        child_failures_.ack(child);
+        stop_pending_.reset();
+    }
+
     std::size_t pending_count() const { return child_failures_.pending_count(); }
     std::size_t reserved_count() const { return child_failures_.reserved_count(); }
     std::size_t restarts_used() const noexcept { return restarts_used_; }
@@ -117,8 +148,12 @@ public:
             ~Release() { lease.clear(std::memory_order_release); }
         } release{lease_};
 
+        if (stop_pending_) {
+            throw std::logic_error("native supervisor STOP uncertain; reconcile before admitting a turn");
+        }
         const auto next = child_failures_.poll();
         if (next) {
+            bool stop_may_have_effects = false;
             try {
                 const auto decision = dispatch(hooks, *next);
                 switch (decision) {
@@ -126,6 +161,19 @@ public:
                         break;
                     case Decision::Escalate:
                         hooks.on_escalate(*next);
+                        break;
+                    case Decision::Stop:
+                        // Save the entire generation BEFORE calling an effectful
+                        // host. If allocation fails here, the host was not called
+                        // and ordinary CONTROL retry remains safe.
+                        stop_pending_ = next->actor;
+                        stop_may_have_effects = true;
+                        if (hooks.on_stop(*next) != StopReceipt::Acknowledged) {
+                            // Hold the event in-flight and the child slot
+                            // reserved. A missing/uncertain receipt must not
+                            // cause STOP re-execution or false resolution.
+                            return Admitted::Control;
+                        }
                         break;
                     case Decision::Restart:
                         // Restart admission is supervisor-scoped. With a
@@ -149,8 +197,11 @@ public:
                         break;
                 }
                 child_failures_.ack(next->actor);
+                if (stop_may_have_effects) stop_pending_.reset();
             } catch (...) {
-                child_failures_.retry(next->actor);
+                // An effectful STOP may have succeeded before throwing:
+                // quarantine until the trusted host proves final disposition.
+                if (!stop_may_have_effects) child_failures_.retry(next->actor);
                 throw;
             }
             return Admitted::Control;
@@ -213,6 +264,9 @@ private:
     std::uint64_t last_restart_tick_ = 0;
     std::size_t restarts_used_ = 0; // lifetime telemetry; single-writer CONTROL turn
     std::atomic_flag lease_ = ATOMIC_FLAG_INIT;
+    // Supervisor logical-turn owned, not a guest ActorRef or public token.
+    // Retained on uncertain or throwing STOP effects for explicit reconciliation.
+    std::optional<SupervisorFailureLane::ActorKey> stop_pending_;
 
 };
 
