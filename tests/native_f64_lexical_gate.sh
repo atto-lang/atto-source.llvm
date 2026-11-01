@@ -180,12 +180,12 @@ pub fnc main(): int {
   if pass_through(42.0) == 42.0; then return 42; fi
   return 86;
 }'
-positive f64_abi_guarded_return 'fnc select(f64 candidate): f64 {
+positive f64_abi_guarded_return 'fnc choose_positive(f64 candidate): f64 {
   if candidate > 0.0; then return 42.0; fi
   return 86.0;
 }
 pub fnc main(): int {
-  if select(1.0) == 42.0; then return 42; fi
+  if choose_positive(1.0) == 42.0; then return 42; fi
   return 86;
 }'
 positive f64_abi_branch_return 'fnc branch(f64 seed): f64 {
