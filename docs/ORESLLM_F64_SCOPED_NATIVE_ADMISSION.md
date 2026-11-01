@@ -9,14 +9,42 @@ This change is stacked on draft [LLVM PR #1236](https://github.com/ores-truffle-
 - Refuse a `ScalarType::F64` field read in LLVM codegen until the typed double struct-field ABI and borrow provenance are proved; do **not** allow a default `i64` field load to reinterpret double bits.
 - Keep F64 parameters/returns, class fields, arrays, async/suspension, owned tensors, actor mailbox transport and full FP exception semantics fail-closed. This patch does not relax those boundaries.
 
+## Typed f64 function ABI follow-up (unverified)
+
+The stacked draft now admits **pure synchronous scalar functions** with by-value
+`f64` parameters and `f64` return values. Each f64 parameter has an actual LLVM
+`double` formal and stack slot, and an f64 return is an LLVM `double` result,
+including guarded and structured return cleanup snapshots. Call sites require
+exact LLVM formal/argument type identity; the parser and independent scalar
+type checker prohibit implicit int/f64 conversion. Nested calls preserve
+the resolved f64 expression type. This is a same-compiler native calling
+convention, not yet an established cross-platform C/foreign ABI.
+
+**Explicitly unsupported:** f64 `main` process status/parameters, borrowed f64
+parameters, f64 class methods and class fields, generic and sum payload
+transport, owned/borrowed aggregate function frames, Task/Future suspension,
+actor messages, and full Tensor or Array<f64> data structures. The first
+f64 ABI slice rejects these before emitting any LLVM IR. The code generator
+separately checks entry/field/return and parameter types if supplied an
+unvalidated AST.
+
+Eight additional positive native source candidates exercise gradient function
+arguments/returns, nested calls, mixed int/f64 parameters, returned lexical
+values, guarded and structured returns, int result from double argument,
+and signed zero across the function boundary. Six negative guests reject
+f64 process entry, borrowed float, incorrect parameter and return types.
+The running test inventory is now **28 positive / 19 negative** candidates,
+all requiring the actual compiled `oreslang-llvmc`, IR verification, Clang
+linking, native exit results and expected no-IR compiler rejections.
+
 ## Real native acceptance, required but not observed
-The existing `native_f64_scalar_e2e` CTest builds real `oreslang-llvmc`, compiles native guest source into LLVM IR, links with Clang and executes the binary. This branch extends it from 14 to **20 positive native-exit-42 guests** and from 12 to **13 negative no-IR source-rejection guests**. Three new positive tests exercise branch-scoped F64, else branch lifetime and mutable branch F64 updates. New negative checks reject implicit int-to-F64 branch initializer and assigning int to `let f64` in a branch. The integer baseline and all prior IEEE, signed-zero, NaN and infinity tests remain.
+The existing `native_f64_scalar_e2e` CTest builds real `oreslang-llvmc`, compiles native guest source into LLVM IR, links with Clang and executes the binary. This branch extends it from 14 to **28 positive native-exit-42 guests** and from 12 to **13 negative no-IR source-rejection guests**. Three new positive tests exercise branch-scoped F64, else branch lifetime and mutable branch F64 updates. New negative checks reject implicit int-to-F64 branch initializer and assigning int to `let f64` in a branch. The integer baseline and all prior IEEE, signed-zero, NaN and infinity tests remain.
 
 Required observations: exact private source Git tree and test file SHA, compiler process exit 0, nonempty valid LLVM IR, real executable exit 42 and empty stdout/stderr for each positive, compiler process **exit 1**, expected diagnostic and zero IR for each negative. Run LLVM verifier and sanitizers, then independent numerical comparisons. GitHub Actions `steps=[]` means runner admission failure, **not** an observed CTest failure or pass.
 
 ## Next source-level implementation gates
-1. Confirm this scoped slice executes all 17/13 native tests at the exact branch SHA and review correctness around branch joins and lifetime intrinsic ordering.
-2. Implement correctly typed F64 function **parameters/returns** with explicit ABI and no float-to-i64 reinterpretation, plus separately checked class fields and constructor calls.
+1. Confirm this ABI/scoped slice executes all 28/19 native tests at the exact branch SHA and review correctness around branch joins and lifetime intrinsic ordering.
+2. After verifying typed F64 function **parameters/returns**, implement separately checked class fields and constructors (still unsupported).
 3. Add bounded owned `Array<f64>` with strict layout/borrow/teardown, typed imports and per-actor zero-GC arenas.
 4. Lower canonical OresLLM integrated Tensor → Autograd → NN → Optim FP64 guest with equivalent gradients, 20-step loss reduction and finite-difference/held-out thresholds. No substitution with host JS, Rust, or C neural training.
 5. Then separately prove WebAssembly execution, Cranelift JIT, .NET NativeAOT and GraalVM Native Image. Source-free LLVM toolchain CI, shared i64 vectors and nonzero-step host checks are not such proof.
@@ -30,7 +58,7 @@ must compile as Oreslang -> LLVM IR -> Clang-linked native binary and return
 native exit status 42; the host-side mathematical identity is not a guest pass.
 They do not call Autograd, construct Tensor2 or execute a 20-step optimizer.
 
-The count is now **20 positive / 13 negative**. A compiler rejecting FP64
+The count is now **28 positive / 19 negative**. A compiler rejecting FP64
 parameters/returns/class fields remains correct for this narrow slice, but
 those explicit limitations prevent any claim of complete OresLLM execution.
 
