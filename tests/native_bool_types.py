@@ -81,6 +81,14 @@ def main():
         ('bool-conditional-cast', 'pub fnc main():int{const x=(true?true:false) as bool;if(x){return 42;}fi return 0;}'),
         ('bool-to-bool-annotation', 'pub fnc main():int{const x:bool=true as bool;if(x){return 42;}fi return 0;}'),
     ])
+    # The same four native .ores guest expressions are exercised by the Wasm
+    # compiler-backed matrix; this lane must compile, link and return 42.
+    positive.extend([
+        ('dual-identity-operands', 'pub fnc main():int{return (7 as int)+(35 as int);}' ),
+        ('grouped-identity-multiplication', 'pub fnc main():int{return ((2+5) as int)*6;}' ),
+        ('chained-identity-multiplication', 'pub fnc main():int{return (7 as int as int)*6;}' ),
+        ('identity-through-const-reference', 'pub fnc main():int{const x=7 as int;const y=x as int;return y*6;}' ),
+    ])
     negative = [
         ('bool-as-int', 'pub fnc main():int{return true;}'),
         ('five-backend-int-to-bool', 'pub fnc main():int{return 7 as bool;}'),
@@ -132,6 +140,12 @@ def main():
         ('inferred-int-let-bool-write', 'pub fnc main():int{let x=7;x=false;return 0;}'),
         ('bool-cast-then-int', 'pub fnc main():int{const x=true as bool as int;return 0;}'),
         ('cast-int-as-bool-from-variable', 'pub fnc main():int{const x=7;const y=x as bool;return 0;}'),
+    ])
+    negative.extend([
+        ('nested-identity-then-bool', 'pub fnc main():int{return (7 as int) as bool;}'),
+        ('nested-bool-then-int', 'pub fnc main():int{return (false as bool) as int;}'),
+        ('identity-then-optional', 'pub fnc main():int{return (7 as int) as? int;}'),
+        ('identity-then-bool-arithmetic', 'pub fnc main():int{return (7 as int)+true;}'),
     ])
     negative.extend([
         ('exclusive-alias', 'fnc pair(borrow mut bool a,borrow mut bool b):int{return 42;}pub fnc main():int{val flag:bool=true;return pair(rt mut borrow flag,rt mut borrow flag);}'),
@@ -190,6 +204,12 @@ def main():
         'inferred-int-let-bool-write': 'native scalar assignment requires int, got bool',
         'bool-cast-then-int': 'impossible native cast: bool as int',
         'cast-int-as-bool-from-variable': 'impossible native cast: int as bool',
+    })
+    ownership_diagnostics.update({
+        'nested-identity-then-bool': 'impossible native cast: int as bool',
+        'nested-bool-then-int': 'impossible native cast: bool as int',
+        'identity-then-optional': 'native as? requires Option<T> checked-cast lowering',
+        'identity-then-bool-arithmetic': 'arithmetic requires int, got bool',
     })
     compared = 0
     with tempfile.TemporaryDirectory(prefix='ores-native-bool-') as tmp:
