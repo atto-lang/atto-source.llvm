@@ -1921,8 +1921,10 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
-                } else if (token_.text == "f64") {
-                    fail("native f64 function parameter ABI not yet admitted; lexical f64 locals only");
+                } else if (accept("f64")) {
+                    if (parameter.mode != Parameter::Mode::Value)
+                        fail("native f64 parameter must be passed by value, not borrow");
+                    parameter.scalar_type = ScalarType::F64;
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
                     // Deferred scalar aliases are admitted only after full resolution.
                 } else if (token_.kind == Kind::Identifier &&
@@ -1962,8 +1964,8 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
-            } else if (token_.text == "f64") {
-                fail("native f64 return ABI not yet admitted; lexical f64 locals only");
+            } else if (accept("f64")) {
+                value.return_type = ScalarType::F64;
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
             } else if (token_.kind == Kind::Identifier &&
@@ -4373,7 +4375,8 @@ private:
                 // a void call where a scalar value is required. Returning the
                 // placeholder here lets statement-position void calls reuse the
                 // exact same typed argument binder.
-                return signature.returns_void ? ScalarType::I64 : signature.return_type;
+                return expr.resolved_type = signature.returns_void
+                    ? ScalarType::I64 : signature.return_type;
             }
             case Expression::Kind::Negate: {
                 ScalarType operand = validate_scalar_expression(
@@ -4617,6 +4620,18 @@ private:
             // Parameter types, borrow modes and returns cannot select a slot.
             if (fn.name == "main" && functions.count("main"))
                 throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
+            // A guest f64 function is legal, but the OS process entry ABI
+            // remains an explicitly integer status. The generated C main
+            // must never treat an IEEE double as a signed exit code.
+            if (fn.name == "main" && (fn.return_type == ScalarType::F64 ||
+                    std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                        [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
+                throw std::runtime_error("native main does not admit f64 process ABI");
+            if (!fn.method_owner.empty() &&
+                    (fn.return_type == ScalarType::F64 ||
+                        std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                            [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
+                throw std::runtime_error("native f64 class method ABI not yet admitted");
             NativeCallSignature signature;
             signature.generics = fn.generic_parameters;
             for (const auto& param : fn.parameters) {
