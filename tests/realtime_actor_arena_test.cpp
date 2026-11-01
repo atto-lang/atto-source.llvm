@@ -196,6 +196,23 @@ int main() {
                 ORES_RT_ARENA_STALE,
             "forged generation must fail before touching private bytes");
 
+    // A forged nonempty host span whose uintptr_t end wraps must fail
+    // before any attempt to dereference the address.
+    auto* wrapping = reinterpret_cast<unsigned char*>(
+        std::numeric_limits<std::uintptr_t>::max() - 3);
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, wrapping, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "overflowing read destination range must reject");
+    require(ores_rt_actor_arena_write(
+                &arena, turn, handles[0], 0, wrapping, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "overflowing write source range must reject");
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_OK && observed == value,
+            "wrapped host spans cannot modify persistent allocation");
+
     const OresRtArenaHandle stale = handles[0];
     require(ores_rt_actor_arena_drop(&arena, turn, handles[0]) ==
                 ORES_RT_ARENA_OK,
@@ -282,6 +299,14 @@ int main() {
                 &arena, turn, scratch, 0, &observed, sizeof(observed)) ==
                 ORES_RT_ARENA_OK && observed == value,
             "forged scratch references leave legitimate data unchanged");
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, scratch, 0, wrapping, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "scratch read rejects wrapping output");
+    require(ores_rt_actor_arena_scratch_write(
+                &arena, turn, scratch, 0, wrapping, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "scratch write rejects wrapping input");
 
     require(ores_rt_actor_arena_retire(&arena) == ORES_RT_ARENA_BUSY,
             "active arena cannot retire");
