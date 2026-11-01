@@ -794,6 +794,19 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Exact flags2env Oreslang client ABI scalar fixture. This is real
+    # Oreslang source -> LLVM IR -> native executable execution; it proves
+    # only the shared numeric host-status contract, not String/FFI support.
+    if(ORE_CLANG)
+        oreslang_contract_test(flags2env_client_abi_status_native
+            flags2env-client-abi-status.ores
+            --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(flags2env_client_abi_status_native
+            PROPERTIES TIMEOUT 90)
+    else()
+        message(FATAL_ERROR "flags2env client ABI status parity requires Clang")
+    endif()
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
