@@ -73,6 +73,31 @@ public:
 
     std::uint64_t runtime_id() const noexcept { return runtime_id_; }
 
+    /**
+     * Read-only membership view held under the registry mutex. Runtime
+     * subsystems that need a membership check and a separate commit lock use
+     * this fence so leave/close/retire cannot linearize between authorization
+     * and commit.
+     */
+    class LockedView final {
+    public:
+        bool contains(std::uint64_t group_id, std::uint64_t actor_id,
+                      std::uint64_t generation) const {
+            return owner_.contains_locked(group_id, actor_id, generation);
+        }
+    private:
+        friend class NativeActorMembershipRegistry;
+        explicit LockedView(const NativeActorMembershipRegistry& owner)
+            : owner_(owner) {}
+        const NativeActorMembershipRegistry& owner_;
+    };
+
+    template<class Fn>
+    decltype(auto) with_locked_view(Fn&& fn) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return std::forward<Fn>(fn)(LockedView(*this));
+    }
+
     // Trusted runtime registration. An actor ID may not be reused while the
     // prior incarnation is live, even if all its group memberships are gone.
     bool register_actor(std::uint64_t actor_id, std::uint64_t generation) {
@@ -184,9 +209,7 @@ public:
     bool contains(std::uint64_t group_id, std::uint64_t actor_id,
                   std::uint64_t generation) const {
         std::lock_guard<std::mutex> guard(mutex_);
-        auto it = groups_.find(group_id);
-        return it != groups_.end()
-            && it->second.members.count(ActorKey{actor_id, generation}) != 0;
+        return contains_locked(group_id, actor_id, generation);
     }
 
     std::size_t member_count(std::uint64_t group_id) const {
@@ -204,6 +227,13 @@ public:
     }
 
 private:
+    bool contains_locked(std::uint64_t group_id, std::uint64_t actor_id,
+                         std::uint64_t generation) const {
+        auto it = groups_.find(group_id);
+        return it != groups_.end()
+            && it->second.members.count(ActorKey{actor_id, generation}) != 0;
+    }
+
     using ActorKey = std::pair<std::uint64_t, std::uint64_t>;
     struct ActorRecord {
         std::uint64_t generation;
