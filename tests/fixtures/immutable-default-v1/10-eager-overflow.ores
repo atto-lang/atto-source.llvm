@@ -1,0 +1,1 @@
+fnc main(): int { int unused = 9223372036854775807 + 1; return 7; }
