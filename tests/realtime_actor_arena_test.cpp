@@ -213,6 +213,32 @@ int main() {
                 &arena, turn, scratch, 0, &observed, sizeof(observed)) ==
                 ORES_RT_ARENA_OK && observed == value,
             "rejected scratch aliases preserve valid data");
+    // Scratch is subject to the same alias and capability boundaries.
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, scratch, 0,
+                storage.data() + required - 1, 2) == ORES_RT_ARENA_INVALID,
+            "scratch read must reject partial arena-end overlap");
+    require(ores_rt_actor_arena_scratch_write(
+                &arena, turn, scratch, 0,
+                storage.data() + required - 1, 2) == ORES_RT_ARENA_INVALID,
+            "scratch write must reject partial arena-end overlap");
+    OresRtArenaScratch stale_scratch = scratch;
+    ++stale_scratch.epoch;
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, stale_scratch, 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_STALE,
+            "scratch epoch forgery must reject");
+    stale_scratch = scratch;
+    ++stale_scratch.domain;
+    require(ores_rt_actor_arena_scratch_write(
+                &arena, turn, stale_scratch, 0, &value, sizeof(value)) ==
+                ORES_RT_ARENA_STALE,
+            "scratch domain forgery must reject");
+    observed = 0;
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, scratch, 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_OK && observed == value,
+            "forged scratch references leave legitimate data unchanged");
 
     require(ores_rt_actor_arena_retire(&arena) == ORES_RT_ARENA_BUSY,
             "active arena cannot retire");
