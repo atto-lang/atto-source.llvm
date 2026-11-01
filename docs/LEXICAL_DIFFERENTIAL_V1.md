@@ -80,9 +80,26 @@ Protocol (safe subprocess, no shell or GitHub secrets):
    regressions. Do not silently claim parity for unsupported cases.
 4. Compare outputs against *executed* Java JUnit at its exact source head.
    Require independent reviewer approval and private Actions eligibility.
-5. Promote the shared five-backend matrix status only after checking actual
+5. Promote the shared six-backend matrix status (Java, LLVM, WASM, Cranelift, .NET, Forge) only after checking actual
    runner steps and per-case output. A plausible JSON receipt alone is not
    evidence.
 
 No private compiler source has been exported to an unapproved organization.
 The adapter contract and shared fixture contain synthetic, nonsecret inputs.
+
+## Native nested-comment depth boundary (candidate; needs execution)
+
+The LLVM production frontend previously had no nesting-depth limit for
+ordinary `/* */` comments or block comments in template interpolations.
+This draft now rejects a 4,097th nested `/*` at source admission (limit 4,096),
+aligning the boundary with the pinned Java v1 lexer. Two CTests invoke
+`oreslang-llvmc` with 4,096/4,097-level source fixtures. The valid
+case must emit `ret i64 42`; the invalid case must reject with the
+specific depth diagnostic and must not produce valid LLVM IR. Template
+interpolation uses the same guard, but does not yet have an independently
+executed depth-boundary fixture.
+
+These source changes are **NOT a lexical-v1 JSON probe** and do not establish
+native Unicode, Symbol normalization, or parser semantic parity. Require
+a current exact-PR-head CTest job with assigned runner, executed steps and
+the exact two named tests before making a pass claim.
