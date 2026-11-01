@@ -1,0 +1,38 @@
+name: Continuation locality contract v1
+on:
+  pull_request:
+    paths:
+      - "contracts/v2/CONTINUATION_LOCALITY_V1.md"
+      - "contracts/v2/test_continuation_locality_v1.py"
+      - "src/**"
+      - "runtime/**"
+      - "tests/**"
+      - "verification/**"
+      - ".github/workflows/continuation-locality-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reference-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exact checkout SHA
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || exit 1
+          git rev-parse HEAD
+      - name: Run host-only reference policy checks (NOT guest parity)
+        run: python3 -m unittest -v contracts/v2/test_continuation_locality_v1.py
+  native-llvm-actor-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native compiler toolchain availability
+        run: command -v cmake && command -v clang && command -v llvm-config
+      - name: Build and execute native C actor scheduler tests
+        run: |
+          cmake -S . -B build-locality -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build build-locality --target oreslang-native-actor-scheduler-test -j2
+          ctest --test-dir build-locality -R native_actor_scheduler -V --output-on-failure
