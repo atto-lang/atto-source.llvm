@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <sys/stat.h>
 
 namespace oreslang::runtime {
 
@@ -69,6 +70,12 @@ public:
         // Invalid/blocking descriptors must not cause cold-start thread
         // creation. Validate before provisioning the first throughput reactor.
         if (!NativeEpollReactor::can_watch(fd, events)) return std::nullopt;
+        // Distinct dup()/dup2() FD values may refer to the same socket/pipe.
+        // Conservatively fence an equal Linux transport inode identity.
+        // No allocation, guest pointer, or mutable buffer access here.
+        struct stat identity{};
+        if (::fstat(fd, &identity) != 0) return std::nullopt;
+        const bool transport = S_ISSOCK(identity.st_mode) || S_ISFIFO(identity.st_mode);
         auto count = started_.load(std::memory_order_relaxed);
         if (count == 0) {
             if (profile_ != Profile::throughput || !reactors_[0]->start())
@@ -81,7 +88,12 @@ public:
         // each register that descriptor independently. Otherwise read/write
         // consumers might race across reactors and violate socket ownership.
         for (const auto& claim : claimed_fds_) {
-            if (claim.occupied && claim.fd == fd) return std::nullopt;
+            if (!claim.occupied) continue;
+            if (claim.fd == fd) return std::nullopt;
+            if (transport && claim.device == identity.st_dev
+                && claim.inode == identity.st_ino
+                && (claim.mode & S_IFMT) == (identity.st_mode & S_IFMT))
+                return std::nullopt;
         }
         maybe_expand_locked();
         count = started_.load(std::memory_order_relaxed);
@@ -96,7 +108,8 @@ public:
                 const Watch result{static_cast<std::uint8_t>(index), *token};
                 for (auto& claim : claimed_fds_) {
                     if (claim.occupied) continue;
-                    claim = FdClaim{true, fd, result};
+                    claim = FdClaim{true, fd, result, identity.st_dev,
+                                    identity.st_ino, identity.st_mode};
                     return result;
                 }
                 // With per-reactor capacity and one claim per active slot this
@@ -187,6 +200,9 @@ private:
         bool occupied = false;
         int fd = -1;
         Watch watch{};
+        dev_t device = 0;
+        ino_t inode = 0;
+        mode_t mode = 0;
     };
     // Fixed-size, process-local ownership table. No allocation on reactor
     // registration/completion paths; protected by mu_ with try-lock admission.
