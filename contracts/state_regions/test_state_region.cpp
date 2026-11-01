@@ -36,6 +36,19 @@ int main() {
     CHECK(exhausted.writer);
     CHECK(exhausted.retire() == Status::busy);
     CHECK(exhausted.release(forged_mode) == Status::invalid_mode);
+    // The last representable epoch is a valid completed write but cannot
+    // authorize another writer; read-only access and retirement still work.
+    Region boundary;
+    boundary.version = std::numeric_limits<uint64_t>::max() - 1;
+    CHECK(boundary.acquire(Mode::write) == Status::ok);
+    CHECK(boundary.release(Mode::write) == Status::ok);
+    CHECK(boundary.version == std::numeric_limits<uint64_t>::max());
+    CHECK(boundary.acquire(Mode::write) == Status::version_exhausted);
+    CHECK(!boundary.writer && boundary.readers == 0);
+    CHECK(boundary.acquire(Mode::read) == Status::ok);
+    CHECK(boundary.retire() == Status::busy);
+    CHECK(boundary.release(Mode::read) == Status::ok);
+    CHECK(boundary.retire() == Status::ok);
 
     CHECK(region.acquire(Mode::read) == Status::ok);
     CHECK(region.acquire(Mode::read) == Status::ok);
