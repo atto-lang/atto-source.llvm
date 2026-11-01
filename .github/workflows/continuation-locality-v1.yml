@@ -40,5 +40,5 @@ jobs:
       - name: Build and execute native C actor scheduler tests
         run: |
           cmake -S . -B build-locality -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="$(llvm-config --cmakedir)"
-          cmake --build build-locality --target oreslang-native-actor-ready-queue-test -j2
-          ctest --test-dir build-locality --output-on-failure -R native_actor_nonblocking_ready_queue
+          cmake --build build-locality --target oreslang-native-actor-ready-queue-test oreslang-native-continuation-wake-escrow-test -j2
+          ctest --test-dir build-locality --output-on-failure -R 'native_actor_nonblocking_ready_queue|native_continuation_wake_escrow_stop_cancel_aba'
