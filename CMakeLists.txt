@@ -324,6 +324,14 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Native compiler admission only. Does not certify a critical mutex,
+    # suspended continuation or five-backend guest runtime parity.
+    add_test(NAME native_critical_suspends_modifier_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_critical_suspends_modifiers.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_critical_suspends_modifier_admission PROPERTIES TIMEOUT 120)
+
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
