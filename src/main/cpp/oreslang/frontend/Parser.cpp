@@ -1779,6 +1779,9 @@ private:
             fail("native execution domain lowering unsupported");
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "critical")
+                fail("E_CRITICAL_SUSPENDS_DECL: native critical body cannot suspend");
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         // Check compound READ/WRITE modes before handling legacy critical,
@@ -1787,7 +1790,10 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         if (token_.text == "critical") {
-            fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "suspends")
+                fail("E_CRITICAL_SUSPENDS_DECL: native critical body cannot suspend");
+            fail("E_CRITICAL_UNLOWERED: native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
