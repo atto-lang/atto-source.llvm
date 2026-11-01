@@ -85,6 +85,10 @@ public:
                       std::uint64_t generation) const {
             return owner_.contains_locked(group_id, actor_id, generation);
         }
+
+        bool group_exists(std::uint64_t group_id) const {
+            return owner_.group_exists_locked(group_id);
+        }
     private:
         friend class NativeActorMembershipRegistry;
         explicit LockedView(const NativeActorMembershipRegistry& owner)
@@ -227,6 +231,10 @@ public:
     }
 
 private:
+    bool group_exists_locked(std::uint64_t group_id) const {
+        return groups_.find(group_id) != groups_.end();
+    }
+
     bool contains_locked(std::uint64_t group_id, std::uint64_t actor_id,
                          std::uint64_t generation) const {
         auto it = groups_.find(group_id);
