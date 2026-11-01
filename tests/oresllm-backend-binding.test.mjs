@@ -11,7 +11,10 @@ const expectedFixtures={
   'signed-product':'pub fnc main(): int { return 42 + ((-7 * -6) - 42); }\n',
   'grouped-negative':'pub fnc main(): int { return 42 + ((-5 * (3 + 4)) + 35); }\n',
   'nested-precedence':'pub fnc main(): int { return 42 + ((1 + (2 * (3 + 4))) - 15); }\n',
-  'max-minus-one':'pub fnc main(): int { return 43 + ((9223372036854775807 - 1) - 9223372036854775807); }\n'
+  'max-minus-one':'pub fnc main(): int { return 43 + ((9223372036854775807 - 1) - 9223372036854775807); }\n',
+  'zero-product':'pub fnc main(): int { return 42 + ((-7 * 0) - 0); }\n',
+  'nested-arithmetic':'pub fnc main(): int { return 42 + (((2 + 3) * (10 - 2)) - 40); }\n',
+  'subtract-self':'pub fnc main(): int { return 42 + ((9223372036854775807 - 9223372036854775807) - 0); }\n'
 };
 const backend=existsSync('pom.xml')?'java':
   existsSync('CMakeLists.txt')?'llvm':
