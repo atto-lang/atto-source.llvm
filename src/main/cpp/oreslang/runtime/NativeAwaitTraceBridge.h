@@ -48,6 +48,22 @@ int ores_native_await_trace_ready_resume_begin(
     OresNativeExecutionHandle* out_execution,
     OresNativeExecutionContext* out_context);
 
+/*
+ * Hot-load generation-fenced scheduler entry. A retired code generation
+ * cannot claim a READY frame, even if the future completed successfully.
+ * This is an additive trusted-host API: source lowering must supply the
+ * current generation from the owning code registry, never a guest value.
+ * A mismatch leaves the continuation READY for cancellation/retirement.
+ */
+int ores_native_await_trace_ready_resume_begin_current_code(
+    OresNativeExecutionContextStore* executions,
+    OresNativeContinuationStore* continuations,
+    OresNativeExecutionId resumed_execution_id,
+    OresNativeSuspensionLink link,
+    uint64_t current_code_generation,
+    OresNativeExecutionHandle* out_execution,
+    OresNativeExecutionContext* out_context);
+
 /* Finish after the resumed guest turn/cleanup has left its native stack. */
 int ores_native_await_trace_resume_finish(
     OresNativeContinuationStore* continuations,
