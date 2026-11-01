@@ -1692,6 +1692,29 @@ if(BUILD_TESTING)
     add_test(NAME native_pg_host_membership_snapshot
         COMMAND oreslang-native-pg-snapshot-test)
     set_tests_properties(native_pg_host_membership_snapshot PROPERTIES TIMEOUT 30)
+    # Adversarial host-only ETS and pg tests: stop races, reincarnation,
+    # group-ID ABA, callback reentrancy, and individual mailbox rejection.
+    add_executable(oreslang-native-ets-linearization-test
+        tests/native_ets_linearizable_retirement_test.cpp)
+    target_include_directories(oreslang-native-ets-linearization-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ets-linearization-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-ets-linearization-test PRIVATE Threads::Threads)
+    add_test(NAME native_ets_insert_new_and_retire_race
+        COMMAND oreslang-native-ets-linearization-test)
+    set_tests_properties(native_ets_insert_new_and_retire_race PROPERTIES TIMEOUT 45)
+
+    add_executable(oreslang-native-pg-broadcast-test
+        tests/native_pg_broadcast_test.cpp)
+    target_include_directories(oreslang-native-pg-broadcast-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-pg-broadcast-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-pg-broadcast-test PRIVATE Threads::Threads)
+    add_test(NAME native_pg_bounded_broadcast_and_group_aba
+        COMMAND oreslang-native-pg-broadcast-test)
+    set_tests_properties(native_pg_bounded_broadcast_and_group_aba PROPERTIES TIMEOUT 45)
     # Host-only CONTROL timer queue: no guest callback, no source async lowering.
     # Expiry tickets are held until exactly-once claim/discard, including
     # accounting for polled-but-not-yet-dispatched timers.
