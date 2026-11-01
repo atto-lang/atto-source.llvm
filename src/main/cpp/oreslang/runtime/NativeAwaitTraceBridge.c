@@ -58,7 +58,8 @@ static int resume_begin_checked(
         OresNativeSuspensionLink link,
         OresNativeExecutionHandle* out_execution,
         OresNativeExecutionContext* out_context,
-        int requires_ready) {
+        int requires_ready,
+        uint64_t current_code_generation) {
     if (!executions || !continuations || !out_execution
             || resumed_execution_id.runtime_domain == 0
             || resumed_execution_id.execution == 0
@@ -72,7 +73,9 @@ static int resume_begin_checked(
             || !same_handle(record.execution, link.parent)
             || !same_execution_id(record.execution_id, link.execution_id)
             || resumed_execution_id.runtime_domain
-                != link.execution_id.runtime_domain)
+                != link.execution_id.runtime_domain
+            || (requires_ready && current_code_generation != 0
+                && record.code_generation != current_code_generation))
         return 0;
 
     OresNativeExecutionContext context = {
@@ -121,7 +124,7 @@ int ores_native_await_trace_resume_begin(
         OresNativeExecutionContext* out_context) {
     /* Direct host trace bootstrap, not a permission to wake an unresolved Future. */
     return resume_begin_checked(executions, continuations,
-        resumed_execution_id, link, out_execution, out_context, 0);
+        resumed_execution_id, link, out_execution, out_context, 0, 0);
 }
 
 int ores_native_await_trace_ready_resume_begin(
@@ -133,7 +136,22 @@ int ores_native_await_trace_ready_resume_begin(
         OresNativeExecutionContext* out_context) {
     /* A scheduler wake must never claim PENDING or CANCELLED work. */
     return resume_begin_checked(executions, continuations,
-        resumed_execution_id, link, out_execution, out_context, 1);
+        resumed_execution_id, link, out_execution, out_context, 1, 0);
+}
+
+int ores_native_await_trace_ready_resume_begin_current_code(
+        OresNativeExecutionContextStore* executions,
+        OresNativeContinuationStore* continuations,
+        OresNativeExecutionId resumed_execution_id,
+        OresNativeSuspensionLink link,
+        uint64_t current_code_generation,
+        OresNativeExecutionHandle* out_execution,
+        OresNativeExecutionContext* out_context) {
+    /* Generation zero is never a valid host code identity. */
+    if (current_code_generation == 0) return 0;
+    return resume_begin_checked(executions, continuations,
+        resumed_execution_id, link, out_execution, out_context,
+        1, current_code_generation);
 }
 
 int ores_native_await_trace_resume_finish(
