@@ -74,20 +74,28 @@ int main() {
     CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::EffectExceedsUsing);
     CHECK(admit_critical_handle_state(c, row(READ | IO))
-            == CriticalStateAdmission::Accept);
+            == CriticalStateAdmission::CriticalBodyIo);
 
     c.inferred = row(READ | SUSPEND);
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::MissingContinuationFence);
+            == CriticalStateAdmission::CriticalBodySuspension);
+    // Neither a generation fence nor releasing a mutable loan makes
+    // suspension legal *within the body*. Entry may still suspend.
     c.continuation_generation_fenced = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::Accept);
+            == CriticalStateAdmission::CriticalBodySuspension);
     c.state_loan_live_across_suspend = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::LoanAcrossSuspension);
+            == CriticalStateAdmission::CriticalBodySuspension);
     c.state_loan_live_across_suspend = false;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::Accept);
+            == CriticalStateAdmission::CriticalBodySuspension);
+    c.inferred = row(READ | WRITE | SUSPEND | IO);
+    CHECK(admit_critical_handle_state(c, row(READ | WRITE | SUSPEND | IO))
+            == CriticalStateAdmission::CriticalBodySuspension);
+    c.inferred = row(READ | IO);
+    CHECK(admit_critical_handle_state(c, row(READ | IO))
+            == CriticalStateAdmission::CriticalBodyIo);
 
     // Trusted admission must not accept forged/reserved bits in either the
     // inferred callback row or the caller's upper-bound "using" row.
