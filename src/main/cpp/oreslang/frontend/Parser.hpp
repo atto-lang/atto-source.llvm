@@ -43,7 +43,7 @@ struct Expression {
         Add, Subtract, Multiply, Remainder,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
-        Conditional,
+        Conditional, Cast,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
@@ -51,6 +51,7 @@ struct Expression {
     std::int64_t integer = 0;
     bool boolean = false;
     mutable ScalarType resolved_type = ScalarType::I64;
+    ScalarType cast_target = ScalarType::I64; // checked, identity-only native scalar cast
     mutable std::string resolved_class;
     std::string name;
     std::unique_ptr<Expression> left;
@@ -100,7 +101,8 @@ struct LocalBinding {
     std::string move_source;
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
-    ScalarType scalar_type = ScalarType::I64;
+    mutable ScalarType scalar_type = ScalarType::I64;
+    bool inferred_scalar = false; // resolved by scalar type pass, never assume i64
     std::string pending_type_alias; // transparent compile-time alias identity
     std::size_t offset = 0;
     std::string sum_type;
