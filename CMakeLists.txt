@@ -46,6 +46,31 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Actor-state region host primitive: single-carrier ownership, generations,
+    # pins and physical retirement. Not a compiler-backed Oreslang guest.
+    # Always keep CHECK assertions enabled in Release / NDEBUG configurations.
+    add_executable(oreslang-native-state-region-primitive-test
+        contracts/state_regions/test_state_region.cpp)
+    add_executable(oreslang-native-state-region-stress-test
+        contracts/state_regions/state_region_stress.cpp)
+    foreach(target IN ITEMS oreslang-native-state-region-primitive-test
+                            oreslang-native-state-region-stress-test)
+        target_include_directories(${target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/state_regions")
+        set_target_properties(${target} PROPERTIES
+            CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+        target_compile_options(${target} PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    endforeach()
+    add_test(NAME native_state_region_100k_allocation_and_epoch
+        COMMAND oreslang-native-state-region-primitive-test)
+    set_tests_properties(native_state_region_100k_allocation_and_epoch
+        PROPERTIES TIMEOUT 30)
+    add_test(NAME native_state_region_500k_lifetime_stress
+        COMMAND oreslang-native-state-region-stress-test)
+    set_tests_properties(native_state_region_500k_lifetime_stress
+        PROPERTIES TIMEOUT 30)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
