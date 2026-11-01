@@ -2737,6 +2737,8 @@ private:
                 fail("native realtime source loop requires verified LLVM continuation lowering");
             }
             if (token_.text == "try") {
+                if (peek_next().text == "critical")
+                    fail("native try critical requires immediate nonblocking ticket lowering and a scoped guard");
                 if (terminal_try_finally || return_guards_started)
                     fail("native terminal try/finally must be a single return-only scope");
                 terminal_try_finally = true;
