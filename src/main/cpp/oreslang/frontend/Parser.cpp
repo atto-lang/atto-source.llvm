@@ -5179,8 +5179,23 @@ private:
             for (const auto& param : fn.parameters)
                 scalar_types.emplace(param.name, param.scalar_type);
 
+            std::function<void(const Expression&, std::size_t)> check_scalar_cast_sources;
+            check_scalar_cast_sources = [&](const Expression& expr, std::size_t depth) {
+                require_expression_depth(depth, expr.offset);
+                if (expr.kind == Expression::Kind::Cast)
+                    check_inferred_scalar_shape(*expr.left, depth + 1);
+                auto child = [&](const std::unique_ptr<Expression>& value) {
+                    if (value) check_scalar_cast_sources(*value, depth + 1);
+                };
+                child(expr.left); child(expr.right); child(expr.condition);
+                child(expr.condition_lhs); child(expr.condition_rhs);
+                child(expr.when_true); child(expr.when_false);
+                for (const auto& arg : expr.arguments) child(arg);
+            };
+
             auto require_scalar = [&](const Expression& expr, ScalarType expected,
                                       const char* where, const TypeMap& env) {
+                check_scalar_cast_sources(expr, 1);
                 const ScalarType actual =
                     validate_scalar_expression(expr, env, functions);
                 if (actual != expected)
@@ -5220,6 +5235,7 @@ private:
                         throw std::runtime_error(
                             "native scalar local requires an initializer");
                     if (binding.inferred_scalar) {
+                        check_scalar_cast_sources(*binding.initializer, 1);
                         check_inferred_scalar_shape(*binding.initializer, 1);
                         binding.scalar_type = validate_scalar_expression(
                             *binding.initializer, scalar_types, functions);
@@ -5288,6 +5304,7 @@ private:
                     const LocalBinding& local = *stmt.branch_local;
                     if (local.initializer) {
                         if (local.inferred_scalar) {
+                            check_scalar_cast_sources(*local.initializer, 1);
                             check_inferred_scalar_shape(*local.initializer, 1);
                             local.scalar_type = validate_scalar_expression(
                                 *local.initializer, env, functions);
