@@ -13,6 +13,7 @@ static_assert(!std::is_move_constructible<oreslang::runtime::IsolateVM>::value,
 #include <cstdint>
 #include <functional>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -31,6 +32,23 @@ int main() {
     assert(rejects([&] { vm.create_isolate({"guest", 64, 2,
                                             IsolateMode::SandboxedProcess}); }));
     assert(rejects([&] { vm.create_isolate({"", 64, 2}); }));
+    // Cross-backend fail-closed identity admission: previous native host
+    // accepted path separators, colon, Unicode and dot-only components.
+    // Rejections must occur before generation, heap or tenant quota charges.
+    const std::vector<std::string> invalid_ids{
+        ".", "..", "../escape", "tenant/other", "tenant\\other",
+        "tenant:other", "tenant other", std::string("bad\\0tenant", 10),
+        "t\\xC3\\xA9nant", std::string(129, 'x')
+    };
+    for (const auto& id : invalid_ids) {
+        assert(rejects([&] { vm.create_isolate({id, 64, 2}); }));
+    }
+    auto boundary = vm.create_isolate({std::string(128, 'x'), 16, 1});
+    vm.start(boundary);
+    assert(vm.snapshot(boundary).phase == IsolatePhase::Running);
+    vm.begin_shutdown(boundary);
+    vm.complete_shutdown(boundary);
+    vm.destroy(boundary);
     auto a = vm.create_isolate({"tenant-a", 32, 2});
     auto b = vm.create_isolate({"tenant-b", 32, 2});
     assert(rejects([&] { vm.create_isolate({"tenant-a", 32, 2}); }));
