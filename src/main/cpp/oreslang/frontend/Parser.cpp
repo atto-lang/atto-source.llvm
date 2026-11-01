@@ -4294,9 +4294,10 @@ private:
             case Expression::Kind::Field: {
                 if (expr.left) {
                     auto found = variables.find(native_place_key(expr));
-                    if (found != variables.end()) return found->second;
+                    if (found != variables.end())
+                        return expr.resolved_type = found->second;
                 }
-                return ScalarType::I64;
+                return expr.resolved_type = ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
                 std::string receiver;
