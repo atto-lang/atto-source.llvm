@@ -38,19 +38,26 @@ Erlang ETS's `protected` mode permits non-owner reads and owner writes. `public`
 
 ## pg local group snapshots: initial host proof
 
-`NativeActorMembershipRegistry::snapshot_group` returns a bounded, runtime-scoped, incarnation-tagged snapshot of `(actor_id, generation)` members. A missing group returns no snapshot. Copy happens under the registry lock; **all sends occur later, outside that lock**. An actor can belong to several groups; no snapshot grants stop/finalization ownership.
+`NativeActorMembershipRegistry::snapshot_group` returns a group-capacity-bounded, runtime-scoped, incarnation-tagged snapshot of `(actor_id, generation)` members. A missing group returns no snapshot. Copy happens under the registry lock; **all sends occur later, outside that lock**. An actor can belong to several groups; no snapshot grants stop/finalization ownership.
 
 Erlang `pg` provides process-group **membership discovery**. A broadcast is built by retrieving members and sending individually; it is not an atomic delivery primitive. For Oreslang, do not claim a linearizable atomic fanout transaction: membership may change after snapshot. Every recipient must still be authenticated as live at its owning VM/isolate mailbox, and bounded send admission may individually fail because of STOP, full inbox, unavailable remote transport, stale generation or authorization revocation.
+
+The additional `snapshot_group_limited` verifies the caller's maximum recipient count **under the group mutex, before allocating a snapshot**, so an over-budget request performs no member copy or delivery. `NativePgBroadcast.hpp` implements a trusted-host local best-effort broadcast adapter with bounded recipients, per-recipient `accepted/rejected/stale` results, a no-throw delivery callback outside the registry lock, and fresh membership checks against stable `group_incarnation`. Rotating join permits leaves that incarnation unchanged; closing/recreating a group allocates a different incarnation to reject old snapshots. Revalidation is not a replacement for the mailbox's own generation/permission/STOP admission checks; a close can still win after the revalidation and before the callback.
 
 This is not a cluster `pg` service: missing are per-isolate subscription authorization, checked `ActorRef` conversions, source `pg` APIs, clustered discovery/partition semantics, authenticated cross-process transport, distributed dedup/replay control, causal ordering and per-recipient backpressure/receipts.
 
 ## Promotion gates
 
-1. **Exact-head native host checks:** strict GCC+Clang C++17, `native_ets_host_scalar_acl_lifetime` and `native_pg_host_membership_snapshot` through CTest, sanitizers, concurrent join/leave and increment, owner death/recreate, cross-isolate denial and capacity exhaustion.
+1. **Exact-head native host checks:** strict GCC+Clang C++17, `native_ets_host_scalar_acl_lifetime`, `native_ets_insert_new_and_retire_race`, `native_pg_host_membership_snapshot`, `native_pg_bounded_broadcast_and_group_aba`, and Linux `native_vm_ets_pg_zero_cold_threads` through CTest, sanitizers, concurrent join/leave and increment, owner death/recreate, cross-isolate denial and capacity exhaustion.
 2. **VM integration:** owner-death hook on physical retirement, table registry lifecycle and quotas, authenticated generation-qualified handles, bounded audit counters; VM close must reject/reconcile lingering table/pg loans.
 3. **Source lowering:** parse/type-check explicit native `ets` and `pg` operations; enforce Sendable/Serializable and ownership; compile actual `.ores` fixtures to LLVM IR and execute AOT; reject unsupported types, table modes and cross-isolate access without emitting runnable IR.
 4. **Scheduler/NIO composition:** no callback under registry/table mutex, no actor carrier blocking on I/O or table contention, reserved CONTROL, full STOP/drain cancellation and reactor completion fences.
 5. **Cross-backend differential:** same success/failure traces against Java backend for owner death, stale handles, concurrent counters, leave/broadcast races, mailbox full, supervisor panic, restart and isolated tenants.
 6. **Security and CI:** source-org stepful exact-head execution or a *separately authorized* reviewed private carrier. The source private-CI allowlists/source export remain a HOLD; runner availability alone never authorizes mirroring. Zero-step Actions results are not execution evidence.
 
-The host ETS test was run locally with GCC and Clang C++17 strict warnings plus ASan/UBSan, with the committed header blob checked against its local compiled bytes. The new pg snapshot test and full CMake project still require executing exact-head CI; do not mark them passed based on source inspection.
+### Local exact-blob execution results
+
+- `NativeEtsScalarSet.hpp` plus `native_ets_linearizable_retirement_test.cpp`: verified Git blob hashes of both local sources match the branch. Both GCC and Clang strict C++17 builds passed, with **8 ASan/UBSan runs per compiler (16/16)**.
+- `NativeActorMembershipRegistry.hpp` plus `NativePgBroadcast.hpp` and `native_pg_broadcast_test.cpp`: all three compiled local sources match the branch Git blob hashes. Both GCC and Clang strict C++17 builds passed, with **8 ASan/UBSan runs per compiler (16/16)** after the bounded-preallocation fix.
+- These are **local native host tests**, not stepful source-org GitHub Actions. The new Linux VM thread-census test, legacy pg snapshot and complete CMake/CTest + actual compiled `.ores` guest remain unverified. Do not mark promotion ready.
+- On these tests `recipient_limit` returns no copied member count by design (0), and zero callback invocations. The old unbounded `snapshot_group` remains a separate trusted host API and must not be exposed as an unbounded guest broadcast entry point.
