@@ -4492,3 +4492,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Host-native actor-local logical I/O substrate. This is not yet source-level
+# io.* lowering; it supplies bounded generation-fenced runtime semantics.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-actor-io-envelope-test
+        tests/native_actor_io_envelope_test.cpp)
+    target_include_directories(oreslang-native-actor-io-envelope-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-io-envelope-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-io-envelope-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_io_bounded_generation_fence
+        COMMAND oreslang-native-actor-io-envelope-test)
+    set_tests_properties(native_actor_io_bounded_generation_fence PROPERTIES TIMEOUT 20)
+endif()
