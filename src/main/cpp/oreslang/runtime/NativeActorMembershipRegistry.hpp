@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -252,6 +253,18 @@ public:
     // This is a host-only point-in-time check. Actual mailbox admission must
     // independently enforce generation, STOP, quotas and authorization.
     bool contains_snapshot_member(const Snapshot& snapshot, Member member) const {
+        // Snapshots are sorted because the registry uses std::set<ActorKey>.
+        // Do not let a later join be retroactively authorized by an older
+        // snapshot: each addressable recipient must have been snapshotted.
+        const auto prior = std::lower_bound(snapshot.members.begin(),
+            snapshot.members.end(), member,
+            [](const Member& a, const Member& b) {
+                return a.actor_id < b.actor_id ||
+                    (a.actor_id == b.actor_id && a.generation < b.generation);
+            });
+        if (prior == snapshot.members.end() ||
+            prior->actor_id != member.actor_id ||
+            prior->generation != member.generation) return false;
         std::lock_guard<std::mutex> guard(mutex_);
         if (snapshot.runtime_id != runtime_id_ ||
             snapshot.registry_incarnation != instance_id_) return false;
