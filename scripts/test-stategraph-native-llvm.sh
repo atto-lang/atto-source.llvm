@@ -27,6 +27,27 @@ if [[ "$common_status" -ne 42 || -s "$tmp/out" ]]; then
 fi
 printf 'SG_LLVM_COMMON_SCALAR_NATIVE_PASS blob=%s guest_exit=42\n' "$(git rev-parse "HEAD:$shared")"
 
+# First byte-identical generic userland StateGraph source.
+generic=contracts/stategraph-portability/shared-generic-state.ores
+[[ -f "$generic" && ! -L "$generic" ]]
+git ls-files --error-unmatch -- "$generic" >/dev/null
+[[ "$(git hash-object "$generic")" = "c3a67b837a73f427a6157c446cc6e3989e9a66da" ]] ||
+  { echo 'SG_LLVM_GENERIC_SOURCE_DRIFT' >&2; exit 1; }
+[[ "$(git rev-parse "HEAD:$generic")" = "c3a67b837a73f427a6157c446cc6e3989e9a66da" ]]
+timeout --kill-after=3s 90s bash scripts/compile-aot.sh "$generic" "$tmp/generic" ||
+  { echo 'SG_LLVM_GENERIC_LOWERING_NOT_ACCEPTED' >&2; exit 1; }
+[[ -x "$tmp/generic" ]]
+set +e
+timeout --kill-after=3s 30s "$tmp/generic" > "$tmp/out" 2> "$tmp/err"
+generic_status=$?
+set -e
+if [[ "$generic_status" -ne 42 || -s "$tmp/out" ]]; then
+  cat "$tmp/err" >&2
+  echo "SG_LLVM_GENERIC_GUEST_NOT_ACCEPTED status=$generic_status" >&2
+  exit 1
+fi
+printf 'SG_LLVM_GENERIC_NATIVE_GUEST_PASS blob=%s result=42\n' "$(git rev-parse "HEAD:$generic")"
+
 for name in scalar guard nominal; do
   source="tests/fixtures/stategraph-parity-$name.ores"
   git ls-files --error-unmatch "$source" >/dev/null
