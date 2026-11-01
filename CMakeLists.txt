@@ -794,6 +794,21 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # ADT source admission reservation (NOT semantic-negative conformance).
+    # These files are byte-identical to reviewed canonical Oreslang fixtures
+    # in oreslang-platform-conformance #270. The current LLVM source frontend
+    # must refuse user-defined enums before emitting even partial IR.
+    # Any future LLVM implementation MUST replace this reservation with real
+    # source positive/negative execution checks before claiming parity.
+    foreach(adt_name IN ITEMS
+            nullary payload owner max-tag guarded-not-exhaustive nested-foreign-payload)
+        oreslang_contract_test(native_adt_unsupported_${adt_name}
+            "adt-source-v1/${adt_name}.ores"
+            --diagnostic "native user-defined tagged enum requires ADT layout and constructor lowering")
+        set_tests_properties(native_adt_unsupported_${adt_name}
+            PROPERTIES TIMEOUT 30)
+    endforeach()
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
