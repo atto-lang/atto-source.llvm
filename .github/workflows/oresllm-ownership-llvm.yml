@@ -46,12 +46,11 @@ jobs:
             oresllm_c_style_reference_parameter_rejected \
             oresllm_c_style_address_of_rejected \
             oresllm_c_style_pointer_decl_rejected; do
-            grep -F " $name" <<< "$inventory" >/dev/null || {
+            grep -Eq "^[[:space:]]*Test[[:space:]]+#[0-9]+:[[:space:]]+${name}$" <<< "$inventory" || {
               echo "::error::Missing mandatory compiler/native test $name"
               exit 1
             }
           done
-          grep -Eq 'Total Tests: 6
- <<< "$inventory"
+          grep -Eq '^Total Tests: 6$' <<< "$inventory"
       - name: Execute real source-to-IR, negative-admission and Clang AOT tests
         run: ctest --test-dir build -R '^oresllm_' --no-tests=error --output-on-failure
