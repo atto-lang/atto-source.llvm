@@ -107,5 +107,15 @@ int main(){
     if(!verify(v,mode))return 1;
     ++passed;
   }
-  std::printf("LIVEVIEW_CPP_HOST_PASS vectors=41 modes=4 observations=%d\n",passed);
+  {
+    Decoder decoder;
+    const auto raw=decode_hex("81850102030469676f686e");
+    auto throws=[](Event)->void {throw std::runtime_error("host send failed");};
+    if(decoder.feed(raw.data(),raw.size(),throws)!=Error::internal ||
+       decoder.error()!=Error::internal) {
+      std::fputs("callback failure not contained\\n",stderr);
+      return 1;
+    }
+  }
+  std::printf("LIVEVIEW_CPP_HOST_PASS vectors=41 modes=4 observations=%d callback_failure=1\\n",passed);
 }

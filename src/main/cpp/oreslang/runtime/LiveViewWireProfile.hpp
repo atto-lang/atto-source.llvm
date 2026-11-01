@@ -17,7 +17,7 @@ constexpr unsigned kMaxFramesPerFeed = 256;
 enum class Kind : std::uint8_t { text, ping, pong, close };
 struct Event { Kind kind; const std::uint8_t *data; std::size_t size; };
 // RFC6455 close code describing rejection. 0 means no error.
-enum class Error : int { none=0, protocol=1002, unsupported=1003, utf8=1007, policy=1008, too_large=1009 };
+enum class Error : int { none=0, protocol=1002, unsupported=1003, utf8=1007, policy=1008, too_large=1009, internal=1011 };
 
 inline bool valid_utf8(const std::uint8_t *p, std::size_t n) noexcept {
   for (std::size_t i=0;i<n;) {
@@ -140,6 +140,14 @@ class Decoder {
     if(control && length>125) return Error::protocol;
     return Error::none;
   }
+  template<class Sink> static Error publish(Sink& sink, Event event) noexcept {
+#if defined(__cpp_exceptions)
+    try { sink(event); } catch (...) { return Error::internal; }
+#else
+    sink(event);
+#endif
+    return Error::none;
+  }
   template<class Sink> Error complete(Sink& sink) noexcept {
     const unsigned op=frame_[0]&15;const bool fin=(frame_[0]&0x80)!=0;
     const unsigned marker=frame_[1]&127;
@@ -156,8 +164,11 @@ class Decoder {
           if(!valid_close_code(code)) return Error::protocol;
           if(!valid_utf8(bytes+2,len-2)) return Error::utf8;
         }
-        sink(Event{Kind::close,bytes,len});closed_=true;
-      } else sink(Event{op==9?Kind::ping:Kind::pong,bytes,len});
+        if (publish(sink,Event{Kind::close,bytes,len})!=Error::none)
+          return Error::internal;
+        closed_=true;
+      } else if (publish(sink,Event{op==9?Kind::ping:Kind::pong,bytes,len})!=Error::none)
+        return Error::internal;
       return Error::none;
     }
     if(op==0 && !fragmented_) return Error::protocol;
@@ -169,7 +180,8 @@ class Decoder {
     fragment_bytes_+=len;
     if(fin) {
       if(!valid_utf8(fragments_.data(),fragment_bytes_)) return Error::utf8;
-      sink(Event{Kind::text,fragments_.data(),fragment_bytes_});
+      if (publish(sink,Event{Kind::text,fragments_.data(),fragment_bytes_})!=Error::none)
+        return Error::internal;
       fragmented_=false;fragment_bytes_=0;fragment_count_=0;
     }
     return Error::none;
