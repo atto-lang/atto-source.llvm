@@ -1464,6 +1464,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_guest_actor_group_create source-actor-group-create-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
     oreslang_contract_test(reject_guest_actor_group_join source-actor-group-join-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
     oreslang_contract_test(reject_guest_actor_group_shadow source-actor-group-declaration-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
+    add_test(NAME reject_shared_actor_pubsub_source_corpus
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_pubsub_source_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(reject_shared_actor_pubsub_source_corpus PROPERTIES TIMEOUT 90)
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
