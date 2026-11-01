@@ -1358,6 +1358,17 @@ if(BUILD_TESTING)
         set_tests_properties(native_branch_local_scope_source_execution
             native_branch_local_scope_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
+    # Full native regression for the semicolon form of conditional branch parsing.
+    # Keep 'then' and 'do' source forms distinct, and reject malformed separators
+    # before any partial LLVM IR is emitted.  These exercise real compiler paths.
+    if(ORE_CLANG)
+        oreslang_contract_test(native_if_semicolon_then_executable
+            conditional-semicolon-then-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_if_semicolon_do_executable
+            conditional-semicolon-do-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_if_semicolon_separator_failclosed
+        conditional-semicolon-invalid-separator.ores --diagnostic "expected 'do'")
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
     # Proven-nonescaping integer-field classes are stack-only and emit no
     # malloc, tracing collector roots, or native heap calls.

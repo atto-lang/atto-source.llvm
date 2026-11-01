@@ -1,0 +1,9 @@
+fnc tick(): void { return; }
+pub fnc main(): int {
+  if (1 eq 1); do
+    tick();
+  else
+    tick();
+  fi
+  return 42;
+}
