@@ -8,6 +8,8 @@ on:
       - 'tests/native_tenant_isolate_race_test.cpp'
       - 'tests/native_tenant_registry_provenance_test.cpp'
       - 'tests/native_tenant_state_machine_test.cpp'
+      - 'tests/native_tenant_secure_retirement_test.cpp'
+      - 'tests/native_tenant_stop_interleaving_test.cpp'
       - 'docs/LLVM_ISOLATE_HARD_RT_FIRST_FIVE.md'
       - 'tests/native_tenant_rt_denial_matrix_test.cpp'
       - '.github/workflows/native-tenant-isolate-rt-host.yml'
@@ -26,7 +28,7 @@ jobs:
           set -euo pipefail
           for compiler in g++ clang++; do
             for opt in -O0 -O2; do
-              for suite in native_tenant_isolate_rt_host_test native_tenant_isolate_race_test native_tenant_registry_provenance_test native_tenant_state_machine_test native_tenant_rt_denial_matrix_test; do
+              for suite in native_tenant_isolate_rt_host_test native_tenant_isolate_race_test native_tenant_registry_provenance_test native_tenant_state_machine_test native_tenant_secure_retirement_test native_tenant_stop_interleaving_test native_tenant_rt_denial_matrix_test; do
                 output="$(mktemp)"
                 trap 'rm -f "$output"' EXIT
                 "$compiler" -std=c++17 "$opt" -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
@@ -41,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for suite in native_tenant_isolate_rt_host_test native_tenant_isolate_race_test native_tenant_registry_provenance_test native_tenant_state_machine_test native_tenant_rt_denial_matrix_test; do
+          for suite in native_tenant_isolate_rt_host_test native_tenant_isolate_race_test native_tenant_registry_provenance_test native_tenant_state_machine_test native_tenant_secure_retirement_test native_tenant_stop_interleaving_test native_tenant_rt_denial_matrix_test; do
             output="$(mktemp)"
             trap 'rm -f "$output"' EXIT
             g++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \

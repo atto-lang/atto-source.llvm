@@ -137,3 +137,40 @@ qualify LLVM hard real time.
 Next executable promotion requires separately authorized source-org runner
 admission (at least one step), then actual source-to-native actor guest
 tests, CONTROL/DATA priority and mailbox/failure retirement integration.
+
+## Follow-up: unconditional secure retirement and deterministic STOP interleavings
+
+Inspection found a real host-side secret-retention bug: `finish_stop()` zeroed
+the arena for orderly tenant recycling, but dropping the host without that
+operation let `unique_ptr<uint8_t[]>` deallocate an uncleared actor region.
+A retained `Turn` defers the final state reclamation until its lease ends.
+
+- `Slot` now remembers its actor-arena length and explicitly zeroes its arena
+  in its destructor, including partially constructed `State` cleanup.
+  `finish_stop()` uses the same volatile-store secure erase. These writes
+  cannot be optimized away as an unused `memset`. Wiping is OFF the hard
+  real-time carrier path; final state reclamation cannot happen until all
+  physical lease pins are released.
+- `tests/native_tenant_secure_retirement_test.cpp` uses an instrumented
+  C++ array allocator to inspect actual freed region bytes, not merely
+  reopen reads. It covers successful STOP, abnormal owner destruction,
+  retained turn after owner destruction, and STOP-in-progress with a pin.
+  The fixture correctly **fails** on the pre-fix header at the dirty-arena
+  assertion, and passes with the patch.
+- `tests/native_tenant_stop_interleaving_test.cpp` runs 256 controlled
+  actor/host interleavings, checking STOP rejects new turns, active turns
+  finish during quiescence, other tenant data remains accessible, no
+  premature slot recycle, old generation rejection, and fresh zeroed memory.
+
+**Locally executed:** these two new suites plus three unchanged lifecycle
+suites ran on GCC 14 and Clang 17, `-O0` and `-O2`: 20/20
+compiler/optimization/test configurations passed. GCC ASan+UBSan passed
+15/15 executions across the same five suites (three repeats per suite).
+The old unpatched header produced the expected regression-test failure.
+All three new Git blobs are SHA-matched to locally tested bytes.
+
+**Unchanged promotion holds:** this is a host-only memory-lifetime proof,
+not tenant authentication, isolated native guest execution, compiler actor
+ownership lowering, a scheduler CONTROL-lane integration, or independently
+qualified hard-real-time timing. Exact-head Actions must execute nonzero
+steps before source CI proof can be claimed.

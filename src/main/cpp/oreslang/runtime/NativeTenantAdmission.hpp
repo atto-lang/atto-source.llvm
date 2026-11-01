@@ -19,6 +19,14 @@ namespace oreslang::runtime {
 // the mutex and cleanup scrub here are deliberately outside RT turns.
 class NativeTenantAdmission final {
     enum class Phase : std::uint8_t { stopped, running, quiescing };
+    // Retire confidential actor bytes even when a host is destroyed without
+    // a successful finish_stop. Volatile stores are observable side effects;
+    // unlike memset, an optimizer must not discard this final wipe as dead.
+    // This bounded cleanup is OFF the realtime actor execution path.
+    static void secure_erase(void* memory, std::size_t bytes) noexcept {
+        volatile std::uint8_t* cursor = static_cast<volatile std::uint8_t*>(memory);
+        for (std::size_t i = 0; i < bytes; ++i) cursor[i] = 0;
+    }
     struct Slot final {
         std::mutex mutex;
         std::unique_ptr<std::uint8_t[]> arena;
@@ -27,6 +35,14 @@ class NativeTenantAdmission final {
         std::uint64_t generation = 0;
         std::size_t active_turns = 0;
         bool host_closed = false;
+        std::size_t arena_size = 0;
+
+        // State may be released only after the last Turn pin has dropped.
+        // This destructor also runs for partially constructed State entries
+        // when allocation of a later tenant arena throws.
+        ~Slot() noexcept {
+            if (arena) secure_erase(arena.get(), arena_size);
+        }
     };
     struct State final {
         const std::size_t slots;
@@ -38,6 +54,7 @@ class NativeTenantAdmission final {
             : slots(slot_count), actors(actors_per_tenant),
               actor_bytes(region_bytes), entries(new Slot[slot_count]) {
             for (std::size_t i = 0; i < slots; ++i) {
+                entries[i].arena_size = actors * actor_bytes;
                 entries[i].arena = std::unique_ptr<std::uint8_t[]>(
                     new std::uint8_t[actors * actor_bytes]{});
                 entries[i].active_actors =
@@ -239,8 +256,7 @@ public:
         if (slot.host_closed || slot.generation != handle.generation ||
             slot.phase != Phase::quiescing || slot.active_turns != 0)
             return false;
-        std::memset(slot.arena.get(), 0,
-                    state_->actors * state_->actor_bytes);
+        secure_erase(slot.arena.get(), slot.arena_size);
         slot.phase = Phase::stopped;
         return true;
     }
