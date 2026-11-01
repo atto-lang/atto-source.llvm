@@ -1693,6 +1693,16 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-actor-membership-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_multi_group_membership COMMAND oreslang-native-actor-membership-test)
     set_tests_properties(native_actor_multi_group_membership PROPERTIES TIMEOUT 20)
+
+    # Host-side bounded pub/sub admission substrate. This does not claim source
+    # Topic<T> lowering; the shared source corpus remains the parity gate.
+    add_executable(oreslang-native-actor-pubsub-test tests/native_actor_pubsub_test.cpp)
+    target_include_directories(oreslang-native-actor-pubsub-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-pubsub-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-pubsub-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_pubsub_admission COMMAND oreslang-native-actor-pubsub-test)
+    set_tests_properties(native_actor_pubsub_admission PROPERTIES TIMEOUT 20)
     # Host-only CONTROL timer queue: no guest callback, no source async lowering.
     # Expiry tickets are held until exactly-once claim/discard, including
     # accounting for polled-but-not-yet-dispatched timers.
