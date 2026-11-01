@@ -122,6 +122,9 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
                     trimmed.starts_with("; ModuleID")
                         || trimmed.starts_with("source_filename =")
                         || trimmed.starts_with("target triple =")
+                        || trimmed.starts_with("target datalayout =")
+                        || (trimmed.starts_with("declare ") && trimmed.contains('@'))
+                        || (trimmed.starts_with("attributes #") && trimmed.contains('='))
                 }),
             "{name}: rejected source leaked LLVM IR to stderr: {stderr}"
         );
@@ -333,6 +336,30 @@ mod tests {
     fn negative_admission_rejects_partial_module_header_on_stderr() {
         assert_rejected_fake_compiler(
             "printf 'bad ownership\n; ModuleID = fake\n' >&2\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_llvm_declaration_on_stderr() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\\ndeclare i64 @escaped(i64)\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_llvm_attribute_block_on_stderr() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\\nattributes #0 = { nounwind }\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_target_datalayout_on_stderr() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\\ntarget datalayout = x86_64\\n' >&2\\nexit 2",
         );
     }
 
