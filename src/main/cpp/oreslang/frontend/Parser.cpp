@@ -4568,6 +4568,11 @@ private:
         for (const auto& cls : program.classes) {
             if (cls.constructor_exported && !cls.exported)
                 throw std::runtime_error("public constructor requires a public class");
+            // Native struct fields are still i64 slots. Reject an f64 member
+            // before any constructor/store could accidentally reinterpret bits.
+            for (const auto& field : cls.fields)
+                if (field.scalar_type == ScalarType::F64)
+                    throw std::runtime_error("native f64 class field requires typed struct layout and borrow proof");
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
