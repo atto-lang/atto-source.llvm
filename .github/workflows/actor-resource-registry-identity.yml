@@ -56,7 +56,8 @@ jobs:
             "${flags[@]}" -I src/main/cpp \
             -c src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c -o /tmp/registry-heap.o
           "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
-            "${flags[@]}" -I src/main/cpp tests/native_actor_retirement_barrier_test.cpp \
+            "${flags[@]}" -DORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER=1 \
+            -I src/main/cpp tests/native_actor_retirement_barrier_test.cpp \
             /tmp/registry-heap.o -o /tmp/registry-retirement
           /tmp/registry-retirement
           if [[ "$MODE" == optimized ]]; then

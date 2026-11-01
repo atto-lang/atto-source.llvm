@@ -115,7 +115,7 @@ fn main() {
     let int b = await w;
     return a + b;
 }
-"#, "await must immediately consume");
+"#, "native first async slice requires await to immediately consume its Future/Task");
 
     rejected(&compiler, &dir.0, "call-producer.ores",
         r#"fnc helper(): int { return 41; }

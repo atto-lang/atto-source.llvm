@@ -173,7 +173,31 @@ class ComparatorParityProof(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("SUITE_COMPLETE=no", summary)
 
+    def test_strict_gate_rejects_real_pending_suite_with_pinned_heads(self):
+        # The checked-in suite currently has intentionally pending LLVM cases.
+        status, summary = self.compare(strict=True, revisions=self.sha)
+        self.assertEqual(status, 1)
+        self.assertIn("SUITE_COMPLETE=no", summary)
+
     def test_strict_gate_accepts_complete_fixture_suite_with_pinned_heads(self):
+        # Positive comparator control only: turn a private test-local copy of
+        # every pending backend into synthetic passing evidence. This does not
+        # modify cases.json, real reports, or authorize production parity.
+        for case in self.suite["cases"]:
+            pending = [backend for backend in ("llvm", "graal")
+                       if case["backends"][backend] == "pending"]
+            for backend in pending:
+                case["backends"][backend] = "required"
+                record = next(r for r in self.reports[backend]["results"]
+                              if r["id"] == case["id"])
+                record.clear()
+                record.update({"id": case["id"], "status": "pass", "detail": ""})
+                if case["kind"] == "diagnostic":
+                    record["diagnostic_class"] = case["diagnostic_class"]
+                else:
+                    record["observed_exit"] = case["expected_exit"]
+            if pending:
+                case.pop("pending_reason", None)
         status, summary = self.compare(strict=True, revisions=self.sha)
         self.assertEqual(status, 0)
         self.assertIn("SUITE_COMPLETE=yes", summary)

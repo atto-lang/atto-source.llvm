@@ -28,7 +28,9 @@ cases = {
         "fnc read(int x): int requires no_alloc { return x; }",
         "native requires clause awaits verified"),
     "await": ("pub fnc main(): int { return await next; }", "native async/channel/select boundary unsupported"),
-    "async fnc": ("pub async fnc main(): int { return 42; }", "native actor/async declaration"),
+    "async fnc": (
+        "pub async fnc main(): int { return 42; }",
+        "native async Future<int> v1 callable must be private, capture-free, pure, and have zero args or one value int arg"),
     "actor fnc": ("actor fnc main(): int { return 42; }", "native actor/async declaration"),
     "select": ("pub fnc main(): int { select { default: { return 1; } } return 42; }", "native async/channel/select boundary unsupported"),
     "nb select": ("pub fnc main(): int { nb select { default: { return 1; } } return 42; }", "native async/channel/select boundary unsupported"),

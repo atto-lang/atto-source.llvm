@@ -859,12 +859,12 @@ if(BUILD_TESTING)
         --diagnostic "native suspend gen* requires scheduler-owned async iterator continuation lowering")
     foreach(generator_case IN ITEMS
             legacy-fnc legacy-routine legacy-async-fnc)
-        add_test(NAME native_generator_v1_${generator_case}_failclosed
-            COMMAND "$<TARGET_FILE:oreslang-llvmc>"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generator-v1-${generator_case}-reject.ores")
-        set_tests_properties(native_generator_v1_${generator_case}_failclosed PROPERTIES
-            WILL_FAIL TRUE
-            PASS_REGULAR_EXPRESSION "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering")
+        # The contract harness verifies exit=1, the exact rejection diagnostic
+        # on stderr, and zero stdout. CTest must not invert failures with
+        # WILL_FAIL, which would also allow unrelated crashes to appear green.
+        oreslang_contract_test(native_generator_v1_${generator_case}_failclosed
+            generator-v1-${generator_case}-reject.ores
+            --diagnostic "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering")
     endforeach()
 
     add_executable(oreslang-ownership-cfg-dataflow-test
@@ -1021,8 +1021,12 @@ if(BUILD_TESTING)
     # expressions (ARM_RESULT); do forms lower to structured statement CFG
     # where arm returns retain FUNCTION_RETURN semantics. Async suspension,
     # replay-unsafe subjects, duplicate cases, and nb dispatch stay fail-closed.
-    oreslang_contract_test(native_value_match_arm_result
-        dispatch-value-match-run.ores --ir "cmp.eq.i1")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_value_match_arm_result
+            dispatch-value-match-run.ores --verify-object --clang "${ORE_CLANG}")
+    else()
+        add_test(NAME native_value_match_arm_result COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir
@@ -1036,8 +1040,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_dispatch_negative_zero_duplicate
         dispatch-negative-zero-duplicate-reject.ores
         --diagnostic "duplicate native value switch case")
-    oreslang_contract_test(native_value_switch_arm_result
-        dispatch-value-switch-run.ores --ir "cmp.eq.i1")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_value_switch_arm_result
+            dispatch-value-switch-run.ores --verify-object --clang "${ORE_CLANG}")
+    else()
+        add_test(NAME native_value_switch_arm_result COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
     oreslang_contract_test(native_do_match_function_return
         dispatch-do-match-run.ores --ir "return.snapshot.slot")
     oreslang_contract_test(native_do_switch_function_return
@@ -1108,7 +1116,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_exit_reject_unsupported_explicit_exit exit-unsupported-process-exit.ores
         --diagnostic "oreslang-llvmc:")
     oreslang_contract_test(native_exit_reject_unsupported_async_root exit-unsupported-async-main.ores
-        --diagnostic "native actor/async declaration requires")
+        --diagnostic "native first async Future<int> producer requires async fnc")
     oreslang_contract_test(native_exit_void_main_ir exit-void-main.ores
         --ir "define i32 @main()")
     if(ORE_CLANG)
@@ -1358,15 +1366,38 @@ if(BUILD_TESTING)
         set_tests_properties(native_branch_local_scope_source_execution
             native_branch_local_scope_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
-    oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
+    # Full native regression for the semicolon form of conditional branch parsing.
+    # Keep 'then' and 'do' source forms distinct, and reject malformed separators
+    # before any partial LLVM IR is emitted.  These exercise real compiler paths.
+    if(ORE_CLANG)
+        oreslang_contract_test(native_if_semicolon_then_executable
+            conditional-semicolon-then-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_if_semicolon_do_executable
+            conditional-semicolon-do-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_if_semicolon_separator_failclosed
+        conditional-semicolon-invalid-separator.ores --diagnostic "expected 'do'")
+    if(ORE_CLANG)
+        oreslang_contract_test(arithmetic_precedence return-arithmetic.ores
+            --run 28 --clang "${ORE_CLANG}")
+    else()
+        add_test(NAME arithmetic_precedence COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
     # Proven-nonescaping integer-field classes are stack-only and emit no
     # malloc, tracing collector roots, or native heap calls.
     oreslang_contract_test(owned_stack_class owned-stack-class.ores --ir "alloca %Box")
     oreslang_contract_test(reject_owned_stack_escape owned-stack-escape.ores --diagnostic "class is non-Copy")
     oreslang_contract_test(reject_owned_stack_unknown_field owned-stack-bad-field.ores --diagnostic "unknown class field")
     oreslang_contract_test(reject_owned_stack_duplicate_field owned-stack-double-field.ores --diagnostic "duplicate class field")
-    oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
-    oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
+    if(ORE_CLANG)
+        oreslang_contract_test(negative_literal negative-literal.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(nested_comments nested-comments.ores
+            --run 42 --clang "${ORE_CLANG}")
+    else()
+        add_test(NAME negative_literal COMMAND "${CMAKE_COMMAND}" -E false)
+        add_test(NAME nested_comments COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
     oreslang_contract_test(native_owned_lexical_lifetime owned-lexical-main.ores --no-native-abi --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_identifier owned-identifier-main.ores --no-native-abi --ir "call i64 @owned")
     # Port the unique generated stress corpus from old stacked #72 without its
@@ -2249,9 +2280,18 @@ if(BUILD_TESTING)
 
     # Native i64 is a Copy value: rt copy/rt share are scalar value copies,
     # while rt take invalidates named scalar binding until function exit.
-    oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores --ir "ret i64 42")
-    oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores --ir "ret i64 42")
-    oreslang_contract_test(native_rt_share_scalar native-rt-share-scalar.ores --ir "ret i64 42")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_rt_share_scalar native-rt-share-scalar.ores
+            --run 42 --clang "${ORE_CLANG}")
+    else()
+        add_test(NAME native_rt_copy_scalar COMMAND "${CMAKE_COMMAND}" -E false)
+        add_test(NAME native_rt_take_scalar COMMAND "${CMAKE_COMMAND}" -E false)
+        add_test(NAME native_rt_share_scalar COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
     oreslang_contract_test(reject_take_then_reuse native-reject-take-then-reuse.ores --diagnostic "use of explicitly moved int")
     oreslang_contract_test(reject_take_call_arg_overlap native-reject-take-call-args.ores --diagnostic "use of explicitly moved int")
     oreslang_contract_test(reject_double_take native-reject-double-take.ores --diagnostic "use of explicitly moved int")

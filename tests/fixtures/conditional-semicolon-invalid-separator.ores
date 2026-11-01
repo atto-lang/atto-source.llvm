@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  if (1 eq 1); otherwise
+    return 42;
+  else
+    return 0;
+  fi
+}
