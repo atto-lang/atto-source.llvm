@@ -220,6 +220,31 @@ public:
         return result;
     }
 
+    // The broadcaster's recipient limit must be checked while the group is
+    // locked, BEFORE allocating/copying a potentially large membership list.
+    // A missing group is distinct from a limit rejection, and both return
+    // without allocating a snapshot. No guest callback runs under this lock.
+    enum class SnapshotStatus : std::uint8_t { ok, group_missing, recipient_limit };
+    struct LimitedSnapshot {
+        SnapshotStatus status;
+        std::optional<Snapshot> snapshot;
+    };
+    LimitedSnapshot snapshot_group_limited(std::uint64_t group_id,
+                                           std::size_t max_recipients) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto it = groups_.find(group_id);
+        if (it == groups_.end())
+            return {SnapshotStatus::group_missing, std::nullopt};
+        if (max_recipients == 0 || it->second.members.size() > max_recipients)
+            return {SnapshotStatus::recipient_limit, std::nullopt};
+        Snapshot snap{runtime_id_, instance_id_, group_id, it->second.epoch,
+                      it->second.incarnation, {}};
+        snap.members.reserve(it->second.members.size());
+        for (const auto& member : it->second.members)
+            snap.members.push_back(Member{member.first, member.second});
+        return {SnapshotStatus::ok, std::move(snap)};
+    }
+
     // Revalidate a *snapshot's group incarnation*, not just the numeric ID.
     // A closed and recreated group may reuse the same ID; an old broadcast
     // must never target members of its replacement. Rotation of join permits
