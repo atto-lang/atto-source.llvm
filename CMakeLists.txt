@@ -1389,6 +1389,14 @@ if(BUILD_TESTING)
             scalar-cross-parentheses-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(cross_backend_scalar_left_associativity
             scalar-cross-left-assoc-run.ores --run 30 --clang "${ORE_CLANG}")
+        add_test(NAME native_shared_scalar50_compiler_and_guest_execution
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_shared_scalar50.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --corpus "${CMAKE_CURRENT_SOURCE_DIR}/contracts/parity/scalar50/v1.tsv")
+        set_tests_properties(native_shared_scalar50_compiler_and_guest_execution
+            PROPERTIES TIMEOUT 360)
     else()
         add_test(NAME arithmetic_precedence COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
