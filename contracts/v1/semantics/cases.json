@@ -179,6 +179,61 @@
         "llvm": "required",
         "graal": "required"
       }
+    },
+    {
+      "id": "native.oresllm-precedence",
+      "feature": "numeric.oresllm-scalar-precedence",
+      "source": "fixtures/oresllm-precedence.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-signed-product",
+      "feature": "numeric.oresllm-scalar-signed-product",
+      "source": "fixtures/oresllm-signed-product.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-grouped-negative",
+      "feature": "numeric.oresllm-scalar-grouped-negative",
+      "source": "fixtures/oresllm-grouped-negative.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-nested-precedence",
+      "feature": "numeric.oresllm-scalar-nested-precedence",
+      "source": "fixtures/oresllm-nested-precedence.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-max-minus-one",
+      "feature": "numeric.oresllm-scalar-max-minus-one",
+      "source": "fixtures/oresllm-max-minus-one.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
     }
   ]
 }
