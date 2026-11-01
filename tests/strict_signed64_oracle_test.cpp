@@ -36,6 +36,19 @@ static_assert(StrictSigned64Arithmetic::mod(2, 0).failure
     == StrictIntegerFailure::divisor_zero);
 static_assert(StrictSigned64Arithmetic::pow(2, -1).failure
     == StrictIntegerFailure::negative_exponent);
+// Shared composed i64 cases: Java real guest, .NET emitted-CIL guest and
+// Cranelift native-JIT test should agree on these exact values. This is a
+// compile-time check of the LLVM C++ reference helper, NOT LLVM guest lowering.
+static_assert(StrictSigned64Arithmetic::bitXor(
+    StrictSigned64Arithmetic::mod(-9, 4).value,
+    StrictSigned64Arithmetic::pow(2, 3).value).value == 11);
+static_assert(StrictSigned64Arithmetic::rem(
+    StrictSigned64Arithmetic::bitXor(5, 3).value,
+    StrictSigned64Arithmetic::pow(2, 2).value).value == 2);
+static_assert(StrictSigned64Arithmetic::pow(
+    StrictSigned64Arithmetic::rem(-9, 4).value + 3, 3).value == 8);
+static_assert(StrictSigned64Arithmetic::mod(
+    StrictSigned64Arithmetic::pow(-2, 3).value, 5).value == 2);
 static_assert(StrictSigned64Arithmetic::bitXor(5, 3).value == 6);
 static_assert(StrictSigned64Arithmetic::bitXor(
     std::numeric_limits<I>::min(), I(0)).value == std::numeric_limits<I>::min());
