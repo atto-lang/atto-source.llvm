@@ -3212,7 +3212,10 @@ private:
                 else if (accept("bool")) cast->cast_target = ScalarType::Bool;
                 else if (accept("string") || accept("String"))
                     cast->cast_target = ScalarType::String;
-                else fail("native checked cast requires int, bool or string; nominal/dynamic casts need runtime type checks");
+                else if (token_.kind == Kind::Identifier &&
+                        scalar_alias_targets_.count(std::string(token_.text)))
+                    cast->cast_target = resolve_scalar_alias(identifier());
+                else fail("native checked cast requires a scalar or checked scalar alias; nominal/dynamic casts need runtime type checks");
                 cast->left = std::move(left);
                 left = std::move(cast);
                 continue;
