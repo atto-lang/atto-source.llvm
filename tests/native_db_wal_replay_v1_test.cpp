@@ -130,6 +130,45 @@ static void check_maximum_wire_replay() {
     assert(::unlink(name)==0);
 }
 
+
+static void check_rechecksummed_header_forgeries() {
+    auto first = boundary_frame(1,1,41,1,0);
+    auto valid = boundary_frame(1,2,42,1,1);
+    char name[] = "/tmp/ores-wal-rechecksummed-XXXXXX";
+    int fd = ::mkstemp(name);
+    assert(fd >= 0);
+    assert(::pwrite(fd,first.data(),first.size(),0)==
+           static_cast<ssize_t>(first.size()));
+    for (unsigned attempt=0; attempt<7; ++attempt) {
+        auto changed = valid;
+        switch (attempt) {
+        case 0: changed[4]=2; break;
+        case 1: changed[5]=2; break;
+        case 2: changed[21]=128; break;
+        case 3: changed[22]=0; break;
+        case 4: changed[22]=65; break;
+        case 5: changed[24]=1; changed[25]=4; break;
+        case 6: changed[0]=80; break;
+        default: std::abort();
+        }
+        unsigned a=1,b=0;
+        for (std::size_t i=0;i<changed.size()-4U;++i) {
+            a=(a+changed[i])%65521U;
+            b=(b+a)%65521U;
+        }
+        u16(changed,static_cast<unsigned>(changed.size()-4U),a);
+        u16(changed,static_cast<unsigned>(changed.size()-2U),b);
+        assert(::ftruncate(fd,static_cast<off_t>(first.size()))==0);
+        assert(::pwrite(fd,changed.data(),changed.size(),first.size())==
+               static_cast<ssize_t>(changed.size()));
+        rejects([&]{ (void)DbWalReplayV1::scan(fd,7,4,[](auto,auto,auto){}); });
+        struct stat statbuf{};
+        assert(::fstat(fd,&statbuf)==0 &&
+               statbuf.st_size==static_cast<off_t>(first.size()+changed.size()));
+    }
+    assert(::close(fd)==0 && ::unlink(name)==0);
+}
+
 int main(){
     char name[]="/tmp/ores-wal-replay-XXXXXX";
     int fd=::mkstemp(name); assert(fd>=0);
@@ -246,4 +285,5 @@ int main(){
     assert(::close(root)==0);
     assert(::close(fd)==0); assert(::unlink(name)==0);
     check_maximum_wire_replay();
+    check_rechecksummed_header_forgeries();
 }
