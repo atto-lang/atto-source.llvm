@@ -67,6 +67,26 @@ int main() {
         for (auto& p : fds) { ::close(p[0]); ::close(p[1]); }
     }
     {
+        // A blocking FD must fail admission BEFORE starting a lazy reactor.
+        // Otherwise the worker could park on a syscall unexpectedly and
+        // violate the nonparking actor transport contract.
+        NativeEpollReactorManager manager(2);
+        int endpoints[2]{-1, -1};
+        check(::pipe2(endpoints, O_CLOEXEC) == 0);
+        check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+        check(manager.started_threads() == 0);
+        const int flags = ::fcntl(endpoints[0], F_GETFL, 0);
+        check(flags >= 0);
+        check(::fcntl(endpoints[0], F_SETFL, flags | O_NONBLOCK) == 0);
+        auto admitted = manager.try_watch(endpoints[0], EPOLLIN);
+        check(admitted.has_value());
+        check(manager.started_threads() == 1);
+        check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+        manager.stop();
+        ::close(endpoints[0]);
+        ::close(endpoints[1]);
+    }
+    {
         NativeEpollReactorManager manager(3,
             NativeEpollReactorManager::Profile::preallocated_rt, 3);
         check(manager.started_threads() == 3);
