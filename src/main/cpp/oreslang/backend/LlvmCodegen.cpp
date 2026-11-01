@@ -152,6 +152,10 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
+        case Expression::Kind::Cast:
+            // Scalar type pass proved exact identity. Never emit a conversion
+            // or silently reinterpret an unrelated native handle.
+            return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
         case Expression::Kind::SumConstruct: {
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
             const bool option = type.kind == NativeSumType::Kind::Option;
