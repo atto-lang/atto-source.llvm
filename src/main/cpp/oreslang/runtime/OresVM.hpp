@@ -78,10 +78,20 @@ public:
         // Tenant identifiers are host-owned but can originate from customer
         // metadata. Bound their uncharged allocation and reject control bytes
         // before the ID reaches maps, diagnostics, or observability.
+        // Shared tenant-isolate identity grammar, identical to Java, .NET,
+        // Cranelift and Wasmtime: ASCII [A-Za-z0-9_.-]{1,128}, excluding
+        // "." and "..". Never let a future path/namespace broker gain
+        // authority from an identifier admitted only by the native host.
         const bool unsafe_tenant_id = config.tenant_id.empty() ||
-            config.tenant_id.size() > 256 ||
-            std::any_of(config.tenant_id.begin(), config.tenant_id.end(),
-                [](unsigned char c) { return c < 0x20 || c == 0x7f; });
+            config.tenant_id.size() > 128 ||
+            config.tenant_id == "." || config.tenant_id == ".." ||
+            !std::all_of(config.tenant_id.begin(), config.tenant_id.end(),
+                [](unsigned char c) {
+                    return (c >= 'A' && c <= 'Z') ||
+                           (c >= 'a' && c <= 'z') ||
+                           (c >= '0' && c <= '9') ||
+                           c == '_' || c == '.' || c == '-';
+                });
         if (unsafe_tenant_id || config.heap_limit_bytes == 0 ||
             config.max_actors == 0 || config.max_inflight_guest_calls == 0)
             throw std::invalid_argument("isolate requires a bounded ID and positive quotas");
