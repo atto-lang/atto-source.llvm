@@ -23,6 +23,20 @@ using ores::state::Status;
 int main() {
     Region region;
     const size_t before = allocations.load();
+    // Arbitrary enum discriminants must not mint a read loan or release one.
+    const auto forged_mode = static_cast<Mode>(255);
+    CHECK(region.acquire(forged_mode) == Status::invalid_mode);
+    CHECK(region.release(forged_mode) == Status::invalid_mode);
+    CHECK(region.readers == 0 && !region.writer);
+    // The 64-bit write generation must never wrap to a stale ABA value.
+    Region exhausted;
+    CHECK(exhausted.acquire(Mode::write) == Status::ok);
+    exhausted.version = std::numeric_limits<uint64_t>::max();
+    CHECK(exhausted.release(Mode::write) == Status::version_exhausted);
+    CHECK(exhausted.writer);
+    CHECK(exhausted.retire() == Status::busy);
+    CHECK(exhausted.release(forged_mode) == Status::invalid_mode);
+
     CHECK(region.acquire(Mode::read) == Status::ok);
     CHECK(region.acquire(Mode::read) == Status::ok);
     CHECK(region.acquire(Mode::write) == Status::conflicting_access);
