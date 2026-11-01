@@ -102,6 +102,23 @@ int main() {
 
     // A churner may race snapshots. Each attempt is bounded, counts sum to
     // snapshot_members and never creates hidden retries or delivery threads.
+    // Membership validation binds both group incarnation AND membership at
+    // snapshot time. An actor joining later must not retroactively enter an
+    // earlier fanout's recipient list.
+    {
+        Registry later(52, 1, 2);
+        const auto room = later.create_group(8, 2);
+        require(later.register_actor(501, 1) && later.register_actor(502, 1));
+        require(later.join(room, 501, 1));
+        const auto prior = later.snapshot_group_limited(8, 2);
+        require(prior.status == Registry::SnapshotStatus::ok && prior.snapshot);
+        require(later.join(room, 502, 1));
+        const Registry::Member newcomer{502, 1};
+        require(!later.contains_snapshot_member(*prior.snapshot, newcomer));
+        const auto current = later.snapshot_group_limited(8, 2);
+        require(current.snapshot && later.contains_snapshot_member(*current.snapshot, newcomer));
+    }
+
     Registry concurrent(51, 1, 1);
     auto cjoin = concurrent.create_group(1, 4);
     for (std::uint64_t i = 1; i <= 4; ++i) require(concurrent.register_actor(i, 1));
