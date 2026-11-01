@@ -39,6 +39,9 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Verify portable source i64 compiler parity and native exit contracts
+        shell: bash
+        run: bash tests/portable_scalar_v1_native_smoke.sh build/oreslang-llvmc
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
