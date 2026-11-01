@@ -1,4 +1,5 @@
 #include "state_region.hpp"
+#include "state_region_wire_v1.hpp"
 #include <cassert>
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #x); std::abort(); } } while (false)
 #include <cstddef>
@@ -21,6 +22,55 @@ using ores::state::Mode;
 using ores::state::Status;
 
 int main() {
+    using ores::state::wire::Requirement;
+    using ores::state::wire::Provenance;
+    using ores::state::wire::Kind;
+    using ores::state::wire::Action;
+    constexpr std::uint64_t max_id = ores::state::wire::kMaxJsonSafeId;
+    const Provenance borrow{9, 3, 7, 1001, 41, 6, 501,
+                            "inventory.stock", Kind::write, Action::borrow};
+    const Provenance release = borrow.release_record();
+    CHECK(borrow.valid() && borrow.authorizes_release(release));
+    CHECK(!release.authorizes_release(borrow));
+    CHECK(!borrow.authorizes_release(borrow));
+    auto corrupted = release;
+    // Exact field identity must match all canonical negative controls.
+    corrupted.execution_id = 1002; CHECK(!borrow.authorizes_release(corrupted));
+    corrupted = release; corrupted.runtime_domain = 8; CHECK(!borrow.authorizes_release(corrupted));
+    corrupted = release; corrupted.execution_generation = 5; CHECK(!borrow.authorizes_release(corrupted));
+    corrupted = release; corrupted.execution_slot = 42; CHECK(!borrow.authorizes_release(corrupted));
+    corrupted = release; corrupted.region_id = 10; CHECK(!borrow.authorizes_release(corrupted));
+    corrupted = release; corrupted.region_generation = 2; CHECK(!borrow.authorizes_release(corrupted));
+    corrupted = release; corrupted.loan_id = 502; CHECK(!borrow.authorizes_release(corrupted));
+    corrupted = release; corrupted.place = "inventory.reserved"; CHECK(!borrow.authorizes_release(corrupted));
+    corrupted = release; corrupted.kind = Kind::read; CHECK(!borrow.authorizes_release(corrupted));
+
+    const Provenance maximum{max_id, max_id, max_id, max_id, max_id, max_id, max_id,
+                             "inventory.stock", Kind::read, Action::borrow};
+    CHECK(maximum.authorizes_release(maximum.release_record()));
+    corrupted = maximum; corrupted.region_id = max_id + 1; CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.region_generation = max_id + 1; CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.runtime_domain = max_id + 1; CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.execution_id = max_id + 1; CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.execution_slot = max_id + 1; CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.execution_generation = max_id + 1; CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.loan_id = max_id + 1; CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.kind = static_cast<Kind>(255); CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.action = static_cast<Action>(255); CHECK(!corrupted.valid());
+    corrupted = maximum; corrupted.place = " "; CHECK(!corrupted.valid());
+
+    Requirement requirement{"inventory", true, true, 501,
+                            "inventory.stock", Kind::write, Action::borrow};
+    CHECK(requirement.valid());
+    auto requirement_release = requirement;
+    requirement_release.action = Action::release;
+    CHECK(requirement.authorizes_release(requirement_release));
+    requirement_release.generation_fence = false;
+    CHECK(!requirement.authorizes_release(requirement_release));
+    requirement_release = requirement;
+    requirement_release.loan_id = max_id + 1;
+    CHECK(!requirement.authorizes_release(requirement_release));
+    CHECK(!requirement_release.valid());
     Region region;
     const size_t before = allocations.load();
     // Arbitrary enum discriminants must not mint a read loan or release one.
