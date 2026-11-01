@@ -1,5 +1,23 @@
 # Native Oreslang DB POSIX WAL physical sync — stage 1
 
+## Stage 1.9 — maximum-frame/delete recovery oracle
+
+The tracked `native_db_wal_replay_v1_test.cpp` adds a second, independent
+file exercising exactly the same deterministic ODB1 wire corpus as Java:
+tenant 7/generation 4, smallest PUT, maximum 1,118-byte PUT (64-byte key,
+1,024-byte value), and 94-byte DELETE (64-byte key, no value).
+Independently pinned checksum bytes are `42 1d 02 86` for the maximum PUT
+and `23 1f df 0a` for DELETE. All three frames must replay as 1,243
+contiguous bytes, last sequence 3/operation 43. A test loops over all
+1,117 incomplete maximum-frame prefixes, checking accepted read-only
+`incomplete_tail` and unchanged length. Corrupted complete checksum,
+DELETE-with-value and 1,025-byte oversize value must reject and preserve
+bytes. This is an authored host regression, not a simulated power cut, nor
+compiled guest/actor ACK proof. Run the exact-HEAD CTest with steps before
+promoting the draft.
+
+
+
 ## Stage 1.8 — reject malformed truncated WAL headers
 
 The host replay scanner now checks all available magic/version, tenant,
