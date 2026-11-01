@@ -43,6 +43,10 @@ def main():
         ('branch-local-bool', FLAG+'fnc exercise(borrow mut Flag f):bool{if(true eq false){const ready:bool=false;f.set(ready);}else{const ready:bool=true;f.set(ready);}fi return f.read();}pub fnc main():int{let mut Flag f=new Flag();const ready:bool=exercise(rt mut borrow f);if(ready){return 42;}fi return 0;}'),
         ('take-local', 'pub fnc main():int{val original:bool=true;const moved:bool=rt take original;if(moved){return 42;}fi return 0;}'),
     ]
+    # Bind the same exact source bytes used by Java/.NET/Cranelift/Wasm.
+    shared_five_backend = Path(__file__).with_name('scalar-cast-inference-five-backend.ores')
+    positive.append(('five-backend-byte-identical-fixture', shared_five_backend.read_text()))
+
     # These are native Oreslang guest programs, not host-language arithmetic
     # stand-ins. All accepted programs must emit IR, link and exit 42.
     positive.extend([
