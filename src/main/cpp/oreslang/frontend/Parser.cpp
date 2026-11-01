@@ -2445,7 +2445,7 @@ private:
                 statement.branch_local = std::move(local); return statement;
             }
             auto type_name = [&]() -> std::string {
-                for (const auto* scalar : {"int", "bool", "string", "String"})
+                for (const auto* scalar : {"int", "bool", "f64", "string", "String"})
                     if (accept(scalar)) return scalar;
                 return type_identifier();
             };
@@ -2453,9 +2453,9 @@ private:
             if (accept(":")) { local->name = first; type = type_name(); }
             else { type = first; local->name = identifier(); }
             if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
-            if (type == "f64") fail("native branch-local f64 storage requires scoped double lowering; unsupported");
             if (type == "Array") fail("ordered owning local requires scoped region/drop lowering");
             if (type == "int") local->scalar_type = ScalarType::I64;
+            else if (type == "f64") local->scalar_type = ScalarType::F64;
             else if (type == "bool") local->scalar_type = ScalarType::Bool;
             else if (type == "String" || type == "string") local->scalar_type = ScalarType::String;
             else if (scalar_alias_targets_.count(type)) local->pending_type_alias = type;
