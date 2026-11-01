@@ -116,10 +116,10 @@ fn main() {
         // Compiler-owned capability denial, not an accepted state container.
         // The same code cannot be certified by parser-only denial once a real
         // typed implementation and positive guest execution are available.
-        ("injected-owned-container", "@Inject(MutableStateContainer())\\ndefine class Foo as\\nstate {}\\nend\\n", "STATE_INJECTION_UNSUPPORTED"),
-        ("state-backed-shared-container", "@StateBacked(MutableStateContainer(scope = #shared))\\ndefine class Foo as\\nstate {}\\nend\\n", "STATE_INJECTION_UNSUPPORTED"),
-        ("state-container-decorator", "@MutableStateContainer()\\ndefine class Foo as\\nend\\n", "STATE_INJECTION_UNSUPPORTED"),
-        ("existing-provider-injection", "@Inject(SessionState)\\ndefine class Manager as\\nend\\n", "STATE_INJECTION_UNSUPPORTED"),
+        ("injected-owned-container", "@Inject(MutableStateContainer())\ndefine class Foo as\nstate {}\nend\n", "STATE_INJECTION_UNSUPPORTED"),
+        ("state-backed-shared-container", "@StateBacked(MutableStateContainer(scope = #shared))\ndefine class Foo as\nstate {}\nend\n", "STATE_INJECTION_UNSUPPORTED"),
+        ("state-container-decorator", "@MutableStateContainer()\ndefine class Foo as\nend\n", "STATE_INJECTION_UNSUPPORTED"),
+        ("existing-provider-injection", "@Inject(SessionState)\ndefine class Manager as\nend\n", "STATE_INJECTION_UNSUPPORTED"),
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
