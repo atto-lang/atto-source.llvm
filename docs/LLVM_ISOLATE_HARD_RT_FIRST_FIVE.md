@@ -217,3 +217,41 @@ hard-real-time lock-free path. `close()` uses standard C++ mutexes and
 does not prevent an uncooperative physical actor from retaining memory.
 Security admission still needs an authenticated broker; full isolation
 needs verified process/OS boundaries and explicit lifecycle integration.
+
+## Next host integration gate: actual NativeOresVM DATA/CONTROL callbacks
+
+This PR now stages a **native scheduler-linked integration fixture** (as
+opposed to previous stand-alone C++ tenant-registry tests):
+
+- `tests/native_tenant_vm_callback_bridge_test.cpp` links the existing
+  `NativeOresVM.c`, `NativeActorScheduler.c`, and
+  `NativeActorFuture.c` via a new CTest executable and an independent
+  source-local GitHub Actions GCC/Clang `-O0/-O2` compile/run step.
+- A blocked actor on the MAIN scheduler holds a tenant-private physical
+  memory lease. The host requests tenant STOP and verifies no premature
+  finish/recycle or admission of a second turn.
+- A second actor in the **same real scheduler domain** completes DATA and
+  receives a separate CONTROL callback on a different carrier while the
+  first actor remains blocked; its memory belongs to another tenant.
+- Following release of the pinned first callback, finalization zeroes the
+  original tenant's bytes before issuing a higher-generation handle for the
+  same slot. The old handle remains invalid.
+- A second real callback is held across the registry-wide `close()`
+  transition, which revokes its subsequent reads/writes without forcing
+  its C carrier to exit. The host retires and closes NativeOresVM **before**
+  destroying the tenant registry and callback context.
+- The fixture also rejects a foreign-domain ActorRef and checks that the
+  UNTRUSTED scheduler domain still reports **no hard security boundary**.
+
+**Evidence pending:** this is new compiled code and a runnable CTest/workflow
+fixture, but no trusted, stepful **exact-head GitHub Actions execution** has
+yet validated its actual C scheduler linkage or behavior. Do not report
+"tested native VM callback integration" until the compiler, linker,
+run exit status, and actual job steps are present. The earlier 28/28
+standalone host matrix and sanitizer results apply to the previous suite,
+not to this newly added integration executable.
+
+**Boundary:** host-supplied callbacks and tenant registry handles are NOT
+native compiled Oreslang guest actor state, authenticated tenant ingress,
+a process sandbox, a complete supervisor typed-failure CONTROL contract,
+a zero-GC linked guest binary, or hard-real-time WCET evidence.

@@ -11,6 +11,11 @@ on:
       - 'tests/native_tenant_secure_retirement_test.cpp'
       - 'tests/native_tenant_stop_interleaving_test.cpp'
       - 'tests/native_tenant_concurrent_close_test.cpp'
+      - 'tests/native_tenant_vm_callback_bridge_test.cpp'
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVM.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorFuture.c'
       - 'docs/LLVM_ISOLATE_HARD_RT_FIRST_FIVE.md'
       - 'tests/native_tenant_rt_denial_matrix_test.cpp'
       - '.github/workflows/native-tenant-isolate-rt-host.yml'
@@ -40,6 +45,32 @@ jobs:
               done
             done
           done
+      - name: NativeOresVM DATA and CONTROL callback tenant bridge (host only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for cc in gcc clang; do
+            if [ "$cc" = gcc ]; then cxx=g++; else cxx=clang++; fi
+            for opt in -O0 -O2; do
+              build="$(mktemp -d)"
+              trap 'rm -rf "$build"' EXIT
+              for source in NativeActorScheduler NativeActorFuture NativeOresVM; do
+                "$cc" -std=c11 "$opt" -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+                  -pthread -I src/main/cpp \
+                  -c "src/main/cpp/oreslang/runtime/${source}.c" \
+                  -o "$build/${source}.o"
+              done
+              "$cxx" -std=c++17 "$opt" -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+                -pthread -I src/main/cpp \
+                tests/native_tenant_vm_callback_bridge_test.cpp \
+                "$build/NativeActorScheduler.o" "$build/NativeActorFuture.o" \
+                "$build/NativeOresVM.o" -o "$build/bridge"
+              timeout 30s "$build/bridge"
+              rm -rf "$build"
+              trap - EXIT
+            done
+          done
+          echo 'HOST NATIVE VM CALLBACKS ONLY: no native .ores guest or OS tenant sandbox.'
       - name: GCC ASan and UBSan with repeated interleavings
         shell: bash
         run: |
