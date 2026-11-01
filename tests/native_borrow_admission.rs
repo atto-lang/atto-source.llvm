@@ -190,6 +190,28 @@ mod tests {
         assert_rejected_fake_compiler("printf 'bad ownership\n' >&2\nexit 0");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_wrong_diagnostic() {
+        assert_rejected_fake_compiler("printf 'unrelated diagnostic\n' >&2\nexit 2");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_source_rewrite() {
+        assert_rejected_fake_compiler(
+            "printf 'mutated source\n' > input.ores\nprintf 'bad ownership\n' >&2\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_source_replacement_with_symlink() {
+        assert_rejected_fake_compiler(
+            "rm input.ores\nln -s /dev/null input.ores\nprintf 'bad ownership\n' >&2\nexit 2",
+        );
+    }
+
     #[test]
     fn definition_predicate_requires_actual_function_line() {
         for output in [
