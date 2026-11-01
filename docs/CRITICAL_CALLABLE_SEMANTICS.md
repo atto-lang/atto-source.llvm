@@ -1,5 +1,15 @@
 # `critical`: callable exclusion and actor scheduling
 
+> **Superseded target contract (2026-11-01):** The v1 language decision in
+> `oreslang-common-source/docs/CRITICAL_SUSPENDS_V1.md` prohibits combined
+> `critical suspends` declarations and any suspension inside a critical body.
+> Entering a critical block may park the requesting continuation; once admitted,
+> its body is non-suspending. Actor-level non-reentrant execution reservations
+> remain separate from critical guards. The older suspend-critical examples and
+> the ticket-across-await descriptions below are **historical design notes**,
+> not the canonical language contract or evidence of native guest support.
+> Native LLVM currently fails closed on source critical and suspends lowering.
+
 Status (October 10, 2026): Java feature branch has executable file/instance
 critical gates; LLVM has a native FIFO ticket substrate but **must fail closed**
 on source critical declarations until its actor/compiler lowering exists. Do not
