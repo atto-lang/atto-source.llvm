@@ -508,7 +508,19 @@ int main() {
         auto peer_watch = manager.try_watch(accepted, EPOLLIN);
         check(peer_watch.has_value());
         check(!manager.try_watch(alias, EPOLLIN).has_value());
-        check(::write(accepted, "xy", 2) == 2);
+        const char response[2]{'x', 'y'};
+        std::size_t sent = 0;
+        const auto send_deadline = std::chrono::steady_clock::now()
+                                 + std::chrono::seconds(3);
+        while (sent < 2 && std::chrono::steady_clock::now() < send_deadline) {
+            const auto n = ::write(accepted, response + sent, 2 - sent);
+            if (n > 0) sent += static_cast<std::size_t>(n);
+            else if (n < 0 && (errno == EINTR || errno == EAGAIN
+                               || errno == EWOULDBLOCK))
+                std::this_thread::yield();
+            else break;
+        }
+        check(sent == 2);
         std::optional<NativeEpollReactorManager::Completion> completed;
         const auto deadline = std::chrono::steady_clock::now()
                             + std::chrono::seconds(3);
@@ -523,8 +535,20 @@ int main() {
         // bookkeeping release this claim. A FUTURE actor-owner ACK fence
         // must be layered on top; it is not implemented by this manager.
         char payload[2]{};
-        check(::read(client, payload, 2) == 2);
-        check(payload[0] == 'x' && payload[1] == 'y');
+        std::size_t received = 0;
+        const auto read_deadline = std::chrono::steady_clock::now()
+                                 + std::chrono::seconds(3);
+        // TCP has no message-sized reads: tolerate a partial/fragmented
+        // transfer and never infer a two-byte frame from one syscall.
+        while (received < 2 && std::chrono::steady_clock::now() < read_deadline) {
+            const auto n = ::read(client, payload + received, 2 - received);
+            if (n > 0) received += static_cast<std::size_t>(n);
+            else if (n < 0 && (errno == EINTR || errno == EAGAIN
+                               || errno == EWOULDBLOCK))
+                std::this_thread::yield();
+            else break;
+        }
+        check(received == 2 && payload[0] == 'x' && payload[1] == 'y');
         std::optional<NativeEpollReactorManager::Watch> reacquired;
         for (int retry = 0; retry < 2000 && !reacquired; ++retry) {
             reacquired = manager.try_watch(alias, EPOLLIN);
