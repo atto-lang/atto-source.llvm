@@ -2141,9 +2141,23 @@ private:
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
-                const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
+            const bool immutable_scalar_type_first =
+                (token_.text == "int" || token_.text == "bool" ||
+                 token_.text == "string") &&
+                sum_first.kind == Kind::Identifier;
+            if (immutable_scalar_type_first ||
+                ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                 (sum_first.text == "int" || sum_first.text == "bool" ||
+                  sum_first.text == "String" || sum_first.text == "string"))) {
+                // 'int x = expr' is an immutable, non-rebindable scalar
+                // binding. It shares the existing readonly scalar lowering,
+                // not let/val's writable ownership permissions. This v1
+                // slice deliberately excludes nominal/generic declaration
+                // lookahead and disallows inferred mutable aliases.
+                const std::string mode = immutable_scalar_type_first
+                    ? "const" : token_.text;
+                if (!immutable_scalar_type_first) advance();
+                if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
