@@ -103,6 +103,56 @@ int main() {
         (void)observedHandoff;
     }
 
+    // Immediate try critical never registers a waiting ticket or waits
+    // for another guest body to finish. Its result is scoped and unique.
+    {
+        CriticalGate try_gate;
+        auto immediate = try_gate.try_request();
+        check(immediate.has_value(), "uncontended try critical failed");
+        check(try_gate.holds(*immediate), "try critical lacks ownership");
+        check(!try_gate.try_request(), "contended try critical was admitted");
+        check(try_gate.waiting() == 0, "try critical silently queued a waiter");
+        const auto waiting = try_gate.request();
+        check(waiting.admission == Admission::queued, "ordinary critical did not queue");
+        check(!try_gate.try_request(), "try critical jumped FIFO queue");
+        check(try_gate.release(*immediate) == waiting.token, "try path did not hand off");
+        check(try_gate.holds(waiting.token), "queued ticket not handed off");
+        check(!try_gate.release(waiting.token), "unexpected additional queued ticket");
+        auto next = try_gate.try_request();
+        check(next.has_value() && *next != *immediate, "try ticket reused");
+        check(!try_gate.release(*immediate), "old try ticket released new owner");
+        check(try_gate.holds(*next), "old ticket stole new try owner");
+        (void)try_gate.release(*next);
+    }
+
+    // Retirement fences the *next* admission for old actor generations.
+    // The scheduler must physically quiesce a running body before retiring.
+    {
+        CriticalGate old_generation;
+        const auto held = old_generation.request();
+        const auto queued = old_generation.request();
+        check(old_generation.waiting() == 1, "retirement setup failed");
+        old_generation.retire();
+        check(old_generation.retired(), "critical gate did not retire");
+        check(old_generation.waiting() == 0, "retirement leaked queued ticket");
+        check(!old_generation.holds(held.token), "retired actor still owns gate");
+        check(!old_generation.holds(queued.token), "retired queued ticket admitted");
+        check(!old_generation.release(held.token), "retired owner released a successor");
+        check(!old_generation.release(queued.token), "retired waiter released a successor");
+        check(!old_generation.try_request(), "retired try critical was admitted");
+        bool rejected = false;
+        try { (void)old_generation.request(); }
+        catch (const std::logic_error&) { rejected = true; }
+        check(rejected, "retired gate accepted new invocation");
+        old_generation.retire();
+        CriticalGate replacement;
+        const auto fresh_generation = replacement.request();
+        check(fresh_generation.admission == Admission::acquired,
+              "fresh generation cannot acquire a distinct critical gate");
+        check(!replacement.holds(held.token), "stale generation held replacement gate");
+        (void)replacement.release(fresh_generation.token);
+    }
+
     (void)first.release(fresh.token);
     (void)second.release(independent.token);
     return 0;
