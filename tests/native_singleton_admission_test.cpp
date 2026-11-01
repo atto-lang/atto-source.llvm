@@ -28,6 +28,10 @@ int main() {
     // Identical Oreslang source bytes as the shared state-container candidates.
     // A parser that merely chokes on @Inject after singleton is not sufficient:
     // ORES-SINGLETON-UNSUPPORTED must be raised before body or trait lowering.
+    denied("define singleton StateBank with Stateful<BankState> as\n"
+           "    @Inject\n"
+           "    state: MutableStateContainer<BankState>\n"
+           "end\n");
     denied("define singleton StateBank implements Stateful<BankState> as\n"
            "    @Inject\n"
            "    state: MutableStateContainer<BankState>\n"
