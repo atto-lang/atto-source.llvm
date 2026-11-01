@@ -44,5 +44,5 @@ jobs:
       - name: Build native actor, continuation and source-compiled Oreslang tests
         run: |
           cmake -S . -B build-locality -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR="$(llvm-config --cmakedir)"
-          cmake --build build-locality --target oreslang-llvmc oreslang-source-task-i64-e2e-build oreslang-native-actor-ready-queue-test oreslang-native-continuation-wake-escrow-test oreslang-native-continuation-ready-resume-test -j2
-          ctest --test-dir build-locality --output-on-failure -R 'native_actor_nonblocking_ready_queue|native_continuation_wake_escrow_stop_cancel_aba|native_continuation_ready_cancel_resume_race|native_source_task_i64_compiled_execution'
+          cmake --build build-locality --target oreslang-llvmc oreslang-source-task-i64-e2e-build oreslang-native-actor-ready-queue-test oreslang-native-continuation-wake-escrow-test oreslang-native-continuation-ready-resume-test oreslang-source-actor-await-trace-runtime-test -j2
+          ctest --test-dir build-locality --output-on-failure -R 'native_actor_nonblocking_ready_queue|native_continuation_wake_escrow_stop_cancel_aba|native_continuation_ready_cancel_resume_race|native_source_task_i64_compiled_execution|source_actor_await_trace_runtime|source_actor_compiled_native_lifecycle'
