@@ -51,10 +51,13 @@ static std::string base64(std::string_view encoded) {
   }
   if(pad>2)throw std::runtime_error("bad base64 padding count");
   // Roundtrip ensures canonical encoding, including zero trailing pad bits.
-  std::string recoded(4*((out.size()+2)/3),'=');
+  const size_t encoded_length=4*((out.size()+2)/3);
+  // EVP_EncodeBlock also writes a trailing NUL: reserve that extra byte.
+  std::string recoded(encoded_length+1,'\0');
   if(!out.empty()&&EVP_EncodeBlock(reinterpret_cast<unsigned char*>(recoded.data()),
       reinterpret_cast<const unsigned char*>(out.data()),static_cast<int>(out.size()))<0)
     throw std::runtime_error("base64 encode failed");
+  recoded.resize(encoded_length);
   if(recoded!=encoded)throw std::runtime_error("noncanonical base64");
   validate_utf8(out);
   return out;
