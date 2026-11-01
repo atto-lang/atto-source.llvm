@@ -322,6 +322,39 @@
         "llvm": "required",
         "graal": "required"
       }
+    },
+    {
+      "id": "native.oresllm-min-max-cancel",
+      "feature": "numeric.oresllm-min-max-cancel",
+      "source": "fixtures/oresllm-min-max-cancel.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-near-square",
+      "feature": "numeric.oresllm-near-square",
+      "source": "fixtures/oresllm-near-square.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-over53-cancel",
+      "feature": "numeric.oresllm-over53-cancel",
+      "source": "fixtures/oresllm-over53-cancel.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
     }
   ]
 }
