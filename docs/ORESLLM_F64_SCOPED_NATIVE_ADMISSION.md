@@ -7,7 +7,7 @@ This change is stacked on draft [LLVM PR #1236](https://github.com/ores-truffle-
 - Admit explicit `val f64`, `const f64` and `let f64` in synchronous ordered/conditional source scopes, preserving strict no-implicit-int-coercion checks.
 - Allocate conditional-scoped F64 locals as native LLVM `double` slots, not i64 slots, preserving the existing lexical lifetime start/end and branch cleanup. Reject a non-double initializer before publishing the local slot.
 - Refuse a `ScalarType::F64` field read in LLVM codegen until the typed double struct-field ABI and borrow provenance are proved; do **not** allow a default `i64` field load to reinterpret double bits.
-- Keep F64 parameters/returns, class fields, arrays, async/suspension, owned tensors, actor mailbox transport and full FP exception semantics fail-closed. This patch does not relax those boundaries.
+- F64 parameters/returns are now admitted only for the restricted pure synchronous scalar ABI described below; class fields, arrays, async/suspension, owned tensors, actor mailbox transport and full FP exception semantics remain fail-closed.
 
 ## Typed f64 function ABI follow-up (unverified)
 
@@ -38,7 +38,7 @@ all requiring the actual compiled `oreslang-llvmc`, IR verification, Clang
 linking, native exit results and expected no-IR compiler rejections.
 
 ## Real native acceptance, required but not observed
-The existing `native_f64_scalar_e2e` CTest builds real `oreslang-llvmc`, compiles native guest source into LLVM IR, links with Clang and executes the binary. This branch extends it from 14 to **28 positive native-exit-42 guests** and from 12 to **13 negative no-IR source-rejection guests**. Three new positive tests exercise branch-scoped F64, else branch lifetime and mutable branch F64 updates. New negative checks reject implicit int-to-F64 branch initializer and assigning int to `let f64` in a branch. The integer baseline and all prior IEEE, signed-zero, NaN and infinity tests remain.
+The existing `native_f64_scalar_e2e` CTest builds real `oreslang-llvmc`, compiles native guest source into LLVM IR, links with Clang and executes the binary. This branch extends it from 14 to **28 positive native-exit-42 guests** and from 12 to **19 negative no-IR source-rejection guests**. Three new positive tests exercise branch-scoped F64, else branch lifetime and mutable branch F64 updates. New negative checks reject implicit int-to-F64 branch initializer and assigning int to `let f64` in a branch. The integer baseline and all prior IEEE, signed-zero, NaN and infinity tests remain.
 
 Required observations: exact private source Git tree and test file SHA, compiler process exit 0, nonempty valid LLVM IR, real executable exit 42 and empty stdout/stderr for each positive, compiler process **exit 1**, expected diagnostic and zero IR for each negative. Run LLVM verifier and sanitizers, then independent numerical comparisons. GitHub Actions `steps=[]` means runner admission failure, **not** an observed CTest failure or pass.
 
@@ -58,9 +58,9 @@ must compile as Oreslang -> LLVM IR -> Clang-linked native binary and return
 native exit status 42; the host-side mathematical identity is not a guest pass.
 They do not call Autograd, construct Tensor2 or execute a 20-step optimizer.
 
-The count is now **28 positive / 19 negative**. A compiler rejecting FP64
-parameters/returns/class fields remains correct for this narrow slice, but
-those explicit limitations prevent any claim of complete OresLLM execution.
+The count is now **28 positive / 19 negative**. A compiler rejecting FP64 class fields, owned arrays, tensor transport and
+actor/suspension interfaces remains correct for this narrow slice; these
+limitations prevent any claim of complete OresLLM execution.
 
 ## Confidentiality
 Source remains in its originating private `ores-truffle-oreslang/oreslang-source.llvm` repository. No cross-organization compiler export/mirror is allowed until independent resolution/authorization under [platform security issue #22](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22). PR reviews, runner execution, confidentiality clearance and merge approval are independent gates.
