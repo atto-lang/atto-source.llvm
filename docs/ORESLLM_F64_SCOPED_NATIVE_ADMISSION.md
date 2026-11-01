@@ -3,9 +3,10 @@
 This change is stacked on draft [LLVM PR #1236](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1236) and is **NOT** a verified native compiler pass, OresLLM training implementation, or backend parity certificate. Never merge this stack ahead of the independently verified base.
 
 ## Implementation
-- Retain the **resolved** `ScalarType::F64` in native scalar variable AST nodes. Previously `validate_scalar_expression` returned the resolved type but left `expr.resolved_type` at its default `I64`; `LlvmCodegen::lower` chooses the load type from that field. Leaving an F64 lexical variable marked I64 could turn a `double` slot into an incorrect i64 load at lowering.
+- Retain the **resolved** `ScalarType::F64` in native scalar variable and field AST nodes. Previously `validate_scalar_expression` returned the resolved type but left `expr.resolved_type` at its default `I64`; `LlvmCodegen::lower` chooses the load type from that field. Leaving an F64 lexical variable marked I64 could turn a `double` slot into an incorrect i64 load at lowering.
 - Admit explicit `val f64`, `const f64` and `let f64` in synchronous ordered/conditional source scopes, preserving strict no-implicit-int-coercion checks.
 - Allocate conditional-scoped F64 locals as native LLVM `double` slots, not i64 slots, preserving the existing lexical lifetime start/end and branch cleanup. Reject a non-double initializer before publishing the local slot.
+- Refuse a `ScalarType::F64` field read in LLVM codegen until the typed double struct-field ABI and borrow provenance are proved; do **not** allow a default `i64` field load to reinterpret double bits.
 - Keep F64 parameters/returns, class fields, arrays, async/suspension, owned tensors, actor mailbox transport and full FP exception semantics fail-closed. This patch does not relax those boundaries.
 
 ## Real native acceptance, required but not observed
