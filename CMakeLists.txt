@@ -384,13 +384,12 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
-    # Source-executable Java-style signed integer remainder subset:
-    # nonzero positive/negative i64 literals only. MIN % -1 is lowered
-    # without LLVM srem poison; dynamic/zero divisors still fail closed.
-    add_test(NAME native_java_signed_remainder_source_parity
-        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" native-remainder-parity
+    # Removed source operators must fail before IR; a real Clang-linked
+    # scalar guest proves the rejection suite did not disable compilation.
+    add_test(NAME native_removed_operators_source_gate
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" native-removed-operators
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
-    set_tests_properties(native_java_signed_remainder_source_parity
+    set_tests_properties(native_removed_operators_source_gate
         PROPERTIES TIMEOUT 120)
     # Exact source alias-extension proof: compiler-owned static receiver dispatch,
     # LLVM IR emission, Clang link and native process execution.
@@ -1085,13 +1084,13 @@ if(BUILD_TESTING)
         --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
 
     # Java '/' produces a float even for int/int. Until native float lowering
-    # exists, reject '/' and '%' before IR rather than silently emitting i64.
+    # exists, reject division before float IR and removed '%' at lexing.
     oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
         --diagnostic "native floating division unsupported")
     oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
         --diagnostic "native floating division unsupported")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
-        --diagnostic "native remainder requires a nonzero signed integer literal divisor")
+        --diagnostic "removed Oreslang operator")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
