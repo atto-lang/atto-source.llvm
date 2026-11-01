@@ -764,6 +764,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
+    if (main_it != source.functions.end() &&
+            (main_it->return_type == ScalarType::F64 ||
+                std::any_of(main_it->parameters.begin(), main_it->parameters.end(),
+                    [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
+        throw std::runtime_error("native main does not admit f64 process ABI");
     bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
@@ -1070,6 +1075,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     std::unordered_map<std::string, std::vector<std::size_t>> class_array_parameters;
     std::unordered_map<std::string, bool> owning_results;
     for (const auto& source_class : source.classes) {
+        for (const auto& field : source_class.fields)
+            if (field.scalar_type == ScalarType::F64)
+                throw std::runtime_error("native f64 class field requires typed struct layout and borrow proof");
         const auto& cls = flat_classes.at(source_class.name);
         record_classes.emplace(cls.name, &cls);
         record_schemas.emplace(cls.name, record_schemas.size() + 1);
@@ -1099,6 +1107,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // internal ABI parameter list and lookup count unchanged.
         const std::size_t source_arity = native_source_value_arity(
             fn.parameters.size(), !fn.method_owner.empty());
+        if (fn.return_type == ScalarType::F64 &&
+                (fn.returns_void || !fn.return_class.empty() || !fn.return_sum.empty()))
+            throw std::runtime_error("native f64 return cannot share an aggregate or void ABI");
         const std::string symbol = family_sizes.at(fn.name) > 1
             ? native_function_slot(base_symbol, source_arity)
             : base_symbol;
