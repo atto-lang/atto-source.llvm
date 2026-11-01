@@ -1451,6 +1451,12 @@ if(BUILD_TESTING)
             source-actor-${hierarchy_case}-unsupported.ores
             --diagnostic "native actor extends/implements requires actor inheritance, trait/interface dispatch and sealed-state lowering; unsupported")
     endforeach()
+    # Exact canonical lifecycle source is a positive Java guest candidate,
+    # but the native bootstrap cannot lower ActorMail<T>, outputs or
+    # receive(ActorMail<T>). The rejection must return no LLVM IR.
+    oreslang_contract_test(native_actor_canonical_lifecycle_unsupported
+        source-actor-lifecycle-canonical-unsupported.ores
+        --diagnostic "native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported")
     # Optional instance method marker: fnc, method, and no marker all lower
     # to the same native supported on_message(int) handler.
     oreslang_contract_test(native_actor_explicit_method source-actor-method-keyword.ores
