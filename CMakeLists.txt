@@ -2097,6 +2097,17 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
+    # Native host substrate test: immediate try-critical never queues or
+    # bypasses a FIFO waiter. Not source-level Oreslang guest execution.
+    add_executable(oreslang-critical-try-admission-test tests/critical_try_admission_test.cpp)
+    target_include_directories(oreslang-critical-try-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-critical-try-admission-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-critical-try-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_logical_try_critical_fifo
+        COMMAND oreslang-critical-try-admission-test)
+    set_tests_properties(native_logical_try_critical_fifo PROPERTIES TIMEOUT 30)
     add_executable(oreslang-function-effects-test tests/function_effects_test.cpp)
     target_include_directories(oreslang-function-effects-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
