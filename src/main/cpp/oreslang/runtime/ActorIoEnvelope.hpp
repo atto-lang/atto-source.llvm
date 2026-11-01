@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -91,17 +92,35 @@ private:
     std::size_t count_ = 0;
 };
 
+template <std::size_t MaxTextBytes>
+struct ActorIoTextPair final {
+    std::array<char, MaxTextBytes> first{};
+    std::array<char, MaxTextBytes> second{};
+    std::size_t first_length = 0;
+    std::size_t second_length = 0;
+
+    std::string_view first_view() const noexcept {
+        return std::string_view(first.data(), first_length);
+    }
+
+    std::string_view second_view() const noexcept {
+        return std::string_view(second.data(), second_length);
+    }
+
+    void clear() noexcept {
+        std::fill(first.begin(), first.end(), '\0');
+        std::fill(second.begin(), second.end(), '\0');
+        first_length = 0;
+        second_length = 0;
+    }
+};
+
 template <std::size_t MaxRecords, std::size_t MaxTextBytes>
 class ActorIoPairQueue final {
     static_assert(MaxRecords > 0, "actor I/O pair capacity must be positive");
     static_assert(MaxTextBytes > 0, "actor I/O text capacity must be positive");
 
-    struct Slot final {
-        std::array<char, MaxTextBytes> first{};
-        std::array<char, MaxTextBytes> second{};
-        std::size_t first_length = 0;
-        std::size_t second_length = 0;
-    };
+    using Record = ActorIoTextPair<MaxTextBytes>;
 
 public:
     bool try_push(std::string_view first, std::string_view second) noexcept {
@@ -109,8 +128,8 @@ public:
             first.size() > MaxTextBytes ||
             second.size() > MaxTextBytes)
             return false;
-        Slot& slot = slots_[tail_];
-        reset(slot);
+        Record& slot = slots_[tail_];
+        slot.clear();
         std::copy(first.begin(), first.end(), slot.first.begin());
         std::copy(second.begin(), second.end(), slot.second.begin());
         slot.first_length = first.size();
@@ -120,34 +139,28 @@ public:
         return true;
     }
 
-    bool try_pop(std::string_view& first, std::string_view& second) noexcept {
-        if (count_ == 0) return false;
-        Slot& slot = slots_[head_];
-        first = std::string_view(slot.first.data(), slot.first_length);
-        second = std::string_view(slot.second.data(), slot.second_length);
-        // Views remain valid until the next mutation of this queue. The caller
-        // must consume/copy them before another pop/push/clear/restart.
+    bool try_pop(Record& out) noexcept {
+        if (count_ == 0) {
+            out.clear();
+            return false;
+        }
+        Record& slot = slots_[head_];
+        out = slot;
+        slot.clear();
         head_ = (head_ + 1) % MaxRecords;
         --count_;
         return true;
     }
 
     void clear() noexcept {
-        for (auto& slot : slots_) reset(slot);
+        for (auto& slot : slots_) slot.clear();
         head_ = 0;
         tail_ = 0;
         count_ = 0;
     }
 
 private:
-    static void reset(Slot& slot) noexcept {
-        std::fill(slot.first.begin(), slot.first.end(), '\0');
-        std::fill(slot.second.begin(), slot.second.end(), '\0');
-        slot.first_length = 0;
-        slot.second_length = 0;
-    }
-
-    std::array<Slot, MaxRecords> slots_{};
+    std::array<Record, MaxRecords> slots_{};
     std::size_t head_ = 0;
     std::size_t tail_ = 0;
     std::size_t count_ = 0;
@@ -215,10 +228,9 @@ public:
     }
 
     bool try_read_error(const ActorIoAuthority& authority,
-                        std::string_view& code,
-                        std::string_view& message) {
+                        ActorIoTextPair<MaxTextBytes>& diagnostic) {
         require(authority);
-        return errors_.try_pop(code, message);
+        return errors_.try_pop(diagnostic);
     }
 
     bool try_emit_event(const ActorIoAuthority& authority,
@@ -229,10 +241,9 @@ public:
     }
 
     bool try_read_event(const ActorIoAuthority& authority,
-                        std::string_view& kind,
-                        std::string_view& payload) {
+                        ActorIoTextPair<MaxTextBytes>& event) {
         require(authority);
-        return events_.try_pop(kind, payload);
+        return events_.try_pop(event);
     }
 
     std::uint64_t metadata_version(const ActorIoAuthority& authority) const {
@@ -268,7 +279,7 @@ public:
             slot.value_length = value.size();
             slot.used = true;
         }
-        if (metadata_version_ == UINT64_MAX)
+        if (metadata_version_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor I/O metadata version exhausted");
         clear_metadata();
         metadata_ = replacement;
