@@ -250,6 +250,17 @@ public:
                 return {Kind::Symbol, source_.substr(start, 2), start};
             }
         }
+        // Annotated private mutable state is not yet emitted by native HIR/MIR.
+        // Fail early with a dedicated diagnostic; never discard @Inject as
+        // inert metadata or accidentally execute unsynchronized shared state.
+        if (ch == '@' && source_.substr(start, 7) == "@Inject"
+            && (start + 7 == source_.size()
+                || !identifier_part(source_[start + 7]))) {
+            throw std::runtime_error("native @Inject state-container lowering requires "
+                                     "verified private regions, scoped borrowing and "
+                                     "runtime guard admission; unsupported"
+                                     " at byte " + std::to_string(start));
+        }
         if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
             throw std::runtime_error("native @DefaultArgVals declaration requires "
                                      "checked named defaults, ownership and ABI lowering at byte "
