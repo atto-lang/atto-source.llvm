@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -35,6 +37,15 @@ public:
     struct ReadResult { Status status; std::uint64_t value; };
     struct VersionedRead { Status status; std::uint64_t value; std::uint64_t version; };
     struct Handle { std::uint64_t incarnation; };
+    // An opaque trusted-runtime receipt for an owner-death handoff.
+    // Numeric fields are identity/fencing, NOT guest authentication grants.
+    struct HeirReceipt {
+        Handle table;
+        Principal deceased_owner;
+        Principal successor;
+        std::uint64_t table_epoch;
+        std::uint64_t receipt_nonce;
+    };
 
     NativeEtsScalarSet(Principal owner, Protection protection, std::size_t capacity)
         : owner_(owner), protection_(protection),
@@ -45,6 +56,61 @@ public:
     NativeEtsScalarSet& operator=(const NativeEtsScalarSet&) = delete;
     Handle handle() const noexcept { return Handle{incarnation_}; }
     std::size_t capacity() const noexcept { return slots_.size(); }
+
+    std::uint64_t table_epoch() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return table_epoch_;
+    }
+
+    // Trusted supervisor only: the actor's physical death and successor's
+    // live registration must be independently authenticated by the OresVM.
+    // The table is fenced immediately; neither old owner nor heir nor PUBLIC
+    // peers may read/write until the single-use receipt is acknowledged.
+    // No guest-supplied principal or nonce grants ownership.
+    std::optional<HeirReceipt> retire_owner_with_heir(
+            Principal deceased, Principal heir) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!live_ || handoff_ || !(deceased == owner_)
+            || !heir.valid() || heir == deceased
+            || heir.runtime != owner_.runtime || heir.isolate != owner_.isolate
+            || table_epoch_ == std::numeric_limits<std::uint64_t>::max()
+            || revoked_count_ == revoked_.size())
+            return std::nullopt;
+        for (std::size_t n = 0; n < revoked_count_; ++n)
+            if (heir == revoked_[n]) return std::nullopt;
+        // No user callback or memory allocation occurs while the lock is held.
+        const HeirReceipt ticket{
+            Handle{incarnation_}, deceased, heir,
+            table_epoch_ + 1, next_incarnation()
+        };
+        handoff_ = ticket;
+        return ticket;
+    }
+
+    // Trusted CONTROL ACK: the owner is swapped only after the externally
+    // authenticated successor is ready. No dual-writer interval exists.
+    bool acknowledge_heir(HeirReceipt receipt, Principal verified_heir) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!live_ || !handoff_ || !(verified_heir == handoff_->successor)
+            || !receipt_matches(receipt, *handoff_))
+            return false;
+        revoked_[revoked_count_++] = owner_;
+        owner_ = verified_heir;
+        table_epoch_ = handoff_->table_epoch;
+        handoff_.reset();
+        return true;
+    }
+
+    // A failed/expired handoff must close the table, not reopen deceased-owner
+    // DATA or accidentally grant the heir a write lease.
+    bool abandon_heir(HeirReceipt receipt) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!handoff_ || !receipt_matches(receipt, *handoff_)) return false;
+        handoff_.reset();
+        live_ = false;
+        for (auto& slot : slots_) slot = Slot{};
+        return true;
+    }
 
     // The caller-provided Principal is a trusted runtime assertion, NOT a
     // security token. Never expose these methods to an untrusted guest directly.
@@ -155,7 +221,7 @@ public:
     // retirement path before claiming owner-linked ETS cleanup.
     bool retire_owner(Principal owner) {
         std::lock_guard<std::mutex> lock(mu_);
-        if (!(owner == owner_) || !live_) return false;
+        if (!(owner == owner_) || !live_ || handoff_) return false;
         live_ = false;
         for (auto& slot : slots_) slot = Slot{};
         return true;
@@ -171,6 +237,15 @@ private:
             protection != Protection::public_table)
             throw std::invalid_argument("invalid ETS protection");
         return capacity;
+    }
+
+    static bool receipt_matches(
+            const HeirReceipt& a, const HeirReceipt& b) noexcept {
+        return a.table.incarnation == b.table.incarnation
+            && a.deceased_owner == b.deceased_owner
+            && a.successor == b.successor
+            && a.table_epoch == b.table_epoch
+            && a.receipt_nonce == b.receipt_nonce;
     }
 
     struct Slot {
@@ -200,22 +275,33 @@ private:
 
     Status authorize(Handle h, Principal caller, bool write) const noexcept {
         if (!live_) return Status::retired;
+        if (handoff_) return Status::denied;
         if (h.incarnation != incarnation_ || !caller.valid()) return Status::invalid;
         if (caller.runtime != owner_.runtime || caller.isolate != owner_.isolate)
             return Status::denied;
+        for (std::size_t n = 0; n < revoked_count_; ++n)
+            if (caller == revoked_[n]) return Status::denied;
         if (caller == owner_) return Status::ok;
         if (protection_ == Protection::private_table) return Status::denied;
         if (write && protection_ == Protection::protected_table) return Status::denied;
         return Status::ok;
     }
 
-    const Principal owner_;
+    Principal owner_;
     const Protection protection_;
     std::vector<Slot> slots_;
     const std::uint64_t incarnation_;
     mutable std::mutex mu_;
     bool live_ = true;
     std::uint64_t version_ = 0;
+    std::uint64_t table_epoch_ = 1;
+    std::optional<HeirReceipt> handoff_;
+    // Bounded revoked owner identities prevent a stale PUBLIC actor from
+    // regaining access after a later heir receives the same table.
+    // At capacity, further owner transfer fails closed until the runtime
+    // supplies an authenticated generation registry/compaction protocol.
+    std::array<Principal, 64> revoked_{};
+    std::size_t revoked_count_ = 0;
 };
 
 } // namespace oreslang::runtime
