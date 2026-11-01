@@ -119,6 +119,53 @@ fn compile_and_run(
     println!("GUEST_PASS {name} observed_exit={expected}");
     Ok(())
 }
+fn check_intermediate_overflow(
+    compiler: &Path,
+    clang: &Path,
+    work: &Workspace,
+    name: &str,
+    expression: &str,
+) -> Result<(), String> {
+    let source = work.0.join(format!("{name}.ores"));
+    let ir = work.0.join(format!("{name}.ll"));
+    let executable = work.0.join(name);
+    fs::write(&source, format!("pub fnc main(): int {{ return {expression}; }}\n"))
+        .map_err(|e| format!("{name}: write failed: {e}"))?;
+    let compiled = call(compiler, &[source.into_os_string()])?;
+    if !compiled.status.success() {
+        // Invalid grammar and unrelated parser failures must not be counted
+        // as checked arithmetic success.
+        let diagnostic = String::from_utf8_lossy(&compiled.stderr).to_ascii_lowercase();
+        if !compiled.stdout.is_empty()
+            || !(diagnostic.contains("overflow") || diagnostic.contains("checked"))
+        {
+            return Err(format!("{name}: compiler rejection was not a checked overflow"));
+        }
+        println!("GUEST_OVERFLOW_REJECT {name} compiler diagnostic");
+        return Ok(());
+    }
+    if !compiled.stdout.windows(b"define i32 @main(".len())
+        .any(|window| window == b"define i32 @main(")
+    {
+        return Err(format!("{name}: no native OS entrypoint after compilation"));
+    }
+    fs::write(&ir, &compiled.stdout)
+        .map_err(|e| format!("{name}: IR write failed: {e}"))?;
+    let linked = call(clang, &[
+        OsString::from("-O0"), OsString::from("-x"), OsString::from("ir"),
+        ir.into_os_string(), OsString::from("-o"),
+        executable.clone().into_os_string(),
+    ])?;
+    require_success(&format!("{name} link"), &linked)?;
+    let result = call(&executable, &[])?;
+    if result.status.success() || !result.stdout.is_empty() {
+        return Err(format!(
+            "{name}: signed64 overflow was accepted or produced guest stdout"
+        ));
+    }
+    println!("GUEST_OVERFLOW_TRAP {name} observed_status={:?}", result.status.code());
+    Ok(())
+}
 fn run() -> Result<(), String> {
     let mut args = env::args_os().skip(1);
     let compiler = checked_binary(
@@ -143,7 +190,15 @@ fn run() -> Result<(), String> {
     for (name, expression, expected) in cases {
         compile_and_run(&compiler, &clang, &work, name, expression, expected)?;
     }
-    println!("SOURCE_NATIVE_GATE_PASS 5/5 real LLVM->Clang->OS guest executions");
+    check_intermediate_overflow(
+        &compiler, &clang, &work,
+        "intermediate_overflow_then_zero", "(9223372036854775807 + 1) * 0",
+    )?;
+    check_intermediate_overflow(
+        &compiler, &clang, &work,
+        "negative_overflow", "-9223372036854775808 - 1",
+    )?;
+    println!("SOURCE_NATIVE_GATE_PASS 5 positive + 2 checked-overflow negative guest cases");
     Ok(())
 }
 fn main() {
