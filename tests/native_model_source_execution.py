@@ -100,6 +100,30 @@ def compile_source(root: Path, compiler: Path, item: Case):
 
 def verify(compiler: Path, clang: Path, corpus_path: Path):
     cases = load_corpus(corpus_path)
+    # Additional compiler/guest regression mirroring the Java zero-formal
+    # source fixture. This is local coverage, not an unreviewed alteration
+    # to the pinned cross-backend normative digest corpus.
+    cases.append(Case(
+        case_id="zero-formal-model-shorthand",
+        expect="accept",
+        java_mode="execute",
+        llvm_mode="execute",
+        diagnostic=None,
+        llvm_diagnostic=None,
+        graph_digest=None,
+        configured_digest=None,
+        semantic_result=42,
+        configuration_i64=None,
+        source=(
+            "fnc Identity(int input): int { return input; }\\n"
+            "fnc AddDelta(int delta, int input): int { return input + delta; }\\n"
+            "define model x as\\n"
+            "  Identity()\\n"
+            "  AddDelta(2)\\n"
+            "end\\n"
+            "pub fnc main(): int { return x().run(40); }\\n"
+        ),
+    ))
     with tempfile.TemporaryDirectory(prefix="oreslang-model-guest-") as td:
         root = Path(td)
         for item in cases:
