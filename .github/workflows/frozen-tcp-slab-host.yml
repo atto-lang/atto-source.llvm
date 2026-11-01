@@ -1,0 +1,21 @@
+name: Frozen TCP slab native host sanitizer evidence
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/FrozenTcpSlab.hpp'
+      - 'tests/frozen_tcp_slab_test.cpp'
+      - 'scripts/test-frozen-tcp-slab-host-sanitizers.sh'
+      - '.github/workflows/frozen-tcp-slab-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: GCC address/undefined sanitizer test (NOT guest TCP)
+        run: bash scripts/test-frozen-tcp-slab-host-sanitizers.sh
