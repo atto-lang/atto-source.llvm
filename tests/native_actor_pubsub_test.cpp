@@ -1,10 +1,26 @@
 #include "oreslang/runtime/NativeActorPubSub.hpp"
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 using oreslang::runtime::NativeActorMembershipRegistry;
 using oreslang::runtime::NativeActorPubSubAdmission;
+
+template<class Bus, class = void>
+struct HasUnscopedSystemPublish : std::false_type {};
+
+template<class Bus>
+struct HasUnscopedSystemPublish<Bus, std::void_t<
+        decltype(std::declval<Bus&>().publish_system(
+                std::declval<std::uint64_t>(),
+                std::declval<const std::string&>(),
+                std::declval<const std::string&>()))>> : std::true_type {};
+
+static_assert(!HasUnscopedSystemPublish<NativeActorPubSubAdmission<std::string>>::value,
+              "untrusted topic admission must not expose system publication");
 
 static void check(bool ok, const char* why) {
     if (!ok) throw std::runtime_error(why);
@@ -69,6 +85,13 @@ int main() {
           "stale membership subscription was not pruned");
     check(memberships.contains(b.group_id(), 11, 1),
           "A membership mutation corrupted B");
+    check(rejected([&] {
+        (void)bus.publish(a.group_id(), "reliable", 12, 1, "stale");
+    }), "departed member published using a cached group/topic name");
+    check(rejected([&] {
+        (void)bus.try_read(a.group_id(), "reliable", 12, 1);
+    }), "departed member read using a cached topic name");
+
 
     check(bus.subscribe(a.group_id(), "latest", 11, 1), "latest subscribe");
     auto latest1 = bus.publish(a.group_id(), "latest", 10, 1, "old");
