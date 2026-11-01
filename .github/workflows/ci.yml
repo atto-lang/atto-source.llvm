@@ -39,6 +39,15 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Execute native application-scalar compiler and guest gate (Rust-only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings tools/portable_app_scalar_gate.rs -o build/portable-app-scalar-gate
+          test -x build/oreslang-llvmc
+          build/portable-app-scalar-gate \
+            "$(readlink -f build/oreslang-llvmc)" \
+            "$(readlink -f "$(command -v clang)")"
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
