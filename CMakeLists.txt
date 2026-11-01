@@ -3996,6 +3996,25 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-vm-ets-pg-cold-boot-test)
     set_tests_properties(native_vm_ets_pg_zero_cold_threads
         PROPERTIES TIMEOUT 30)
+    # Real native VM mailbox admission, not a mock send callback. Test only
+    # runs with trusted host refs; source pg lowering remains unsupported.
+    add_executable(oreslang-native-pg-vm-mailbox-test
+        tests/native_pg_vm_mailbox_admission_test.cpp
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-pg-vm-mailbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-pg-vm-mailbox-test PROPERTIES
+        LINKER_LANGUAGE CXX)
+    target_link_libraries(oreslang-native-pg-vm-mailbox-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-pg-vm-mailbox-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_pg_real_vm_mailbox_stop_backpressure
+        COMMAND oreslang-native-pg-vm-mailbox-test)
+    set_tests_properties(native_pg_real_vm_mailbox_stop_backpressure
+        PROPERTIES TIMEOUT 30)
 endif()
 
 # This compiles the REAL native frontend parser and ownership checker,
