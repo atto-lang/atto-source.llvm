@@ -56,6 +56,13 @@ if(BUILD_TESTING)
         COMMAND oreslang-hpc-finance-risk-host-contract
         "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/hpc-finance/risk-gate-v1.tsv")
     set_tests_properties(hpc_finance_risk_host_only PROPERTIES TIMEOUT 15)
+    add_test(NAME hpc_finance_source_float_region_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_FINANCE_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/hpc_finance_float_negative_test.cmake")
+    set_tests_properties(hpc_finance_source_float_region_fail_closed
+        PROPERTIES TIMEOUT 40)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
