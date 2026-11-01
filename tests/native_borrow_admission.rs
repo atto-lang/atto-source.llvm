@@ -1,4 +1,4 @@
-//! Real compiler admission: sixteen denials and three genuine IR controls.
+//! Real compiler admission: twenty denials and three genuine IR controls.
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -55,11 +55,16 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
     // including a directory, remains observable as an admission failure.
     let stdout_path = root.join(format!("{name}.stdout"));
     let stderr_path = root.join(format!("{name}.stderr"));
+    // Snapshot the parent after creating the harness-owned log files.
+    // A failed compiler must not leave artifacts alongside its fixture.
+    let stdout_file = fs::File::create(&stdout_path).unwrap();
+    let stderr_file = fs::File::create(&stderr_path).unwrap();
+    let root_before = entries(root);
     let mut child = Command::new(compiler)
         .arg(&input)
         .current_dir(&dir)
-        .stdout(Stdio::from(fs::File::create(&stdout_path).unwrap()))
-        .stderr(Stdio::from(fs::File::create(&stderr_path).unwrap()))
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
         .spawn()
         .expect("start compiler");
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -91,6 +96,10 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
     if let Some(expected) = diagnostic {
         assert!(!status.success(), "{name}: invalid source admitted");
         assert!(
+            status.code().is_some(),
+            "{name}: signal-terminated compiler is not a controlled rejection"
+        );
+        assert!(
             stdout.trim().is_empty(),
             "{name}: rejected source emitted IR: {stdout}"
         );
@@ -99,6 +108,10 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
             "{name}: expected {expected:?}, got {stderr}"
         );
         assert_eq!(entries(&dir), before, "{name}: rejection created artifacts");
+        assert_eq!(
+            entries(root), root_before,
+            "{name}: rejection created artifacts beside the fixture"
+        );
     } else {
         assert!(
             status.success() && has_definition(&stdout),
@@ -123,6 +136,11 @@ fn main() {
         ("mut-share-function-argument-reject", "fnc consume(int x): int { return x; }\npub fnc main(): int { let int v = 42; return consume(rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-nested-group-reject", "pub fnc main(): int { let int v = 42; return rt mut share ((v)); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
 
+        ("mut-share-constructor-argument-reject", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Box box = new Box(rt mut share v); return box.read(); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-binary-expression-reject", "pub fnc main(): int { let int v = 42; return 1 + (rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-borrowed-call-argument-reject", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-nested-rt-borrow-reject", "pub fnc main(): int { let int v = 42; return rt borrow (rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
@@ -143,7 +161,7 @@ fn main() {
         check_case(&compiler, &root.0, name, source, None);
     }
     println!(
-        "PASS native borrow admission: sixteen no-IR/no-artifact denials, three real IR controls"
+        "PASS native borrow admission: twenty no-IR/no-artifact denials, three real IR controls"
     );
 }
 
@@ -264,6 +282,22 @@ mod tests {
     fn negative_admission_rejects_mixed_ir_and_failure_banner() {
         assert_rejected_fake_compiler(
             "printf '; ownership failed\ndefine i64 @main() {\n'\nprintf 'bad ownership\n' >&2\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_parent_scratch_artifact() {
+        assert_rejected_fake_compiler(
+            "touch ../unapproved.ll\nprintf 'bad ownership\n' >&2\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_signal_termination_with_matching_diagnostic() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\n' >&2\nkill -KILL $",
         );
     }
 
