@@ -282,9 +282,14 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
         wasm_src = work / "wasm-array.ores"
         wasm_src.write_text(POSITIVE["add-get-set-size"][0], encoding="utf-8")
         wasm = run([str(compiler), "--target=wasm32", str(wasm_src)])
-        if wasm.returncode != 1 or wasm.stdout or \
-                b"wasm32 native heap-owned/Array<int> regions are not implemented" not in wasm.stderr:
-            raise AssertionError(f"wasm32 array must reject without IR: {wasm.returncode}, {wasm.stderr!r}")
+        expected_wasm = (
+            b"oreslang-llvmc: wasm32 Array<int> requires an explicit allocator provider "
+            b"[file: wasm-array.ores]\n"
+        )
+        if wasm.returncode != 1 or wasm.stdout or wasm.stderr != expected_wasm:
+            raise AssertionError(
+                f"wasm32 array must reject without IR and with exact allocator-provider provenance: "
+                f"{wasm.returncode}, {wasm.stderr!r}")
         for name, (source, diagnostic) in NEGATIVE.items():
             src = work / f"{name}.ores"
             src.write_text(source, encoding="utf-8")

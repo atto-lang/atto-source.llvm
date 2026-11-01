@@ -13,46 +13,60 @@ class NativeLinkedQueueHarnessTest(unittest.TestCase):
 
     def result(self, status=1, out=b"", err=None):
         if err is None:
-            err = (self.expected + "\n").encode("utf-8")
+            err = (self.expected + " [file: smoke.ores]\n").encode("utf-8")
         return subprocess.CompletedProcess(["compiler", "fixture"], status, out, err)
 
     def test_expected_rejection_is_admitted(self):
-        verify_rejection("smoke", self.result(), self.expected)
+        verify_rejection("smoke.ores", self.result(), self.expected)
+
+    def test_missing_or_wrong_file_provenance_is_rejected(self):
+        with self.assertRaises(AssertionError):
+            verify_rejection(
+                "smoke.ores",
+                self.result(err=(self.expected + "\n").encode("utf-8")),
+                self.expected,
+            )
+        with self.assertRaises(AssertionError):
+            verify_rejection(
+                "smoke.ores",
+                self.result(err=(self.expected + " [file: other.ores]\n").encode("utf-8")),
+                self.expected,
+            )
 
     def test_stub_that_rejects_everything_with_generic_error_fails(self):
         with self.assertRaises(AssertionError):
-            verify_rejection("smoke", self.result(err=b"oreslang-llvmc: internal error\n"),
+            verify_rejection("smoke.ores", self.result(err=b"oreslang-llvmc: internal error\n"),
                              self.expected)
 
     def test_missing_source_is_not_unsupported_language(self):
         with self.assertRaises(AssertionError):
-            verify_rejection("smoke", self.result(err=b"oreslang-llvmc: cannot open Oreslang source\n"),
+            verify_rejection("smoke.ores", self.result(err=b"oreslang-llvmc: cannot open Oreslang source\n"),
                              self.expected)
 
     def test_cli_misuse_is_not_language_rejection(self):
         with self.assertRaises(AssertionError):
-            verify_rejection("smoke", self.result(status=2), self.expected)
+            verify_rejection("smoke.ores", self.result(status=2), self.expected)
 
     def test_crash_is_not_language_rejection(self):
         with self.assertRaises(AssertionError):
-            verify_rejection("smoke", self.result(status=-11), self.expected)
+            verify_rejection("smoke.ores", self.result(status=-11), self.expected)
 
     def test_success_without_ir_is_not_rejection(self):
         with self.assertRaises(AssertionError):
-            verify_rejection("smoke", self.result(status=0), self.expected)
+            verify_rejection("smoke.ores", self.result(status=0), self.expected)
 
     def test_stdout_with_only_whitespace_still_fails(self):
         with self.assertRaises(AssertionError):
-            verify_rejection("smoke", self.result(out=b"\n"), self.expected)
+            verify_rejection("smoke.ores", self.result(out=b"\n"), self.expected)
 
     def test_partial_ir_still_fails(self):
         with self.assertRaises(AssertionError):
-            verify_rejection("smoke", self.result(out=b"; ModuleID = 'oops'\n"),
+            verify_rejection("smoke.ores", self.result(out=b"; ModuleID = 'oops'\n"),
                              self.expected)
 
     def test_extra_diagnostic_output_fails(self):
         with self.assertRaises(AssertionError):
-            verify_rejection("smoke", self.result(err=(self.expected + "\nwarning\n").encode()),
+            verify_rejection("smoke.ores", self.result(err=(self.expected + "\nwarning\n").encode()),
                              self.expected)
 
     def test_blob_is_git_hash_not_plain_sha1(self):

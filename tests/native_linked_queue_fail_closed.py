@@ -69,7 +69,9 @@ def verify_rejection(relative, result, expected_diagnostic):
         )
     if result.stdout != b"":
         raise AssertionError(f"{relative}: compiler emitted output on rejection")
-    expected = (expected_diagnostic + "\n").encode("utf-8")
+    expected = (
+        expected_diagnostic + " [file: " + Path(relative).name + "]\n"
+    ).encode("utf-8")
     if result.stderr != expected:
         raise AssertionError(
             f"{relative}: unexpected diagnostic; actual={result.stderr!r}; "
