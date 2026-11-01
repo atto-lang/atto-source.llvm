@@ -70,6 +70,42 @@ int main() {
             "persistent read");
     require(observed == value, "persistent value");
 
+    // A stale or malicious host adapter must not be able to turn an arena
+    // data-copy into corruption of private slot, scratch or control metadata.
+    // All these failures must preserve the live actor's valid turn.
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, arena.slab, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "read destination inside private backing must reject");
+    require(ores_rt_actor_arena_write(
+                &arena, turn, handles[0], 0, arena.slab, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "write source inside private backing must reject");
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, &arena, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "read destination overlapping control metadata must reject");
+    require(ores_rt_actor_arena_write(
+                &arena, turn, handles[0], 0, &arena, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "write source overlapping control metadata must reject");
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, nullptr, 0) ==
+                ORES_RT_ARENA_OK,
+            "zero-byte read remains a valid no-op");
+    require(ores_rt_actor_arena_write(
+                &arena, turn, handles[0], 0, nullptr, 0) ==
+                ORES_RT_ARENA_OK,
+            "zero-byte write remains a valid no-op");
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, storage.data() + required, 1) ==
+                ORES_RT_ARENA_OK,
+            "byte immediately beyond private backing remains accessible");
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_OK && observed == value,
+            "rejected aliases cannot change live slot data or turn");
+
     const OresRtArenaHandle stale = handles[0];
     require(ores_rt_actor_arena_drop(&arena, turn, handles[0]) ==
                 ORES_RT_ARENA_OK,
@@ -110,6 +146,26 @@ int main() {
                 ORES_RT_ARENA_OK,
             "scratch read");
     require(observed == value, "scratch value");
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, scratch, 0, arena.scratch, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "scratch read cannot alias private backing");
+    require(ores_rt_actor_arena_scratch_write(
+                &arena, turn, scratch, 0, arena.scratch, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "scratch write cannot alias private backing");
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, scratch, 0, &arena, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "scratch read cannot overwrite control metadata");
+    require(ores_rt_actor_arena_scratch_write(
+                &arena, turn, scratch, 0, &arena, sizeof(value)) ==
+                ORES_RT_ARENA_INVALID,
+            "scratch write cannot read control metadata");
+    require(ores_rt_actor_arena_scratch_read(
+                &arena, turn, scratch, 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_OK && observed == value,
+            "rejected scratch aliases preserve valid data");
 
     require(ores_rt_actor_arena_retire(&arena) == ORES_RT_ARENA_BUSY,
             "active arena cannot retire");
