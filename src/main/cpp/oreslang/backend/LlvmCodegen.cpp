@@ -284,6 +284,10 @@ llvm::Value* lower(const Expression& expr,
             return stored;
         }
         case Expression::Kind::Field:
+            // No source-level f64 struct-field ABI has been admitted yet.
+            // Never emit an i64 load from a typed double field by accident.
+            if (expr.resolved_type == ScalarType::F64)
+                throw std::runtime_error("native f64 field requires typed struct layout and borrow proof");
             if (expr.name == "size" && expr.left &&
                     expr.left->kind == Expression::Kind::Field) {
                 llvm::Value* handle = builder.CreateLoad(i64,
