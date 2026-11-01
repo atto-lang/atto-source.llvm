@@ -1,8 +1,9 @@
 #include "oreslang/runtime/AllocatorProviderV1.h"
 #include "oreslang/runtime/NativeIntArrayRegion.h"
 
-#include <assert.h>
 #include <stdint.h>
+
+#define REQUIRE(expr) do { if (!(expr)) return __LINE__; } while (0)
 
 int main(void) {
     union {
@@ -11,16 +12,16 @@ int main(void) {
     } storage = {0};
     OresAllocatorProviderV1 provider = ORES_ALLOCATOR_PROVIDER_V1_ZERO_INIT;
 
-    assert(ores_allocator_provider_v1_init(
+    REQUIRE(ores_allocator_provider_v1_init(
         &provider, storage.bytes, sizeof(storage.bytes)) ==
         ORES_ALLOCATOR_PROVIDER_V1_OK);
-    assert(ores_allocator_provider_v1_bind(&provider) ==
+    REQUIRE(ores_allocator_provider_v1_bind(&provider) ==
         ORES_ALLOCATOR_PROVIDER_V1_OK);
 
     OresNativeIntArrayRegion* region = 0;
-    assert(oreslang_int_array_try_region_open(&region) ==
+    REQUIRE(oreslang_int_array_try_region_open(&region) ==
         ORES_NATIVE_ARRAY_OK);
-    assert(region != 0);
+    REQUIRE(region != 0);
 
     {
         const uint64_t lengths[1] = {1024};
@@ -29,9 +30,9 @@ int main(void) {
         const OresNativeIntArrayStatus status =
             oreslang_int_array_try_prepare_filled_many(
                 region, 1, lengths, values, out);
-        assert(status == ORES_NATIVE_ARRAY_NO_MEMORY ||
+        REQUIRE(status == ORES_NATIVE_ARRAY_NO_MEMORY ||
             status == ORES_NATIVE_ARRAY_LIMIT);
-        assert(out[0] == 0);
+        REQUIRE(out[0] == 0);
     }
 
     /*
@@ -40,19 +41,19 @@ int main(void) {
      * staged handle leaked from the rollback path.
      */
     OresNativeIntArrayHandle handles[16] = {0};
-    assert(oreslang_int_array_try_prepare_many(region, 16, handles) ==
+    REQUIRE(oreslang_int_array_try_prepare_many(region, 16, handles) ==
         ORES_NATIVE_ARRAY_OK);
     for (unsigned i = 0; i < 16; ++i) {
-        assert(handles[i] != 0);
+        REQUIRE(handles[i] != 0);
         oreslang_int_array_drop(region, handles[i]);
     }
 
     oreslang_int_array_region_close(region);
-    assert(ores_allocator_provider_v1_unbind(&provider) ==
+    REQUIRE(ores_allocator_provider_v1_unbind(&provider) ==
         ORES_ALLOCATOR_PROVIDER_V1_OK);
-    assert(ores_allocator_provider_v1_reset(&provider) ==
+    REQUIRE(ores_allocator_provider_v1_reset(&provider) ==
         ORES_ALLOCATOR_PROVIDER_V1_OK);
-    assert(ores_allocator_provider_v1_used(&provider) == 0);
+    REQUIRE(ores_allocator_provider_v1_used(&provider) == 0);
 
     return 0;
 }

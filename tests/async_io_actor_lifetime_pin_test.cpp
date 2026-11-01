@@ -78,6 +78,7 @@ int main() {
         rejected = true;
     }
     assert(rejected);
+    if (!stale_group.mark_ready(stale)) return 1;
     stale_group.close();
     // No lifetime pin was admitted on the mismatched generation.
     assert(stale.outstanding_resource_loans() == 0);
