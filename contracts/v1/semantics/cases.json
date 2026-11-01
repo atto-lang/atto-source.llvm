@@ -267,6 +267,61 @@
         "llvm": "required",
         "graal": "required"
       }
+    },
+    {
+      "id": "native.oresllm-zero-add",
+      "feature": "numeric.oresllm-zero-add",
+      "source": "fixtures/oresllm-zero-add.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-signed-subtract",
+      "feature": "numeric.oresllm-signed-subtract",
+      "source": "fixtures/oresllm-signed-subtract.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-left-associative",
+      "feature": "numeric.oresllm-left-associative",
+      "source": "fixtures/oresllm-left-associative.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-zero-times-max",
+      "feature": "numeric.oresllm-zero-times-max",
+      "source": "fixtures/oresllm-zero-times-max.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-over-2pow53",
+      "feature": "numeric.oresllm-over-2pow53",
+      "source": "fixtures/oresllm-over-2pow53.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
     }
   ]
 }
