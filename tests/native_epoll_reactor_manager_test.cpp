@@ -219,7 +219,8 @@ int main() {
         // dup() preserves the underlying open file description. Checking
         // only numeric FD equality allows two actors/reactors to consume
         // the same TCP bytes through distinct epoll registrations.
-        for (const bool socket_mode : {false, true}) {
+        for (int mode = 0; mode < 2; ++mode) {
+            const bool socket_mode = mode == 1;
             NativeEpollReactorManager manager(2,
                 NativeEpollReactorManager::Profile::preallocated_rt, 2);
             int endpoints[2]{-1, -1};
@@ -236,6 +237,13 @@ int main() {
             // Same socket/pipe inode, different FD value: must fail closed.
             check(!manager.try_watch(alias, EPOLLIN).has_value());
             check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+            // Opposite ends of a socketpair are different physical sockets.
+            // Reject aliases without globally blocking unrelated descriptors.
+            if (socket_mode) {
+                auto other_end = manager.try_watch(endpoints[1], EPOLLIN);
+                check(other_end.has_value());
+                check(!manager.try_watch(endpoints[1], EPOLLIN).has_value());
+            }
             bool cancelled = false;
             for (int attempt = 0; attempt < 2000 && !cancelled; ++attempt) {
                 cancelled = manager.try_cancel(*original);
