@@ -106,6 +106,53 @@ int main() {
                 ORES_RT_ARENA_OK && observed == value,
             "rejected aliases cannot change live slot data or turn");
 
+    // A span touching the final private byte must reject even if its other
+    // byte is in spare caller storage. This catches containment-only checks
+    // that would allow partially overlapping buffers across a region edge.
+    auto* private_end = storage.data() + required;
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, private_end - 1, 2) ==
+                ORES_RT_ARENA_INVALID,
+            "partial read overlap at arena high boundary must reject");
+    require(ores_rt_actor_arena_write(
+                &arena, turn, handles[0], 0, private_end - 1, 2) ==
+                ORES_RT_ARENA_INVALID,
+            "partial write overlap at arena high boundary must reject");
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, private_end, 1) ==
+                ORES_RT_ARENA_OK,
+            "exact arena high boundary must remain disjoint");
+    require(ores_rt_actor_arena_write(
+                &arena, turn, handles[0], 0, private_end, 1) ==
+                ORES_RT_ARENA_OK,
+            "external byte at exact boundary must be writable source");
+    // A control-object suffix intersecting by one byte is equally forbidden.
+    auto* control_end = reinterpret_cast<unsigned char*>(&arena) + sizeof(arena);
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, control_end - 1, 2) ==
+                ORES_RT_ARENA_INVALID,
+            "partial read overlap at arena control boundary must reject");
+    require(ores_rt_actor_arena_write(
+                &arena, turn, handles[0], 0, control_end - 1, 2) ==
+                ORES_RT_ARENA_INVALID,
+            "partial write overlap at arena control boundary must reject");
+    require(ores_rt_actor_arena_read(
+                &arena, turn, handles[0], 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_OK && observed == value,
+            "overlap denial must not modify persistent bytes");
+    OresRtArenaHandle forged = handles[0];
+    ++forged.domain;
+    require(ores_rt_actor_arena_read(
+                &arena, turn, forged, 0, &observed, sizeof(observed)) ==
+                ORES_RT_ARENA_STALE,
+            "forged domain must fail before touching external output");
+    forged = handles[0];
+    ++forged.generation;
+    require(ores_rt_actor_arena_write(
+                &arena, turn, forged, 0, &value, sizeof(value)) ==
+                ORES_RT_ARENA_STALE,
+            "forged generation must fail before touching private bytes");
+
     const OresRtArenaHandle stale = handles[0];
     require(ores_rt_actor_arena_drop(&arena, turn, handles[0]) ==
                 ORES_RT_ARENA_OK,
