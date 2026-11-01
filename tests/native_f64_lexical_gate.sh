@@ -13,9 +13,21 @@ scratch="$(mktemp -d)"
 trap 'rm -rf -- "$scratch"' EXIT
 pass=0
 reject=0
+# A duplicate ID could overwrite a previous source, IR or executable and
+# manufacture an apparent N/N pass. Enforce unique sandbox-safe case IDs.
+declare -A seen_case_ids=()
+check_case_id() {
+  local name="$1"
+  [[ "$name" =~ ^[a-z][a-z0-9_]*$ ]] ||
+    { echo "NATIVE_F64_UNSAFE_CASE_ID: $name" >&2; exit 1; }
+  [[ ! ${seen_case_ids[$name]+exists} ]] ||
+    { echo "NATIVE_F64_DUPLICATE_CASE_ID: $name" >&2; exit 1; }
+  seen_case_ids["$name"]=1
+}
 
 positive() {
   local name="$1" source="$2"
+  check_case_id "$name"
   printf '%s\n' "$source" > "$scratch/$name.ores"
   "$compiler" --target=host "$scratch/$name.ores" \
     > "$scratch/$name.ll" 2> "$scratch/$name.compiler.stderr" ||
@@ -41,6 +53,7 @@ positive() {
 
 negative() {
   local name="$1" source="$2" expected_diagnostic="$3"
+  check_case_id "$name"
   printf '%s\n' "$source" > "$scratch/$name.ores"
   local compile_rc=0
   "$compiler" --target=host "$scratch/$name.ores" \
