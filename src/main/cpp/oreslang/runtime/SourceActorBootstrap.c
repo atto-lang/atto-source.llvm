@@ -323,7 +323,7 @@ static void root_done_suspend_turn(void) {
         origin,
         no_parent,
         ORES_CONTINUATION_BOUNDARY_AWAIT,
-        1,
+        SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION,
         frame->source_token,
         &frame->link));
     ensure(ores_native_execution_context_store_release(
