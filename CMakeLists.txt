@@ -742,6 +742,21 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_bool_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    # Native Oreslang immutable-default bindings: Rust/std-only harness,
+    # real oreslang-llvmc -> LLVM IR -> clang -> native process execution.
+    # Never credit an absent rustc/clang as a passed source-level test.
+    find_program(ORE_IMMUTABLE_RUSTC NAMES rustc)
+    if(ORE_IMMUTABLE_RUSTC AND ORE_CLANG AND UNIX)
+        add_test(NAME native_immutable_default_source_guest_v1
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/run-immutable-native.sh"
+                "${ORE_IMMUTABLE_RUSTC}" "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/immutable-default-v1")
+        set_tests_properties(native_immutable_default_source_guest_v1 PROPERTIES TIMEOUT 180)
+    else()
+        message(STATUS "Immutable-default native guest CTest UNAVAILABLE (need rustc, clang and Unix); not a parity pass")
+    endif()
+
+
     # Source-level compiler admission (not a host-only ownership model):
     # rejected sources must fail before emitting LLVM IR, and three accepted
     # controls must produce IR to prevent parser-only false positives.
