@@ -97,6 +97,7 @@ def main():
         ('inferred-int-into-bool', 'pub fnc main():int{const x=7;const bool y=x;return 0;}'),
         ('cast-does-not-convert', 'pub fnc main():int{const x=7 as bool as int;return 0;}'),
         ('scalar-alias-cast-mismatch', 'declare type Flag=bool;pub fnc main():int{const x=7 as Flag;return 0;}'),
+        ('cast-move-use-after-move', 'pub fnc main():int{val x=7;const moved=(rt take x) as int;return x;}'),
         ('inferred-bool-arithmetic', 'pub fnc main():int{const x=true;return x+1;}'),
     ])
     negative.extend([
@@ -141,6 +142,7 @@ def main():
         'inferred-int-into-bool': 'native scalar local initializer requires bool, got int',
         'cast-does-not-convert': 'impossible native cast: int as bool',
         'scalar-alias-cast-mismatch': 'impossible native cast: int as bool',
+        'cast-move-use-after-move': 'use of explicitly moved int',
         'inferred-bool-arithmetic': 'arithmetic requires int, got bool',
     })
     compared = 0
