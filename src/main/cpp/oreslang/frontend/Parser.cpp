@@ -5776,8 +5776,44 @@ void resolve_future_pipeline_contracts(Program& program) {
 
 } // namespace
 
+void reject_native_actor_pubsub_source(std::string_view source) {
+    Lexer lexer(source);
+    Token before_previous{Kind::End, {}, 0};
+    Token previous{Kind::End, {}, 0};
+    for (;;) {
+        const Token current = lexer.next();
+        if (current.kind == Kind::End) return;
+
+        const bool named_group =
+            current.kind == Kind::Identifier && current.text == "group" &&
+            previous.text == "." &&
+            before_previous.kind == Kind::Identifier &&
+            before_previous.text == "actor";
+        const bool typed_handle =
+            current.text == "<" &&
+            previous.kind == Kind::Identifier &&
+            (previous.text == "Topic" || previous.text == "Subscription");
+        const bool typed_topic_call =
+            current.text == "<" &&
+            previous.kind == Kind::Identifier && previous.text == "topic" &&
+            before_previous.text == ".";
+
+        if (named_group || typed_handle || typed_topic_call) {
+            const std::size_t offset =
+                named_group ? before_previous.offset : previous.offset;
+            throw std::runtime_error(
+                "native ActorGroup/Topic source lowering unsupported at byte " +
+                std::to_string(offset));
+        }
+
+        before_previous = previous;
+        previous = current;
+    }
+}
+
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
+    reject_native_actor_pubsub_source(source);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
     if (experimental_rt_scalar_loop &&
