@@ -51,6 +51,8 @@ def main():
         ('annotation-vs-cast', 'pub fnc main():int{const a:int=7;const b=7 as int;return a+b+28;}'),
         ('parenthesized-cast', 'pub fnc main():int{const a=(2+5) as int;return a+35;}'),
         ('cast-then-add', 'pub fnc main():int{const a=(7 as int)+35;return a;}'),
+        ('five-backend-expression-identity', 'pub fnc main():int{return (7 as int)+35;}'),
+        ('five-backend-chained-identity', 'pub fnc main():int{return (7 as int as int)+35;}'),
         ('inferred-reference', 'pub fnc main():int{const a=7;const b=a as int;return b+35;}'),
         ('inferred-boolean', 'pub fnc main():int{const yes=true; if(yes){return 42;}fi return 0;}'),
         ('cast-boolean', 'pub fnc main():int{const yes=true as bool; if(yes){return 42;}fi return 0;}'),
@@ -81,6 +83,9 @@ def main():
     ])
     negative = [
         ('bool-as-int', 'pub fnc main():int{return true;}'),
+        ('five-backend-int-to-bool', 'pub fnc main():int{return 7 as bool;}'),
+        ('five-backend-bool-to-int', 'pub fnc main():int{return true as int;}'),
+        ('five-backend-cast-overflow', 'pub fnc main():int{return 9223372036854775808 as int;}'),
         ('int-as-bool', 'fnc bad():bool{return 1;}pub fnc main():int{return 0;}'),
         ('local-int-as-bool', 'pub fnc main():int{const flag:bool=1;return 0;}'),
         ('local-bool-as-int', 'pub fnc main():int{const number:int=false;return 0;}'),
