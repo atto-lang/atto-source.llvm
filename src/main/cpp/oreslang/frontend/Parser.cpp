@@ -312,6 +312,7 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply ||
             expr.kind == Expression::Kind::Remainder ||
+            expr.kind == Expression::Kind::ShiftRight8 ||
             expr.kind == Expression::Kind::Equal ||
             expr.kind == Expression::Kind::NotEqual ||
             expr.kind == Expression::Kind::Less ||
@@ -439,6 +440,7 @@ bool native_constructor_scalar_tree(const Expression& expr,
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
             expr.kind == Kind::Multiply || expr.kind == Kind::Remainder ||
+            expr.kind == Kind::ShiftRight8 ||
             expr.kind == Kind::Equal ||
             expr.kind == Kind::NotEqual || expr.kind == Kind::Less ||
             expr.kind == Kind::LessEqual || expr.kind == Kind::Greater ||
@@ -3186,10 +3188,38 @@ private:
         return left;
     }
 
-    std::unique_ptr<Expression> comparison() {
+    // Keep the ordinary two '>' lexer tokens so nested generic closers
+    // do not change identity. Only *adjacent* >> is a signed shift operator
+    // in an expression context. No whitespace-separated '> >' alias.
+    bool shift8_ahead() const {
+        if (token_.text != ">") return false;
+        Lexer lookahead = lexer_;
+        const Token second = lookahead.next();
+        return second.text == ">" && second.offset == token_.offset + 1;
+    }
+
+    std::unique_ptr<Expression> shift8() {
         auto left = additive();
+        while (shift8_ahead()) {
+            const auto offset = token_.offset;
+            advance();
+            require(">");
+            auto count = additive();
+            if (count->kind != Expression::Kind::Integer || count->integer != 8)
+                fail("native ODB1 scalar shift admits only the literal signed >> 8");
+            auto expr = make_expression(Expression::Kind::ShiftRight8, offset);
+            expr->left = std::move(left);
+            expr->right = std::move(count);
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> comparison() {
+        auto left = shift8();
         while (token_.text == "<" || token_.text == "<=" ||
-                token_.text == ">" || token_.text == ">=") {
+                (token_.text == ">" && !shift8_ahead()) ||
+                token_.text == ">=") {
             const auto offset = token_.offset;
             const auto op = token_.text;
             advance();
@@ -3199,7 +3229,7 @@ private:
                 : Expression::Kind::GreaterEqual;
             auto expr = make_expression(kind, offset);
             expr->left = std::move(left);
-            expr->right = additive();
+            expr->right = shift8();
             left = std::move(expr);
         }
         return left;
@@ -4167,6 +4197,7 @@ private:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
             case Expression::Kind::Remainder:
+            case Expression::Kind::ShiftRight8:
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual:
             case Expression::Kind::Less:
@@ -4346,7 +4377,12 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-            case Expression::Kind::Remainder: {
+            case Expression::Kind::Remainder:
+            case Expression::Kind::ShiftRight8: {
+                if (expr.kind == Expression::Kind::ShiftRight8 &&
+                    (!expr.right || expr.right->kind != Expression::Kind::Integer ||
+                     expr.right->integer != 8))
+                    fail("native shift requires an exact signed literal count of 8");
                 ScalarType left = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(

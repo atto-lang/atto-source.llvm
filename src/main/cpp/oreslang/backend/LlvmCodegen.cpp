@@ -423,6 +423,19 @@ llvm::Value* lower(const Expression& expr,
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
         }
+        case Expression::Kind::ShiftRight8: {
+            // Preserve original signed i64 bits: this is NOT float division,
+            // and the native parser must prove the literal count 8 first.
+            if (!expr.left || !expr.right ||
+                expr.right->kind != Expression::Kind::Integer ||
+                expr.right->integer != 8)
+                throw std::runtime_error("unproved native signed shift-by-eight AST");
+            auto* input = lower(*expr.left, builder, i64, storage, field_storage,
+                                functions, moves);
+            if (!input->getType()->isIntegerTy(64))
+                throw std::runtime_error("native signed shift requires i64");
+            return builder.CreateAShr(input, llvm::ConstantInt::get(i64, 8), "odb1.shr8");
+        }
         case Expression::Kind::Remainder: {
             // The frontend normalizes syntactically signed literal divisors.
             // Never trust an externally supplied AST to skip this proof gate.

@@ -392,6 +392,13 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_java_signed_remainder_source_parity
         PROPERTIES TIMEOUT 120)
+    # ODB1 scalar subset: signed >>8 must lower into real LLVM ashr and
+    # execute through a native Clang-linked OS process. Full WAL codec
+    # modules, List/Result and actor I/O still require separate parity.
+    add_test(NAME native_odb1_scalar_shift8_aot
+        COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-odb1-shift8-aot.sh"
+          "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_odb1_scalar_shift8_aot PROPERTIES TIMEOUT 120)
     # Exact source alias-extension proof: compiler-owned static receiver dispatch,
     # LLVM IR emission, Clang link and native process execution.
     add_test(NAME native_alias_extension_method_aot
