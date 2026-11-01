@@ -30,6 +30,9 @@ def main():
         ("unguarded critical block",
          "pub fnc main(): int { critical { return 1; } return 7; }",
          "critical block requires scheduler-owned"),
+        ("unlowered immediate try critical",
+         "pub fnc main(): int { try critical { return 1; } return 7; }",
+         "try critical requires immediate nonblocking ticket lowering"),
     ]
     with tempfile.TemporaryDirectory(prefix="oreslang-critical-admission-") as tmp:
         path = Path(tmp) / "case.ores"
