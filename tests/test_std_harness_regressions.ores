@@ -1,0 +1,15 @@
+import class TestCase, TestSuite, TestOptions, TestOutcome, RunSummary from "std/testing";
+import fnc expect_true, expect_false, expect_equal_int, expect_equal_string, run_suite, require_success, fail from "std/testing";
+fnc exact_i64_above_float_precision(): TestOutcome {
+  return expect_equal_int(9007199254740993 - 9007199254740992, 1,
+    "signed i64 subtraction must not route through f64");
+}
+pub routine main(): void {
+  val TestSuite suite = new TestSuite("llvm-guest-semantics", arr[
+    new TestCase("exact_i64_above_float_precision", exact_i64_above_float_precision, false, "")
+  ]);
+  val TestOptions options = new TestOptions("", false, true);
+  val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
+  require_success(rt borrow summary);
+  return;
+}
