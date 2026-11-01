@@ -119,7 +119,10 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
             !has_definition(&stderr)
                 && !stderr.lines().any(|line| {
                     let trimmed = line.trim_start();
-                    trimmed.starts_with("; ModuleID")
+                    // A partial function prototype or multiline definition
+                    // is still LLVM IR, even if no opening brace was emitted.
+                    (trimmed.starts_with("define ") && trimmed.contains('@'))
+                        || trimmed.starts_with("; ModuleID")
                         || trimmed.starts_with("source_filename =")
                         || trimmed.starts_with("target triple =")
                         || trimmed.starts_with("target datalayout =")
@@ -369,6 +372,22 @@ mod tests {
     fn negative_admission_rejects_target_datalayout_on_stderr() {
         assert_rejected_fake_compiler(
             "printf 'bad ownership\\ntarget datalayout = x86_64\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_truncated_function_prototype_on_stderr() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\\ndefine i64 @truncated(i64)\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_multiline_function_definition_on_stderr() {
+        assert_rejected_fake_compiler(
+            "printf 'bad ownership\\ndefine i64 @truncated(i64)\\n{\\n' >&2\\nexit 2",
         );
     }
 
