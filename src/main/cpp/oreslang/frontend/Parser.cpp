@@ -1254,6 +1254,12 @@ private:
             fail("callable signatures cannot be declared as nominal actor types");
         if (entry_builtin_name(actor.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
+        // The native scalar bootstrap has no actor-superclass layout, trait
+        // witness table or interface dispatch. A generic 'expected as' error
+        // obscures this crucial fail-closed boundary.
+        if (token_.text == "extends" || token_.text == "implements" || token_.text == "impl") {
+            fail("native actor extends/implements requires actor inheritance, trait/interface dispatch and sealed-state lowering; unsupported");
+        }
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
