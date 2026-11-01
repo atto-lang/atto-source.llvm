@@ -2418,9 +2418,13 @@ private:
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
+            const bool default_readonly =
+                token_.text == "int" || token_.text == "bool" ||
+                token_.text == "string" || token_.text == "String";
             const bool mutable_slot = token_.text == "let";
-            const bool mutable_referent = token_.text != "const";
-            advance(); const bool explicit_mutable = mutable_slot && accept("mut");
+            const bool mutable_referent = !default_readonly && token_.text != "const";
+            if (!default_readonly) advance();
+            const bool explicit_mutable = mutable_slot && accept("mut");
             if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
             auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
             local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
@@ -2564,7 +2568,9 @@ private:
                         fail("native statement follows terminal return");
                     continue;
                 }
-                if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+                if (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
+                        token_.text == "int" || token_.text == "bool" ||
+                        token_.text == "string" || token_.text == "String") {
                     actions.push_back(scoped_local());
                     continue;
                 }
@@ -2928,7 +2934,9 @@ private:
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
             if (ready_future_local()) continue;
-            if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+            if (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
+                        token_.text == "int" || token_.text == "bool" ||
+                        token_.text == "string" || token_.text == "String") {
                 value.statements.push_back(scoped_local()); continue;
             }
             if (token_.text == "await") {
@@ -5133,7 +5141,9 @@ private:
             // complete first so this pass never guesses through unresolved
             // symbols or accidentally turns a typing failure into binding.
             using TypeMap = std::unordered_map<std::string, ScalarType>;
+            using AssignableMap = std::unordered_map<std::string, bool>;
             TypeMap scalar_types;
+            AssignableMap scalar_assignable;
 
             // Local scalar inference is not a machine-word inference. Refuse
             // untagged handles and class/sum variables even though the backend
@@ -5195,8 +5205,11 @@ private:
             };
             for (const auto& parameter : fn.parameters) class_scalars(parameter.name, parameter.class_name);
             for (const auto& binding : fn.locals) class_scalars(binding.name, binding.class_name);
-            for (const auto& param : fn.parameters)
+            for (const auto& param : fn.parameters) {
                 scalar_types.emplace(param.name, param.scalar_type);
+                // Parameters are value bindings, not rebindable local slots.
+                scalar_assignable.emplace(param.name, false);
+            }
 
             std::function<void(const Expression&, std::size_t)> check_scalar_cast_sources;
             check_scalar_cast_sources = [&](const Expression& expr, std::size_t depth) {
@@ -5225,6 +5238,7 @@ private:
             };
 
             for (const auto& binding : fn.locals) {
+                scalar_assignable.emplace(binding.name, binding.assignable);
                 if (binding.int_array || binding.new_class || binding.move_class) {
                     scalar_types.emplace(binding.name, ScalarType::I64);
                     if (binding.int_array)
@@ -5265,10 +5279,12 @@ private:
                 scalar_types.emplace(binding.name, binding.scalar_type);
             }
 
-            std::function<void(const Statement&, TypeMap&)> check_statement_types;
-            check_statement_types = [&](const Statement& stmt, TypeMap& env) {
-                auto scoped_type = [&](const LocalBinding& local, TypeMap& scope) {
+            std::function<void(const Statement&, TypeMap&, AssignableMap&)> check_statement_types;
+            check_statement_types = [&](const Statement& stmt, TypeMap& env, AssignableMap& assignable) {
+                auto scoped_type = [&](const LocalBinding& local, TypeMap& scope,
+                                       AssignableMap& permissions) {
                     scope.emplace(local.name, local.scalar_type);
+                    permissions.emplace(local.name, local.assignable);
                     if (local.int_array) scope.emplace(local.name + ".$element", local.array_element_type);
                     if (!local.class_name.empty()) for (const auto& leaf : layouts.at(local.class_name).leaves) {
                         scope.emplace(local.name + "." + leaf.path, leaf.field->scalar_type);
@@ -5277,10 +5293,12 @@ private:
                 };
                 if (stmt.kind == Statement::Kind::ForIndex) {
                     require_scalar(*stmt.branch_local->initializer, ScalarType::I64, "index initializer", env);
-                    TypeMap body = env; scoped_type(*stmt.branch_local, body);
+                    TypeMap body = env; AssignableMap body_assignable = assignable;
+                    scoped_type(*stmt.branch_local, body, body_assignable);
                     require_scalar(*stmt.condition, ScalarType::Bool, "index condition", body);
                     require_scalar(*stmt.loop_step, ScalarType::I64, "index update", body);
-                    for (const auto& action : stmt.then_statements) check_statement_types(action, body);
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_types(action, body, body_assignable);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Return) {
@@ -5289,8 +5307,10 @@ private:
                 }
                 if (stmt.kind == Statement::Kind::ForEach) {
                     (void)validate_scalar_expression(*stmt.expression, env, functions);
-                    TypeMap body = env; scoped_type(*stmt.branch_local, body);
-                    for (const auto& action : stmt.then_statements) check_statement_types(action, body);
+                    TypeMap body = env; AssignableMap body_assignable = assignable;
+                    scoped_type(*stmt.branch_local, body, body_assignable);
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_types(action, body, body_assignable);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Conditional) {
@@ -5305,10 +5325,12 @@ private:
                     }
                     TypeMap then_env = env;
                     TypeMap else_env = env;
+                    AssignableMap then_assignable = assignable;
+                    AssignableMap else_assignable = assignable;
                     for (const auto& action : stmt.then_statements)
-                        check_statement_types(action, then_env);
+                        check_statement_types(action, then_env, then_assignable);
                     for (const auto& action : stmt.else_statements)
-                        check_statement_types(action, else_env);
+                        check_statement_types(action, else_env, else_assignable);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
@@ -5331,7 +5353,7 @@ private:
                             require_scalar(*local.initializer, local.scalar_type,
                                 "native branch-local initializer", env);
                     }
-                    scoped_type(local, env);
+                    scoped_type(local, env, assignable);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::FieldWrite ||
@@ -5342,14 +5364,19 @@ private:
                     return;
                 }
                 if (stmt.kind == Statement::Kind::ScalarWrite) {
-                    require_scalar(*stmt.expression, env.at(stmt.receiver), "native scalar assignment", env);
+                    const auto permission = assignable.find(stmt.receiver);
+                    if (permission == assignable.end() || !permission->second)
+                        throw std::runtime_error(
+                            "cannot reassign immutable scalar local '" + stmt.receiver + "'");
+                    require_scalar(*stmt.expression, env.at(stmt.receiver),
+                        "native scalar assignment", env);
                     return;
                 }
                 if (stmt.expression)
                     (void)validate_scalar_expression(*stmt.expression, env, functions);
             };
             for (const auto& stmt : fn.statements)
-                check_statement_types(stmt, scalar_types);
+                check_statement_types(stmt, scalar_types, scalar_assignable);
 
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Send)

@@ -70,6 +70,8 @@ def main():
         ('call-inference', 'fnc seven():int{return 7;}pub fnc main():int{const x=seven();return x+35;}'),
         ('call-cast', 'fnc seven():int{return 7;}pub fnc main():int{const x=seven() as int;return x+35;}'),
         ('branch-inference', 'pub fnc main():int{if(true){const x=7 as int;return x+35;}fi return 0;}'),
+        ('branch-type-first-immutable', 'pub fnc main():int{if(true){int x=7;return x+35;}fi return 0;}'),
+        ('branch-type-first-bool', 'pub fnc main():int{if(true){bool ready=true;if(ready){return 42;}fi}fi return 0;}'),
         ('scalar-alias-cast', 'declare type Code=int;pub fnc main():int{const x=7 as Code;return x+35;}'),
         ('scalar-alias-bool-cast', 'declare type Flag=bool;pub fnc main():int{const yes=true as Flag;if(yes){return 42;}fi return 0;}'),
         ('mutable-inferred-scalar', 'pub fnc main():int{let x=7 as int;x=42;return x;}'),
@@ -131,6 +133,8 @@ def main():
         ('generic-bool', 'fnc id<T>(T n):T{return n;}pub fnc main():int{return id(true);}'),
     ]
     negative.extend([
+        ('type-first-immutable-reassign', 'pub fnc main():int{int x=7;x=8;return x;}'),
+        ('branch-type-first-immutable-reassign', 'pub fnc main():int{if(true){int x=7;x=8;return x;}fi return 0;}'),
         ('type-first-int-rejects-bool', 'pub fnc main():int{int x=true;return 0;}'),
         ('type-first-bool-rejects-int', 'pub fnc main():int{bool x=7;return 0;}'),
         ('cast-int-to-bool', 'pub fnc main():int{const x=7 as bool;return 0;}'),
@@ -197,6 +201,8 @@ def main():
     }
     ownership_diagnostics.update(scalar_diagnostics)
     ownership_diagnostics.update({
+        'type-first-immutable-reassign': "cannot reassign immutable scalar local 'x'",
+        'branch-type-first-immutable-reassign': "cannot reassign immutable scalar local 'x'",
         'type-first-int-rejects-bool': 'native scalar local initializer requires int, got bool',
         'type-first-bool-rejects-int': 'native scalar local initializer requires bool, got int',
         'cast-int-to-bool': 'impossible native cast: int as bool',
