@@ -57,21 +57,25 @@ public:
             DeliveryPolicy policy,
             std::size_t capacity) {
         validate_topic(group_id, name, policy, capacity);
-        std::lock_guard<std::mutex> guard(mutex_);
-        TopicKey key{group_id, std::move(name)};
-        auto existing = topics_.find(key);
-        if (existing != topics_.end()) {
-            if (existing->second.policy != policy
-                    || existing->second.capacity != capacity)
-                throw std::logic_error(
-                        "topic already defined with different policy/capacity");
-            return;
-        }
-        if (topics_.size() >= max_topics_)
-            throw std::logic_error("native pub-sub topic capacity exceeded");
-        topics_.emplace(
-                std::move(key),
-                TopicRecord{policy, capacity, {}});
+        memberships_.with_locked_view([&](const auto& memberships) {
+            if (!memberships.group_exists(group_id))
+                throw std::logic_error("unknown or closed ActorGroup");
+            std::lock_guard<std::mutex> guard(mutex_);
+            TopicKey key{group_id, std::move(name)};
+            auto existing = topics_.find(key);
+            if (existing != topics_.end()) {
+                if (existing->second.policy != policy
+                        || existing->second.capacity != capacity)
+                    throw std::logic_error(
+                            "topic already defined with different policy/capacity");
+                return;
+            }
+            if (topics_.size() >= max_topics_)
+                throw std::logic_error("native pub-sub topic capacity exceeded");
+            topics_.emplace(
+                    std::move(key),
+                    TopicRecord{policy, capacity, {}});
+        });
     }
 
     bool subscribe(
@@ -79,20 +83,23 @@ public:
             const std::string& name,
             std::uint64_t actor_id,
             std::uint64_t generation) {
-        if (!memberships_.contains(group_id, actor_id, generation))
-            throw std::logic_error(
-                    "subscription requires live ActorGroup membership");
-        std::lock_guard<std::mutex> guard(mutex_);
-        TopicRecord& topic = require_topic_locked(group_id, name);
-        ActorKey actor{actor_id, generation};
-        if (topic.subscribers.find(actor) != topic.subscribers.end())
-            return false;
-        std::size_t& count = actor_subscription_counts_[actor];
-        if (count >= max_subscriptions_per_actor_)
-            throw std::logic_error("native pub-sub actor subscription quota exceeded");
-        topic.subscribers.emplace(actor, Queue{});
-        ++count;
-        return true;
+        return memberships_.with_locked_view([&](const auto& memberships) {
+            if (!memberships.contains(group_id, actor_id, generation))
+                throw std::logic_error(
+                        "subscription requires live ActorGroup membership");
+            std::lock_guard<std::mutex> guard(mutex_);
+            TopicRecord& topic = require_topic_locked(group_id, name);
+            ActorKey actor{actor_id, generation};
+            if (topic.subscribers.find(actor) != topic.subscribers.end())
+                return false;
+            std::size_t& count = actor_subscription_counts_[actor];
+            if (count >= max_subscriptions_per_actor_)
+                throw std::logic_error(
+                        "native pub-sub actor subscription quota exceeded");
+            topic.subscribers.emplace(actor, Queue{});
+            ++count;
+            return true;
+        });
     }
 
     bool unsubscribe(
@@ -115,11 +122,16 @@ public:
             std::uint64_t publisher_id,
             std::uint64_t publisher_generation,
             const T& value) {
-        if (!memberships_.contains(
-                group_id, publisher_id, publisher_generation))
-            throw std::logic_error(
-                    "publication requires live ActorGroup membership");
-        return publish_impl(group_id, name, value);
+        return memberships_.with_locked_view([&](const auto& memberships) {
+            if (!memberships.contains(
+                    group_id, publisher_id, publisher_generation))
+                throw std::logic_error(
+                        "publication requires live ActorGroup membership");
+            std::lock_guard<std::mutex> guard(mutex_);
+            TopicRecord& topic = require_topic_locked(group_id, name);
+            prune_stale_locked(group_id, topic, memberships);
+            return publish_locked(topic, value);
+        });
     }
 
     /** Trusted runtime/supervisor publication, never exposed as guest authority. */
@@ -127,7 +139,14 @@ public:
             std::uint64_t group_id,
             const std::string& name,
             const T& value) {
-        return publish_impl(group_id, name, value);
+        return memberships_.with_locked_view([&](const auto& memberships) {
+            if (!memberships.group_exists(group_id))
+                throw std::logic_error("unknown or closed ActorGroup");
+            std::lock_guard<std::mutex> guard(mutex_);
+            TopicRecord& topic = require_topic_locked(group_id, name);
+            prune_stale_locked(group_id, topic, memberships);
+            return publish_locked(topic, value);
+        });
     }
 
     std::optional<T> try_read(
@@ -135,18 +154,22 @@ public:
             const std::string& name,
             std::uint64_t actor_id,
             std::uint64_t generation) {
-        if (!memberships_.contains(group_id, actor_id, generation))
-            throw std::logic_error(
-                    "subscription read requires live ActorGroup membership");
-        std::lock_guard<std::mutex> guard(mutex_);
-        TopicRecord& topic = require_topic_locked(group_id, name);
-        auto subscriber = topic.subscribers.find(ActorKey{actor_id, generation});
-        if (subscriber == topic.subscribers.end())
-            throw std::logic_error("actor is not subscribed to topic");
-        if (subscriber->second.values.empty()) return std::nullopt;
-        T value = std::move(subscriber->second.values.front());
-        subscriber->second.values.pop_front();
-        return value;
+        return memberships_.with_locked_view([&](const auto& memberships)
+                -> std::optional<T> {
+            if (!memberships.contains(group_id, actor_id, generation))
+                throw std::logic_error(
+                        "subscription read requires live ActorGroup membership");
+            std::lock_guard<std::mutex> guard(mutex_);
+            TopicRecord& topic = require_topic_locked(group_id, name);
+            auto subscriber =
+                    topic.subscribers.find(ActorKey{actor_id, generation});
+            if (subscriber == topic.subscribers.end())
+                throw std::logic_error("actor is not subscribed to topic");
+            if (subscriber->second.values.empty()) return std::nullopt;
+            T value = std::move(subscriber->second.values.front());
+            subscriber->second.values.pop_front();
+            return value;
+        });
     }
 
     void remove_actor(std::uint64_t actor_id, std::uint64_t generation) {
@@ -178,10 +201,12 @@ public:
     std::size_t subscriber_count(
             std::uint64_t group_id,
             const std::string& name) {
-        std::lock_guard<std::mutex> guard(mutex_);
-        TopicRecord& topic = require_topic_locked(group_id, name);
-        prune_stale_locked(group_id, topic);
-        return topic.subscribers.size();
+        return memberships_.with_locked_view([&](const auto& memberships) {
+            std::lock_guard<std::mutex> guard(mutex_);
+            TopicRecord& topic = require_topic_locked(group_id, name);
+            prune_stale_locked(group_id, topic, memberships);
+            return topic.subscribers.size();
+        });
     }
 
 private:
@@ -242,12 +267,14 @@ private:
         else --count->second;
     }
 
+    template<class MembershipView>
     void prune_stale_locked(
             std::uint64_t group_id,
-            TopicRecord& topic) {
+            TopicRecord& topic,
+            const MembershipView& memberships) {
         for (auto it = topic.subscribers.begin();
              it != topic.subscribers.end();) {
-            if (memberships_.contains(
+            if (memberships.contains(
                     group_id,
                     it->first.actor_id,
                     it->first.generation)) {
@@ -260,14 +287,9 @@ private:
         }
     }
 
-    PublishReceipt publish_impl(
-            std::uint64_t group_id,
-            const std::string& name,
+    PublishReceipt publish_locked(
+            TopicRecord& topic,
             const T& value) {
-        std::lock_guard<std::mutex> guard(mutex_);
-        TopicRecord& topic = require_topic_locked(group_id, name);
-        prune_stale_locked(group_id, topic);
-
         PublishReceipt receipt;
         receipt.subscribers = topic.subscribers.size();
 
