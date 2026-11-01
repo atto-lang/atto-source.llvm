@@ -1,4 +1,4 @@
-//! Real compiler admission: twenty-five denials and four genuine IR controls.
+//! Real compiler admission: twenty-eight denials and five genuine IR controls.
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -147,6 +147,11 @@ fn main() {
     let compiler = fs::canonicalize(&args[1]).expect("compiler path");
     let root = Scratch::new();
     let negatives = [
+        // Annotation syntax is a deliberate unsupported capability, not
+        // a passed borrow-checker assertion or an emitted IR fallback.
+        ("inject-state-class-reject", "@Inject(MutableStateContainer())\ndefine class Counter as\n state { count: int = 0; }\nend\npub fnc main():int{return 42;}\n", "native @Inject state-container lowering requires verified private regions"),
+        ("inject-state-on-scalar-reject", "@Inject(MutableStateContainer())\npub fnc main():int{return 42;}\n", "native @Inject state-container lowering requires verified private regions"),
+        ("inject-state-trailing-reject", "pub fnc main():int{return 42;}\n@Inject(MutableStateContainer())\n", "native @Inject state-container lowering requires verified private regions"),
         ("mut-share-scalar-reject", "pub fnc main(): int { let int v = 42; return rt mut share v; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-parenthesized-owned-reject", "pub fnc main(): int { let int v = 42; return rt mut share (v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
@@ -184,6 +189,7 @@ fn main() {
         check_case(&compiler, &root.0, name, source, Some(expected));
     }
     for (name, source) in [
+        ("valid-annotation-comment", "// @Inject(MutableStateContainer()) is inert in a comment\npub fnc main():int{return 42;}\n"),
         ("valid-shared-borrow", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt borrow v); }\n"),
         ("valid-exclusive-mutable-borrow", "fnc read(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut borrow v); }\n"),
         ("valid-owned-scalar-call", "fnc consume(int x): int { return x; }\npub fnc main(): int { return consume(42); }\n"),
