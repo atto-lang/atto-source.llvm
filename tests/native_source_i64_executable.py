@@ -17,7 +17,7 @@ BYTES_SHA256 = "39bddbe558ad1c336271f91e6403c4555f2f16a7ed33a3355ee897721b6ab02a
 CORPUS = Path(__file__).resolve().parents[1] / "contracts/v1/source-i64/portable-i64.v1.json"
 ADMITTED = ("precedence","grouping","signed-multiplication","subtraction")
 OTHERS = ("negative-result","max-minus-one","signed-minimum")
-NEGATIVES = ("3/2","9223372036854775808")
+NEGATIVES = ("3/2","9223372036854775808","7%3","-7%-3","(8%3)*2","-9223372036854775808%-1")
 
 def require(good,message):
     if not good:raise RuntimeError(message)
@@ -91,8 +91,12 @@ def main():
         for expr in NEGATIVES:
             src.write_text("pub fnc main():int{return "+expr+";}\n",encoding="utf-8")
             rejected=run([str(compiler),str(src)])
-            require(rejected.returncode!=0 and rejected.stdout==b"" and rejected.stderr,
-                    "unsupported source generated native IR: "+expr)
+            require(rejected.returncode==1 and rejected.stdout==b"" and
+                    rejected.stderr.startswith(b"oreslang-llvmc: "),
+                    "unexpected LLVM negative outcome (crash/noisy IR/no diagnostic): "+expr)
+            if "%" in expr:
+                require(b"noncanonical '%' source operator" in rejected.stderr,
+                        "legacy percent rejection used unrelated compiler error: "+expr)
     print(json.dumps({"kind":"native-llvm-compiled-os-exit-subset",
                       "source_corpus_blob":BLOB,"source_corpus_sha256":BYTES_SHA256,
                       "compiler_sha256":compiler_sha256,"clang_sha256":clang_sha256,
