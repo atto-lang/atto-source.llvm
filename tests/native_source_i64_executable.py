@@ -31,6 +31,17 @@ WAVE_SCALARS = (
 )
 
 
+WAVE_SOURCE_SHA256 = {
+    "34": "2d186d0c400c23c6fcdf1df963580351eacea82250097a1cd083a1cc308b40f5",
+    "35": "73e5fc703df0b0d3af6898c156ff105ec28e8dfc639f2a02ccca0f1cd3c69dd8",
+    "36": "2ca62fbe11d05cb219a4be255669842994c279e0e0a5208fbc3d3a0e4c047d29",
+    "37": "efb740b31d72bfdc1eecc8a7eb87a7b84c8961f444fbbcc08a142ca54cf7c97b",
+    "38": "391467d7baf7b84b339a63e55be2395d9a8a4d92b5719f249df428b34bac7ccd",
+    "39": "d1fa2dc614cd61c442ab1bfa5683fac50cc9d72139e0dcdf0a67b3610d427bd6",
+    "40": "0322dc2a7d48fed12d917aaaf2a50c025b77402a2b21fdbb87224fece59b44b0",
+    "41": "3483cb15d4b2f2c24f90ba65e55e886b59eaea2190aa9c18f8ed10badba04e76",
+}
+
 def require(good,message):
     if not good:raise RuntimeError(message)
 
@@ -103,7 +114,14 @@ def main():
         # Candidate five-backend scalar subset. Each case must link and execute;
         # a source-only parse, zero-step CI or host evaluation is not a pass.
         for case_id, expr in WAVE_SCALARS:
-            src.write_text("pub fnc main(): int { return "+expr+"; }\n", encoding="utf-8")
+            # Identical UTF-8 bytes to the shared Oreslang programs/34..41;
+            # a backend-specific wrapper is not an acceptable parity fixture.
+            wave_source = ("// "+case_id+": candidate source-identical checked-i64 scalar program.\n"
+                           "// Expected integer result 42; guest execution on each backend is unverified.\n"
+                           "pub fnc main(): int { return "+expr+"; }\n")
+            src.write_bytes(wave_source.encode("utf-8"))
+            require(hashlib.sha256(src.read_bytes()).hexdigest()==WAVE_SOURCE_SHA256[case_id],
+                    "native LLVM wave source bytes differ from canonical parity fixture "+case_id)
             compiled=run([str(compiler),str(src)])
             require(compiled.returncode==0 and b"define i32 @main(" in compiled.stdout,
                     "native LLVM compile rejected wave case "+case_id+" "+repr(compiled.stderr[:1024]))
