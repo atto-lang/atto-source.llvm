@@ -30,9 +30,10 @@ public:
     };
     enum class Protection : std::uint8_t { private_table, protected_table, public_table };
     enum class Status : std::uint8_t {
-        ok, absent, exists, full, denied, retired, invalid, overflow
+        ok, absent, exists, full, denied, retired, invalid, overflow, conflict
     };
     struct ReadResult { Status status; std::uint64_t value; };
+    struct VersionedRead { Status status; std::uint64_t value; std::uint64_t version; };
     struct Handle { std::uint64_t incarnation; };
 
     NativeEtsScalarSet(Principal owner, Protection protection, std::size_t capacity)
@@ -56,13 +57,16 @@ public:
         for (auto& slot : slots_) {
             if (slot.occupied && slot.key == key) {
                 if (only_if_absent) return Status::exists;
+                if (!advance_version()) return Status::overflow;
                 slot.value = value;
+                slot.version = version_;
                 return Status::ok;
             }
             if (!slot.occupied && !vacant) vacant = &slot;
         }
         if (!vacant) return Status::full;
-        *vacant = Slot{true, key, value};
+        if (!advance_version()) return Status::overflow;
+        *vacant = Slot{true, key, value, version_};
         return Status::ok;
     }
 
@@ -81,7 +85,9 @@ public:
         if (status != Status::ok) return status;
         for (auto& slot : slots_) {
             if (slot.occupied && slot.key == key) {
+                if (!advance_version()) return Status::overflow;
                 slot.occupied = false;
+                slot.version = version_;
                 return Status::ok;
             }
         }
@@ -98,11 +104,50 @@ public:
             if (slot.occupied && slot.key == key) {
                 if (slot.value > std::numeric_limits<std::uint64_t>::max() - delta)
                     return {Status::overflow, 0};
+                if (!advance_version()) return {Status::overflow, 0};
                 slot.value += delta;
+                slot.version = version_;
                 return {Status::ok, slot.value};
             }
         }
         return {Status::absent, 0};
+    }
+
+    // Each new version is unique for this table incarnation, even across
+    // erase/reinsert and slot reuse. A stale value-only CAS cannot bypass ABA.
+    VersionedRead lookup_versioned(Handle h, Principal caller,
+                                   std::uint64_t key) const {
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto status = authorize(h, caller, false);
+        if (status != Status::ok) return {status, 0, 0};
+        for (const auto& slot : slots_) {
+            if (slot.occupied && slot.key == key)
+                return {Status::ok, slot.value, slot.version};
+        }
+        return {Status::absent, 0, 0};
+    }
+
+    // Returns conflict instead of modifying data if either the old value or
+    // immutable entry-version differs. An exhausted version counter fails
+    // closed before writing.
+    Status compare_exchange_versioned(Handle h, Principal caller,
+                                      std::uint64_t key, std::uint64_t expected,
+                                      std::uint64_t expected_version,
+                                      std::uint64_t desired) {
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto status = authorize(h, caller, true);
+        if (status != Status::ok) return status;
+        if (!expected_version) return Status::invalid;
+        for (auto& slot : slots_) {
+            if (!slot.occupied || slot.key != key) continue;
+            if (slot.value != expected || slot.version != expected_version)
+                return Status::conflict;
+            if (!advance_version()) return Status::overflow;
+            slot.value = desired;
+            slot.version = version_;
+            return Status::ok;
+        }
+        return Status::absent;
     }
 
     // Called by the trusted lifetime owner after actor termination is known.
@@ -132,7 +177,14 @@ private:
         bool occupied = false;
         std::uint64_t key = 0;
         std::uint64_t value = 0;
+        std::uint64_t version = 0;
     };
+
+    bool advance_version() noexcept {
+        if (version_ == std::numeric_limits<std::uint64_t>::max()) return false;
+        ++version_;
+        return true;
+    }
 
     static std::uint64_t next_incarnation() {
         static std::atomic<std::uint64_t> sequence{1};
@@ -163,6 +215,7 @@ private:
     const std::uint64_t incarnation_;
     mutable std::mutex mu_;
     bool live_ = true;
+    std::uint64_t version_ = 0;
 };
 
 } // namespace oreslang::runtime
