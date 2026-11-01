@@ -174,3 +174,46 @@ not tenant authentication, isolated native guest execution, compiler actor
 ownership lowering, a scheduler CONTROL-lane integration, or independently
 qualified hard-real-time timing. Exact-head Actions must execute nonzero
 steps before source CI proof can be claimed.
+
+## Follow-up: explicit concurrent admission-close barrier (2026-11-01)
+
+`NativeTenantAdmission` previously provided lifecycle `request_stop` and
+`finish_stop` for individual tenants but no *whole-registry* admission fence.
+Its destructor closed slots, while correctly requiring callers to arrange an
+external producer lifetime fence first. A supervisor needs an explicit operation
+that can be called **while producer threads are still running**, prior to
+joining them and destroying the wrapper.
+
+- New idempotent `close() noexcept`: a single short trusted-host admission
+  mutex serializes the transition to global `closing=true` against
+  `open()` and `enter()`. After the transition, no new tenant or actor
+  turn can be admitted. The implementation then seals each slot under its
+  own mutex. Read/write calls through previously admitted `Turn` pins
+  reject after `closing` is published, but the pinned allocation remains
+  alive until the physical turn is released; no forcible preemption occurs.
+- `request_stop()`/`finish_stop()` also reject after close; existing
+  tenant-specific STOP and all-actor-memory scrub paths stay intact.
+- `~NativeTenantAdmission()` now calls `close()`. Destruction still requires
+  that producers/callbacks making API calls have been externally joined or
+  fenced before the C++ wrapper lifetime ends; concurrent destruction is NOT
+  made safe. Close is a *nonblocking admission fence*, not a wait-for-DONE or
+  actor supervisor notice.
+- `tests/native_tenant_concurrent_close_test.cpp` races two concurrent
+  closers against eight independent producers (open, enter, write, request
+  STOP, finish STOP), retains active actor leases across close, asserts
+  idempotent post-close denial, and runs 96 further close/enter races while
+  checking that a separate registry remains usable.
+
+**Executed local host-only evidence:** seven suites (six existing and one new),
+GCC 14.2 and Clang 17, O0 and O2: 28/28 compiled-and-executed matrix entries.
+Six lifecycle suites on GCC ASan+UBSan passed 12/12 executions (two per
+suite). The new test passed 5/5 GCC ThreadSanitizer runs. The exact local
+`git hash-object` for the new header and concurrent-close test matched
+GitHub Git blobs before commit.
+
+**Important qualification:** This is neither integration into the actual
+`NativeOresVM.c` scheduler or native `.ores` guest compilation, nor a
+hard-real-time lock-free path. `close()` uses standard C++ mutexes and
+does not prevent an uncooperative physical actor from retaining memory.
+Security admission still needs an authenticated broker; full isolation
+needs verified process/OS boundaries and explicit lifecycle integration.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -48,6 +49,8 @@ class NativeTenantAdmission final {
         const std::size_t slots;
         const std::size_t actors;
         const std::size_t actor_bytes;
+        std::mutex admission_gate;  // trusted-host ingress vs global close
+        std::atomic<bool> closing{false};
         std::unique_ptr<Slot[]> entries;
         State(std::size_t slot_count, std::size_t actors_per_tenant,
               std::size_t region_bytes)
@@ -140,7 +143,8 @@ public:
             // Quiescing permits already-admitted turns to finish; STOP does
             // not revoke their memory while the physical execution is active.
             // Destruction of the owning host revokes even pinned turn access.
-            if (slot.host_closed || slot.generation != generation_ ||
+            if (state_->closing.load(std::memory_order_acquire) ||
+                slot.host_closed || slot.generation != generation_ ||
                 slot.phase == Phase::stopped ||
                 !slot.active_actors[actor_]) return false;
             std::uint8_t* where =
@@ -191,11 +195,17 @@ public:
     NativeTenantAdmission(const NativeTenantAdmission&) = delete;
     NativeTenantAdmission& operator=(const NativeTenantAdmission&) = delete;
 
-    // Owner destruction is off-carrier and requires external synchronization
-    // with concurrent calls on this registry. Existing pins keep state alive
-    // until RAII release, but may not read/write after owner destruction.
-    ~NativeTenantAdmission() noexcept {
-        if (!state_) return;
+    // Trusted off-carrier, nonblocking admission shutdown. Safe to call
+    // concurrently with other public methods while the registry object lives.
+    // Admission and close serialize on the ingress gate, before any slot
+    // locks. After the closing flag is published, no open/enter can admit.
+    // Physical turns retain backing memory but may no longer read/write.
+    // This does NOT join or forcibly preempt uncooperative guest callbacks.
+    void close() noexcept {
+        {
+            std::lock_guard<std::mutex> admission(state_->admission_gate);
+            state_->closing.store(true, std::memory_order_release);
+        }
         for (std::size_t i = 0; i < state_->slots; ++i) {
             Slot& slot = state_->entries[i];
             std::lock_guard<std::mutex> guard(slot.mutex);
@@ -204,14 +214,23 @@ public:
         }
     }
 
+    // Object destruction still needs an external producer/API lifetime fence.
+    // Call close(), join every producer/actor callback, THEN destroy this VM.
+    // Existing pins keep State allocated until their final RAII release.
+    ~NativeTenantAdmission() noexcept { close(); }
+
     // A handle is a trusted-host identity/fencing token, NOT authentication.
     // The ingress broker must authenticate and authorize tenant identity.
     // Matching slot+generation is insufficient across separate registries.
     std::optional<Handle> open() {
+        std::lock_guard<std::mutex> admission(state_->admission_gate);
+        if (state_->closing.load(std::memory_order_acquire))
+            return std::nullopt;
         for (std::size_t i = 0; i < state_->slots; ++i) {
             Slot& slot = state_->entries[i];
             std::lock_guard<std::mutex> guard(slot.mutex);
-            if (slot.phase != Phase::stopped ||
+            if (state_->closing.load(std::memory_order_acquire) ||
+                slot.host_closed || slot.phase != Phase::stopped ||
                 slot.generation == std::numeric_limits<std::uint64_t>::max())
                 continue;
             ++slot.generation;
@@ -222,12 +241,14 @@ public:
     }
 
     std::optional<Turn> enter(Handle handle, std::size_t actor_index) {
+        std::lock_guard<std::mutex> admission(state_->admission_gate);
         if (!owns(handle) || handle.slot >= state_->slots ||
             actor_index >= state_->actors || handle.generation == 0)
             return std::nullopt;
         Slot& slot = state_->entries[handle.slot];
         std::lock_guard<std::mutex> guard(slot.mutex);
-        if (slot.host_closed || slot.phase != Phase::running ||
+        if (state_->closing.load(std::memory_order_acquire) ||
+            slot.host_closed || slot.phase != Phase::running ||
             slot.generation != handle.generation ||
             slot.active_actors[actor_index]) return std::nullopt;
         slot.active_actors[actor_index] = true;
@@ -240,7 +261,8 @@ public:
             handle.generation == 0) return false;
         Slot& slot = state_->entries[handle.slot];
         std::lock_guard<std::mutex> guard(slot.mutex);
-        if (slot.host_closed || slot.generation != handle.generation ||
+        if (state_->closing.load(std::memory_order_acquire) ||
+            slot.host_closed || slot.generation != handle.generation ||
             slot.phase != Phase::running) return false;
         slot.phase = Phase::quiescing;
         return true;
@@ -253,7 +275,8 @@ public:
             handle.generation == 0) return false;
         Slot& slot = state_->entries[handle.slot];
         std::lock_guard<std::mutex> guard(slot.mutex);
-        if (slot.host_closed || slot.generation != handle.generation ||
+        if (state_->closing.load(std::memory_order_acquire) ||
+            slot.host_closed || slot.generation != handle.generation ||
             slot.phase != Phase::quiescing || slot.active_turns != 0)
             return false;
         secure_erase(slot.arena.get(), slot.arena_size);
