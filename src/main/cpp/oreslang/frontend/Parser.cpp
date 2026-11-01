@@ -1768,6 +1768,10 @@ private:
                 extension_receiver_alias_, extension_method_name_);
         } else {
             value.exported = owner.empty() ? accept("pub") : visible;
+        // V1 removes async as a callable spelling. Do not silently reinterpret
+        // the experimental Future<int> producer as a suspends function.
+        if (token_.text == "async")
+            fail("native 'async' callable modifier removed; use suspends after explicit Future/await migration");
         const bool source_async = owner.empty() && accept("async");
         value.async_source_i64 = source_async;
         if (token_.text == "pure") {
@@ -1779,6 +1783,8 @@ private:
             fail("native execution domain lowering unsupported");
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
+            if (peek_next().text == "critical")
+                fail("native 'critical suspends' is forbidden: protected bodies cannot suspend");
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         // Check compound READ/WRITE modes before handling legacy critical,
@@ -1787,6 +1793,8 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         if (token_.text == "critical") {
+            if (peek_next().text == "suspends" || peek_next().text == "suspend")
+                fail("native 'critical suspends' is forbidden: protected bodies cannot suspend");
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
         if (token_.text == "actor" || token_.text == "async" ||
@@ -2901,6 +2909,8 @@ private:
             if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
                 value.statements.push_back(scoped_local()); continue;
             }
+            if (token_.text == "critical")
+                fail("native critical block requires scheduler-owned nonblocking acquisition, scoped guard release, and no-suspension effects");
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
