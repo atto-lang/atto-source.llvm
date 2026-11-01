@@ -242,6 +242,13 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // Removed language operators must be rejected before tokenization,
+        // including their former restricted signed-remainder subset.
+        // Comments/strings are already consumed by lexical branches above.
+        if (ch == '%' || ch == '^') {
+            throw std::runtime_error("removed Oreslang operator at byte "
+                                     + std::to_string(start));
+        }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
         for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
@@ -258,7 +265,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/=.<>@?!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -3222,40 +3229,17 @@ private:
 
     std::unique_ptr<Expression> product() {
         auto left = unary();
-        while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
+        while (token_.text == "*" || token_.text == "/") {
+            // Oreslang int/int division produces float; this i64-only LLVM
+            // compiler cannot lower it. % and ^ fail in lexical admission.
             if (token_.text == "/")
                 fail("native floating division unsupported: int/int yields float in Java; "
                      "LLVM float typing and zero-divisor semantics are not implemented");
-            const bool remainder = token_.text == "%";
             const auto offset = token_.offset;
             advance();
-            auto right = unary();
-            // Admit exactly nonzero signed integer *literals*. Normalize
-            // unary-negative literal syntax into the already typed integer
-            // node; codegen independently checks the normalized invariant.
-            // Neither computed divisors nor unknown zero-divisor effects are
-            // silently admitted. The special MIN / -1 case is handled by
-            // codegen rather than emitting LLVM poison.
-            if (remainder) {
-                if (right->kind == Expression::Kind::Negate && right->left &&
-                        right->left->kind == Expression::Kind::Integer &&
-                        right->left->integer > 0) {
-                    const auto magnitude = right->left->integer;
-                    right->left.reset();
-                    right->kind = Expression::Kind::Integer;
-                    right->integer = -magnitude; // magnitude fits signed i64
-                }
-                if (right->kind != Expression::Kind::Integer || right->integer == 0)
-                    fail("native remainder requires a nonzero signed integer literal divisor "
-                         "until typed zero-divisor effects are implemented");
-            }
-            auto expr = make_expression(remainder ? Expression::Kind::Remainder
-                                                 : Expression::Kind::Multiply, offset);
+            auto expr = make_expression(Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
-            expr->right = std::move(right);
+            expr->right = unary();
             left = std::move(expr);
         }
         return left;
