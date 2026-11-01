@@ -103,7 +103,7 @@ def main():
         # Candidate five-backend scalar subset. Each case must link and execute;
         # a source-only parse, zero-step CI or host evaluation is not a pass.
         for case_id, expr in WAVE_SCALARS:
-            src.write_text("pub fnc main(): int { return "+expr+"; }\\n".replace("\\n", "\n"), encoding="utf-8")
+            src.write_text("pub fnc main(): int { return "+expr+"; }\n", encoding="utf-8")
             compiled=run([str(compiler),str(src)])
             require(compiled.returncode==0 and b"define i32 @main(" in compiled.stdout,
                     "native LLVM compile rejected wave case "+case_id+" "+repr(compiled.stderr[:1024]))
