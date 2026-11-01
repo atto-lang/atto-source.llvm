@@ -13,6 +13,10 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     SupervisorControlTurn::Decision next = SupervisorControlTurn::Decision::Acknowledge;
     bool restart_ok = true;
     bool fail_once = false;
+    bool stop_throws = false;
+    int stop_calls = 0;
+    SupervisorControlTurn::StopReceipt stop_receipt =
+            SupervisorControlTurn::StopReceipt::Acknowledged;
     SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure&) override {
         CHECK(false && "actor terminal Throw may never reach supervisor on_throw");
         return next;
@@ -46,6 +50,13 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     }
     bool on_restart(const SupervisorFailureLane::Failure&) override {
         order.push_back("restart"); return restart_ok;
+    }
+    SupervisorControlTurn::StopReceipt on_stop(
+            const SupervisorFailureLane::Failure&) override {
+        order.push_back("stop");
+        ++stop_calls;
+        if (stop_throws) throw std::runtime_error("ambiguous host STOP");
+        return stop_receipt;
     }
     void on_user_turn() override { order.push_back("user"); }
 };
@@ -188,6 +199,77 @@ int main() {
     CHECK(regressing.admit_turn(regressionHooks, false, 49)
             == SupervisorControlTurn::Admitted::Control);
     CHECK(regressionHooks.order.back() == "escalate");
+
+    // An acknowledged host STOP is committed only after an explicit receipt.
+    SupervisorControlTurn stopping(2);
+    Hooks stopHooks;
+    stopHooks.next = SupervisorControlTurn::Decision::Stop;
+    Key stopped{"stopped", 8};
+    stopping.reserve_child(stopped);
+    CHECK(stopping.publish_child(stopped, Kind::Panic, "panic"));
+    CHECK(stopping.admit_turn(stopHooks, true) == SupervisorControlTurn::Admitted::Control);
+    CHECK(stopHooks.stop_calls == 1);
+    CHECK(!stopping.stop_quarantined());
+    CHECK(stopping.reserved_count() == 0);
+    CHECK(stopping.admit_turn(stopHooks, false) == SupervisorControlTurn::Admitted::None);
+
+    // An uncertain STOP holds the original child generation in-flight and
+    // blocks all subsequent CONTROL or user turns until trusted reconciliation.
+    SupervisorControlTurn uncertain(2);
+    Hooks uncertainHooks;
+    uncertainHooks.next = SupervisorControlTurn::Decision::Stop;
+    uncertainHooks.stop_receipt = SupervisorControlTurn::StopReceipt::Uncertain;
+    Key undecided{"undecided", 9}, laterStop{"another-child", 1};
+    uncertain.reserve_child(undecided);
+    uncertain.reserve_child(laterStop);
+    CHECK(uncertain.publish_child(undecided, Kind::Panic, "panic"));
+    CHECK(uncertain.admit_turn(uncertainHooks, false)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(uncertain.stop_quarantined());
+    CHECK(uncertain.reserved_count() == 2);
+    CHECK(uncertain.pending_count() == 0);
+    CHECK(uncertain.publish_child(laterStop, Kind::Panic, "panic"));
+    bool deniedStop = false;
+    try { (void)uncertain.admit_turn(uncertainHooks, true); }
+    catch (const std::logic_error&) { deniedStop = true; }
+    CHECK(deniedStop && uncertainHooks.stop_calls == 1);
+    deniedStop = false;
+    try { uncertain.confirm_stopped(Key{"undecided", 8}); }
+    catch (const std::logic_error&) { deniedStop = true; }
+    CHECK(deniedStop && uncertain.stop_quarantined());
+    uncertain.confirm_stopped(undecided);
+    CHECK(!uncertain.stop_quarantined());
+    CHECK(uncertain.reserved_count() == 1);
+    uncertainHooks.next = SupervisorControlTurn::Decision::Acknowledge;
+    CHECK(uncertain.admit_turn(uncertainHooks, false)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(uncertain.reserved_count() == 0);
+    deniedStop = false;
+    try { uncertain.confirm_stopped(undecided); }
+    catch (const std::logic_error&) { deniedStop = true; }
+    CHECK(deniedStop);
+
+    // A STOP callback that throws after a possibly applied effect must never
+    // be retried automatically. The host must reconcile its exact generation.
+    SupervisorControlTurn throwingStop(1);
+    Hooks throwingHooks;
+    throwingHooks.next = SupervisorControlTurn::Decision::Stop;
+    throwingHooks.stop_throws = true;
+    Key unknownReceipt{"unknown-receipt", 12};
+    throwingStop.reserve_child(unknownReceipt);
+    CHECK(throwingStop.publish_child(unknownReceipt, Kind::Panic, "panic"));
+    bool ambiguous = false;
+    try { (void)throwingStop.admit_turn(throwingHooks, false); }
+    catch (const std::runtime_error&) { ambiguous = true; }
+    CHECK(ambiguous && throwingStop.stop_quarantined());
+    CHECK(throwingStop.reserved_count() == 1);
+    CHECK(throwingStop.pending_count() == 0);
+    deniedStop = false;
+    try { (void)throwingStop.admit_turn(throwingHooks, false); }
+    catch (const std::logic_error&) { deniedStop = true; }
+    CHECK(deniedStop && throwingHooks.stop_calls == 1);
+    throwingStop.confirm_stopped(unknownReceipt);
+    CHECK(throwingStop.reserved_count() == 0);
 
     return 0;
 }
