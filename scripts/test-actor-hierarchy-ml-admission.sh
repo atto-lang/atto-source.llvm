@@ -65,6 +65,7 @@ define actor Bad implements BadTrait as end';;
   status=$?
   set -e
   [[ $status -ne 0 ]] || { echo "$testcase: unsupported source was admitted" >&2; exit 1; }
+  [[ $status -lt 128 ]] || { echo "$testcase: compiler crashed (exit=$status)" >&2; exit 1; }
   [[ ! -s "$tmp/$testcase.ll" ]] || { echo "$testcase: emitted LLVM IR on denied source" >&2; exit 1; }
   [[ -s "$tmp/$testcase.err" ]] || { echo "$testcase: missing explicit rejection diagnostic" >&2; exit 1; }
 done
