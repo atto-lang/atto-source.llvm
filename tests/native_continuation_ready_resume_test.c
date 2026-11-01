@@ -455,9 +455,22 @@ int main(void) {
     check(record.state == ORES_CONTINUATION_PENDING);
     check(ores_native_continuation_store_notify_ready(
         continuations, link.continuation));
-    check(ores_native_await_trace_ready_resume_begin(
+    /* The scheduler's trusted code generation, not the Future's producer,
+     * determines whether a READY frame may enter a new actor turn. Invalid
+     * generations cannot consume the one-shot claim or allocate a child. */
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
         executions, continuations, (OresNativeExecutionId){88, 9},
-        link, &resumed, &resumed_context));
+        link, 0, &resumed, &resumed_context));
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 9},
+        link, 78, &resumed, &resumed_context));
+    check(ores_native_continuation_store_get(
+        continuations, link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(!ores_native_store_handle_valid(resumed));
+    check(ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 9},
+        link, 77, &resumed, &resumed_context));
     check(resumed_context.id.execution == 9);
     check(resumed_context.allocation.owner == context.allocation.owner);
     check(ores_native_continuation_store_get(
