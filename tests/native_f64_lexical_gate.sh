@@ -150,6 +150,34 @@ positive scoped_f64_mutation 'pub fnc main(): int {
   return 86;
 }'
 positive integer_control 'pub fnc main(): int { return 42; }'
+positive oresllm_scalar_gradient 'pub fnc main(): int {
+  val f64 weight = 5.0;
+  val f64 x = 3.0;
+  val f64 bias = 1.0;
+  val f64 target = 9.0;
+  val f64 error = weight * x + bias - target;
+  val f64 gradient = 2.0 * error * x;
+  if gradient == 42.0; then return 42; fi
+  return 86;
+}'
+positive oresllm_finite_difference 'pub fnc main(): int {
+  val f64 weight = 5.0;
+  val f64 x = 3.0;
+  val f64 h = 0.5;
+  val f64 a = (weight + h) * x + 1.0 - 9.0;
+  val f64 b = (weight - h) * x + 1.0 - 9.0;
+  val f64 gradient = (a * a - b * b) / (2.0 * h);
+  if gradient == 42.0; then return 42; fi
+  return 86;
+}'
+positive oresllm_scoped_gradient 'pub fnc main(): int {
+  if true; then
+    let f64 gradient = 2.0 * ((5.0 * 3.0 + 1.0) - 9.0) * 3.0;
+    gradient = gradient + 0.0;
+    if gradient == 42.0; then return 42; fi
+  fi
+  return 86;
+}'
 
 negative implicit_int_to_f64 'pub fnc main(): int {
   val f64 value = 1;
@@ -208,6 +236,6 @@ negative scoped_f64_wrong_assignment 'pub fnc main(): int {
   return 86;
 }' 'native scalar assignment requires f64'
 
-[[ "$pass" -eq 17 && "$reject" -eq 13 ]] ||
+[[ "$pass" -eq 20 && "$reject" -eq 13 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=17; NEGATIVE_NO_IR_PASS=13 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=20; NEGATIVE_NO_IR_PASS=13 (not arrays/solver)"
