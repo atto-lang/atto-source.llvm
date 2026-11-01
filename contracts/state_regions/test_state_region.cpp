@@ -29,7 +29,10 @@ int main() {
     constexpr std::uint64_t max_id = ores::state::wire::kMaxJsonSafeId;
     const Provenance borrow{9, 3, 7, 1001, 41, 6, 501,
                             "inventory.stock", Kind::write, Action::borrow};
-    const Provenance release = borrow.release_record();
+    const auto release_option = borrow.release_record();
+    CHECK(release_option.has_value());
+    const Provenance release = *release_option;
+    CHECK(!release.release_record().has_value());
     CHECK(borrow.valid() && borrow.authorizes_release(release));
     CHECK(!release.authorizes_release(borrow));
     CHECK(!borrow.authorizes_release(borrow));
@@ -47,8 +50,10 @@ int main() {
 
     const Provenance maximum{max_id, max_id, max_id, max_id, max_id, max_id, max_id,
                              "inventory.stock", Kind::read, Action::borrow};
-    CHECK(maximum.authorizes_release(maximum.release_record()));
+    CHECK(maximum.release_record().has_value());
+    CHECK(maximum.authorizes_release(*maximum.release_record()));
     corrupted = maximum; corrupted.region_id = max_id + 1; CHECK(!corrupted.valid());
+    CHECK(!corrupted.release_record().has_value());
     corrupted = maximum; corrupted.region_generation = max_id + 1; CHECK(!corrupted.valid());
     corrupted = maximum; corrupted.runtime_domain = max_id + 1; CHECK(!corrupted.valid());
     corrupted = maximum; corrupted.execution_id = max_id + 1; CHECK(!corrupted.valid());
