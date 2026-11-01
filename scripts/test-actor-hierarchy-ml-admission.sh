@@ -45,6 +45,7 @@ cases=(
   state_loan_escape
   model_graph
   actor_trait_mixed_state
+  canonical_counter_target
 )
 for testcase in "${cases[@]}"; do
   case "$testcase" in
@@ -70,6 +71,14 @@ end';;
  let int shared_mutable = 1;
 end
 define actor Bad implements BadTrait as end';;
+    canonical_counter_target)
+      command -v git >/dev/null || { echo "git source blob verifier unavailable" >&2; exit 2; }
+      actual_blob="$(git hash-object --no-filters "$root/tests/fixtures/actor-counter-target.ores")"
+      [[ "$actual_blob" == "c49780b4b42251db20ae9ac864eb8606bf7da922" ]] || {
+        echo "Counter actor source differs from shared canonical Git blob" >&2
+        exit 1
+      }
+      source="$(cat -- "$root/tests/fixtures/actor-counter-target.ores")";;
   esac
   printf '%s\n' "$source" >"$tmp/$testcase.ores"
   set +e
@@ -81,4 +90,4 @@ define actor Bad implements BadTrait as end';;
   [[ ! -s "$tmp/$testcase.ll" ]] || { echo "$testcase: emitted LLVM IR on denied source" >&2; exit 1; }
   [[ -s "$tmp/$testcase.err" ]] || { echo "$testcase: missing explicit rejection diagnostic" >&2; exit 1; }
 done
-echo "LLVM_ACTOR_HIERARCHY_ML_SOURCE_GATE: scalar_42_pass; six_source_denials_pass"
+echo "LLVM_ACTOR_HIERARCHY_ML_SOURCE_GATE: scalar_42_pass; seven_source_denials_pass"
