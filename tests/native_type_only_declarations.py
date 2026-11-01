@@ -171,21 +171,21 @@ def main():
     # emit scalar LLVM IR before matching parser/type/ownership lowering exists.
     negative.extend([
         ("state container needs owner-scoped mutable-state lowering",
-         "define state container Ledger as end\\n" + main_fn, None),
+         "define state container Ledger as end\n" + main_fn, None),
         ("state container cannot fake an ordinary class inheritance",
-         "define state container Ledger extends Holder as end\\n" + main_fn, None),
+         "define state container Ledger extends Holder as end\n" + main_fn, None),
         ("grain needs keyed virtual actor identity",
-         "define grain User as end\\n" + main_fn, None),
+         "define grain User as end\n" + main_fn, None),
         ("grain cannot inherit plain actor and bypass activation",
-         "define grain User extends ActorBase as end\\n" + main_fn, None),
+         "define grain User extends ActorBase as end\n" + main_fn, None),
         ("supervisor requires CONTROL-plane lowering",
-         "define supervisor Root as end\\n" + main_fn, None),
+         "define supervisor Root as end\n" + main_fn, None),
         ("supervisor cannot borrow ordinary class inheritance",
-         "define supervisor Root extends Base as end\\n" + main_fn, None),
+         "define supervisor Root extends Base as end\n" + main_fn, None),
         ("protocol needs typed verified wire descriptor",
-         "define protocol Wire as end\\n" + main_fn, None),
+         "define protocol Wire as end\n" + main_fn, None),
         ("service is not an implicit network actor",
-         "define service Api as end\\n" + main_fn, None),
+         "define service Api as end\n" + main_fn, None),
     ])
 
     negative.extend([
