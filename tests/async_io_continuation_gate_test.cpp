@@ -96,6 +96,12 @@ static void completion_is_not_scheduler_visible_before_physical_retirement() {
     assert(resumed_context.allocation.owner == ticket.actor_id);
     assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
     assert(gate.finish_resume());
+    // A completed await has no second guest continuation, even if a
+    // foreign producer repeats its terminal callback after retirement.
+    assert(!gate.notify_ready_after_retirement());
+    OresNativeExecutionHandle second{};
+    assert(!gate.try_resume({77, 1003}, &second));
+    assert(!gate.finish_resume());
     assert(ores_native_execution_context_store_release(
         stores.executions, resumed));
     stores.release(link);
