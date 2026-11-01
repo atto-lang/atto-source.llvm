@@ -127,9 +127,9 @@ OresRtArenaStatus ores_rt_actor_arena_alloc(
     OresRtArenaHandle* out_handle);
 
 /*
- * Host read/write buffers are trusted and must not overlap arena backing.
- * The current byte-copy primitive has memcpy-style, not memmove-style,
- * semantics. Compiler/runtime integration must preserve this precondition.
+ * Host read/write buffers are checked for overlap with arena backing and
+ * live control metadata; overlapping or wrapping nonempty spans fail closed.
+ * Distinct external buffers need no heap allocation or synchronization.
  */
 OresRtArenaStatus ores_rt_actor_arena_read(
     OresRealtimeActorArena* arena,
