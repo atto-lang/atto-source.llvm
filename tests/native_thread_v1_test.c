@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeThreadV1.h"
 #include <assert.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -47,6 +48,23 @@ static int worker(void *opaque) {
     atomic_fetch_add(&entry_count, 1);
     return 42+a->idx;
 }
+
+static atomic_int early_exit_tls_drops = ATOMIC_VAR_INIT(0);
+static void exit_tls_drop(void *owned) {
+    /* The dying thread cannot revive a context while its slots are dropping. */
+    void *v = (void *)1;
+    assert(ores_native_thread_local_get_v1(7, &v) == ORES_THREAD_NO_CONTEXT_V1);
+    assert(v == NULL);
+    free(owned);
+    atomic_fetch_add(&early_exit_tls_drops, 1);
+}
+static int early_exit_worker(void *ignored) {
+    (void)ignored;
+    assert(ores_native_thread_local_set_v1(7, new_value(99), exit_tls_drop)
+           == ORES_THREAD_OK_V1);
+    pthread_exit(NULL);
+    return 0; /* unreachable */
+}
 int main(void) {
     ores_native_thread_v1 *handles[4] = {0};
     void *outside = (void *)1;
@@ -83,6 +101,16 @@ int main(void) {
     assert(atomic_load(&entry_count) == 4);
     /* per worker: replaced slot, taken slot, remaining slot, moved arg */
     assert(atomic_load(&drops) == 16);
+    ores_native_thread_v1 *early = NULL;
+    int *early_arg = new_value(44);
+    assert(ores_native_thread_spawn_v1(
+        early_exit_worker, early_arg, drop_value, &early) == ORES_THREAD_OK_V1);
+    int early_result = 0;
+    assert(ores_native_thread_join_blocking_v1(early, &early_result)
+           == ORES_THREAD_UNEXPECTED_EXIT_V1);
+    assert(ores_native_thread_release_v1(early) == ORES_THREAD_OK_V1);
+    assert(atomic_load(&early_exit_tls_drops) == 1);
+    assert(atomic_load(&drops) == 17);
     puts("native pthread substrate: OK (host-only; no guest compiler claim)");
     return 0;
 }
