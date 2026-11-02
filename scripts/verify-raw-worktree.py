@@ -99,7 +99,7 @@ def self_test() -> None:
         git(root, "-c", "user.name=Fixture", "-c",
             "user.email=fixture@example.invalid", "commit", "-qm", "initial")
         git(root, "config", "filter.attack.clean", "sh -c 'touch filter-executed; cat'")
-        if verify(root) != 2 or (root / "filter-executed").exists():
+        if verify(root) != 3 or (root / "filter-executed").exists():
             raise IntegrityError("clean control or filter nonexecution failed")
         (root / "example.txt").write_text("mutated\n")
         try:
