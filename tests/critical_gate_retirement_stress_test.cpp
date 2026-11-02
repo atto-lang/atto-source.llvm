@@ -22,7 +22,10 @@ int main() {
     require(gate.release(queued1.token)==queued2.token,"second FIFO"); ++passes;
     require(!gate.release(queued2.token),"drained FIFO"); ++passes;
     auto newOwner=gate.try_request(); require(newOwner.has_value(),"reuse"); ++passes;
-    auto stale=gate.request(); require(gate.retire()==1,"retire waiter"); ++passes;
+    auto stale=gate.request(); const auto retired = gate.retire();
+    require(retired.cancelled_waiters.size()==1 &&
+            retired.cancelled_waiters.front()==stale.token &&
+            retired.owner==*newOwner,"retirement tickets"); ++passes;
     require(!gate.quiescent(),"not quiescent until active exits"); ++passes;
     require(!gate.release(stale.token),"cancel stale"); ++passes;
     bool threw=false; try { (void)gate.request(); } catch(const std::logic_error&) {threw=true;}
@@ -42,7 +45,9 @@ int main() {
       });
     });
     while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
-    require(mutex.retire()==0,"retired active mutex"); ++passes;
+    const auto retired = mutex.retire();
+    require(retired.cancelled_waiters.empty() &&
+            retired.owner==*token,"retired active mutex"); ++passes;
     require(!mutex.quiescent(),"not quiescent while body running"); ++passes;
     finish.store(true,std::memory_order_release);
     worker.join();

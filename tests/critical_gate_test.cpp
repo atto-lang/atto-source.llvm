@@ -133,7 +133,13 @@ int main() {
         check(active.has_value(), "retirement setup has no owner");
         auto queuedA = gate.request();
         auto queuedB = gate.request();
-        check(gate.retire() == 2, "retire did not revoke two queued tickets");
+        const auto revoked = gate.retire();
+        check(revoked.cancelled_waiters.size() == 2,
+              "retire did not return two cancellation receipts");
+        check(revoked.cancelled_waiters[0] == queuedA.token
+              && revoked.cancelled_waiters[1] == queuedB.token,
+              "retirement receipts did not preserve FIFO order");
+        check(revoked.owner == *active, "retirement omitted active owner identity");
         check(gate.retired(), "retire state absent");
         check(!gate.quiescent(), "active owner declared physically quiescent");
         check(gate.waiting() == 0, "retired queued tickets retained capacity");
@@ -146,7 +152,9 @@ int main() {
         reject = false;
         try { (void)gate.try_request(); } catch (const std::logic_error&) { reject = true; }
         check(reject, "retired gate admitted try-request");
-        check(gate.retire() == 0, "duplicate retirement changed state");
+        const auto repeat = gate.retire();
+        check(repeat.cancelled_waiters.empty() && !repeat.owner,
+              "duplicate retirement issued duplicate cancellation receipts");
         check(!gate.release(*active), "retired owner was handed to a waiter");
         check(gate.quiescent(), "retired gate did not become quiescent");
         check(!gate.holds(*active), "stale active ticket retained owner after exit");

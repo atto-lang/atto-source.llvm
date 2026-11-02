@@ -104,7 +104,11 @@ int main() {
         check(!protectedState.try_request().has_value(), "busy logical mutex try_request succeeded");
         auto pending = protectedState.request();
         check(pending.admission == Admission::queued, "logical mutex pending slot absent");
-        check(protectedState.retire() == 1, "logical mutex failed to revoke waiter");
+        const auto retired = protectedState.retire();
+        check(retired.cancelled_waiters.size() == 1
+              && retired.cancelled_waiters.front() == pending.token,
+              "logical mutex dropped the cancellation ticket");
+        check(retired.owner == *owner, "logical mutex lost owner identity");
         check(!protectedState.quiescent(), "live logical callback marked quiescent");
         bool deniedAfterRetirement = false;
         try {
@@ -136,7 +140,9 @@ int main() {
             });
         });
         while (!inside.load(std::memory_order_acquire)) std::this_thread::yield();
-        check(gate.retire() == 0, "retirement with active owner revoked callback");
+        const auto retired = gate.retire();
+        check(retired.cancelled_waiters.empty() && retired.owner == *owner,
+              "retirement with active owner lost owner receipt");
         check(!gate.quiescent(), "retirement reclaimed an active protected body");
         finish.store(true, std::memory_order_release);
         worker.join();

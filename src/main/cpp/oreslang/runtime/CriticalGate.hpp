@@ -47,6 +47,17 @@ public:
     };
     static constexpr std::size_t max_waiters = 8192;
 
+    /**
+     * Trusted scheduler owns these cancellation receipts after retirement.
+     * Every queued ticket is returned exactly once in FIFO order; owner is
+     * returned for cancellation fencing but MUST NOT be released before an
+     * already-executing protected callback physically finishes.
+     */
+    struct Retirement final {
+        std::deque<Token> cancelled_waiters;
+        Token owner;
+    };
+
     CriticalGate() : scope_(issue_scope()) {}
     CriticalGate(const CriticalGate&) = delete;
     CriticalGate& operator=(const CriticalGate&) = delete;
@@ -88,18 +99,23 @@ public:
     }
 
     /**
-     * Revoke queued continuations on STOP/restart/hotload. Retirement does
-     * NOT release a physically active protected body or prove quiescence.
-     * The scheduler owns cancellation notifications and must separately
-     * retire the rejected logical continuations.
+     * Atomic STOP/restart/hotload fence. The caller MUST deliver cancellation
+     * to every returned waiter on the scheduler's control lane, outside mu_.
+     * Lost tokens would strand suspended Futures forever; returning only a
+     * count is therefore not a valid retirement interface.
+     *
+     * Preserve the already granted owner until physical completion or a
+     * scheduler-confirmed pre-entry cancellation. Returning owner here gives
+     * that scheduler an exact identity for its separate decision.
      */
-    [[nodiscard]] std::size_t retire() {
+    [[nodiscard]] Retirement retire() {
         std::lock_guard<std::mutex> lock(mu_);
-        if (retired_) return 0;
+        Retirement retired;
+        if (retired_) return retired;
         retired_ = true;
-        const std::size_t rejected = waiting_.size();
-        waiting_.clear();
-        return rejected;
+        retired.owner = owner_;
+        retired.cancelled_waiters.swap(waiting_);
+        return retired;
     }
 
     [[nodiscard]] bool retired() const {

@@ -43,10 +43,10 @@ public:
     [[nodiscard]] std::optional<Token> try_request() { return queue_.try_request(); }
     // Retire only queued tickets; a live protected callback must finish
     // before its state/arena is reclaimed.
-    [[nodiscard]] std::size_t retire() {
-        // Match with_owner/release lock order. Once retired, even a formerly
-        // admitted but not-yet-executing token cannot enter a new callback.
-        // An already-active callback remains physically pinned to its owner.
+    [[nodiscard]] CriticalGate::Retirement retire() {
+        // The admission/callback boundary and retirement use identical lock
+        // ordering. Receipts are owned by the scheduler after this returns;
+        // never notify or run guest code under lease_mu_.
         std::lock_guard<std::mutex> lock(lease_mu_);
         return queue_.retire();
     }
