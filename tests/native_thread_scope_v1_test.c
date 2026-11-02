@@ -152,13 +152,39 @@ static void rollback_on_failed_native_spawn(void) {
     assert(ores_native_thread_scope_destroy_v1(scope) == ORES_THREAD_OK_V1);
 }
 #endif
+static int premature_exit(void *p) {
+    (void)p;
+    pthread_exit(NULL);
+    return 0; /* unreachable */
+}
+static void abnormal_exit_retains_quota_until_release(void) {
+    ores_native_thread_scope_v1 *scope = NULL;
+    assert(ores_native_thread_scope_open_v1(1, &scope) == ORES_THREAD_OK_V1);
+    ores_native_thread_v1 *h = NULL;
+    assert(ores_native_thread_scope_spawn_v1(
+        scope, premature_exit, owned(88), drop_arg, &h) == ORES_THREAD_OK_V1);
+    assert(ores_native_thread_scope_close_v1(scope) == ORES_THREAD_SCOPE_BUSY_V1);
+    int result = -999;
+    assert(ores_native_thread_join_blocking_v1(h, &result)
+           == ORES_THREAD_UNEXPECTED_EXIT_V1);
+    assert(result == -999); /* no fabricated successful guest return */
+    assert(ores_native_thread_scope_destroy_v1(scope) == ORES_THREAD_SCOPE_BUSY_V1);
+    assert(ores_native_thread_release_v1(h) == ORES_THREAD_OK_V1);
+    assert(ores_native_thread_scope_close_v1(scope) == ORES_THREAD_OK_V1);
+    assert(ores_native_thread_scope_destroy_v1(scope) == ORES_THREAD_OK_V1);
+}
 int main(void) {
+    ores_native_thread_scope_v1 *bad = (ores_native_thread_scope_v1 *)1;
+    assert(ores_native_thread_scope_open_v1(1025, &bad)
+           == ORES_THREAD_BAD_ARGUMENT_V1);
+    assert(bad == NULL);
     basic_close_and_lifetime();
     concurrent_admission();
+    abnormal_exit_retains_quota_until_release();
 #ifdef ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION
     rollback_on_failed_native_spawn();
 #endif
-    assert(atomic_load(&drops) == 5);
+    assert(atomic_load(&drops) == 6);
     puts("NATIVE_THREAD_SCOPE_QUOTA_PASS (host-only)");
     return 0;
 }
