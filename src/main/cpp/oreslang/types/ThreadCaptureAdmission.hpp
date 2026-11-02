@@ -142,6 +142,11 @@ public:
                 default:
                     invalid_shape();
                 }
+                // Check the *queued* breadth before allocating it. A
+                // maliciously wide nominal type could otherwise enqueue
+                // millions of children before the inspected-node guard fires.
+                if (node.parameters.size() > 4096 - inspected - pending.size())
+                    throw std::invalid_argument("thread_capture_type_budget");
                 for (const auto& param : node.parameters)
                     pending.push_back({&param, item.second + 1});
             }
