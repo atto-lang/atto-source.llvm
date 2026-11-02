@@ -44,6 +44,15 @@ fn main(){
         const last = infer struct{...first,x:2};
         return last.x + last.y;
       }"#,42),
+      ("computed-fields",r#"pub fnc main():int{
+        const first = infer struct{x:20+2,y:20};
+        return first.x + first.y;
+      }"#,42),
+      ("prior-scalar-local",r#"pub fnc main():int{
+        const int initial = 20;
+        const row = infer struct{x:initial,y:22};
+        return row.x + row.y;
+      }"#,42),
       ("original-unchanged",r#"pub fnc main():int{
         const old = record{x:20};
         const new_row = record{...old,x:42};
