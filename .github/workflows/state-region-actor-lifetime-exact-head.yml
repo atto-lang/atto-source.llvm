@@ -6,6 +6,7 @@ on:
       - 'CMakeLists.txt'
       - 'tests/state_region_actor_lifetime_pin_test.cpp'
       - 'tests/native_two_actor_arena_lifetime_test.cpp'
+      - 'tests/native_actor_arena_denial_test.cpp'
       - 'src/main/cpp/oreslang/runtime/StateRegionActorLifetimePin.hpp'
       - 'src/main/cpp/oreslang/runtime/OresTaskBoundStateRegion.h'
       - 'src/main/cpp/oreslang/runtime/NativeActorRetirementBarrier.hpp'
@@ -98,6 +99,19 @@ jobs:
             "$RUNNER_TEMP/actor-state-region/two-actor.o" \
             -o "$RUNNER_TEMP/actor-state-region/two-actor-test"
           "$RUNNER_TEMP/actor-state-region/two-actor-test"
+          # Fork/abort denial checks run only under optimized and ASan/UBSan.
+          # TSAN continues to exercise the concurrent lifetime test above.
+          if [[ "$MODE" != tsan ]]; then
+            "$CXX" -std=c++20 "${FLAGS[@]}" -Wall -Wextra -Wpedantic -Werror \
+              -Isrc/main/cpp -pthread \
+              -c tests/native_actor_arena_denial_test.cpp \
+              -o "$RUNNER_TEMP/actor-state-region/denials.o"
+            "$CXX" "${LINK_FLAGS[@]}" -pthread \
+              "$RUNNER_TEMP/actor-state-region/arena.o" \
+              "$RUNNER_TEMP/actor-state-region/denials.o" \
+              -o "$RUNNER_TEMP/actor-state-region/denials-test"
+            "$RUNNER_TEMP/actor-state-region/denials-test"
+          fi
           echo "EXACT_HEAD_NATIVE_ACTOR_LIFETIME=$EXPECTED_HEAD"
           echo "COMPILER_GUEST_EXECUTED=false"
           echo "COMPILER_GUEST_PARITY=NOT_VERIFIED"
@@ -136,11 +150,11 @@ jobs:
           cmake -S . -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
             "-DLLVM_DIR=$LLVM_DIR" -DBUILD_TESTING=ON
-          cmake --build "$BUILD" --target oreslang-state-region-actor-lifetime-pin-test oreslang-native-two-actor-arena-lifetime-test -j2
+          cmake --build "$BUILD" --target \
+            oreslang-state-region-actor-lifetime-pin-test \
+            oreslang-native-two-actor-arena-lifetime-test \
+            oreslang-native-actor-arena-denial-test -j2
           ctest --test-dir "$BUILD" --output-on-failure \
-            -R '^(native_state_region_blocks_actor_arena_reclamation|native_two_actor_arena_isolation_and_quiescent_reclamation)
-          echo "PRODUCTION_NATIVE_CTEST_HEAD=$EXPECTED_HEAD"
-          echo "COMPILED_ORES_GUEST_VERIFIED=false"
-
+            -R '^(native_state_region_blocks_actor_arena_reclamation|native_two_actor_arena_isolation_and_quiescent_reclamation|native_actor_arena_denial_abort_contract)$'
           echo "PRODUCTION_NATIVE_CTEST_HEAD=$EXPECTED_HEAD"
           echo "COMPILED_ORES_GUEST_VERIFIED=false"
