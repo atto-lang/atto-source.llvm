@@ -50,6 +50,16 @@ int main() {
     check(memberships.join(b, 11, 1), "join subscriber 11 B");
 
     NativeActorPubSubAdmission<std::string> bus(memberships, 8, 4);
+    bool c1_control_rejected = false;
+    try {
+        bus.define_topic(
+            a.group_id(), "bad-\xC2\x85",
+            NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 1);
+    } catch (const std::invalid_argument&) {
+        c1_control_rejected = true;
+    }
+    check(c1_control_rejected,
+          "typed bus accepted a Unicode C1-control topic name");
     bus.define_topic(
             a.group_id(), "reliable",
             NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable,
