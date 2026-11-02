@@ -38,6 +38,14 @@ static int64_t actor_message(
 int main(void) {
     void* actor = oreslang_source_actor_spawn(actor_init, actor_message, 1);
     check(actor != NULL);
+
+    OresSourceActorIdentity identity = {0};
+    check(oreslang_source_actor_identity(actor, &identity));
+    check(identity.logical_id != 0);
+    check(identity.scheduler_domain != 0);
+    check(identity.actor_slot < 63);
+    check(identity.scheduler_generation != 0);
+
     oreslang_source_actor_send(actor, 7);
     oreslang_source_actor_send(actor, 8);
 
@@ -57,6 +65,11 @@ int main(void) {
     oreslang_source_actor_join_done(actor);
     check(atomic_load_explicit(&exited, memory_order_acquire));
     check(atomic_load_explicit(&delivered, memory_order_acquire) == 1);
+
+    /* The stale pointer value is safe to probe: identity() checks slot
+     * equality under the lifetime mutex before dereferencing any SourceActor. */
+    OresSourceActorIdentity retired = {0};
+    check(!oreslang_source_actor_identity(actor, &retired));
 
     puts("SOURCE_ACTOR_STOP_JOIN_SPLIT_PASS");
     return 0;
