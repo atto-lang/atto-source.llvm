@@ -298,18 +298,18 @@ extern "C" OresNativePubSubStatus ores_native_actor_pubsub_leave(
     if (!valid_runtime_and_actor(runtime, actor) || group_id == 0)
         return ORES_NATIVE_PUBSUB_INVALID;
     return guarded([&] {
-        if (!runtime->memberships.leave(
-                group_id, actor.logical_id, actor.scheduler_generation)) {
+        if (!runtime->memberships.leave_with_cleanup(
+                group_id, actor.logical_id, actor.scheduler_generation, [&] {
+                    // Membership lock -> bus lock, exactly the same order as
+                    // subscribe/publish. A rejoin cannot create a new edge
+                    // until both old queues are physically reclaimed.
+                    runtime->i64_bus.remove_actor_from_group(
+                        group_id, actor.logical_id, actor.scheduler_generation);
+                    runtime->utf8_bus.remove_actor_from_group(
+                        group_id, actor.logical_id, actor.scheduler_generation);
+                })) {
             throw std::logic_error("membership already absent or stale");
         }
-        /*
-         * The membership registry is already the barrier. Remove queued topic
-         * state only after no publication can authorize this actor again.
-         */
-        runtime->i64_bus.remove_actor_from_group(
-            group_id, actor.logical_id, actor.scheduler_generation);
-        runtime->utf8_bus.remove_actor_from_group(
-            group_id, actor.logical_id, actor.scheduler_generation);
     });
 }
 
