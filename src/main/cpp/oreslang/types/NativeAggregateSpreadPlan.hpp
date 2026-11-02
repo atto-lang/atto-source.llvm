@@ -32,6 +32,7 @@ public:
 
     // One syntactically named field, evaluated once before later elements.
     void add_named(std::string name, std::string type) {
+        require_budget(1);
         NativeAggregateShape candidate{result_kind_, {{name, type}}};
         candidate.canonicalize(); // rejects invalid and unsupported shapes
         if (!explicit_names_.insert(name).second)
@@ -44,6 +45,7 @@ public:
     // Never enumerate a wider runtime object or implicitly consume its owner.
     void add_checked_spread_projection(NativeAggregateShape source) {
         source.canonicalize();
+        require_budget(source.fields.size());
         const std::size_t element = next_element_++;
         for (const auto& field : source.fields)
             writes_.push_back(Write{element, field.name, field.type, true});
@@ -71,6 +73,10 @@ public:
     std::size_t source_elements() const noexcept { return next_element_; }
 
 private:
+    void require_budget(std::size_t additional_writes) const {
+        if (next_element_ >= 1024 || additional_writes > 8192 - writes_.size())
+            throw std::invalid_argument("AGGREGATE_SPREAD_PLAN_BUDGET");
+    }
     Kind result_kind_;
     std::size_t next_element_ = 0;
     std::set<std::string> explicit_names_;
