@@ -354,10 +354,10 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
     // These tests establish only the currently implemented scalar guest slice,
     // not full language/actor AOT parity.
     for (label, program, expected_exit) in [
-        ("zero", "pub routine main(): int { return 0; }\\n", 0),
-        ("one", "pub routine main(): int { return 1; }\\n", 1),
-        ("module", "define module demo as\\n  pub fnc main(): int { return 7; }\\nend\\n", 7),
-        ("forward-call", "pub fnc main(): int { return add(40, 2); }\\nfnc add(int a, int b): int { return a + b; }\\n", 42),
+        ("zero", "pub routine main(): int { return 0; }\n", 0),
+        ("one", "pub routine main(): int { return 1; }\n", 1),
+        ("module", "define module demo as\n  pub fnc main(): int { return 7; }\nend\n", 7),
+        ("forward-call", "pub fnc main(): int { return add(40, 2); }\nfnc add(int a, int b): int { return a + b; }\n", 42),
     ] {
         fs::write(&source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
         let built = Command::new(driver)
@@ -381,7 +381,7 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
     }
     // Rebuild the original image before negative cases: they must preserve
     // exactly these published bytes and never publish a partial executable.
-    fs::write(&source, "fnc main(): int { return 42; }\\n")
+    fs::write(&source, "fnc main(): int { return 42; }\n")
         .map_err(|e| e.to_string())?;
     let restored = Command::new(driver)
         .arg(&source).arg(&output)
