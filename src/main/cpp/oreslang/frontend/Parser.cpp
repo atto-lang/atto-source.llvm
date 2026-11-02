@@ -2156,6 +2156,67 @@ private:
         // immutable, closed and limited to native Copy-safe i64/bool fields.
         // Every syntactic initializer stays in source order, including writes
         // subsequently overridden by another field or spread.
+        // Classify a statically typed scalar expression without executing it.
+        // The independent native scalar checker still validates operations,
+        // arithmetic overflow, name binding and effect/ownership rules.
+        std::function<std::string(const Expression&, std::size_t)>
+            infer_scalar_aggregate_field_type;
+        infer_scalar_aggregate_field_type = [&](const Expression& expr, std::size_t depth) -> std::string {
+            require_expression_depth(depth, expr.offset);
+            using K = Expression::Kind;
+            if (expr.kind == K::Integer) return "int";
+            if (expr.kind == K::Boolean) return "bool";
+            if (expr.kind == K::Variable) {
+                const auto local = std::find_if(value.locals.begin(), value.locals.end(),
+                    [&](const LocalBinding& x) { return x.name == expr.name; });
+                if (local != value.locals.end() && !local->aggregate_type &&
+                        !local->heap_owned && !local->int_array &&
+                        local->class_name.empty() && local->sum_type.empty())
+                    return local->scalar_type == ScalarType::Bool ? "bool" :
+                        local->scalar_type == ScalarType::I64 ? "int" : "";
+                return "";
+            }
+            if (expr.kind == K::Field && expr.left && expr.left->kind == K::Variable) {
+                const auto local = std::find_if(value.locals.begin(), value.locals.end(),
+                    [&](const LocalBinding& x) { return x.name == expr.left->name; });
+                if (local != value.locals.end() && local->aggregate_type) {
+                    const auto field = std::find_if(local->aggregate_type->fields.begin(),
+                        local->aggregate_type->fields.end(),
+                        [&](const types::NativeAggregateShape::Field& f) {
+                            return f.name == expr.name;
+                        });
+                    if (field != local->aggregate_type->fields.end()) return field->type;
+                }
+                return "";
+            }
+            if (expr.kind == K::Negate || expr.kind == K::LogicalNot) {
+                if (!expr.left) return "";
+                const auto type = infer_scalar_aggregate_field_type(*expr.left,depth+1);
+                if (expr.kind == K::Negate && type == "int") return "int";
+                if (expr.kind == K::LogicalNot && type == "bool") return "bool";
+                return "";
+            }
+            const bool integer_math = expr.kind == K::Add || expr.kind == K::Subtract ||
+                expr.kind == K::Multiply || expr.kind == K::Remainder;
+            const bool comparison = expr.kind == K::Equal || expr.kind == K::NotEqual ||
+                expr.kind == K::Less || expr.kind == K::LessEqual ||
+                expr.kind == K::Greater || expr.kind == K::GreaterEqual;
+            const bool logical = expr.kind == K::LogicalAnd ||
+                expr.kind == K::LogicalOr || expr.kind == K::LogicalXor;
+            if ((integer_math || comparison || logical) && expr.left && expr.right) {
+                const auto left = infer_scalar_aggregate_field_type(*expr.left,depth+1);
+                const auto right = infer_scalar_aggregate_field_type(*expr.right,depth+1);
+                if (integer_math && left == "int" && right == "int") return "int";
+                if (comparison && !left.empty() && left == right) return "bool";
+                if (logical && left == "bool" && right == "bool") return "bool";
+            }
+            if (expr.kind == K::Conditional && expr.when_true && expr.when_false) {
+                const auto yes = infer_scalar_aggregate_field_type(*expr.when_true,depth+1);
+                const auto no = infer_scalar_aggregate_field_type(*expr.when_false,depth+1);
+                if (!yes.empty() && yes == no) return yes;
+            }
+            return "";
+        };
         auto infer_stack_aggregate = [&]() -> std::unique_ptr<Expression> {
             const auto offset = token_.offset;
             const bool inferred = accept("infer");
@@ -2204,26 +2265,7 @@ private:
                         advance();
                         require(":");
                         auto field = expression();
-                        std::string type;
-                        if (field->kind == Expression::Kind::Integer)
-                            type = "int";
-                        else if (field->kind == Expression::Kind::Boolean)
-                            type = "bool";
-                        else if (field->kind == Expression::Kind::Field && field->left &&
-                                 field->left->kind == Expression::Kind::Variable) {
-                            const auto& owner = field->left->name;
-                            const auto local = std::find_if(value.locals.begin(), value.locals.end(),
-                                [&](const LocalBinding& x) { return x.name == owner; });
-                            if (local != value.locals.end() && local->aggregate_type) {
-                                const auto member = std::find_if(local->aggregate_type->fields.begin(),
-                                    local->aggregate_type->fields.end(),
-                                    [&](const types::NativeAggregateShape::Field& x) {
-                                        return x.name == field->name;
-                                    });
-                                if (member != local->aggregate_type->fields.end())
-                                    type = member->type;
-                            }
-                        }
+                        const std::string type = infer_scalar_aggregate_field_type(*field, 1);
                         if (type != "int" && type != "bool")
                             fail("AGGREGATE_INFER_FIELD_TYPE_UNVERIFIED: first slice supports literal or closed scalar field");
                         plan.add_named(name, type);
