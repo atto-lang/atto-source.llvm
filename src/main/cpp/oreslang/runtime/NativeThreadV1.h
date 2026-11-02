@@ -55,6 +55,11 @@ ores_thread_status_v1 ores_native_thread_local_take_v1(
     uint64_t key, void **owned_value, ores_native_thread_drop_v1 *drop);
 ores_thread_status_v1 ores_native_thread_id_v1(uint64_t *out_id);
 
+/* Isolated test-build injection; never exported in normal runtime builds. */
+#ifdef ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION
+void ores_native_thread_test_set_next_id_v1(uint64_t id);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
