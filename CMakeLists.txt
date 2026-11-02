@@ -385,7 +385,14 @@ if(BUILD_TESTING)
         add_test(NAME native_inferred_aggregate_guest
             COMMAND "${CMAKE_CURRENT_BINARY_DIR}/attolang-native-infer-guest"
                 "$<TARGET_FILE:oreslang-llvmc>" "${ORE_AGGREGATE_CLANG}")
+    else()
+        # Missing compilers must be a failed conformance gate, never a green
+        # suite with the positive guest execution test silently omitted.
+        add_test(NAME native_inferred_aggregate_guest
+            COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
+    set_tests_properties(native_inferred_aggregate_guest
+        PROPERTIES TIMEOUT 360)
     # One positive scalar IR control followed by 33 isolated compiler
     # negatives. Each child has a 30-second cap; only complete results
     # publish a digest-bound negative-only receipt (not guest certification).
