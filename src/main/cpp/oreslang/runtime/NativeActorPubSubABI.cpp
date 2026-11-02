@@ -110,6 +110,11 @@ bool valid_topic_name(const char* name) {
          *p != 0; ++p) {
         if (++length > 256) return false;
         if (*p < 0x20 || *p == 0x7f) return false;
+        // U+0080..U+009F are Unicode C1 controls (UTF-8 C2 80..9F).
+        // Match .NET char.IsControl rather than permitting control-bearing
+        // topic names on only one backend.
+        if (*p == 0xc2 && p[1] >= 0x80 && p[1] <= 0x9f)
+            return false;
     }
     return valid_utf8_bytes(name, length);
 }
