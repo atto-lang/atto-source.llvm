@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -31,12 +32,45 @@ struct NativeAggregateShape {
             });
     }
 
+    static void validate_static_name(const std::string& name) {
+        if (name.empty()) throw std::invalid_argument("AGGREGATE_SHAPE_EMPTY_FIELD");
+        if (name.size() > 1024)
+            throw std::invalid_argument("AGGREGATE_SHAPE_FIELD_NAME_BUDGET");
+        std::size_t i = 0;
+        while (i < name.size()) {
+            const auto first = static_cast<unsigned char>(name[i]);
+            std::uint32_t code = 0;
+            std::size_t width = 0;
+            if (first <= 0x7f) { code = first; width = 1; }
+            else if (first >= 0xc2 && first <= 0xdf) { code = first & 0x1f; width = 2; }
+            else if (first >= 0xe0 && first <= 0xef) { code = first & 0x0f; width = 3; }
+            else if (first >= 0xf0 && first <= 0xf4) { code = first & 0x07; width = 4; }
+            else throw std::invalid_argument("AGGREGATE_SHAPE_INVALID_UTF8");
+            if (width > name.size() - i)
+                throw std::invalid_argument("AGGREGATE_SHAPE_INVALID_UTF8");
+            for (std::size_t j = 1; j < width; ++j) {
+                const auto byte = static_cast<unsigned char>(name[i + j]);
+                if ((byte & 0xc0) != 0x80)
+                    throw std::invalid_argument("AGGREGATE_SHAPE_INVALID_UTF8");
+                code = (code << 6) | (byte & 0x3f);
+            }
+            if ((width == 2 && code < 0x80) ||
+                    (width == 3 && code < 0x800) ||
+                    (width == 4 && code < 0x10000) ||
+                    (code >= 0xd800 && code <= 0xdfff) ||
+                    code > 0x10ffff)
+                throw std::invalid_argument("AGGREGATE_SHAPE_INVALID_UTF8");
+            if (code < 0x20 || (code >= 0x7f && code <= 0x9f))
+                throw std::invalid_argument("AGGREGATE_SHAPE_CONTROL_FIELD_NAME");
+            i += width;
+        }
+    }
+
     void canonicalize() {
         if (fields.size() > 64)
             throw std::invalid_argument("AGGREGATE_SHAPE_FIELD_BUDGET: more than 64 fields");
         for (const auto& field : fields) {
-            if (field.name.empty())
-                throw std::invalid_argument("AGGREGATE_SHAPE_EMPTY_FIELD");
+            validate_static_name(field.name);
             // v1 only records scalar field identity. Nested/opaque type names
             // cannot be silently treated as i64 or legal LLVM field layouts.
             if (field.type != "int" && field.type != "bool" &&
