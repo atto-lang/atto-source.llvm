@@ -124,7 +124,18 @@ inline void resolve_native_sums(Program& program) {
             return {owner.element, {}, owner.element_class};
         }
         if (e.kind == E::Conditional) {
-            if (e.condition) expression(*e.condition, env, {});
+            // A malformed or untyped ternary must not reach sum payload
+            // inference. Compatibility equality guards use lhs/rhs, while
+            // the canonical conditional has an explicitly typed bool guard.
+            if (!e.when_true || !e.when_false ||
+                (!e.condition && (!e.condition_lhs || !e.condition_rhs)))
+                throw std::runtime_error("native sum conditional missing guard or branch");
+            if (e.condition) {
+                const Hint guard = expression(*e.condition, env, {});
+                if (guard.scalar != ScalarType::Bool || !guard.sum.empty() ||
+                    !guard.cls.empty() || guard.array)
+                    throw std::runtime_error("native sum conditional guard must be bool");
+            }
             if (e.condition_lhs) expression(*e.condition_lhs, env, {});
             if (e.condition_rhs) expression(*e.condition_rhs, env, {});
             const auto yes = expression(*e.when_true, env, expected);
