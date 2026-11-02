@@ -54,7 +54,12 @@ public:
     // The output is a fresh row: rightmost write wins, including a new type.
     // Neither the source row nor prior generated rows are mutated.
     NativeAggregateShape result_shape() const {
-        std::map<std::string, std::string> row;
+        struct FieldOrder {
+            bool operator()(const std::string& a, const std::string& b) const {
+                return NativeAggregateShape::field_name_less(a,b);
+            }
+        };
+        std::map<std::string, std::string, FieldOrder> row;
         for (const Write& write : writes_)
             row[write.field] = write.type;
         if (row.size() > 64)
