@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <map>
 
 using oreslang::types::NativeAggregateSpreadPlan;
 using oreslang::types::NativeAggregateShape;
@@ -147,5 +148,55 @@ int main() {
         bad.add_named(std::string("\xE2\x82", 2), "int");
     }, "AGGREGATE_SHAPE_INVALID_UTF8"));
 
+    // Deterministic property oracle: independently apply every source-ordered
+    // write and check the inferred type row against its final overwrite map.
+    // The corpus deliberately mixes two spread sources, different scalar
+    // field types and explicitly named fields without relying on randomness.
+    for (unsigned seed = 1; seed <= 512; ++seed) {
+        NativeAggregateSpreadPlan checked(Kind::ReadonlyRecord);
+        std::map<std::string, std::string> expected;
+        unsigned state = seed * 1664525u + 1013904223u;
+        const auto next_word = [&]() -> unsigned {
+            state = state * 1664525u + 1013904223u;
+            return state;
+        };
+        const unsigned elements = 1 + (seed % 13);
+        std::size_t expected_writes = 0;
+        for (unsigned i = 0; i < elements; ++i) {
+            if ((next_word() & 3u) == 0u) {
+                const std::string key = "explicit_" + std::to_string(i);
+                const std::string type = (next_word() & 1u) ? "bool" : "int";
+                checked.add_named(key, type);
+                expected[key] = type;
+                ++expected_writes;
+            } else {
+                NativeAggregateShape source{Kind::ExactStruct, {}};
+                const unsigned field_count = next_word() % 7u;
+                for (unsigned j = 0; j < field_count; ++j) {
+                    // Keys deliberately overlap across earlier spread sources.
+                    const auto type = (next_word() & 1u) ? "int" : "bool";
+                    source.fields.push_back({"spread_" + std::to_string(j), type});
+                }
+                source.canonicalize();
+                const auto frozen = source;
+                checked.add_checked_spread_projection(source);
+                CHECK(source.same_type_as(frozen));
+                for (const auto& field : source.fields) {
+                    expected[field.name] = field.type;
+                    ++expected_writes;
+                }
+            }
+        }
+        CHECK(checked.source_elements() == elements);
+        CHECK(checked.source_ordered_writes().size() == expected_writes);
+        const auto inferred = checked.result_shape();
+        CHECK(inferred.kind == Kind::ReadonlyRecord);
+        CHECK(inferred.fields.size() == expected.size());
+        for (const auto& field : inferred.fields) {
+            const auto it = expected.find(field.name);
+            CHECK(it != expected.end() && it->second == field.type);
+        }
+        CHECK(inferred.same_type_as(checked.result_shape()));
+    }
     return 0;
 }
