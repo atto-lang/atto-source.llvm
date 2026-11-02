@@ -101,6 +101,7 @@ fn run() -> Result<(), String> {
         ("self-reference", "int x = x + 1; return x;"),
         ("duplicate", "int x = 7; int x = 8; return x;"),
         ("missing-initializer", "int x; return 7;"),
+        ("missing-bool-initializer", "bool ready; return 7;"),
         ("const-rebind", "const x = 7; x = 8; return x;"),
         ("bool-mismatch", "bool flag = 7; return 7;"),
     ];
@@ -155,6 +156,10 @@ fn run() -> Result<(), String> {
         if (name == &"rebind" || name == &"const-rebind") &&
                 !diagnostic.contains("assignment") {
             return Err(format!("{name}: rejection did not diagnose assignment: {diagnostic}"));
+        }
+        if (name == &"missing-initializer" || name == &"missing-bool-initializer")
+                && !diagnostic.contains("requires initializer") {
+            return Err(format!("{name}: expected an immutable initializer diagnostic: {diagnostic}"));
         }
         if name == &"duplicate" && !diagnostic.contains("duplicate") {
             return Err(format!("{name}: rejection was not duplicate-name semantic diagnostic: {diagnostic}"));
