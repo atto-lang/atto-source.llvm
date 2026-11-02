@@ -292,6 +292,28 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn guarded_share_denial_rejects_mixed_native_diagnostics() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = Scratch::new();
+        let compiler = root.0.join("mixed-diagnostic-compiler.sh");
+        let denial = "oreslang-llvmc: native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof; refusing unsynchronized alias at byte 49";
+        fs::write(&compiler, format!(
+            "#!/bin/sh\\nprintf '%s\\\\n' '{}' >&2\\nprintf 'error: unrelated parser failure\\\\n' >&2\\nexit 1\\n",
+            denial
+        )).unwrap();
+        let mut permissions = fs::metadata(&compiler).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&compiler, permissions).unwrap();
+        let caught = std::panic::catch_unwind(|| check_case(
+            &compiler, &root.0, "mut-share-mixed-diagnostic",
+            "pub fnc main(): int { return rt mut share 42; }\\n",
+            Some("native rt mut share requires verified SharedMutex<T> capability")
+        ));
+        assert!(caught.is_err(), "mixed diagnostics falsely proved guarded-sharing denial");
+    }
+
     #[test]
     fn definition_predicate_requires_actual_function_line() {
         for output in [
