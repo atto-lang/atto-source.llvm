@@ -351,6 +351,34 @@ mod tests {
         assert!(caught.is_err(), "non-compiler exit status falsely proved guarded-sharing denial");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn guarded_share_denial_rejects_same_line_spoofed_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = Scratch::new();
+        let compiler = root.0.join("same-line-spoof-compiler.sh");
+        let forged = "oreslang-llvmc: native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof; refusing unsynchronized alias at byte 49; unrelated parser error";
+        fs::write(&compiler, format!(
+            "#!/bin/sh\nprintf '%s\\n' '{}' >&2\nexit 1\n",
+            forged
+        )).unwrap();
+        let mut permissions = fs::metadata(&compiler).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&compiler, permissions).unwrap();
+        let probe = Command::new(&compiler).output().expect("fake compiler must execute");
+        assert_eq!(probe.status.code(), Some(1));
+        assert!(probe.stdout.is_empty());
+        assert_eq!(String::from_utf8(probe.stderr).unwrap().trim_end(), forged);
+
+        let caught = std::panic::catch_unwind(|| check_case(
+            &compiler, &root.0, "mut-share-same-line-spoof",
+            "pub fnc main(): int { return rt mut share 42; }\n",
+            Some("native rt mut share requires verified SharedMutex<T> capability")
+        ));
+        assert!(caught.is_err(),
+            "a same-line parser error masqueraded as guarded-sharing denial");
+    }
+
     #[test]
     fn definition_predicate_requires_actual_function_line() {
         for output in [
