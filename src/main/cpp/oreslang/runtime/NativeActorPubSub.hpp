@@ -287,6 +287,11 @@ public:
         return queued_payload_bytes_;
     }
 
+    std::size_t allocated_queue_slots() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return allocated_queue_slots_;
+    }
+
 private:
     struct ActorKey {
         std::uint64_t actor_id;
