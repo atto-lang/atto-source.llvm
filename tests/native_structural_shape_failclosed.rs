@@ -50,7 +50,15 @@ fn main() {
         ("inline shape pattern", "fnc main():int { match 1 over on structural { id:int } v -> { return 1; } on _ -> { return 0; } end }\n"),
         ("tuple parameter", "fnc take(structural Tuple<int,string> v):int{return v[0];}\n"),
         ("tuple pattern", "fnc main():int { match 1 over on structural (int,int) v -> { return 1; } on _ -> { return 0; } end }\n"),
-        ("actor parameter", "actor fnc take(structural { id:int } v):int{return 1;}\n")
+        ("actor parameter", "actor fnc take(structural { id:int } v):int{return 1;}\n"),
+        ("inferred struct constructor", "fnc main():int { const p = infer struct{x:42}; return p.x; }\n"),
+        ("inferred record constructor", "fnc main():int { const p = infer record{x:42}; return p.x; }\n"),
+        ("plain readonly record constructor", "fnc main():int { const p = record{x:42}; return p.x; }\n"),
+        ("struct spread appends field", "fnc main():int { const p = infer struct{x:1}; const q = infer struct{...p,y:2}; return q.y; }\n"),
+        ("record spread changes field type", "fnc main():int { const p = record{x:1}; const q = record{...p,x:true}; return 42; }\n"),
+        ("record spread rejects scalar operand", "fnc main():int { const q = record{...42,x:1}; return q.x; }\n"),
+        ("multiple spread operands", "fnc main():int { const a = record{x:1}; const b = record{y:2}; const c = record{...a,...b,z:3}; return c.z; }\n"),
+        ("structural view and inferred aggregate", "fnc take(structural { id:int } x):int{return x.id;} fnc main():int { const row = infer record{id:42}; return take(row); }\n")
     ];
     for (name, src) in probes {
         let output = compile(&compiler, &tmp.0, src);
