@@ -191,7 +191,7 @@ int main() {
             throw std::runtime_error(".atto root import did not resolve");
     }
     {
-        const auto dir = temp / "ambiguous-source";
+        const auto dir = temp / "canonical-precedence-source";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
