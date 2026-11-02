@@ -127,6 +127,8 @@ inline void resolve_native_sums(Program& program) {
             // A malformed or untyped ternary must not reach sum payload
             // inference. Compatibility equality guards use lhs/rhs, while
             // the canonical conditional has an explicitly typed bool guard.
+            if (e.condition && (e.condition_lhs || e.condition_rhs))
+                throw std::runtime_error("native sum conditional conflicting guard forms");
             if (!e.when_true || !e.when_false ||
                 (!e.condition && (!e.condition_lhs || !e.condition_rhs)))
                 throw std::runtime_error("native sum conditional missing guard or branch");
