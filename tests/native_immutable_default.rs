@@ -1,6 +1,59 @@
 // Compile+link+execute pinned native Oreslang guest programs. No Python,
 // fake compiler or host-side arithmetic oracle is used by this runner.
-use std::{env, fs, path::{Path, PathBuf}, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::{Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+// Never allow a bad source compiler, linker, or guest to hang this
+// admission runner indefinitely or allocate unbounded host memory from pipes.
+// Redirect output to files so a chatty child cannot deadlock on pipe capacity.
+const PER_PROCESS_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_PROCESS_OUTPUT: u64 = 1024 * 1024;
+
+struct CheckedOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+fn bounded_output(mut command: Command, dir: &Path, label: &str)
+    -> Result<CheckedOutput, String>
+{
+    let stdout_file = dir.join(format!("{label}.stdout"));
+    let stderr_file = dir.join(format!("{label}.stderr"));
+    let out = fs::File::create(&stdout_file).map_err(|e| e.to_string())?;
+    let err = fs::File::create(&stderr_file).map_err(|e| e.to_string())?;
+    command.stdout(Stdio::from(out)).stderr(Stdio::from(err))
+        .stdin(Stdio::null());
+    let mut child = command.spawn().map_err(|e| format!("{label} spawn: {e}"))?;
+    let until = Instant::now() + PER_PROCESS_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| format!("{label} wait: {e}"))? {
+            break status;
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("{label}: timed out after 20s"));
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    // The child has exited, so outputs cannot keep growing through its own
+    // file descriptors. Fail closed on arbitrarily large tool output.
+    for file in [&stdout_file, &stderr_file] {
+        if fs::metadata(file).map_err(|e| e.to_string())?.len() > MAX_PROCESS_OUTPUT {
+            return Err(format!("{label}: output exceeds 1 MiB limit"));
+        }
+    }
+    Ok(CheckedOutput {
+        status,
+        stdout: fs::read(stdout_file).map_err(|e| e.to_string())?,
+        stderr: fs::read(stderr_file).map_err(|e| e.to_string())?,
+    })
+}
 
 struct Workspace(PathBuf);
 impl Drop for Workspace {
@@ -57,8 +110,9 @@ fn run() -> Result<(), String> {
         let exe = dir.join(format!("{name}.app"));
         fs::write(&src, format!("pub fnc main(): int {{ {body} }}\n"))
             .map_err(|e| e.to_string())?;
-        let output = Command::new(compiler).arg(&src).output()
-            .map_err(|e| format!("compiler spawn {name}: {e}"))?;
+        let mut compile_cmd = Command::new(compiler);
+        compile_cmd.arg(&src);
+        let output = bounded_output(compile_cmd, &dir, &format!("{name}-compile"))?;
         if !output.status.success() || output.stdout.is_empty() {
             return Err(format!("{name} did not emit real IR: {}",
                 String::from_utf8_lossy(&output.stderr)));
@@ -67,15 +121,15 @@ fn run() -> Result<(), String> {
             return Err(format!("{name} emitted oversized IR"));
         }
         fs::write(&ir, &output.stdout).map_err(|e| e.to_string())?;
-        let linked = Command::new(clang).args(["-x", "ir"]).arg(&ir)
-            .arg("-o").arg(&exe).output()
-            .map_err(|e| format!("clang spawn {name}: {e}"))?;
+        let mut link_cmd = Command::new(clang);
+        link_cmd.args(["-x", "ir"]).arg(&ir).arg("-o").arg(&exe);
+        let linked = bounded_output(link_cmd, &dir, &format!("{name}-link"))?;
         if !linked.status.success() {
             return Err(format!("{name} native link failed: {}",
                 String::from_utf8_lossy(&linked.stderr)));
         }
-        let guest = Command::new(&exe).output()
-            .map_err(|e| format!("native guest spawn {name}: {e}"))?;
+        let guest = bounded_output(
+            Command::new(&exe), &dir, &format!("{name}-guest"))?;
         if guest.status.code() != Some(*expected) {
             return Err(format!("{name}: real native exit {:?}, expected {expected}; stdout={} stderr={}",
                 guest.status.code(), String::from_utf8_lossy(&guest.stdout),
@@ -87,8 +141,9 @@ fn run() -> Result<(), String> {
         let src = dir.join(format!("reject-{name}.ores"));
         fs::write(&src, format!("pub fnc main(): int {{ {body} }}\n"))
             .map_err(|e| e.to_string())?;
-        let result = Command::new(compiler).arg(&src).output()
-            .map_err(|e| format!("negative compiler spawn {name}: {e}"))?;
+        let mut reject_cmd = Command::new(compiler);
+        reject_cmd.arg(&src);
+        let result = bounded_output(reject_cmd, &dir, &format!("{name}-reject"))?;
         if result.status.success() || !result.stdout.is_empty() || result.stderr.is_empty() {
             return Err(format!("{name}: negative input was accepted, emitted IR, or had no diagnostic"));
         }
