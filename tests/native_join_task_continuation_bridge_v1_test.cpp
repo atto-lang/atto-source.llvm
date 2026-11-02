@@ -165,6 +165,38 @@ static void nonblocking_join_publishes_one_ready_ticket() {
     authority->retire();
 }
 
+static void already_joined_thread_registers_without_losing_wakeup() {
+    Stores stores;
+    auto reaper = std::make_unique<NativeThreadJoinReaperV1>(2, 2);
+    auto authority = TaskCancellation::root();
+    auto link = stores.suspend(3101);
+    auto task = bind_task(stores, authority, link);
+    std::atomic<bool> native_gate{true};
+    auto completion = start(*reaper, native_gate);
+    observed_join(completion); // force registration AFTER physical join
+    std::atomic<int> notifications{0};
+    auto bridge = NativeJoinTaskContinuationBridgeV1::subscribe(
+        completion, task, 3102, [&](std::uint64_t g) {
+            assert(g == 3102);
+            notifications.fetch_add(1);
+        });
+    assert(bridge);
+    assert(notifications.load() == 1); // callback ran inline
+    assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+    assert(bridge->try_admit_ready(3102));
+    assert(!bridge->try_admit_ready(3102));
+    OresNativeExecutionHandle resumed{};
+    assert(task->try_resume({88, 3103}, &resumed));
+    assert(task->finish_resume());
+    assert(ores_native_execution_context_store_release(stores.executions, resumed));
+    reaper.reset(); // callback quiescence precedes borrowed store release
+    task->close();
+    bridge.reset();
+    task.reset();
+    stores.release(link);
+    authority->retire();
+}
+
 static void cancelled_task_never_enqueues_or_resumes() {
     Stores stores;
     std::atomic<int> enqueues{0};
@@ -227,6 +259,7 @@ static void retired_task_weak_gate_cannot_be_reanimated() {
 }
 int main() {
     nonblocking_join_publishes_one_ready_ticket();
+    already_joined_thread_registers_without_losing_wakeup();
     cancelled_task_never_enqueues_or_resumes();
     retired_task_weak_gate_cannot_be_reanimated();
     std::puts("NATIVE_JOIN_TASK_CONTINUATION_BRIDGE_HOST_ONLY_PASS");
