@@ -4524,3 +4524,16 @@ if(BUILD_TESTING AND UNIX)
         COMMAND oreslang-native-thread-v1-test)
     set_tests_properties(native_thread_context_tls_join_host_only PROPERTIES TIMEOUT 20)
 endif()
+
+# Header-only typed Thread capture admission model, not guest AST integration.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-thread-capture-admission-test
+        tests/native_thread_capture_admission_test.cpp)
+    target_include_directories(oreslang-native-thread-capture-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-thread-capture-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-thread-capture-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_thread_capture_admission_model_only
+        COMMAND oreslang-native-thread-capture-admission-test)
+endif()
