@@ -108,7 +108,7 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
             "{name}: signal-terminated compiler is not a controlled rejection"
         );
         assert!(
-            stdout.trim().is_empty(),
+            stdout.is_empty(),
             "{name}: rejected source emitted IR: {stdout}"
         );
         assert!(
@@ -289,6 +289,14 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn negative_admission_rejects_whitespace_stdout() {
+        assert_rejected_fake_compiler(
+            "printf '  \\n'\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn negative_admission_rejects_non_ir_stdout_even_with_correct_diagnostic() {
         assert_rejected_fake_compiler(
             "printf 'compilation failed\n'\nprintf 'bad ownership\n' >&2\nexit 2",
@@ -355,7 +363,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_llvm_declaration_on_stderr() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\\ndeclare i64 @escaped(i64)\\n' >&2\\nexit 2",
+            "printf 'bad ownership\ndeclare i64 @escaped(i64)\n' >&2\nexit 2",
         );
     }
 
@@ -363,7 +371,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_llvm_attribute_block_on_stderr() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\\nattributes #0 = { nounwind }\\n' >&2\\nexit 2",
+            "printf 'bad ownership\nattributes #0 = { nounwind }\n' >&2\nexit 2",
         );
     }
 
@@ -371,7 +379,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_target_datalayout_on_stderr() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\\ntarget datalayout = x86_64\\n' >&2\\nexit 2",
+            "printf 'bad ownership\ntarget datalayout = x86_64\n' >&2\nexit 2",
         );
     }
 
@@ -379,7 +387,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_truncated_function_prototype_on_stderr() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\\ndefine i64 @truncated(i64)\\n' >&2\\nexit 2",
+            "printf 'bad ownership\ndefine i64 @truncated(i64)\n' >&2\nexit 2",
         );
     }
 
@@ -387,7 +395,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_multiline_function_definition_on_stderr() {
         assert_rejected_fake_compiler(
-            "printf 'bad ownership\\ndefine i64 @truncated(i64)\\n{\\n' >&2\\nexit 2",
+            "printf 'bad ownership\ndefine i64 @truncated(i64)\n{\n' >&2\nexit 2",
         );
     }
 
