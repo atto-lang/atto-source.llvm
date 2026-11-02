@@ -21,6 +21,7 @@ typedef struct ores_context_v1 {
 struct ores_native_thread_v1 {
     pthread_t native;
     atomic_int join_state; /* 0 joinable, 1 joining, 2 joined */
+    atomic_int body_completed; /* release after all TLS destructors */
     int result;
 };
 
@@ -74,6 +75,7 @@ static void *ores_thread_trampoline_v1(void *opaque) {
     }
     if (start->drop) start->drop(start->arg);
     ores_context_destroy_v1(context); /* all TLS values dropped before join */
+    atomic_store_explicit(&handle->body_completed, 1, memory_order_release);
     free(start);
     return NULL;
 }
@@ -98,6 +100,7 @@ ores_thread_status_v1 ores_native_thread_spawn_v1(
         return ORES_THREAD_OS_ERROR_V1;
     }
     atomic_init(&handle->join_state, 0);
+    atomic_init(&handle->body_completed, 0);
     start->entry = entry; start->arg = owned_arg; start->drop = drop_arg;
     start->context = context; start->handle = handle;
     if (pthread_create(&handle->native, NULL, ores_thread_trampoline_v1, start) != 0) {
@@ -197,5 +200,16 @@ ores_thread_status_v1 ores_native_thread_local_take_v1(
         }
         link = &slot->next;
     }
+    return ORES_THREAD_OK_V1;
+}
+
+/* This is a release/acquire completion notification, NOT an OS-thread join.
+ * Caller must own/retain handle through access. Physical join is performed
+ * only by the structured host reaper. */
+ores_thread_status_v1 ores_native_thread_poll_completed_v1(
+    const ores_native_thread_v1 *handle, int *out_completed) {
+    if (!handle || !out_completed) return ORES_THREAD_BAD_ARGUMENT_V1;
+    *out_completed = atomic_load_explicit(
+        &handle->body_completed, memory_order_acquire);
     return ORES_THREAD_OK_V1;
 }
