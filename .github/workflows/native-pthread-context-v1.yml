@@ -94,3 +94,11 @@ jobs:
             "$tmp/native-thread-tsan.o" -o "$tmp/native-thread-reaper-tsan"
           TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
             "$tmp/native-thread-reaper-tsan"
+          # Scheduler notification callback/cancellation racing against a
+          # physical pthread join. Host-side model, not compiled guest code.
+          g++ -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Isrc/main/cpp tests/native_join_task_wait_v1_test.cpp \
+            "$tmp/native-thread-tsan.o" -o "$tmp/native-join-task-wait-tsan"
+          TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
+            "$tmp/native-join-task-wait-tsan"
