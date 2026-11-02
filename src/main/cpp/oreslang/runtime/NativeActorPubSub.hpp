@@ -161,6 +161,19 @@ public:
         });
     }
 
+    void remove_actor_from_group(
+            std::uint64_t group_id,
+            std::uint64_t actor_id,
+            std::uint64_t generation) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        ActorKey actor{actor_id, generation};
+        for (auto& entry : topics_) {
+            if (entry.first.group_id != group_id) continue;
+            if (entry.second.subscribers.erase(actor))
+                decrement_actor_subscription_locked(actor);
+        }
+    }
+
     void remove_actor(std::uint64_t actor_id, std::uint64_t generation) {
         std::lock_guard<std::mutex> guard(mutex_);
         ActorKey actor{actor_id, generation};
