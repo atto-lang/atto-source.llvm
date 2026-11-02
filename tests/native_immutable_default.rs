@@ -31,6 +31,25 @@ fn bounded_output(mut command: Command, dir: &Path, label: &str)
     let mut child = command.spawn().map_err(|e| format!("{label} spawn: {e}"))?;
     let until = Instant::now() + PER_PROCESS_TIMEOUT;
     let status = loop {
+        // Check while the child is active, not only after its exit. A
+        // compiler can emit enormous diagnostics before the 20s watchdog.
+        // The 20ms polling interval bounds detection latency; this is not
+        // a kernel-enforced quota, so the sandbox must retain disk quotas.
+        for file in [&stdout_file, &stderr_file] {
+            match fs::metadata(file) {
+                Ok(meta) if meta.len() > MAX_PROCESS_OUTPUT => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("{label}: output exceeds 1 MiB limit"));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("{label}: cannot monitor output: {error}"));
+                }
+                _ => {}
+            }
+        }
         if let Some(status) = child.try_wait().map_err(|e| format!("{label} wait: {e}"))? {
             break status;
         }
@@ -41,8 +60,7 @@ fn bounded_output(mut command: Command, dir: &Path, label: &str)
         }
         thread::sleep(Duration::from_millis(20));
     };
-    // The child has exited, so outputs cannot keep growing through its own
-    // file descriptors. Fail closed on arbitrarily large tool output.
+    // Re-check after exit in case the final write crossed the threshold.
     for file in [&stdout_file, &stderr_file] {
         if fs::metadata(file).map_err(|e| e.to_string())?.len() > MAX_PROCESS_OUTPUT {
             return Err(format!("{label}: output exceeds 1 MiB limit"));
