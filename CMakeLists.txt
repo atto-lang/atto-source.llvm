@@ -1731,6 +1731,7 @@ if(BUILD_TESTING)
     # cooperation-membership and pub/sub generation fence used by host tests.
     add_executable(oreslang-source-actor-pubsub-identity-bridge-test
         tests/source_actor_pubsub_identity_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorPubSubABI.cpp
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
