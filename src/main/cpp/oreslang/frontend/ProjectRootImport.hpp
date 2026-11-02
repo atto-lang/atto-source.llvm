@@ -161,9 +161,12 @@ inline std::filesystem::path resolve_project_root_import(
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
     fs::path candidate = package_root / fs::path(std::string(suffix));
-    if (candidate.extension().empty()) candidate += ".ores";
-    if (candidate.extension() != ".ores")
-        throw std::runtime_error("native project-root imports require .ores source files");
+    if (candidate.extension().empty()) {
+        const auto canonical_source = fs::path(candidate.string() + ".atto");
+        candidate += fs::exists(canonical_source) ? ".atto" : ".ores";
+    }
+    if (candidate.extension() != ".atto" && candidate.extension() != ".ores")
+        throw std::runtime_error("native project-root imports require .atto or .ores source files");
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)
