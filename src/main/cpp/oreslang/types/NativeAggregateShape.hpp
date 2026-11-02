@@ -19,6 +19,18 @@ struct NativeAggregateShape {
     Kind kind = Kind::ExactStruct;
     std::vector<Field> fields;
 
+    // Compare unsigned UTF-8 bytes, equivalent to Unicode scalar ordering
+    // for strictly validated UTF-8 names. Never depend on signed char order.
+    static bool field_name_less(const std::string& left,
+                                const std::string& right) {
+        return std::lexicographical_compare(
+            left.begin(), left.end(), right.begin(), right.end(),
+            [](char a, char b) {
+                return static_cast<unsigned char>(a) <
+                       static_cast<unsigned char>(b);
+            });
+    }
+
     void canonicalize() {
         if (fields.size() > 64)
             throw std::invalid_argument("AGGREGATE_SHAPE_FIELD_BUDGET: more than 64 fields");
@@ -32,7 +44,7 @@ struct NativeAggregateShape {
                 throw std::invalid_argument("AGGREGATE_SHAPE_UNSUPPORTED_FIELD_TYPE: " + field.type);
         }
         std::sort(fields.begin(), fields.end(),
-                  [](const Field& a, const Field& b) { return a.name < b.name; });
+                  [](const Field& a, const Field& b) { return field_name_less(a.name, b.name); });
         for (std::size_t i = 1; i < fields.size(); ++i)
             if (fields[i].name == fields[i - 1].name)
                 throw std::invalid_argument("AGGREGATE_SHAPE_DUPLICATE_FIELD: " + fields[i].name);
