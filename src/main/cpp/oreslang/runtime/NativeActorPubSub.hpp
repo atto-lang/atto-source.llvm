@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -27,6 +28,116 @@ struct NativeActorPubSubPayloadBytes<std::string> final {
     static std::size_t size(const std::string& value) noexcept {
         return value.size();
     }
+};
+
+/*
+ * Runtime-wide resource ledger shared by every typed pub/sub lane. Without a
+ * shared ledger, mixing Topic<int> and Topic<String> could multiply the
+ * advertised graph byte, preallocated-slot, and per-actor subscription
+ * limits by the number of payload types.
+ *
+ * Lock order is always membership -> typed bus -> this ledger. The ledger
+ * never calls back into a bus, so typed lanes may safely share it.
+ */
+class NativeActorPubSubResourceLedger final {
+public:
+    NativeActorPubSubResourceLedger(
+            std::size_t max_subscriptions_per_actor,
+            std::size_t max_total_bytes,
+            std::size_t max_total_queue_slots)
+        : max_subscriptions_per_actor_(max_subscriptions_per_actor),
+          max_total_bytes_(max_total_bytes),
+          max_total_queue_slots_(max_total_queue_slots) {
+        if (max_subscriptions_per_actor_ == 0
+                || max_total_bytes_ == 0
+                || max_total_queue_slots_ == 0)
+            throw std::invalid_argument("invalid native pub-sub shared limits");
+    }
+
+    void reserve_subscription(
+            std::uint64_t actor_id,
+            std::uint64_t generation,
+            std::size_t queue_slots) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (queue_slots == 0
+                || allocated_queue_slots_ > max_total_queue_slots_
+                || queue_slots > max_total_queue_slots_ - allocated_queue_slots_)
+            throw std::logic_error(
+                "native pub-sub shared queue-slot budget exceeded");
+
+        const ActorKey actor{actor_id, generation};
+        auto it = subscriptions_.find(actor);
+        const std::size_t current =
+            it == subscriptions_.end() ? 0 : it->second;
+        if (current >= max_subscriptions_per_actor_)
+            throw std::logic_error(
+                "native pub-sub shared actor subscription quota exceeded");
+
+        if (it == subscriptions_.end())
+            it = subscriptions_.emplace(actor, 0).first;
+        ++it->second;
+        allocated_queue_slots_ += queue_slots;
+    }
+
+    void release_subscription(
+            std::uint64_t actor_id,
+            std::uint64_t generation,
+            std::size_t queue_slots) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const ActorKey actor{actor_id, generation};
+        auto it = subscriptions_.find(actor);
+        if (it == subscriptions_.end() || it->second == 0
+                || queue_slots > allocated_queue_slots_)
+            throw std::logic_error("native pub-sub shared ledger underflow");
+        if (--it->second == 0) subscriptions_.erase(it);
+        allocated_queue_slots_ -= queue_slots;
+    }
+
+    bool try_reserve_bytes(std::size_t bytes) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (queued_payload_bytes_ > max_total_bytes_
+                || bytes > max_total_bytes_ - queued_payload_bytes_)
+            return false;
+        queued_payload_bytes_ += bytes;
+        return true;
+    }
+
+    bool try_replace_bytes(std::size_t remove_bytes, std::size_t add_bytes) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (remove_bytes > queued_payload_bytes_)
+            throw std::logic_error("native pub-sub shared byte ledger underflow");
+        const std::size_t base = queued_payload_bytes_ - remove_bytes;
+        if (base > max_total_bytes_ || add_bytes > max_total_bytes_ - base)
+            return false;
+        queued_payload_bytes_ = base + add_bytes;
+        return true;
+    }
+
+    void release_bytes(std::size_t bytes) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (bytes > queued_payload_bytes_)
+            throw std::logic_error("native pub-sub shared byte ledger underflow");
+        queued_payload_bytes_ -= bytes;
+    }
+
+    std::size_t queued_payload_bytes() const {
+        return resources_->queued_payload_bytes();
+    }
+
+    std::size_t allocated_queue_slots() const {
+        return resources_->allocated_queue_slots();
+    }
+
+private:
+    using ActorKey = std::pair<std::uint64_t, std::uint64_t>;
+
+    const std::size_t max_subscriptions_per_actor_;
+    const std::size_t max_total_bytes_;
+    const std::size_t max_total_queue_slots_;
+    mutable std::mutex mutex_;
+    std::map<ActorKey, std::size_t> subscriptions_;
+    std::size_t queued_payload_bytes_ = 0;
+    std::size_t allocated_queue_slots_ = 0;
 };
 
 /**
@@ -72,19 +183,22 @@ public:
             std::size_t max_bytes_per_subscription = DEFAULT_EDGE_BYTES,
             std::size_t max_total_bytes = DEFAULT_GRAPH_BYTES,
             std::size_t max_queue_capacity = DEFAULT_MAX_QUEUE_CAPACITY,
-            std::size_t max_total_queue_slots = DEFAULT_TOTAL_QUEUE_SLOTS)
+            std::size_t max_total_queue_slots = DEFAULT_TOTAL_QUEUE_SLOTS,
+            std::shared_ptr<NativeActorPubSubResourceLedger> shared_resources = {})
         : memberships_(memberships),
           max_topics_(max_topics),
-          max_subscriptions_per_actor_(max_subscriptions_per_actor),
           max_bytes_per_subscription_(max_bytes_per_subscription),
-          max_total_bytes_(max_total_bytes),
           max_queue_capacity_(max_queue_capacity),
-          max_total_queue_slots_(max_total_queue_slots) {
-        if (max_topics_ == 0 || max_subscriptions_per_actor_ == 0
+          resources_(shared_resources ? std::move(shared_resources)
+              : std::make_shared<NativeActorPubSubResourceLedger>(
+                    max_subscriptions_per_actor,
+                    max_total_bytes,
+                    max_total_queue_slots)) {
+        if (max_topics_ == 0 || max_subscriptions_per_actor == 0
                 || max_bytes_per_subscription_ == 0
-                || max_total_bytes_ == 0
+                || max_total_bytes == 0
                 || max_queue_capacity_ == 0
-                || max_total_queue_slots_ == 0)
+                || max_total_queue_slots == 0)
             throw std::invalid_argument("invalid native pub-sub limits");
     }
 
@@ -129,33 +243,13 @@ public:
             ActorKey actor{actor_id, generation};
             if (topic.subscribers.find(actor) != topic.subscribers.end())
                 return false;
-            auto count = actor_subscription_counts_.find(actor);
-            const std::size_t current_count =
-                count == actor_subscription_counts_.end()
-                    ? 0 : count->second;
-            if (current_count >= max_subscriptions_per_actor_)
-                throw std::logic_error(
-                    "native pub-sub actor subscription quota exceeded");
-            if (allocated_queue_slots_ > max_total_queue_slots_
-                    || topic.capacity
-                        > max_total_queue_slots_ - allocated_queue_slots_)
-                throw std::logic_error(
-                    "native pub-sub queue-slot budget exceeded");
-
             /*
-             * Allocate the whole bounded ring before publishing this
-             * subscription into either index. A failed allocation cannot
-             * leave a half-created subscriber or consume quota.
+             * Allocate the bounded ring before reserving shared runtime
+             * accounting. A failed allocation changes no quota state.
              */
             Queue queue(topic.capacity);
-
-            bool created_count = false;
-            if (count == actor_subscription_counts_.end()) {
-                auto inserted =
-                    actor_subscription_counts_.emplace(actor, 0);
-                count = inserted.first;
-                created_count = inserted.second;
-            }
+            resources_->reserve_subscription(
+                actor_id, generation, topic.capacity);
             try {
                 auto inserted =
                     topic.subscribers.emplace(actor, std::move(queue));
@@ -163,13 +257,10 @@ public:
                     throw std::logic_error(
                         "duplicate native pub-sub subscription");
             } catch (...) {
-                if (created_count && count->second == 0)
-                    actor_subscription_counts_.erase(count);
+                resources_->release_subscription(
+                    actor_id, generation, topic.capacity);
                 throw;
             }
-
-            allocated_queue_slots_ += topic.capacity;
-            ++count->second;
             return true;
         });
     }
@@ -269,7 +360,7 @@ public:
             T value = *slot.value;
             const std::size_t bytes = slot.bytes;
             queue.pop();
-            queued_payload_bytes_ -= bytes;
+            resources_->release_bytes(bytes);
             return value;
         });
     }
@@ -304,7 +395,7 @@ public:
                 return ReadIntoStatus::InsufficientCapacity;
             const std::size_t bytes = slot.bytes;
             queue.pop();
-            queued_payload_bytes_ -= bytes;
+            resources_->release_bytes(bytes);
             return ReadIntoStatus::Consumed;
         });
     }
@@ -338,9 +429,11 @@ public:
                 continue;
             }
             for (const auto& subscriber : it->second.subscribers) {
-                queued_payload_bytes_ -= subscriber.second.payload_bytes;
-                allocated_queue_slots_ -= subscriber.second.slots.size();
-                decrement_actor_subscription_locked(subscriber.first);
+                resources_->release_bytes(subscriber.second.payload_bytes);
+                resources_->release_subscription(
+                    subscriber.first.actor_id,
+                    subscriber.first.generation,
+                    subscriber.second.slots.size());
             }
             it = topics_.erase(it);
             ++removed;
@@ -494,22 +587,15 @@ private:
         return it->second;
     }
 
-    void decrement_actor_subscription_locked(const ActorKey& actor) {
-        auto count = actor_subscription_counts_.find(actor);
-        if (count == actor_subscription_counts_.end()) return;
-        if (count->second <= 1) actor_subscription_counts_.erase(count);
-        else --count->second;
-    }
-
     bool erase_subscription_locked(
             TopicRecord& topic,
             const ActorKey& actor) {
         auto subscriber = topic.subscribers.find(actor);
         if (subscriber == topic.subscribers.end()) return false;
-        queued_payload_bytes_ -= subscriber->second.payload_bytes;
-        allocated_queue_slots_ -= subscriber->second.slots.size();
+        resources_->release_bytes(subscriber->second.payload_bytes);
+        resources_->release_subscription(
+            actor.actor_id, actor.generation, subscriber->second.slots.size());
         topic.subscribers.erase(subscriber);
-        decrement_actor_subscription_locked(actor);
         return true;
     }
 
@@ -528,10 +614,10 @@ private:
                 continue;
             }
             const ActorKey stale = it->first;
-            queued_payload_bytes_ -= it->second.payload_bytes;
-            allocated_queue_slots_ -= it->second.slots.size();
+            resources_->release_bytes(it->second.payload_bytes);
+            resources_->release_subscription(
+                stale.actor_id, stale.generation, it->second.slots.size());
             it = topic.subscribers.erase(it);
-            decrement_actor_subscription_locked(stale);
         }
     }
 
@@ -543,13 +629,6 @@ private:
         receipt.subscribers = topic.subscribers.size();
 
         if (topic.policy == DeliveryPolicy::Reliable) {
-            if (payload_bytes != 0
-                    && receipt.subscribers
-                        > (max_total_bytes_ - queued_payload_bytes_)
-                            / payload_bytes) {
-                receipt.backpressured = true;
-                return receipt;
-            }
             for (const auto& subscriber : topic.subscribers) {
                 const Queue& queue = subscriber.second;
                 if (queue.full()
@@ -562,9 +641,21 @@ private:
                 }
             }
 
+            if (payload_bytes != 0
+                    && receipt.subscribers
+                        > std::numeric_limits<std::size_t>::max() / payload_bytes) {
+                receipt.backpressured = true;
+                return receipt;
+            }
+            const std::size_t graph_bytes =
+                payload_bytes * receipt.subscribers;
+            if (!resources_->try_reserve_bytes(graph_bytes)) {
+                receipt.backpressured = true;
+                return receipt;
+            }
+
             for (auto& subscriber : topic.subscribers) {
                 subscriber.second.push(frozen, payload_bytes);
-                queued_payload_bytes_ += payload_bytes;
                 ++receipt.accepted;
             }
             return receipt;
@@ -577,25 +668,29 @@ private:
              * publication. Compute the complete post-replacement graph budget
              * before modifying any queue.
              */
-            std::size_t projected = queued_payload_bytes_;
+            std::size_t remove_bytes = 0;
+            std::size_t add_bytes = 0;
             for (const auto& subscriber : topic.subscribers) {
                 const Queue& queue = subscriber.second;
                 const std::size_t old =
                     queue.empty() ? 0 : queue.front().bytes;
-                projected -= old;
-                if (would_exceed(projected, payload_bytes, max_total_bytes_))
-                    throw std::logic_error(
-                        "LATEST publication exceeds graph byte quota");
-                projected += payload_bytes;
+                if (remove_bytes
+                        > std::numeric_limits<std::size_t>::max() - old
+                        || add_bytes
+                        > std::numeric_limits<std::size_t>::max() - payload_bytes)
+                    throw std::overflow_error(
+                        "LATEST publication byte accounting overflow");
+                remove_bytes += old;
+                add_bytes += payload_bytes;
             }
+            if (!resources_->try_replace_bytes(remove_bytes, add_bytes))
+                throw std::logic_error(
+                    "LATEST publication exceeds shared graph byte quota");
 
             for (auto& subscriber : topic.subscribers) {
                 Queue& queue = subscriber.second;
                 const bool had_value = !queue.empty();
-                const std::size_t old =
-                    queue.replace_latest(frozen, payload_bytes);
-                queued_payload_bytes_ -= old;
-                queued_payload_bytes_ += payload_bytes;
+                (void)queue.replace_latest(frozen, payload_bytes);
                 if (had_value) ++receipt.coalesced;
                 ++receipt.accepted;
             }
@@ -609,15 +704,11 @@ private:
                         queue.payload_bytes,
                         payload_bytes,
                         max_bytes_per_subscription_)
-                    || would_exceed(
-                        queued_payload_bytes_,
-                        payload_bytes,
-                        max_total_bytes_)) {
+                    || !resources_->try_reserve_bytes(payload_bytes)) {
                 ++receipt.dropped;
                 continue;
             }
             queue.push(frozen, payload_bytes);
-            queued_payload_bytes_ += payload_bytes;
             ++receipt.accepted;
         }
         return receipt;
@@ -625,16 +716,11 @@ private:
 
     const NativeActorMembershipRegistry& memberships_;
     const std::size_t max_topics_;
-    const std::size_t max_subscriptions_per_actor_;
     const std::size_t max_bytes_per_subscription_;
-    const std::size_t max_total_bytes_;
     const std::size_t max_queue_capacity_;
-    const std::size_t max_total_queue_slots_;
+    std::shared_ptr<NativeActorPubSubResourceLedger> resources_;
     mutable std::mutex mutex_;
     std::map<TopicKey, TopicRecord> topics_;
-    std::map<ActorKey, std::size_t> actor_subscription_counts_;
-    std::size_t queued_payload_bytes_ = 0;
-    std::size_t allocated_queue_slots_ = 0;
 };
 
 } // namespace oreslang::runtime
