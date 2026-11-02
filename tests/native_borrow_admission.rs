@@ -119,6 +119,8 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
         // gate, not merely a compiler failure containing matching words.
         // Mixed diagnostics can conceal an unrelated parser/host failure.
         if name.starts_with("mut-share-") || name.starts_with("six-mut-share-") {
+            assert_eq!(status.code(), Some(1),
+                "{name}: guarded-sharing denial requires controlled native compiler exit(1)");
             let lines: Vec<_> = stderr.lines().collect();
             assert_eq!(lines.len(), 1,
                 "{name}: mixed native diagnostics are not guarded-sharing proof: {stderr}");
@@ -306,12 +308,47 @@ mod tests {
         let mut permissions = fs::metadata(&compiler).unwrap().permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&compiler, permissions).unwrap();
+        // Verify that this fixture genuinely launches and returns an owned
+        // nonzero compiler-like exit. Otherwise catch_unwind would accept a
+        // broken shebang or a spawn panic as proof of rejection.
+        let probe = Command::new(&compiler).output().expect("fake compiler must execute");
+        assert_eq!(probe.status.code(), Some(1));
+        assert!(probe.stdout.is_empty());
+        let probe_stderr = String::from_utf8(probe.stderr).unwrap();
+        assert_eq!(probe_stderr.lines().count(), 2,
+            "fixture must actually print the forged denial plus parser error");
+
         let caught = std::panic::catch_unwind(|| check_case(
             &compiler, &root.0, "mut-share-mixed-diagnostic",
-            "pub fnc main(): int { return rt mut share 42; }\\n",
+            "pub fnc main(): int { return rt mut share 42; }\n",
             Some("native rt mut share requires verified SharedMutex<T> capability")
         ));
         assert!(caught.is_err(), "mixed diagnostics falsely proved guarded-sharing denial");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guarded_share_denial_rejects_unexpected_exit_status() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = Scratch::new();
+        let compiler = root.0.join("wrong-exit-compiler.sh");
+        let denial = "oreslang-llvmc: native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof; refusing unsynchronized alias at byte 49";
+        fs::write(&compiler, format!(
+            "#!/bin/sh\nprintf '%s\\n' '{}' >&2\nexit 2\n", denial
+        )).unwrap();
+        let mut permissions = fs::metadata(&compiler).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&compiler, permissions).unwrap();
+        let probe = Command::new(&compiler).output().expect("fake compiler must execute");
+        assert_eq!(probe.status.code(), Some(2));
+        assert!(probe.stdout.is_empty());
+        assert_eq!(String::from_utf8(probe.stderr).unwrap().lines().count(), 1);
+        let caught = std::panic::catch_unwind(|| check_case(
+            &compiler, &root.0, "mut-share-wrong-exit",
+            "pub fnc main(): int { return rt mut share 42; }\n",
+            Some("native rt mut share requires verified SharedMutex<T> capability")
+        ));
+        assert!(caught.is_err(), "non-compiler exit status falsely proved guarded-sharing denial");
     }
 
     #[test]
