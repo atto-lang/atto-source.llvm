@@ -4515,6 +4515,8 @@ if(BUILD_TESTING AND UNIX)
         src/main/cpp/oreslang/runtime/NativeThreadV1.c)
     set_target_properties(oreslang-native-thread-v1-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+    target_compile_definitions(oreslang-native-thread-v1-test PRIVATE
+        ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION=1)
     target_include_directories(oreslang-native-thread-v1-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-thread-v1-test PRIVATE
