@@ -63,6 +63,30 @@ int main() {
             throw std::runtime_error("positive project-root resolution mismatch");
     }
     {
+        const auto dir = temp / "atto-canonical";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"app/main.atto", "");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        if (resolve(dir/"app/main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("canonical .atto resolution lost to legacy");
+        if (resolve(dir/"app/main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("explicit legacy .ores import rejected");
+        if (resolve(dir/"app/main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("explicit canonical .atto import rejected");
+        fs::remove(dir/"lib.atto");
+        if (resolve(dir/"app/main.atto", "+/lib") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("legacy fallback missing");
+    }
+    {
+        const auto dir = temp / "atto-extension-reject";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"secret.txt", "");
+        must_fail("foreign extension", ".atto or .ores source files",
+                  [&] { (void)resolve(dir/"main.atto", "+/secret.txt"); });
+    }
+    {
         const auto dir = temp / "quoted-key";
         write_text(dir/".ores.pkg.toml", "\"schema_version\" = \"1\"\n");
         write_text(dir/"main.ores", "");
@@ -186,7 +210,7 @@ int main() {
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
         write_text(dir/"lib.txt", "");
-        must_fail("extension", ".ores source files",
+        must_fail("extension", ".atto or .ores source files",
                   [&] { (void)resolve(dir/"main.ores", "+/lib.txt"); });
     }
 
