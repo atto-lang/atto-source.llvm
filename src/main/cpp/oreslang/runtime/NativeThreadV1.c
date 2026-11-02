@@ -39,6 +39,28 @@ static pthread_once_t ores_tls_once_v1 = PTHREAD_ONCE_INIT;
 static atomic_int ores_tls_result_v1 = ATOMIC_VAR_INIT(0);
 static atomic_uint_fast64_t ores_id_counter_v1 = ATOMIC_VAR_INIT(1);
 
+/* Logical native thread incarnations cannot be reused. fetch_add would
+ * wrap at UINT64_MAX and eventually reissue older identities; reserve the
+ * exhausted sentinel with CAS and fail closed instead. */
+static uint64_t ores_allocate_thread_id_v1(void) {
+    uint_fast64_t current = atomic_load_explicit(
+        &ores_id_counter_v1, memory_order_relaxed);
+    while (current != 0 && current < UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(
+                &ores_id_counter_v1, &current, current + 1,
+                memory_order_relaxed, memory_order_relaxed))
+            return (uint64_t)current;
+    }
+    return 0;
+}
+
+#ifdef ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION
+/* Test build only: forbidden in production guest/runtime objects. */
+void ores_native_thread_test_set_next_id_v1(uint64_t id) {
+    atomic_store_explicit(&ores_id_counter_v1, id, memory_order_relaxed);
+}
+#endif
+
 static void ores_tls_init_v1(void) {
     if (pthread_key_create(&ores_tls_key_v1, NULL) != 0) {
         atomic_store(&ores_tls_result_v1, 1);
@@ -107,8 +129,8 @@ ores_thread_status_v1 ores_native_thread_spawn_v1(
         free(handle); free(context); free(start);
         return ORES_THREAD_OUT_OF_MEMORY_V1;
     }
-    context->id = atomic_fetch_add(&ores_id_counter_v1, 1);
-    if (!context->id || context->id == UINT64_MAX) {
+    context->id = ores_allocate_thread_id_v1();
+    if (!context->id) {
         free(handle); free(context); free(start);
         return ORES_THREAD_OS_ERROR_V1;
     }
@@ -136,10 +158,11 @@ ores_thread_status_v1 ores_native_thread_join_blocking_v1(
         atomic_store(&handle->join_state, 0);
         return ORES_THREAD_OS_ERROR_V1;
     }
-    *out_result = handle->result;
+    const int abnormal = atomic_load_explicit(
+        &handle->abnormal_exit, memory_order_acquire);
+    if (!abnormal) *out_result = handle->result;
     atomic_store(&handle->join_state, 2);
-    return atomic_load_explicit(&handle->abnormal_exit, memory_order_acquire)
-        ? ORES_THREAD_UNEXPECTED_EXIT_V1 : ORES_THREAD_OK_V1;
+    return abnormal ? ORES_THREAD_UNEXPECTED_EXIT_V1 : ORES_THREAD_OK_V1;
 }
 
 ores_thread_status_v1 ores_native_thread_release_v1(
