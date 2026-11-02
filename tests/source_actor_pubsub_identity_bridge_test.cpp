@@ -1,14 +1,10 @@
-#include "oreslang/runtime/NativeActorMembershipRegistry.hpp"
-#include "oreslang/runtime/NativeActorPubSub.hpp"
+#include "oreslang/runtime/NativeActorPubSubABI.h"
 #include "oreslang/runtime/SourceActorBootstrap.h"
 
 #include <cstdint>
 #include <cstdlib>
 #include <sched.h>
 #include <stdexcept>
-
-using oreslang::runtime::NativeActorMembershipRegistry;
-using oreslang::runtime::NativeActorPubSubAdmission;
 
 static void check(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -60,7 +56,6 @@ int main() {
           "publisher identity unavailable");
     check(oreslang_source_actor_identity(subscriber, &subscriber_id),
           "subscriber identity unavailable");
-
     check(publisher_id.logical_id != subscriber_id.logical_id,
           "distinct source actors reused logical identity");
     check(publisher_id.scheduler_domain == subscriber_id.scheduler_domain,
@@ -71,96 +66,86 @@ int main() {
             && subscriber_id.scheduler_generation != 0,
           "source actor generation fence missing");
 
-    NativeActorMembershipRegistry memberships(
-        publisher_id.scheduler_domain, 8, 4);
-    check(memberships.register_actor(
-              publisher_id.logical_id,
-              publisher_id.scheduler_generation),
+    OresNativeActorPubSubRuntime* pubsub =
+        ores_native_actor_pubsub_open(
+            publisher_id.scheduler_domain, 8, 4, 4, 4);
+    check(pubsub != nullptr, "native pub-sub ABI open failed");
+
+    check(ores_native_actor_pubsub_register_source_actor(
+              pubsub, publisher_id) == ORES_NATIVE_PUBSUB_OK,
           "publisher registration failed");
-    check(memberships.register_actor(
-              subscriber_id.logical_id,
-              subscriber_id.scheduler_generation),
+    check(ores_native_actor_pubsub_register_source_actor(
+              pubsub, subscriber_id) == ORES_NATIVE_PUBSUB_OK,
           "subscriber registration failed");
-
-    auto group = memberships.create_group(1, 8);
-    check(memberships.join(
-              group,
-              publisher_id.logical_id,
-              publisher_id.scheduler_generation),
+    check(ores_native_actor_pubsub_create_group(
+              pubsub, 1, 8) == ORES_NATIVE_PUBSUB_OK,
+          "group creation failed");
+    check(ores_native_actor_pubsub_join(
+              pubsub, 1, publisher_id) == ORES_NATIVE_PUBSUB_OK,
           "publisher group join failed");
-    check(memberships.join(
-              group,
-              subscriber_id.logical_id,
-              subscriber_id.scheduler_generation),
+    check(ores_native_actor_pubsub_join(
+              pubsub, 1, subscriber_id) == ORES_NATIVE_PUBSUB_OK,
           "subscriber group join failed");
-
-    NativeActorPubSubAdmission<std::int64_t> bus(memberships, 4, 4);
-    bus.define_topic(
-        group.group_id(),
-        "source-identity",
-        NativeActorPubSubAdmission<std::int64_t>::DeliveryPolicy::Reliable,
-        2);
-    check(bus.subscribe(
-              group.group_id(),
-              "source-identity",
-              subscriber_id.logical_id,
-              subscriber_id.scheduler_generation),
+    check(ores_native_actor_pubsub_define_i64_topic(
+              pubsub, 1, "source-identity",
+              ORES_NATIVE_PUBSUB_RELIABLE, 2)
+              == ORES_NATIVE_PUBSUB_OK,
+          "source identity topic definition failed");
+    check(ores_native_actor_pubsub_subscribe_i64(
+              pubsub, 1, "source-identity", subscriber_id)
+              == ORES_NATIVE_PUBSUB_OK,
           "source subscriber admission failed");
 
-    const auto receipt = bus.publish(
-        group.group_id(),
-        "source-identity",
-        publisher_id.logical_id,
-        publisher_id.scheduler_generation,
-        INT64_C(42));
+    OresNativePubSubPublishReceipt receipt{};
+    check(ores_native_actor_pubsub_publish_i64(
+              pubsub, 1, "source-identity",
+              publisher_id, INT64_C(42), &receipt)
+              == ORES_NATIVE_PUBSUB_OK,
+          "source identity publication failed");
     check(receipt.accepted == 1 && !receipt.backpressured,
           "source identity publication was not admitted");
-    const auto value = bus.try_read(
-        group.group_id(),
-        "source-identity",
-        subscriber_id.logical_id,
-        subscriber_id.scheduler_generation);
-    check(value.has_value() && value.value() == INT64_C(42),
+
+    std::int64_t value = 0;
+    check(ores_native_actor_pubsub_try_read_i64(
+              pubsub, 1, "source-identity",
+              subscriber_id, &value)
+              == ORES_NATIVE_PUBSUB_OK,
+          "source identity subscriber read failed");
+    check(value == INT64_C(42),
           "source identity subscriber read mismatch");
 
     /*
-     * Physical source actor retirement invalidates the opaque identity first;
-     * control-plane retirement then removes the corresponding membership and
-     * topic subscription. No replacement actor can inherit either by slot.
+     * Physical source actor retirement invalidates the opaque identity.
+     * The saved generation-fenced identity then authorizes only trusted
+     * runtime cleanup; no stale pointer is needed to reclaim subscription
+     * state.
      */
     oreslang_source_actor_request_stop(subscriber);
     oreslang_source_actor_join_done(subscriber);
     OresSourceActorIdentity retired{};
     check(!oreslang_source_actor_identity(subscriber, &retired),
           "retired source actor still exposed identity");
-    check(memberships.retire_actor(
-              subscriber_id.logical_id,
-              subscriber_id.scheduler_generation),
-          "membership retirement failed");
-    bus.remove_actor(
-        subscriber_id.logical_id,
-        subscriber_id.scheduler_generation);
-    check(bus.subscriber_count(
-              group.group_id(), "source-identity") == 0,
-          "retired source actor subscription leaked");
+    check(ores_native_actor_pubsub_retire_source_actor(
+              pubsub, subscriber_id) == ORES_NATIVE_PUBSUB_OK,
+          "pub-sub subscriber retirement failed");
 
-    const auto empty = bus.publish(
-        group.group_id(),
-        "source-identity",
-        publisher_id.logical_id,
-        publisher_id.scheduler_generation,
-        INT64_C(99));
-    check(empty.subscribers == 0 && empty.accepted == 0,
+    receipt = OresNativePubSubPublishReceipt{};
+    check(ores_native_actor_pubsub_publish_i64(
+              pubsub, 1, "source-identity",
+              publisher_id, INT64_C(99), &receipt)
+              == ORES_NATIVE_PUBSUB_OK,
+          "post-retirement publication failed unexpectedly");
+    check(receipt.subscribers == 0 && receipt.accepted == 0,
           "publication targeted physically retired source actor");
 
     oreslang_source_actor_request_stop(publisher);
     oreslang_source_actor_join_done(publisher);
-    check(memberships.retire_actor(
-              publisher_id.logical_id,
-              publisher_id.scheduler_generation),
-          "publisher membership retirement failed");
-    bus.remove_actor(
-        publisher_id.logical_id,
-        publisher_id.scheduler_generation);
+    check(ores_native_actor_pubsub_retire_source_actor(
+              pubsub, publisher_id) == ORES_NATIVE_PUBSUB_OK,
+          "pub-sub publisher retirement failed");
+    check(ores_native_actor_pubsub_close_group(
+              pubsub, 1) == ORES_NATIVE_PUBSUB_OK,
+          "group close failed");
+    ores_native_actor_pubsub_close(pubsub);
     return 0;
 }
