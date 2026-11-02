@@ -182,11 +182,61 @@ int main() {
     }
 #endif
     {
+        const auto dir = temp / "modern-source";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"app/main.atto", "");
+        write_text(dir/"lib.atto", "");
+        if (resolve(dir/"app/main.atto", "+/lib") != fs::canonical(dir/"lib.atto") ||
+                resolve(dir/"app/main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error(".atto root import did not resolve");
+    }
+    {
+        const auto dir = temp / "ambiguous-source";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        must_fail("root suffix ambiguity", "ambiguous native source",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto")
+                || resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("explicit .atto/.ores suffix must disambiguate");
+    }
+    {
+        const auto dir = temp / "modern-nested-boundary";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"nested/.ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("modern nested boundary", "nested package boundary",
+                  [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
+    }
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "modern-dangling-symlink";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.ores", "");
+        fs::create_symlink(dir/"absent.atto", dir/"lib.atto");
+        must_fail("dangling .atto shadows legacy", "ambiguous native source",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "modern-symlink-escape";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(temp/"outside-modern.atto", "");
+        fs::create_symlink(temp/"outside-modern.atto", dir/"lib.atto");
+        must_fail(".atto symlink target escape", "escapes physical package root",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+#endif
+    {
         const auto dir = temp / "extension";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
         write_text(dir/"lib.txt", "");
-        must_fail("extension", ".ores source files",
+        must_fail("extension", ".atto or legacy .ores extension",
                   [&] { (void)resolve(dir/"main.ores", "+/lib.txt"); });
     }
 
