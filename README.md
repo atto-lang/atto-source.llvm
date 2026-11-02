@@ -267,3 +267,21 @@ artifact.
 The executed CTest gate compiles both shaken and unshaken IR through Clang and
 requires identical process behavior while asserting the dead private symbol is
 absent from the shaken IR.
+
+## AttoLang `.atto` source admission (integer subset)
+
+The LLVM CLI accepts canonical `.atto` source paths as well as legacy `.ores`
+paths; the file extension does not change the current parser or semantics.
+A native executable regression fixture lives at
+`tests/fixtures/numerics-atto-main.atto` and is registered as
+`numerics_atto_integer_guest` when Clang is available. It exercises the
+existing integer-only subset (forward function call and signed i64 addition)
+and must return exit code 42.
+
+This is source-extension admission only. LLVM currently does **not** lower
+floating-point values, floating division, contiguous numerical arrays, or
+tensor kernels. The numerical-library fixtures using `float`, `List<float>`,
+dot products, reductions and matrix multiplication remain unsupported here
+and must fail closed rather than silently map to i64. See the existing
+`native_float_division_unavailable` contract. Java/LLVM numerical parity is
+not claimed by this fixture.
