@@ -187,17 +187,14 @@ static void cancelled_task_never_enqueues_or_resumes() {
     reaper.reset();
     OresNativeExecutionHandle resumed{};
     assert(!task->try_resume({88, 4002}, &resumed));
+    // Queued cancellation tickets never authorize continuation readiness.
+    assert(enqueues.load() <= 1);
+    assert(!waiter->try_admit_ready(5001));
     task->close();
     task.reset();
     waiter.reset();
     stores.release(link);
     authority->retire();
-    // Reaper destructor joins native worker and completes all callbacks
-    // before enqueues goes out of scope; cancellation cannot mint a wake.
-    // A stale ticket can be queued before or after cancellation. It must
-    // never mark the cancelled continuation READY or resume guest code.
-    assert(enqueues.load() <= 1);
-    assert(!waiter->try_admit_ready(5001));
 }
 
 static void retired_task_weak_gate_cannot_be_reanimated() {
@@ -222,11 +219,11 @@ static void retired_task_weak_gate_cannot_be_reanimated() {
     // dropping the borrowed continuation stores or the queue lifetime.
     reaper.reset();
     assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
-    waiter.reset();
-    stores.release(link);
     // Weak Task authority is gone. Any queued ticket must fail admission.
     assert(enqueues.load() <= 1);
     assert(!waiter->try_admit_ready(7001));
+    waiter.reset();
+    stores.release(link);
 }
 int main() {
     nonblocking_join_publishes_one_ready_ticket();
