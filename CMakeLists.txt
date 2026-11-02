@@ -767,8 +767,13 @@ if(BUILD_TESTING)
     add_test(NAME native_source_immutable_default_compiler_and_guest
         COMMAND "${ORE_IMMUTABLE_NATIVE_BIN}"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    # Nine accepted guests each compile, link and execute, while ten
+    # rejected sources must produce compiler diagnostics. Each of these
+    # 37 child processes has a 20 s watchdog; 120 s would terminate a
+    # healthy slow runner before the harness could report a failure.
+    # Match the reviewed private CI plan's bounded 960 s CTest budget.
     set_tests_properties(native_source_immutable_default_compiler_and_guest
-        PROPERTIES TIMEOUT 120)
+        PROPERTIES TIMEOUT 900)
 
     # Source-level compiler admission (not a host-only ownership model):
     # rejected sources must fail before emitting LLVM IR, and three accepted
