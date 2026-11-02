@@ -128,7 +128,16 @@ inline void resolve_native_sums(Program& program) {
             if (e.condition_lhs) expression(*e.condition_lhs, env, {});
             if (e.condition_rhs) expression(*e.condition_rhs, env, {});
             const auto yes = expression(*e.when_true, env, expected);
-            expression(*e.when_false, env, expected.empty() ? yes.sum : expected);
+            const auto no = expression(*e.when_false, env, expected.empty() ? yes.sum : expected);
+            // Constructor payload inference must not take the first arm's
+            // scalar type and silently ignore a differently typed second arm.
+            // This is checked before a conditional is allowed to inhabit an
+            // Option/Result scalar ABI slot (and before IR is generated).
+            if (yes.scalar != no.scalar || yes.sum != no.sum ||
+                yes.cls != no.cls || yes.array != no.array ||
+                (yes.array && (yes.element != no.element ||
+                               yes.element_class != no.element_class)))
+                throw std::runtime_error("native sum conditional branch payload types do not match");
             return yes;
         }
         Hint left;
