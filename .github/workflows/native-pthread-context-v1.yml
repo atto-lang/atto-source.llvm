@@ -40,3 +40,24 @@ jobs:
         env:
           CC: ${{ matrix.compiler }}
         run: sh tests/run_native_thread_sanitizers_v1.sh
+
+  native-pthread-tsan:
+    name: "host-only ThreadSanitizer - gcc"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute true pthread ID-exhaustion race under TSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread \
+            -Isrc/main/cpp \
+            src/main/cpp/oreslang/runtime/NativeThreadV1.c \
+            tests/native_thread_v1_test.c \
+            -o "$tmp/native-thread-tsan"
+          TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
+            "$tmp/native-thread-tsan"
