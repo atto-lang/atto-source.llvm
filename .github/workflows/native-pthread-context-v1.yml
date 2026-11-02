@@ -6,6 +6,8 @@ on:
       - "src/main/cpp/oreslang/types/ThreadCaptureAdmission.hpp"
       - "tests/native_thread_capture_admission_test.cpp"
       - "src/main/cpp/oreslang/runtime/NativeThreadJoinReaperV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeJoinTaskWaitV1.hpp"
+      - "tests/native_join_task_wait_v1_test.cpp"
       - "tests/native_thread_join_reaper_v1_test.cpp"
       - "tests/native_thread_v1_test.c"
       - "tests/native_thread_scope_v1_test.c"
