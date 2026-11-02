@@ -219,8 +219,8 @@ extern "C" OresNativePubSubStatus ores_native_actor_pubsub_leave(
          * The membership registry is already the barrier. Remove queued topic
          * state only after no publication can authorize this actor again.
          */
-        runtime->i64_bus.remove_actor(
-            actor.logical_id, actor.scheduler_generation);
+        runtime->i64_bus.remove_actor_from_group(
+            group_id, actor.logical_id, actor.scheduler_generation);
     });
 }
 
