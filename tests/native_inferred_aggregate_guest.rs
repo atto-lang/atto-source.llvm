@@ -1,4 +1,4 @@
-//! Real .ores -> oreslang-llvmc -> LLVM IR -> clang -> OS exit verification.
+//! Real .atto -> oreslang-llvmc -> LLVM IR -> clang -> OS exit verification.
  //! Positive scalar-only stack shape inference. Requires executed compiler and
  //! linker; this is NOT a host-only contract or an aggregate parameter ABI.
 use std::fs::{self, read_dir};
@@ -79,7 +79,7 @@ fn main(){
     ];
     for (name, source) in rejected {
         let work=temp();
-        let src=work.0.join("negative.ores");
+        let src=work.0.join("negative.atto");
         fs::write(&src,source).unwrap();
         let result=run(&compiler,&[src.as_path()],&work.0);
         assert!(result.status.code().unwrap_or(-1)>0,
@@ -93,7 +93,7 @@ fn main(){
     }
     for (name, source, expected) in corpus {
         let work=temp();
-        let src=work.0.join("program.ores");
+        let src=work.0.join("program.atto");
         let ir=work.0.join("program.ll");
         let exe=work.0.join("program");
         fs::write(&src,source).unwrap();
