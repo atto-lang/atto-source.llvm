@@ -9,6 +9,7 @@ on:
       - "tests/native_thread_join_reaper_v1_test.cpp"
       - "tests/native_thread_v1_test.c"
       - "tests/run_native_thread_v1.sh"
+      - "tests/run_native_thread_sanitizers_v1.sh"
       - ".github/workflows/native-pthread-context-v1.yml"
   workflow_dispatch:
 jobs:
@@ -25,3 +26,17 @@ jobs:
         env:
           CC: ${{ matrix.compiler }}
         run: sh tests/run_native_thread_v1.sh
+
+  native-pthread-sanitizer:
+    name: "host-only sanitizer - ${{ matrix.compiler }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute ASan/UBSan host pthread and capture checks
+        env:
+          CC: ${{ matrix.compiler }}
+        run: sh tests/run_native_thread_sanitizers_v1.sh
