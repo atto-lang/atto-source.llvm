@@ -752,6 +752,24 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/parity")
     set_tests_properties(native_five_backend_checked_cast_guest PROPERTIES TIMEOUT 180)
 
+    # Real native Oreslang source->LLVM IR->Clang guest tests. The runner is
+    # implemented in Rust (no new Python tooling), and must not be credited
+    # as backend parity until this exact branch executes a stepful CTest.
+    find_program(ORE_IMMUTABLE_RUSTC rustc REQUIRED)
+    set(ORE_IMMUTABLE_NATIVE_BIN "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-immutable-default${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_command(OUTPUT "${ORE_IMMUTABLE_NATIVE_BIN}"
+        COMMAND "${ORE_IMMUTABLE_RUSTC}" --edition=2021 -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_immutable_default.rs"
+            -o "${ORE_IMMUTABLE_NATIVE_BIN}"
+        DEPENDS tests/native_immutable_default.rs VERBATIM)
+    add_custom_target(oreslang-native-immutable-default-build ALL
+        DEPENDS "${ORE_IMMUTABLE_NATIVE_BIN}")
+    add_test(NAME native_source_immutable_default_compiler_and_guest
+        COMMAND "${ORE_IMMUTABLE_NATIVE_BIN}"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    set_tests_properties(native_source_immutable_default_compiler_and_guest
+        PROPERTIES TIMEOUT 120)
+
     # Source-level compiler admission (not a host-only ownership model):
     # rejected sources must fail before emitting LLVM IR, and three accepted
     # controls must produce IR to prevent parser-only false positives.
