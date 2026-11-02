@@ -26,6 +26,7 @@ struct OresNativeActorPubSubRuntime {
     // One topic name has one fixed payload type for its group lifetime.
     // Protected by groups_mutex alongside group creation/closure.
     std::map<std::pair<std::uint64_t, std::string>, char> topic_types;
+    const std::size_t max_topics_total;
 
     OresNativeActorPubSubRuntime(
             std::uint64_t runtime_domain,
@@ -35,7 +36,8 @@ struct OresNativeActorPubSubRuntime {
             std::size_t max_subscriptions_per_actor)
         : memberships(runtime_domain, max_groups, max_groups_per_actor),
           i64_bus(memberships, max_topics, max_subscriptions_per_actor),
-          utf8_bus(memberships, max_topics, max_subscriptions_per_actor) {}
+          utf8_bus(memberships, max_topics, max_subscriptions_per_actor),
+          max_topics_total(max_topics) {}
 };
 
 namespace {
@@ -121,16 +123,32 @@ OresNativePubSubStatus guarded(Fn&& fn) noexcept {
     }
 }
 
-void require_topic_type_locked(
+// Caller owns groups_mutex. Reserve the shared typed-name index BEFORE
+// mutating the i64/string bus, and unwind the index if the bus admission fails.
+// Without this ordering, a thrown std::bad_alloc could leave an untracked
+// topic that a second payload type could later redefine.
+template<class Define>
+void define_typed_topic_locked(
         OresNativeActorPubSubRuntime* runtime,
         std::uint64_t group_id,
         const char* topic_name,
-        char kind) {
-    auto it = runtime->topic_types.find(
-        std::make_pair(group_id, std::string(topic_name)));
-    if (it != runtime->topic_types.end() && it->second != kind)
+        char kind,
+        Define&& define) {
+    auto [it, inserted] = runtime->topic_types.emplace(
+        std::make_pair(group_id, std::string(topic_name)), kind);
+    if (!inserted && it->second != kind)
         throw std::logic_error(
             "native ActorGroup topic cannot change its payload type");
+    if (inserted && runtime->topic_types.size() > runtime->max_topics_total) {
+        runtime->topic_types.erase(it);
+        throw std::logic_error("native pub-sub total topic quota exceeded");
+    }
+    try {
+        std::forward<Define>(define)();
+    } catch (...) {
+        if (inserted) runtime->topic_types.erase(it);
+        throw;
+    }
 }
 
 template<class Receipt>
@@ -307,14 +325,11 @@ ores_native_actor_pubsub_define_i64_topic(
         return ORES_NATIVE_PUBSUB_INVALID;
     return guarded([&] {
         std::lock_guard<std::mutex> lock(runtime->groups_mutex);
-        require_topic_type_locked(runtime, group_id, topic_name, 'i');
-        runtime->i64_bus.define_topic(
-            group_id,
-            std::string(topic_name),
-            policy(topic_policy),
-            capacity);
-        runtime->topic_types.emplace(
-            std::make_pair(group_id, std::string(topic_name)), 'i');
+        define_typed_topic_locked(runtime, group_id, topic_name, 'i', [&] {
+            runtime->i64_bus.define_topic(
+                group_id, std::string(topic_name),
+                policy(topic_policy), capacity);
+        });
     });
 }
 
@@ -414,7 +429,6 @@ ores_native_actor_pubsub_define_utf8_topic(
             || capacity == 0) return ORES_NATIVE_PUBSUB_INVALID;
     return guarded([&] {
         std::lock_guard<std::mutex> lock(runtime->groups_mutex);
-        require_topic_type_locked(runtime, group_id, topic_name, 's');
         using Policy =
             NativeActorPubSubAdmission<std::string>::DeliveryPolicy;
         Policy converted;
@@ -424,10 +438,10 @@ ores_native_actor_pubsub_define_utf8_topic(
             case ORES_NATIVE_PUBSUB_LOSSY: converted = Policy::Lossy; break;
             default: throw std::invalid_argument("invalid native pub-sub policy");
         }
-        runtime->utf8_bus.define_topic(
-            group_id, std::string(topic_name), converted, capacity);
-        runtime->topic_types.emplace(
-            std::make_pair(group_id, std::string(topic_name)), 's');
+        define_typed_topic_locked(runtime, group_id, topic_name, 's', [&] {
+            runtime->utf8_bus.define_topic(
+                group_id, std::string(topic_name), converted, capacity);
+        });
     });
 }
 
