@@ -94,5 +94,58 @@ int main() {
     empty.add_checked_spread_projection(NativeAggregateShape{Kind::ExactStruct, {}});
     CHECK(empty.result_shape().fields.empty());
     CHECK(empty.source_elements() == 1);
+
+    // Failure must leave all previously checked writes intact: duplicate
+    // explicit fields must not partially mutate the inferred source plan.
+    NativeAggregateSpreadPlan atomic(Kind::ReadonlyRecord);
+    atomic.add_named("x", "int");
+    const auto before = atomic.source_ordered_writes().size();
+    CHECK(denies([&] { atomic.add_named("x", "bool"); },
+                 "AGGREGATE_SPREAD_DUPLICATE_NAMED_FIELD"));
+    CHECK(atomic.source_ordered_writes().size() == before);
+    CHECK(atomic.source_elements() == 1);
+    CHECK(atomic.result_shape().fields[0].type == "int");
+
+    // Empty spread elements have zero field writes, but still consume the
+    // lexical element budget. Permit exactly 1024 and reject element 1025.
+    NativeAggregateSpreadPlan element_budget(Kind::ExactStruct);
+    for (int i = 0; i < 1024; ++i)
+        element_budget.add_checked_spread_projection(
+            NativeAggregateShape{Kind::ReadonlyRecord, {}});
+    CHECK(element_budget.source_elements() == 1024);
+    CHECK(element_budget.source_ordered_writes().empty());
+    CHECK(denies([&] {
+        element_budget.add_checked_spread_projection(
+            NativeAggregateShape{Kind::ReadonlyRecord, {}});
+    }, "AGGREGATE_SPREAD_PLAN_BUDGET"));
+    CHECK(element_budget.source_elements() == 1024);
+
+    // Eight thousand one hundred ninety-two writes must be accepted exactly;
+    // even an additional field from a valid row must fail before mutation.
+    NativeAggregateShape wide{Kind::ReadonlyRecord, {}};
+    for (int i = 0; i < 64; ++i)
+        wide.fields.push_back({"f" + std::to_string(i), "int"});
+    wide.canonicalize();
+    NativeAggregateSpreadPlan write_budget(Kind::ReadonlyRecord);
+    for (int i = 0; i < 128; ++i)
+        write_budget.add_checked_spread_projection(wide);
+    CHECK(write_budget.source_elements() == 128);
+    CHECK(write_budget.source_ordered_writes().size() == 8192);
+    CHECK(write_budget.result_shape().fields.size() == 64);
+    CHECK(denies([&] { write_budget.add_named("another", "int"); },
+                 "AGGREGATE_SPREAD_PLAN_BUDGET"));
+    CHECK(write_budget.source_ordered_writes().size() == 8192);
+
+    // UTF-8 validation is byte-based and rejects embedded NUL and truncated
+    // multibyte keys instead of treating them as distinct static field names.
+    CHECK(denies([] {
+        NativeAggregateSpreadPlan bad(Kind::ReadonlyRecord);
+        bad.add_named(std::string("a\0b", 3), "int");
+    }, "AGGREGATE_SHAPE_CONTROL_FIELD_NAME"));
+    CHECK(denies([] {
+        NativeAggregateSpreadPlan bad(Kind::ReadonlyRecord);
+        bad.add_named(std::string("\xE2\x82", 2), "int");
+    }, "AGGREGATE_SHAPE_INVALID_UTF8"));
+
     return 0;
 }
