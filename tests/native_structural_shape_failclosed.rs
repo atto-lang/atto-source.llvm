@@ -47,12 +47,12 @@ fn main() {
     // aggregate implementation in LLVM PR #1114. Other structural views,
     // aggregate ABIs and nested fields remain negative, not silently erased.
     let aggregate_positives = [
-        ("inferred struct constructor", "fnc main():int { const p = infer struct{x:42}; return p.x; }\n"),
-        ("inferred record constructor", "fnc main():int { const p = infer record{x:42}; return p.x; }\n"),
-        ("plain readonly record constructor", "fnc main():int { const p = record{x:42}; return p.x; }\n"),
-        ("struct spread appends field", "fnc main():int { const p = infer struct{x:40}; const q = infer struct{...p,y:2}; return q.y+p.x; }\n"),
-        ("record type changing override", "fnc main():int { const p = record{x:true,y:40}; const q = record{...p,x:2}; return q.x+q.y; }\n"),
-        ("multiple spread operands", "fnc main():int { const a = record{x:20}; const b = record{y:22}; const c = record{...a,...b}; return c.x+c.y; }\n"),
+        ("inferred struct constructor", "pub fnc main():int { const p = infer struct{x:42}; return p.x; }\n"),
+        ("inferred record constructor", "pub fnc main():int { const p = infer record{x:42}; return p.x; }\n"),
+        ("plain readonly record constructor", "pub fnc main():int { const p = record{x:42}; return p.x; }\n"),
+        ("struct spread appends field", "pub fnc main():int { const p = infer struct{x:40}; const q = infer struct{...p,y:2}; return q.y+p.x; }\n"),
+        ("record type changing override", "pub fnc main():int { const p = record{x:true,y:40}; const q = record{...p,x:2}; return q.x+q.y; }\n"),
+        ("multiple spread operands", "pub fnc main():int { const a = record{x:20}; const b = record{y:22}; const c = record{...a,...b}; return c.x+c.y; }\n"),
     ];
     for (name, source) in aggregate_positives.iter() {
         let compiled = compile(&compiler, &tmp.0, source);
