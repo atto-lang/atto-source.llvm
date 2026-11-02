@@ -10,12 +10,14 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace oreslang::runtime {
 
-// Host-only completion object. The scheduler may poll it or wire a dedicated
-// host-notification bridge; observing readiness never calls pthread_join.
-// A cancelled/dropped observer does not cancel cleanup owned by the reaper.
+// Host-owned, read-only completion. Dropping an observer never cancels join.
+// The scheduler can later register an event-driven bridge; try_read is not
+// permission to poll or block a guest carrier thread.
 class NativeJoinCompletionV1 final {
 public:
     bool try_read(ores_thread_status_v1& status, int& value) const noexcept {
@@ -36,32 +38,62 @@ private:
     int value_ = 0;
 };
 
-// Bounded host reaper; NEVER instantiated on an AttoLang actor carrier.
-// Joining is performed on exactly one dedicated *host* thread. No
-// per-waiter OS thread is created. Guest Task wakeups are not yet implemented.
+// Bounded *host-only* join pool, not a guest Task/Future implementation.
+// Multiple workers prevent one stalled pthread from starving unrelated joins.
+// The caller must not destroy this pool on a guest scheduler carrier.
+//
+// Unexpected physical-join failures retain unique handles in failed_ until
+// recovery by a supervisor. Destruction with unrecovered failures deliberately
+// terminates, rather than silently dropping ownership of native resources.
 class NativeThreadJoinReaperV1 final {
 public:
-    explicit NativeThreadJoinReaperV1(std::size_t capacity)
-        : capacity_(checked_capacity(capacity)), worker_([this] { run(); }) {
+    using JoinFunction = ores_thread_status_v1 (*)(ores_native_thread_v1*, int*);
+
+    explicit NativeThreadJoinReaperV1(
+            std::size_t capacity, std::size_t workers = 2,
+            JoinFunction join = ores_native_thread_join_blocking_v1)
+        : capacity_(checked_capacity(capacity)),
+          worker_count_(checked_workers(workers, capacity_)),
+          join_(checked_join(join)) {
+        failed_.reserve(capacity_);
+        workers_.reserve(worker_count_);
+        try {
+            for (std::size_t i = 0; i < worker_count_; ++i)
+                workers_.emplace_back([this] { run(); });
+        } catch (...) {
+            {
+                std::lock_guard<std::mutex> guard(lock_);
+                closing_ = true;
+            }
+            cv_.notify_all();
+            for (auto& worker : workers_)
+                if (worker.joinable()) worker.join();
+            throw;
+        }
     }
 
-    ~NativeThreadJoinReaperV1() {
+    ~NativeThreadJoinReaperV1() noexcept {
         {
             std::lock_guard<std::mutex> guard(lock_);
             closing_ = true;
         }
-        cv_.notify_one();
-        if (worker_.joinable()) worker_.join();
-        // Shutdown waits for actual thread retirement. Must be invoked by
-        // a host/supervisor shutdown worker, never a cooperative carrier.
+        cv_.notify_all();
+        for (auto& worker : workers_) {
+            if (worker.get_id() == std::this_thread::get_id())
+                std::terminate();
+            if (worker.joinable()) worker.join();
+        }
+        // Never hide failed join rights or pthread handles behind a silent
+        // memory leak when the structured supervisor is destroyed.
+        if (!failed_.empty()) std::terminate();
     }
 
     NativeThreadJoinReaperV1(const NativeThreadJoinReaperV1&) = delete;
     NativeThreadJoinReaperV1& operator=(const NativeThreadJoinReaperV1&) = delete;
 
-    // On success sets handle to NULL, transferring its unique ownership.
-    // On backpressure or shutdown, caller retains the same handle and may
-    // retry or join during structured cleanup; no silent detach.
+    // Successful submission consumes *handle exactly once. Queue saturation,
+    // allocation failures, or shutdown keep the caller's ownership intact.
+    // Throwing allocation failures preserve the handle as well.
     std::shared_ptr<NativeJoinCompletionV1> submit(
             ores_native_thread_v1*& handle) {
         if (!handle) return {};
@@ -69,7 +101,7 @@ public:
         {
             std::lock_guard<std::mutex> guard(lock_);
             if (closing_ || active_ >= capacity_) return {};
-            pending_.push_back({handle, completion});
+            pending_.push_back({handle, completion}); // may throw before move
             ++active_;
             handle = nullptr;
         }
@@ -77,23 +109,50 @@ public:
         return completion;
     }
 
-    std::size_t active() const {
+    std::size_t active() const noexcept {
         std::lock_guard<std::mutex> guard(lock_);
         return active_;
     }
+
+    std::size_t failed_count() const noexcept {
+        std::lock_guard<std::mutex> guard(lock_);
+        return failed_.size();
+    }
+
+    // Called by an authorized host supervisor after observing an OS failure.
+    // The returned handles remain joinable/owned; the supervisor must retry
+    // join or escalate without losing them. This is not a guest API.
+    std::vector<ores_native_thread_v1*> recover_failed() noexcept {
+        std::vector<ores_native_thread_v1*> recovered;
+        std::lock_guard<std::mutex> guard(lock_);
+        recovered.swap(failed_);
+        return recovered;
+    }
+
 private:
     struct Job {
-        ores_native_thread_v1* handle;
+        ores_native_thread_v1* handle = nullptr;
         std::shared_ptr<NativeJoinCompletionV1> completion;
     };
+
     static std::size_t checked_capacity(std::size_t n) {
         if (n == 0 || n > 1024)
             throw std::invalid_argument("native_join_reaper_capacity_invalid");
         return n;
     }
+    static std::size_t checked_workers(std::size_t n, std::size_t capacity) {
+        if (n == 0 || n > 16 || n > capacity)
+            throw std::invalid_argument("native_join_reaper_workers_invalid");
+        return n;
+    }
+    static JoinFunction checked_join(JoinFunction fn) {
+        if (!fn) throw std::invalid_argument("native_join_reaper_join_null");
+        return fn;
+    }
+
     void run() noexcept {
         while (true) {
-            Job job{};
+            Job job;
             {
                 std::unique_lock<std::mutex> guard(lock_);
                 cv_.wait(guard, [this] { return closing_ || !pending_.empty(); });
@@ -104,31 +163,35 @@ private:
                 job = std::move(pending_.front());
                 pending_.pop_front();
             }
+
             int result = 0;
-            auto status = ores_native_thread_join_blocking_v1(job.handle, &result);
+            ores_thread_status_v1 status = join_(job.handle, &result);
             if (status == ORES_THREAD_OK_V1) {
                 status = ores_native_thread_release_v1(job.handle);
-            } else {
-                // An unexpected join failure is a fatal native lifecycle
-                // violation. Preserve the raw handle for supervisor/debug
-                // inspection rather than detach or silently freeing it.
-                // The report carries OS_ERROR, never a success result.
-                status = ORES_THREAD_OS_ERROR_V1;
             }
-            job.completion->publish(status, result);
             {
                 std::lock_guard<std::mutex> guard(lock_);
+                if (status != ORES_THREAD_OK_V1) {
+                    // No allocation here: the vector reserves 'capacity_' slots,
+                    // and active_ always bounds simultaneous failed handles.
+                    failed_.push_back(job.handle);
+                }
                 --active_;
             }
+            job.completion->publish(status, result);
         }
     }
+
     const std::size_t capacity_;
+    const std::size_t worker_count_;
+    JoinFunction join_;
     mutable std::mutex lock_;
     std::condition_variable cv_;
     std::deque<Job> pending_;
+    std::vector<ores_native_thread_v1*> failed_;
+    std::vector<std::thread> workers_;
     std::size_t active_ = 0;
     bool closing_ = false;
-    std::thread worker_;
 };
 
 } // namespace oreslang::runtime
