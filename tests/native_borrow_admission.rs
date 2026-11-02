@@ -228,6 +228,22 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A false-pass regression must fail at the named compiler-evidence gate.
+    // Catching an unrelated spawn, I/O or assertion panic is not proof.
+    #[cfg(unix)]
+    fn assert_panicked_for(
+        result: Result<(), Box<dyn std::any::Any + Send>>,
+        expected: &str,
+    ) {
+        let payload = result.expect_err("forged compiler evidence was admitted");
+        let message = payload
+            .downcast_ref::<String>().map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(message.contains(expected),
+            "wrong rejection predicate fired: expected {expected:?}, got {message:?}");
+    }
     #[cfg(unix)]
     fn assert_rejected_fake_compiler(script_body: &str) {
         use std::os::unix::fs::PermissionsExt;
@@ -323,7 +339,7 @@ mod tests {
             "pub fnc main(): int { return rt mut share 42; }\n",
             Some("native rt mut share requires verified SharedMutex<T> capability")
         ));
-        assert!(caught.is_err(), "mixed diagnostics falsely proved guarded-sharing denial");
+        assert_panicked_for(caught, "mixed native diagnostics");
     }
 
     #[cfg(unix)]
@@ -348,7 +364,7 @@ mod tests {
             "pub fnc main(): int { return rt mut share 42; }\n",
             Some("native rt mut share requires verified SharedMutex<T> capability")
         ));
-        assert!(caught.is_err(), "non-compiler exit status falsely proved guarded-sharing denial");
+        assert_panicked_for(caught, "guarded-sharing denial requires controlled native compiler exit(1)");
     }
 
     #[cfg(unix)]
@@ -375,8 +391,7 @@ mod tests {
             "pub fnc main(): int { return rt mut share 42; }\n",
             Some("native rt mut share requires verified SharedMutex<T> capability")
         ));
-        assert!(caught.is_err(),
-            "a same-line parser error masqueraded as guarded-sharing denial");
+        assert_panicked_for(caught, "malformed or appended guarded-sharing diagnostic");
     }
 
     #[test]
