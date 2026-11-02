@@ -204,4 +204,33 @@ int main() {
           "group close leaked preallocated queue slots");
     check(bounded.queued_payload_bytes() == 0,
           "group close leaked bounded payload bytes");
+
+    check(memberships.join(b, 12, 1),
+          "subscriber 12 join B for graph-byte test");
+    NativeActorPubSubAdmission<std::string> graph_bounded(
+        memberships,
+        2,
+        4,
+        4,   // per-edge bytes
+        5,   // graph-wide bytes: smaller than 3 bytes * 2 subscribers
+        2,
+        4);
+    graph_bounded.define_topic(
+        b.group_id(), "graph",
+        NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable,
+        1);
+    check(graph_bounded.subscribe(b.group_id(), "graph", 11, 1),
+          "graph subscriber 11 admission failed");
+    check(graph_bounded.subscribe(b.group_id(), "graph", 12, 1),
+          "graph subscriber 12 admission failed");
+    auto graph_blocked =
+        graph_bounded.publish(b.group_id(), "graph", 10, 1, "abc");
+    check(graph_blocked.backpressured && graph_blocked.accepted == 0,
+          "graph byte quota allowed partial reliable fanout");
+    check(graph_bounded.queued_payload_bytes() == 0,
+          "graph-byte rejection changed payload ledger");
+    check(graph_bounded.close_group(b.group_id()) == 1,
+          "graph-byte test topic cleanup failed");
+    check(graph_bounded.allocated_queue_slots() == 0,
+          "graph-byte test leaked queue slots");
 }
