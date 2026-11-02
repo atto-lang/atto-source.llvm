@@ -41,6 +41,7 @@ required_tests=(
   reject_shared_actor_pubsub_source_corpus
   native_actor_multi_group_membership
   native_actor_pubsub_admission
+  source_actor_pubsub_identity_bridge
   native_actor_group_managed_worker_readiness
   source_actor_compiled_native_lifecycle
   source_actor_compiled_native_asan_ubsan
