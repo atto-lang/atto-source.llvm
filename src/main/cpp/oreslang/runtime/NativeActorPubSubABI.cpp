@@ -19,6 +19,9 @@ using oreslang::runtime::NativeActorPubSubAdmission;
 
 struct OresNativeActorPubSubRuntime {
     NativeActorMembershipRegistry memberships;
+    // i64 and String lanes charge a single graph ledger, not independent
+    // 64MiB byte / 1Mi-slot / actor subscription budgets.
+    std::shared_ptr<oreslang::runtime::NativeActorPubSubResourceLedger> resources;
     NativeActorPubSubAdmission<std::int64_t> i64_bus;
     NativeActorPubSubAdmission<std::string> utf8_bus;
     std::mutex groups_mutex;
@@ -35,8 +38,25 @@ struct OresNativeActorPubSubRuntime {
             std::size_t max_topics,
             std::size_t max_subscriptions_per_actor)
         : memberships(runtime_domain, max_groups, max_groups_per_actor),
-          i64_bus(memberships, max_topics, max_subscriptions_per_actor),
-          utf8_bus(memberships, max_topics, max_subscriptions_per_actor),
+          resources(std::make_shared<
+              oreslang::runtime::NativeActorPubSubResourceLedger>(
+                  max_subscriptions_per_actor,
+                  NativeActorPubSubAdmission<std::int64_t>::DEFAULT_GRAPH_BYTES,
+                  NativeActorPubSubAdmission<std::int64_t>::DEFAULT_TOTAL_QUEUE_SLOTS)),
+          i64_bus(
+              memberships, max_topics, max_subscriptions_per_actor,
+              NativeActorPubSubAdmission<std::int64_t>::DEFAULT_EDGE_BYTES,
+              NativeActorPubSubAdmission<std::int64_t>::DEFAULT_GRAPH_BYTES,
+              NativeActorPubSubAdmission<std::int64_t>::DEFAULT_MAX_QUEUE_CAPACITY,
+              NativeActorPubSubAdmission<std::int64_t>::DEFAULT_TOTAL_QUEUE_SLOTS,
+              resources),
+          utf8_bus(
+              memberships, max_topics, max_subscriptions_per_actor,
+              NativeActorPubSubAdmission<std::string>::DEFAULT_EDGE_BYTES,
+              NativeActorPubSubAdmission<std::string>::DEFAULT_GRAPH_BYTES,
+              NativeActorPubSubAdmission<std::string>::DEFAULT_MAX_QUEUE_CAPACITY,
+              NativeActorPubSubAdmission<std::string>::DEFAULT_TOTAL_QUEUE_SLOTS,
+              resources),
           max_topics_total(max_topics) {}
 };
 
