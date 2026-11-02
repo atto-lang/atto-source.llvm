@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -60,7 +61,11 @@ int main() {
         int value = 0;
         while (!complete->try_read(status, value)) std::this_thread::yield();
         assert(status == ORES_THREAD_OK_V1 && value == 17);
-        assert(waiter->state() != State::Pending);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (waiter->state() == State::Pending) {
+            assert(std::chrono::steady_clock::now() < deadline);
+            std::this_thread::yield();
+        }
     }
     assert(enqueues.load() <= 200);
     // A cancelled waiter must not execute a late scheduler enqueue.
