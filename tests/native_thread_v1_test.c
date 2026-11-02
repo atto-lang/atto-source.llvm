@@ -81,13 +81,3 @@ int main(void) {
     return 0;
 }
 
-/* This is a release/acquire completion notification, NOT an OS-thread join.
- * Caller must own/retain handle through access. Physical join is performed
- * only by the structured host reaper. */
-ores_thread_status_v1 ores_native_thread_poll_completed_v1(
-    const ores_native_thread_v1 *handle, int *out_completed) {
-    if (!handle || !out_completed) return ORES_THREAD_BAD_ARGUMENT_V1;
-    *out_completed = atomic_load_explicit(
-        &handle->body_completed, memory_order_acquire);
-    return ORES_THREAD_OK_V1;
-}
