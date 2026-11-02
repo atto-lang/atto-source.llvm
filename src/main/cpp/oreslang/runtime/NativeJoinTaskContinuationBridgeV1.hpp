@@ -9,43 +9,64 @@
 
 namespace oreslang::runtime {
 
-// Host-only glue from a physical pthread join to an authenticated logical
-// Task continuation. Caller owns the C execution/continuation stores and must
-// keep them alive through all join callbacks, scheduler claims and cleanup.
+// Host-only bridge from a physical pthread join to a logical Task continuation.
+// The reaper's callback ONLY enqueues a generation ticket. It MUST NOT acquire
+// Task/continuation-store locks, directly resume a guest frame or block a
+// scheduler carrier. The Task scheduler owns ticket dequeue and admission.
 //
-// A join worker is permitted to publish READY and enqueue an immutable
-// generation ticket, but MUST NOT execute a guest frame. The consuming Task
-// carrier must call TaskContinuationGate::try_resume(), which re-checks Task
-// authority, code/actor identity and READY -> CLAIMED under the store lock.
-//
-// Construction of the TaskContinuationGate must explicitly require
-// ORES_CONTINUATION_BOUNDARY_TASK_JOIN; this adapter cannot mint a gate or
-// weaken the boundary or the task's structural cancellation authority.
-class NativeJoinTaskContinuationBridgeV1 final {
+// The caller constructs TaskContinuationGate with explicit TASK_JOIN boundary
+// and retains the C execution/continuation stores until all physical reaper
+// callbacks and any claimed continuations have quiesced.
+class NativeJoinTaskContinuationBridgeV1 final
+    : public std::enable_shared_from_this<NativeJoinTaskContinuationBridgeV1> {
 public:
     using Enqueue = NativeJoinTaskWaitV1::Enqueue;
 
-    static std::shared_ptr<NativeJoinTaskWaitV1> subscribe(
+    static std::shared_ptr<NativeJoinTaskContinuationBridgeV1> subscribe(
             const std::shared_ptr<NativeJoinCompletionV1>& completion,
             const std::shared_ptr<TaskContinuationGate>& gate,
             std::uint64_t task_generation, Enqueue enqueue) {
         if (!completion || !gate || !enqueue || task_generation == 0)
             return {};
-        const std::weak_ptr<TaskContinuationGate> weak = gate;
+        auto bridge = std::shared_ptr<NativeJoinTaskContinuationBridgeV1>(
+            new NativeJoinTaskContinuationBridgeV1(gate));
+        const std::weak_ptr<NativeJoinTaskContinuationBridgeV1> weak = bridge;
         auto waiter = NativeJoinTaskWaitV1::create(
             task_generation,
             [weak, enqueue = std::move(enqueue)](std::uint64_t generation) {
-                auto active = weak.lock();
-                if (active && active->notify_ready()) {
-                    // enqueue() never resumes guest code inline. If Task
-                    // cancellation wins after READY, the consuming carrier's
-                    // generation-fenced try_resume() will reject the ticket.
-                    enqueue(generation);
-                }
+                // Only a bounded, enqueue-only notification is allowed on a
+                // native reaper thread. No C store or guest Task operations.
+                if (weak.lock()) enqueue(generation);
             });
         if (!waiter || !waiter->attach(completion)) return {};
-        return waiter;
+        bridge->waiter_ = std::move(waiter);
+        return bridge;
     }
+
+    // Scheduler-dequeue side ONLY: bind immutable generation, one-shot join
+    // notification and original Task authority before marking its exact
+    // continuation READY. A later TaskCancellation still wins against resume
+    // through TaskContinuationGate::try_resume() on the guest carrier.
+    bool try_admit_ready(std::uint64_t ticket_generation) noexcept {
+        if (!waiter_ ||
+                waiter_->generation() != ticket_generation ||
+                waiter_->state() != NativeJoinTaskWaitV1::State::Notified)
+            return false;
+        auto gate = gate_.lock();
+        return gate && gate->notify_ready();
+    }
+
+    bool cancel_waiter() noexcept {
+        return waiter_ && waiter_->cancel();
+    }
+
+private:
+    explicit NativeJoinTaskContinuationBridgeV1(
+            const std::shared_ptr<TaskContinuationGate>& gate)
+        : gate_(gate) {}
+
+    std::weak_ptr<TaskContinuationGate> gate_;
+    std::shared_ptr<NativeJoinTaskWaitV1> waiter_;
 };
 
 } // namespace oreslang::runtime
