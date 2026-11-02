@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void check(int condition) {
     if (!condition) abort();
@@ -76,6 +77,96 @@ int main(void) {
         == ORES_NATIVE_PUBSUB_OK);
     check(value == 11);
 
+    /* String topics share the same actor incarnation/membership fence. */
+    check(ores_native_actor_pubsub_define_utf8_topic(
+        runtime, 2, "strings",
+        ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_define_utf8_topic(
+        runtime, 2, "newest",
+        ORES_NATIVE_PUBSUB_LATEST, 1) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_define_utf8_topic(
+        runtime, 2, "losses",
+        ORES_NATIVE_PUBSUB_LOSSY, 1) == ORES_NATIVE_PUBSUB_OK);
+    /* A topic name is single-typed, regardless of the native bus lane. */
+    check(ores_native_actor_pubsub_define_utf8_topic(
+        runtime, 1, "events",
+        ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
+    check(ores_native_actor_pubsub_define_i64_topic(
+        runtime, 2, "strings",
+        ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
+    check(ores_native_actor_pubsub_subscribe_utf8(
+        runtime, 2, "strings", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_utf8(
+        runtime, 2, "newest", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_utf8(
+        runtime, 2, "losses", subscriber) == ORES_NATIVE_PUBSUB_OK);
+
+    receipt = (OresNativePubSubPublishReceipt){0};
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "strings", publisher, "hello", 5, &receipt)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(receipt.accepted == 1 && !receipt.backpressured);
+    receipt = (OresNativePubSubPublishReceipt){0};
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "strings", publisher, "blocked", 7, &receipt)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(receipt.accepted == 0 && receipt.backpressured);
+
+    char small[3] = {0};
+    size_t length = 0;
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "strings", subscriber, small, sizeof small, &length)
+        == ORES_NATIVE_PUBSUB_RESOURCE_EXHAUSTED);
+    check(length == 5);
+    char received[16] = {0};
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "strings", subscriber, received, sizeof received, &length)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(length == 5 && memcmp(received, "hello", 5) == 0);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "strings", subscriber, received, sizeof received, &length)
+        == ORES_NATIVE_PUBSUB_EMPTY);
+
+    /* UTF-8 validity is checked before mutation; reject overlong encodings. */
+    const char invalid_utf8[] = {(char)0xc0, (char)0xaf};
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "strings", publisher, invalid_utf8, 2, &receipt)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    const char multilingual[] = "h\xc3\xa9llo";
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "strings", publisher,
+        multilingual, sizeof multilingual - 1, &receipt)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "strings", subscriber, received, sizeof received, &length)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(length == sizeof multilingual - 1
+        && memcmp(received, multilingual, length) == 0);
+
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "newest", publisher, "old", 3, &receipt)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "newest", publisher, "new", 3, &receipt)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(receipt.coalesced == 1);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "newest", subscriber, received, sizeof received, &length)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(length == 3 && memcmp(received, "new", 3) == 0);
+
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "losses", publisher, "first", 5, &receipt)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "losses", publisher, "drop", 4, &receipt)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(receipt.dropped == 1);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "losses", subscriber, received, sizeof received, &length)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(length == 5 && memcmp(received, "first", 5) == 0);
+
     /* Leaving A must remove only A's subscription. */
     check(ores_native_actor_pubsub_leave(
         runtime, 1, subscriber) == ORES_NATIVE_PUBSUB_OK);
@@ -111,6 +202,14 @@ int main(void) {
 
     check(ores_native_actor_pubsub_retire_source_actor(
         runtime, subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_utf8(
+        runtime, 2, "strings", subscriber) == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
+    check(ores_native_actor_pubsub_publish_utf8(
+        runtime, 2, "strings", subscriber, "stale", 5, &receipt)
+        == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "strings", subscriber, received, sizeof received, &length)
+        == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
     receipt = (OresNativePubSubPublishReceipt){0};
     check(ores_native_actor_pubsub_publish_i64(
         runtime, 2, "events", publisher, 23, &receipt)
