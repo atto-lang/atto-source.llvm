@@ -418,7 +418,6 @@ public:
         ActorKey actor{actor_id, generation};
         for (auto& entry : topics_)
             (void)erase_subscription_locked(entry.second, actor);
-        actor_subscription_counts_.erase(actor);
     }
 
     std::size_t close_group(std::uint64_t group_id) {
