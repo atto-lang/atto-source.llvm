@@ -38,6 +38,28 @@ static pthread_once_t ores_tls_once_v1 = PTHREAD_ONCE_INIT;
 static atomic_int ores_tls_result_v1 = ATOMIC_VAR_INIT(0);
 static atomic_uint_fast64_t ores_id_counter_v1 = ATOMIC_VAR_INIT(1);
 
+/* A native thread ID is an incarnation/correlation value, not an OS pthread_t
+ * and never a transferable actor authority. Monotonically reserve IDs with
+ * CAS; fetch_add would wrap after UINT64_MAX and eventually reissue old IDs. */
+static uint64_t ores_allocate_thread_id_v1(void) {
+    uint_fast64_t candidate = atomic_load_explicit(
+        &ores_id_counter_v1, memory_order_relaxed);
+    while (candidate != 0 && candidate < UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(
+                &ores_id_counter_v1, &candidate, candidate + 1,
+                memory_order_relaxed, memory_order_relaxed))
+            return (uint64_t)candidate;
+    }
+    return 0; /* fail closed; UINT64_MAX is an exhausted sentinel */
+}
+
+#ifdef ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION
+/* Fault injection only: never compile into production or guest binaries. */
+void ores_native_thread_test_set_next_id_v1(uint64_t id) {
+    atomic_store_explicit(&ores_id_counter_v1, id, memory_order_relaxed);
+}
+#endif
+
 static void ores_tls_init_v1(void) {
     if (pthread_key_create(&ores_tls_key_v1, NULL) != 0) {
         atomic_store(&ores_tls_result_v1, 1);
@@ -94,8 +116,8 @@ ores_thread_status_v1 ores_native_thread_spawn_v1(
         free(handle); free(context); free(start);
         return ORES_THREAD_OUT_OF_MEMORY_V1;
     }
-    context->id = atomic_fetch_add(&ores_id_counter_v1, 1);
-    if (!context->id || context->id == UINT64_MAX) {
+    context->id = ores_allocate_thread_id_v1();
+    if (!context->id) {
         free(handle); free(context); free(start);
         return ORES_THREAD_OS_ERROR_V1;
     }
