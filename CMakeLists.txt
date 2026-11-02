@@ -1710,6 +1710,23 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_pubsub_admission COMMAND oreslang-native-actor-pubsub-test)
     set_tests_properties(native_actor_pubsub_admission PROPERTIES TIMEOUT 20)
 
+    # C-compatible ABI used by future compiler-generated IR. The implementation
+    # remains C++ internally but no C++ exception or template crosses this edge.
+    add_executable(oreslang-native-actor-pubsub-abi-test
+        tests/native_actor_pubsub_abi_test.c
+        src/main/cpp/oreslang/runtime/NativeActorPubSubABI.cpp)
+    target_include_directories(oreslang-native-actor-pubsub-abi-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-pubsub-abi-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-actor-pubsub-abi-test PRIVATE
+        c_std_11 cxx_std_17)
+    target_compile_options(oreslang-native-actor-pubsub-abi-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_pubsub_c_abi
+        COMMAND oreslang-native-actor-pubsub-abi-test)
+    set_tests_properties(native_actor_pubsub_c_abi PROPERTIES TIMEOUT 20)
+
     # Real SourceActorBootstrap identities must feed the same native
     # cooperation-membership and pub/sub generation fence used by host tests.
     add_executable(oreslang-source-actor-pubsub-identity-bridge-test
