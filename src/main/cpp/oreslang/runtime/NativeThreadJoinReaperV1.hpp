@@ -167,6 +167,11 @@ public:
         // Allocate a copy BEFORE releasing any ownership. Keep failed_ with
         // its preallocated capacity so run() remains noexcept after recovery.
         auto recovered = failed_;
+        // Failed handles continue consuming bounded reaper capacity until the
+        // supervisor explicitly takes custody of them.
+        if (recovered.size() > active_)
+            std::terminate(); // corrupted internal ownership accounting
+        active_ -= recovered.size();
         failed_.clear();
         return recovered;
     }
@@ -223,11 +228,13 @@ private:
             {
                 std::lock_guard<std::mutex> guard(lock_);
                 if (!handle_released) {
-                    // No allocation here: the vector reserves 'capacity_' slots,
-                    // and active_ always bounds simultaneous failed handles.
+                    // Failed ownership remains active and consumes capacity
+                    // until recover_failed() transfers it to the supervisor.
+                    // Thus failed_.size() can never exceed the reserved bound.
                     failed_.push_back(job.handle);
+                } else {
+                    --active_;
                 }
-                --active_;
             }
             job.completion->publish(status, result);
         }
