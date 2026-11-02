@@ -126,6 +126,25 @@ if(BUILD_TESTING)
     set_tests_properties(native_two_actor_arena_isolation_and_quiescent_reclamation
         PROPERTIES TIMEOUT 30)
 
+    # Negative authority checks deliberately fork and expect SIGABRT; UNIX only.
+    # Never interpret these host-native checks as compiled Oreslang guest proof.
+    if(UNIX)
+        add_executable(oreslang-native-actor-arena-denial-test
+            tests/native_actor_arena_denial_test.cpp
+            src/main/cpp/oreslang/runtime/ActorArena.c)
+        target_include_directories(oreslang-native-actor-arena-denial-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        set_target_properties(oreslang-native-actor-arena-denial-test PROPERTIES
+            CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+            C_STANDARD 11 C_STANDARD_REQUIRED ON)
+        target_compile_options(oreslang-native-actor-arena-denial-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_actor_arena_denial_abort_contract
+            COMMAND oreslang-native-actor-arena-denial-test)
+        set_tests_properties(native_actor_arena_denial_abort_contract
+            PROPERTIES TIMEOUT 20)
+    endif()
+
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-string-region-test
         tests/native_string_region_test.c src/main/cpp/oreslang/runtime/NativeStringRegion.c)
