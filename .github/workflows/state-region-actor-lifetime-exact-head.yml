@@ -7,6 +7,7 @@ on:
       - 'tests/state_region_actor_lifetime_pin_test.cpp'
       - 'tests/native_two_actor_arena_lifetime_test.cpp'
       - 'tests/native_actor_arena_denial_test.cpp'
+      - 'tests/native_actor_stop_race_test.cpp'
       - 'src/main/cpp/oreslang/runtime/StateRegionActorLifetimePin.hpp'
       - 'src/main/cpp/oreslang/runtime/OresTaskBoundStateRegion.h'
       - 'src/main/cpp/oreslang/runtime/NativeActorRetirementBarrier.hpp'
@@ -99,6 +100,16 @@ jobs:
             "$RUNNER_TEMP/actor-state-region/two-actor.o" \
             -o "$RUNNER_TEMP/actor-state-region/two-actor-test"
           "$RUNNER_TEMP/actor-state-region/two-actor-test"
+          # Concurrent STOP and outstanding resource loans, including the TSAN matrix.
+          "$CXX" -std=c++20 "${FLAGS[@]}" -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -pthread \
+            -c tests/native_actor_stop_race_test.cpp \
+            -o "$RUNNER_TEMP/actor-state-region/stop-race.o"
+          "$CXX" "${LINK_FLAGS[@]}" -pthread \
+            "$RUNNER_TEMP/actor-state-region/arena.o" \
+            "$RUNNER_TEMP/actor-state-region/stop-race.o" \
+            -o "$RUNNER_TEMP/actor-state-region/stop-race-test"
+          "$RUNNER_TEMP/actor-state-region/stop-race-test"
           # Fork/abort denial checks run only under optimized and ASan/UBSan.
           # TSAN continues to exercise the concurrent lifetime test above.
           if [[ "$MODE" != tsan ]]; then
@@ -153,8 +164,12 @@ jobs:
           cmake --build "$BUILD" --target \
             oreslang-state-region-actor-lifetime-pin-test \
             oreslang-native-two-actor-arena-lifetime-test \
-            oreslang-native-actor-arena-denial-test -j2
+            oreslang-native-actor-arena-denial-test \
+            oreslang-native-actor-stop-race-test -j2
           ctest --test-dir "$BUILD" --output-on-failure \
-            -R '^(native_state_region_blocks_actor_arena_reclamation|native_two_actor_arena_isolation_and_quiescent_reclamation|native_actor_arena_denial_abort_contract)$'
+            -R '^(native_state_region_blocks_actor_arena_reclamation|native_two_actor_arena_isolation_and_quiescent_reclamation|native_actor_arena_denial_abort_contract|native_actor_stop_carrier_ffi_loan_quiescence)
+          echo "PRODUCTION_NATIVE_CTEST_HEAD=$EXPECTED_HEAD"
+          echo "COMPILED_ORES_GUEST_VERIFIED=false"
+
           echo "PRODUCTION_NATIVE_CTEST_HEAD=$EXPECTED_HEAD"
           echo "COMPILED_ORES_GUEST_VERIFIED=false"
