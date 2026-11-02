@@ -27,6 +27,26 @@ enum {
  * to a failed get_ready observer while get_done still completes normally. */
 int oreslang_source_actor_ready_status(void* actor);
 
+/*
+ * Trusted runtime-only identity snapshot for compiler/runtime adapters such as
+ * ActorGroup membership and in-memory pub/sub. This is NOT a source intrinsic:
+ * guest Oreslang cannot mint, serialize, compare, or reconstruct this record.
+ *
+ * logical_id is process-unique for the lifetime of this runtime generation.
+ * scheduler_generation is the NativeActorScheduler incarnation fence. The
+ * scheduler domain/slot are diagnostic/routing metadata and never substitute
+ * for the generation check.
+ */
+typedef struct {
+    uint64_t logical_id;
+    uint64_t scheduler_domain;
+    uint64_t actor_slot;
+    uint64_t scheduler_generation;
+} OresSourceActorIdentity;
+
+int oreslang_source_actor_identity(
+    void* actor, OresSourceActorIdentity* out_identity);
+
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 /* Deterministic startup-race proof hooks. They pause only the reserved
  * initialization CONTROL callback before it decides whether construction may
