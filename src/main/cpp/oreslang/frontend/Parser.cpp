@@ -6,6 +6,7 @@
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/NativeAggregateSpreadPlan.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 
 #include <algorithm>
@@ -241,6 +242,12 @@ public:
                 ++at_;
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
+        }
+        // Aggregate field spread is a distinct token; never reinterpret
+        // individual '.' field lookups as a spread or tuple call expansion.
+        if (source_.substr(at_, 3) == "...") {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
@@ -2144,6 +2151,92 @@ private:
             require(";");
             return true;
         };
+        // The first executable inferred-aggregate slice is stack-owned,
+        // immutable, closed and limited to native Copy-safe i64/bool fields.
+        // Every syntactic initializer stays in source order, including writes
+        // subsequently overridden by another field or spread.
+        auto infer_stack_aggregate = [&]() -> std::unique_ptr<Expression> {
+            const auto offset = token_.offset;
+            const bool inferred = accept("infer");
+            if (inferred && token_.text == "<")
+                fail("AGGREGATE_INFER_NAMED_TYPE_UNVERIFIED: use a closed anonymous shape");
+            types::NativeAggregateShape::Kind kind;
+            if (accept("struct")) kind = types::NativeAggregateShape::Kind::ExactStruct;
+            else if (accept("record")) kind = types::NativeAggregateShape::Kind::ReadonlyRecord;
+            else fail("AGGREGATE_INFER_SHAPE_REQUIRED");
+            auto result = make_expression(Expression::Kind::AggregateConstruct, offset);
+            types::NativeAggregateSpreadPlan plan(kind);
+            require("{");
+            std::size_t elements = 0;
+            if (!accept("}")) {
+                do {
+                    if (++elements > 1024)
+                        fail("AGGREGATE_SPREAD_PLAN_BUDGET");
+                    if (accept("...")) {
+                        const auto source_offset = token_.offset;
+                        const std::string owner = identifier();
+                        auto previous = std::find_if(value.locals.begin(), value.locals.end(),
+                            [&](const LocalBinding& local) { return local.name == owner; });
+                        if (previous == value.locals.end() || !previous->aggregate_type ||
+                                previous->owner_mutable || previous->assignable)
+                            fail("AGGREGATE_SPREAD_SOURCE_UNVERIFIED: requires prior immutable closed local");
+                        const auto& source = *previous->aggregate_type;
+                        // The statically checked projection, never host field
+                        // enumeration, supplies each copied scalar slot.
+                        plan.add_checked_spread_projection(source);
+                        for (const auto& member : source.fields) {
+                            if (member.type != "int" && member.type != "bool")
+                                fail("AGGREGATE_SPREAD_NONCOPY_FIELD_UNVERIFIED");
+                            auto field = make_expression(Expression::Kind::Field, source_offset);
+                            field->name = member.name;
+                            field->left = make_expression(Expression::Kind::Variable, source_offset);
+                            field->left->name = owner;
+                            result->argument_names.push_back(member.name);
+                            result->aggregate_argument_types.push_back(
+                                member.type == "bool" ? ScalarType::Bool : ScalarType::I64);
+                            result->arguments.push_back(std::move(field));
+                        }
+                    } else {
+                        if (token_.kind != Kind::Identifier && token_.kind != Kind::String)
+                            fail("AGGREGATE_INFER_FIELD_NAME_REQUIRED");
+                        const std::string name(token_.text);
+                        advance();
+                        require(":");
+                        auto field = expression();
+                        std::string type;
+                        if (field->kind == Expression::Kind::Integer)
+                            type = "int";
+                        else if (field->kind == Expression::Kind::Boolean)
+                            type = "bool";
+                        else if (field->kind == Expression::Kind::Field && field->left &&
+                                 field->left->kind == Expression::Kind::Variable) {
+                            const auto& owner = field->left->name;
+                            const auto local = std::find_if(value.locals.begin(), value.locals.end(),
+                                [&](const LocalBinding& x) { return x.name == owner; });
+                            if (local != value.locals.end() && local->aggregate_type) {
+                                const auto member = std::find_if(local->aggregate_type->fields.begin(),
+                                    local->aggregate_type->fields.end(),
+                                    [&](const types::NativeAggregateShape::Field& x) {
+                                        return x.name == field->name;
+                                    });
+                                if (member != local->aggregate_type->fields.end())
+                                    type = member->type;
+                            }
+                        }
+                        if (type != "int" && type != "bool")
+                            fail("AGGREGATE_INFER_FIELD_TYPE_UNVERIFIED: first slice supports literal or closed scalar field");
+                        plan.add_named(name, type);
+                        result->argument_names.push_back(name);
+                        result->aggregate_argument_types.push_back(
+                            type == "bool" ? ScalarType::Bool : ScalarType::I64);
+                        result->arguments.push_back(std::move(field));
+                    }
+                } while (accept(","));
+                require("}");
+            }
+            result->aggregate_type = plan.result_shape();
+            return result;
+        };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
@@ -2426,8 +2519,18 @@ private:
                     continue;
                 }
                 if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
-                if (!explicit_type) fail("scalar local requires an explicit ': int' or ': bool' type");
-                binding.initializer = expression();
+                if (!explicit_type &&
+                        (token_.text == "infer" || token_.text == "record" ||
+                         token_.text == "struct")) {
+                    if (binding.owner_mutable || binding.assignable)
+                        fail("AGGREGATE_MUTABLE_LOCAL_UNVERIFIED: use immutable const");
+                    binding.initializer = infer_stack_aggregate();
+                    binding.aggregate_type = binding.initializer->aggregate_type;
+                } else {
+                    if (!explicit_type)
+                        fail("scalar local requires an explicit ': int' or ': bool' type");
+                    binding.initializer = expression();
+                }
             }
             require(";");
             if (!binding.class_name.empty()) class_receivers_.insert(binding.name);
@@ -5194,8 +5297,9 @@ private:
                             !binding.initializer->aggregate_type ||
                             !binding.aggregate_type->same_type_as(*binding.initializer->aggregate_type))
                         throw std::runtime_error("AGGREGATE_LOCAL_INITIALIZER_UNVERIFIED");
-                    if (binding.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct)
-                        throw std::runtime_error("AGGREGATE_RECORD_LOWERING_UNVERIFIED");
+                    // Readonly records and exact structs have the same private
+                    // stack-only scalar representation in this restricted slice.
+                    // Their *type identities* remain distinct in the AST.
                     for (std::size_t i = 0; i < binding.initializer->arguments.size(); ++i) {
                         const auto& field_name = binding.initializer->argument_names.at(i);
                         const auto field = std::find_if(
@@ -5206,9 +5310,13 @@ private:
                         if (field == binding.aggregate_type->fields.end() ||
                                 (field->type != "int" && field->type != "bool"))
                             throw std::runtime_error("AGGREGATE_NATIVE_FIELD_UNVERIFIED");
+                        const auto expected =
+                            binding.initializer->aggregate_argument_types.size() ==
+                                binding.initializer->arguments.size()
+                            ? binding.initializer->aggregate_argument_types[i]
+                            : (field->type == "bool" ? ScalarType::Bool : ScalarType::I64);
                         require_scalar(*binding.initializer->arguments[i],
-                            field->type == "bool" ? ScalarType::Bool : ScalarType::I64,
-                            "AGGREGATE_CONSTRUCTOR_FIELD_TYPE_MISMATCH", scalar_types);
+                            expected, "AGGREGATE_CONSTRUCTOR_FIELD_TYPE_MISMATCH", scalar_types);
                     }
                     for (const auto& field : binding.aggregate_type->fields)
                         scalar_types.emplace(binding.name + "." + field.name,
