@@ -246,5 +246,22 @@ int main(void) {
         runtime, publisher) == ORES_NATIVE_PUBSUB_OK);
 
     ores_native_actor_pubsub_close(runtime);
+
+    /* i64 and UTF-8 share one per-actor subscription credit. */
+    OresNativeActorPubSubRuntime* quota = ores_native_actor_pubsub_open(99, 2, 2, 4, 1);
+    check(quota != NULL);
+    const OresSourceActorIdentity one = actor(201, 99, 1, 1);
+    check(ores_native_actor_pubsub_register_source_actor(quota, one) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_create_group(quota, 1, 2) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_join(quota, 1, one) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_define_i64_topic(
+        quota, 1, "ints", ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_define_utf8_topic(
+        quota, 1, "texts", ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_i64(
+        quota, 1, "ints", one) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_utf8(
+        quota, 1, "texts", one) == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
+    ores_native_actor_pubsub_close(quota);
     return 0;
 }
