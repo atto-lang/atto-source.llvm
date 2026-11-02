@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_whitespace_stdout() {
         assert_rejected_fake_compiler(
-            "printf '  \\n'\\nprintf 'bad ownership\\n' >&2\\nexit 2",
+            "printf '  \n'\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
