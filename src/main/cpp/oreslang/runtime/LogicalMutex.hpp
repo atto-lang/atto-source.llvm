@@ -77,8 +77,14 @@ public:
     auto with_owner(Token token, Fn&& fn)
             -> std::invoke_result_t<Fn&, T&> {
         using Result = std::invoke_result_t<Fn&, T&>;
-        static_assert(!std::is_reference_v<Result> && !std::is_pointer_v<Result>,
-                      "native logical mutex protected references cannot escape");
+        // Arbitrary aggregates can hide borrowed pointers/references (including
+        // reference_wrapper, span, view and custom borrowed envelopes). Until
+        // the guest borrow checker can certify an owned copy-out, native
+        // protected callbacks may return only values with no reference graph.
+        static_assert(std::is_void_v<Result> || std::is_arithmetic_v<Result>
+                          || std::is_enum_v<Result>,
+                      "native logical mutex may return only void or scalar values; "
+                      "aggregate and borrowed-view copy-out requires ownership proof");
         {
             std::lock_guard<std::mutex> lock(lease_mu_);
             if (!queue_.holds(token)) {

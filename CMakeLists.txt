@@ -2135,6 +2135,15 @@ if(BUILD_TESTING)
     add_test(NAME native_critical_gate_retirement_stress
         COMMAND oreslang-critical-retirement-stress-test)
     set_tests_properties(native_critical_gate_retirement_stress PROPERTIES TIMEOUT 35)
+    # Fail-closed compile test: native scalar returns only. Prevent opaque
+    # reference wrappers/views from escaping actor-owned state via C++ templates.
+    # Host-only test, NOT Oreslang guest ownership verification.
+    add_test(NAME native_logical_mutex_scalar_copyout_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/critical_scalar_copyout_compile_test.py"
+            --cxx "${CMAKE_CXX_COMPILER}"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_tests_properties(native_logical_mutex_scalar_copyout_failclosed PROPERTIES TIMEOUT 40)
     # Host policy only; guest exceptional effects remain rejected.
     add_executable(oreslang-native-exception-policy-test tests/native_exception_policy_test.cpp)
     target_include_directories(oreslang-native-exception-policy-test PRIVATE
