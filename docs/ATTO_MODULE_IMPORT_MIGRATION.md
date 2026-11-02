@@ -6,11 +6,12 @@ sources, fixtures and examples should use `.atto`.
 
 For relative `./lib`, `../lib` and project-root `+/lib` imports:
 
-- If exactly `lib.atto` exists, import that physical file.
-- If exactly `lib.ores` exists, accept the legacy file.
-- If **both** source names exist (including dangling symlink entries),
-  **reject** the extensionless import as ambiguous. There is no implicit
-  priority that can silently execute the unintended source file.
+- If `lib.atto` exists, prefer that physical file, even if a legacy
+  `lib.ores` sibling also exists. This matches Java and .NET resolution.
+- Otherwise, if `lib.ores` exists, accept the legacy file.
+- Inspect directory entries rather than only resolving target existence:
+  a dangling `.atto` symlink must be selected and rejected by canonical-file
+  admission, never silently bypassed in favor of a legacy sibling.
 - If neither exists, fail at the ordinary canonical source resolution.
 - Explicit `lib.atto` and explicit `lib.ores` are accepted independently.
 - All other suffixes fail closed before any foreign-source import.
