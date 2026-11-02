@@ -8,6 +8,12 @@ on:
       - 'tests/native_two_actor_arena_lifetime_test.cpp'
       - 'tests/native_actor_arena_denial_test.cpp'
       - 'tests/native_actor_stop_race_test.cpp'
+      - 'tests/native_aot_two_actor_owned_counter_harness.c'
+      - 'tests/fixtures/native-aot-two-actor-owned-counter.ores'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/runtime/StateRegionActorLifetimePin.hpp'
       - 'src/main/cpp/oreslang/runtime/OresTaskBoundStateRegion.h'
       - 'src/main/cpp/oreslang/runtime/NativeActorRetirementBarrier.hpp'
@@ -167,9 +173,90 @@ jobs:
             oreslang-native-actor-arena-denial-test \
             oreslang-native-actor-stop-race-test -j2
           ctest --test-dir "$BUILD" --output-on-failure \
-            -R '^(native_state_region_blocks_actor_arena_reclamation|native_two_actor_arena_isolation_and_quiescent_reclamation|native_actor_arena_denial_abort_contract|native_actor_stop_carrier_ffi_loan_quiescence)
+            -R '^(native_state_region_blocks_actor_arena_reclamation|native_two_actor_arena_isolation_and_quiescent_reclamation|native_actor_arena_denial_abort_contract|native_actor_stop_carrier_ffi_loan_quiescence)$'
           echo "PRODUCTION_NATIVE_CTEST_HEAD=$EXPECTED_HEAD"
           echo "COMPILED_ORES_GUEST_VERIFIED=false"
 
-          echo "PRODUCTION_NATIVE_CTEST_HEAD=$EXPECTED_HEAD"
-          echo "COMPILED_ORES_GUEST_VERIFIED=false"
+  compiled-native-actor-owned-heaps:
+    # Only local-repository PRs: never run private-source instructions from a fork.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [optimized, asan-ubsan]
+    steps:
+      - name: Checkout immutable PR source head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Build LLVM compiler and run compiled-source two-actor AOT program
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          if command -v llvm-config >/dev/null 2>&1; then
+            LLVM_CONFIG=llvm-config
+          elif command -v llvm-config-18 >/dev/null 2>&1; then
+            LLVM_CONFIG=llvm-config-18
+          else
+            echo "LLVM CMake prerequisites missing (not a compiler verdict)" >&2
+            exit 2
+          fi
+          LLVM_DIR="$("$LLVM_CONFIG" --cmakedir)"
+          test -f "$LLVM_DIR/LLVMConfig.cmake"
+          BUILD="$RUNNER_TEMP/ores-aot-actor-build"
+          cmake -S . -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
+            "-DLLVM_DIR=$LLVM_DIR" -DBUILD_TESTING=OFF
+          cmake --build "$BUILD" --target oreslang-llvmc -j2
+          COMPILER="$BUILD/oreslang-llvmc"
+          test -x "$COMPILER"
+          if command -v clang-18 >/dev/null 2>&1; then
+            CLANG=clang-18
+          elif command -v clang >/dev/null 2>&1; then
+            CLANG=clang
+          else
+            echo "clang missing (runner/toolchain failure)" >&2
+            exit 2
+          fi
+          SRC=tests/fixtures/native-aot-two-actor-owned-counter.ores
+          IR="$RUNNER_TEMP/compiled-two-actor-owned-counter.ll"
+          "$COMPILER" --experimental-owned-int "$SRC" > "$IR"
+          test -s "$IR"
+          grep -Fq '@oreslang_actor_Worker_init(' "$IR"
+          grep -Fq '@oreslang_actor_Worker_on_message(' "$IR"
+          grep -Fq 'ores_actor_i64_heap_scoped_new' "$IR"
+          grep -Fq 'ores_actor_i64_heap_scoped_drop' "$IR"
+          if [[ "$MODE" == optimized ]]; then
+            FLAGS=(-O2 -DNDEBUG)
+          elif [[ "$MODE" == asan-ubsan ]]; then
+            FLAGS=(-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
+          else
+            echo "unrecognized AOT test mode" >&2
+            exit 2
+          fi
+          "$CLANG" -x ir "${FLAGS[@]}" -c "$IR" -o "$RUNNER_TEMP/guest.o"
+          "$CLANG" -x c -std=c11 "${FLAGS[@]}" -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+            -o "$RUNNER_TEMP/native-actor-heap.o"
+          "$CLANG" -x c -std=c11 "${FLAGS[@]}" -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c tests/native_aot_two_actor_owned_counter_harness.c \
+            -o "$RUNNER_TEMP/actor-harness.o"
+          "$CLANG" "${FLAGS[@]}" "$RUNNER_TEMP/guest.o" \
+            "$RUNNER_TEMP/native-actor-heap.o" "$RUNNER_TEMP/actor-harness.o" \
+            -o "$RUNNER_TEMP/aot-two-actor-test"
+          "$RUNNER_TEMP/aot-two-actor-test" | tee "$RUNNER_TEMP/aot-two-actor-receipt"
+          grep -Fxq 'AOT_COMPILED_TWO_ACTOR_OWNED_HEAPS_2009_TURNS_PASS' \
+            "$RUNNER_TEMP/aot-two-actor-receipt"
+          echo "SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          echo "COMPILER_GUEST_EXECUTED=true"
+          echo "COMPILER_GUEST_SCOPE=legacy-scalar-actor-only"
+          echo "SOURCE_STATE_HANDLE_STATE_CERTIFIED=false"
+          sha256sum "$RUNNER_TEMP/guest.o" "$RUNNER_TEMP/aot-two-actor-test"
