@@ -41,6 +41,10 @@ inline void resolve_native_sums(Program& program) {
     expression = [&](Expression& e, const Env& env, const std::string& expected) -> Hint {
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
+            // Malformed internal ASTs must never dereference absent payloads,
+            // including the context-free Some(...) inference path.
+            for (const auto& arg : e.arguments)
+                if (!arg) throw std::runtime_error("native sum constructor has null payload");
             std::string selected = expected;
             if (selected.empty()) {
                 if (e.name != "Some" || e.arguments.size() != 1) throw std::runtime_error("native sum constructor requires a declared Option/Result context");
@@ -107,6 +111,10 @@ inline void resolve_native_sums(Program& program) {
             return {ScalarType::I64, {}, e.name};
         }
         if (e.kind == E::ArrayCall || e.kind == E::SumAccess) {
+            if (!e.left)
+                throw std::runtime_error("native sum access missing receiver");
+            for (const auto& arg : e.arguments)
+                if (!arg) throw std::runtime_error("native sum access has null argument");
             const auto owner = expression(*e.left, env, {});
             std::vector<Hint> argument_types;
             argument_types.reserve(e.arguments.size());
