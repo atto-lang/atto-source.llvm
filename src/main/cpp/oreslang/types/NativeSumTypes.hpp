@@ -79,6 +79,14 @@ inline void resolve_native_sums(Program& program) {
             return {};
         }
         if (e.kind == E::Call) {
+            // A partial named-argument vector previously allowed unchecked
+            // e.argument_names[i] indexing while resolving sum contexts.
+            // Every call argument must also be a real expression node.
+            if (!e.argument_names.empty() &&
+                e.argument_names.size() != e.arguments.size())
+                throw std::runtime_error("native sum call argument name count mismatch");
+            for (const auto& arg : e.arguments)
+                if (!arg) throw std::runtime_error("native sum call has null argument");
             const auto found = functions.find(native_function_slot(e.name, e.arguments.size()));
             for (std::size_t i = 0; i < e.arguments.size(); ++i) {
                 std::size_t slot = i;
