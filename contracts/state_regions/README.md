@@ -349,3 +349,59 @@ FFI callback, scheduler cancellation, source actor compilation, LLVM generated
 drop-glue proof, complete AOT binary, or whole-program zero-GC proof.
 An admitted external callback and exact-head stepful compiler guest run are
 still required before any certification.
+
+## Compiled LLVM native two-actor AOT acceptance (legacy scalar subset)
+
+`tests/fixtures/native-aot-two-actor-owned-counter.ores` defines a real
+AttoLang/Oreslang source `Worker` actor with one persistent mutable i64 field
+and one per-message `owned int` temporary. The LLVM backend must generate
+`oreslang_actor_Worker_init` and `oreslang_actor_Worker_on_message`.
+`tests/native_aot_two_actor_owned_counter_harness.c` links those *compiler
+generated symbols*, not host substitutes, against the native
+`ActorOwnedI64Heap.c` implementation. It invokes 1,000 turns per actor, then
+stops actor A with an external lifetime-only loan outstanding, verifies that
+physical reclamation is deferred, executes nine more turns in actor B, releases
+the loan, and finally destroys both heaps.
+
+The `compiled-native-actor-owned-heaps` workflow jobs build the LLVM compiler,
+require exact-head checkout, emit native LLVM IR from the source file under
+`--experimental-owned-int`, inspect emitted actor/owned temporary symbols,
+compile the LLVM IR into a native object, link the real native actor heap and
+test harness, and execute the resulting ELF binary in optimized and
+ASan/UBSan modes. Compiler, linked object and binary SHA evidence is captured
+on a **successful** execution. Any compile, link, verification or runtime
+failure stops the job.
+
+A separate `native-aot-unlowered-sealed-actor-state-reject.ores` negative
+fixture must be rejected with empty LLVM IR and the diagnostic
+`requires sealed handle_state lowering`. This prevents the old scalar actor
+implementation from being mislabeled as the newer sealed state contract.
+
+Original submitted Git objects verified:
+
+- AttoLang AOT source fixture blob:
+  `1f7534f1ab30639661ab61ba61790d12af4a2a05`
+- Native C AOT harness blob:
+  `090177cb57dbd1ef456809a83b51053183ec05cd`
+
+The exact C harness file was reconstructed locally and
+`git hash-object` matched the GitHub blob. GCC 14 and Clang 17 each accepted
+it under C11 with `-Wall -Wextra -Wpedantic -Werror -O2 -DNDEBUG`, using
+matching public type/function declarations. That is **syntax-only**, not
+compiled AttoLang actor execution.
+
+**Execution state:** the source GitHub Actions run `41397527333` on commit
+`002925ea4e66b21595f7eb404d392edf176e3349` reported all eight jobs
+with `steps=[]`, including the two new AOT build modes. Therefore **the
+compiled guest AOT test is NOT_EXECUTED**; all assertions above describe
+test intent, not observed guest behavior. No cross-org private mirror was
+performed following an earlier platform safety block on carrier workflow
+creation.
+
+The test applies only to the already-supported **legacy synchronous scalar
+actor** compilation path. It does **not** prove `state { ... }`, sealed
+`critical handle_state`, source lifetime/borrow semantics, async
+suspension/cancellation, a general actor-owned region allocator, no host GC,
+or hard-real-time safety. These require separately validated compiler and
+runtime changes; do not merge or certify from this gate until there is a
+stepful exact-source native compilation receipt and independent review.
