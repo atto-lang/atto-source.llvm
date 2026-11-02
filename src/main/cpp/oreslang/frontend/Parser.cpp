@@ -608,7 +608,11 @@ public:
                 type_only_declaration(program, true, exported);
                 continue;
             }
-            if (token_.text == "model")
+            if (token_.text == "state" && peek_next().text == "container")
+                    fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
+                if (token_.text == "virtual" && peek_next().text == "actor")
+                    fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
+                if (token_.text == "model")
                 fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
             if (accept("enum")) {
                 if (token_.text != "MaxActorThreads")
@@ -690,6 +694,10 @@ public:
                     type_only_declaration(program, true, public_class);
                     continue;
                 }
+                if (token_.text == "state" && peek_next().text == "container")
+                    fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
+                if (token_.text == "virtual" && peek_next().text == "actor")
+                    fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
                 if (token_.text == "model")
                     fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");

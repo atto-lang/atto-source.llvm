@@ -4492,3 +4492,16 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Dedicated semantic-admission test: unsupported new declarations must fail
+# before LLVM IR or native artifacts are emitted, never as generic parse errors.
+if(BUILD_TESTING)
+    add_test(NAME native_state_container_virtual_actor_source_admission
+        COMMAND "${CMAKE_COMMAND}"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/state-container-virtual-actor-admission"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/state_container_virtual_actor_admission.cmake")
+    set_tests_properties(native_state_container_virtual_actor_source_admission
+        PROPERTIES TIMEOUT 60)
+endif()
