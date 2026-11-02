@@ -155,16 +155,25 @@ int oreslang_source_actor_identity(
         void* opaque,
         OresSourceActorIdentity* out_identity) {
     if (!opaque || !out_identity) return 0;
-    SourceActor* instance = (SourceActor*)opaque;
 
     /*
      * Hold the source-group lifetime fence while validating the opaque ref.
-     * join_done clears the slot and frees the SourceActor under this same
-     * mutex, so a successful snapshot can never describe a physically retired
-     * allocation.
+     * Do NOT dereference opaque until pointer equality finds it in the live
+     * slot table: a pointer retained after join_done may name freed storage.
+     * join_done clears the slot before releasing the allocation under this
+     * same mutex.
      */
     group_lock();
-    if (instance->magic != SOURCE_ACTOR_MAGIC
+    SourceActor* instance = NULL;
+    for (size_t slot = 0; slot < group.next_slot
+            && slot < SOURCE_GROUP_ROOT_SLOT; ++slot) {
+        if (group.actors[slot] == (SourceActor*)opaque) {
+            instance = group.actors[slot];
+            break;
+        }
+    }
+    if (!instance
+            || instance->magic != SOURCE_ACTOR_MAGIC
             || instance->ref.actor_slot >= SOURCE_GROUP_ROOT_SLOT
             || instance->ref.actor_slot >= group.next_slot
             || group.actors[instance->ref.actor_slot] != instance
@@ -615,12 +624,19 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->processed, 0);
     atomic_init(&instance->last_result, 0);
 
-    instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
-    group.actors[slot] = instance;
     instance->ref =
         ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
     ensure(instance->ref.scheduler_domain
-        && instance->ref.actor_slot == slot);
+        && instance->ref.actor_slot == slot
+        && instance->ref.generation != 0);
+    /*
+     * Actor-owned heap identity follows the scheduler incarnation. This keeps
+     * heap loans, ActorGroup membership and future pub/sub subscriptions on
+     * one generation fence instead of the historical hard-coded generation 1.
+     */
+    instance->heap = ores_actor_i64_heap_open(
+        instance->id, instance->ref.generation, fields);
+    group.actors[slot] = instance;
     group.live++;
     if (group.live > group.peak) group.peak = group.live;
 
