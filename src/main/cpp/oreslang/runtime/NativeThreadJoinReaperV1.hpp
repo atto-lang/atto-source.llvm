@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -27,13 +28,51 @@ public:
         value = value_;
         return true;
     }
+
+    // A one-shot scheduler notification; may register before OR after
+    // physical join. It is invoked exactly once, without internal locks,
+    // either on the reaper host thread or on the registering host thread.
+    // CALLBACK MUST ONLY ENQUEUE the logical continuation; it must never
+    // directly resume guest code, block a carrier, or throw an exception.
+    // Captures should be weak generation-checked task handles, so cancelling
+    // a waiter never consumes the underlying thread join right.
+    // A second subscriber is rejected, even after completion.
+    bool on_ready_once(std::function<void()> notify) {
+        if (!notify) return false;
+        bool call_now = false;
+        {
+            std::lock_guard<std::mutex> guard(notify_lock_);
+            if (notify_registered_) return false;
+            notify_registered_ = true;
+            call_now = ready_.load(std::memory_order_acquire);
+            if (!call_now) notify_ = std::move(notify);
+        }
+        if (call_now) invoke_noexcept(notify);
+        return true;
+    }
 private:
     friend class NativeThreadJoinReaperV1;
-    void publish(ores_thread_status_v1 status, int value) noexcept {
-        value_ = value;
-        status_ = status;
-        ready_.store(true, std::memory_order_release);
+    static void invoke_noexcept(const std::function<void()>& notify) noexcept {
+        try { notify(); } catch (...) {
+            // Scheduler notification must not unwind through the native
+            // thread-reaper. A failure is a runtime programming error.
+            std::terminate();
+        }
     }
+    void publish(ores_thread_status_v1 status, int value) noexcept {
+        std::function<void()> notify;
+        {
+            std::lock_guard<std::mutex> guard(notify_lock_);
+            value_ = value;
+            status_ = status;
+            ready_.store(true, std::memory_order_release);
+            notify = std::move(notify_);
+        }
+        if (notify) invoke_noexcept(notify);
+    }
+    mutable std::mutex notify_lock_;
+    std::function<void()> notify_;
+    bool notify_registered_ = false;
     std::atomic<bool> ready_{false};
     ores_thread_status_v1 status_ = ORES_THREAD_OS_ERROR_V1;
     int value_ = 0;
