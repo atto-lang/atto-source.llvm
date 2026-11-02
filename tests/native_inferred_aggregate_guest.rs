@@ -59,6 +59,38 @@ fn main(){
         return new_row.x - old.x + 20;
       }"#,42)
     ];
+    const rejected=[
+      ("missing spread source",r#"pub fnc main():int{
+        const r=infer struct{...missing,y:2}; return r.y;
+      }"#),
+      ("duplicate named field",r#"pub fnc main():int{
+        const r=infer struct{x:1,x:2}; return r.x;
+      }"#),
+      ("scalar spread operand",r#"pub fnc main():int{
+        const r=infer record{...42,y:2}; return r.y;
+      }"#),
+      ("implicit aggregate escape",r#"pub fnc main():int{
+        const r=infer struct{x:42}; return r;
+      }"#),
+      ("bool result returned as int",r#"pub fnc main():int{
+        const r=infer struct{x:1}; const s=infer struct{...r,x:true};
+        return s.x;
+      }"#)
+    ];
+    for (name, source) in rejected {
+        let work=temp();
+        let src=work.0.join("negative.ores");
+        fs::write(&src,source).unwrap();
+        let result=run(&compiler,&[src.as_path()],&work.0);
+        assert!(result.status.code().unwrap_or(-1)>0,
+            "{name}: unsupported source was compiled or crashed");
+        assert!(result.stdout.is_empty(),"{name}: rejected source emitted LLVM IR");
+        assert!(!result.stderr.is_empty(),"{name}: missing diagnostic");
+        assert_eq!(fs::read_to_string(&src).unwrap(),source,
+            "{name}: compiler modified negative source");
+        assert_eq!(read_dir(&work.0).unwrap().count(),1,
+            "{name}: compiler published an artifact on rejection");
+    }
     for (name, source, expected) in corpus {
         let work=temp();
         let src=work.0.join("program.ores");
@@ -78,5 +110,5 @@ fn main(){
         assert_eq!(executed.status.code(),Some(expected),"{name}: guest exit != {expected}");
         assert!(executed.stdout.is_empty() && executed.stderr.is_empty(),"{name}: guest emitted output");
     }
-    println!("real native inferred aggregate guest execution: {} cases",corpus.len());
+    println!("real native inferred aggregate guest execution: {} positive, {} negative",corpus.len(),rejected.len());
 }
