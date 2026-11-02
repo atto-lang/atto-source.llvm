@@ -137,6 +137,14 @@ int main(void) {
     assert(ores_native_thread_spawn_v1(
         worker, NULL, NULL, &rejected_handle) == ORES_THREAD_OS_ERROR_V1);
     assert(rejected_handle == NULL); /* cannot wrap back to ID=1 */
+    /* The old fetch_add bug rejects MAX, then zero, and subsequently
+     * silently reissues ID 1. Repeated denial catches this cycle. */
+    for (int retry = 0; retry < 8; ++retry) {
+        rejected_handle = (ores_native_thread_v1 *)1;
+        assert(ores_native_thread_spawn_v1(
+            worker, NULL, NULL, &rejected_handle) == ORES_THREAD_OS_ERROR_V1);
+        assert(rejected_handle == NULL);
+    }
     assert(atomic_load(&drops) == 21);
 #endif
     puts("native pthread substrate: OK (host-only; no guest compiler claim)");
