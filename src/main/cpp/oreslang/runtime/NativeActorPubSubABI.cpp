@@ -361,11 +361,13 @@ ores_native_actor_pubsub_unsubscribe_i64(
             || !valid_topic_name(topic_name))
         return ORES_NATIVE_PUBSUB_INVALID;
     return guarded([&] {
-        (void)runtime->i64_bus.unsubscribe(
-            group_id,
-            topic_name,
-            actor.logical_id,
-            actor.scheduler_generation);
+        if (!runtime->memberships.contains(
+                group_id, actor.logical_id, actor.scheduler_generation))
+            throw std::logic_error("subscription is no longer authorized");
+        if (!runtime->i64_bus.unsubscribe(
+                group_id, topic_name, actor.logical_id,
+                actor.scheduler_generation))
+            throw std::logic_error("subscription is already closed");
     });
 }
 
