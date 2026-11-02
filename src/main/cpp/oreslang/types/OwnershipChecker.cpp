@@ -764,7 +764,6 @@ void validate_i64_ownership(Program& program) {
                 if (!binding.initializer ||
                         binding.initializer->kind != Expression::Kind::AggregateConstruct ||
                         !binding.initializer->aggregate_type ||
-                        binding.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct ||
                         !binding.aggregate_type->same_type_as(*binding.initializer->aggregate_type))
                     throw std::runtime_error("AGGREGATE_LOCAL_OWNERSHIP_UNVERIFIED");
                 for (const auto& field : binding.aggregate_type->fields)
