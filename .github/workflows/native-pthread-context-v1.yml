@@ -8,6 +8,7 @@ on:
       - "src/main/cpp/oreslang/runtime/NativeThreadJoinReaperV1.hpp"
       - "tests/native_thread_join_reaper_v1_test.cpp"
       - "tests/native_thread_v1_test.c"
+      - "tests/native_thread_scope_v1_test.c"
       - "tests/run_native_thread_v1.sh"
       - "tests/run_native_thread_sanitizers_v1.sh"
       - ".github/workflows/native-pthread-context-v1.yml"
