@@ -1,0 +1,67 @@
+name: Native bounded ready-index exact-head (no LLVM toolchain)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeReadyBitmap.h'
+      - 'tests/native_ready_bitmap_test.c'
+      - 'scripts/test-native-ready-bitmap-standalone.sh'
+      - '.github/workflows/native-ready-bitmap-locality.yml'
+permissions:
+  contents: read
+jobs:
+  native-ready-index:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc-O2
+            cc: gcc
+            flags: '-O2 -UNDEBUG'
+          - name: clang-ASan-UBSan
+            cc: clang
+            flags: '-O1 -g -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer'
+    steps:
+      - name: Checkout verified PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify exact source HEAD and tree
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+      - name: GCC and Clang independently check bitmap bounds with sanitizers
+        run: bash scripts/test-native-ready-bitmap-standalone.sh
+      - name: Compile the actual threaded actor scheduler and regression harnesses
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          FLAGS: ${{ matrix.flags }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/actor-ready-tests"
+          read -r -a options <<< "$FLAGS"
+          for case in native_actor_scheduler_test native_actor_exclusive_control_test native_continuation_wake_escrow_test native_actor_send_stop_race_test native_actor_typed_control_exclusive_test; do
+            "$CC" -std=c11 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+              -Isrc/main/cpp -Itests \
+              "tests/$case.c" src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "$RUNNER_TEMP/actor-ready-tests/$case"
+          done
+      - name: Execute scheduler, CONTROL, wake, stop-race and actor-exclusivity tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for case in native_actor_scheduler_test native_actor_exclusive_control_test native_continuation_wake_escrow_test native_actor_send_stop_race_test native_actor_typed_control_exclusive_test; do
+            timeout 45s "$RUNNER_TEMP/actor-ready-tests/$case"
+            echo "PASS $case"
+          done
