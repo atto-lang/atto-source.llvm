@@ -121,11 +121,13 @@ public:
     }
 
     std::size_t queued_payload_bytes() const {
-        return resources_->queued_payload_bytes();
+        std::lock_guard<std::mutex> guard(mutex_);
+        return queued_payload_bytes_;
     }
 
     std::size_t allocated_queue_slots() const {
-        return resources_->allocated_queue_slots();
+        std::lock_guard<std::mutex> guard(mutex_);
+        return allocated_queue_slots_;
     }
 
 private:
@@ -453,13 +455,11 @@ public:
     }
 
     std::size_t queued_payload_bytes() const {
-        std::lock_guard<std::mutex> guard(mutex_);
-        return queued_payload_bytes_;
+        return resources_->queued_payload_bytes();
     }
 
     std::size_t allocated_queue_slots() const {
-        std::lock_guard<std::mutex> guard(mutex_);
-        return allocated_queue_slots_;
+        return resources_->allocated_queue_slots();
     }
 
 private:
