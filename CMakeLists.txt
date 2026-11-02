@@ -4537,3 +4537,19 @@ if(BUILD_TESTING)
     add_test(NAME native_thread_capture_admission_model_only
         COMMAND oreslang-native-thread-capture-admission-test)
 endif()
+
+# Bounded host-only join/reaper model: not Task/Future guest lowering.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-thread-join-reaper-test
+        tests/native_thread_join_reaper_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c)
+    target_include_directories(oreslang-native-thread-join-reaper-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-thread-join-reaper-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-thread-join-reaper-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-thread-join-reaper-test PRIVATE Threads::Threads)
+    add_test(NAME native_thread_join_reaper_host_only
+        COMMAND oreslang-native-thread-join-reaper-test)
+endif()
