@@ -258,3 +258,33 @@ substrate. It does not demonstrate compiler-generated `.atto` actor source,
 supervisor scheduling/cancellation, full AOT, absence of all system allocations,
 or zero GC in any managed host. These still require an exact-head, stepful
 compiled-guest test and a separately audited transitive runtime call graph.
+
+## Eight fail-closed authority/loan denials
+
+`tests/native_actor_arena_denial_test.cpp` executes eight negative cases in
+separate Unix child processes and requires termination by `SIGABRT` rather than
+a normal exit or a recoverable value:
+
+1. Wrong actor owner and wrong actor incarnation at turn admission.
+2. Foreign actor-domain handle read and cross-actor loan release.
+3. Stale slot generation after drop and same-slot reuse.
+4. Double release of an already retired persistent loan.
+5. Scratch-region handle reused across two actor turns.
+6. Attempt to start a turn after the actor arena was retired.
+
+These are eight process-level assertions (the first and second items each
+contain two cases). Running children under fork provides independent negative
+fault handling; core dumps are disabled. The CTest target
+`native_actor_arena_denial_abort_contract` is included on Unix hosts.
+Optimized and ASan/UBSan CI runs execute it; the fork/abort suite is deliberately
+excluded from TSan, which still runs the concurrent lifetime test.
+
+**Evidence:** This test's exact source Git blob was independently verified
+against a local source file at SHA
+`0fc6ebf9c5240e1bb0a985ff1c3ef036ea454772`.
+Both GCC and Clang accepted C++20 syntax with `-Wall -Wextra -Wpedantic
+-Werror -DNDEBUG` against the current arena API declarations. This was
+a *syntax-only* check: no private native ActorArena implementation was linked
+locally, and no actual process-level negative test has yet passed. Do not
+promote these tests to executed evidence until a stepful exact-head runner
+compiles and executes them with the real implementation.
