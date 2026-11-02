@@ -473,6 +473,7 @@ std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     result->resolved_class = source.resolved_class;
     result->name = source.name;
     result->argument_names = source.argument_names;
+    result->aggregate_argument_types = source.aggregate_argument_types;
     result->type_arguments = source.type_arguments;
     result->type_arguments_present = source.type_arguments_present;
     result->sum_type = source.sum_type;
