@@ -1,6 +1,7 @@
 #include "oreslang/runtime/NativeActorPubSub.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -8,6 +9,7 @@
 
 using oreslang::runtime::NativeActorMembershipRegistry;
 using oreslang::runtime::NativeActorPubSubAdmission;
+using oreslang::runtime::NativeActorPubSubResourceLedger;
 
 template<class Bus, class = void>
 struct HasUnscopedSystemPublish : std::false_type {};
@@ -233,4 +235,74 @@ int main() {
           "graph-byte test topic cleanup failed");
     check(graph_bounded.allocated_queue_slots() == 0,
           "graph-byte test leaked queue slots");
+
+    /*
+     * i64 and UTF8 lanes in one runtime share one physical resource ledger.
+     * Payload type must not multiply per-actor subscription, queue-slot, or
+     * graph-byte limits.
+     */
+    auto shared_resources = std::make_shared<NativeActorPubSubResourceLedger>(
+        1, 9, 2);
+    NativeActorPubSubAdmission<std::int64_t> shared_i64(
+        memberships, 2, 1, 16, 9, 2, 2, shared_resources);
+    NativeActorPubSubAdmission<std::string> shared_utf8(
+        memberships, 2, 1, 16, 9, 2, 2, shared_resources);
+    shared_i64.define_topic(
+        b.group_id(), "shared-i64",
+        NativeActorPubSubAdmission<std::int64_t>::DeliveryPolicy::Reliable,
+        1);
+    shared_utf8.define_topic(
+        b.group_id(), "shared-utf8",
+        NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable,
+        1);
+    check(shared_i64.subscribe(b.group_id(), "shared-i64", 11, 1),
+          "shared i64 subscription failed");
+    check(rejected([&] {
+        (void)shared_utf8.subscribe(b.group_id(), "shared-utf8", 11, 1);
+    }), "payload type multiplied shared per-actor subscription quota");
+    check(shared_utf8.subscribe(b.group_id(), "shared-utf8", 12, 1),
+          "shared UTF8 subscription failed");
+    check(rejected([&] {
+        (void)shared_utf8.subscribe(b.group_id(), "shared-utf8", 10, 1);
+    }), "payload type multiplied shared preallocated-slot quota");
+    check(shared_i64.allocated_queue_slots() == 2
+              && shared_utf8.allocated_queue_slots() == 2,
+          "typed lanes do not observe one shared slot ledger");
+
+    auto shared_number =
+        shared_i64.publish(b.group_id(), "shared-i64", 10, 1, INT64_C(7));
+    check(shared_number.accepted == 1 && !shared_number.backpressured,
+          "shared i64 publication was not admitted");
+    check(shared_utf8.queued_payload_bytes() == sizeof(std::int64_t),
+          "UTF8 lane did not observe i64 graph-byte reservation");
+    auto shared_blocked =
+        shared_utf8.publish(b.group_id(), "shared-utf8", 10, 1, "xy");
+    check(shared_blocked.backpressured && shared_blocked.accepted == 0,
+          "UTF8 lane bypassed graph bytes reserved by i64 lane");
+    check(shared_utf8.queued_payload_bytes() == sizeof(std::int64_t),
+          "failed cross-type admission changed shared byte ledger");
+
+    check(shared_i64.try_read(
+              b.group_id(), "shared-i64", 11, 1).value() == INT64_C(7),
+          "shared i64 read mismatch");
+    check(shared_utf8.queued_payload_bytes() == 0,
+          "i64 read did not reclaim shared bytes for UTF8 lane");
+    check(shared_utf8.publish(
+              b.group_id(), "shared-utf8", 10, 1, "xy").accepted == 1,
+          "UTF8 lane did not observe reclaimed shared bytes");
+    check(shared_i64.queued_payload_bytes() == 2,
+          "i64 lane did not observe UTF8 shared byte reservation");
+    check(shared_utf8.try_read(
+              b.group_id(), "shared-utf8", 12, 1).value() == "xy",
+          "shared UTF8 read mismatch");
+    check(shared_i64.queued_payload_bytes() == 0,
+          "UTF8 read leaked shared graph bytes");
+
+    check(shared_i64.unsubscribe(b.group_id(), "shared-i64", 11, 1),
+          "shared i64 unsubscribe failed");
+    check(shared_utf8.unsubscribe(b.group_id(), "shared-utf8", 12, 1),
+          "shared UTF8 unsubscribe failed");
+    check(shared_i64.allocated_queue_slots() == 0
+              && shared_utf8.allocated_queue_slots() == 0,
+          "cross-type teardown leaked shared queue slots");
 }
