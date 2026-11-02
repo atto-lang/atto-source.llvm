@@ -33,4 +33,12 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
   -I"$root/src/main/cpp" "$root/tests/native_thread_join_reaper_v1_test.cpp" \
   "$tmp/NativeThreadV1.o" -o "$tmp/thread-join-reaper-test"
 "$tmp/thread-join-reaper-test"
+
+# Host-only scheduler notification bridge: cancellation, exactly-once enqueue,
+# generation tags, and race with physical thread completion.
+"$cxx_bin" -std=c++17 $common -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+  -I"$root/src/main/cpp" "$root/tests/native_join_task_wait_v1_test.cpp" \
+  "$tmp/NativeThreadV1.o" -o "$tmp/native-join-task-wait"
+"$tmp/native-join-task-wait"
+
 echo "native pthread sanitizer suite: host-only PASS"
