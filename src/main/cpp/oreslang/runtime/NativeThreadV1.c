@@ -22,6 +22,7 @@ struct ores_native_thread_v1 {
     pthread_t native;
     atomic_int join_state; /* 0 joinable, 1 joining, 2 joined */
     atomic_int body_completed; /* release after all TLS destructors */
+    atomic_int abnormal_exit; /* no returned entry result (pthread_exit/cancel) */
     int result;
 };
 
@@ -63,20 +64,32 @@ static void ores_context_destroy_v1(ores_context_v1 *context) {
     free(context);
 }
 
+/* Explicit pthread cleanup means a guest/FFI pthread_exit or a deferred
+ * cancellation still reclaims the captured argument and physical TLS values.
+ * Clearing the TLS key BEFORE running drops prevents reentrant callbacks
+ * from resurrecting a context whose lifetime has ended. */
+static void ores_thread_cleanup_v1(void *opaque) {
+    ores_start_v1 *start = (ores_start_v1 *)opaque;
+    (void)pthread_setspecific(ores_tls_key_v1, NULL);
+    if (start->drop) start->drop(start->arg);
+    ores_context_destroy_v1(start->context);
+    atomic_store_explicit(&start->handle->body_completed, 1, memory_order_release);
+    free(start);
+}
+
 static void *ores_thread_trampoline_v1(void *opaque) {
     ores_start_v1 *start = (ores_start_v1 *)opaque;
-    ores_context_v1 *context = start->context;
     ores_native_thread_v1 *handle = start->handle;
-    if (pthread_setspecific(ores_tls_key_v1, context) == 0) {
+    if (pthread_setspecific(ores_tls_key_v1, start->context) == 0) {
+        /* The push/pop pair is deliberately in the same lexical scope. */
+        pthread_cleanup_push(ores_thread_cleanup_v1, start);
         handle->result = start->entry(start->arg);
-        (void)pthread_setspecific(ores_tls_key_v1, NULL);
+        atomic_store_explicit(&handle->abnormal_exit, 0, memory_order_release);
+        pthread_cleanup_pop(1);
     } else {
-        handle->result = -1; /* OS TLS admission failed; entry never ran */
+        /* The thread never entered the guest callback, but still owns arg. */
+        ores_thread_cleanup_v1(start);
     }
-    if (start->drop) start->drop(start->arg);
-    ores_context_destroy_v1(context); /* all TLS values dropped before join */
-    atomic_store_explicit(&handle->body_completed, 1, memory_order_release);
-    free(start);
     return NULL;
 }
 
@@ -101,6 +114,7 @@ ores_thread_status_v1 ores_native_thread_spawn_v1(
     }
     atomic_init(&handle->join_state, 0);
     atomic_init(&handle->body_completed, 0);
+    atomic_init(&handle->abnormal_exit, 1);
     start->entry = entry; start->arg = owned_arg; start->drop = drop_arg;
     start->context = context; start->handle = handle;
     if (pthread_create(&handle->native, NULL, ores_thread_trampoline_v1, start) != 0) {
@@ -124,7 +138,8 @@ ores_thread_status_v1 ores_native_thread_join_blocking_v1(
     }
     *out_result = handle->result;
     atomic_store(&handle->join_state, 2);
-    return ORES_THREAD_OK_V1;
+    return atomic_load_explicit(&handle->abnormal_exit, memory_order_acquire)
+        ? ORES_THREAD_UNEXPECTED_EXIT_V1 : ORES_THREAD_OK_V1;
 }
 
 ores_thread_status_v1 ores_native_thread_release_v1(
