@@ -279,12 +279,38 @@ fault handling; core dumps are disabled. The CTest target
 Optimized and ASan/UBSan CI runs execute it; the fork/abort suite is deliberately
 excluded from TSan, which still runs the concurrent lifetime test.
 
-**Evidence:** This test's exact source Git blob was independently verified
-against a local source file at SHA
-`0fc6ebf9c5240e1bb0a985ff1c3ef036ea454772`.
-Both GCC and Clang accepted C++20 syntax with `-Wall -Wextra -Wpedantic
--Werror -DNDEBUG` against the current arena API declarations. This was
-a *syntax-only* check: no private native ActorArena implementation was linked
-locally, and no actual process-level negative test has yet passed. Do not
-promote these tests to executed evidence until a stepful exact-head runner
-compiles and executes them with the real implementation.
+**Verified local native execution (2026-11-02):**
+
+Original private Git objects were fetched read-only through the GitHub connector
+and reconstructed locally; each was checked with `git hash-object` against
+GitHub's exact blob ID before compiling. No cross-organization source branch,
+checkout token, or credential export was used.
+
+| Exact original source | Verified blob SHA |
+| --- | --- |
+| `src/main/cpp/oreslang/runtime/ActorArena.c` | `bed8e302d1a37d75e6ca51637d844cbb02311980` |
+| `src/main/cpp/oreslang/runtime/ActorArena.h` | `8e788315f23640827b85315a37ba49d27fc548f0` |
+| `tests/native_actor_arena_denial_test.cpp` | `0fc6ebf9c5240e1bb0a985ff1c3ef036ea454772` |
+| `tests/native_two_actor_arena_lifetime_test.cpp` | `66a42837989dd709fc005735266cb9908bc5091c` |
+
+Actual host-native compilation and execution results:
+
+- GCC optimized (`-O2 -DNDEBUG -Wall -Wextra -Wpedantic -Werror`):
+  **8/8 abort-denial cases passed; two-actor 1,000-turn test passed**.
+- Clang optimized (same strict flags):
+  **8/8 abort-denial cases passed; two-actor test passed**.
+- GCC ASan/UBSan (`-O1 -g -DNDEBUG -fsanitize=address,undefined`):
+  **8/8 abort-denial cases passed; two-actor test passed**.
+- Clang ASan/UBSan (same sanitizer flags):
+  **8/8 abort-denial cases passed; two-actor test passed**.
+- Positive two-actor sanitizer runs used leak detection; negative abort
+  scenarios used `ASAN_OPTIONS=detect_leaks=0:abort_on_error=1`, because
+  intentional child-process `SIGABRT` is the passing negative outcome.
+
+These executions used the **real byte-verified ActorArena implementation**,
+not a declaration-only stub. They are local host-native results, **not**
+GitHub Actions steps, LLVM compiler-generated guest code, TSAN proof, complete
+borrow checking, or full zero-GC/hard-real-time certification. The source-org
+exact-head native workflow still failed admission with `steps=0` in all jobs
+at the preceding code head; separate authorized stepful CI and source-level
+compiler tests remain required before merge.
