@@ -84,6 +84,12 @@ int main() {
                 Kind::ReadonlyRecord, {}});
     }, "AGGREGATE_SPREAD_PLAN_BUDGET"));
 
+    // U+E000 sorts before U+10000 by scalar value, unlike UTF-16 ordinal.
+    NativeAggregateSpreadPlan unicode(Kind::ReadonlyRecord);
+    unicode.add_named("\xF0\x90\x80\x80", "int");
+    unicode.add_named("\xEE\x80\x80", "int");
+    CHECK(unicode.result_shape().fields[0].name == "\xEE\x80\x80");
+
     NativeAggregateSpreadPlan empty(Kind::ReadonlyRecord);
     empty.add_checked_spread_projection(NativeAggregateShape{Kind::ExactStruct, {}});
     CHECK(empty.result_shape().fields.empty());
