@@ -55,6 +55,7 @@ public:
     static constexpr std::size_t DEFAULT_GRAPH_BYTES =
         std::size_t{64} * 1024 * 1024;
     static constexpr std::size_t DEFAULT_MAX_QUEUE_CAPACITY = 65536;
+    static constexpr std::size_t DEFAULT_TOTAL_QUEUE_SLOTS = 1u << 20;
 
     struct PublishReceipt {
         std::size_t subscribers = 0;
@@ -70,17 +71,20 @@ public:
             std::size_t max_subscriptions_per_actor,
             std::size_t max_bytes_per_subscription = DEFAULT_EDGE_BYTES,
             std::size_t max_total_bytes = DEFAULT_GRAPH_BYTES,
-            std::size_t max_queue_capacity = DEFAULT_MAX_QUEUE_CAPACITY)
+            std::size_t max_queue_capacity = DEFAULT_MAX_QUEUE_CAPACITY,
+            std::size_t max_total_queue_slots = DEFAULT_TOTAL_QUEUE_SLOTS)
         : memberships_(memberships),
           max_topics_(max_topics),
           max_subscriptions_per_actor_(max_subscriptions_per_actor),
           max_bytes_per_subscription_(max_bytes_per_subscription),
           max_total_bytes_(max_total_bytes),
-          max_queue_capacity_(max_queue_capacity) {
+          max_queue_capacity_(max_queue_capacity),
+          max_total_queue_slots_(max_total_queue_slots) {
         if (max_topics_ == 0 || max_subscriptions_per_actor_ == 0
                 || max_bytes_per_subscription_ == 0
                 || max_total_bytes_ == 0
-                || max_queue_capacity_ == 0)
+                || max_queue_capacity_ == 0
+                || max_total_queue_slots_ == 0)
             throw std::invalid_argument("invalid native pub-sub limits");
     }
 
@@ -135,8 +139,12 @@ public:
              * subscription into either index. A failed allocation cannot
              * leave a half-created subscriber or consume quota.
              */
+            if (topic.capacity > max_total_queue_slots_ - allocated_queue_slots_)
+                throw std::logic_error(
+                    "native pub-sub queue-slot budget exceeded");
             Queue queue(topic.capacity);
             topic.subscribers.emplace(actor, std::move(queue));
+            allocated_queue_slots_ += topic.capacity;
             ++count;
             return true;
         });
@@ -254,6 +262,7 @@ public:
             }
             for (const auto& subscriber : it->second.subscribers) {
                 queued_payload_bytes_ -= subscriber.second.payload_bytes;
+                allocated_queue_slots_ -= subscriber.second.slots.size();
                 decrement_actor_subscription_locked(subscriber.first);
             }
             it = topics_.erase(it);
@@ -416,6 +425,7 @@ private:
         auto subscriber = topic.subscribers.find(actor);
         if (subscriber == topic.subscribers.end()) return false;
         queued_payload_bytes_ -= subscriber->second.payload_bytes;
+        allocated_queue_slots_ -= subscriber->second.slots.size();
         topic.subscribers.erase(subscriber);
         decrement_actor_subscription_locked(actor);
         return true;
@@ -437,6 +447,7 @@ private:
             }
             const ActorKey stale = it->first;
             queued_payload_bytes_ -= it->second.payload_bytes;
+            allocated_queue_slots_ -= it->second.slots.size();
             it = topic.subscribers.erase(it);
             decrement_actor_subscription_locked(stale);
         }
@@ -498,12 +509,12 @@ private:
 
             for (auto& subscriber : topic.subscribers) {
                 Queue& queue = subscriber.second;
+                const bool had_value = !queue.empty();
                 const std::size_t old =
                     queue.replace_latest(frozen, payload_bytes);
                 queued_payload_bytes_ -= old;
                 queued_payload_bytes_ += payload_bytes;
-                if (old != 0 || !queue.empty())
-                    receipt.coalesced += old != 0 ? 1 : 0;
+                if (had_value) ++receipt.coalesced;
                 ++receipt.accepted;
             }
             return receipt;
@@ -536,10 +547,12 @@ private:
     const std::size_t max_bytes_per_subscription_;
     const std::size_t max_total_bytes_;
     const std::size_t max_queue_capacity_;
+    const std::size_t max_total_queue_slots_;
     mutable std::mutex mutex_;
     std::map<TopicKey, TopicRecord> topics_;
     std::map<ActorKey, std::size_t> actor_subscription_counts_;
     std::size_t queued_payload_bytes_ = 0;
+    std::size_t allocated_queue_slots_ = 0;
 };
 
 } // namespace oreslang::runtime
