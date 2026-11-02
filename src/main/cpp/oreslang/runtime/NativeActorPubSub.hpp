@@ -266,6 +266,41 @@ public:
         });
     }
 
+    // Runtime-only bounded UTF-8/other typed delivery sink. The caller sees
+    // a value under the same membership + queue lock that decides whether
+    // to consume it. An undersized output buffer MUST NOT dequeue the value.
+    // Guest code never receives this sink or the internal queue reference.
+    enum class ReadIntoStatus { Empty, Consumed, InsufficientCapacity };
+
+    template<class Sink>
+    ReadIntoStatus try_read_into(
+            std::uint64_t group_id,
+            const std::string& name,
+            std::uint64_t actor_id,
+            std::uint64_t generation,
+            Sink&& sink) {
+        return memberships_.with_locked_view([&](const auto& membership_view) {
+            if (!membership_view.contains(group_id, actor_id, generation))
+                throw std::logic_error(
+                    "subscription read requires live ActorGroup membership");
+            std::lock_guard<std::mutex> guard(mutex_);
+            TopicRecord& topic = require_topic_locked(group_id, name);
+            auto subscriber =
+                topic.subscribers.find(ActorKey{actor_id, generation});
+            if (subscriber == topic.subscribers.end())
+                throw std::logic_error("actor is not subscribed to topic");
+            Queue& queue = subscriber->second;
+            if (queue.empty()) return ReadIntoStatus::Empty;
+            const Slot& slot = queue.front();
+            if (!std::forward<Sink>(sink)(*slot.value))
+                return ReadIntoStatus::InsufficientCapacity;
+            const std::size_t bytes = slot.bytes;
+            queue.pop();
+            queued_payload_bytes_ -= bytes;
+            return ReadIntoStatus::Consumed;
+        });
+    }
+
     void remove_actor_from_group(
             std::uint64_t group_id,
             std::uint64_t actor_id,
