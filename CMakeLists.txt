@@ -2135,6 +2135,19 @@ if(BUILD_TESTING)
     add_test(NAME native_critical_gate_retirement_stress
         COMMAND oreslang-critical-retirement-stress-test)
     set_tests_properties(native_critical_gate_retirement_stress PROPERTIES TIMEOUT 35)
+    # Checked-in native stress: 8192 bounded FIFO requests, exact scalar state
+    # accounting, and 1000 concurrent retire-vs-handoff outcomes.
+    # Compiler-generated .ores guest execution is a separate release gate.
+    add_executable(oreslang-native-critical-capacity-handoff-test
+        tests/critical_gate_capacity_handoff_test.cpp)
+    target_include_directories(oreslang-native-critical-capacity-handoff-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-critical-capacity-handoff-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-critical-capacity-handoff-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_critical_capacity_fifo_retire_1000_races
+        COMMAND oreslang-native-critical-capacity-handoff-test)
+    set_tests_properties(native_critical_capacity_fifo_retire_1000_races PROPERTIES TIMEOUT 60)
     # Fail-closed compile test: native scalar returns only. Prevent opaque
     # reference wrappers/views from escaping actor-owned state via C++ templates.
     # Host-only test, NOT Oreslang guest ownership verification.
