@@ -4505,3 +4505,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_state_container_virtual_actor_source_admission
         PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only POSIX pthread reference for proposed portable Thread API.
+# This is not guest source lowering, TaskLocal or ActorLocal support.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-thread-v1-test
+        tests/native_thread_v1_test.c
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c)
+    set_target_properties(oreslang-native-thread-v1-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-thread-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-thread-v1-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-thread-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_thread_context_tls_join_host_only
+        COMMAND oreslang-native-thread-v1-test)
+    set_tests_properties(native_thread_context_tls_join_host_only PROPERTIES TIMEOUT 20)
+endif()
