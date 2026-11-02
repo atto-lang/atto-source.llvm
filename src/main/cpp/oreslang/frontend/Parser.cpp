@@ -1064,22 +1064,27 @@ private:
 
     // Constant evaluation visits the already parsed expression AST, never
     // interpolates source text and never executes any host/guest call.
-    std::int64_t macro_const_int(const Expression& value, std::size_t depth = 0) {
+    std::int64_t macro_const_int(const Expression& value, std::size_t depth = 0,
+                                 std::size_t* visited = nullptr) {
+        std::size_t initial = 0;
+        if (!visited) visited = &initial;
+        if (++*visited > 2048)
+            fail("NATIVE_MACRO_BUDGET: constant AST node limit exceeded (2048); runtime fallback is forbidden");
         if (depth > 64)
             fail("NATIVE_MACRO_BUDGET: constant expression nesting exceeds 64; runtime fallback is forbidden");
         using K = Expression::Kind;
         if (value.kind == K::Integer) return value.integer;
         std::int64_t a = 0, b = 0, out = 0;
         if (value.kind == K::Negate && value.left) {
-            a = macro_const_int(*value.left, depth + 1);
+            a = macro_const_int(*value.left, depth + 1, visited);
             if (__builtin_sub_overflow(std::int64_t{0}, a, &out))
                 fail("NATIVE_MACRO_CONST_OVERFLOW: checked compile-time i64 overflow; runtime fallback is forbidden");
             return out;
         }
         if ((value.kind == K::Add || value.kind == K::Subtract ||
                 value.kind == K::Multiply) && value.left && value.right) {
-            a = macro_const_int(*value.left, depth + 1);
-            b = macro_const_int(*value.right, depth + 1);
+            a = macro_const_int(*value.left, depth + 1, visited);
+            b = macro_const_int(*value.right, depth + 1, visited);
             bool overflow = value.kind == K::Add
                     ? __builtin_add_overflow(a, b, &out)
                     : value.kind == K::Subtract
