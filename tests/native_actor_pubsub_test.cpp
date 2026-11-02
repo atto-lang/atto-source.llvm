@@ -111,9 +111,6 @@ int main() {
     check(rejected([&] { (void)bus.publish(a.group_id(), "reliable", 13, 1, "bad"); }),
           "non-member publisher admitted");
 
-    bus.remove_actor(11, 1);
-    check(bus.subscriber_count(a.group_id(), "reliable") == 0,
-          "actor pub-sub cleanup leaked reliable subscription");
     check(bus.close_group(a.group_id()) == 2,
           "group close did not remove both A topics");
     check(rejected([&] {
@@ -125,5 +122,10 @@ int main() {
           "closing A must not revoke B publication");
     check(bus.try_read(b.group_id(), "lossy", 11, 1).value() == "after-a-close",
           "closing A must not revoke B subscription");
+    bus.remove_actor(11, 1);
+    check(bus.subscriber_count(b.group_id(), "lossy") == 0,
+          "retiring actor must remove its surviving B subscription");
+    check(bus.close_group(a.group_id()) == 0,
+          "repeated group topic shutdown must be idempotent");
 
 }
