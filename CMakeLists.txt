@@ -3596,6 +3596,28 @@ if(BUILD_TESTING)
     endforeach()
 endif()
 
+# Real guest-native LLVM proof for the two bounded typed macro AST cases.
+# This invokes the production compiler, then links emitted IR into a host
+# executable using clang; an IR printout alone is not guest execution.
+if(BUILD_TESTING)
+    find_program(ORE_NATIVE_MACRO_CLANG_EXECUTABLE NAMES clang)
+    if(ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
+        foreach(macro_case IN ITEMS const identity)
+            set(macro_fixture
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-${macro_case}-aot.ores")
+            add_test(NAME "native_macro_${macro_case}_linked_guest_aot_42"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DFIXTURE=${macro_fixture}"
+                    "-DCLANG=${ORE_NATIVE_MACRO_CLANG_EXECUTABLE}"
+                    "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/macro-aot-${macro_case}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+            set_tests_properties("native_macro_${macro_case}_linked_guest_aot_42"
+                PROPERTIES TIMEOUT 90)
+        endforeach()
+    endif()
+endif()
+
 # Dependency-free, executable import/source admission boundary. This test
 # compiles the production SourceInput.hpp with the host C++ compiler.
 if(BUILD_TESTING AND UNIX)
