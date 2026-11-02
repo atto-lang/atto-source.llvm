@@ -74,10 +74,10 @@ public:
         // Validate the arena descriptor even for null. Null is a zero value,
         // not permission to bypass a malformed/overflowing region descriptor.
         if (!detail::valid_arena_span(arena_base, arena_bytes)
-                || static_cast<std::uint64_t>(arena_bytes) > max_addressable_span)
+                || static_cast<std::uint64_t>(arena_bytes) > max_addressable_span
+                || (arena_base & (kQuantum - 1)) != 0)
             return std::nullopt;
         if (address == 0) return ActorManagedRef{};
-        if ((arena_base & (kQuantum - 1)) != 0) return std::nullopt;
         if (!detail::address_in_span(arena_base, arena_bytes, address)) return std::nullopt;
         const auto offset = static_cast<std::uint64_t>(address - arena_base);
         if ((offset & (kQuantum - 1)) != 0 || offset > max_offset) return std::nullopt;
