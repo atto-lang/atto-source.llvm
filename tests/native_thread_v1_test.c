@@ -65,6 +65,73 @@ static int early_exit_worker(void *ignored) {
     pthread_exit(NULL);
     return 0; /* unreachable */
 }
+#ifdef ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION
+#define ID_RACE_CHALLENGERS 24
+#define ID_RACE_CAPACITY 8
+static atomic_int id_race_accepted = ATOMIC_VAR_INIT(0);
+static atomic_int id_race_denied = ATOMIC_VAR_INIT(0);
+static atomic_uint_fast64_t id_race_ids[ID_RACE_CHALLENGERS];
+static int id_race_entry(void *owned) {
+    const int index = *(int *)owned;
+    uint64_t id = 0;
+    assert(ores_native_thread_id_v1(&id) == ORES_THREAD_OK_V1);
+    atomic_store(&id_race_ids[index], id);
+    return 900 + index;
+}
+static void *id_race_challenger(void *opaque) {
+    const int index = *(int *)opaque;
+    int *owned = new_value(index);
+    ores_native_thread_v1 *handle = NULL;
+    const ores_thread_status_v1 status = ores_native_thread_spawn_v1(
+        id_race_entry, owned, free, &handle);
+    if (status == ORES_THREAD_OK_V1) {
+        int result = -1;
+        assert(handle);
+        assert(ores_native_thread_join_blocking_v1(handle, &result)
+               == ORES_THREAD_OK_V1);
+        assert(result == 900 + index);
+        assert(ores_native_thread_release_v1(handle) == ORES_THREAD_OK_V1);
+        atomic_fetch_add(&id_race_accepted, 1);
+    } else {
+        assert(status == ORES_THREAD_OS_ERROR_V1);
+        assert(handle == NULL);
+        free(owned);
+        atomic_fetch_add(&id_race_denied, 1);
+    }
+    return NULL;
+}
+static void test_id_exhaustion_race(void) {
+    pthread_t callers[ID_RACE_CHALLENGERS];
+    int indexes[ID_RACE_CHALLENGERS];
+    ores_native_thread_test_set_next_id_v1(UINT64_MAX - ID_RACE_CAPACITY);
+    for (int i = 0; i < ID_RACE_CHALLENGERS; ++i) {
+        indexes[i] = i;
+        assert(pthread_create(&callers[i], NULL,
+                              id_race_challenger, &indexes[i]) == 0);
+    }
+    for (int i = 0; i < ID_RACE_CHALLENGERS; ++i)
+        assert(pthread_join(callers[i], NULL) == 0);
+    assert(atomic_load(&id_race_accepted) == ID_RACE_CAPACITY);
+    assert(atomic_load(&id_race_denied)
+           == ID_RACE_CHALLENGERS - ID_RACE_CAPACITY);
+    unsigned seen = 0;
+    for (int i = 0; i < ID_RACE_CHALLENGERS; ++i) {
+        const uint64_t id = atomic_load(&id_race_ids[i]);
+        if (!id) continue;
+        assert(id >= UINT64_MAX - ID_RACE_CAPACITY);
+        assert(id < UINT64_MAX);
+        for (int j = 0; j < i; ++j)
+            assert(id != atomic_load(&id_race_ids[j]));
+        ++seen;
+    }
+    assert(seen == ID_RACE_CAPACITY);
+    ores_native_thread_v1 *denied = (ores_native_thread_v1 *)1;
+    assert(ores_native_thread_spawn_v1(id_race_entry, NULL, NULL, &denied)
+           == ORES_THREAD_OS_ERROR_V1);
+    assert(denied == NULL);
+}
+#endif
+
 int main(void) {
     ores_native_thread_v1 *handles[4] = {0};
     void *outside = (void *)1;
@@ -146,6 +213,7 @@ int main(void) {
         assert(rejected_handle == NULL);
     }
     assert(atomic_load(&drops) == 21);
+    test_id_exhaustion_race();
 #endif
     puts("native pthread substrate: OK (host-only; no guest compiler claim)");
     return 0;
