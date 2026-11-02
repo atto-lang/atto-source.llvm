@@ -81,6 +81,21 @@ public:
                     capture.type.kind == AutoTypeKind::Arc)
                 throw std::invalid_argument("thread_arc_requires_share_admission");
 
+            // Bound recursive metadata before calling AutoTraitRules, which
+            // currently has no independent recursion/size guard.
+            std::vector<std::pair<const AutoType*, unsigned>> pending = {
+                {&capture.type, 0}
+            };
+            std::size_t inspected = 0;
+            while (!pending.empty()) {
+                const auto item = pending.back();
+                pending.pop_back();
+                if (item.second > 64 || ++inspected > 4096)
+                    throw std::invalid_argument("thread_capture_type_budget");
+                for (const auto& param : item.first->parameters)
+                    pending.push_back({&param, item.second + 1});
+            }
+
             // The existing auto-trait rules may throw for malformed types.
             // This boundary reports deterministic failure, not a crash.
             Capabilities caps;
