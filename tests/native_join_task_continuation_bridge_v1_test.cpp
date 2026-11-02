@@ -113,12 +113,12 @@ static void nonblocking_join_publishes_one_ready_ticket() {
     std::mutex queue_mutex;
     std::condition_variable queue_cv;
     std::vector<std::uint64_t> tickets;
-    NativeThreadJoinReaperV1 reaper(2, 2);
+    auto reaper = std::make_unique<NativeThreadJoinReaperV1>(2, 2);
     auto authority = TaskCancellation::root();
     auto link = stores.suspend(2001);
     auto task = bind_task(stores, authority, link);
     std::atomic<bool> native_gate{false};
-    auto completion = start(reaper, native_gate);
+    auto completion = start(*reaper, native_gate);
     assert(completion);
     auto waiter = NativeJoinTaskContinuationBridgeV1::subscribe(
         completion, task, 3001, [&](std::uint64_t generation) {
@@ -149,6 +149,9 @@ static void nonblocking_join_publishes_one_ready_ticket() {
     assert(!task->finish_resume());
     assert(ores_native_execution_context_store_release(stores.executions, resumed));
     observed_join(completion);
+    // Host-only teardown barrier: finish the reaper's callback before
+    // dropping the borrowed continuation stores or the queue lifetime.
+    reaper.reset();
     task->close();
     task.reset();
     waiter.reset();
@@ -159,12 +162,12 @@ static void nonblocking_join_publishes_one_ready_ticket() {
 static void cancelled_task_never_enqueues_or_resumes() {
     Stores stores;
     std::atomic<int> enqueues{0};
-    NativeThreadJoinReaperV1 reaper(2, 2);
+    auto reaper = std::make_unique<NativeThreadJoinReaperV1>(2, 2);
     auto authority = TaskCancellation::root();
     auto link = stores.suspend(4001);
     auto task = bind_task(stores, authority, link);
     std::atomic<bool> native_gate{false};
-    auto completion = start(reaper, native_gate);
+    auto completion = start(*reaper, native_gate);
     assert(completion);
     auto waiter = NativeJoinTaskContinuationBridgeV1::subscribe(
         completion, task, 5001, [&](std::uint64_t) { enqueues.fetch_add(1); });
@@ -173,6 +176,9 @@ static void cancelled_task_never_enqueues_or_resumes() {
     assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
     native_gate.store(true, std::memory_order_release);
     observed_join(completion);
+    // Host-only teardown barrier: finish the reaper's callback before
+    // dropping the borrowed continuation stores or the queue lifetime.
+    reaper.reset();
     OresNativeExecutionHandle resumed{};
     assert(!task->try_resume({88, 4002}, &resumed));
     task->close();
@@ -188,12 +194,12 @@ static void cancelled_task_never_enqueues_or_resumes() {
 static void retired_task_weak_gate_cannot_be_reanimated() {
     Stores stores;
     std::atomic<int> enqueues{0};
-    NativeThreadJoinReaperV1 reaper(2, 2);
+    auto reaper = std::make_unique<NativeThreadJoinReaperV1>(2, 2);
     auto authority = TaskCancellation::root();
     auto link = stores.suspend(6001);
     auto task = bind_task(stores, authority, link);
     std::atomic<bool> native_gate{false};
-    auto completion = start(reaper, native_gate);
+    auto completion = start(*reaper, native_gate);
     assert(completion);
     auto waiter = NativeJoinTaskContinuationBridgeV1::subscribe(
         completion, task, 7001, [&](std::uint64_t) { enqueues.fetch_add(1); });
@@ -203,6 +209,9 @@ static void retired_task_weak_gate_cannot_be_reanimated() {
     authority->retire();
     native_gate.store(true, std::memory_order_release);
     observed_join(completion);
+    // Host-only teardown barrier: finish the reaper's callback before
+    // dropping the borrowed continuation stores or the queue lifetime.
+    reaper.reset();
     assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
     waiter.reset();
     stores.release(link);
