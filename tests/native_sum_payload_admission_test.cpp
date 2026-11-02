@@ -59,6 +59,28 @@ Program fallback(const std::string& sum, Kind argumentKind) {
     program.functions.front().locals.push_back(std::move(next));
     return program;
 }
+// Exercise both ternary arms through the actual native sum resolver. A
+// mismatched false arm previously inherited the true arm's Hint unnoticed.
+Program conditional_payload(Kind yes, Kind no) {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto ternary = scalar(Kind::Conditional);
+    ternary->condition = scalar(Kind::Boolean);
+    ternary->when_true = scalar(yes);
+    ternary->when_false = scalar(no);
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(ternary));
+    return program;
+}
+Program conditional_default(Kind yes, Kind no) {
+    Program program = fallback("Option<int>", Kind::Integer);
+    auto ternary = scalar(Kind::Conditional);
+    ternary->condition = scalar(Kind::Boolean);
+    ternary->when_true = scalar(yes);
+    ternary->when_false = scalar(no);
+    program.functions.front().locals.back().initializer->arguments.front() =
+        std::move(ternary);
+    return program;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -78,6 +100,16 @@ void require_rejection(Program p, const std::string& diagnostic,
 
 int main() {
     try {
+        require_success(conditional_payload(Kind::Integer, Kind::Integer),
+            "both ternary payload arms are i64");
+        require_success(conditional_default(Kind::Integer, Kind::Integer),
+            "both ternary fallback arms are i64");
+        require_rejection(conditional_payload(Kind::Integer, Kind::String),
+            "conditional branch payload types do not match", "String in false Some arm");
+        require_rejection(conditional_payload(Kind::String, Kind::Integer),
+            "conditional branch payload types do not match", "int in false Some arm");
+        require_rejection(conditional_default(Kind::Integer, Kind::Boolean),
+            "conditional branch payload types do not match", "bool in false fallback arm");
         require_success(initial("Option<int>", "Some", scalar(Kind::Integer)), "Some<int>");
         require_success(initial("Option<String>", "Some", scalar(Kind::String)), "Some<String>");
         require_success(initial("Option<int>", "None"), "None<int>");
@@ -106,7 +138,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 17 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 22 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
