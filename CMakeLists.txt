@@ -368,6 +368,24 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_aggregate_kind_failclosed.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    # Real source-to-LLVM-to-native executable inferred row acceptance.
+    # Require the compiler binary and the host Clang; never use a mock.
+    find_program(ORE_AGGREGATE_RUSTC rustc)
+    find_program(ORE_AGGREGATE_CLANG clang)
+    if(ORE_AGGREGATE_RUSTC AND ORE_AGGREGATE_CLANG)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/attolang-native-infer-guest"
+            COMMAND "${ORE_AGGREGATE_RUSTC}" --edition=2021
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inferred_aggregate_guest.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/attolang-native-infer-guest"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inferred_aggregate_guest.rs"
+            VERBATIM)
+        add_custom_target(attolang-native-infer-guest-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/attolang-native-infer-guest")
+        add_test(NAME native_inferred_aggregate_guest
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/attolang-native-infer-guest"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_AGGREGATE_CLANG}")
+    endif()
     # One positive scalar IR control followed by 33 isolated compiler
     # negatives. Each child has a 30-second cap; only complete results
     # publish a digest-bound negative-only receipt (not guest certification).
