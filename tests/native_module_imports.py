@@ -96,7 +96,7 @@ def main():
         }, 42),
         ('atto-project-root-source', {
             'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
-            '.ores.pkg.toml': 'schema_version = "1"\\n',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
         ('atto-relative-prefers-canonical-over-legacy', {
@@ -106,7 +106,7 @@ def main():
         }, 42),
         ('atto-project-root-prefers-canonical-over-legacy', {
             'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
-            '.ores.pkg.toml': 'schema_version = "1"\\n',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
             'lib.ores': 'define module Lib as pub fnc answer():int{return 41;} end',
         }, 42),
