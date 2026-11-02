@@ -41,4 +41,19 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
   "$tmp/NativeThreadV1.o" -o "$tmp/native-join-task-wait"
 "$tmp/native-join-task-wait"
 
+
+# End-to-end host-only join completion -> Task READY -> exact scheduler claim.
+# Keep all C stores compiled as C, and never run guest frames from the reaper.
+for unit in NativeExecutionContextStore NativeContinuationStore NativeAwaitTraceBridge; do
+  "$cc_bin" -std=c11 $common -Wall -Wextra -Wpedantic -Werror -pthread \
+    -I"$root/src/main/cpp" -c "$root/src/main/cpp/oreslang/runtime/$unit.c" \
+    -o "$tmp/$unit.o"
+done
+"$cxx_bin" -std=c++17 $common -Wall -Wextra -Wpedantic -Werror -pthread \
+  -I"$root/src/main/cpp" "$root/tests/native_join_task_continuation_bridge_v1_test.cpp" \
+  "$tmp/NativeThreadV1.o" "$tmp/NativeExecutionContextStore.o" \
+  "$tmp/NativeContinuationStore.o" "$tmp/NativeAwaitTraceBridge.o" \
+  -o "$tmp/native-join-task-continuation-bridge"
+"$tmp/native-join-task-continuation-bridge"
+
 echo "native pthread sanitizer suite: host-only PASS"
