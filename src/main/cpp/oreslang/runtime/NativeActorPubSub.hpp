@@ -129,23 +129,47 @@ public:
             ActorKey actor{actor_id, generation};
             if (topic.subscribers.find(actor) != topic.subscribers.end())
                 return false;
-            std::size_t& count = actor_subscription_counts_[actor];
-            if (count >= max_subscriptions_per_actor_)
+            auto count = actor_subscription_counts_.find(actor);
+            const std::size_t current_count =
+                count == actor_subscription_counts_.end()
+                    ? 0 : count->second;
+            if (current_count >= max_subscriptions_per_actor_)
                 throw std::logic_error(
                     "native pub-sub actor subscription quota exceeded");
+            if (allocated_queue_slots_ > max_total_queue_slots_
+                    || topic.capacity
+                        > max_total_queue_slots_ - allocated_queue_slots_)
+                throw std::logic_error(
+                    "native pub-sub queue-slot budget exceeded");
 
             /*
              * Allocate the whole bounded ring before publishing this
              * subscription into either index. A failed allocation cannot
              * leave a half-created subscriber or consume quota.
              */
-            if (topic.capacity > max_total_queue_slots_ - allocated_queue_slots_)
-                throw std::logic_error(
-                    "native pub-sub queue-slot budget exceeded");
             Queue queue(topic.capacity);
-            topic.subscribers.emplace(actor, std::move(queue));
+
+            bool created_count = false;
+            if (count == actor_subscription_counts_.end()) {
+                auto inserted =
+                    actor_subscription_counts_.emplace(actor, 0);
+                count = inserted.first;
+                created_count = inserted.second;
+            }
+            try {
+                auto inserted =
+                    topic.subscribers.emplace(actor, std::move(queue));
+                if (!inserted.second)
+                    throw std::logic_error(
+                        "duplicate native pub-sub subscription");
+            } catch (...) {
+                if (created_count && count->second == 0)
+                    actor_subscription_counts_.erase(count);
+                throw;
+            }
+
             allocated_queue_slots_ += topic.capacity;
-            ++count;
+            ++count->second;
             return true;
         });
     }
@@ -168,6 +192,16 @@ public:
             std::uint64_t publisher_id,
             std::uint64_t publisher_generation,
             const T& value) {
+        /*
+         * Reject unauthorized publishers before allocating a frozen payload.
+         * The locked view below revalidates membership at the actual commit
+         * boundary, so leave/retire can still win between these two checks.
+         */
+        if (!memberships_.contains(
+                group_id, publisher_id, publisher_generation))
+            throw std::logic_error(
+                "publication requires live ActorGroup membership");
+
         const std::size_t payload_bytes =
             NativeActorPubSubPayloadBytes<T>::size(value);
         if (payload_bytes > max_bytes_per_subscription_
