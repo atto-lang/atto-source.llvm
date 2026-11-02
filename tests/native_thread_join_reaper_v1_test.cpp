@@ -68,6 +68,45 @@ static ores_thread_status_v1 fail_once(ores_native_thread_v1* handle, int* resul
     if (fail_next_join.exchange(false)) return ORES_THREAD_OS_ERROR_V1;
     return ores_native_thread_join_blocking_v1(handle, result);
 }
+static ores_thread_status_v1 always_fail(ores_native_thread_v1*, int*) {
+    return ORES_THREAD_OS_ERROR_V1;
+}
+static void test_failed_handles_keep_capacity_until_recovery() {
+    const int baseline = cleanup.load();
+    NativeThreadJoinReaperV1 reaper(2, 2, always_fail);
+    ores_native_thread_v1* handles[3] = {
+        spawn(610), spawn(611), spawn(612)
+    };
+    auto completions[2] = {
+        reaper.submit(handles[0]), reaper.submit(handles[1])
+    };
+    assert(completions[0] && completions[1]);
+    assert(!handles[0] && !handles[1]);
+    wait_read(completions[0], ORES_THREAD_OS_ERROR_V1);
+    wait_read(completions[1], ORES_THREAD_OS_ERROR_V1);
+    assert(reaper.failed_count() == 2);
+    assert(reaper.active() == 2); // failure still owns both bounded slots
+    assert(!reaper.submit(handles[2]));
+    assert(handles[2] != nullptr); // rejected submission retains caller ownership
+
+    auto failed = reaper.recover_failed();
+    assert(failed.size() == 2);
+    assert(reaper.failed_count() == 0);
+    assert(reaper.active() == 0);
+    for (std::size_t i = 0; i < failed.size(); ++i) {
+        int result = -1;
+        assert(ores_native_thread_join_blocking_v1(failed[i], &result)
+               == ORES_THREAD_OK_V1);
+        assert(result == 610 + static_cast<int>(i));
+        assert(ores_native_thread_release_v1(failed[i]) == ORES_THREAD_OK_V1);
+    }
+    int result = -1;
+    assert(ores_native_thread_join_blocking_v1(handles[2], &result)
+           == ORES_THREAD_OK_V1);
+    assert(result == 612);
+    assert(ores_native_thread_release_v1(handles[2]) == ORES_THREAD_OK_V1);
+    wait_cleanup(baseline + 3, reaper);
+}
 static void test_invalid_limits() {
     try { NativeThreadJoinReaperV1 invalid(0); assert(false); }
     catch (const std::invalid_argument&) {}
@@ -246,6 +285,7 @@ int main() {
     test_invalid_limits();
     test_no_head_of_line_blocking();
     test_failed_join_recovery();
+    test_failed_handles_keep_capacity_until_recovery();
     test_abnormal_exit_consumes_join();
     test_nonblocking_completion_subscription();
     test_notification_registration_race();
