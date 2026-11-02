@@ -50,6 +50,9 @@ int main() {
     CHECK(null_ref && null_ref->is_null());
     CHECK(null_ref->decode(base, arena.size()).has_value());
     CHECK(null_ref->decode(base, arena.size()).value() == 0);
+    auto native_null = NativeActorManagedRef::encode(base, arena.size(), std::uintptr_t{0});
+    CHECK(native_null && native_null->is_null());
+    CHECK(native_null->decode(base, arena.size()).value() == 0);
 
     CHECK(!CompressedActorRef::encode(base, arena.size(), base + 3));
     CHECK(!CompressedActorRef::encode(base, arena.size(), base + arena.size()));
