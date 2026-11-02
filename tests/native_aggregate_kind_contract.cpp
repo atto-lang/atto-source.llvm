@@ -83,5 +83,16 @@ int main() {
                   "AGGREGATE_SHAPE_UNSUPPORTED_FIELD_TYPE"));
     CHECK(rejects({Kind::ExactStruct, {{"", "int"}}},
                   "AGGREGATE_SHAPE_EMPTY_FIELD"));
+    CHECK(rejects({Kind::ExactStruct, {{"\xED\xA0\x80", "int"}}},
+                  "AGGREGATE_SHAPE_INVALID_UTF8"));
+    CHECK(rejects({Kind::ReadonlyRecord, {{"\xF4\x90\x80\x80", "int"}}},
+                  "AGGREGATE_SHAPE_INVALID_UTF8"));
+    CHECK(rejects({Kind::ReadonlyRecord, {{"bad\nkey", "int"}}},
+                  "AGGREGATE_SHAPE_CONTROL_FIELD_NAME"));
+    NativeAggregateShape unicode{Kind::ReadonlyRecord,
+        {{"\xF0\x90\x80\x80", "int"}, {"\xEE\x80\x80", "bool"}}};
+    unicode.canonicalize();
+    CHECK(unicode.fields[0].name == "\xEE\x80\x80");
+
     return 0;
 }
