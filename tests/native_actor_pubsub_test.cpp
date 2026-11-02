@@ -116,4 +116,14 @@ int main() {
           "actor pub-sub cleanup leaked reliable subscription");
     check(bus.close_group(a.group_id()) == 2,
           "group close did not remove both A topics");
+    check(rejected([&] {
+        (void)bus.publish(a.group_id(), "reliable", 10, 1, "after-close");
+    }), "closed group topic remained publishable through cached name");
+    check(bus.try_read(b.group_id(), "lossy", 11, 1).value() == "one",
+          "closing A must not corrupt queued topic B delivery");
+    check(bus.publish(b.group_id(), "lossy", 10, 1, "after-a-close").accepted == 1,
+          "closing A must not revoke B publication");
+    check(bus.try_read(b.group_id(), "lossy", 11, 1).value() == "after-a-close",
+          "closing A must not revoke B subscription");
+
 }
