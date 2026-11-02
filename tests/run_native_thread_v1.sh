@@ -53,3 +53,18 @@ esac
   -I"$root/src/main/cpp" "$root/tests/native_join_task_wait_v1_test.cpp" \
   "$tmp/NativeThreadV1.o" -o "$tmp/native-join-task-wait"
 "$tmp/native-join-task-wait"
+
+
+# End-to-end host-only join completion -> Task READY -> exact scheduler claim.
+# Keep all C stores compiled as C, and never run guest frames from the reaper.
+for unit in NativeExecutionContextStore NativeContinuationStore NativeAwaitTraceBridge; do
+  "$cc_bin" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+    -I"$root/src/main/cpp" -c "$root/src/main/cpp/oreslang/runtime/$unit.c" \
+    -o "$tmp/$unit.o"
+done
+"$cxx_bin" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+  -I"$root/src/main/cpp" "$root/tests/native_join_task_continuation_bridge_v1_test.cpp" \
+  "$tmp/NativeThreadV1.o" "$tmp/NativeExecutionContextStore.o" \
+  "$tmp/NativeContinuationStore.o" "$tmp/NativeAwaitTraceBridge.o" \
+  -o "$tmp/native-join-task-continuation-bridge"
+"$tmp/native-join-task-continuation-bridge"
