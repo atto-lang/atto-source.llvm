@@ -117,6 +117,16 @@ Program malformed_conditional(Kind guard, bool dropGuard, bool dropFalseArm) {
     if (dropFalseArm) expr.when_false.reset();
     return program;
 }
+// Compatibility lowering permits a complete equality guard pair, but
+// must reject half-constructed or simultaneous canonical/legacy forms.
+Program conditional_guard_pair(bool canonical, bool lhs, bool rhs) {
+    Program program = conditional_payload(Kind::Integer, Kind::Integer);
+    auto& expr = *program.functions.front().locals.front().initializer->arguments.front();
+    if (!canonical) expr.condition.reset();
+    if (lhs) expr.condition_lhs = scalar(Kind::Integer);
+    if (rhs) expr.condition_rhs = scalar(Kind::Integer);
+    return program;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -136,6 +146,16 @@ void require_rejection(Program p, const std::string& diagnostic,
 
 int main() {
     try {
+        require_success(conditional_guard_pair(false, true, true),
+            "complete legacy equality guard remains permitted");
+        require_rejection(conditional_guard_pair(true, true, true),
+            "conditional conflicting guard forms", "canonical plus legacy guard");
+        require_rejection(conditional_guard_pair(true, true, false),
+            "conditional conflicting guard forms", "canonical plus half legacy guard");
+        require_rejection(conditional_guard_pair(false, true, false),
+            "conditional missing guard or branch", "incomplete legacy guard");
+        require_rejection(conditional_guard_pair(false, false, true),
+            "conditional missing guard or branch", "right-only legacy guard");
         require_rejection(malformed_conditional(Kind::Integer, false, false),
             "conditional guard must be bool", "integer guard cannot select sum payload");
         require_rejection(malformed_conditional(Kind::String, false, false),
@@ -192,7 +212,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 31 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 36 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
