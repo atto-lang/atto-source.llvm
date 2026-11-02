@@ -107,6 +107,15 @@ Program nested_conditional_payload(Kind nestedFalse) {
         constructor("Some", std::move(outer));
     return program;
 }
+// Negative AST shapes can originate from malformed internal passes;
+// the resolver must reject these even when no parser is involved.
+Program malformed_conditional(Kind guard, bool dropGuard, bool dropFalseArm) {
+    Program program = conditional_payload(Kind::Integer, Kind::Integer);
+    auto& expr = *program.functions.front().locals.front().initializer->arguments.front();
+    expr.condition = dropGuard ? nullptr : scalar(guard);
+    if (dropFalseArm) expr.when_false.reset();
+    return program;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -126,6 +135,14 @@ void require_rejection(Program p, const std::string& diagnostic,
 
 int main() {
     try {
+        require_rejection(malformed_conditional(Kind::Integer, false, false),
+            "conditional guard must be bool", "integer guard cannot select sum payload");
+        require_rejection(malformed_conditional(Kind::String, false, false),
+            "conditional guard must be bool", "string guard cannot select sum payload");
+        require_rejection(malformed_conditional(Kind::Boolean, true, false),
+            "conditional missing guard or branch", "ternary without guard");
+        require_rejection(malformed_conditional(Kind::Boolean, false, true),
+            "conditional missing guard or branch", "ternary without false branch");
         require_success(conditional_error(Kind::String, Kind::String),
             "both Result Err ternary arms are String");
         require_rejection(conditional_error(Kind::String, Kind::Integer),
@@ -174,7 +191,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 27 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 31 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
