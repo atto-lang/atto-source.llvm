@@ -314,3 +314,38 @@ borrow checking, or full zero-GC/hard-real-time certification. The source-org
 exact-head native workflow still failed admission with `steps=0` in all jobs
 at the preceding code head; separate authorized stepful CI and source-level
 compiler tests remain required before merge.
+
+## Concurrent STOP with live carrier and external loan (host-native)
+
+`tests/native_actor_stop_race_test.cpp` models a live carrier executing actor A
+while the supervisor initiates STOP. The admitted turn holds a persistent arena
+loan, and an independently owned actor B progresses during STOP. The test
+proves that a live turn blocks destruction, a loan retained past turn unwind
+still blocks destruction, and releasing the last loan permits physical
+reclamation. Each test execution repeats the lifecycle 256 times using fresh
+actor-incarnation identities and arenas.
+
+Actual local execution against SHA-verified native sources on 2026-11-02:
+
+- `ActorArena.c` blob `bed8e302d1a37d75e6ca51637d844cbb02311980`
+- `ActorArena.h` blob `8e788315f23640827b85315a37ba49d27fc548f0`
+- `native_actor_stop_race_test.cpp` blob `d4cde9e554873be9d39c674849e01aad63446566`
+
+`git hash-object` independently matched the fetched source objects before
+compiling. Results: GCC 14 optimized **PASS** (256 loops), Clang 17 optimized
+**PASS** (256), GCC 14 ASan/UBSan **PASS** (256), Clang 17 ASan/UBSan
+**PASS** (256), GCC 14 ThreadSanitizer **PASS** (256). A normal native arena
+implementation is linked in every run. No credential export or cross-org
+source mirror is involved.
+
+CTest target `native_actor_stop_carrier_ffi_loan_quiescence` and the
+existing exact-head native matrix were updated to include this test.
+However, source-org Actions run
+`41395956532` at head `a8a8d204a8539a03b57c4c89864c8111e08c81d5`
+reported **zero executed steps in all six jobs** (runner admission failure).
+
+This is **host-native simulation** of an external lifetime loan, not an actual
+FFI callback, scheduler cancellation, source actor compilation, LLVM generated
+drop-glue proof, complete AOT binary, or whole-program zero-GC proof.
+An admitted external callback and exact-head stepful compiler guest run are
+still required before any certification.
