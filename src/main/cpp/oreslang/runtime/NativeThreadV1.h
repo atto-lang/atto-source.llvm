@@ -21,7 +21,8 @@ typedef enum ores_thread_status_v1 {
     ORES_THREAD_OS_ERROR_V1 = 4,
     ORES_THREAD_ALREADY_JOINED_V1 = 5,
     ORES_THREAD_SELF_JOIN_V1 = 6,
-    ORES_THREAD_SLOT_LIMIT_V1 = 7
+    ORES_THREAD_SLOT_LIMIT_V1 = 7,
+    ORES_THREAD_UNEXPECTED_EXIT_V1 = 8
 } ores_thread_status_v1;
 
 /* On successful spawn, owned_arg moves to the thread and drop_arg runs ONCE
@@ -30,7 +31,9 @@ ores_thread_status_v1 ores_native_thread_spawn_v1(
     ores_native_thread_entry_v1 entry, void *owned_arg,
     ores_native_thread_drop_v1 drop_arg, ores_native_thread_v1 **out);
 
-/* Join exactly once; a cancelled async waiter must not invoke this itself.
+/* Join exactly once. Unexpected pthread_exit/cancel is reported AFTER a
+ * successful physical pthread_join, so the caller must still release the
+ * consumed handle. A cancelled async waiter must not invoke this itself.
  * This blocking HOST primitive MUST NOT be called on an AttoLang carrier. */
 ores_thread_status_v1 ores_native_thread_join_blocking_v1(
     ores_native_thread_v1 *handle, int *out_result);
