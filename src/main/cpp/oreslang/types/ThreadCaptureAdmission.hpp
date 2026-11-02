@@ -92,7 +92,57 @@ public:
                 pending.pop_back();
                 if (item.second > 64 || ++inspected > 4096)
                     throw std::invalid_argument("thread_capture_type_budget");
-                for (const auto& param : item.first->parameters)
+
+                // A type description is compiler-minted metadata, not an
+                // arbitrary bag of flags. Validate the *entire* nested shape
+                // before using the auto-trait rules: Scalar ignores children,
+                // Dyn ignores children, and wrapper rules use exactly_one().
+                // Extra metadata must not silently upgrade a Send/Sync proof.
+                const AutoType& node = *item.first;
+                for (const auto marker : node.dyn_bounds)
+                    if (marker != AutoTrait::Send &&
+                            marker != AutoTrait::Sync &&
+                            marker != AutoTrait::Share)
+                        throw std::invalid_argument("thread_capture_invalid_type_shape");
+                for (const auto marker : node.negative)
+                    if (marker != AutoTrait::Send &&
+                            marker != AutoTrait::Sync &&
+                            marker != AutoTrait::Share)
+                        throw std::invalid_argument("thread_capture_invalid_type_shape");
+
+                const auto invalid_shape = [&] {
+                    throw std::invalid_argument("thread_capture_invalid_type_shape");
+                };
+                switch (node.kind) {
+                case AutoTypeKind::Scalar:
+                    if (!node.parameters.empty() || !node.dyn_bounds.empty() ||
+                            node.complete_nominal_layout || node.shareable_domain)
+                        invalid_shape();
+                    break;
+                case AutoTypeKind::Nominal:
+                    if (!node.dyn_bounds.empty()) invalid_shape();
+                    break;
+                case AutoTypeKind::Dyn:
+                    if (!node.parameters.empty() || node.complete_nominal_layout)
+                        invalid_shape();
+                    break;
+                case AutoTypeKind::Box: case AutoTypeKind::Rc:
+                case AutoTypeKind::RefCell: case AutoTypeKind::Mutex:
+                case AutoTypeKind::RwLock:
+                    if (node.parameters.size() != 1 ||
+                            !node.dyn_bounds.empty() || node.shareable_domain ||
+                            node.complete_nominal_layout)
+                        invalid_shape();
+                    break;
+                case AutoTypeKind::Arc: case AutoTypeKind::Weak:
+                    if (node.parameters.size() != 1 ||
+                            !node.dyn_bounds.empty() || node.complete_nominal_layout)
+                        invalid_shape();
+                    break;
+                default:
+                    invalid_shape();
+                }
+                for (const auto& param : node.parameters)
                     pending.push_back({&param, item.second + 1});
             }
 
