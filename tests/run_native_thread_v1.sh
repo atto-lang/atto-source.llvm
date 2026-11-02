@@ -46,3 +46,10 @@ esac
     "$tmp/NativeThreadV1.o" \
     -o "$tmp/native-thread-join-reaper"
 "$tmp/native-thread-join-reaper"
+
+# Host-only scheduler notification bridge: cancellation, exactly-once enqueue,
+# generation tags, and race with physical thread completion.
+"$cxx_bin" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+  -I"$root/src/main/cpp" "$root/tests/native_join_task_wait_v1_test.cpp" \
+  "$tmp/NativeThreadV1.o" -o "$tmp/native-join-task-wait"
+"$tmp/native-join-task-wait"
