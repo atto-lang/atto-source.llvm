@@ -1,6 +1,8 @@
 #include "oreslang/runtime/NativeActorPubSub.hpp"
 
+#include <atomic>
 #include <cstdint>
+#include <thread>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -305,4 +307,41 @@ int main() {
     check(shared_i64.allocated_queue_slots() == 0
               && shared_utf8.allocated_queue_slots() == 0,
           "cross-type teardown leaked shared queue slots");
+
+    // The final cleanup of one actor incarnation must not race ahead of
+    // re-registration. A concurrent registration has to wait for the
+    // retirement callback while its membership lock remains held.
+    NativeActorMembershipRegistry retire_gate(91, 2, 2);
+    check(retire_gate.register_actor(901, 1), "register retirement fixture");
+    const auto retire_group = retire_gate.create_group(1, 2);
+    check(retire_gate.join(retire_group, 901, 1), "join retirement fixture");
+    std::atomic<bool> cleaning{false};
+    std::atomic<bool> release_cleanup{false};
+    std::atomic<bool> began_register{false};
+    std::atomic<bool> registered{false};
+    std::atomic<bool> retired{false};
+    std::thread old_actor([&] {
+        retired.store(retire_gate.retire_actor_with_cleanup(901, 1, [&] {
+            cleaning.store(true);
+            while (!release_cleanup.load())
+                std::this_thread::yield();
+        }));
+    });
+    while (!cleaning.load()) std::this_thread::yield();
+    std::thread next_actor([&] {
+        began_register.store(true);
+        registered.store(retire_gate.register_actor(901, 2));
+    });
+    while (!began_register.load()) std::this_thread::yield();
+    for (int i = 0; i < 1000; ++i) std::this_thread::yield();
+    const bool overtook_cleanup = registered.load();
+    release_cleanup.store(true);
+    old_actor.join();
+    next_actor.join();
+    check(!overtook_cleanup,
+          "new actor registration overtook retirement cleanup");
+    check(retired.load() && registered.load(),
+          "actor retirement and replacement registration did not finish");
+    check(!retire_gate.contains(1, 901, 1),
+          "retired actor retained a prior-group membership");
 }
