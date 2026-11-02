@@ -202,6 +202,8 @@ int main(void) {
 
     check(ores_native_actor_pubsub_retire_source_actor(
         runtime, subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_unsubscribe_i64(
+        runtime, 2, "events", subscriber) == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
     check(ores_native_actor_pubsub_subscribe_utf8(
         runtime, 2, "strings", subscriber) == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
     check(ores_native_actor_pubsub_publish_utf8(
