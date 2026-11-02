@@ -1331,13 +1331,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 // storage; bool values are canonical 0/1 in that transport.
                 // This is NOT a callable aggregate ABI or a string handle.
                 const auto& shape = *binding.aggregate_type;
-                if (shape.kind != types::NativeAggregateShape::Kind::ExactStruct ||
-                        !binding.initializer ||
+                if (!binding.initializer ||
                         binding.initializer->kind != Expression::Kind::AggregateConstruct ||
                         !binding.initializer->aggregate_type ||
                         !shape.same_type_as(*binding.initializer->aggregate_type) ||
-                        binding.initializer->arguments.size() != shape.fields.size() ||
-                        binding.initializer->argument_names.size() != shape.fields.size())
+                        binding.initializer->arguments.size() !=
+                            binding.initializer->argument_names.size())
                     throw std::runtime_error("AGGREGATE_STACK_LOWERING_UNVERIFIED");
                 for (const auto& field : shape.fields)
                     if (field.type != "int" && field.type != "bool")
