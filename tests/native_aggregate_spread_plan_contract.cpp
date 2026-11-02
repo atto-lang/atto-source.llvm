@@ -77,6 +77,13 @@ int main() {
         (void)bad.result_shape();
     }, "AGGREGATE_SHAPE_FIELD_BUDGET"));
 
+    CHECK(denies([] {
+        NativeAggregateSpreadPlan excessive(Kind::ReadonlyRecord);
+        for (int i=0;i<1025;i++)
+            excessive.add_checked_spread_projection(NativeAggregateShape{
+                Kind::ReadonlyRecord, {}});
+    }, "AGGREGATE_SPREAD_PLAN_BUDGET"));
+
     NativeAggregateSpreadPlan empty(Kind::ReadonlyRecord);
     empty.add_checked_spread_projection(NativeAggregateShape{Kind::ExactStruct, {}});
     CHECK(empty.result_shape().fields.empty());
