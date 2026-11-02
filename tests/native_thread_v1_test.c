@@ -83,6 +83,33 @@ int main(void) {
     assert(atomic_load(&entry_count) == 4);
     /* per worker: replaced slot, taken slot, remaining slot, moved arg */
     assert(atomic_load(&drops) == 16);
+#ifdef ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION
+    /* Reserve the final usable incarnation, then permanently exhaust IDs.
+     * A failed spawn must leave the caller's owned capture intact. */
+    ores_native_thread_test_set_next_id_v1(UINT64_MAX - 1);
+    args *final_arg = malloc(sizeof(*final_arg));
+    assert(final_arg); final_arg->idx = 0;
+    ores_native_thread_v1 *final_handle = NULL;
+    assert(ores_native_thread_spawn_v1(
+        worker, final_arg, drop_value, &final_handle) == ORES_THREAD_OK_V1);
+    int final_result = -1;
+    assert(ores_native_thread_join_blocking_v1(
+        final_handle, &final_result) == ORES_THREAD_OK_V1);
+    assert(final_result == 42);
+    assert(ores_native_thread_release_v1(final_handle) == ORES_THREAD_OK_V1);
+    args *rejected_arg = malloc(sizeof(*rejected_arg));
+    assert(rejected_arg); rejected_arg->idx = 0;
+    ores_native_thread_v1 *rejected_handle = (ores_native_thread_v1 *)1;
+    assert(ores_native_thread_spawn_v1(
+        worker, rejected_arg, drop_value, &rejected_handle) == ORES_THREAD_OS_ERROR_V1);
+    assert(rejected_handle == NULL);
+    free(rejected_arg); /* failed admission did not consume ownership */
+    rejected_handle = (ores_native_thread_v1 *)1;
+    assert(ores_native_thread_spawn_v1(
+        worker, NULL, NULL, &rejected_handle) == ORES_THREAD_OS_ERROR_V1);
+    assert(rejected_handle == NULL); /* permanent exhaustion, no ID reuse */
+    assert(atomic_load(&drops) == 20);
+#endif
     puts("native pthread substrate: OK (host-only; no guest compiler claim)");
     return 0;
 }
