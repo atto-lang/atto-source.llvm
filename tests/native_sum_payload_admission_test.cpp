@@ -143,6 +143,20 @@ Program malformed_call_payload(bool shortNames, bool nullArgument) {
         constructor("Some", std::move(call));
     return program;
 }
+// Absent internal AST children must reject before constructor inference
+// or unwrap_or access evaluation touches the missing pointer.
+Program malformed_constructor_payload(bool has_context) {
+    Program program = initial(has_context ? "Option<int>" : "", "Some", scalar(Kind::Integer));
+    program.functions.front().locals.front().initializer->arguments.front().reset();
+    return program;
+}
+Program malformed_sum_access(bool missing_receiver) {
+    Program program = fallback("Option<int>", Kind::Integer);
+    auto& access = program.functions.front().locals.back().initializer;
+    if (missing_receiver) access->left.reset();
+    else access->arguments.front().reset();
+    return program;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -162,6 +176,14 @@ void require_rejection(Program p, const std::string& diagnostic,
 
 int main() {
     try {
+        require_rejection(malformed_constructor_payload(true),
+            "constructor has null payload", "typed Some with missing AST child");
+        require_rejection(malformed_constructor_payload(false),
+            "constructor has null payload", "inferred Some with missing AST child");
+        require_rejection(malformed_sum_access(true),
+            "access missing receiver", "unwrap_or with null receiver");
+        require_rejection(malformed_sum_access(false),
+            "access has null argument", "unwrap_or with null fallback");
         require_rejection(malformed_call_payload(true, false),
             "call argument name count mismatch", "partial named-call AST vector");
         require_rejection(malformed_call_payload(false, true),
@@ -242,7 +264,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 43 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 47 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
