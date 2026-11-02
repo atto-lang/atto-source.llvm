@@ -300,7 +300,7 @@ mod tests {
         let compiler = root.0.join("mixed-diagnostic-compiler.sh");
         let denial = "oreslang-llvmc: native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof; refusing unsynchronized alias at byte 49";
         fs::write(&compiler, format!(
-            "#!/bin/sh\\nprintf '%s\\\\n' '{}' >&2\\nprintf 'error: unrelated parser failure\\\\n' >&2\\nexit 1\\n",
+            "#!/bin/sh\nprintf '%s\\n' '{}' >&2\nprintf 'error: unrelated parser failure\\n' >&2\nexit 1\n",
             denial
         )).unwrap();
         let mut permissions = fs::metadata(&compiler).unwrap().permissions();
