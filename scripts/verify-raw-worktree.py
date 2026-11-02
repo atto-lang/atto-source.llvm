@@ -130,6 +130,15 @@ def self_test() -> None:
             raise IntegrityError("ignored untracked source file was accepted")
         ignored.unlink()
         ignored.parent.rmdir()
+        # Git's index executable bit must match the raw on-disk mode.
+        (root / "example.txt").chmod(0o755)
+        try:
+            verify(root)
+        except IntegrityError:
+            pass
+        else:
+            raise IntegrityError("changed executable bit was accepted")
+        (root / "example.txt").chmod(0o644)
         # Reset the test before the symlink case; no source is copied.
         (root / "example.txt").unlink()
         (root / "example.txt").symlink_to(".gitattributes")
@@ -139,9 +148,22 @@ def self_test() -> None:
             pass
         else:
             raise IntegrityError("replaced tracked regular file was accepted")
+        # An index-only staged addition changes HEAD^{tree} without changing
+        # any existing tracked worktree contents. Fail before hashing blobs.
+        # Deliberately do not run 'git reset' during cleanup: a configured
+        # clean filter could run while Git refreshes unrelated index entries.
+        staged = root / "staged.txt"
+        staged.write_text("staged\n")
+        git(root, "add", "staged.txt")
+        try:
+            verify(root)
+        except IntegrityError:
+            pass
+        else:
+            raise IntegrityError("staged index divergence was accepted")
         if (root / "filter-executed").exists():
             raise IntegrityError("Git clean filter executed during verification")
-    print("RAW_WORKTREE_SELF_TEST_PASS clean=1 negative=4 filter_executed=0")
+    print("RAW_WORKTREE_SELF_TEST_PASS clean=1 negative=6 filter_executed=0")
 
 
 if __name__ == "__main__":
