@@ -93,13 +93,24 @@ static void test_failed_handles_keep_capacity_until_recovery() {
     assert(failed.size() == 2);
     assert(reaper.failed_count() == 0);
     assert(reaper.active() == 0);
-    for (std::size_t i = 0; i < failed.size(); ++i) {
+    // Two independent reaper workers race to push their failed handles.
+    // Their completion/recovery order is intentionally NOT submission order.
+    bool saw_610 = false, saw_611 = false;
+    for (auto* recovered : failed) {
         int result = -1;
-        assert(ores_native_thread_join_blocking_v1(failed[i], &result)
+        assert(ores_native_thread_join_blocking_v1(recovered, &result)
                == ORES_THREAD_OK_V1);
-        assert(result == 610 + static_cast<int>(i));
-        assert(ores_native_thread_release_v1(failed[i]) == ORES_THREAD_OK_V1);
+        assert(result == 610 || result == 611);
+        if (result == 610) {
+            assert(!saw_610);
+            saw_610 = true;
+        } else {
+            assert(!saw_611);
+            saw_611 = true;
+        }
+        assert(ores_native_thread_release_v1(recovered) == ORES_THREAD_OK_V1);
     }
+    assert(saw_610 && saw_611);
     int result = -1;
     assert(ores_native_thread_join_blocking_v1(handles[2], &result)
            == ORES_THREAD_OK_V1);
