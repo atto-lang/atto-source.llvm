@@ -262,6 +262,10 @@ int main(void) {
         quota, 1, "ints", one) == ORES_NATIVE_PUBSUB_OK);
     check(ores_native_actor_pubsub_subscribe_utf8(
         quota, 1, "texts", one) == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
+    check(ores_native_actor_pubsub_unsubscribe_i64(
+        quota, 1, "ints", one) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_utf8(
+        quota, 1, "texts", one) == ORES_NATIVE_PUBSUB_OK);
     ores_native_actor_pubsub_close(quota);
     return 0;
 }
