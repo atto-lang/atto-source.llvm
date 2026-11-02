@@ -179,11 +179,19 @@ public:
             const std::string& name,
             std::uint64_t actor_id,
             std::uint64_t generation) {
-        std::lock_guard<std::mutex> guard(mutex_);
-        auto topic = topics_.find(TopicKey{group_id, name});
-        if (topic == topics_.end()) return false;
-        return erase_subscription_locked(
-            topic->second, ActorKey{actor_id, generation});
+        // The membership check and queue-edge removal must be atomic with
+        // leave/retire/rejoin admission. Checking once in the C wrapper
+        // before acquiring the bus lock is an authorization TOCTOU.
+        return memberships_.with_locked_view([&](const auto& view) {
+            if (!view.contains(group_id, actor_id, generation))
+                throw std::logic_error(
+                    "unsubscribe requires live ActorGroup membership");
+            std::lock_guard<std::mutex> guard(mutex_);
+            auto topic = topics_.find(TopicKey{group_id, name});
+            if (topic == topics_.end()) return false;
+            return erase_subscription_locked(
+                topic->second, ActorKey{actor_id, generation});
+        });
     }
 
     PublishReceipt publish(
