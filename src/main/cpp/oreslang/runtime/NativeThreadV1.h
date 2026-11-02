@@ -10,6 +10,7 @@ extern "C" {
  * owned captures, thread capability and nonblocking join_async separately.
  * No guest frontend or code generation is provided by this header. */
 typedef struct ores_native_thread_v1 ores_native_thread_v1;
+typedef struct ores_native_thread_scope_v1 ores_native_thread_scope_v1;
 typedef void (*ores_native_thread_drop_v1)(void *);
 typedef int (*ores_native_thread_entry_v1)(void *owned_arg);
 
@@ -22,7 +23,10 @@ typedef enum ores_thread_status_v1 {
     ORES_THREAD_ALREADY_JOINED_V1 = 5,
     ORES_THREAD_SELF_JOIN_V1 = 6,
     ORES_THREAD_SLOT_LIMIT_V1 = 7,
-    ORES_THREAD_UNEXPECTED_EXIT_V1 = 8
+    ORES_THREAD_UNEXPECTED_EXIT_V1 = 8,
+    ORES_THREAD_SCOPE_FULL_V1 = 9,
+    ORES_THREAD_SCOPE_CLOSED_V1 = 10,
+    ORES_THREAD_SCOPE_BUSY_V1 = 11
 } ores_thread_status_v1;
 
 /* On successful spawn, owned_arg moves to the thread and drop_arg runs ONCE
@@ -30,6 +34,30 @@ typedef enum ores_thread_status_v1 {
 ores_thread_status_v1 ores_native_thread_spawn_v1(
     ores_native_thread_entry_v1 entry, void *owned_arg,
     ores_native_thread_drop_v1 drop_arg, ores_native_thread_v1 **out);
+
+/* Host-only per-isolate native-thread capability. 1..1024 outstanding
+ * handles, not just executing workers: even a finished pthread still
+ * consumes capacity until physical join + release. Separate scopes cannot
+ * borrow capacity from each other. The compiler must never export the
+ * raw unscoped spawn to untrusted guest code.
+ *
+ * Every operation requires a live scope and external isolation ownership.
+ * close is nonblocking: it irrevocably stops admission, returning BUSY
+ * until all joined handles have been released. destroy succeeds only after
+ * close + physical quiescence, and the owner must first fence all concurrent
+ * callers. Failed spawn does not consume owned_arg. */
+ores_thread_status_v1 ores_native_thread_scope_open_v1(
+    unsigned capacity, ores_native_thread_scope_v1 **out);
+ores_thread_status_v1 ores_native_thread_scope_spawn_v1(
+    ores_native_thread_scope_v1 *scope,
+    ores_native_thread_entry_v1 entry, void *owned_arg,
+    ores_native_thread_drop_v1 drop_arg, ores_native_thread_v1 **out);
+ores_thread_status_v1 ores_native_thread_scope_close_v1(
+    ores_native_thread_scope_v1 *scope);
+ores_thread_status_v1 ores_native_thread_scope_outstanding_v1(
+    ores_native_thread_scope_v1 *scope, unsigned *out);
+ores_thread_status_v1 ores_native_thread_scope_destroy_v1(
+    ores_native_thread_scope_v1 *scope);
 
 /* Join exactly once. Unexpected pthread_exit/cancel is reported AFTER a
  * successful physical pthread_join, so the caller must still release the
