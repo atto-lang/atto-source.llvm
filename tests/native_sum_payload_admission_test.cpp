@@ -112,7 +112,8 @@ Program nested_conditional_payload(Kind nestedFalse) {
 Program malformed_conditional(Kind guard, bool dropGuard, bool dropFalseArm) {
     Program program = conditional_payload(Kind::Integer, Kind::Integer);
     auto& expr = *program.functions.front().locals.front().initializer->arguments.front();
-    expr.condition = dropGuard ? nullptr : scalar(guard);
+    if (dropGuard) expr.condition.reset();
+    else expr.condition = scalar(guard);
     if (dropFalseArm) expr.when_false.reset();
     return program;
 }
