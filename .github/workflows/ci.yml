@@ -30,8 +30,10 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git diff --quiet --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
+          # Do not run git diff/status: configured clean filters can execute.
+          # Detect ALL untracked files, including ignored-source injections.
+          python3 scripts/verify-raw-worktree.py --self-test
+          python3 scripts/verify-raw-worktree.py .
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
       # Fail fast on the typed sum resolver, without waiting for the full
       # LLVM toolchain installation or unrelated native actor test suites.
