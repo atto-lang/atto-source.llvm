@@ -90,11 +90,11 @@ inline void validate_manifest(const std::string& manifest_bytes) {
 }
 
 /**
- * Resolve only the two admitted native source extensions. An extensionless
- * import cannot silently select one of two visible source files: that would
- * make module identity depend on unspecified search order and enable source
- * shadowing during migration. Inspect physical directory entries, including
- * dangling symlinks (which must still block unambiguous resolution).
+ * Resolve only the two admitted native source extensions. Extensionless
+ * imports prefer canonical .atto, then fall back to legacy .ores, matching
+ * Java and .NET. Inspect directory entries (not only target existence), so a
+ * dangling .atto symlink is selected and rejected by canonical-file admission
+ * rather than silently falling back to a shadowing legacy .ores file.
  */
 inline fs::path resolve_native_source_suffix(fs::path candidate) {
     const auto ext = candidate.extension();
@@ -110,9 +110,6 @@ inline fs::path resolve_native_source_suffix(fs::path candidate) {
     legacy += ".ores";
     const bool has_modern = exists_marker(modern);
     const bool has_legacy = exists_marker(legacy);
-    if (has_modern && has_legacy)
-        throw std::runtime_error(
-            "ambiguous native source import: both .atto and .ores exist; use explicit extension");
     if (has_modern) return modern;
     if (has_legacy) return legacy;
     // Allow the caller's canonical-resolution path to produce its normal
