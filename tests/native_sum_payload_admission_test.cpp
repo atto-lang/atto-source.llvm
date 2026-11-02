@@ -129,6 +129,20 @@ Program conditional_guard_pair(bool canonical, bool lhs, bool rhs,
     if (rhs) expr.condition_rhs = scalar(rhsKind);
     return program;
 }
+// Even malformed internal call AST nodes must fail with a diagnostic
+// instead of indexing past the partial name vector or dereferencing null.
+Program malformed_call_payload(bool shortNames, bool nullArgument) {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto call = scalar(Kind::Call);
+    call->name = "external";
+    call->arguments.push_back(scalar(Kind::Integer));
+    if (nullArgument) call->arguments.push_back(nullptr);
+    else call->arguments.push_back(scalar(Kind::Integer));
+    if (shortNames) call->argument_names.push_back("arg0");
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(call));
+    return program;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -148,6 +162,10 @@ void require_rejection(Program p, const std::string& diagnostic,
 
 int main() {
     try {
+        require_rejection(malformed_call_payload(true, false),
+            "call argument name count mismatch", "partial named-call AST vector");
+        require_rejection(malformed_call_payload(false, true),
+            "call has null argument", "null call argument AST must reject");
         require_success(conditional_guard_pair(false, true, true),
             "complete legacy equality guard remains permitted");
         require_success(conditional_guard_pair(false, true, true, Kind::Boolean, Kind::Boolean),
@@ -224,7 +242,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 41 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 43 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
