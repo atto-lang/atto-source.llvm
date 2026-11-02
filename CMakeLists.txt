@@ -2831,6 +2831,7 @@ if(BUILD_TESTING)
         oreslang_contract_test(reject_scalar_constructor_effect_body
             class-scalar-constructor-effectful-body-reject.ores --diagnostic "native scalar constructor body must be empty or contain only")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(numerics_atto_integer_guest numerics-atto-main.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")
