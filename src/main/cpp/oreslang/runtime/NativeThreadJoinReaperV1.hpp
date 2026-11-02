@@ -122,10 +122,12 @@ public:
     // Called by an authorized host supervisor after observing an OS failure.
     // The returned handles remain joinable/owned; the supervisor must retry
     // join or escalate without losing them. This is not a guest API.
-    std::vector<ores_native_thread_v1*> recover_failed() noexcept {
-        std::vector<ores_native_thread_v1*> recovered;
+    std::vector<ores_native_thread_v1*> recover_failed() {
         std::lock_guard<std::mutex> guard(lock_);
-        recovered.swap(failed_);
+        // Allocate a copy BEFORE releasing any ownership. Keep failed_ with
+        // its preallocated capacity so run() remains noexcept after recovery.
+        auto recovered = failed_;
+        failed_.clear();
         return recovered;
     }
 
