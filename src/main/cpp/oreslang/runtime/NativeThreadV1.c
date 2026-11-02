@@ -198,8 +198,9 @@ ores_thread_status_v1 ores_native_thread_release_v1(
  * an attempted operation that has not yet acquired its scope mutex. */
 ores_thread_status_v1 ores_native_thread_scope_open_v1(
     unsigned capacity, ores_native_thread_scope_v1 **out) {
-    if (!out || capacity == 0 || capacity > 1024) return ORES_THREAD_BAD_ARGUMENT_V1;
+    if (!out) return ORES_THREAD_BAD_ARGUMENT_V1;
     *out = NULL;
+    if (capacity == 0 || capacity > 1024) return ORES_THREAD_BAD_ARGUMENT_V1;
     ores_native_thread_scope_v1 *scope = calloc(1, sizeof(*scope));
     if (!scope) return ORES_THREAD_OUT_OF_MEMORY_V1;
     if (pthread_mutex_init(&scope->lock, NULL) != 0) {
