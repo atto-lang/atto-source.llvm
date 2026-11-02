@@ -4292,8 +4292,7 @@ private:
             case Expression::Kind::AggregateConstruct:
                 // Validate source initializers in lexical order, retaining
                 // aggregate type identity through later native typechecking.
-                if (!expr.aggregate_type ||
-                        expr.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct)
+                if (!expr.aggregate_type)
                     throw std::runtime_error("AGGREGATE_CONSTRUCTOR_KIND_UNVERIFIED");
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
