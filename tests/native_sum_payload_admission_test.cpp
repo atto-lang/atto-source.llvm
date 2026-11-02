@@ -119,12 +119,14 @@ Program malformed_conditional(Kind guard, bool dropGuard, bool dropFalseArm) {
 }
 // Compatibility lowering permits a complete equality guard pair, but
 // must reject half-constructed or simultaneous canonical/legacy forms.
-Program conditional_guard_pair(bool canonical, bool lhs, bool rhs) {
+Program conditional_guard_pair(bool canonical, bool lhs, bool rhs,
+                               Kind lhsKind = Kind::Integer,
+                               Kind rhsKind = Kind::Integer) {
     Program program = conditional_payload(Kind::Integer, Kind::Integer);
     auto& expr = *program.functions.front().locals.front().initializer->arguments.front();
     if (!canonical) expr.condition.reset();
-    if (lhs) expr.condition_lhs = scalar(Kind::Integer);
-    if (rhs) expr.condition_rhs = scalar(Kind::Integer);
+    if (lhs) expr.condition_lhs = scalar(lhsKind);
+    if (rhs) expr.condition_rhs = scalar(rhsKind);
     return program;
 }
 void require_success(Program p, const std::string& label) {
@@ -148,6 +150,16 @@ int main() {
     try {
         require_success(conditional_guard_pair(false, true, true),
             "complete legacy equality guard remains permitted");
+        require_success(conditional_guard_pair(false, true, true, Kind::Boolean, Kind::Boolean),
+            "legacy bool == bool guard remains permitted");
+        require_success(conditional_guard_pair(false, true, true, Kind::String, Kind::String),
+            "legacy String == String guard remains permitted");
+        require_rejection(conditional_guard_pair(false, true, true, Kind::Integer, Kind::String),
+            "equality guard types do not match", "legacy int == String forbidden");
+        require_rejection(conditional_guard_pair(false, true, true, Kind::String, Kind::Boolean),
+            "equality guard types do not match", "legacy String == bool forbidden");
+        require_rejection(conditional_guard_pair(false, true, true, Kind::Integer, Kind::Boolean),
+            "equality guard types do not match", "legacy int == bool forbidden");
         require_rejection(conditional_guard_pair(true, true, true),
             "conditional conflicting guard forms", "canonical plus legacy guard");
         require_rejection(conditional_guard_pair(true, true, false),
@@ -212,7 +224,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 36 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 41 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
