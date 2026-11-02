@@ -97,9 +97,11 @@ inline void validate_manifest(const std::string& manifest_bytes) {
  * rather than silently falling back to a shadowing legacy .ores file.
  */
 inline fs::path resolve_native_source_suffix(fs::path candidate) {
-    const auto ext = candidate.extension();
-    if (!ext.empty()) {
-        if (ext != ".atto" && ext != ".ores")
+    auto extension = candidate.extension().string();
+    for (char& value : extension)
+        value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
+    if (!extension.empty()) {
+        if (extension != ".atto" && extension != ".ores")
             throw std::runtime_error(
                 "native module source must use .atto or legacy .ores extension");
         return candidate;
