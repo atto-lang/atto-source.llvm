@@ -7,6 +7,10 @@ on:
       - "tests/native_thread_capture_admission_test.cpp"
       - "src/main/cpp/oreslang/runtime/NativeThreadJoinReaperV1.hpp"
       - "src/main/cpp/oreslang/runtime/NativeJoinTaskWaitV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeJoinTaskContinuationBridgeV1.hpp"
+      - "src/main/cpp/oreslang/runtime/TaskContinuationGate.hpp"
+      - "tests/native_join_task_continuation_bridge_v1_test.cpp"
+      - "tests/native_task_continuation_gate_test.cpp"
       - "tests/native_join_task_wait_v1_test.cpp"
       - "tests/native_thread_join_reaper_v1_test.cpp"
       - "tests/native_thread_v1_test.c"
@@ -102,3 +106,20 @@ jobs:
             "$tmp/native-thread-tsan.o" -o "$tmp/native-join-task-wait-tsan"
           TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
             "$tmp/native-join-task-wait-tsan"
+
+          # Exercise the actual continuation store and Task cancellation
+          # bridge under TSan; still a host test, not .atto guest lowering.
+          for unit in NativeExecutionContextStore NativeContinuationStore NativeAwaitTraceBridge; do
+            gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+              -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+              -Isrc/main/cpp -c "src/main/cpp/oreslang/runtime/$unit.c" \
+              -o "$tmp/$unit-tsan.o"
+          done
+          g++ -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Isrc/main/cpp tests/native_join_task_continuation_bridge_v1_test.cpp \
+            "$tmp/native-thread-tsan.o" "$tmp/NativeExecutionContextStore-tsan.o" \
+            "$tmp/NativeContinuationStore-tsan.o" "$tmp/NativeAwaitTraceBridge-tsan.o" \
+            -o "$tmp/native-join-task-continuation-tsan"
+          TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
+            "$tmp/native-join-task-continuation-tsan"
