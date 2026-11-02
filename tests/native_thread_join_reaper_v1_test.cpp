@@ -4,6 +4,7 @@
 #include <cassert>
 #include <chrono>
 #include <iostream>
+#include <pthread.h>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -135,9 +136,29 @@ static void test_failed_join_recovery() {
         wait_cleanup(5 + i, reaper);
     }
 }
+static int early_exit_entry(void* owned) {
+    (void)owned;
+    pthread_exit(nullptr);
+    return 0;
+}
+static void test_abnormal_exit_consumes_join() {
+    NativeThreadJoinReaperV1 reaper(1, 1);
+    auto* arg = new Arg{55, nullptr};
+    ores_native_thread_v1* handle = nullptr;
+    assert(ores_native_thread_spawn_v1(early_exit_entry, arg, drop, &handle)
+           == ORES_THREAD_OK_V1);
+    auto completion = reaper.submit(handle);
+    assert(completion && !handle);
+    wait_read(completion, ORES_THREAD_UNEXPECTED_EXIT_V1);
+    wait_cleanup(7, reaper);
+    // The physical join succeeded. There must not be a spurious failed-join
+    // handle to retry or a double release hidden in the error path.
+    assert(reaper.failed_count() == 0);
+}
 int main() {
     test_invalid_limits();
     test_no_head_of_line_blocking();
     test_failed_join_recovery();
+    test_abnormal_exit_consumes_join();
     std::cout << "native concurrent join reaper: OK (host-only)\n";
 }
