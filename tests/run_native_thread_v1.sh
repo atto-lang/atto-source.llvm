@@ -23,3 +23,16 @@ esac
     "$root/tests/native_thread_capture_admission_test.cpp" \
     -o "$tmp/native-thread-capture-admission"
 "$tmp/native-thread-capture-admission"
+
+# The C host runtime is built with the C compiler, then linked into the
+# bounded C++17 reaper model. This tests true native thread join cleanup.
+"$cc_bin" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+    -I"$root/src/main/cpp" \
+    -c "$root/src/main/cpp/oreslang/runtime/NativeThreadV1.c" \
+    -o "$tmp/NativeThreadV1.o"
+"$cxx_bin" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+    -I"$root/src/main/cpp" \
+    "$root/tests/native_thread_join_reaper_v1_test.cpp" \
+    "$tmp/NativeThreadV1.o" \
+    -o "$tmp/native-thread-join-reaper"
+"$tmp/native-thread-join-reaper"
