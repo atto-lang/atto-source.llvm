@@ -305,10 +305,9 @@ public:
 
         const std::size_t payload_bytes =
             NativeActorPubSubPayloadBytes<T>::size(value);
-        if (payload_bytes > max_bytes_per_subscription_
-                || payload_bytes > max_total_bytes_) {
+        if (payload_bytes > max_bytes_per_subscription_) {
             throw std::logic_error(
-                "native pub-sub payload exceeds configured byte quota");
+                "native pub-sub payload exceeds per-subscription byte quota");
         }
 
         /*
