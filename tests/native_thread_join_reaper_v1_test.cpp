@@ -155,10 +155,99 @@ static void test_abnormal_exit_consumes_join() {
     // handle to retry or a double release hidden in the error path.
     assert(reaper.failed_count() == 0);
 }
+static void test_nonblocking_completion_subscription() {
+    // Race before completion and after completion. A Task integration can
+    // install a weak-generation-checked wake callback with no busy polling.
+    const int before = cleanup.load();
+    gate_a.store(false, std::memory_order_release);
+    NativeThreadJoinReaperV1 reaper(2, 2);
+    auto* pending = spawn(77, &gate_a);
+    auto subscribed = reaper.submit(pending);
+    assert(subscribed && !pending);
+    std::atomic<int> notifications{0};
+    assert(subscribed->on_ready_once([&] {
+        ores_thread_status_v1 status = ORES_THREAD_OS_ERROR_V1;
+        int result = 0;
+        assert(subscribed->try_read(status, result));
+        assert(status == ORES_THREAD_OK_V1 && result == 77);
+        notifications.fetch_add(1);
+    }));
+    assert(!subscribed->on_ready_once([&] { notifications.fetch_add(100); }));
+    ores_thread_status_v1 status = ORES_THREAD_OS_ERROR_V1;
+    int result = 0;
+    assert(!subscribed->try_read(status, result));
+
+    // A cancelled task waiter is represented by a weak handle. Its disposal
+    // does not drop or cancel the native pthread/JoinHandle.
+    gate_b.store(false, std::memory_order_release);
+    auto* canceled = spawn(78, &gate_b);
+    auto abandoned = reaper.submit(canceled);
+    assert(abandoned && !canceled);
+    auto live = std::make_shared<int>(1);
+    std::weak_ptr<int> weak = live;
+    std::atomic<int> stale_wakes{0};
+    assert(abandoned->on_ready_once([weak, &stale_wakes] {
+        if (weak.lock()) stale_wakes.fetch_add(1);
+    }));
+    live.reset();
+    gate_a.store(true, std::memory_order_release);
+    gate_b.store(true, std::memory_order_release);
+    wait_read(subscribed, ORES_THREAD_OK_V1, 77);
+    wait_read(abandoned, ORES_THREAD_OK_V1, 78);
+    // Callback runs after ready is published, but may run slightly later
+    // than a polling observer; synchronization is needed for its own count.
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(8);
+    while (notifications.load() != 1) {
+        assert(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::yield();
+    }
+    assert(stale_wakes.load() == 0);
+    assert(!subscribed->on_ready_once([] {}));
+
+    // Registration after physical completion must immediately notify once.
+    std::atomic<int> late{0};
+    assert(abandoned->on_ready_once([&] { late.fetch_add(1); }) == false);
+    auto* fast = spawn(79);
+    auto done = reaper.submit(fast);
+    assert(done && !fast);
+    wait_read(done, ORES_THREAD_OK_V1, 79);
+    assert(done->on_ready_once([&] { late.fetch_add(1); }));
+    assert(late.load() == 1);
+    assert(!done->on_ready_once([&] { late.fetch_add(1); }));
+    wait_cleanup(before + 3, reaper);
+}
+
+static void test_notification_registration_race() {
+    const int baseline = cleanup.load();
+    NativeThreadJoinReaperV1 reaper(4, 2);
+    std::atomic<int> wakes{0};
+    for (int i = 0; i < 24; ++i) {
+        auto* handle = spawn(300 + i);
+        auto completion = reaper.submit(handle);
+        assert(completion && !handle);
+        std::thread registrar([completion, &wakes] {
+            assert(completion->on_ready_once([&wakes] {
+                wakes.fetch_add(1, std::memory_order_relaxed);
+            }));
+        });
+        wait_read(completion, ORES_THREAD_OK_V1, 300 + i);
+        registrar.join();
+    }
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(8);
+    while (wakes.load() != 24) {
+        assert(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::yield();
+    }
+    wait_cleanup(baseline + 24, reaper);
+}
 int main() {
     test_invalid_limits();
     test_no_head_of_line_blocking();
     test_failed_join_recovery();
     test_abnormal_exit_consumes_join();
+    test_nonblocking_completion_subscription();
+    test_notification_registration_race();
     std::cout << "native concurrent join reaper: OK (host-only)\n";
 }
