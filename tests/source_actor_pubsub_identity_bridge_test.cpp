@@ -19,7 +19,7 @@ static void actor_init(
         std::uint64_t domain,
         std::uint64_t epoch) {
     (void)heap;
-    check(domain != 0 && epoch != 0, "invalid source actor heap turn");
+    if (domain == 0 || epoch == 0) std::abort();
 }
 
 static std::int64_t actor_message(
@@ -28,7 +28,7 @@ static std::int64_t actor_message(
         std::uint64_t epoch,
         std::int64_t payload) {
     (void)heap;
-    check(domain != 0 && epoch != 0, "invalid source actor message turn");
+    if (domain == 0 || epoch == 0) std::abort();
     return payload;
 }
 
