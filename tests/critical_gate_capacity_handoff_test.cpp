@@ -12,7 +12,7 @@ using oreslang::runtime::LogicalMutex;
 static std::size_t checks=0;
 static void expect(bool condition,const char* msg) { if(!condition) throw std::runtime_error(msg); ++checks; }
 int main() {
-  // 10,000 contended logical updates through explicit FIFO handoff.
+  // 8,193 protected increments through explicit bounded FIFO handoff.
   LogicalMutex<int> lock(0);
   const auto first=lock.request();
   std::vector<CriticalGate::Token> queued;
