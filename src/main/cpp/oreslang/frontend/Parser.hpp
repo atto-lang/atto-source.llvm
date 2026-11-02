@@ -68,6 +68,7 @@ struct Expression {
     std::unique_ptr<Expression> when_false;
     std::vector<std::unique_ptr<Expression>> arguments;
     std::vector<std::string> argument_names; // indexed in lexical source order
+    std::vector<ScalarType> aggregate_argument_types; // optional checked lexical initializer types
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
