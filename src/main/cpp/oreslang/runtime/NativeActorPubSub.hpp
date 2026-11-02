@@ -559,8 +559,13 @@ private:
         if (group_id == 0 || name.empty() || name.size() > 256
                 || capacity == 0 || capacity > max_queue_capacity_)
             throw std::invalid_argument("invalid native pub-sub topic");
-        for (unsigned char ch : name) {
-            if (ch < 0x20 || ch == 0x7f)
+        for (std::size_t i = 0; i < name.size(); ++i) {
+            const unsigned char ch =
+                static_cast<unsigned char>(name[i]);
+            if (ch < 0x20 || ch == 0x7f
+                    || (ch == 0xc2 && i + 1 < name.size()
+                        && static_cast<unsigned char>(name[i + 1]) >= 0x80
+                        && static_cast<unsigned char>(name[i + 1]) <= 0x9f))
                 throw std::invalid_argument(
                     "native pub-sub topic contains control character");
         }
