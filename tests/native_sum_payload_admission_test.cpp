@@ -81,6 +81,32 @@ Program conditional_default(Kind yes, Kind no) {
         std::move(ternary);
     return program;
 }
+// Check the error arm of Result<int,String>, not just Some/Option paths.
+Program conditional_error(Kind yes, Kind no) {
+    Program program = initial("Result<int,String>", "Err", scalar(Kind::String));
+    auto ternary = scalar(Kind::Conditional);
+    ternary->condition = scalar(Kind::Boolean);
+    ternary->when_true = scalar(yes);
+    ternary->when_false = scalar(no);
+    program.functions.front().locals.front().initializer =
+        constructor("Err", std::move(ternary));
+    return program;
+}
+// A nested false-arm conditional must be type-checked at every depth.
+Program nested_conditional_payload(Kind nestedFalse) {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto outer = scalar(Kind::Conditional);
+    outer->condition = scalar(Kind::Boolean);
+    outer->when_true = scalar(Kind::Integer);
+    auto inner = scalar(Kind::Conditional);
+    inner->condition = scalar(Kind::Boolean);
+    inner->when_true = scalar(Kind::Integer);
+    inner->when_false = scalar(nestedFalse);
+    outer->when_false = std::move(inner);
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(outer));
+    return program;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -100,6 +126,16 @@ void require_rejection(Program p, const std::string& diagnostic,
 
 int main() {
     try {
+        require_success(conditional_error(Kind::String, Kind::String),
+            "both Result Err ternary arms are String");
+        require_rejection(conditional_error(Kind::String, Kind::Integer),
+            "conditional branch payload types do not match", "Err false arm is int");
+        require_rejection(conditional_error(Kind::Integer, Kind::String),
+            "conditional branch payload types do not match", "Err true arm is int");
+        require_success(nested_conditional_payload(Kind::Integer),
+            "nested conditional is scalar i64");
+        require_rejection(nested_conditional_payload(Kind::Boolean),
+            "conditional branch payload types do not match", "nested false arm is bool");
         require_success(conditional_payload(Kind::Integer, Kind::Integer),
             "both ternary payload arms are i64");
         require_success(conditional_default(Kind::Integer, Kind::Integer),
@@ -138,7 +174,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 22 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 27 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
