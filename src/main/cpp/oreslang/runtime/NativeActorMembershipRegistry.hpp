@@ -209,13 +209,22 @@ public:
         return true;
     }
 
-    // Physical actor retirement is generation-fenced: late acknowledgments
-    // cannot remove the next incarnation's memberships.
-    bool retire_actor(std::uint64_t actor_id, std::uint64_t generation) {
+    // Retirement and dependent queue reclamation share the membership
+    // admission fence. This prevents a register/rejoin of the same logical
+    // identity from racing a delayed old-queue cleanup.
+    // Lock ordering: membership registry -> delivery bus -> resource ledger.
+    template<class Cleanup>
+    bool retire_actor_with_cleanup(
+            std::uint64_t actor_id, std::uint64_t generation,
+            Cleanup&& cleanup) {
         std::lock_guard<std::mutex> guard(mutex_);
         auto it = actors_.find(actor_id);
         if (it == actors_.end() || it->second.generation != generation)
             return false;
+        // No concurrent subscription/publish may enter while this
+        // callback reclaims delivery edges. Failed cleanup cannot publish
+        // a partially retired actor record.
+        std::forward<Cleanup>(cleanup)();
         for (auto group_id : it->second.groups) {
             auto group = groups_.find(group_id);
             if (group != groups_.end())
@@ -223,6 +232,11 @@ public:
         }
         actors_.erase(it);
         return true;
+    }
+
+    // Existing consumers without dependent resources retain the plain API.
+    bool retire_actor(std::uint64_t actor_id, std::uint64_t generation) {
+        return retire_actor_with_cleanup(actor_id, generation, [] {});
     }
 
     bool contains(std::uint64_t group_id, std::uint64_t actor_id,
