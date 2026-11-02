@@ -1,0 +1,50 @@
+name: AttoLang native join scheduler wake (host bridge)
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/NativeThreadJoinSchedulerWakeV1.hpp"
+      - "tests/native_thread_join_scheduler_wake_v1_test.cpp"
+      - ".github/workflows/native-thread-join-scheduler-wake-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  wake-bridge:
+    name: "wake bridge - ${{ matrix.compiler }} / ${{ matrix.mode }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        mode: [optimized, asan-ubsan]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Pin source-local exact bridge and test blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeThreadJoinSchedulerWakeV1.hpp)" = "21385dc7ec04638d9738c781ad00fdfe264be8a6"
+          test "$(git hash-object tests/native_thread_join_scheduler_wake_v1_test.cpp)" = "175accae00a52cfdf7a7ca905ca060faa07f03d7"
+      - name: Run real native join scheduler-wake host bridge
+        shell: bash
+        env:
+          CC: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          if [[ "$CC" == gcc ]]; then CXX=g++; else CXX=clang++; fi
+          flags=(-O2 -UNDEBUG)
+          if [[ "$MODE" == asan-ubsan ]]; then
+            flags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -UNDEBUG)
+            export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
+            export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+          fi
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeThreadV1.c             -o "$tmp/native.o"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread             -Isrc/main/cpp tests/native_thread_join_scheduler_wake_v1_test.cpp "$tmp/native.o"             -o "$tmp/join-wake"
+          "$tmp/join-wake"
+          printf 'SOURCE_NATIVE_JOIN_WAKE_HOST_ONLY_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
