@@ -4,6 +4,7 @@
 #include <cassert>
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <pthread.h>
 #include <stdexcept>
 #include <thread>
@@ -60,7 +61,13 @@ static void wait_cleanup(int n, NativeThreadJoinReaperV1& reaper) {
     const auto deadline = std::chrono::steady_clock::now()
         + std::chrono::seconds(8);
     while (cleanup.load() != n || reaper.active() != 0) {
-        assert(std::chrono::steady_clock::now() < deadline);
+        if (std::chrono::steady_clock::now() >= deadline) {
+            std::cerr << "join reaper cleanup timeout: expected=" << n
+                      << " actual=" << cleanup.load()
+                      << " active=" << reaper.active()
+                      << " failed=" << reaper.failed_count() << "\n";
+            assert(false);
+        }
         std::this_thread::yield();
     }
 }
@@ -77,7 +84,7 @@ static void test_failed_handles_keep_capacity_until_recovery() {
     ores_native_thread_v1* handles[3] = {
         spawn(610), spawn(611), spawn(612)
     };
-    auto completions[2] = {
+    std::shared_ptr<NativeJoinCompletionV1> completions[2] = {
         reaper.submit(handles[0]), reaper.submit(handles[1])
     };
     assert(completions[0] && completions[1]);
@@ -129,6 +136,7 @@ static void test_invalid_limits() {
     catch (const std::invalid_argument&) {}
 }
 static void test_no_head_of_line_blocking() {
+    const int baseline = cleanup.load();
     NativeThreadJoinReaperV1 reaper(2, 2);
     auto* slow = spawn(40, &gate_a);
     auto* other = spawn(41, &gate_b);
@@ -156,17 +164,18 @@ static void test_no_head_of_line_blocking() {
 
     gate_a.store(true, std::memory_order_release);
     wait_read(first, ORES_THREAD_OK_V1, 40);
-    wait_cleanup(3, reaper);
+    wait_cleanup(baseline + 3, reaper);
 
     // A dropped observer is not permitted to cancel native cleanup.
     auto* abandoned = spawn(43);
     auto dropped = reaper.submit(abandoned);
     assert(dropped && !abandoned);
     dropped.reset();
-    wait_cleanup(4, reaper);
+    wait_cleanup(baseline + 4, reaper);
     assert(reaper.failed_count() == 0);
 }
 static void test_failed_join_recovery() {
+    const int baseline = cleanup.load();
     NativeThreadJoinReaperV1 reaper(1, 1, fail_once);
     for (int i = 0; i < 2; ++i) {
         auto* handle = spawn(50 + i);
@@ -183,7 +192,7 @@ static void test_failed_join_recovery() {
                == ORES_THREAD_OK_V1);
         assert(result == 50 + i);
         assert(ores_native_thread_release_v1(failed.front()) == ORES_THREAD_OK_V1);
-        wait_cleanup(5 + i, reaper);
+        wait_cleanup(baseline + i + 1, reaper);
     }
 }
 static int early_exit_entry(void* owned) {
@@ -192,6 +201,7 @@ static int early_exit_entry(void* owned) {
     return 0;
 }
 static void test_abnormal_exit_consumes_join() {
+    const int baseline = cleanup.load();
     NativeThreadJoinReaperV1 reaper(1, 1);
     auto* arg = new Arg{55, nullptr};
     ores_native_thread_v1* handle = nullptr;
@@ -200,7 +210,7 @@ static void test_abnormal_exit_consumes_join() {
     auto completion = reaper.submit(handle);
     assert(completion && !handle);
     wait_read(completion, ORES_THREAD_UNEXPECTED_EXIT_V1);
-    wait_cleanup(7, reaper);
+    wait_cleanup(baseline + 1, reaper);
     // The physical join succeeded. There must not be a spurious failed-join
     // handle to retry or a double release hidden in the error path.
     assert(reaper.failed_count() == 0);
