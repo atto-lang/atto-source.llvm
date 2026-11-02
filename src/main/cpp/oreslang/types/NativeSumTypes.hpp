@@ -138,8 +138,18 @@ inline void resolve_native_sums(Program& program) {
                     !guard.cls.empty() || guard.array)
                     throw std::runtime_error("native sum conditional guard must be bool");
             }
-            if (e.condition_lhs) expression(*e.condition_lhs, env, {});
-            if (e.condition_rhs) expression(*e.condition_rhs, env, {});
+            if (e.condition_lhs) {
+                // The older equality-only ternary still requires a typed,
+                // compatible pair. Traversing the operands without comparing
+                // their hints silently admitted int == String guards.
+                const Hint lhs = expression(*e.condition_lhs, env, {});
+                const Hint rhs = expression(*e.condition_rhs, env, {});
+                if (lhs.scalar != rhs.scalar || lhs.sum != rhs.sum ||
+                    lhs.cls != rhs.cls || lhs.array != rhs.array ||
+                    (lhs.array && (lhs.element != rhs.element ||
+                                   lhs.element_class != rhs.element_class)))
+                    throw std::runtime_error("native sum conditional equality guard types do not match");
+            }
             const auto yes = expression(*e.when_true, env, expected);
             const auto no = expression(*e.when_false, env, expected.empty() ? yes.sum : expected);
             // Constructor payload inference must not take the first arm's
