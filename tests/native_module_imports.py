@@ -95,6 +95,17 @@ def main():
             '.ores.pkg.toml': 'schema_version = "1"\\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
+        ('atto-relative-prefers-canonical-over-legacy', {
+            'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 41;} end',
+        }, 42),
+        ('atto-project-root-prefers-canonical-over-legacy', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 41;} end',
+        }, 42),
     ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
@@ -172,22 +183,6 @@ def main():
             result = run([a.compiler, str(directory/'main.ores')])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
-            passed += 1
-        for root_import in (False, True):
-            directory = root/('atto-root-shadow' if root_import else 'atto-relative-shadow')
-            directory.mkdir()
-            (directory/'main.atto').write_text(
-                'import module Lib from "' + ('+/lib' if root_import else './lib') +
-                '"; pub fnc main():int{return Lib.answer();}')
-            (directory/'lib.atto').write_text(
-                'define module Lib as pub fnc answer():int{return 42;} end')
-            (directory/'lib.ores').write_text(
-                'define module Lib as pub fnc answer():int{return 41;} end')
-            if root_import:
-                (directory/'.ores.pkg.toml').write_text('schema_version = "1"\\n')
-            result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
-                raise AssertionError(('atto shadowing must fail', root_import, result.stderr))
             passed += 1
         directory=root/'project-root-duplicate-schema'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
