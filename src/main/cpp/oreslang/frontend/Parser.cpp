@@ -2129,7 +2129,16 @@ private:
             require(";");
             return true;
         };
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+        // The native local-binding loop must admit the new type-first form
+        // before the body parser falls through to return/statement dispatch.
+        // The previous scalar parser branch supported it internally but this
+        // enclosing loop made every 'int x = ...' unreachable.
+        while (token_.text == "const" || token_.text == "val" ||
+               token_.text == "let" || token_.text == "stdio" ||
+               ((token_.text == "int" || token_.text == "bool" ||
+                 token_.text == "string") &&
+                peek_next().kind == Kind::Identifier) ||
+               array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
