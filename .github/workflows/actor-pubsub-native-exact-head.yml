@@ -1,0 +1,64 @@
+name: LLVM actor pubsub exact-head native ABI and source rejection
+
+on:
+  push:
+    branches: [feat/actor-pubsub-v1]
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeActorPubSub*'
+      - 'src/main/cpp/oreslang/runtime/NativeActorMembershipRegistry.hpp'
+      - 'tests/native_actor_pubsub*'
+      - 'tests/source_actor_pubsub_identity_bridge_test.cpp'
+      - 'tests/actor_pubsub_source_gate.py'
+      - 'contracts/v1/fixtures/actor-pubsub*'
+      - '.github/workflows/actor-pubsub-native-exact-head.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  source-head-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact and clean source revision
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          echo "LLVM_PUBSUB_EXACT_HEAD=$EXPECTED TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native compiler prerequisites
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Configure and build actual native compiler and admission substrates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/pubsub -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
+          cmake --build build/pubsub --parallel 2
+      - name: Require and execute exactly registered native and negative source tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            native_actor_pubsub_admission
+            native_actor_pubsub_c_abi
+            source_actor_pubsub_identity_bridge
+            reject_shared_actor_pubsub_source_corpus
+          )
+          for name in "${required[@]}"; do
+            ctest --test-dir build/pubsub -N -R "^$name$" |
+              grep -Eq '^Total Tests: 1$'
+          done
+          regex="^($(IFS='|'; echo "${required[*]}"))$"
+          ctest --test-dir build/pubsub --output-on-failure -R "$regex" \
+            --timeout 90
+          echo "LLVM_PUBSUB_EXACT_HEAD_HOST_ABI_EXECUTED=$(git rev-parse HEAD)"
+          echo "LLVM_PUBSUB_GUEST_POSITIVES_STILL_UNSUPPORTED=true"
