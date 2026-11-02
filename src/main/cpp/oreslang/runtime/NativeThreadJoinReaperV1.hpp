@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
