@@ -12,10 +12,10 @@ esac
 common="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -UNDEBUG"
 export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
 export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
-"$cc_bin" -std=c11 $common -Wall -Wextra -Wpedantic -Werror -pthread \
+"$cc_bin" -std=c11 $common -Wall -Wextra -Wpedantic -Werror -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread \
   -I"$root/src/main/cpp" -c "$root/src/main/cpp/oreslang/runtime/NativeThreadV1.c" \
   -o "$tmp/NativeThreadV1.o"
-"$cc_bin" -std=c11 $common -Wall -Wextra -Wpedantic -Werror -pthread \
+"$cc_bin" -std=c11 $common -Wall -Wextra -Wpedantic -Werror -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread \
   -I"$root/src/main/cpp" "$root/tests/native_thread_v1_test.c" "$tmp/NativeThreadV1.o" \
   -o "$tmp/native-thread-test"
 "$tmp/native-thread-test"
