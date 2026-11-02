@@ -165,18 +165,33 @@ public:
         return true;
     }
 
-    // Trusted runtime leave: clears only this group's membership. Never
-    // stops the actor or affects any of its other cooperation groups.
-    bool leave(std::uint64_t group_id, std::uint64_t actor_id,
-               std::uint64_t generation) {
+    // Serialize all queued-delivery cleanup with leave/join on the
+    // authoritative membership lock. No rejoin can publish a new edge
+    // between revocation and removal of the prior edge.
+    template<class Cleanup>
+    bool leave_with_cleanup(
+            std::uint64_t group_id, std::uint64_t actor_id,
+            std::uint64_t generation, Cleanup&& cleanup) {
         std::lock_guard<std::mutex> guard(mutex_);
         auto group = groups_.find(group_id);
         auto actor = actors_.find(actor_id);
         if (group == groups_.end() || actor == actors_.end()
-            || actor->second.generation != generation) return false;
-        if (!actor->second.groups.erase(group_id)) return false;
+            || actor->second.generation != generation
+            || !actor->second.groups.count(group_id)) return false;
+        // Cleanup must lock only pubsub's delivery mutex, never recurse
+        // into membership. Perform it before revocation so a failed
+        // cleanup cannot commit a half-retired membership.
+        std::forward<Cleanup>(cleanup)();
+        actor->second.groups.erase(group_id);
         group->second.members.erase(ActorKey{actor_id, generation});
         return true;
+    }
+
+    // Trusted runtime leave: never grants stop/cancel authority.
+    bool leave(std::uint64_t group_id, std::uint64_t actor_id,
+               std::uint64_t generation) {
+        return leave_with_cleanup(
+            group_id, actor_id, generation, [] {});
     }
 
     // Close/revoke a cooperation domain without any lifecycle stop requests.
