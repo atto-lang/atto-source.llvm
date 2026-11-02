@@ -1,4 +1,4 @@
-//! Real compiler admission: twenty-five denials and four genuine IR controls.
+//! Real compiler admission: thirty-one denials and four genuine IR controls.
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -174,6 +174,14 @@ fn main() {
         ("mut-share-nested-take-reject", "pub fnc main(): int { let int owned = 42; return rt mut share (rt take owned); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-nested-copy-reject", "pub fnc main(): int { let int owned = 42; return rt mut share (rt copy owned); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
 
+        // Shared six-expression source-denial intersection across the five toolchains.
+        ("six-mut-share-scalar", "pub fnc main(): int { return rt mut share 42; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("six-mut-share-parenthesized", "pub fnc main(): int { return (rt mut share 42); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("six-mut-share-binary", "pub fnc main(): int { return 1 + (rt mut share 2); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("six-mut-share-shared-borrow", "pub fnc main(): int { return rt mut share (rt borrow 3); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("six-mut-share-mutable-borrow", "pub fnc main(): int { return rt mut share (rt mut borrow 4); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("six-mut-share-recursive", "pub fnc main(): int { return rt mut share (rt mut share 5); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
@@ -195,7 +203,7 @@ fn main() {
         check_case(&compiler, &root.0, name, source, None);
     }
     println!(
-        "PASS native borrow admission: twenty-five no-IR/no-artifact denials, four real IR controls"
+        "PASS native borrow admission: thirty-one no-IR/no-artifact denials, four real IR controls"
     );
 }
 
