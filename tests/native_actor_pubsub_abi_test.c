@@ -170,6 +170,26 @@ int main(void) {
     /* Leaving A must remove only A's subscription. */
     check(ores_native_actor_pubsub_leave(
         runtime, 1, subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_unsubscribe_i64(
+        runtime, 1, "events", subscriber)
+        == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
+    check(ores_native_actor_pubsub_try_read_i64(
+        runtime, 1, "events", subscriber, &value)
+        == ORES_NATIVE_PUBSUB_DENIED_OR_STALE);
+    check(ores_native_actor_pubsub_join(
+        runtime, 1, subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_i64(
+        runtime, 1, "events", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_publish_i64(
+        runtime, 1, "events", publisher, 101, &receipt)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(receipt.subscribers == 1 && receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_i64(
+        runtime, 1, "events", subscriber, &value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(value == 101);
+    check(ores_native_actor_pubsub_leave(
+        runtime, 1, subscriber) == ORES_NATIVE_PUBSUB_OK);
     receipt = (OresNativePubSubPublishReceipt){0};
     check(ores_native_actor_pubsub_publish_i64(
         runtime, 1, "events", publisher, 12, &receipt)
