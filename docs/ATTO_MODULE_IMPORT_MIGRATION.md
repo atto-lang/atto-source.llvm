@@ -1,0 +1,49 @@
+# Native `.atto` module resolution — fail-closed migration admission
+
+This draft adds explicit `.atto` module imports to the native LLVM compiler
+without removing the existing legacy `.ores` import form. New language
+sources, fixtures and examples should use `.atto`.
+
+For relative `./lib`, `../lib` and project-root `+/lib` imports:
+
+- If exactly `lib.atto` exists, import that physical file.
+- If exactly `lib.ores` exists, accept the legacy file.
+- If **both** source names exist (including dangling symlink entries),
+  **reject** the extensionless import as ambiguous. There is no implicit
+  priority that can silently execute the unintended source file.
+- If neither exists, fail at the ordinary canonical source resolution.
+- Explicit `lib.atto` and explicit `lib.ores` are accepted independently.
+- All other suffixes fail closed before any foreign-source import.
+
+The change retains existing source-content UTF-8 checks, source identity
+checks, regular-file-only admission, package nesting detection and root
+symlink boundary checks. It does not automatically rename `.ores.pkg.toml`
+or alter module runtime semantics.
+
+## Tests and evidence
+
+`tests/project_root_import_test.cpp` adds root-resolution, legacy shadowing,
+nested-package and symlink-escape cases. Existing CTest name:
+`native_project_root_import_security`.
+
+`tests/native_module_imports.py` now drives four additional positive actual
+AOT module graph cases (extensionless modern, explicit modern, explicit
+legacy, and project-root modern), plus two negative fail-before-IR shadowing
+cases. Existing CTest name: `native_source_module_graph_execution`.
+
+The pure suffix helper was also compiled/run locally in an isolated C++17
+harness using g++ with `-Wall -Wextra -Wpedantic -Werror`. This is **only
+component logic evidence**; it is **not** a build of the full repository
+nor proof that `oreslang-llvmc` executed the new source fixtures.
+Actual compiler/CTest and sanitizer receipts remain mandatory on the
+immutable PR head before any merge or cross-backend parity claim.
+
+## Private-source execution boundary
+
+Security incidents [platform-conformance #22](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22)
+and [#77](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/77)
+currently hold private-to-private source mirroring pending independent
+source-visibility and exact source-snapshot approval. A private destination,
+available Actions minutes and token-free GitHub-connector mirroring do
+**not** independently satisfy the incident release gates. This PR was
+developed in the source organization without cross-organization source copy.
