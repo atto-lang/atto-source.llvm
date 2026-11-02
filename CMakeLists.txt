@@ -146,6 +146,25 @@ if(BUILD_TESTING)
     endif()
 
     find_package(Threads REQUIRED)
+    # Host-native concurrent STOP model: a real admitted carrier turn and
+    # external resource loan must each prevent physical arena destruction.
+    # This is native substrate validation, not compiled AttoLang guest evidence.
+    add_executable(oreslang-native-actor-stop-race-test
+        tests/native_actor_stop_race_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-stop-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-stop-race-test PROPERTIES
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+        C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_compile_options(oreslang-native-actor-stop-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-actor-stop-race-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_stop_carrier_ffi_loan_quiescence
+        COMMAND oreslang-native-actor-stop-race-test)
+    set_tests_properties(native_actor_stop_carrier_ffi_loan_quiescence
+        PROPERTIES TIMEOUT 60)
+
     add_executable(oreslang-native-string-region-test
         tests/native_string_region_test.c src/main/cpp/oreslang/runtime/NativeStringRegion.c)
     target_include_directories(oreslang-native-string-region-test PRIVATE src/main/cpp)
