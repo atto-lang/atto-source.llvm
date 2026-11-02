@@ -18,6 +18,12 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
 "$cc_bin" -std=c11 $common -Wall -Wextra -Wpedantic -Werror -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread \
   -I"$root/src/main/cpp" "$root/tests/native_thread_v1_test.c" "$tmp/NativeThreadV1.o" \
   -o "$tmp/native-thread-test"
+
+"$cc_bin" -std=c11 $common -Wall -Wextra -Wpedantic -Werror \
+  -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread \
+  -I"$root/src/main/cpp" "$root/tests/native_thread_scope_v1_test.c" \
+  "$tmp/NativeThreadV1.o" -o "$tmp/native-thread-scope-test"
+"$tmp/native-thread-scope-test"
 "$tmp/native-thread-test"
 "$cxx_bin" -std=c++17 $common -Wall -Wextra -Wpedantic -Werror -pthread \
   -I"$root/src/main/cpp" "$root/tests/native_thread_capture_admission_test.cpp" \
