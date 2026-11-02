@@ -129,5 +129,14 @@ define module demo as
   }
 end
 )");
+    // A balanced tree keeps source/parser nesting shallow while trying to
+    // amplify compile-time AST work beyond the strict 2048-node budget.
+    std::string broad = "1";
+    for (int i = 0; i < 12; ++i) broad = "(" + broad + "+" + broad + ")";
+    const std::string bounded =
+        "define macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }"
+        "pub fnc main(): int { return literal!(const " + broad + "); }";
+    denied(bounded);
+
     return 0;
 }
