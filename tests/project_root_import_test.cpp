@@ -196,8 +196,8 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         write_text(dir/"lib.ores", "");
-        must_fail("root suffix ambiguity", "ambiguous native source",
-                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("extensionless import must prefer canonical .atto");
         if (resolve(dir/"main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto")
                 || resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("explicit .atto/.ores suffix must disambiguate");
@@ -218,7 +218,7 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.ores", "");
         fs::create_symlink(dir/"absent.atto", dir/"lib.atto");
-        must_fail("dangling .atto shadows legacy", "ambiguous native source",
+        must_fail("dangling .atto blocks legacy fallback", "cannot resolve native project-root import",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
