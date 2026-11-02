@@ -237,3 +237,24 @@ release-in-progress interval; completion observers are prevented from touching
 
 These are authored exact-source tests; private source-org CI still requires a real
 assigned runner before they count as native execution evidence.
+
+## Two-actor physical arena regression (native substrate only)
+
+`tests/native_two_actor_arena_lifetime_test.cpp` uses two actual native
+`OresActorArena` allocations with different owner/incarnation/domain IDs.
+It covers 1,000 alternating, independently admitted turns per actor, persistent
+slot preservation, scratch zeroization after turn exit, and lifetime loans
+surviving turn exit. A retiring actor must reject physical reclamation while
+a loan remains outstanding; the other actor must continue to read its own
+unmodified state and retire independently. The final release permits physical
+scrub and reclamation of the first arena exactly once.
+
+The test is registered as
+`native_two_actor_arena_isolation_and_quiescent_reclamation` in CMake and
+included in optimized, ASan/UBSan and TSan source-native CI builds.
+
+**Evidence boundary:** A passing test would validate the native memory
+substrate. It does not demonstrate compiler-generated `.atto` actor source,
+supervisor scheduling/cancellation, full AOT, absence of all system allocations,
+or zero GC in any managed host. These still require an exact-head, stepful
+compiled-guest test and a separately audited transitive runtime call graph.
