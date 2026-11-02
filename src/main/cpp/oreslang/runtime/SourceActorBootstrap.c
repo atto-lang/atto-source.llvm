@@ -151,6 +151,40 @@ int oreslang_source_actor_ready_status(void* opaque) {
         &instance->startup_state, memory_order_acquire);
 }
 
+int oreslang_source_actor_identity(
+        void* opaque,
+        OresSourceActorIdentity* out_identity) {
+    if (!opaque || !out_identity) return 0;
+    SourceActor* instance = (SourceActor*)opaque;
+
+    /*
+     * Hold the source-group lifetime fence while validating the opaque ref.
+     * join_done clears the slot and frees the SourceActor under this same
+     * mutex, so a successful snapshot can never describe a physically retired
+     * allocation.
+     */
+    group_lock();
+    if (instance->magic != SOURCE_ACTOR_MAGIC
+            || instance->ref.actor_slot >= SOURCE_GROUP_ROOT_SLOT
+            || instance->ref.actor_slot >= group.next_slot
+            || group.actors[instance->ref.actor_slot] != instance
+            || instance->id == 0
+            || instance->ref.scheduler_domain == 0
+            || instance->ref.generation == 0) {
+        group_unlock();
+        return 0;
+    }
+
+    *out_identity = (OresSourceActorIdentity){
+        .logical_id = instance->id,
+        .scheduler_domain = instance->ref.scheduler_domain,
+        .actor_slot = instance->ref.actor_slot,
+        .scheduler_generation = instance->ref.generation
+    };
+    group_unlock();
+    return 1;
+}
+
 typedef struct {
     OresNativeActorFuture* future;
     int status;
