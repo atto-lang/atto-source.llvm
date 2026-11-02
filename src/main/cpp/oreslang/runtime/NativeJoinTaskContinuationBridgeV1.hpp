@@ -38,8 +38,12 @@ public:
                 // native reaper thread. No C store or guest Task operations.
                 if (weak.lock()) enqueue(generation);
             });
-        if (!waiter || !waiter->attach(completion)) return {};
+        if (!waiter) return {};
+        // Attach can notify synchronously for an already-completed join.
+        // Publish bridge state BEFORE registering that callback, so a
+        // concurrent scheduler dequeue never races with waiter_ assignment.
         bridge->waiter_ = std::move(waiter);
+        if (!bridge->waiter_->attach(completion)) return {};
         return bridge;
     }
 
