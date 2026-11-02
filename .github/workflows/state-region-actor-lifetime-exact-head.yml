@@ -10,6 +10,7 @@ on:
       - 'tests/native_actor_stop_race_test.cpp'
       - 'tests/native_aot_two_actor_owned_counter_harness.c'
       - 'tests/fixtures/native-aot-two-actor-owned-counter.ores'
+      - 'tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.ores'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
@@ -227,6 +228,18 @@ jobs:
           fi
           SRC=tests/fixtures/native-aot-two-actor-owned-counter.ores
           IR="$RUNNER_TEMP/compiled-two-actor-owned-counter.ll"
+          # Unsupported sealed actor state must fail before ANY IR output,
+          # rather than silently falling back to the legacy scalar ABI.
+          DENIED="$RUNNER_TEMP/unlowered-sealed-actor-state.ll"
+          if "$COMPILER" --experimental-owned-int \
+              tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.ores \
+              > "$DENIED" 2> "$RUNNER_TEMP/sealed-actor-diagnostic"; then
+            echo "unimplemented sealed state unexpectedly compiled" >&2
+            exit 1
+          fi
+          test ! -s "$DENIED"
+          grep -Fq 'requires sealed handle_state lowering' \
+            "$RUNNER_TEMP/sealed-actor-diagnostic"
           "$COMPILER" --experimental-owned-int "$SRC" > "$IR"
           test -s "$IR"
           grep -Fq '@oreslang_actor_Worker_init(' "$IR"
