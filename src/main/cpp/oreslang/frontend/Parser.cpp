@@ -2136,6 +2136,11 @@ private:
             Lexer look = lexer_;
             const auto name = look.next();
             const auto equal = look.next();
+            if (name.kind == Kind::Identifier && equal.text == ";") {
+                // No fallback into expression parsing: report the actual
+                // immutable type-first declaration error deterministically.
+                fail("native immutable type-first scalar local requires initializer");
+            }
             return name.kind == Kind::Identifier && equal.text == "=";
         };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
