@@ -201,6 +201,9 @@ int main() {
         if (resolve(dir/"main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto")
                 || resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("explicit .atto/.ores suffix must disambiguate");
+        write_text(dir/"upper.ATTO", "");
+        if (resolve(dir/"main.atto", "+/upper.ATTO") != fs::canonical(dir/"upper.ATTO"))
+            throw std::runtime_error("explicit case-insensitive .ATTO suffix must be admitted");
     }
     {
         const auto dir = temp / "modern-nested-boundary";
