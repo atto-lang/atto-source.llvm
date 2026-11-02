@@ -1169,6 +1169,30 @@ if(BUILD_TESTING)
 
     oreslang_contract_test(call_scoped_borrow_parameter_refresh unsupported-borrow-param.ores
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
+
+    # Original source-free OresLLM ownership grammar admission probes.
+    # These DO NOT import/mirror any private ores-llm source or prove those PR heads.
+    oreslang_contract_test(oresllm_explicit_ownership_borrow_accept
+        oresllm-explicit-ownership-borrow-accept.ores
+        --ir "call i64 @read_oresllm")
+    if(ORE_CLANG)
+        oreslang_contract_test(oresllm_explicit_ownership_borrow_execute
+            oresllm-explicit-ownership-borrow-accept.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(oresllm_arithmetic_star_preserved
+            oresllm-ownership-multiply-accept.ores
+            --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(oresllm_c_style_reference_parameter_rejected
+        oresllm-ownership-ampersand-parameter-reject.ores
+        --diagnostic "oreslang-llvmc:")
+    oreslang_contract_test(oresllm_c_style_address_of_rejected
+        oresllm-ownership-ampersand-expression-reject.ores
+        --diagnostic "oreslang-llvmc:")
+    oreslang_contract_test(oresllm_c_style_pointer_decl_rejected
+        oresllm-ownership-star-pointer-reject.ores
+        --diagnostic "oreslang-llvmc:")
+
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" named-call-order
