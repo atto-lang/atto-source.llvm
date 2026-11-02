@@ -105,12 +105,40 @@ int main(void) {
     int *early_arg = new_value(44);
     assert(ores_native_thread_spawn_v1(
         early_exit_worker, early_arg, drop_value, &early) == ORES_THREAD_OK_V1);
-    int early_result = 0;
+    int early_result = -5678;
     assert(ores_native_thread_join_blocking_v1(early, &early_result)
            == ORES_THREAD_UNEXPECTED_EXIT_V1);
+    assert(early_result == -5678); /* no valid guest result was returned */
     assert(ores_native_thread_release_v1(early) == ORES_THREAD_OK_V1);
     assert(atomic_load(&early_exit_tls_drops) == 1);
     assert(atomic_load(&drops) == 17);
+#ifdef ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION
+    /* One final usable ID followed by permanent exhaustion. Failed spawns
+     * must leave owned_arg in the caller's custody. */
+    ores_native_thread_test_set_next_id_v1(UINT64_MAX - 1);
+    args *last = malloc(sizeof(*last));
+    assert(last); last->idx = 0;
+    ores_native_thread_v1 *last_handle = NULL;
+    assert(ores_native_thread_spawn_v1(
+        worker, last, drop_value, &last_handle) == ORES_THREAD_OK_V1);
+    int last_result = -1;
+    assert(ores_native_thread_join_blocking_v1(last_handle, &last_result)
+           == ORES_THREAD_OK_V1);
+    assert(last_result == 42);
+    assert(ores_native_thread_release_v1(last_handle) == ORES_THREAD_OK_V1);
+    args *rejected = malloc(sizeof(*rejected));
+    assert(rejected); rejected->idx = 0;
+    ores_native_thread_v1 *rejected_handle = (ores_native_thread_v1 *)1;
+    assert(ores_native_thread_spawn_v1(
+        worker, rejected, drop_value, &rejected_handle) == ORES_THREAD_OS_ERROR_V1);
+    assert(rejected_handle == NULL);
+    free(rejected); /* never moved on rejected admission */
+    rejected_handle = (ores_native_thread_v1 *)1;
+    assert(ores_native_thread_spawn_v1(
+        worker, NULL, NULL, &rejected_handle) == ORES_THREAD_OS_ERROR_V1);
+    assert(rejected_handle == NULL); /* cannot wrap back to ID=1 */
+    assert(atomic_load(&drops) == 21);
+#endif
     puts("native pthread substrate: OK (host-only; no guest compiler claim)");
     return 0;
 }
