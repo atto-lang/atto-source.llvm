@@ -110,6 +110,51 @@ OresNativePubSubStatus ores_native_actor_pubsub_try_read_i64(
     OresSourceActorIdentity subscriber,
     int64_t* out_value);
 
+/*
+ * UTF-8 String source payload bridge. Only trusted compiler/runtime code may
+ * call these C symbols. payload_length is explicit (embedded NUL is allowed),
+ * and all names are validated as bounded NUL-terminated UTF-8 strings.
+ * A read with insufficient capacity returns RESOURCE_EXHAUSTED, writes the
+ * required byte count to out_length and leaves the queued event untouched.
+ * No guest-visible raw string pointer or reconstructed actor authority.
+ */
+OresNativePubSubStatus ores_native_actor_pubsub_define_utf8_topic(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresNativePubSubPolicy policy,
+    size_t capacity);
+
+OresNativePubSubStatus ores_native_actor_pubsub_subscribe_utf8(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresSourceActorIdentity subscriber);
+
+OresNativePubSubStatus ores_native_actor_pubsub_unsubscribe_utf8(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresSourceActorIdentity subscriber);
+
+OresNativePubSubStatus ores_native_actor_pubsub_publish_utf8(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresSourceActorIdentity publisher,
+    const char* payload,
+    size_t payload_length,
+    OresNativePubSubPublishReceipt* out_receipt);
+
+OresNativePubSubStatus ores_native_actor_pubsub_try_read_utf8(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresSourceActorIdentity subscriber,
+    char* out_buffer,
+    size_t out_capacity,
+    size_t* out_length);
+
 #ifdef __cplusplus
 }
 #endif
