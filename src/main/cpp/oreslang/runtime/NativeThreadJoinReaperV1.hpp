@@ -169,12 +169,21 @@ private:
 
             int result = 0;
             ores_thread_status_v1 status = join_(job.handle, &result);
-            if (status == ORES_THREAD_OK_V1) {
-                status = ores_native_thread_release_v1(job.handle);
+            bool handle_released = false;
+            if (status == ORES_THREAD_OK_V1 ||
+                    status == ORES_THREAD_UNEXPECTED_EXIT_V1) {
+                // UNEXPECTED_EXIT consumes the physical join right too; it
+                // is an error result but NOT a live handle requiring retry.
+                const auto release_status =
+                    ores_native_thread_release_v1(job.handle);
+                if (release_status != ORES_THREAD_OK_V1)
+                    status = release_status;
+                else
+                    handle_released = true;
             }
             {
                 std::lock_guard<std::mutex> guard(lock_);
-                if (status != ORES_THREAD_OK_V1) {
+                if (!handle_released) {
                     // No allocation here: the vector reserves 'capacity_' slots,
                     // and active_ always bounds simultaneous failed handles.
                     failed_.push_back(job.handle);
