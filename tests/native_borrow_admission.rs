@@ -115,6 +115,22 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
             stderr.contains(expected),
             "{name}: expected {expected:?}, got {stderr}"
         );
+        // This test specifically proves the native mutable-share capability
+        // gate, not merely a compiler failure containing matching words.
+        // Mixed diagnostics can conceal an unrelated parser/host failure.
+        if name.starts_with("mut-share-") || name.starts_with("six-mut-share-") {
+            let lines: Vec<_> = stderr.lines().collect();
+            assert_eq!(lines.len(), 1,
+                "{name}: mixed native diagnostics are not guarded-sharing proof: {stderr}");
+            let line = lines[0];
+            assert!(line.starts_with(
+                "oreslang-llvmc: native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof; refusing unsynchronized alias at byte "
+            ), "{name}: compiler-owned guarded-sharing diagnostic required: {stderr}");
+            let offset = line.rsplit_once(" at byte ").map(|(_, value)| value)
+                .expect("guarded-sharing byte offset");
+            assert!(!offset.is_empty() && offset.bytes().all(|byte| byte.is_ascii_digit()),
+                "{name}: malformed or appended guarded-sharing diagnostic: {stderr}");
+        }
         assert!(
             !has_definition(&stderr)
                 && !stderr.lines().any(|line| {
