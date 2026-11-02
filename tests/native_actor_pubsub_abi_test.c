@@ -52,6 +52,14 @@ int main(void) {
     check(ores_native_actor_pubsub_join(
         runtime, 2, subscriber) == ORES_NATIVE_PUBSUB_OK);
 
+    /* A C1 Unicode control is legal UTF-8 but not a legal topic name.
+     * .NET rejects U+0085 through char.IsControl; native lanes must agree. */
+    check(ores_native_actor_pubsub_define_utf8_topic(
+        runtime, 1, "bad-\xC2\x85-name",
+        ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_INVALID);
+    check(ores_native_actor_pubsub_define_i64_topic(
+        runtime, 1, "bad-\xC2\x9F-name",
+        ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_INVALID);
     check(ores_native_actor_pubsub_define_i64_topic(
         runtime, 1, "events",
         ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_OK);
