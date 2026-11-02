@@ -108,6 +108,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_symbol_property_layout_host_only_v1
         PROPERTIES TIMEOUT 15)
 
+    # Two separately owned physical actor arenas; host-native substrate only.
+    # Checks persistent values across 1000 independent turns, scratch scrub,
+    # and delayed physical reclamation when a loan outlives actor STOP.
+    add_executable(oreslang-native-two-actor-arena-lifetime-test
+        tests/native_two_actor_arena_lifetime_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-two-actor-arena-lifetime-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-two-actor-arena-lifetime-test
+        PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+                   C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_compile_options(oreslang-native-two-actor-arena-lifetime-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_two_actor_arena_isolation_and_quiescent_reclamation
+        COMMAND oreslang-native-two-actor-arena-lifetime-test)
+    set_tests_properties(native_two_actor_arena_isolation_and_quiescent_reclamation
+        PROPERTIES TIMEOUT 30)
+
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-string-region-test
         tests/native_string_region_test.c src/main/cpp/oreslang/runtime/NativeStringRegion.c)
