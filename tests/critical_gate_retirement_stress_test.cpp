@@ -56,5 +56,30 @@ int main() {
     require(!mutex.release(*token),"retired mutex no handoff"); ++passes;
     require(mutex.quiescent(),"retired mutex quiescent"); ++passes;
   }
+  // Retire racing the FIFO handoff must produce exactly one disposition:
+  // a scheduler cancellation receipt or a newly admitted owner, never both.
+  for (int round=0;round<256;++round) {
+    CriticalGate gate;
+    auto owner=gate.request();
+    auto queued=gate.request();
+    CriticalGate::Retirement retired;
+    CriticalGate::Token transferred;
+    std::thread releaseThread([&] { transferred=gate.release(owner.token); });
+    std::thread retireThread([&] { retired=gate.retire(); });
+    releaseThread.join();
+    retireThread.join();
+    if (retired.cancelled_waiters.size()==1) {
+      require(retired.cancelled_waiters.front()==queued.token,
+              "cancelled receipt identity"); ++passes;
+      require(!transferred, "retired waiter also received permit"); ++passes;
+      require(retired.owner==owner.token,"retired owner identity"); ++passes;
+    } else {
+      require(retired.cancelled_waiters.empty(), "unexpected cancelled tokens"); ++passes;
+      require(transferred==queued.token,"missing FIFO admission"); ++passes;
+      require(retired.owner==queued.token,"retire omitted transferred owner"); ++passes;
+      require(!gate.release(queued.token),"unexpected retired handoff"); ++passes;
+    }
+    require(gate.quiescent(),"retirement handoff race not quiescent"); ++passes;
+  }
   std::cout << "PASS native header smoke assertions=" << passes << '\n';
 }
