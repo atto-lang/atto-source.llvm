@@ -147,6 +147,18 @@ fn run() -> Result<(), String> {
         if result.status.success() || !result.stdout.is_empty() || result.stderr.is_empty() {
             return Err(format!("{name}: negative input was accepted, emitted IR, or had no diagnostic"));
         }
+        // A syntax error is NOT a proof that a resolved binding was
+        // immutable. Require compiler-owned assignment diagnostics on the
+        // two explicit rebinding cases, and a duplicate-name diagnostic for
+        // the duplicate declaration rather than counting generic failures.
+        let diagnostic = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
+        if (name == &"rebind" || name == &"const-rebind") &&
+                !diagnostic.contains("assignment") {
+            return Err(format!("{name}: rejection did not diagnose assignment: {diagnostic}"));
+        }
+        if name == &"duplicate" && !diagnostic.contains("duplicate") {
+            return Err(format!("{name}: rejection was not duplicate-name semantic diagnostic: {diagnostic}"));
+        }
         println!("COMPILE_REJECT {name}");
     }
     println!("NATIVE_IMMUTABLE_DEFAULT_DONE positive={} negative={}",
