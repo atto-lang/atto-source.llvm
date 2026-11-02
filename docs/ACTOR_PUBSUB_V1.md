@@ -27,10 +27,16 @@ The native runtime now exposes three layers without claiming positive source par
    compiler-generated LLVM IR may call, and a real SourceActorBootstrap test
    drives live source actor identities through that ABI.
 
-The ABI is intentionally i64-only today. `Topic<String>` remains fail-closed:
-the existing native String is an owned buffer and cannot be copied into queues
-by value, while a native string topic additionally needs explicit per-edge and
-graph-wide byte accounting before ownership-safe queueing can be admitted.
-`Subscription.next()` also remains blocked on continuation-aware nonblocking
-read lowering. Therefore the positive String golden fixture still rejects
-before IR and is not counted as LLVM source parity.
+The ABI is intentionally i64-only today. The native topic substrate now uses
+preallocated bounded rings of shared immutable payloads and enforces default
+16 MiB per-subscription / 64 MiB graph-wide logical queued-payload limits plus
+a global preallocated-slot budget. RELIABLE fanout allocates/freezes once
+before commit, so allocation failure cannot create a partial publication.
+
+`Topic<String>` source nevertheless remains fail-closed: the existing native
+String is an owned buffer, while the compiler-facing C ABI still needs an
+ownership-safe conversion into/out of the shared immutable topic payload
+without copying an owning String struct by value. `Subscription.next()` also
+remains blocked on continuation-aware nonblocking read lowering. Therefore the
+positive String golden fixture still rejects before IR and is not counted as
+LLVM source parity.
