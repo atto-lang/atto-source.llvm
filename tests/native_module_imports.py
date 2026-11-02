@@ -77,6 +77,25 @@ def main():
         '.ores.pkg.toml': 'schema_version = "1"\n',
         'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
     }, 42))
+    positives.extend([
+        ('atto-relative-source', {
+            'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-explicit-relative-source', {
+            'main.atto': 'import module Lib from "./lib.atto"; pub fnc main():int{return Lib.answer();}',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-legacy-relative-source', {
+            'main.atto': 'import module Lib from "./lib.ores"; pub fnc main():int{return Lib.answer();}',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-project-root-source', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+    ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -128,7 +147,8 @@ def main():
         for name, files, expected in positives:
             directory = root/name; directory.mkdir()
             for path, source in files.items(): (directory/path).write_text(source)
-            result = run([a.compiler, str(directory/'main.ores')])
+            entry = 'main.atto' if 'main.atto' in files else 'main.ores'
+            result = run([a.compiler, str(directory/entry)])
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
@@ -140,8 +160,8 @@ def main():
             executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
             if executed.returncode != expected: raise AssertionError((name, executed.returncode, executed.stderr))
             for path in files: (directory/(path+'.hidden')).rename(directory/path)
-            if a.java_command and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
-                reference = run([*a.java_command, str(directory/'main.ores')])
+            if a.java_command and entry == 'main.ores' and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
+                reference = run([*a.java_command, str(directory/entry)])
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
@@ -152,6 +172,22 @@ def main():
             result = run([a.compiler, str(directory/'main.ores')])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        for root_import in (False, True):
+            directory = root/('atto-root-shadow' if root_import else 'atto-relative-shadow')
+            directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "' + ('+/lib' if root_import else './lib') +
+                '"; pub fnc main():int{return Lib.answer();}')
+            (directory/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            (directory/'lib.ores').write_text(
+                'define module Lib as pub fnc answer():int{return 41;} end')
+            if root_import:
+                (directory/'.ores.pkg.toml').write_text('schema_version = "1"\\n')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
+                raise AssertionError(('atto shadowing must fail', root_import, result.stderr))
             passed += 1
         directory=root/'project-root-duplicate-schema'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
