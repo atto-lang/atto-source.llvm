@@ -5,6 +5,7 @@
 #include "oreslang/runtime/NativeExecutionAuthority.h"
 #include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
+#include "oreslang/runtime/NativeReadyBitmap.h"
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
@@ -61,6 +62,9 @@ struct OresNativeActorScheduler {
     pthread_cond_t ready;
     pthread_cond_t drained;
     ActorLane* actors;
+    OresNativeReadyBitmap control_ready;
+    OresNativeReadyBitmap wake_ready;
+    OresNativeReadyBitmap data_ready;
     uint64_t* slots;
     WakeCredit* wake_slots;
     pthread_t* threads;
@@ -181,21 +185,37 @@ int ores_native_actor_scheduler_test_set_next_execution(
     return ok;
 }
 #endif
+/* All ready indexes are updated under the scheduler's mutex. Active
+ * actor lanes must have NO indexed work until their physical turn retires.
+ * The three separate bitmaps preserve CONTROL > WAKE > DATA priority. */
+static void refresh_ready_index_locked(OresNativeActorScheduler* s, size_t i) {
+    ActorLane* lane = &s->actors[i];
+    if (!!lane->active != !!lane->carrier_owner_valid) abort();
+    const int idle = !lane->active;
+    ores_native_ready_bitmap_update(&s->control_ready, i,
+                                    idle && lane->has_control);
+    ores_native_ready_bitmap_update(&s->wake_ready, i,
+                                    idle && lane->wake_ready);
+    ores_native_ready_bitmap_update(&s->data_ready, i,
+                                    idle && lane->queued);
+}
+
 /* Supervisor CONTROL outranks WAKE which outranks DATA. */
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
         size_t recent_actor, unsigned consecutive) {
+    size_t i = 0;
     for (int pass = 2; pass >= 1; --pass) {
-        for (size_t offset = 0; offset < s->actor_count; ++offset) {
-            size_t i = (s->next_actor + offset) % s->actor_count;
+        const OresNativeReadyBitmap* ready =
+                pass == 2 ? &s->control_ready : &s->wake_ready;
+        if (ores_native_ready_bitmap_find(
+                ready, s->actor_count, s->next_actor, &i)) {
             ActorLane* lane = &s->actors[i];
-            if (!!lane->active != !!lane->carrier_owner_valid) abort();
-            if (!lane->active
-                    && (pass == 2 ? lane->has_control : lane->wake_ready)) {
-                *actor = i;
-                *kind = pass;
-                s->next_actor = (i + 1) % s->actor_count;
-                return 1;
-            }
+            if (lane->active || lane->carrier_owner_valid
+                || !(pass == 2 ? lane->has_control : lane->wake_ready)) abort();
+            *actor = i;
+            *kind = pass;
+            s->next_actor = (i + 1) % s->actor_count;
+            return 1;
         }
     }
     if (recent_actor < s->actor_count && consecutive < 2
@@ -205,13 +225,13 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
         s->next_actor = (recent_actor + 1) % s->actor_count;
         return 1;
     }
-    for (size_t offset = 0; offset < s->actor_count; ++offset) {
-        size_t i = (s->next_actor + offset) % s->actor_count;
-        if (!s->actors[i].active && s->actors[i].queued) {
-            *actor = i; *kind = 0;
-            s->next_actor = (i + 1) % s->actor_count;
-            return 1;
-        }
+    if (ores_native_ready_bitmap_find(
+            &s->data_ready, s->actor_count, s->next_actor, &i)) {
+        ActorLane* lane = &s->actors[i];
+        if (lane->active || lane->carrier_owner_valid || !lane->queued) abort();
+        *actor = i; *kind = 0;
+        s->next_actor = (i + 1) % s->actor_count;
+        return 1;
     }
     return 0;
 }
@@ -332,6 +352,7 @@ static void* carrier(void* raw) {
         lane->active = 1;
         lane->carrier_owner = pthread_self();
         lane->carrier_owner_valid = 1;
+        refresh_ready_index_locked(s, i);
         unlock(s);
 
         // Actor identity is authorized only by the physical execution claim.
@@ -375,6 +396,7 @@ static void* carrier(void* raw) {
             || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
         lane->carrier_owner_valid = 0;
+        refresh_ready_index_locked(s, i);
         s->outstanding--;
         s->completed++;
         if (kind == 0) {
@@ -631,6 +653,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    refresh_ready_index_locked(s, i);
     if (a->accepted_user_messages == UINT64_MAX) abort();
     ++a->accepted_user_messages;
     s->reserved_executions++;
@@ -880,6 +903,7 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     w->outcome = outcome;
     w->state = WAKE_READY;
     ++lane->wake_ready;
+    refresh_ready_index_locked(s, (size_t)ticket.producer.actor_slot);
     if (new_lane) ++s->runnable_lanes;
     ++s->reserved_executions;
     ++s->accepted;
@@ -940,6 +964,7 @@ int ores_native_actor_scheduler_publish_control(
         lane->control_payload = payload;
         lane->control_is_failure = 0;
         lane->has_control = 1;
+        refresh_ready_index_locked(s, (size_t)parent.actor_slot);
         ++s->reserved_executions;
         ++s->accepted;
         ++s->outstanding;
@@ -974,6 +999,7 @@ int ores_native_actor_scheduler_publish_failure(
         a->failure = failure;
         a->control_is_failure = 1;
         a->has_control = 1;
+        refresh_ready_index_locked(s, (size_t)parent.actor_slot);
         s->reserved_executions++;
         s->accepted++;
         s->outstanding++;
@@ -1019,6 +1045,7 @@ static int stop_locked(
 
         lane->head = lane->tail;
         lane->queued = 0;
+        refresh_ready_index_locked(s, (size_t)actor.actor_slot);
         lane->abandoned_user_messages += (uint64_t)abandoned;
         s->reserved_executions -= abandoned;
         s->outstanding -= abandoned;
