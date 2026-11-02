@@ -34,6 +34,12 @@ ores_thread_status_v1 ores_native_thread_spawn_v1(
  * This blocking HOST primitive MUST NOT be called on an AttoLang carrier. */
 ores_thread_status_v1 ores_native_thread_join_blocking_v1(
     ores_native_thread_v1 *handle, int *out_result);
+/* Advisory guest-body/TLS completion bit for scheduler notifications. A true
+ * value does NOT mean pthread_join has reaped the native thread; a separate
+ * host reaper must perform join. Polling is not an efficient wake mechanism. */
+ores_thread_status_v1 ores_native_thread_poll_completed_v1(
+    const ores_native_thread_v1 *handle, int *out_completed);
+
 ores_thread_status_v1 ores_native_thread_release_v1(
     ores_native_thread_v1 *joined_handle);
 
