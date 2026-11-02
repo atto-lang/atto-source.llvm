@@ -89,6 +89,37 @@ inline void validate_manifest(const std::string& manifest_bytes) {
             "native project-root import requires schema_version = \"1\"");
 }
 
+/**
+ * Resolve only the two admitted native source extensions. An extensionless
+ * import cannot silently select one of two visible source files: that would
+ * make module identity depend on unspecified search order and enable source
+ * shadowing during migration. Inspect physical directory entries, including
+ * dangling symlinks (which must still block unambiguous resolution).
+ */
+inline fs::path resolve_native_source_suffix(fs::path candidate) {
+    const auto ext = candidate.extension();
+    if (!ext.empty()) {
+        if (ext != ".atto" && ext != ".ores")
+            throw std::runtime_error(
+                "native module source must use .atto or legacy .ores extension");
+        return candidate;
+    }
+    fs::path modern = candidate;
+    modern += ".atto";
+    fs::path legacy = candidate;
+    legacy += ".ores";
+    const bool has_modern = exists_marker(modern);
+    const bool has_legacy = exists_marker(legacy);
+    if (has_modern && has_legacy)
+        throw std::runtime_error(
+            "ambiguous native source import: both .atto and .ores exist; use explicit extension");
+    if (has_modern) return modern;
+    if (has_legacy) return legacy;
+    // Allow the caller's canonical-resolution path to produce its normal
+    // missing-file diagnostic. Never search unrelated extension types.
+    return modern;
+}
+
 inline void validate_suffix(std::string_view suffix) {
     if (suffix.empty())
         throw std::runtime_error("native project-root import requires a non-empty path");
@@ -161,9 +192,7 @@ inline std::filesystem::path resolve_project_root_import(
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
     fs::path candidate = package_root / fs::path(std::string(suffix));
-    if (candidate.extension().empty()) candidate += ".ores";
-    if (candidate.extension() != ".ores")
-        throw std::runtime_error("native project-root imports require .ores source files");
+    candidate = resolve_native_source_suffix(candidate);
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)
