@@ -27,10 +27,13 @@ or alter module runtime semantics.
 nested-package and symlink-escape cases. Existing CTest name:
 `native_project_root_import_security`.
 
-`tests/native_module_imports.py` now drives four additional positive actual
-AOT module graph cases (extensionless modern, explicit modern, explicit
-legacy, and project-root modern), plus two negative fail-before-IR shadowing
-cases. Existing CTest name: `native_source_module_graph_execution`.
+`tests/native_module_imports.py` retains four actual-compiler `.atto`
+module graph cases (extensionless modern, explicit modern, explicit legacy,
+and project-root modern), plus the existing negative fail-before-IR cases.
+The canonical-over-legacy precedence, explicit case-insensitive `.ATTO`,
+and dangling-entry shadow cases are asserted by the native C++ resolver test;
+they are host resolver evidence, not additional AOT guest execution. Existing
+CTest name: `native_source_module_graph_execution`.
 
 The pure suffix helper was also compiled/run locally in an isolated C++17
 harness using g++ with `-Wall -Wextra -Wpedantic -Werror`. This is **only
