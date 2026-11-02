@@ -226,19 +226,18 @@ ores_native_actor_pubsub_retire_source_actor(
     if (!valid_runtime_and_actor(runtime, actor))
         return ORES_NATIVE_PUBSUB_INVALID;
     return guarded([&] {
-        /*
-         * Membership retirement is the admission barrier. It waits for any
-         * publication holding the membership view, then prevents new ones.
-         * Queue cleanup occurs only after that barrier.
-         */
-        if (!runtime->memberships.retire_actor(
-                actor.logical_id, actor.scheduler_generation)) {
+        // Reclaim both typed lanes while the membership fence is held.
+        // Cleanup after dropping the fence allowed a same-ID re-register
+        // to race with stale edge deletion and lose fresh delivery state.
+        if (!runtime->memberships.retire_actor_with_cleanup(
+                actor.logical_id, actor.scheduler_generation, [&] {
+                    runtime->i64_bus.remove_actor(
+                        actor.logical_id, actor.scheduler_generation);
+                    runtime->utf8_bus.remove_actor(
+                        actor.logical_id, actor.scheduler_generation);
+                })) {
             throw std::logic_error("unknown or stale actor incarnation");
         }
-        runtime->i64_bus.remove_actor(
-            actor.logical_id, actor.scheduler_generation);
-        runtime->utf8_bus.remove_actor(
-            actor.logical_id, actor.scheduler_generation);
     });
 }
 
