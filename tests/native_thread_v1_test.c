@@ -58,6 +58,7 @@ int main(void) {
     int *invalid_arg = new_value(11);
     assert(ores_native_thread_spawn_v1(worker, invalid_arg, NULL, &handles[0]) == ORES_THREAD_BAD_ARGUMENT_V1);
     free(invalid_arg); /* spawn failure retained caller ownership */
+    assert(ores_native_thread_poll_completed_v1(NULL, NULL) == ORES_THREAD_BAD_ARGUMENT_V1);
     for (int i = 0; i < 4; ++i) {
         args *a = malloc(sizeof(*a));
         assert(a);
@@ -66,7 +67,12 @@ int main(void) {
     }
     for (int i = 0; i < 4; ++i) {
         int result = 0;
+        int completed = -1;
+        assert(ores_native_thread_poll_completed_v1(handles[i], &completed) == ORES_THREAD_OK_V1);
+        assert(completed == 0 || completed == 1);
         assert(ores_native_thread_join_blocking_v1(handles[i], &result) == ORES_THREAD_OK_V1);
+        assert(ores_native_thread_poll_completed_v1(handles[i], &completed) == ORES_THREAD_OK_V1);
+        assert(completed == 1);
         assert(result == 42+i);
         assert(ores_native_thread_join_blocking_v1(handles[i], &result) == ORES_THREAD_ALREADY_JOINED_V1);
         assert(ores_native_thread_release_v1(handles[i]) == ORES_THREAD_OK_V1);
