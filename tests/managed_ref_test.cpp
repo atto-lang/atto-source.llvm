@@ -117,6 +117,20 @@ int main() {
     CHECK(first->decode(foreign_base, foreign_arena.size()) == foreign_base);
     CHECK(foreign_base != base);
 
+
+    // Null is a value, not an escape hatch around malformed arena descriptors.
+    // Both physical reference modes validate descriptors before encoding or
+    // decoding even when the stored/address value is null.
+    CHECK(!CompressedActorRef::encode(std::uintptr_t{0}, 0, std::uintptr_t{0}));
+    CHECK(!CompressedActorRef::encode(base, 0, std::uintptr_t{0}));
+    CHECK(!CompressedActorRef::encode(base + 1, arena.size(), std::uintptr_t{0}));
+    CHECK(!CompressedActorRef{}.decode(std::uintptr_t{0}, 0));
+    CHECK(!CompressedActorRef{}.decode(base + 1, arena.size()));
+    CHECK(!NativeActorManagedRef::encode(std::uintptr_t{0}, 0, std::uintptr_t{0}));
+    CHECK(!NativeActorManagedRef::encode(base, 0, std::uintptr_t{0}));
+    CHECK(!NativeActorManagedRef::encode(base + 1, arena.size(), std::uintptr_t{0}));
+    CHECK(!NativeActorManagedRef{}.decode(std::uintptr_t{0}, 0));
+    CHECK(!NativeActorManagedRef{}.decode(base + 1, arena.size()));
     // The full 32-bit range is real even though no enormous actor arena is
     // allocated for this boundary test. High-bit words must be treated as
     // unsigned stored data, never as signed Java/LLVM guest integers.
