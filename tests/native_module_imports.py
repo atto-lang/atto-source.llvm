@@ -95,6 +95,30 @@ def main():
             '.ores.pkg.toml': 'schema_version = "1"\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
+        # Extensionless imports are canonicalized before module loading.
+        # A legacy twin may exist, but it must never shadow the .atto file.
+        ('atto-shadows-legacy-sibling', {
+            'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 7;} end',
+        }, 42),
+        ('atto-explicit-legacy-remains-selectable', {
+            'main.atto': 'import module Lib from "./lib.ores"; pub fnc main():int{return Lib.answer();}',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 7;} end',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-root-shadows-legacy-sibling', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 7;} end',
+        }, 42),
+        ('atto-diamond-linked-dependencies', {
+            'main.atto': 'import module A from "./a"; import module B from "./b"; pub fnc main():int{return A.answer()+B.answer();}',
+            'a.atto': 'import module Base from "./base"; define module A as pub fnc answer():int{return Base.answer();} end',
+            'b.atto': 'import module Base from "./base.atto"; define module B as pub fnc answer():int{return Base.answer();} end',
+            'base.atto': 'define module Base as pub fnc answer():int{return 21;} end',
+        }, 42),
     ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
