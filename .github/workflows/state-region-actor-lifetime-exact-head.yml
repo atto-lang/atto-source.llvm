@@ -242,10 +242,14 @@ jobs:
             "$RUNNER_TEMP/sealed-actor-diagnostic"
           "$COMPILER" --experimental-owned-int "$SRC" > "$IR"
           test -s "$IR"
-          grep -Fq '@oreslang_actor_Worker_init(' "$IR"
-          grep -Fq '@oreslang_actor_Worker_on_message(' "$IR"
-          grep -Fq 'ores_actor_i64_heap_scoped_new' "$IR"
-          grep -Fq 'ores_actor_i64_heap_scoped_drop' "$IR"
+          # A declaration alone cannot satisfy a compiler-backed guest gate.
+          # Demand generated actor definitions and real scoped owner calls.
+          grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_init\\(' "$IR"
+          grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_on_message\\(' "$IR"
+          grep -Eq '[[:space:]]call .*@ores_actor_i64_heap_scoped_new\\(' "$IR"
+          grep -Eq '[[:space:]]call .*@ores_actor_i64_heap_scoped_drop\\(' "$IR"
+          grep -Eq '[[:space:]]call .*@ores_actor_i64_heap_field_read\\(' "$IR"
+          grep -Eq '[[:space:]]call .*@ores_actor_i64_heap_field_write\\(' "$IR"
           if [[ "$MODE" == optimized ]]; then
             FLAGS=(-O2 -DNDEBUG)
           elif [[ "$MODE" == asan-ubsan ]]; then
