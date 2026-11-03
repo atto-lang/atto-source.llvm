@@ -7,8 +7,12 @@
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <csignal>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 #endif
 
 // Link these symbols from the exact compiler-emitted verified LLVM module.
@@ -60,6 +64,14 @@ static void must_trap(F f, const char* why) {
     const auto pid = fork();
     require(pid >= 0, "fork death-test failed");
     if (pid == 0) {
+        // The trap is the expected outcome, so it must not write a core. Under a
+        // piped core_pattern (Ubuntu apport) the dying child otherwise blocks in
+        // the kernel until the handler drains it, and RLIMIT_CORE does not apply.
+        struct rlimit no_core {0, 0};
+        (void)setrlimit(RLIMIT_CORE, &no_core);
+#if defined(__linux__)
+        (void)prctl(PR_SET_DUMPABLE, 0);
+#endif
         f();
         _exit(0);
     }
