@@ -23,9 +23,9 @@ set(source_initializer-spawn
 
 
 set(source_generic-spawn
-    "fnc main(): int { return thread.spawn<int>(1); }\\n")
+    "fnc main(): int { return thread.spawn<int>(1); }\n")
 set(source_generic-qualified-spawn
-    "fnc main(): int { return std.thread.spawn<int>(1); }\\n")
+    "fnc main(): int { return std.thread.spawn<int>(1); }\n")
 
 foreach(case_name IN LISTS cases)
   set(path "${WORKDIR}/${case_name}.ores")
