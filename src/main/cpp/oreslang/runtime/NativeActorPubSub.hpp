@@ -176,6 +176,8 @@ public:
         std::size_t dropped = 0;
         std::size_t coalesced = 0;
         bool backpressured = false;
+        // Host C++ result only; the C ABI remains unchanged until versioned.
+        std::uint64_t sequence = 0;
     };
 
     NativeActorPubSubAdmission(
@@ -549,6 +551,7 @@ private:
         DeliveryPolicy policy;
         std::size_t capacity;
         std::map<ActorKey, Queue> subscribers;
+        std::uint64_t last_sequence = 0;
     };
 
     // Portable fail-closed topic admission: Unicode whitespace-only names
@@ -676,6 +679,11 @@ private:
             std::size_t payload_bytes) {
         PublishReceipt receipt;
         receipt.subscribers = topic.subscribers.size();
+        // Unsigned u64 topic-local sequence, never recycled or wrapped.
+        // Rejected admission leaves receipt.sequence=0 and state unchanged.
+        if (topic.last_sequence == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("native pub-sub topic sequence exhausted");
+        const std::uint64_t next_sequence = topic.last_sequence + 1;
 
         if (topic.policy == DeliveryPolicy::Reliable) {
             for (const auto& subscriber : topic.subscribers) {
@@ -707,6 +715,8 @@ private:
                 subscriber.second.push(frozen, payload_bytes);
                 ++receipt.accepted;
             }
+            topic.last_sequence = next_sequence;
+            receipt.sequence = next_sequence;
             return receipt;
         }
 
@@ -743,6 +753,8 @@ private:
                 if (had_value) ++receipt.coalesced;
                 ++receipt.accepted;
             }
+            topic.last_sequence = next_sequence;
+            receipt.sequence = next_sequence;
             return receipt;
         }
 
@@ -760,6 +772,10 @@ private:
             queue.push(frozen, payload_bytes);
             ++receipt.accepted;
         }
+        // LOSSY counts a successfully processed publication attempt even
+        // when all eligible recipient queues drop the delivery.
+        topic.last_sequence = next_sequence;
+        receipt.sequence = next_sequence;
         return receipt;
     }
 
