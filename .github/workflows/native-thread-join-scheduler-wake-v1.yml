@@ -58,7 +58,7 @@ jobs:
           set -euo pipefail
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeJoinActorSchedulerWakeV1.hpp)" = "cdcc4397075453f5e0b432f2cbe806c2eb727377"
           test "$(git hash-object tests/native_join_actor_scheduler_single_worker_v1_test.cpp)" = "bee79265181fb49ebc7801b5f54b793c4001f919"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "4b7cab067a3e5980f4a000a14e0682cef21b6daa"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "26908b0d9cf6bf5cbaab931313edd9b0e015bea8"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeThreadV1.c)" = "c3cb61b3e063c3173b5548b183ebab84726dd613"
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
