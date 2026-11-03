@@ -13,13 +13,17 @@ impl Drop for TempDir {
 fn temp() -> TempDir {
     let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let root = std::env::temp_dir().join(format!("attolang-infer-{}-{n}",std::process::id()));
-    fs::create_dir(&root).expect("isolated temp directory");
+    // Set Unix mode on mkdir itself: chmod-after-create briefly exposes
+    // private guest sources when the runner's umask is permissive.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-            .expect("private compiler test directory");
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&root).expect("isolated private test directory");
     }
+    #[cfg(not(unix))]
+    fs::create_dir(&root).expect("isolated test directory");
     TempDir(root)
 }
 fn run(binary:&Path, args:&[&Path], dir:&Path)->std::process::Output {
@@ -98,9 +102,24 @@ fn main(){
             "{name}: unsupported source was compiled or crashed");
         assert!(result.stdout.is_empty(),"{name}: rejected source emitted LLVM IR");
         assert!(!result.stderr.is_empty(),"{name}: missing diagnostic");
-        let stderr = String::from_utf8_lossy(&result.stderr);
+        let stderr = std::str::from_utf8(&result.stderr)
+            .expect("compiler rejection must produce valid UTF-8 diagnostic text");
         assert!(!["; ModuleID", "source_filename =", "target triple =", "define "]
             .iter().any(|marker| stderr.contains(*marker)),
+            "{name}: rejected source leaked LLVM IR on stderr");
+        let expected = match name {
+            "missing spread source" => Some("AGGREGATE_SPREAD_SOURCE_UNVERIFIED"),
+            "duplicate named field" => Some("AGGREGATE_SPREAD_DUPLICATE_NAMED_FIELD"),
+            "implicit aggregate escape" => Some("AGGREGATE_RETURN_TYPE_MISMATCH"),
+            _ => None, // Generic parser/type error controls lack stable code yet.
+        };
+        if let Some(code) = expected {
+            assert!(stderr.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .any(|token| token == code),
+                "{name}: expected exact diagnostic code {code}");
+        }
+        // The remainder below rejects crash-like text, mutated sources,
+        // and artifacts; no host exception is a successful type rejection.
             "{name}: rejected source leaked LLVM IR on stderr");
         let diagnostic = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
         assert!(!["segmentation fault", "stack trace", "traceback", "fatal signal", "unhandled exception", "process crashed"].iter().any(|marker| diagnostic.contains(marker)),
