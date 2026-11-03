@@ -98,7 +98,7 @@ case "$(uname -s)" in
       echo 'ELF entrypoint or program-header table is missing/invalid.' >&2
       exit 65
     }
-    executable_load=0
+    entry_mapped=0
     for ((index=0; index<phnum; index++)); do
       header=$((phoff + index * phentsize))
       ptype="$(LC_ALL=C od -An -tu4 -j"$header" -N4 "$work/program" | tr -d '[:space:]')"
@@ -106,20 +106,37 @@ case "$(uname -s)" in
       pflags="$(LC_ALL=C od -An -tu4 -j"$((header + 4))" -N4 "$work/program" | tr -d '[:space:]')"
       poffset="$(LC_ALL=C od -An -tu4 -j"$((header + 8))" -N4 "$work/program" | tr -d '[:space:]')"
       poffset_hi="$(LC_ALL=C od -An -tu4 -j"$((header + 12))" -N4 "$work/program" | tr -d '[:space:]')"
+      pvaddr_lo="$(LC_ALL=C od -An -tu4 -j"$((header + 16))" -N4 "$work/program" | tr -d '[:space:]')"
+      pvaddr_hi="$(LC_ALL=C od -An -tu4 -j"$((header + 20))" -N4 "$work/program" | tr -d '[:space:]')"
       pfilesz="$(LC_ALL=C od -An -tu4 -j"$((header + 32))" -N4 "$work/program" | tr -d '[:space:]')"
       pfilesz_hi="$(LC_ALL=C od -An -tu4 -j"$((header + 36))" -N4 "$work/program" | tr -d '[:space:]')"
+      pmemsz_lo="$(LC_ALL=C od -An -tu4 -j"$((header + 40))" -N4 "$work/program" | tr -d '[:space:]')"
+      pmemsz_hi="$(LC_ALL=C od -An -tu4 -j"$((header + 44))" -N4 "$work/program" | tr -d '[:space:]')"
       [[ "$poffset_hi" == 0 && "$pfilesz_hi" == 0 &&
          "$poffset" -le "$elf_size" &&
-         "$pfilesz" -le $((elf_size - poffset)) ]] || {
-        echo 'ELF PT_LOAD segment is outside the native image.' >&2
+         "$pfilesz" -le $((elf_size - poffset)) &&
+         ( "$pmemsz_hi" -gt 0 || "$pmemsz_lo" -ge "$pfilesz" ) ]] || {
+        echo 'ELF PT_LOAD segment has invalid file bounds or filesz > memsz.' >&2
         exit 65
       }
-      if (( (pflags & 1) != 0 && pfilesz > 0 )); then
-        executable_load=1
+      (( (pflags & 1) != 0 && pfilesz > 0 )) || continue
+      # Compare the 64-bit entrypoint and vaddr in unsigned 32-bit limbs.
+      # The file-backed segment is <4GiB in the bounded release profile;
+      # allow crossing one limb boundary but reject unrelated entrypoints.
+      if (( elf_entry_hi == pvaddr_hi && elf_entry_lo >= pvaddr_lo )); then
+        delta=$((elf_entry_lo - pvaddr_lo))
+      elif (( pvaddr_hi < 4294967295 && elf_entry_hi == pvaddr_hi + 1 &&
+               elf_entry_lo < pvaddr_lo )); then
+        delta=$((4294967296 - pvaddr_lo + elf_entry_lo))
+      else
+        continue
+      fi
+      if (( delta < pfilesz )); then
+        entry_mapped=1
       fi
     done
-    [[ "$executable_load" == 1 ]] || {
-      echo 'ELF has no file-backed executable PT_LOAD segment.' >&2
+    [[ "$entry_mapped" == 1 ]] || {
+      echo 'ELF entrypoint is not mapped by a file-backed executable PT_LOAD.' >&2
       exit 65
     }
     ;;
