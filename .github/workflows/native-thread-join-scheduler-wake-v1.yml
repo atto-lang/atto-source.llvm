@@ -7,6 +7,9 @@ on:
       - "tests/native_thread_join_scheduler_wake_throwing_gate_compile_fail.cpp"
       - "src/main/cpp/oreslang/runtime/NativeJoinActorSchedulerWakeV1.hpp"
       - "tests/native_join_actor_scheduler_single_worker_v1_test.cpp"
+      - "tests/native_join_real_task_continuation_scheduler_v1_test.cpp"
+      - "src/main/cpp/oreslang/runtime/NativeJoinTaskContinuationBridgeV1.hpp"
+      - "src/main/cpp/oreslang/runtime/TaskContinuationGate.hpp"
       - ".github/workflows/native-thread-join-scheduler-wake-v1.yml"
   workflow_dispatch:
 permissions:
@@ -91,3 +94,29 @@ jobs:
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread             -Isrc/main/cpp tests/native_thread_join_scheduler_wake_v1_test.cpp "$tmp/native.o"             -o "$tmp/join-wake"
           "$tmp/join-wake"
           printf 'SOURCE_NATIVE_JOIN_WAKE_HOST_ONLY_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
+
+      - name: Exact TaskContinuationGate through real one-worker scheduler
+        shell: bash
+        env:
+          CC: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          test "$(git hash-object tests/native_join_real_task_continuation_scheduler_v1_test.cpp)" = "f3acae7f6975af2643c751cbbdcecb42017dd93d"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeJoinTaskContinuationBridgeV1.hpp)" = "bedc82253a5500d773972472baf66bddeb34fc8b"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/TaskContinuationGate.hpp)" = "58f0d9710ff683139fe5df652878a58212006c2f"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          if [[ "$CC" == gcc ]]; then CXX=g++; else CXX=clang++; fi
+          flags=(-O2 -UNDEBUG)
+          if [[ "$MODE" == asan-ubsan ]]; then
+            flags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -UNDEBUG)
+            export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
+            export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+          fi
+          for unit in NativeThreadV1 NativeActorScheduler NativeExecutionContextStore NativeContinuationStore NativeAwaitTraceBridge; do
+            "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread -Isrc/main/cpp -c "src/main/cpp/oreslang/runtime/$unit.c" -o "$tmp/$unit.o"
+          done
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread -Isrc/main/cpp tests/native_join_real_task_continuation_scheduler_v1_test.cpp "$tmp/NativeThreadV1.o" "$tmp/NativeActorScheduler.o" "$tmp/NativeExecutionContextStore.o" "$tmp/NativeContinuationStore.o" "$tmp/NativeAwaitTraceBridge.o" -o "$tmp/task-continuation"
+          "$tmp/task-continuation"
+          echo "EXACT_TASK_CONTINUATION_REAL_SCHEDULER_HOST_ONLY_PASS compiler=$CC mode=$MODE"
