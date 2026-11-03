@@ -248,6 +248,52 @@ def main():
                 raise AssertionError(('atto hardlink twin ambiguity', result.returncode,
                                       result.stdout[:150], result.stderr))
             passed += 1
+        # Relative ../ is allowed inside the nearest package but cannot
+        # cross that package's physical root or enter a nested package.
+        directory = root/'atto-relative-parent-within-package'; directory.mkdir()
+        (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+        (directory/'app').mkdir()
+        (directory/'app/main.atto').write_text(
+            'import module Lib from "../lib"; pub fnc main():int{return Lib.answer();}')
+        (directory/'lib.atto').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        result = run([a.compiler, str(directory/'app/main.atto')])
+        if result.returncode:
+            raise AssertionError(('relative parent within package', result.stderr))
+        (directory/'guest.ll').write_text(result.stdout)
+        built = run([a.clang, str(directory/'guest.ll'), '-O2', '-o', str(directory/'guest')])
+        if built.returncode or run([str(directory/'guest')], env={'PATH':'/nonexistent'}).returncode != 42:
+            raise AssertionError(('relative parent within package execution', built.stderr))
+        passed += 1
+
+        directory = root/'atto-relative-package-escape'; directory.mkdir()
+        package = directory/'pkg'; (package/'app').mkdir(parents=True)
+        (package/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+        (package/'app/main.atto').write_text(
+            'import module Outside from "../../outside"; pub fnc main():int{return 0;}')
+        (directory/'outside.atto').write_text(
+            'define module Outside as pub fnc answer():int{return 42;} end')
+        result = run([a.compiler, str(package/'app/main.atto')])
+        if not result.returncode or result.stdout or 'escapes physical package root' not in result.stderr:
+            raise AssertionError(('relative package escape', result.returncode,
+                                  result.stdout[:150], result.stderr))
+        passed += 1
+
+        directory = root/'atto-relative-nested-package'; directory.mkdir()
+        (directory/'app').mkdir()
+        (directory/'nested').mkdir()
+        (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+        (directory/'nested/.ores.pkg.toml').write_text('schema_version = "1"\n')
+        (directory/'app/main.atto').write_text(
+            'import module Lib from "../nested/lib"; pub fnc main():int{return 0;}')
+        (directory/'nested/lib.atto').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        result = run([a.compiler, str(directory/'app/main.atto')])
+        if not result.returncode or result.stdout or 'nested package boundary' not in result.stderr:
+            raise AssertionError(('relative nested package crossing', result.returncode,
+                                  result.stdout[:150], result.stderr))
+        passed += 1
+
         for name, main_source, library_source, diagnostic in negatives:
             directory = root/name; directory.mkdir()
             (directory/'main.ores').write_text(main_source)
