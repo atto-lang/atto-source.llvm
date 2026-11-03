@@ -12,6 +12,21 @@ use std::{
 // Parallel test threads can read the same clock tick, so the stamp alone is not unique.
 static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
+// A freshly written fake compiler can still be open for writing in a sibling test's
+// fork-to-exec window, and Linux then refuses to execute it. Only that errno retries.
+fn retry_text_busy<T>(mut start: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    const ETXTBSY: i32 = 26;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match start() {
+            Err(e) if e.raw_os_error() == Some(ETXTBSY) && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            other => return other,
+        }
+    }
+}
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
@@ -71,13 +86,13 @@ fn check_case_with_suffix(
     let stdout_file = fs::File::create(&stdout_path).unwrap();
     let stderr_file = fs::File::create(&stderr_path).unwrap();
     let root_before = entries(root);
-    let mut child = Command::new(compiler)
+    let mut command = Command::new(compiler);
+    command
         .arg(&input)
         .current_dir(&dir)
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
-        .spawn()
-        .expect("start compiler");
+        .stderr(Stdio::from(stderr_file));
+    let mut child = retry_text_busy(|| command.spawn()).expect("start compiler");
     let deadline = Instant::now() + Duration::from_secs(20);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -356,7 +371,8 @@ mod tests {
         // Verify that this fixture genuinely launches and returns an owned
         // nonzero compiler-like exit. Otherwise catch_unwind would accept a
         // broken shebang or a spawn panic as proof of rejection.
-        let probe = Command::new(&compiler).output().expect("fake compiler must execute");
+        let probe = retry_text_busy(|| Command::new(&compiler).output())
+            .expect("fake compiler must execute");
         assert_eq!(probe.status.code(), Some(1));
         assert!(probe.stdout.is_empty());
         let probe_stderr = String::from_utf8(probe.stderr).unwrap();
@@ -384,7 +400,8 @@ mod tests {
         let mut permissions = fs::metadata(&compiler).unwrap().permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&compiler, permissions).unwrap();
-        let probe = Command::new(&compiler).output().expect("fake compiler must execute");
+        let probe = retry_text_busy(|| Command::new(&compiler).output())
+            .expect("fake compiler must execute");
         assert_eq!(probe.status.code(), Some(2));
         assert!(probe.stdout.is_empty());
         assert_eq!(String::from_utf8(probe.stderr).unwrap().lines().count(), 1);
@@ -410,7 +427,8 @@ mod tests {
         let mut permissions = fs::metadata(&compiler).unwrap().permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&compiler, permissions).unwrap();
-        let probe = Command::new(&compiler).output().expect("fake compiler must execute");
+        let probe = retry_text_busy(|| Command::new(&compiler).output())
+            .expect("fake compiler must execute");
         assert_eq!(probe.status.code(), Some(1));
         assert!(probe.stdout.is_empty());
         assert_eq!(String::from_utf8(probe.stderr).unwrap().trim_end(), forged);
