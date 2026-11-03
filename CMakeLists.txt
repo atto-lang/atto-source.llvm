@@ -4612,3 +4612,17 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_join_task_continuation_bridge_host_only
         PROPERTIES TIMEOUT 45)
 endif()
+
+
+# M0 native guest-source admission. This exercises the real LLVM frontend with
+# four negative .ores fixtures; no host-only model can substitute for this gate.
+# Thread lowering remains fail-closed until AST ownership + isolate generation
+# + async scheduler join are implemented and evidenced.
+if(BUILD_TESTING)
+    add_test(NAME native_thread_source_admission_m0
+        COMMAND "${CMAKE_COMMAND}"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/native-thread-source-admission-m0"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_thread_source_admission_m0.cmake")
+    set_tests_properties(native_thread_source_admission_m0 PROPERTIES TIMEOUT 60)
+endif()
