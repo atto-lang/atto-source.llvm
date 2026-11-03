@@ -4,18 +4,23 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+// Parallel test threads can read the same clock tick, so the stamp alone is not unique.
+static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
+        let serial = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = env::temp_dir().join(format!("ores-borrow-{}-{stamp}", std::process::id()));
+        let path = env::temp_dir().join(format!("ores-borrow-{}-{stamp}-{serial}", std::process::id()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -136,6 +141,12 @@ fn check_case_with_suffix(
             ), "{name}: compiler-owned guarded-sharing diagnostic required: {stderr}");
             let offset = line.rsplit_once(" at byte ").map(|(_, value)| value)
                 .expect("guarded-sharing byte offset");
+            // The compiler names the source file after the offset; nothing else may follow.
+            let offset = offset.rsplit_once(" [file: ").map_or(offset, |(digits, file)| {
+                assert!(file.strip_suffix(']').is_some_and(|name| name.starts_with("input.")),
+                    "{name}: unexpected source attribution: {stderr}");
+                digits
+            });
             assert!(!offset.is_empty() && offset.bytes().all(|byte| byte.is_ascii_digit()),
                 "{name}: malformed or appended guarded-sharing diagnostic: {stderr}");
         }
