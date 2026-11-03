@@ -40,5 +40,32 @@ if (( ${#runtime_sources[@]} )); then
 else
   "$clang" -O2 -x ir "$work/program.ll" -o "$work/program"
 fi
+# Fail closed before publishing. A successful subprocess exit is not proof that
+# the output is a native executable: a broken wrapper can emit IR, a shell script,
+# a library or nothing. The native ABI is verified again by the Rust CTest.
+[[ -s "$work/program" && -x "$work/program" ]] || {
+  echo 'Clang did not produce a nonempty executable.' >&2
+  exit 65
+}
+magic="$(LC_ALL=C od -An -tx1 -N4 "$work/program" | tr -d '[:space:]')"
+case "$(uname -s)" in
+  Linux*)
+    [[ "$magic" == 7f454c46 ]] || {
+      echo "Expected ELF native executable, found magic $magic" >&2
+      exit 65
+    }
+    ;;
+  Darwin*)
+    [[ "$magic" == cffaedfe || "$magic" == feedfacf || \
+       "$magic" == cefaedfe || "$magic" == feedface ]] || {
+      echo "Expected Mach-O native executable, found magic $magic" >&2
+      exit 65
+    }
+    ;;
+  *)
+    echo 'Standalone AOT driver has not been qualified on this host OS.' >&2
+    exit 69
+    ;;
+esac
 mv -f -- "$work/program" "$output_file"
 printf 'Native executable: %s\n' "$output_file"
