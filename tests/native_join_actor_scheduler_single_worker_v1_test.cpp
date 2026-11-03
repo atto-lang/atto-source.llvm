@@ -95,8 +95,13 @@ void on_message(void* raw, size_t actor_index, uint64_t payload) {
         // The original Task's turn returns to the only carrier.
         // The carrier must execute payload 2 while pthread is gated.
         s.phase.store(1, std::memory_order_release);
-        assert(ores_native_actor_scheduler_try_send(
-            s.scheduler, s.actor, 2) == ORES_NATIVE_SEND_ACCEPTED);
+        if (!s.cancel_before_completion) {
+            assert(ores_native_actor_scheduler_try_send(
+                s.scheduler, s.actor, 2) == ORES_NATIVE_SEND_ACCEPTED);
+        }
+        // In the cancellation case the HOST explicitly submits the second
+        // turn after retiring the wake credit, avoiding a timing-dependent
+        // race between setup and pthread completion.
         return;
     }
     assert(payload == 2);
@@ -153,6 +158,8 @@ void run(bool cancel_before_completion) {
     if (cancel_before_completion) {
         s.gate->cancel();
         assert(s.queue->retire());
+        assert(ores_native_actor_scheduler_try_send(
+            s.scheduler, s.actor, 2) == ORES_NATIVE_SEND_ACCEPTED);
     } else {
         std::unique_lock<std::mutex> guard(s.lock);
         assert(s.cv.wait_for(
@@ -173,6 +180,10 @@ void run(bool cancel_before_completion) {
         assert(ores_native_actor_scheduler_wakes_completed(s.scheduler) <= 1);
         assert(s.queue->publish_status() == ORES_NATIVE_WAKE_PUBLISHED);
     }
+    // The wake callback signals the host BEFORE the scheduler decrements
+    // its own wake loan. Drain is the required physical-turn quiescence
+    // fence; an immediate outstanding-credit assertion would race cleanup.
+    assert(ores_native_actor_scheduler_drain(s.scheduler));
     assert(ores_native_actor_scheduler_outstanding_wake_loans(
         s.scheduler, s.actor) == 0);
     s.queue.reset();
