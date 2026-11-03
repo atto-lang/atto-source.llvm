@@ -53,6 +53,24 @@ int main() {
     const auto resolve = [&](const fs::path& source, std::string_view raw) {
         return oreslang::resolve_project_root_import(source, raw, read_manifest);
     };
+    // The shared extension selector is used by both project-root and
+    // relative imports. Confirm it never guesses the other language's file.
+    using oreslang::project_root_import_detail::source_extension_for_implicit_import;
+    using oreslang::project_root_import_detail::source_extension_supported;
+    if (source_extension_for_implicit_import(fs::path("src/main.atto"))
+            != fs::path(".atto") ||
+        source_extension_for_implicit_import(fs::path("src/main.ores"))
+            != fs::path(".ores") ||
+        !source_extension_supported(fs::path("module.atto")) ||
+        !source_extension_supported(fs::path("module.ores")) ||
+        source_extension_supported(fs::path("module.txt")))
+        throw std::runtime_error("native shared import extension selector mismatch");
+    must_fail("unknown source extension", "must use .atto or legacy .ores",
+              [&] {
+                  (void)source_extension_for_implicit_import(
+                      fs::path("src/main.txt"));
+              });
+
 
     {
         const auto dir = temp / "positive";
