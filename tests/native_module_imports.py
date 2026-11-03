@@ -95,6 +95,16 @@ def main():
             '.ores.pkg.toml': 'schema_version = "1"\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
+        ('atto-native-package-manifest', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.atto.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-native-manifest-explicit-legacy', {
+            'main.atto': 'import module Lib from "+/lib.ores"; pub fnc main():int{return Lib.answer();}',
+            '.atto.pkg.toml': 'schema_version = "1"\n',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
         ('atto-project-root-explicit-modern-with-twin', {
             'main.atto': 'import module Lib from "+/lib.atto"; pub fnc main():int{return Lib.answer();}',
             '.ores.pkg.toml': 'schema_version = "1"\n',
@@ -205,6 +215,33 @@ def main():
             result = run([a.compiler, str(directory/'main.atto')])
             if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
                 raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        # Reject simultaneous package authority and cross-generation nested
+        # boundaries before emitting any LLVM IR.
+        for name, files, diagnostic in [
+            ('atto-both-package-markers', {
+                'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
+                '.atto.pkg.toml': 'schema_version = "1"\n',
+                '.ores.pkg.toml': 'schema_version = "1"\n',
+                'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+            }, 'conflicting .atto and .ores manifests'),
+            ('atto-modern-parent-legacy-child', {
+                'app/main.atto': 'import module Lib from "+/nested/lib"; pub fnc main():int{return 0;}',
+                '.atto.pkg.toml': 'schema_version = "1"\n',
+                'nested/.ores.pkg.toml': 'schema_version = "1"\n',
+                'nested/lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+            }, 'nested package boundary'),
+        ]:
+            directory = root/name; directory.mkdir()
+            for filename, source in files.items():
+                file_path = directory/filename
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_text(source)
+            entry = directory/('app/main.atto' if 'app/main.atto' in files else 'main.atto')
+            result = run([a.compiler, str(entry)])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode,
+                                      result.stdout[:150], result.stderr))
             passed += 1
         # Project-root security failures must be compiler failures too, not
         # only host-resolver unit failures. Every case requires zero IR.
