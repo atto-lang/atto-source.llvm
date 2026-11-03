@@ -5,6 +5,8 @@ on:
       - "src/main/cpp/oreslang/runtime/NativeThreadJoinSchedulerWakeV1.hpp"
       - "tests/native_thread_join_scheduler_wake_v1_test.cpp"
       - "tests/native_thread_join_scheduler_wake_throwing_gate_compile_fail.cpp"
+      - "src/main/cpp/oreslang/runtime/NativeJoinActorSchedulerWakeV1.hpp"
+      - "tests/native_join_actor_scheduler_single_worker_v1_test.cpp"
       - ".github/workflows/native-thread-join-scheduler-wake-v1.yml"
   workflow_dispatch:
 permissions:
@@ -44,6 +46,31 @@ jobs:
             exit 1
           fi
           grep -Fq "native join wake gate notify_ready must return bool and be noexcept" "$tmp"
+      - name: Prove real one-worker scheduler progress while native join pending
+        shell: bash
+        env:
+          CC: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeJoinActorSchedulerWakeV1.hpp)" = "cdcc4397075453f5e0b432f2cbe806c2eb727377"
+          test "$(git hash-object tests/native_join_actor_scheduler_single_worker_v1_test.cpp)" = "9e691eb1756723dd249fb755d71f7cd09b2b40aa"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "4b7cab067a3e5980f4a000a14e0682cef21b6daa"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeThreadV1.c)" = "c3cb61b3e063c3173b5548b183ebab84726dd613"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          if [[ "$CC" == gcc ]]; then CXX=g++; else CXX=clang++; fi
+          flags=(-O2 -UNDEBUG)
+          if [[ "$MODE" == asan-ubsan ]]; then
+            flags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -UNDEBUG)
+            export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
+            export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+          fi
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c -o "$tmp/scheduler.o"
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeThreadV1.c -o "$tmp/native.o"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread -Isrc/main/cpp tests/native_join_actor_scheduler_single_worker_v1_test.cpp "$tmp/scheduler.o" "$tmp/native.o" -o "$tmp/single-worker"
+          "$tmp/single-worker"
+          echo "REAL_SINGLE_WORKER_NATIVE_JOIN_HOST_ONLY_PASS compiler=$CC mode=$MODE"
       - name: Run real native join scheduler-wake host bridge
         shell: bash
         env:
