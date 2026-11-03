@@ -4513,3 +4513,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_state_container_virtual_actor_source_admission
         PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only logical HTTP RequestLocal: independent of native pthread TLS.
+# Real actor scheduler and cancellation are exercised; .atto compiler
+# lowering and true Task continuation migration are separate release gates.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-request-context-local-v1-test
+        tests/native_request_context_local_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-request-context-local-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-request-context-local-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-request-context-local-v1-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-request-context-local-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_request_context_local_host_only
+        COMMAND oreslang-request-context-local-v1-test)
+    set_tests_properties(native_request_context_local_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
