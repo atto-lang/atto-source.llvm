@@ -141,14 +141,17 @@ int main() {
     // named write copies O(n^2) field strings at the 1,024-element budget.
     // Geometric growth should require only a handful of vector reallocations.
     NativeAggregateSpreadPlan growth(Kind::ReadonlyRecord);
+    NativeAggregateShape repeated_source{Kind::ExactStruct, {{"x", "int"}}};
+    repeated_source.canonicalize();
     std::size_t capacity_changes = 0;
     std::size_t last_capacity = growth.source_ordered_writes().capacity();
     for (int i = 0; i < 1024; ++i) {
-        growth.add_named("growth_" + std::to_string(i), "int");
+        growth.add_checked_spread_projection(repeated_source);
         const auto& writes = growth.source_ordered_writes();
         CHECK(writes.size() == static_cast<std::size_t>(i + 1));
         CHECK(writes.capacity() >= writes.size());
-        CHECK(writes.capacity() <= 8192);
+        // C++ only guarantees capacity >= reserve request, not an upper
+        // bound: do not assert a nonportable maximum capacity here.
         if (writes.capacity() != last_capacity) {
             CHECK(writes.capacity() > last_capacity);
             ++capacity_changes;
@@ -157,7 +160,8 @@ int main() {
     }
     CHECK(growth.source_elements() == 1024);
     CHECK(capacity_changes >= 1 && capacity_changes <= 12);
-    CHECK(denies([&] { growth.add_named("overflow", "int"); },
+    CHECK(growth.result_shape().fields.size() == 1);
+    CHECK(denies([&] { growth.add_checked_spread_projection(repeated_source); },
                  "AGGREGATE_SPREAD_PLAN_BUDGET"));
     CHECK(growth.source_elements() == 1024);
     CHECK(growth.source_ordered_writes().size() == 1024);
