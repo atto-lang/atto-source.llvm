@@ -47,6 +47,11 @@ def fixture():
                        "--clang", "/usr/bin/clang", "--root", "/work/src"]
             if name == "source_actor_compiled_native_asan_ubsan":
                 command.append("--sanitize")
+        elif name.startswith("native_aggregate_positive_harness_selftest"):
+            command = [sys.executable]
+            if name.endswith("_python_O"):
+                command.append("-O")
+            command.append("/work/src/tests/test_native_aggregate_positive_execution_harness.py")
         elif name == "native_ctest_manifest_harness_adversarial":
             command = [sys.executable, "-m", "unittest", "discover",
                        "-s", "/work/src/tests", "-p", "test_ctest_manifest_gate.py", "-v"]
@@ -78,6 +83,41 @@ class ManifestAuditTests(unittest.TestCase):
     def fail_on(self, expected):
         with self.assertRaisesRegex(ManifestFailure, expected):
             check_manifest(self.manifest)
+
+    def test_aggregate_admission_harness_cannot_be_omitted(self):
+        self.manifest["tests"] = [
+            item for item in self.manifest["tests"]
+            if item["name"] != "native_aggregate_positive_harness_selftest"
+        ]
+        self.fail_on("required CTest was not registered")
+
+    def test_aggregate_admission_optimized_harness_cannot_be_omitted(self):
+        self.manifest["tests"] = [
+            item for item in self.manifest["tests"]
+            if item["name"] != "native_aggregate_positive_harness_selftest_python_O"
+        ]
+        self.fail_on("required CTest was not registered")
+
+    def test_aggregate_admission_harness_wrong_script_denied(self):
+        for test in self.manifest["tests"]:
+            if test["name"] == "native_aggregate_positive_harness_selftest":
+                test["command"][-1] = "/work/src/tests/noop.py"
+                break
+        self.fail_on("aggregate guest harness has wrong interpreter")
+
+    def test_aggregate_admission_harness_missing_python_O_denied(self):
+        for test in self.manifest["tests"]:
+            if test["name"] == "native_aggregate_positive_harness_selftest_python_O":
+                test["command"].remove("-O")
+                break
+        self.fail_on("aggregate guest harness has wrong interpreter")
+
+    def test_aggregate_admission_harness_forged_python_O_denied(self):
+        for test in self.manifest["tests"]:
+            if test["name"] == "native_aggregate_positive_harness_selftest":
+                test["command"].insert(1, "-O")
+                break
+        self.fail_on("aggregate guest harness has wrong interpreter")
 
     def test_borrow_matrix_sanitizer_is_mandatory(self):
         entry = next(x for x in self.manifest["tests"]
