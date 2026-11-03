@@ -1,4 +1,14 @@
-# Oreslang LLVM backend
+# AttoLang Native LLVM backend
+
+**AttoLang** is the current public language name (formerly **Oreslang**).
+This compiler/runtime remains the independent native LLVM implementation; existing tool names, `.ores` fixtures, module identifiers and compiled ABI remain unchanged.
+This branding change does not establish new syntax, source-extension support,
+execution parity, AOT capabilities or zero-GC guarantees. New source SHOULD
+use `.atto` only after this particular backend has passed a real compile/run
+admission test; `.ores` remains supported wherever already implemented.
+Do not rename repositories, dependencies, commands or fixed interfaces merely
+to make their names match the public brand.
+
 
 Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
 Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
