@@ -20,6 +20,7 @@ typedef struct ores_context_v1 {
 
 struct ores_native_thread_scope_v1 {
     pthread_mutex_t lock;
+    ores_native_thread_isolate_key_v1 isolate_key; /* immutable after publish */
     unsigned capacity;
     unsigned outstanding; /* joined + released, not merely completed */
     int closing;
@@ -276,6 +277,75 @@ ores_thread_status_v1 ores_native_thread_scope_destroy_v1(
     if (pthread_mutex_destroy(&scope->lock) != 0) return ORES_THREAD_OS_ERROR_V1;
     free(scope);
     return ORES_THREAD_OK_V1;
+}
+
+/* Isolate identity guards are defense-in-depth routing checks.
+ * Identity is NOT a bearer capability: only a trusted supervisor may hold
+ * the scope pointer and mint the expected key passed to these entry points.
+ * The original unkeyed host functions remain internal/privileged ABI. */
+static int ores_isolate_key_valid_v1(ores_native_thread_isolate_key_v1 key) {
+    return key.tenant_id != 0 && key.isolate_id != 0 &&
+           key.generation != 0;
+}
+
+static int ores_isolate_key_matches_v1(
+    const ores_native_thread_scope_v1 *scope,
+    ores_native_thread_isolate_key_v1 expected) {
+    return scope->isolate_key.tenant_id == expected.tenant_id &&
+           scope->isolate_key.isolate_id == expected.isolate_id &&
+           scope->isolate_key.generation == expected.generation;
+}
+
+ores_thread_status_v1 ores_native_thread_scope_open_isolate_v1(
+    ores_native_thread_isolate_key_v1 key, unsigned capacity,
+    ores_native_thread_scope_v1 **out) {
+    if (!out) return ORES_THREAD_BAD_ARGUMENT_V1;
+    *out = NULL;
+    if (!ores_isolate_key_valid_v1(key))
+        return ORES_THREAD_BAD_ARGUMENT_V1;
+    ores_native_thread_scope_v1 *scope = NULL;
+    const ores_thread_status_v1 result =
+        ores_native_thread_scope_open_v1(capacity, &scope);
+    if (result != ORES_THREAD_OK_V1) return result;
+    scope->isolate_key = key; /* caller has not yet received the pointer */
+    *out = scope;
+    return ORES_THREAD_OK_V1;
+}
+
+ores_thread_status_v1 ores_native_thread_scope_spawn_isolate_v1(
+    ores_native_thread_scope_v1 *scope,
+    ores_native_thread_isolate_key_v1 expected,
+    ores_native_thread_entry_v1 entry, void *owned_arg,
+    ores_native_thread_drop_v1 drop_arg, ores_native_thread_v1 **out) {
+    if (!out) return ORES_THREAD_BAD_ARGUMENT_V1;
+    *out = NULL;
+    if (!scope || !ores_isolate_key_valid_v1(expected) ||
+            !entry || (owned_arg && !drop_arg))
+        return ORES_THREAD_BAD_ARGUMENT_V1;
+    if (!ores_isolate_key_matches_v1(scope, expected))
+        return ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1;
+    return ores_native_thread_scope_spawn_v1(
+        scope, entry, owned_arg, drop_arg, out);
+}
+
+ores_thread_status_v1 ores_native_thread_scope_close_isolate_v1(
+    ores_native_thread_scope_v1 *scope,
+    ores_native_thread_isolate_key_v1 expected) {
+    if (!scope || !ores_isolate_key_valid_v1(expected))
+        return ORES_THREAD_BAD_ARGUMENT_V1;
+    if (!ores_isolate_key_matches_v1(scope, expected))
+        return ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1;
+    return ores_native_thread_scope_close_v1(scope);
+}
+
+ores_thread_status_v1 ores_native_thread_scope_destroy_isolate_v1(
+    ores_native_thread_scope_v1 *scope,
+    ores_native_thread_isolate_key_v1 expected) {
+    if (!scope || !ores_isolate_key_valid_v1(expected))
+        return ORES_THREAD_BAD_ARGUMENT_V1;
+    if (!ores_isolate_key_matches_v1(scope, expected))
+        return ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1;
+    return ores_native_thread_scope_destroy_v1(scope);
 }
 
 ores_thread_status_v1 ores_native_thread_id_v1(uint64_t *out_id) {
