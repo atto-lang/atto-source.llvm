@@ -88,7 +88,7 @@ def main():
         ('atto-project-root', {
             'main.atto': 'import module Math from "+/math"; pub fnc main():int{return Math.answer();}',
             'math.atto': 'define module Math as pub fnc answer():int{return 42;} end',
-            '.atto.pkg.toml': 'schema_version = "1"\\n',
+            '.atto.pkg.toml': 'schema_version = "1"\n',
         }, 42),
         ('atto-explicit-legacy', {
             'main.atto': 'import module Math from "./math.ores"; pub fnc main():int{return Math.answer();}',
@@ -97,7 +97,7 @@ def main():
         ('atto-root-explicit-legacy', {
             'main.atto': 'import module Math from "+/math.ores"; pub fnc main():int{return Math.answer();}',
             'math.ores': 'define module Math as pub fnc answer():int{return 42;} end',
-            '.atto.pkg.toml': 'schema_version = "1"\\n',
+            '.atto.pkg.toml': 'schema_version = "1"\n',
         }, 42),
         ('atto-same-stem-precedence', {
             'main.atto': 'import module Math from "./math"; pub fnc main():int{return Math.answer();}',
@@ -198,13 +198,13 @@ def main():
             ('atto-no-root-downgrade', {
                 'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
                 'lib.ores': library,
-                '.atto.pkg.toml': 'schema_version = "1"\\n',
+                '.atto.pkg.toml': 'schema_version = "1"\n',
             }, 'cannot resolve native project-root import'),
             ('atto-dual-manifest', {
                 'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
                 'lib.atto': library,
-                '.atto.pkg.toml': 'schema_version = "1"\\n',
-                '.ores.pkg.toml': 'schema_version = "1"\\n',
+                '.atto.pkg.toml': 'schema_version = "1"\n',
+                '.ores.pkg.toml': 'schema_version = "1"\n',
             }, 'conflicting'),
             ('atto-invalid-explicit-extension', {
                 'main.atto': 'import module Lib from "./lib.txt"; pub fnc main():int{return 0;}',
