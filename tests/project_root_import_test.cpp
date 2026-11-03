@@ -236,9 +236,9 @@ int main() {
 #endif
     {
         const auto dir = temp / "atto-canonical-manifest";
-        write_text(dir/".ores.pkg.toml", "schema_version = \"999\"\\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"999\"\n");
         write_text(dir/".atto.pkg.toml",
-                   "schema_version = \"1\"\\n[project]\\nname = \"attolang\"\\nroot = \".\"\\n");
+                   "schema_version = \"1\"\n[project]\nname = \"attolang\"\nroot = \".\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         write_text(dir/"lib.ores", "");
@@ -255,8 +255,8 @@ int main() {
     }
     {
         const auto dir = temp / "atto-malformed-manifest";
-        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\\n");
-        write_text(dir/".atto.pkg.toml", "schema_version = \"999\"\\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/".atto.pkg.toml", "schema_version = \"999\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         must_fail("canonical malformed does not downgrade to legacy", "schema_version",
@@ -264,9 +264,9 @@ int main() {
     }
     {
         const auto dir = temp / "atto-nested-boundary";
-        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\\n");
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.atto", "");
-        write_text(dir/"nested/.atto.pkg.toml", "schema_version = \"1\"\\n");
+        write_text(dir/"nested/.atto.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"nested/lib.atto", "");
         must_fail("canonical nested boundary", "nested package boundary",
                   [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
