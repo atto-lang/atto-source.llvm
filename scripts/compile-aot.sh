@@ -56,8 +56,7 @@ case "$(uname -s)" in
     }
     ;;
   Darwin*)
-    [[ "$magic" == cffaedfe || "$magic" == feedfacf || \
-       "$magic" == cefaedfe || "$magic" == feedface ]] || {
+    [[ "$magic" == cffaedfe || "$magic" == feedfacf ]] || {
       echo "Expected Mach-O native executable, found magic $magic" >&2
       exit 65
     }
