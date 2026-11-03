@@ -41,10 +41,11 @@ done
 case "$FAKE_OUTPUT_KIND" in
   empty) : > "$out" ;;
   shell) printf '#!/bin/sh\nexit 42\n' > "$out" ;;
-  forged-elf)
-    dd if=/dev/zero of="$out" bs=1 count=128 status=none
+  forged-elf|forged-class|forged-noexec|forged-range|forged-phoff)
+    dd if=/dev/zero of="$out" bs=1 count=256 status=none
     printf '\177ELF\002\001\001' | dd of="$out" bs=1 seek=0 conv=notrunc status=none
-    # ET_DYN, host e_machine, version 1, but intentionally no e_entry.
+    # A deliberately forged ET_DYN ELF64 with an executable PT_LOAD:
+    # each case corrupts one independently necessary admission condition.
     printf '\003\000' | dd of="$out" bs=1 seek=16 conv=notrunc status=none
     case "$(uname -m)" in
       x86_64) printf '\076\000' ;;
@@ -54,6 +55,23 @@ case "$FAKE_OUTPUT_KIND" in
     printf '\001\000\000\000' | dd of="$out" bs=1 seek=20 conv=notrunc status=none
     printf '\100\000\000\000\000\000\000\000' | dd of="$out" bs=1 seek=32 conv=notrunc status=none
     printf '\100\000\070\000\001\000' | dd of="$out" bs=1 seek=52 conv=notrunc status=none
+    printf '\001\000\000\000\005\000\000\000' | dd of="$out" bs=1 seek=64 conv=notrunc status=none
+    printf '\200\000\000\000\000\000\000\000' | dd of="$out" bs=1 seek=72 conv=notrunc status=none
+    printf '\040\000\000\000\000\000\000\000' | dd of="$out" bs=1 seek=96 conv=notrunc status=none
+    if [[ "$FAKE_OUTPUT_KIND" != forged-elf ]]; then
+      printf '\000\020\000\000\000\000\000\000' |
+        dd of="$out" bs=1 seek=24 conv=notrunc status=none
+    fi
+    case "$FAKE_OUTPUT_KIND" in
+      forged-class)
+        printf '\001' | dd of="$out" bs=1 seek=4 conv=notrunc status=none ;;
+      forged-noexec)
+        printf '\004\000\000\000' | dd of="$out" bs=1 seek=68 conv=notrunc status=none ;;
+      forged-range)
+        printf '\377\377\377\177' | dd of="$out" bs=1 seek=72 conv=notrunc status=none ;;
+      forged-phoff)
+        printf '\001\000\000\000' | dd of="$out" bs=1 seek=36 conv=notrunc status=none ;;
+    esac
     ;;
   *) exit 64 ;;
 esac
@@ -87,7 +105,7 @@ second="$(sha256sum "$output" | cut -d' ' -f1)"
 }
 
 printf 'define pub fnc main() -> int { return 42; }\n' > "$source"
-for kind in empty shell forged-elf; do
+for kind in empty shell forged-elf forged-class forged-noexec forged-range forged-phoff; do
   if ORESLANG_LLVMC="$work/fake-llvmc" CLANG="$work/fake-linker" \
       FAKE_OUTPUT_KIND="$kind" bash "$driver" "$source" "$output" \
       > "$work/$kind.stdout" 2> "$work/$kind.stderr"; then
