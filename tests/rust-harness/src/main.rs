@@ -350,14 +350,17 @@ fn assert_native_aot_artifact(image: &[u8]) -> Result<(), String> {
             };
             let cpu = u32::from_le_bytes([image[4], image[5], image[6], image[7]]);
             require(cpu == expected_cpu, format!("wrong Mach-O architecture: {cpu}"))?;
+            let file_type = u32::from_le_bytes([image[12], image[13], image[14], image[15]]);
+            require(file_type == 2, "expected MH_EXECUTE, not a Mach-O object or dylib")?;
         }
         "windows" => {
             require(image.starts_with(b"MZ"), "expected PE executable")?;
             let pe_offset = u32::from_le_bytes([image[60], image[61], image[62], image[63]]) as usize;
             require(
-                image.get(pe_offset..pe_offset.saturating_add(4)) == Some(&b"PE\0\0"[..]),
-                "expected a valid PE signature",
+                pe_offset >= 64 && pe_offset <= image.len().saturating_sub(24),
+                "PE signature or COFF header falls outside the artifact",
             )?;
+            require(&image[pe_offset..pe_offset + 4] == b"PE\0\0", "expected a valid PE signature")?;
             let machine = u16::from_le_bytes([image[pe_offset + 4], image[pe_offset + 5]]);
             let expected = match std::env::consts::ARCH {
                 "x86_64" => 0x8664u16,
@@ -365,9 +368,37 @@ fn assert_native_aot_artifact(image: &[u8]) -> Result<(), String> {
                 other => return Err(format!("unsupported native AOT architecture: {other}")),
             };
             require(machine == expected, format!("wrong PE architecture: {machine}"))?;
+            let flags = u16::from_le_bytes([image[pe_offset + 22], image[pe_offset + 23]]);
+            require(flags & 0x0002 != 0 && flags & 0x2000 == 0,
+                "PE artifact is not an executable or is a DLL")?;
         }
         other => return Err(format!("unqualified native AOT host OS: {other}")),
     }
+    Ok(())
+}
+
+// Executable header checks are not a substitute for execution. These adversarial
+// byte fixtures ensure the pre-execution ABI gate cannot accept trivial scripts,
+// empty link outputs, or a truncated/forged PE header.
+fn aot_artifact_header_selftest() -> Result<(), String> {
+    for (name, payload) in [
+        ("empty", vec![]),
+        ("shell", b"#!/bin/sh\nexit 42\n".to_vec()),
+        ("zeros", vec![0u8; 128]),
+    ] {
+        require(assert_native_aot_artifact(&payload).is_err(),
+            format!("admitted forged native artifact: {name}"))?;
+    }
+    let mut forged = vec![0u8; 128];
+    forged[..2].copy_from_slice(b"MZ");
+    forged[60..64].copy_from_slice(&125u32.to_le_bytes());
+    require(assert_native_aot_artifact(&forged).is_err(),
+        "admitted truncated PE signature/COFF header")?;
+    let mut forged = vec![0u8; 128];
+    forged[..4].copy_from_slice(b"\x7fELF");
+    require(assert_native_aot_artifact(&forged).is_err(),
+        "admitted truncated ELF without valid type/machine")?;
+    println!("native AOT artifact header negative selftest: PASS");
     Ok(())
 }
 
@@ -918,6 +949,7 @@ fn real_main() -> Result<(), String> {
             let vectors = path_arg(&args, 3, "usage: tagged-message-wire <binary> <vectors>")?;
             tagged_message_wire(&binary, &vectors)
         }
+        Some("aot-artifact-header-selftest") => aot_artifact_header_selftest(),
         Some("aot-driver") => {
             let driver = path_arg(&args, 2, "usage: aot-driver <driver> <compiler> <clang>")?;
             let compiler = path_arg(&args, 3, "usage: aot-driver <driver> <compiler> <clang>")?;
