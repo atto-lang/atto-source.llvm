@@ -24,6 +24,15 @@ import tempfile
 SOURCE_REPO = "ores-truffle-oreslang/oreslang-source.llvm"
 SOURCE_REPO_ID = 1410897874
 SOURCE_BRANCH = "main"
+INCIDENT_REPO = "ores-truffle-oreslang/oreslang-platform-conformance"
+INCIDENT_GATES = (
+    (22, 5832921751,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22"),
+    (77, 5904679716,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/77"),
+    (127, 5935338521,
+     "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/127"),
+)
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
@@ -603,7 +612,8 @@ def validate_test_plan(plan_bytes, source_pr):
 
     allowed_fields = {
         "schema", "source_repo", "allowed_prs", "commands",
-        "required_source_blobs", "maven_pom_blob_sha",
+        "required_source_blobs", "required_source_head_sha",
+        "required_source_root_tree_sha", "maven_pom_blob_sha",
         "maven_prefetch_artifacts",
     }
     if not set(plan).issubset(allowed_fields):
@@ -616,6 +626,18 @@ def validate_test_plan(plan_bytes, source_pr):
                    or value <= 0 for value in allowed)
             or len(set(allowed)) != len(allowed)):
         raise Denied("reviewed test plan does not authorize source PR")
+
+    required_head = plan.get("required_source_head_sha")
+    required_tree = plan.get("required_source_root_tree_sha")
+    if (required_head is None) != (required_tree is None):
+        raise Denied("reviewed test plan source snapshot pins must be paired")
+    if required_head is not None:
+        required_head = valid_sha(
+            required_head, "reviewed test plan source head pin invalid"
+        )
+        required_tree = valid_sha(
+            required_tree, "reviewed test plan source root tree pin invalid"
+        )
 
     required = plan.get("required_source_blobs", {})
     if not isinstance(required, dict):
@@ -682,10 +704,25 @@ def validate_test_plan(plan_bytes, source_pr):
     return {
         "sha256": hashlib.sha256(plan_bytes).hexdigest(),
         "required_source_blobs": checked_required,
+        "required_source_head_sha": required_head,
+        "required_source_root_tree_sha": required_tree,
         "uses_maven": uses_maven,
         "maven_pom_blob_sha": checked_required.get("pom.xml"),
         "maven_prefetch_artifacts": extras,
     }
+
+
+def verify_required_source_snapshot(plan_meta, source_commit, source_tree=None):
+    required_head = plan_meta.get("required_source_head_sha")
+    required_tree = plan_meta.get("required_source_root_tree_sha")
+    if required_head is None and required_tree is None:
+        return
+    if required_head is None or required_tree is None:
+        raise Denied("reviewed test plan source snapshot pins are incomplete")
+    if source_commit != required_head:
+        raise Denied("source head differs from reviewed test plan")
+    if source_tree is not None and source_tree != required_tree:
+        raise Denied("source root tree differs from reviewed test plan")
 
 
 def verify_required_source_blobs(files, required):
@@ -699,8 +736,26 @@ def verify_required_source_blobs(files, required):
             )
 
 
+def require_incident_closure():
+    """Require independent completion of every pinned private-CI P0 incident."""
+    for number, issue_id, html_url in INCIDENT_GATES:
+        issue = gh_api(f"repos/{INCIDENT_REPO}/issues/{number}")
+        if (not isinstance(issue, dict)
+                or issue.get("id") != issue_id
+                or issue.get("number") != number
+                or issue.get("html_url") != html_url
+                or issue.get("state") != "closed"
+                or issue.get("state_reason") != "completed"
+                or "pull_request" in issue):
+            raise Denied(
+                f"platform-conformance incident #{number} is not independently completed"
+            )
+    return True
+
+
 def protected_authority(repository, source_pr, test_plan):
-    """Attest this exact script plus local policies to enforced protected source main."""
+    """Attest incidents, this exact script, and local policies to enforced protected source main."""
+    require_incident_closure()
     main_sha = authorized_source_main_sha()
     remote_self, remote_self_sha = remote_source_file(
         SELF_PATH, main_sha, 512 * 1024
@@ -1158,9 +1213,11 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     )
     base_tree, plan_bytes = checked_destination(repository, contract)
     plan_meta = validate_test_plan(plan_bytes, source_pr)
+    verify_required_source_snapshot(plan_meta, source_commit)
     source_tree, files, rows, manifest_sha256 = exact_source_tree(
         source_pr, source_commit
     )
+    verify_required_source_snapshot(plan_meta, source_commit, source_tree)
     verify_required_source_blobs(files, plan_meta["required_source_blobs"])
     branch = "ci/oreslang-" + source_tree
     plan_sha256 = plan_meta["sha256"]

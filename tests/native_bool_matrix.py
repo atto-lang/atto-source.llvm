@@ -93,15 +93,15 @@ fnc miss(borrow mut Pair p): void {
 }
 fnc choose(borrow mut Pair p): int {
   if (ready()) {
-    hit(rt borrow mut p);
+    hit(rt mut borrow p);
   } else {
-    miss(rt borrow mut p);
+    miss(rt mut borrow p);
   } fi
   return p.first;
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  return choose(rt borrow mut p);
+  return choose(rt mut borrow p);
 }
 """, 42),
     "bool-if-guard": ("""
@@ -121,11 +121,11 @@ fnc touch(borrow mut Pair p): bool {
   return true;
 }
 fnc probe(borrow mut Pair p): bool {
-  return false && touch(rt borrow mut p);
+  return false && touch(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 1),
@@ -135,11 +135,11 @@ fnc touch(borrow mut Pair p): bool {
   return false;
 }
 fnc probe(borrow mut Pair p): bool {
-  return true || touch(rt borrow mut p);
+  return true || touch(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 1),
@@ -149,11 +149,11 @@ fnc touch(borrow mut Pair p): bool {
   return true;
 }
 fnc probe(borrow mut Pair p): bool {
-  return false ^^ touch(rt borrow mut p);
+  return false ^^ touch(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 42),
@@ -215,7 +215,7 @@ pub fnc main(): bool {
 fnc borrowed(borrow mut bool first, borrow mut bool second): int { return 0; }
 pub fnc main(): int {
   val flag: bool = false;
-  return borrowed(rt borrow mut flag, rt borrow mut flag);
+  return borrowed(rt mut borrow flag, rt mut borrow flag);
 }
 """, "conflicting active native borrow"),
     "reject-hidden-call-in-declared-effects-arm": ("""

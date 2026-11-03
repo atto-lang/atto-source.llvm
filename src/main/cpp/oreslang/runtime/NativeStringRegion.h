@@ -6,6 +6,9 @@ extern "C" {
 #endif
 /* Private compiler ABI. Handles cannot cross root invocation/thread boundaries.
  * begin/end belong to the OS wrapper, never guest actor/control callbacks.
+ * Every string is an explicit (data, size) span. size is authoritative,
+ * embedded NUL bytes are ordinary data, and strlen/sentinel semantics are
+ * forbidden for Oreslang string values.
  */
 int64_t ores_string_region_begin(int64_t console);
 int64_t ores_string_region_end(void);

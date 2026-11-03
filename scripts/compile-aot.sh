@@ -13,6 +13,8 @@ output_file="$output_dir/$(basename "$2")"
 [[ ! -d "$output_file" ]] || { echo 'Output must be a file, not a directory.' >&2; exit 64; }
 [[ "$source_file" != "$output_file" ]] || { echo 'Source and executable paths must differ.' >&2; exit 64; }
 [[ -x "$compiler" ]] || { echo 'Build oreslang-llvmc first or set ORESLANG_LLVMC.' >&2; exit 69; }
+auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
+[[ -x "$auditor" ]] || { echo 'Build oreslang-no-gc-ir-audit first or set ORES_NO_GC_IR_AUDIT.' >&2; exit 69; }
 clang_path="$(command -v "$clang")" || { echo 'Install Clang or set CLANG.' >&2; exit 69; }
 # Compare identities, not just spellings: a symlink or hard link must not let
 # publication replace the source compiler or native toolchain executable.
@@ -25,7 +27,7 @@ work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 "$compiler" --target=host "$source_file" > "$work/program.ll"
 # Known tracing-GC IR screen; not a complete linked-image/FFI collector proof.
-"${PYTHON3:-python3}" "$root/scripts/audit-no-gc-ir.py" "$work/program.ll" >/dev/null
+"$auditor" "$work/program.ll" >/dev/null
 runtime_sources=()
 if grep -Eq 'declare .*@ores_string_' "$work/program.ll"; then
   runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeStringRegion.c")

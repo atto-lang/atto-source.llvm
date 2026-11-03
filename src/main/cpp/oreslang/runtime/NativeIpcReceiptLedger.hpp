@@ -105,6 +105,16 @@ public:
         return event;
     }
 
+    // Transport loss makes every outstanding outcome UNKNOWN, not failed
+    // or replayable. Keep monotonic stream/sequence/route fences intact.
+    std::size_t mark_transport_lost() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto count = live_.size();
+        live_.clear();
+        transport_credits_ = 0;
+        return count;
+    }
+
     std::size_t live_count() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return live_.size();
@@ -169,3 +179,4 @@ private:
     std::map<std::uint64_t, Record> live_;
 };
 } // namespace oreslang::runtime
+

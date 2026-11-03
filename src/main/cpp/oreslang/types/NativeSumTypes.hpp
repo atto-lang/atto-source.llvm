@@ -139,8 +139,8 @@ inline void resolve_native_sums(Program& program) {
             }
             env.emplace(binding.name, local_hint(binding));
         }
-        std::function<void(std::vector<Statement>&, Env)> statements;
-        statements = [&](std::vector<Statement>& items, Env scope) {
+        std::function<void(std::vector<Statement>&, Env&)> statements;
+        statements = [&](std::vector<Statement>& items, Env& scope) {
             for (auto& item : items) {
                 if (item.branch_local && item.branch_local->initializer) expression(*item.branch_local->initializer, scope, item.branch_local->sum_type);
                 if (item.kind == Statement::Kind::ForEach || item.kind == Statement::Kind::ForIndex) {
@@ -154,12 +154,15 @@ inline void resolve_native_sums(Program& program) {
                 if (item.condition_lhs) expression(*item.condition_lhs, scope, {});
                 if (item.condition_rhs) expression(*item.condition_rhs, scope, {});
                 std::string context = item.kind == Statement::Kind::Return ? fn.return_sum : std::string{};
+                if (item.kind == Statement::Kind::ScalarWrite && scope.count(item.receiver))
+                    context = scope.at(item.receiver).sum;
                 if (!item.receiver.empty() && scope.count(item.receiver) && classes.count(scope.at(item.receiver).cls))
                     for (const auto& field : classes.at(scope.at(item.receiver).cls)->fields) if (field.name == item.field) context = field.sum_type;
                 if (item.expression) expression(*item.expression, scope, context);
                 if (item.array_commit_length) expression(*item.array_commit_length, scope, {});
                 for (auto& value : item.array_commit_values) expression(*value, scope, {});
-                statements(item.then_statements, scope); statements(item.else_statements, scope);
+                Env yes = scope, no = scope;
+                statements(item.then_statements, yes); statements(item.else_statements, no);
                 if (item.kind == Statement::Kind::ScopedLocal) scope.emplace(item.branch_local->name, local_hint(*item.branch_local));
             }
         };

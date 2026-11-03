@@ -145,7 +145,7 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind != Kind::Int && left.kind != Kind::String) fail(e.offset, "addition requires int or string");
                 return left;
             }
-            case E::Subtract: case E::Multiply:
+            case E::Subtract: case E::Multiply: case E::Remainder:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);
@@ -255,8 +255,8 @@ void validate_native_scalar_types(const Program& program) {
         }
         if (fn.scalar_while)
             require(locals.at(fn.scalar_while->counter), scalar(false), fn.offset, "loop counter requires int");
-        std::function<void(const std::vector<Statement>&, Locals)> statements;
-        statements = [&](const std::vector<Statement>& items, Locals scope) {
+        std::function<void(const std::vector<Statement>&, Locals&)> statements;
+        statements = [&](const std::vector<Statement>& items, Locals& scope) {
             for (const auto& item : items) {
                 if (item.kind == Statement::Kind::ForIndex) {
                     require(expression(*item.branch_local->initializer, scope), scalar(false), item.offset, "index initializer requires int");
@@ -279,16 +279,20 @@ void validate_native_scalar_types(const Program& program) {
                 } else if (item.kind == Statement::Kind::ScopedLocal) {
                     const auto& binding = *item.branch_local;
                     if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
-                    require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
+                    if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
+                    if (binding.initializer) require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
                 } else if (item.kind == Statement::Kind::Conditional) {
                     if (item.condition) require(expression(*item.condition, scope), scalar(true), item.offset, "condition requires bool");
                     else compare(*item.condition_lhs, *item.condition_rhs, scope);
-                    statements(item.then_statements, scope); statements(item.else_statements, scope);
+                    Locals yes = scope, no = scope;
+                    statements(item.then_statements, yes); statements(item.else_statements, no);
                 } else if (item.kind == Statement::Kind::ArrayCommitFilled) {
                     require(expression(*item.array_commit_length, scope), scalar(false), item.offset, "array length requires int");
                     for (const auto& arg : item.array_commit_values)
                         require(expression(*arg, scope), scalar(false), arg->offset, "Array<int> fill requires int");
+                } else if (item.kind == Statement::Kind::ScalarWrite) {
+                    require(expression(*item.expression, scope), scope.at(item.receiver), item.offset, "scalar assignment type");
                 } else if (!item.receiver.empty()) {
                     require(expression(*item.expression, scope), field_type(scope.at(item.receiver), item.field, item.offset),
                             item.offset, "field assignment type");

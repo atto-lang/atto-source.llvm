@@ -213,7 +213,7 @@ fnc plus_one(borrow mut Pair pair): void {
 pub fnc main(): int {
   let mut Pair source = new Pair();
   let mut Pair dest = rt take(source);
-  plus_one(rt borrow mut dest);
+  plus_one(rt mut borrow dest);
   return dest.a + dest.b - 1;
 }
 "####,

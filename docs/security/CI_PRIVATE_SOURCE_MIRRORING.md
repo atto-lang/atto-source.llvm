@@ -10,6 +10,16 @@ Destination privacy, repository identity, workflow permissions, retention, and p
 
 Java repository approvals do not authorize LLVM source exports.
 
+## Incident resume gate
+
+Before the publisher may read or export private source bytes, it must query the
+immutable platform-conformance incident identities for #22, #77, and #127 and
+require each issue to be exactly `closed` with `state_reason=completed`.
+Open incidents, alternate close reasons, issue-ID/URL drift, or a pull request
+masquerading as an issue all fail closed. The gate is rechecked every time
+protected authority is re-attested, including immediately before executable
+carrier authorization.
+
 ## Transfer requirements
 
 Any future publisher must run from trusted protected-source code, never from the PR under test, and must:

@@ -444,12 +444,24 @@ static void terminal_retirement_waits_for_inflight_owner_to_ack() {
 static void stale_generation_cannot_reuse_a_live_native_actor_inbox() {
     NativeActorGroup old_group(750, 1), newer_group(750, 1);
     auto old_actor = old_group.adopt(750, 9, 1, [] {});
-    auto new_actor = newer_group.adopt(750, 9, 2, [] {});
+    // A newer generation cannot overlap a live incarnation's exclusive owner.
+    bool duplicate_owner_rejected = false;
+    try { (void)newer_group.adopt(750, 9, 2, [] {}); }
+    catch (const std::logic_error&) { duplicate_owner_rejected = true; }
+    CHECK(duplicate_owner_rejected);
     CHECK(old_group.mark_ready(old_actor));
-    CHECK(newer_group.mark_ready(new_actor));
     Inbox inbox({2, 16}, {2, 16}, {2, 16});
     inbox.bind_target(old_actor);
     CHECK(inbox.offer_to(old_actor, Lane::Normal, 5, 8));
+    // Physical finalization cannot outrun queued resource ownership.
+    CHECK(!old_group.finalized(old_actor));
+    const auto finalizer = old_group.runtime_finalizer(old_actor);
+    old_group.close();
+    CHECK(inbox.retire_queued_after_quiescence(finalizer, old_actor) == 1);
+    CHECK(finalizer.finalized());
+    old_actor.get_done().get();
+    auto new_actor = newer_group.adopt(750, 9, 2, [] {});
+    CHECK(newer_group.mark_ready(new_actor));
     int rejected_payload = 17;
     bool rejected = false;
     try {
@@ -460,17 +472,16 @@ static void stale_generation_cannot_reuse_a_live_native_actor_inbox() {
     CHECK(inbox.dispatch_next(newer_group, new_actor, [&](Inbox::Delivery&) {
         CHECK(false && "new generation stole old queued message");
     }) == Inbox::Dispatch::Retired);
-    CHECK(inbox.snapshot() == 1 && inbox.used_frames(Lane::Normal) == 1);
+    CHECK(inbox.snapshot() == 1 && inbox.used_frames(Lane::Normal) == 0);
     rejected = false;
     try { inbox.bind_target(new_actor); }
     catch (const std::logic_error&) { rejected = true; }
     CHECK(rejected);
-    CHECK(inbox.dispatch_next(old_group, old_actor, [&](Inbox::Delivery& message) {
-        CHECK(message.value() == 5 && message.sequence() == 1);
-        CHECK(message.acknowledge_released());
-    }) == Inbox::Dispatch::User);
-    CHECK(inbox.completed_through(1));
-    CHECK(old_group.finalized(old_actor));
+    CHECK(inbox.dispatch_next(old_group, old_actor, [&](Inbox::Delivery&) {
+        CHECK(false && "finalized actor executed a queued user callback");
+    }) == Inbox::Dispatch::Retired);
+    CHECK(inbox.retire_queued_after_quiescence(finalizer, old_actor) == 0);
+    CHECK(inbox.drain_status(1) == Inbox::DrainStatus::Aborted);
     CHECK(newer_group.finalized(new_actor));
     old_actor.get_done().get();
     new_actor.get_done().get();
@@ -824,28 +835,30 @@ static void owned_handle_admission_never_steals_on_rejection_or_constructor_faul
     FailOnceMove::fail_move = false;
     inbox.close();
 
-    // Generation-fenced unique-ownership path must reject a restarted actor
-    // without touching the sender's still-owned object.
+    // Drain the old incarnation before replacement admission. A restarted
+    // actor must not steal the sender's object through the old inbox ticket.
     NativeActorGroup original(751, 1), replacement(751, 1);
     auto original_ref = original.adopt(751, 11, 1, [] {});
-    auto replacement_ref = replacement.adopt(751, 11, 2, [] {});
-    CHECK(original.mark_ready(original_ref) && replacement.mark_ready(replacement_ref));
+    CHECK(original.mark_ready(original_ref));
     Inbox target({1, 8}, {1, 8}, {1, 8});
     target.bind_target(original_ref);
     auto owned = std::make_unique<int>(7);
-    bool invalid = false;
-    try { (void)target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8); }
-    catch (const std::logic_error&) { invalid = true; }
-    CHECK(invalid && owned && *owned == 7);
-    CHECK(target.snapshot() == 0);
     CHECK(target.offer_owned_to(original_ref, Lane::Urgent, owned, 8));
     CHECK(!owned);
     auto accepted = target.try_receive();
     CHECK(accepted && accepted->value() == 7 && accepted->acknowledge_released());
     CHECK(target.completed_through(1));
     CHECK(original.finalized(original_ref));
-    CHECK(replacement.finalized(replacement_ref));
     original_ref.get_done().get();
+    auto replacement_ref = replacement.adopt(751, 11, 2, [] {});
+    CHECK(replacement.mark_ready(replacement_ref));
+    owned = std::make_unique<int>(17);
+    bool invalid = false;
+    try { (void)target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8); }
+    catch (const std::logic_error&) { invalid = true; }
+    CHECK(invalid && owned && *owned == 17);
+    CHECK(target.snapshot() == 1);
+    CHECK(replacement.finalized(replacement_ref));
     replacement_ref.get_done().get();
     target.close();
 }

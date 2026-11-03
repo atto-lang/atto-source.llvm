@@ -1,4 +1,14 @@
-# Oreslang LLVM backend
+# AttoLang Native LLVM backend
+
+**AttoLang** is the current public language name (formerly **Oreslang**).
+This compiler/runtime remains the independent native LLVM implementation; existing tool names, `.ores` fixtures, module identifiers and compiled ABI remain unchanged.
+This branding change does not establish new syntax, source-extension support,
+execution parity, AOT capabilities or zero-GC guarantees. New source SHOULD
+use `.atto` only after this particular backend has passed a real compile/run
+admission test; `.ores` remains supported wherever already implemented.
+Do not rename repositories, dependencies, commands or fixed interfaces merely
+to make their names match the public brand.
+
 
 Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
 Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
@@ -55,6 +65,9 @@ for every workload.
   generation/schema/tag validation. Real routing capture fixtures run natively;
   class payloads and the full Spin server remain work in progress. See
   [native sums and lifetime boundaries](docs/NATIVE_SCALAR_SUMS.md).
+- Ordered scalar/sum locals and immutable record views can follow calls and
+  control flow. Mutable scalar slots preserve lexical scope, loan checks and
+  deferred cleanup lifetimes. See [ordered locals](docs/NATIVE_ORDERED_LOCALS.md).
 - Parse a relative module graph with one or more `fnc`/`routine` declarations returning `int`, with optional
   `pub` and one optional `define module M [as] ... end` wrapper.
 - Typed `int` and `bool` parameters, scalar fields and loans; checked bool operators
@@ -264,3 +277,21 @@ artifact.
 The executed CTest gate compiles both shaken and unshaken IR through Clang and
 requires identical process behavior while asserting the dead private symbol is
 absent from the shaken IR.
+
+## AttoLang `.atto` source admission (integer subset)
+
+The LLVM CLI accepts canonical `.atto` source paths as well as legacy `.ores`
+paths; the file extension does not change the current parser or semantics.
+A native executable regression fixture lives at
+`tests/fixtures/numerics-atto-main.atto` and is registered as
+`numerics_atto_integer_guest` when Clang is available. It exercises the
+existing integer-only subset (forward function call and signed i64 addition)
+and must return exit code 42.
+
+This is source-extension admission only. LLVM currently does **not** lower
+floating-point values, floating division, contiguous numerical arrays, or
+tensor kernels. The numerical-library fixtures using `float`, `List<float>`,
+dot products, reductions and matrix multiplication remain unsupported here
+and must fail closed rather than silently map to i64. See the existing
+`native_float_division_unavailable` contract. Java/LLVM numerical parity is
+not claimed by this fixture.

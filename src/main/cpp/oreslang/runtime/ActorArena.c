@@ -33,6 +33,12 @@ static _Atomic(uint64_t) next_domain = 1;
 static _Thread_local OresActorArena* carrier_arena;
 static _Thread_local uint64_t carrier_epoch;
 static void deny(void) { abort(); }
+/* Ordinary memset immediately before free can be eliminated at -O2.
+ * Actor bytes and authority metadata must be scrubbed physically. */
+static void scrub(void* memory, size_t bytes) {
+    volatile unsigned char* p = (volatile unsigned char*) memory;
+    for (size_t i = 0; i < bytes; ++i) p[i] = 0;
+}
 static void enter_lock(OresActorArena* a) {
     if (!a) deny();
     for (unsigned n = 0; n < 1000000u; ++n)
@@ -161,7 +167,7 @@ void ores_actor_arena_leave(OresActorArena* a, OresArenaTurn turn) {
      * are revoked by require_turn(). */
     if (!a->active || turn.domain != a->domain || turn.epoch != a->epoch
         || carrier_arena != a || carrier_epoch != turn.epoch) deny();
-    memset(a->scratch, 0, a->scratch_top);
+    scrub(a->scratch, a->scratch_top);
     a->scratch_top = 0;
     a->active = 0;
     carrier_arena = NULL;
@@ -209,7 +215,7 @@ void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandl
     require_turn(a, turn);
     Slot* s = require_slot(a, h);
     if (s->loans || s->generation == UINT64_MAX) deny();
-    memset(a->slab + (size_t) h.index * a->slot_bytes, 0, a->slot_bytes);
+    scrub(a->slab + (size_t) h.index * a->slot_bytes, a->slot_bytes);
     s->length = 0;
     s->live = 0;
     ++s->generation;
@@ -297,12 +303,13 @@ int ores_actor_arena_try_destroy(OresActorArena* a) {
     if (!a->retiring) deny();
     if (a->active || a->loans) { leave_lock(a); return 0; }
     /* Trusted scheduler fences all timers/wakers/FFI holders before destroy. */
-    memset(a->slab, 0, checked_mul(a->slots, a->slot_bytes));
-    memset(a->scratch, 0, a->scratch_bytes);
-    memset(a->meta, 0, checked_mul(a->slots, sizeof(Slot)));
-    memset(a->free_slots, 0, checked_mul(a->slots, sizeof(size_t)));
+    scrub(a->slab, checked_mul(a->slots, a->slot_bytes));
+    scrub(a->scratch, a->scratch_bytes);
+    scrub(a->meta, checked_mul(a->slots, sizeof(Slot)));
+    scrub(a->free_slots, checked_mul(a->slots, sizeof(size_t)));
     free(a->slab); free(a->scratch); free(a->meta); free(a->free_slots);
     leave_lock(a);
-    memset(a, 0, sizeof(*a)); free(a);
+    scrub(a, sizeof(*a)); free(a);
     return 1;
 }
+
