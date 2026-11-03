@@ -4563,3 +4563,17 @@ if(BUILD_TESTING AND UNIX)
     add_test(NAME native_thread_join_reaper_host_only
         COMMAND oreslang-native-thread-join-reaper-test)
 endif()
+
+# M0 AttoLang .atto source admission for std.thread. Real LLVM parser
+# invocation is REQUIRED: unlike host-only pthread references this test
+# rejects eight source forms, accepts a normal user function named thread,
+# and prohibits IR/side-artifact emission on unsupported operations.
+if(BUILD_TESTING)
+    add_test(NAME native_thread_source_admission_m0
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/native-thread-source-admission-m0"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_thread_source_admission_m0.cmake")
+    set_tests_properties(native_thread_source_admission_m0
+        PROPERTIES TIMEOUT 60)
+endif()
