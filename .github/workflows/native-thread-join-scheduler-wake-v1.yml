@@ -4,6 +4,7 @@ on:
     paths:
       - "src/main/cpp/oreslang/runtime/NativeThreadJoinSchedulerWakeV1.hpp"
       - "tests/native_thread_join_scheduler_wake_v1_test.cpp"
+      - "tests/native_thread_join_scheduler_wake_throwing_gate_compile_fail.cpp"
       - ".github/workflows/native-thread-join-scheduler-wake-v1.yml"
   workflow_dispatch:
 permissions:
@@ -26,8 +27,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeThreadJoinSchedulerWakeV1.hpp)" = "21385dc7ec04638d9738c781ad00fdfe264be8a6"
-          test "$(git hash-object tests/native_thread_join_scheduler_wake_v1_test.cpp)" = "175accae00a52cfdf7a7ca905ca060faa07f03d7"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeThreadJoinSchedulerWakeV1.hpp)" = "17bd5ef29ad335e85c31f96acac54f323e78b90a"
+          test "$(git hash-object tests/native_thread_join_scheduler_wake_v1_test.cpp)" = "728f13052ec4d9e588dfcbb04c8ac45fcf9049c2"
+      - name: Reject throwing native join gate at compile time
+        shell: bash
+        env:
+          CC: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          test "$(git hash-object tests/native_thread_join_scheduler_wake_throwing_gate_compile_fail.cpp)" = "9e8bc1e27591df2098f3a127973f4c0cfa04008c"
+          if [[ "$CC" == gcc ]]; then CXX=g++; else CXX=clang++; fi
+          tmp="$(mktemp)"
+          trap 'rm -f "$tmp"' EXIT
+          if "$CXX" -std=c++17 -fsyntax-only -Isrc/main/cpp tests/native_thread_join_scheduler_wake_throwing_gate_compile_fail.cpp >"$tmp" 2>&1; then
+            echo "ERROR: throwing join gate passed compile-time admission" >&2
+            exit 1
+          fi
+          grep -Fq "native join wake gate notify_ready must return bool and be noexcept" "$tmp"
       - name: Run real native join scheduler-wake host bridge
         shell: bash
         env:
