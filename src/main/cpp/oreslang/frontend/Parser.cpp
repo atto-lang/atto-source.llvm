@@ -3709,9 +3709,10 @@ private:
                 const auto dot = token_.text == "thread"
                     ? first : lookahead.next();
                 const auto member = lookahead.next();
-                const auto call = lookahead.next();
-                if (dot.text == "." && member.text == "spawn" &&
-                        (call.text == "(" || call.text == "<")) {
+                // Even an uninvoked thread.spawn member would be an
+                // unverified first-class thread capability. Never let it
+                // flow through ordinary scalar/record lowering.
+                if (dot.text == "." && member.text == "spawn") {
                     fail("THREAD_SPAWN_BACKEND_UNSUPPORTED: AttoLang std.thread "
                          "requires compiler-owned Send/Sync capture proofs, "
                          "isolate-scoped native admission and asynchronous "
