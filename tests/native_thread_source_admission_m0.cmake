@@ -9,7 +9,9 @@ set(cases
     "unqualified-spawn"
     "qualified-spawn"
     "lexical-whitespace"
-    "initializer-spawn")
+    "initializer-spawn"
+    "generic-spawn"
+    "generic-qualified-spawn")
 set(source_unqualified-spawn
     "fnc main(): int { return thread.spawn(1); }\n")
 set(source_qualified-spawn
@@ -18,6 +20,12 @@ set(source_lexical-whitespace
     "fnc main(): int { return thread . spawn (1); }\n")
 set(source_initializer-spawn
     "fnc main(): int { let int result = thread.spawn(1); return result; }\n")
+
+
+set(source_generic-spawn
+    "fnc main(): int { return thread.spawn<int>(1); }\\n")
+set(source_generic-qualified-spawn
+    "fnc main(): int { return std.thread.spawn<int>(1); }\\n")
 
 foreach(case_name IN LISTS cases)
   set(path "${WORKDIR}/${case_name}.ores")
