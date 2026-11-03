@@ -62,6 +62,60 @@ int main() {
         if (resolve(dir/"app/main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("positive project-root resolution mismatch");
     }
+    // New AttoLang packages select .atto by default, even if a same-named
+    // legacy .ores file exists. Cross-version imports must be explicit.
+    {
+        const auto dir = temp / "atto-positive";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"app/main.atto", "");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        if (resolve(dir/"app/main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("AttoLang implicit root import selected wrong extension");
+        if (resolve(dir/"app/main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("AttoLang explicit legacy import rejected");
+    }
+    // Legacy packages remain deterministic, with no surprise migration.
+    {
+        const auto dir = temp / "legacy-precedence";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.ores", "");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        if (resolve(dir/"main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("legacy implicit root import selected wrong extension");
+        if (resolve(dir/"main.ores", "+/lib.atto") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("legacy explicit AttoLang import rejected");
+    }
+    // Missing .atto must not fall back to an unrelated .ores file.
+    {
+        const auto dir = temp / "no-implicit-downgrade";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.ores", "");
+        must_fail("no implicit legacy downgrade", "cannot resolve native project-root import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("explicit legacy import should remain available");
+    }
+    {
+        const auto dir = temp / "dual-manifest";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("conflicting modern and legacy manifests", "conflicting",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-nested-boundary";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"nested/.ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("legacy nested package inside modern root", "nested package boundary",
+                  [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
+    }
     {
         const auto dir = temp / "quoted-key";
         write_text(dir/".ores.pkg.toml", "\"schema_version\" = \"1\"\n");
@@ -150,6 +204,16 @@ int main() {
         fs::create_symlink(outside, dir/"lib.ores");
         must_fail("symlink target escape", "escapes physical package root",
                   [&] { (void)resolve(dir/"main.ores", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-target-escape";
+        const auto outside = temp / "outside-target.atto";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(outside, "");
+        fs::create_symlink(outside, dir/"lib.atto");
+        must_fail("AttoLang symlink target escape", "escapes physical package root",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
         const auto dir = temp / "manifest-escape";
