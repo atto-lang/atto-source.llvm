@@ -25,6 +25,17 @@ inline bool exists_marker(const fs::path& path) {
     return status.type() != fs::file_type::not_found;
 }
 
+inline fs::path find_package_manifest(const fs::path& directory) {
+    const fs::path modern = directory / ".atto.pkg.toml";
+    const fs::path legacy = directory / ".ores.pkg.toml";
+    const bool has_modern = exists_marker(modern);
+    const bool has_legacy = exists_marker(legacy);
+    if (has_modern && has_legacy)
+        throw std::runtime_error(
+            "native package directory has conflicting .atto and .ores manifests");
+    return has_modern ? modern : has_legacy ? legacy : fs::path{};
+}
+
 inline bool strict_descendant(const fs::path& root, const fs::path& path) {
     auto root_it = root.begin();
     auto path_it = path.begin();
@@ -40,7 +51,7 @@ inline void reject_nested_package(const fs::path& root, const fs::path& path) {
     for (fs::path parent = path.parent_path(); parent != root; parent = parent.parent_path()) {
         if (parent.empty() || parent == parent.root_path())
             throw std::runtime_error("native project-root import escapes physical package root");
-        if (exists_marker(parent / ".ores.pkg.toml"))
+        if (!find_package_manifest(parent).empty())
             throw std::runtime_error("native project-root import crosses nested package boundary");
     }
 }
@@ -91,7 +102,7 @@ inline void validate_manifest(const std::string& manifest_bytes) {
 
 /**
  * Resolve only the two admitted native source extensions. Extensionless
- * extensionless imports are intentionally ambiguous if both canonical .atto
+ * imports are intentionally ambiguous if both canonical .atto
  * and legacy .ores names exist. Migration must never silently select one twin.
  * Inspect directory entries (not only target existence), so dangling symlinks
  * and same-inode aliases still count as conflicting source names.
@@ -132,8 +143,8 @@ inline void enforce_relative_import_package_boundary(
     fs::path cursor = source.parent_path();
     fs::path package_root;
     for (;;) {
-        const fs::path manifest = cursor / ".ores.pkg.toml";
-        if (exists_marker(manifest)) {
+        const fs::path manifest = find_package_manifest(cursor);
+        if (!manifest.empty()) {
             std::error_code regular_error;
             if (!fs::is_regular_file(manifest, regular_error) || regular_error)
                 throw std::runtime_error("native package manifest must be a regular file");
@@ -208,8 +219,8 @@ inline std::filesystem::path resolve_project_root_import(
     fs::path cursor = source.parent_path();
     fs::path package_root;
     for (;;) {
-        const fs::path manifest = cursor / ".ores.pkg.toml";
-        if (exists_marker(manifest)) {
+        const fs::path manifest = find_package_manifest(cursor);
+        if (!manifest.empty()) {
             std::error_code regular_error;
             if (!fs::is_regular_file(manifest, regular_error) || regular_error)
                 throw std::runtime_error("native package manifest must be a regular file");
@@ -231,7 +242,7 @@ inline std::filesystem::path resolve_project_root_import(
         cursor = parent;
     }
     if (package_root.empty())
-        throw std::runtime_error("native +/ imports require nearest .ores.pkg.toml");
+        throw std::runtime_error("native +/ imports require nearest .ores.pkg.toml or .atto.pkg.toml");
 
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
