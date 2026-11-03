@@ -95,6 +95,18 @@ def main():
             '.ores.pkg.toml': 'schema_version = "1"\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
+        ('atto-project-root-explicit-modern-with-twin', {
+            'main.atto': 'import module Lib from "+/lib.atto"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 7;} end',
+        }, 42),
+        ('atto-project-root-explicit-legacy-with-twin', {
+            'main.atto': 'import module Lib from "+/lib.ores"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 7;} end',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
         ('atto-explicit-legacy-remains-selectable', {
             'main.atto': 'import module Lib from "./lib.ores"; pub fnc main():int{return Lib.answer();}',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 7;} end',
@@ -194,6 +206,36 @@ def main():
             if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
                 raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
             passed += 1
+        # Project-root security failures must be compiler failures too, not
+        # only host-resolver unit failures. Every case requires zero IR.
+        directory = root/'atto-root-nested-package-boundary'; directory.mkdir()
+        (directory/'main.atto').write_text(
+            'import module Lib from "+/nested/lib"; pub fnc main():int{return 0;}')
+        (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+        (directory/'nested').mkdir()
+        (directory/'nested/.ores.pkg.toml').write_text('schema_version = "1"\n')
+        (directory/'nested/lib.atto').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        result = run([a.compiler, str(directory/'main.atto')])
+        if not result.returncode or result.stdout or 'nested package boundary' not in result.stderr:
+            raise AssertionError(('atto nested package boundary', result.returncode,
+                                  result.stdout[:150], result.stderr))
+        passed += 1
+
+        if hasattr(os, 'symlink'):
+            directory = root/'atto-root-symlink-escape'; directory.mkdir()
+            outside = root/'outside-root-import.atto'
+            outside.write_text('define module Lib as pub fnc answer():int{return 42;} end')
+            (directory/'main.atto').write_text(
+                'import module Lib from "+/lib"; pub fnc main():int{return 0;}')
+            (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+            (directory/'lib.atto').symlink_to(outside)
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or 'escapes physical package root' not in result.stderr:
+                raise AssertionError(('atto project-root symlink escape', result.returncode,
+                                      result.stdout[:150], result.stderr))
+            passed += 1
+
         if hasattr(os, 'link'):
             directory = root/'atto-hardlink-ambiguous-twins'; directory.mkdir()
             (directory/'main.atto').write_text(
