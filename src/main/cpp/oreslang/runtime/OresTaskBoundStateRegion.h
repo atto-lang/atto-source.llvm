@@ -19,6 +19,7 @@
 #include "oreslang/runtime/OresStdSyncAdmission.h"
 
 #include <stdbool.h>
+#include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -73,7 +74,8 @@ static inline bool ores_state_task_identity_from_store(
     if (!store || !out || !ores_native_store_handle_valid(handle) ||
             expected.runtime_domain == 0 || expected.execution == 0)
         return false;
-    OresNativeExecutionContext context = {0};
+    OresNativeExecutionContext context;
+    memset(&context, 0, sizeof context);
     if (!ores_native_execution_context_store_get(store, handle, &context))
         return false;
     if (context.id.runtime_domain != expected.runtime_domain ||
@@ -128,8 +130,8 @@ static inline void ores_state_region_clear_binding(
         ores_state_region_binding* binding) {
     if (!binding) return;
     binding->occupied = false;
-    binding->ticket = (ores_std_ticket){0};
-    binding->owner = (ores_state_task_identity){0};
+    memset(&binding->ticket, 0, sizeof binding->ticket);
+    memset(&binding->owner, 0, sizeof binding->owner);
 }
 
 /*
@@ -143,7 +145,8 @@ static inline ores_std_sync_code ores_state_region_bind_actor_arena(
     if (!region || !arena || region->gate.kind != ORES_STD_RW)
         return ORES_STD_SYNC_INVALID;
 
-    OresArenaIdentity identity = {0};
+    OresArenaIdentity identity;
+    memset(&identity, 0, sizeof identity);
     if (!ores_actor_arena_identity(arena, &identity))
         return ORES_STD_SYNC_INVALID;
 
@@ -172,7 +175,8 @@ static inline bool ores_state_region_matches_actor_arena(
             region->generation == 0 ||
             region->gate.scope_generation != region->generation ||
             region->gate.kind != ORES_STD_RW) return false;
-    OresArenaIdentity identity = {0};
+    OresArenaIdentity identity;
+    memset(&identity, 0, sizeof identity);
     return ores_actor_arena_identity(arena, &identity) &&
         region->region_id == identity.domain &&
         region->generation == identity.incarnation;

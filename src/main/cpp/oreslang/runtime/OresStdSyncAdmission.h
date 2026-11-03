@@ -12,6 +12,7 @@
 #include "oreslang/runtime/OresCoreSync.h"
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #define ORES_STD_SYNC_CAPACITY 64u
 
@@ -93,7 +94,8 @@ typedef struct ores_std_sync_result {
 } ores_std_sync_result;
 
 static inline ores_std_sync_result ores_std_empty(ores_std_sync_code code) {
-    ores_std_sync_result out = {0};
+    ores_std_sync_result out;
+    memset(&out, 0, sizeof out);
     out.code = code;
     return out;
 }

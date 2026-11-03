@@ -15,7 +15,7 @@
 // when the external build defines NDEBUG.
 #define CHECK(expr) do { \
     if (!(expr)) { \
-        std::fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #expr); \
+        std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
         std::abort(); \
     } \
 } while (false)

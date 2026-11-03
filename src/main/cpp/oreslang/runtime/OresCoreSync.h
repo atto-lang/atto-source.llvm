@@ -37,7 +37,7 @@ typedef struct ores_core_mutex_gate {
     unsigned int issued; /* writable only under owner==UINT_MAX reservation */
 } ores_core_mutex_gate;
 
-#define ORES_CORE_MUTEX_GATE_INIT { ATOMIC_VAR_INIT(0u), 0u }
+#define ORES_CORE_MUTEX_GATE_INIT { 0u, 0u }
 
 static inline ores_core_sync_result
 ores_core_mutex_try_acquire(ores_core_mutex_gate* gate, unsigned int* token) {
@@ -82,14 +82,14 @@ typedef struct ores_core_rw_gate {
     unsigned int issued_writers; /* only under state==RESERVED */
 } ores_core_rw_gate;
 
-#define ORES_CORE_RW_GATE_INIT { ATOMIC_VAR_INIT(0u), ATOMIC_VAR_INIT(0u), 0u }
+#define ORES_CORE_RW_GATE_INIT { 0u, 0u, 0u }
 
 typedef struct ores_core_rw_writer_wait {
     atomic_uint active; /* 0=idle, 1=queued, 2=transition, 3=claiming, 4=granted */
     ores_core_rw_gate* gate;
 } ores_core_rw_writer_wait;
 
-#define ORES_CORE_RW_WRITER_WAIT_INIT { ATOMIC_VAR_INIT(0u), 0 }
+#define ORES_CORE_RW_WRITER_WAIT_INIT { 0u, 0 }
 
 static inline ores_core_sync_result
 ores_core_rw_writer_register(ores_core_rw_gate* gate, ores_core_rw_writer_wait* wait) {
