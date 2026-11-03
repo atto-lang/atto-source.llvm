@@ -19,7 +19,8 @@ class SharedReactorPool final {
 public:
     struct Reactor {
         virtual ~Reactor() = default;
-        virtual void poll(bool may_wait) noexcept = 0;
+        // The pool contains poll exceptions, seals admission and drains accepted work.
+        virtual void poll(bool may_wait) = 0;
         virtual void wake() noexcept = 0;
     };
     using Work = void (*)(void*);
@@ -80,7 +81,16 @@ private:
                     may_wait = !closing_ && size_ == 0;
                 }
                 state(slot, State::polling);
-                reactor_.poll(may_wait);
+                try {
+                    reactor_.poll(may_wait);
+                } catch (...) {
+                    failures_.fetch_add(1, std::memory_order_relaxed);
+                    {
+                        std::lock_guard<std::mutex> lock(gate_);
+                        closing_ = true;
+                    }
+                    ready_.notify_all();
+                }
                 poll_owner_.store(-1, std::memory_order_release);
                 ready_.notify_one();
             } else if (!work) {
