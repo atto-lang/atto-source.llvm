@@ -1,5 +1,6 @@
 #pragma once
 
+#include "oreslang/frontend/AttoSourcePath.hpp"
 #include <cctype>
 #include <filesystem>
 #include <functional>
@@ -13,18 +14,6 @@
 namespace oreslang {
 
 namespace project_root_import_detail {
-namespace fs = std::filesystem;
-
-inline bool exists_marker(const fs::path& path) {
-    std::error_code error;
-    const auto status = fs::symlink_status(path, error);
-    if (error) {
-        if (error == std::errc::no_such_file_or_directory) return false;
-        throw std::runtime_error("cannot safely inspect native package boundary");
-    }
-    return status.type() != fs::file_type::not_found;
-}
-
 inline bool strict_descendant(const fs::path& root, const fs::path& path) {
     auto root_it = root.begin();
     auto path_it = path.begin();
@@ -40,7 +29,8 @@ inline void reject_nested_package(const fs::path& root, const fs::path& path) {
     for (fs::path parent = path.parent_path(); parent != root; parent = parent.parent_path()) {
         if (parent.empty() || parent == parent.root_path())
             throw std::runtime_error("native project-root import escapes physical package root");
-        if (exists_marker(parent / ".ores.pkg.toml"))
+        if (exists_marker(parent / ".atto.pkg.toml") ||
+                exists_marker(parent / ".ores.pkg.toml"))
             throw std::runtime_error("native project-root import crosses nested package boundary");
     }
 }
@@ -133,8 +123,16 @@ inline std::filesystem::path resolve_project_root_import(
     fs::path cursor = source.parent_path();
     fs::path package_root;
     for (;;) {
-        const fs::path manifest = cursor / ".ores.pkg.toml";
-        if (exists_marker(manifest)) {
+        const fs::path modern_manifest = cursor / ".atto.pkg.toml";
+        const fs::path legacy_manifest = cursor / ".ores.pkg.toml";
+        const bool modern_found = exists_marker(modern_manifest);
+        const bool legacy_found = exists_marker(legacy_manifest);
+        if (modern_found && legacy_found)
+            throw std::runtime_error(
+                "ambiguous AttoLang package root: both manifest names exist");
+        if (modern_found || legacy_found) {
+            const fs::path manifest = modern_found
+                ? modern_manifest : legacy_manifest;
             std::error_code regular_error;
             if (!fs::is_regular_file(manifest, regular_error) || regular_error)
                 throw std::runtime_error("native package manifest must be a regular file");
@@ -156,14 +154,13 @@ inline std::filesystem::path resolve_project_root_import(
         cursor = parent;
     }
     if (package_root.empty())
-        throw std::runtime_error("native +/ imports require nearest .ores.pkg.toml");
+        throw std::runtime_error("native +/ imports require nearest .atto.pkg.toml or nearest .ores.pkg.toml (legacy)");
 
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
     fs::path candidate = package_root / fs::path(std::string(suffix));
-    if (candidate.extension().empty()) candidate += ".ores";
-    if (candidate.extension() != ".ores")
-        throw std::runtime_error("native project-root imports require .ores source files");
+    reject_nested_package(package_root, candidate);
+    candidate = resolve_attolang_source_candidate(std::move(candidate));
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)

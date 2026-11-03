@@ -4614,6 +4614,33 @@ if(BUILD_TESTING AND UNIX)
 endif()
 
 
+# AttoLang canonical source extension selector is header-only and
+# deliberately independent of LLVM/host-compiler lowering.
+if(BUILD_TESTING AND UNIX)
+    add_executable(oreslang-native-atto-source-path-test
+        tests/native_attolang_source_path_test.cpp)
+    target_include_directories(oreslang-native-atto-source-path-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-atto-source-path-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-atto-source-path-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_attolang_source_path_resolution
+        COMMAND oreslang-native-atto-source-path-test)
+    set_tests_properties(native_attolang_source_path_resolution
+        PROPERTIES TIMEOUT 15)
+    add_executable(oreslang-native-atto-project-root-test
+        tests/native_attolang_project_root_import_test.cpp)
+    target_include_directories(oreslang-native-atto-project-root-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-atto-project-root-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-atto-project-root-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_attolang_project_root_import_security
+        COMMAND oreslang-native-atto-project-root-test)
+    set_tests_properties(native_attolang_project_root_import_security
+        PROPERTIES TIMEOUT 15)
+endif()
+
 # M0 AttoLang .atto guest-source admission. The actual LLVM compiler must
 # reject eight unsupported thread-spawn forms without emitting IR and must
 # compile the ordinary-function positive control. Host mocks are insufficient.
