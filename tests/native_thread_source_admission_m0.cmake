@@ -52,3 +52,25 @@ foreach(case_name IN LISTS cases)
     message(FATAL_ERROR "${case_name} produced compiler artifacts")
   endif()
 endforeach()
+
+# Preserve contextual ordinary identifiers: a user function named thread is
+# not itself the std.thread capability, and its ordinary scalar call remains
+# legal. This positive control prevents reserving all uses of "thread".
+set(ordinary_source "${WORKDIR}/ordinary-thread-identifier.ores")
+file(WRITE "${ordinary_source}"
+    "fnc thread(int value): int { return value; }\nfnc main(): int { return thread(7); }\n")
+file(GLOB before RELATIVE "${WORKDIR}" "${WORKDIR}/*")
+execute_process(
+  COMMAND "${COMPILER}" "${ordinary_source}"
+  WORKING_DIRECTORY "${WORKDIR}"
+  RESULT_VARIABLE result
+  OUTPUT_VARIABLE ir
+  ERROR_VARIABLE error
+  TIMEOUT 10)
+if(NOT "${result}" STREQUAL "0" OR NOT "${ir}" MATCHES "define ")
+  message(FATAL_ERROR "ordinary non-thread-spawn function unexpectedly rejected: ${error}")
+endif()
+file(GLOB after RELATIVE "${WORKDIR}" "${WORKDIR}/*")
+if(NOT "${before}" STREQUAL "${after}")
+  message(FATAL_ERROR "ordinary control unexpectedly emitted an artifact")
+endif()
