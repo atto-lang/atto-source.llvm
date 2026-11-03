@@ -83,7 +83,6 @@ jobs:
             numerics_atto_integer_guest \
             atto_shared_scalar_guest
           do
-            grep -F "Test #"${name} /dev/null 2>/dev/null || true
             grep -Eq "Test +#[0-9]+: ${name}$" /tmp/ctest-inventory.txt
           done
       - name: Compile, link and execute real canonical import guests
