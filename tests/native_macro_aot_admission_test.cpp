@@ -1,6 +1,7 @@
 #include "oreslang/frontend/Parser.hpp"
 
 #include <cstdlib>
+#include <cstdint>
 #include <exception>
 #include <string>
 #include <string_view>
@@ -24,13 +25,16 @@ static void denied(std::string_view source) {
     }
     check(rejected);
 }
-static void scalar_42(std::string_view source) {
+static void scalar_value(std::string_view source, std::int64_t expected) {
     auto program = parse_program(source);
     check(program.functions.size() == 1);
     const auto& function = program.functions.front();
     check(function.result != nullptr);
     check(function.result->kind == Expression::Kind::Integer);
-    check(function.result->integer == 42);
+    check(function.result->integer == expected);
+}
+static void scalar_42(std::string_view source) {
+    scalar_value(source, 42);
 }
 int main() {
     scalar_42(R"(
@@ -129,14 +133,16 @@ define module demo as
   }
 end
 )");
-    // A balanced tree keeps source/parser nesting shallow while trying to
-    // amplify compile-time AST work beyond the strict 2048-node budget.
-    std::string broad = "1";
-    for (int i = 0; i < 12; ++i) broad = "(" + broad + "+" + broad + ")";
-    const std::string bounded =
+    // Inclusive shared const-v1 evaluator limit: 256 leaves form 511 AST
+    // nodes and must succeed. Doubling the tree has 1023 AST nodes and must
+    // reject (before IR), independently of expression-parser depth.
+    const std::string prefix =
         "define macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }"
-        "pub fnc main(): int { return literal!(const " + broad + "); }";
-    denied(bounded);
+        "pub fnc main(): int { return literal!(const ";
+    std::string broad = "1";
+    for (int i = 0; i < 8; ++i) broad = "(" + broad + "+" + broad + ")";
+    scalar_value(prefix + broad + "); }", 256);
+    denied(prefix + "(" + broad + "+" + broad + ")" + "); }");
 
     return 0;
 }
