@@ -64,7 +64,7 @@ case "$(uname -s)" in
       *) echo 'Unqualified Linux native AOT architecture.' >&2; exit 69 ;;
     esac
     [[ "$elf_class" == 2 && "$elf_data" == 1 &&
-       "$elf_kind" == 2 || "$elf_kind" == 3 ]] || {
+       ( "$elf_kind" == 2 || "$elf_kind" == 3 ) ]] || {
       echo "Wrong ELF class, endian or type: $elf_class $elf_data $elf_kind" >&2
       exit 65
     }
