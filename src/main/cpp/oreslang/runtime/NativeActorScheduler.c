@@ -56,8 +56,17 @@ typedef struct {
     OresNativeAllocationDomainRef allocation_domain;
     OresNativeExecutionAuthority authority;
 } ActorLane;
+/* Two-level bitmap over actor slots. Dispatch cost must not depend on how many idle
+ * actors a tenant holds, because the search runs under the scheduler lock and so
+ * bounds the whole tenant's turn rate. */
+typedef struct {
+    uint64_t* words;
+    uint64_t* summary; /* one bit per nonzero word */
+    size_t count;
+} ReadySet;
 struct OresNativeActorScheduler {
     pthread_mutex_t lock;
+    ReadySet ready_control, ready_wake, ready_data; /* lanes that are runnable, !active */
     pthread_cond_t ready;
     pthread_cond_t drained;
     ActorLane* actors;
@@ -182,18 +191,75 @@ int ores_native_actor_scheduler_test_set_next_execution(
 }
 #endif
 /* Supervisor CONTROL outranks WAKE which outranks DATA. */
-static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
+static int ready_set_init(ReadySet* set, size_t count) {
+    const size_t words = count / 64u + 1u;
+    set->words = (uint64_t*)calloc(words, sizeof(uint64_t));
+    set->summary = (uint64_t*)calloc(words / 64u + 1u, sizeof(uint64_t));
+    set->count = count;
+    return set->words && set->summary;
+}
+static void ready_set_free(ReadySet* set) {
+    free(set->words);
+    free(set->summary);
+    set->words = set->summary = NULL;
+}
+static void ready_set_assign(ReadySet* set, size_t i, int on) {
+    const size_t word = i / 64u;
+    const uint64_t bit = UINT64_C(1) << (i % 64u);
+    if (on) {
+        set->words[word] |= bit;
+        set->summary[word / 64u] |= UINT64_C(1) << (word % 64u);
+    } else {
+        set->words[word] &= ~bit;
+        if (!set->words[word])
+            set->summary[word / 64u] &= ~(UINT64_C(1) << (word % 64u));
+    }
+}
+/* Lowest set index >= from, or SIZE_MAX. */
+static size_t ready_set_scan(const ReadySet* set, size_t from) {
+    if (from >= set->count) return SIZE_MAX;
+    size_t word = from / 64u;
+    const uint64_t here = set->words[word] & (~UINT64_C(0) << (from % 64u));
+    if (here) return word * 64u + (size_t)__builtin_ctzll(here);
+    ++word;
+    const size_t last_word = (set->count - 1u) / 64u;
+    if (word > last_word) return SIZE_MAX;
+    size_t group = word / 64u;
+    uint64_t mask = set->summary[group] & (~UINT64_C(0) << (word % 64u));
+    for (;;) {
+        if (mask) {
+            const size_t found = group * 64u + (size_t)__builtin_ctzll(mask);
+            return found * 64u + (size_t)__builtin_ctzll(set->words[found]);
+        }
+        if (++group > last_word / 64u) return SIZE_MAX;
+        mask = set->summary[group];
+    }
+}
+/* First set index in round-robin order starting at `cursor`, or SIZE_MAX. */
+static size_t ready_set_next(const ReadySet* set, size_t cursor) {
+    const size_t at_or_after = ready_set_scan(set, cursor);
+    return at_or_after != SIZE_MAX ? at_or_after : ready_set_scan(set, 0);
+}
+/* Call under the lock after anything changes a lane's work or active state. */
+static void lane_sync_ready(OresNativeActorScheduler* s, size_t i) {
+    const ActorLane* lane = &s->actors[i];
+    const int idle = !lane->active;
+    ready_set_assign(&s->ready_control, i, idle && lane->has_control);
+    ready_set_assign(&s->ready_wake, i, idle && lane->wake_ready);
+    ready_set_assign(&s->ready_data, i, idle && lane->queued);
+}
+#if defined(ORES_NATIVE_SCHEDULER_VERIFY_READY)
+/* Differential check: the original linear selection, which must agree on every call. */
+static int find_ready_linear(OresNativeActorScheduler* s, size_t* actor, int* kind,
         size_t recent_actor, unsigned consecutive) {
     for (int pass = 2; pass >= 1; --pass) {
         for (size_t offset = 0; offset < s->actor_count; ++offset) {
             size_t i = (s->next_actor + offset) % s->actor_count;
             ActorLane* lane = &s->actors[i];
-            if (!!lane->active != !!lane->carrier_owner_valid) abort();
             if (!lane->active
                     && (pass == 2 ? lane->has_control : lane->wake_ready)) {
                 *actor = i;
                 *kind = pass;
-                s->next_actor = (i + 1) % s->actor_count;
                 return 1;
             }
         }
@@ -202,18 +268,52 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
             && !s->actors[recent_actor].active
             && s->actors[recent_actor].queued) {
         *actor = recent_actor; *kind = 0;
-        s->next_actor = (recent_actor + 1) % s->actor_count;
         return 1;
     }
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
         if (!s->actors[i].active && s->actors[i].queued) {
             *actor = i; *kind = 0;
-            s->next_actor = (i + 1) % s->actor_count;
             return 1;
         }
     }
     return 0;
+}
+#endif
+static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
+        size_t recent_actor, unsigned consecutive) {
+#if defined(ORES_NATIVE_SCHEDULER_VERIFY_READY)
+    size_t expected_actor = 0;
+    int expected_kind = 0;
+    const int expected = find_ready_linear(s, &expected_actor, &expected_kind,
+                                           recent_actor, consecutive);
+#endif
+    int found = 0;
+    size_t i = ready_set_next(&s->ready_control, s->next_actor);
+    if (i != SIZE_MAX) {
+        *kind = 2;
+        found = 1;
+    } else if ((i = ready_set_next(&s->ready_wake, s->next_actor)) != SIZE_MAX) {
+        *kind = 1;
+        found = 1;
+    } else if (recent_actor < s->actor_count && consecutive < 2
+            && !s->actors[recent_actor].active
+            && s->actors[recent_actor].queued) {
+        i = recent_actor;
+        *kind = 0;
+        found = 1;
+    } else if ((i = ready_set_next(&s->ready_data, s->next_actor)) != SIZE_MAX) {
+        *kind = 0;
+        found = 1;
+    }
+#if defined(ORES_NATIVE_SCHEDULER_VERIFY_READY)
+    if (found != expected || (found && (i != expected_actor || *kind != expected_kind))) abort();
+#endif
+    if (!found) return 0;
+    if (!!s->actors[i].active != !!s->actors[i].carrier_owner_valid) abort();
+    *actor = i;
+    s->next_actor = (i + 1) % s->actor_count;
+    return 1;
 }
 static int lane_has_work(const ActorLane* lane) {
     return lane->queued || lane->has_control || lane->wake_ready;
@@ -330,6 +430,7 @@ static void* carrier(void* raw) {
                 (uint64_t)(uintptr_t)&carrier_identity, 1, &execution_claim))
             abort();
         lane->active = 1;
+        lane_sync_ready(s, i);
         lane->carrier_owner = pthread_self();
         lane->carrier_owner_valid = 1;
         unlock(s);
@@ -374,6 +475,7 @@ static void* carrier(void* raw) {
             || !pthread_equal(lane->carrier_owner, pthread_self())
             || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
+        lane_sync_ready(s, i);
         lane->carrier_owner_valid = 0;
         s->outstanding--;
         s->completed++;
@@ -410,7 +512,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
     OresNativeActorPanicFn panic_callback, OresNativeActorWakeFn wake_callback,
     void* ctx) {
-    if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
+    if (!callback || !actors || actors > ORES_NATIVE_SCHEDULER_MAX_ACTORS
+        || !capacity || capacity > 65536
         || !workers || workers > 128 || actors > SIZE_MAX / capacity)
         return NULL;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
@@ -422,7 +525,10 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
         actors * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR, sizeof(WakeCredit));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
     if (!s->actors || !s->slots || (wake_callback && !s->wake_slots)
-            || !s->threads)
+            || !s->threads
+            || !ready_set_init(&s->ready_control, actors)
+            || !ready_set_init(&s->ready_wake, actors)
+            || !ready_set_init(&s->ready_data, actors))
         goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
@@ -457,6 +563,9 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
 allocation_failed:
     for (size_t i = 0; i < initialized; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    ready_set_free(&s->ready_control);
+    ready_set_free(&s->ready_wake);
+    ready_set_free(&s->ready_data);
     free(s->threads);
     free(s->slots);
     free(s->wake_slots);
@@ -631,6 +740,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    lane_sync_ready(s, (size_t)(a - s->actors));
     if (a->accepted_user_messages == UINT64_MAX) abort();
     ++a->accepted_user_messages;
     s->reserved_executions++;
@@ -880,6 +990,7 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     w->outcome = outcome;
     w->state = WAKE_READY;
     ++lane->wake_ready;
+    lane_sync_ready(s, (size_t)(lane - s->actors));
     if (new_lane) ++s->runnable_lanes;
     ++s->reserved_executions;
     ++s->accepted;
@@ -940,6 +1051,7 @@ int ores_native_actor_scheduler_publish_control(
         lane->control_payload = payload;
         lane->control_is_failure = 0;
         lane->has_control = 1;
+        lane_sync_ready(s, (size_t)(lane - s->actors));
         ++s->reserved_executions;
         ++s->accepted;
         ++s->outstanding;
@@ -974,6 +1086,7 @@ int ores_native_actor_scheduler_publish_failure(
         a->failure = failure;
         a->control_is_failure = 1;
         a->has_control = 1;
+        lane_sync_ready(s, (size_t)(a - s->actors));
         s->reserved_executions++;
         s->accepted++;
         s->outstanding++;
@@ -1019,6 +1132,7 @@ static int stop_locked(
 
         lane->head = lane->tail;
         lane->queued = 0;
+        lane_sync_ready(s, (size_t)(lane - s->actors));
         lane->abandoned_user_messages += (uint64_t)abandoned;
         s->reserved_executions -= abandoned;
         s->outstanding -= abandoned;
@@ -1188,6 +1302,9 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
         || pthread_mutex_destroy(&s->lock) != 0) abort();
     for (size_t i = 0; i < s->actor_count; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    ready_set_free(&s->ready_control);
+    ready_set_free(&s->ready_wake);
+    ready_set_free(&s->ready_data);
     free(s->threads);
     free(s->slots);
     free(s->wake_slots);
