@@ -21,7 +21,7 @@ struct Reactor final : Pool::Reactor {
     int signal = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     int input = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     std::atomic<Pool*> pool{nullptr};
-    std::atomic<int> active{0}, calls{0}, deliveries{0};
+    std::atomic<int> active{0}, calls{0}, deliveries{0}, wakes{0};
     std::mutex ids_gate;
     std::set<std::thread::id> poll_ids, work_ids;
     std::uint64_t pending = 0; // only polling-lease owner accesses this
@@ -32,7 +32,7 @@ struct Reactor final : Pool::Reactor {
         do { n = write(fd, &one, sizeof(one)); } while (n < 0 && errno == EINTR);
         check(n == sizeof(one) || (n < 0 && errno == EAGAIN));
     }
-    void wake() noexcept override { notify(signal); }
+    void wake() noexcept override { ++wakes; notify(signal); }
     void emit() { notify(input); }
     static void delivery(void* argument) {
         auto& self = *static_cast<Reactor*>(argument);
@@ -121,7 +121,9 @@ int main() {
         Reactor reactor; Pool pool(reactor, 1, 1); reactor.pool = &pool;
         Block b; check(pool.try_submit(block, &b)); until([&] { return b.entered.load(); });
         std::atomic<int> done{0};
+        const auto wakes_before_hot_queue = reactor.wakes.load();
         for (std::size_t i = 0; i < Pool::queue_capacity; ++i) check(pool.try_submit(increment, &done));
+        check(reactor.wakes == wakes_before_hot_queue); // executor busy, no polling lease
         check(!pool.try_submit(increment, &done));
         b.release = true; pool.close(); check(done == 1024); check(pool.completed() == 1025);
     }
