@@ -10,8 +10,8 @@ Host components remain opt-in. Existing runtime/CLI defaults and guest feature a
 
 ## Exact component Git blobs
 
-- `src/main/cpp/oreslang/runtime/SharedReactorPool.hpp`: `2b39bf63b17d2bb5461052996d94eb8c1e958924`
-- `tests/shared_reactor_pool_test.cpp`: `1a6900baadc492108ff94d299666ef5a12c49aac`
+- `src/main/cpp/oreslang/runtime/SharedReactorPool.hpp`: `90542d00e55d98e1d1ce1ea9510c2d76e7e5ea68`
+- `tests/shared_reactor_pool_test.cpp`: `05570efaa8abebeded0d9700aeb511630409606a`
 - `tests/shared_worker_layout_benchmark.cpp`: `753dd4769e6160ceb03def0f8a99cd94bbc2c6a5`
 
 ## Counter microbenchmark (local shared host)
@@ -34,3 +34,13 @@ Hot-queue submissions avoid calling the reactor wake function when the single po
 Exact-file Git blobs verified locally. C++17 strict `-Wall -Wextra -Werror` with GCC and Clang, each at O1 and O2, ASan+UBSan, five executions per combination (20/20 total), PASS. `ASAN_OPTIONS=detect_leaks=0` (LeakSanitizer not established). Full CMake, compiler guest, and production bridge untested.
 
 These results are standalone host-substrate evidence only. The PR remains draft and opt-in; runtime wiring, actor authority, CONTROL priority, cancellation generation fencing, and total-process thread measurements are still required. Remote zero-step workflow failures are not execution evidence.
+
+## Poll failure containment, fail-closed drain and runner capacity — 2026-11-03
+
+A faulting reactor must not leave a worker spinning or lose previously accepted entries: once an exception seals admission, workers drain already-admitted work but do not re-enter polling. C++17 no longer requires `poll` to be `noexcept`; unexpected exceptions are caught at the scheduler boundary while `wake` still must be nonblocking and `noexcept`.
+
+Exact LLVM native implementation/test blobs verified by `git hash-object` before local execution. GCC/Clang × O1/O2 with `-std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined` each passed 5/5 executions (20/20 total). Fault-injected reactor poll failure sealed admission and drained 128 accepted tasks without repoll, one failure total. LeakSanitizer disabled; full LLVM compiler and source guest execution NOT_EXECUTED. PR mergeability state remains `dirty` (conflicts).
+
+GitHub focused CI jobs in the source organization have previously failed without executed steps; these are not test failures. A separately authorized **source-free** GitHub Actions runner canary succeeded in private alternate-org carrier `opto-sync-test/go-java-validation`, run https://github.com/opto-sync-test/go-java-validation/actions/runs/41589765720, commit `7705a21d567f9637dbe035c69cd9be8dfbd1e8e2`. This demonstrates runner capacity only and does not certify or authorize exporting private source.
+
+The protected-source repository policies have no active approval for cross-organization source mirroring; no source, tree, or runtime test fixture was transferred to the alternate org. Real cross-org source-bearing CI remains BLOCKED by governance. The opt-in pool and draft PR must not be treated as production 2-thread startup or five-backend guest parity proof.
