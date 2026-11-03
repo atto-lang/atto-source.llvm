@@ -1,0 +1,1005 @@
+#include "oreslang/runtime/TenantVm.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <csetjmp>
+#include <csignal>
+#include <cstring>
+#include <deque>
+#include <map>
+#include <mutex>
+#include <pthread.h>
+#include <stdexcept>
+#include <sys/mman.h>
+#include <thread>
+#include <unistd.h>
+#include <unordered_map>
+
+namespace oreslang::runtime::vm {
+
+const char* to_string(Status s) noexcept {
+    switch (s) {
+        case Status::Ok: return "Ok";
+        case Status::InvalidArgument: return "InvalidArgument";
+        case Status::DuplicateTenant: return "DuplicateTenant";
+        case Status::TenantQuota: return "TenantQuota";
+        case Status::HeapQuota: return "HeapQuota";
+        case Status::OutOfAddressSpace: return "OutOfAddressSpace";
+        case Status::StaleHandle: return "StaleHandle";
+        case Status::ForeignHandle: return "ForeignHandle";
+        case Status::NotRunning: return "NotRunning";
+        case Status::Busy: return "Busy";
+        case Status::PayloadTooLarge: return "PayloadTooLarge";
+        case Status::ActorQuota: return "ActorQuota";
+        case Status::UnknownActor: return "UnknownActor";
+        case Status::ActorStopping: return "ActorStopping";
+        case Status::MailboxFull: return "MailboxFull";
+        case Status::HeapBudget: return "HeapBudget";
+        case Status::BadKind: return "BadKind";
+        case Status::GuestError: return "GuestError";
+        case Status::ReplyTooLarge: return "ReplyTooLarge";
+        case Status::TenantFailed: return "TenantFailed";
+        case Status::HostClosed: return "HostClosed";
+    }
+    return "Unknown";
+}
+
+const char* to_string(FailReason r) noexcept {
+    switch (r) {
+        case FailReason::None: return "None";
+        case FailReason::MemoryFault: return "MemoryFault";
+        case FailReason::WildAccess: return "WildAccess";
+        case FailReason::StackOverflow: return "StackOverflow";
+        case FailReason::Trap: return "Trap";
+        case FailReason::TurnDeadline: return "TurnDeadline";
+        case FailReason::CpuBudget: return "CpuBudget";
+        case FailReason::HostKill: return "HostKill";
+        case FailReason::HostClosed: return "HostClosed";
+    }
+    return "Unknown";
+}
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+constexpr std::uint64_t kAddressableBytes = std::uint64_t{1} << 32;
+constexpr std::uint64_t kCageBytes = kAddressableBytes * 2; // window + guard
+constexpr std::uint64_t kCommitStepBytes = std::uint64_t{1} << 20;
+constexpr std::size_t kCarrierGuardBytes = std::size_t{1} << 20;
+constexpr std::size_t kSignalStackBytes = std::size_t{64} << 10;
+constexpr std::uint32_t kAlignment = 16;
+constexpr std::uint32_t kMaxActorBytes = std::uint32_t{1} << 30;
+constexpr int kInterruptSignal = SIGURG;
+
+std::uint64_t now_ns() {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        Clock::now().time_since_epoch()).count());
+}
+
+std::uint64_t align_up(std::uint64_t value, std::uint64_t alignment) {
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+bool valid_tenant_id(const std::string& id) {
+    if (id.empty() || id.size() > 128 || id == "." || id == "..") return false;
+    return std::all_of(id.begin(), id.end(), [](unsigned char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '.' || c == '-';
+    });
+}
+
+bool valid_module(const OresVmGuestModule* m) {
+    if (!m || m->abi_version != ORES_VM_GUEST_ABI_VERSION || !m->kinds || m->kind_count == 0) return false;
+    for (std::uint32_t i = 0; i < m->kind_count; ++i) {
+        const OresVmGuestKind& k = m->kinds[i];
+        const std::uint64_t total = std::uint64_t{k.state_bytes} + k.heap_bytes + k.scratch_bytes;
+        if (!k.turn || k.scratch_bytes == 0 || total > kMaxActorBytes) return false;
+    }
+    return true;
+}
+
+struct Mail {
+    std::vector<std::uint8_t> bytes;
+    bool has_promise = false;
+    std::promise<TurnResult> promise;
+};
+
+struct Actor {
+    const OresVmGuestKind* kind = nullptr;
+    std::uint32_t generation = 0; // bumped at every release, so stale refs never match
+    std::uint32_t region = 0;
+    std::uint32_t region_bytes = 0;
+    std::uint32_t heap_used = 0;
+    std::deque<Mail> mailbox;
+    bool live = false;
+    bool running = false;
+    bool queued = false;
+    bool stopping = false;
+};
+
+struct Vm {
+    std::mutex mutex;
+    VmSpec spec;
+    std::uint64_t generation = 0;
+    std::uint8_t* cage = nullptr;
+    std::atomic<int> phase{static_cast<int>(Phase::Running)};
+    std::uint64_t committed = 0; // grows only, up to the heap limit
+    std::uint64_t bump = 0;
+    std::uint64_t used = 0;
+    std::map<std::uint32_t, std::vector<std::uint32_t>> free_regions;
+    std::vector<std::unique_ptr<Actor>> actors;
+    std::vector<std::uint32_t> free_slots;
+    std::size_t live_actors = 0;
+    std::deque<std::uint32_t> ready;
+    std::size_t inflight = 0;
+    std::uint32_t running = 0;
+    bool enqueued = false;
+    bool retired = false;
+    std::uint64_t turns = 0;
+    std::atomic<std::uint64_t> cpu_ns{0};
+    VmTerminal terminal;
+    std::promise<VmTerminal> closed_promise;
+    std::shared_future<VmTerminal> closed;
+
+    Phase current_phase() const { return static_cast<Phase>(phase.load(std::memory_order_seq_cst)); }
+};
+
+// One per carrier thread. Everything the signal handlers touch is here, and is either
+// lock-free or written only by the owning thread.
+struct Carrier {
+    pthread_t thread{};
+    void* stack = nullptr;
+    std::uint8_t* stack_guard_low = nullptr;
+    void* signal_stack = nullptr;
+
+    // Odd while inside a turn. Interrupts name the sequence they target, so a late signal
+    // can never abort the carrier's next turn, which may belong to another tenant.
+    std::atomic<std::uint64_t> turn_seq{0};
+    std::atomic<std::uint64_t> abort_seq{0};
+    std::atomic<std::uint64_t> vm_generation{0};
+    std::atomic<std::uint64_t> deadline_ns{0};
+
+    volatile std::sig_atomic_t in_guest = 0;
+    sigjmp_buf resume;
+    FailReason trap_reason = FailReason::None;
+    std::uintptr_t fault_address = 0;
+
+    // Host-call context for the current turn; only this thread reads these.
+    void* core = nullptr; // TenantVmHost::Core
+    Vm* vm = nullptr;
+    Actor* actor = nullptr;
+};
+
+thread_local Carrier* t_carrier = nullptr;
+
+// On Darwin only the mask-saving form also restores the kernel's on-alt-stack state, which
+// a recovery from a stack overflow depends on. Linux derives that state from the SP.
+#if defined(__APPLE__)
+#define ORES_VM_SETJMP(env) sigsetjmp(env, 1)
+#else
+#define ORES_VM_SETJMP(env) sigsetjmp(env, 0)
+#endif
+
+void unblock_recovered_signals() {
+#if !defined(__APPLE__)
+    sigset_t set;
+    sigemptyset(&set);
+    for (int s : {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, kInterruptSignal}) sigaddset(&set, s);
+    pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
+#endif
+}
+
+struct sigaction g_previous[64];
+
+// A fault while a carrier is executing guest code ends that VM. A fault anywhere else is a
+// bug in the host, so it must stay fatal rather than be mistaken for a guest problem.
+void on_fault(int signal, siginfo_t* info, void* context) {
+    Carrier* c = t_carrier;
+    if (c && c->in_guest) {
+        c->in_guest = 0;
+        c->fault_address = reinterpret_cast<std::uintptr_t>(info->si_addr);
+        c->trap_reason = (signal == SIGSEGV || signal == SIGBUS) ? FailReason::WildAccess : FailReason::Trap;
+        siglongjmp(c->resume, 1);
+    }
+    // Not ours. Runtimes in this process may rely on these signals (the CLR and JVM use SIGSEGV
+    // for null checks), so hand over without giving up the handler for later guest faults.
+    const struct sigaction& previous = g_previous[signal];
+    if (previous.sa_flags & SA_SIGINFO) {
+        previous.sa_sigaction(signal, info, context);
+    } else if (previous.sa_handler == SIG_IGN) {
+        return;
+    } else if (previous.sa_handler == SIG_DFL) {
+        ::signal(signal, SIG_DFL); // returning re-executes the fault, which is now fatal
+    } else {
+        previous.sa_handler(signal);
+    }
+}
+
+void on_interrupt(int, siginfo_t*, void*) {
+    Carrier* c = t_carrier;
+    if (c && c->in_guest && c->abort_seq.load(std::memory_order_acquire) == c->turn_seq.load(std::memory_order_acquire)) {
+        c->in_guest = 0;
+        c->fault_address = 0;
+        c->trap_reason = FailReason::HostKill;
+        siglongjmp(c->resume, 1);
+    }
+}
+
+void trap_from_guest() {
+    Carrier* c = t_carrier;
+    if (!c || !c->in_guest) std::abort(); // only lowered guest code may call this
+    c->in_guest = 0;
+    c->fault_address = 0;
+    c->trap_reason = FailReason::Trap;
+    siglongjmp(c->resume, 1);
+}
+
+void install_handlers_once() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        struct sigaction action {};
+        action.sa_sigaction = on_fault;
+        action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigemptyset(&action.sa_mask);
+        for (int s : {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP})
+            if (sigaction(s, &action, &g_previous[s]) != 0) std::abort();
+        action.sa_sigaction = on_interrupt;
+        action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
+        if (sigaction(kInterruptSignal, &action, &g_previous[kInterruptSignal]) != 0) std::abort();
+    });
+}
+
+} // namespace
+
+struct TenantVmHost::Core {
+    explicit Core(HostLimits value) : limits(value) {}
+
+    const HostLimits limits;
+    const std::shared_ptr<const void> root = std::make_shared<int>(0);
+
+    // Order: Vm::mutex, then ready_mutex. registry_mutex is never held with either.
+    mutable std::mutex registry_mutex;
+    std::unordered_map<std::string, std::shared_ptr<Vm>> by_id;
+    std::unordered_map<std::uint64_t, std::shared_ptr<Vm>> by_generation;
+    std::uint64_t next_generation = 1;
+    std::uint64_t admitted_heap = 0;
+
+    std::mutex ready_mutex;
+    std::condition_variable ready_cv;
+    std::deque<std::shared_ptr<Vm>> ready_vms;
+    bool stopping = false;
+
+    std::vector<std::unique_ptr<Carrier>> carriers;
+    std::thread watchdog;
+    std::atomic<bool> watchdog_stop{false};
+    std::atomic<std::uint64_t> traps_contained{0};
+    std::atomic<std::uint64_t> kills_delivered{0};
+
+    OresVmHostApi api{};
+
+    // ------------------------------------------------------------- scheduling
+
+    // Each ready VM holds one position in the rotation however many actors it has. That is
+    // the fairness rule: a tenant with 5000 busy actors gets the same share as one with 1.
+    void schedule_locked(const std::shared_ptr<Vm>& vm) {
+        if (vm->enqueued || vm->ready.empty() || vm->running >= vm->spec.limits.max_parallel_turns) return;
+        const Phase phase = vm->current_phase();
+        if (phase != Phase::Running && phase != Phase::Quiescing) return;
+        vm->enqueued = true;
+        {
+            std::lock_guard<std::mutex> lock(ready_mutex);
+            ready_vms.push_back(vm);
+        }
+        ready_cv.notify_one();
+    }
+
+    void make_ready_locked(const std::shared_ptr<Vm>& vm, std::uint32_t slot) {
+        Actor& actor = *vm->actors[slot];
+        if (actor.queued || actor.running || actor.mailbox.empty()) return;
+        actor.queued = true;
+        vm->ready.push_back(slot);
+        schedule_locked(vm);
+    }
+
+    void carrier_main(Carrier* c) {
+        t_carrier = c;
+        stack_t alt{};
+        alt.ss_sp = c->signal_stack;
+        alt.ss_size = kSignalStackBytes;
+        if (sigaltstack(&alt, nullptr) != 0) std::abort();
+        for (;;) {
+            std::shared_ptr<Vm> vm;
+            {
+                std::unique_lock<std::mutex> lock(ready_mutex);
+                ready_cv.wait(lock, [&] { return stopping || !ready_vms.empty(); });
+                if (ready_vms.empty()) return; // stopping, nothing left
+                vm = std::move(ready_vms.front());
+                ready_vms.pop_front();
+            }
+            run_one_turn(c, vm);
+        }
+    }
+
+    void run_one_turn(Carrier* c, const std::shared_ptr<Vm>& vm) {
+        Mail mail;
+        Actor* actor = nullptr;
+        std::uint32_t slot = 0;
+        {
+            std::lock_guard<std::mutex> lock(vm->mutex);
+            vm->enqueued = false;
+            const Phase phase = vm->current_phase();
+            if ((phase != Phase::Running && phase != Phase::Quiescing) || vm->ready.empty() ||
+                vm->running >= vm->spec.limits.max_parallel_turns)
+                return;
+            slot = vm->ready.front();
+            vm->ready.pop_front();
+            actor = vm->actors[slot].get();
+            actor->queued = false;
+            actor->running = true;
+            ++vm->running;
+            mail = std::move(actor->mailbox.front());
+            actor->mailbox.pop_front();
+            --vm->inflight;
+            ++vm->turns;
+            schedule_locked(vm); // others of this VM may run in parallel, at the back of the line
+        }
+
+        TurnResult result = execute(c, *vm, *actor, slot, mail);
+
+        bool trapped = false;
+        FailReason reason = FailReason::None;
+        std::uint64_t fault_offset = 0;
+        if (c->trap_reason != FailReason::None) {
+            trapped = true;
+            reason = classify(*vm, c, fault_offset);
+            c->trap_reason = FailReason::None;
+            if (reason != FailReason::HostKill) traps_contained.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (trapped && reason != FailReason::HostKill) fail(vm, reason, fault_offset);
+
+        bool over_budget = false;
+        {
+            std::lock_guard<std::mutex> lock(vm->mutex);
+            actor->running = false;
+            --vm->running;
+            const std::uint64_t budget = vm->spec.limits.cpu_budget_ms;
+            over_budget = budget && vm->cpu_ns.load(std::memory_order_relaxed) / 1000000 > budget;
+            const Phase phase = vm->current_phase();
+            if (phase == Phase::Running || phase == Phase::Quiescing) {
+                if (actor->stopping && actor->mailbox.empty()) release_actor_locked(*vm, *actor, slot);
+                else make_ready_locked(vm, slot);
+                schedule_locked(vm);
+            }
+        }
+        // After the bookkeeping, so that a caller acting on this result sees the actor idle.
+        if (mail.has_promise) mail.promise.set_value(std::move(result));
+        if (over_budget) fail(vm, FailReason::CpuBudget, 0);
+        maybe_retire(vm);
+    }
+
+    FailReason classify(const Vm& vm, Carrier* c, std::uint64_t& fault_offset) const {
+        if (c->trap_reason != FailReason::WildAccess) return c->trap_reason;
+        const auto address = c->fault_address;
+        const auto cage = reinterpret_cast<std::uintptr_t>(vm.cage);
+        if (address >= cage && address - cage < kCageBytes) {
+            fault_offset = address - cage;
+            return FailReason::MemoryFault;
+        }
+        const auto guard = reinterpret_cast<std::uintptr_t>(c->stack_guard_low);
+        if (address >= guard && address - guard < kCarrierGuardBytes) return FailReason::StackOverflow;
+        return FailReason::WildAccess;
+    }
+
+    // Trivially destructible locals only: a recovery longjmps over this frame's callee.
+    static bool enter_guest(Carrier* c, const OresVmGuestKind* kind, const OresVmHostApi* api, std::uint8_t* cage,
+                            std::uint64_t self, std::uint32_t state, std::uint32_t input,
+                            std::uint32_t input_length, std::uint32_t output, std::uint32_t capacity,
+                            std::int64_t* out) {
+        if (ORES_VM_SETJMP(c->resume) != 0) {
+            c->in_guest = 0;
+            unblock_recovered_signals();
+            return false;
+        }
+        c->in_guest = 1;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        // An interrupt that landed before in_guest was set must not be lost.
+        if (c->abort_seq.load(std::memory_order_acquire) == c->turn_seq.load(std::memory_order_acquire)) {
+            c->in_guest = 0;
+            c->trap_reason = FailReason::HostKill;
+            return false;
+        }
+        const std::int64_t value = kind->turn(api, cage, self, state, input, input_length, output, capacity);
+        c->in_guest = 0;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        *out = value;
+        return true;
+    }
+
+    TurnResult execute(Carrier* c, Vm& vm, Actor& actor, std::uint32_t slot, const Mail& mail) {
+        TurnResult result;
+        const OresVmGuestKind* kind = actor.kind;
+        const std::uint32_t scratch = actor.region + kind->state_bytes + kind->heap_bytes;
+        const auto input_length = static_cast<std::uint32_t>(mail.bytes.size());
+        const auto output = static_cast<std::uint32_t>(align_up(scratch + std::uint64_t{input_length}, kAlignment));
+        const std::uint32_t scratch_end = scratch + kind->scratch_bytes;
+        const std::uint32_t capacity = std::min(scratch_end - output, vm.spec.limits.max_reply_bytes);
+        if (input_length) std::memcpy(vm.cage + scratch, mail.bytes.data(), input_length);
+        const std::uint64_t self = (std::uint64_t{actor.generation} << 32) | slot;
+
+        c->vm = &vm;
+        c->actor = &actor;
+        c->trap_reason = FailReason::None;
+        const std::uint64_t started = now_ns();
+        c->deadline_ns.store(started + std::uint64_t{vm.spec.limits.turn_deadline_ms} * 1000000, std::memory_order_relaxed);
+        c->vm_generation.store(vm.generation, std::memory_order_seq_cst);
+        c->turn_seq.fetch_add(1, std::memory_order_seq_cst); // now odd
+        std::int64_t value = 0;
+        bool completed = false;
+        // Pairs with fail(): it publishes the phase and then scans carriers, this announces
+        // the turn and then reads the phase, so at least one of the two sees the other.
+        if (vm.current_phase() == Phase::Running || vm.current_phase() == Phase::Quiescing) {
+            completed = enter_guest(c, kind, &api, vm.cage, self, actor.region, scratch, input_length,
+                                    output, capacity, &value);
+        } else {
+            c->trap_reason = FailReason::HostKill;
+        }
+        c->turn_seq.fetch_add(1, std::memory_order_seq_cst); // even again
+        vm.cpu_ns.fetch_add(now_ns() - started, std::memory_order_relaxed);
+        c->vm = nullptr;
+        c->actor = nullptr;
+
+        if (!completed) {
+            result.status = Status::TenantFailed;
+            return result;
+        }
+        if (value < 0) {
+            result.status = Status::GuestError;
+            result.guest_code = value;
+            return result;
+        }
+        if (static_cast<std::uint64_t>(value) > capacity) {
+            result.status = Status::ReplyTooLarge;
+            return result;
+        }
+        result.status = Status::Ok;
+        result.payload.assign(vm.cage + output, vm.cage + output + value);
+        return result;
+    }
+
+    // ----------------------------------------------------------- guest memory
+
+    bool ensure_committed_locked(Vm& vm, std::uint64_t end) {
+        if (end <= vm.committed) return true;
+        if (end > vm.spec.limits.heap_bytes + page_size()) return false;
+        const std::uint64_t target = std::min(align_up(std::max(end, vm.committed + kCommitStepBytes), page_size()),
+                                              align_up(vm.spec.limits.heap_bytes + page_size(), page_size()));
+        if (mprotect(vm.cage + vm.committed, target - vm.committed, PROT_READ | PROT_WRITE) != 0) return false;
+        vm.committed = target;
+        return true;
+    }
+
+    static std::uint64_t page_size() {
+        static const std::uint64_t size = static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
+        return size;
+    }
+
+    // Offset 0 stays unmapped, so a null offset faults like a null pointer.
+    bool allocate_region_locked(Vm& vm, std::uint32_t bytes, std::uint32_t& out) {
+        auto reuse = vm.free_regions.find(bytes);
+        if (reuse != vm.free_regions.end() && !reuse->second.empty()) {
+            out = reuse->second.back();
+            reuse->second.pop_back();
+            vm.used += bytes;
+            return true;
+        }
+        const std::uint64_t start = vm.bump;
+        const std::uint64_t end = start + bytes;
+        if (end - page_size() > vm.spec.limits.heap_bytes || !ensure_committed_locked(vm, end)) return false;
+        vm.bump = end;
+        vm.used += bytes;
+        out = static_cast<std::uint32_t>(start);
+        return true;
+    }
+
+    Status spawn_locked(const std::shared_ptr<Vm>& vm, std::uint32_t kind_index, std::uint64_t& out_ref) {
+        Vm& v = *vm;
+        if (kind_index >= v.spec.module->kind_count) return Status::BadKind;
+        const OresVmGuestKind* kind = &v.spec.module->kinds[kind_index];
+        if (v.live_actors >= v.spec.limits.max_actors) return Status::ActorQuota;
+        const auto bytes = static_cast<std::uint32_t>(align_up(
+            std::uint64_t{kind->state_bytes} + kind->heap_bytes + kind->scratch_bytes, kAlignment));
+        std::uint32_t region = 0;
+        if (!allocate_region_locked(v, bytes, region)) return Status::HeapBudget;
+        std::uint32_t slot;
+        if (!v.free_slots.empty()) {
+            slot = v.free_slots.back();
+            v.free_slots.pop_back();
+        } else {
+            slot = static_cast<std::uint32_t>(v.actors.size());
+            v.actors.push_back(std::make_unique<Actor>());
+        }
+        Actor& actor = *v.actors[slot];
+        actor.kind = kind;
+        actor.region = region;
+        actor.region_bytes = bytes;
+        actor.heap_used = 0;
+        actor.live = true;
+        actor.stopping = false;
+        ++v.live_actors;
+        out_ref = (std::uint64_t{actor.generation} << 32) | slot;
+        return Status::Ok;
+    }
+
+    // Scrubs before reuse, so a later actor can never read what this one left behind.
+    void release_actor_locked(Vm& vm, Actor& actor, std::uint32_t slot) {
+        std::memset(vm.cage + actor.region, 0, actor.region_bytes);
+        vm.free_regions[actor.region_bytes].push_back(actor.region);
+        vm.used -= actor.region_bytes;
+        actor.live = false;
+        actor.stopping = false;
+        ++actor.generation;
+        vm.free_slots.push_back(slot);
+        --vm.live_actors;
+    }
+
+    Actor* resolve_actor_locked(Vm& vm, std::uint64_t ref) {
+        const auto slot = static_cast<std::uint32_t>(ref);
+        if (slot >= vm.actors.size()) return nullptr;
+        Actor* actor = vm.actors[slot].get();
+        const auto generation = static_cast<std::uint32_t>((ref & ~(std::uint64_t{1} << 63)) >> 32);
+        if (!actor->live || actor->generation != generation) return nullptr;
+        return actor;
+    }
+
+    // --------------------------------------------------------------- host API
+
+    // Guest code runs with in_guest set. Host code must clear it, so that a fault in the host
+    // is treated as the host bug it is, and so that an interrupt defers to the way back.
+    static Carrier* host_enter() {
+        Carrier* c = t_carrier;
+        c->in_guest = 0;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        return c;
+    }
+    static void host_leave(Carrier* c) {
+        if (c->abort_seq.load(std::memory_order_acquire) == c->turn_seq.load(std::memory_order_acquire)) {
+            c->trap_reason = FailReason::HostKill;
+            siglongjmp(c->resume, 1);
+        }
+        c->in_guest = 1;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+    }
+
+    static std::uint32_t alloc_impl(Carrier* c, std::uint32_t bytes, std::uint32_t alignment) {
+        if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0 || alignment > 4096) return 0;
+        Actor& actor = *c->actor;
+        // Only this actor's turn touches heap_used, and at most one turn runs per actor.
+        const std::uint64_t heap = actor.region + std::uint64_t{actor.kind->state_bytes};
+        const std::uint64_t start = align_up(heap + actor.heap_used, alignment);
+        const std::uint64_t end = start + bytes;
+        if (end > heap + actor.kind->heap_bytes) return 0;
+        actor.heap_used = static_cast<std::uint32_t>(end - heap);
+        return static_cast<std::uint32_t>(start);
+    }
+
+    static std::uint32_t host_alloc(std::uint32_t bytes, std::uint32_t alignment) {
+        Carrier* c = host_enter();
+        const std::uint32_t result = alloc_impl(c, bytes, alignment);
+        host_leave(c);
+        return result;
+    }
+
+    int send_impl(Vm& vm, std::uint64_t target, std::uint32_t offset, std::uint32_t length) {
+        if (length > vm.spec.limits.max_payload_bytes) return 0;
+        std::shared_ptr<Vm> shared;
+        {
+            std::lock_guard<std::mutex> registry(registry_mutex);
+            auto it = by_generation.find(vm.generation);
+            if (it == by_generation.end()) return 0;
+            shared = it->second;
+        }
+        std::lock_guard<std::mutex> lock(vm.mutex);
+        if (vm.current_phase() != Phase::Running) return 0;
+        // The window is bounded by what is committed, which never shrinks in this VM's life.
+        if (std::uint64_t{offset} + length > vm.committed) return 0;
+        Actor* actor = resolve_actor_locked(vm, target);
+        if (!actor || actor->stopping || actor->mailbox.size() >= vm.spec.limits.mailbox_capacity ||
+            vm.inflight >= vm.spec.limits.max_inflight ||
+            length > mail_capacity(*actor->kind, vm.spec.limits))
+            return 0;
+        Mail mail;
+        mail.bytes.assign(vm.cage + offset, vm.cage + offset + length);
+        actor->mailbox.push_back(std::move(mail));
+        ++vm.inflight;
+        make_ready_locked(shared, static_cast<std::uint32_t>(target));
+        return 1;
+    }
+
+    static int host_send(std::uint64_t target, std::uint32_t offset, std::uint32_t length) {
+        Carrier* c = host_enter();
+        const int result = static_cast<Core*>(c->core)->send_impl(*c->vm, target, offset, length);
+        host_leave(c);
+        return result;
+    }
+
+    std::uint64_t spawn_impl(Vm& vm, std::uint32_t kind) {
+        std::shared_ptr<Vm> shared;
+        {
+            std::lock_guard<std::mutex> registry(registry_mutex);
+            auto it = by_generation.find(vm.generation);
+            if (it == by_generation.end()) return 0;
+            shared = it->second;
+        }
+        std::lock_guard<std::mutex> lock(vm.mutex);
+        if (vm.current_phase() != Phase::Running) return 0;
+        std::uint64_t ref = 0;
+        if (spawn_locked(shared, kind, ref) != Status::Ok) return 0;
+        return ref | (std::uint64_t{1} << 63); // so slot 0, generation 0 is not the failure value
+    }
+
+    static std::uint64_t host_spawn(std::uint32_t kind) {
+        Carrier* c = host_enter();
+        const std::uint64_t result = static_cast<Core*>(c->core)->spawn_impl(*c->vm, kind);
+        host_leave(c);
+        return result;
+    }
+
+    static std::uint32_t mail_capacity(const OresVmGuestKind& kind, const VmLimits& limits) {
+        // Input shares scratch with output. Half each keeps a reply possible.
+        return std::min(kind.scratch_bytes / 2, limits.max_payload_bytes);
+    }
+
+    // -------------------------------------------------------------- lifecycle
+
+    // Stop the VM's carriers wherever they are. Signals carry the targeted sequence, so one
+    // arriving late is ignored, and the watchdog repeats them until the turn has ended.
+    void interrupt_carriers(std::uint64_t generation) {
+        for (auto& owned : carriers) {
+            Carrier& c = *owned;
+            const std::uint64_t seq = c.turn_seq.load(std::memory_order_seq_cst);
+            if (!(seq & 1) || c.vm_generation.load(std::memory_order_seq_cst) != generation) continue;
+            if (c.turn_seq.load(std::memory_order_seq_cst) != seq) continue;
+            c.abort_seq.store(seq, std::memory_order_seq_cst);
+            pthread_kill(c.thread, kInterruptSignal);
+            kills_delivered.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    void fail(const std::shared_ptr<Vm>& vm, FailReason reason, std::uint64_t fault_offset) {
+        std::deque<Mail> doomed;
+        {
+            std::lock_guard<std::mutex> lock(vm->mutex);
+            const Phase phase = vm->current_phase();
+            if (phase == Phase::Failed || phase == Phase::Stopped) return;
+            vm->phase.store(static_cast<int>(Phase::Failed), std::memory_order_seq_cst);
+            vm->terminal.reason = reason;
+            vm->terminal.fault_offset = fault_offset;
+            for (auto& actor : vm->actors) {
+                for (auto& mail : actor->mailbox) doomed.push_back(std::move(mail));
+                actor->mailbox.clear();
+                actor->queued = false;
+            }
+            vm->ready.clear();
+            vm->inflight = 0;
+        }
+        for (auto& mail : doomed) {
+            if (!mail.has_promise) continue;
+            TurnResult r;
+            r.status = Status::TenantFailed;
+            mail.promise.set_value(std::move(r));
+        }
+        interrupt_carriers(vm->generation);
+        maybe_retire(vm);
+    }
+
+    // The cage goes away only when no carrier can still be inside it.
+    void maybe_retire(const std::shared_ptr<Vm>& vm) {
+        {
+            std::lock_guard<std::mutex> lock(vm->mutex);
+            if (vm->retired || vm->running != 0) return;
+            const Phase phase = vm->current_phase();
+            if (phase == Phase::Quiescing) {
+                if (vm->inflight != 0) return;
+                vm->phase.store(static_cast<int>(Phase::Stopped), std::memory_order_seq_cst);
+            } else if (phase != Phase::Failed) {
+                return;
+            }
+            vm->retired = true;
+        }
+        munmap(vm->cage, kCageBytes);
+        vm->cage = nullptr;
+        VmTerminal terminal = vm->terminal;
+        terminal.phase = vm->current_phase();
+        terminal.generation = vm->generation;
+        {
+            std::lock_guard<std::mutex> lock(registry_mutex);
+            admitted_heap -= vm->spec.limits.heap_bytes;
+            by_generation.erase(vm->generation);
+            auto it = by_id.find(vm->spec.tenant_id);
+            if (it != by_id.end() && it->second == vm) by_id.erase(it);
+        }
+        vm->closed_promise.set_value(terminal);
+    }
+
+    void watchdog_main() {
+        while (!watchdog_stop.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            const std::uint64_t now = now_ns();
+            for (auto& owned : carriers) {
+                Carrier& c = *owned;
+                const std::uint64_t seq = c.turn_seq.load(std::memory_order_seq_cst);
+                if (!(seq & 1)) continue;
+                if (c.abort_seq.load(std::memory_order_seq_cst) == seq) {
+                    // Already targeted and still inside: it may have been in a host call.
+                    pthread_kill(c.thread, kInterruptSignal);
+                    continue;
+                }
+                if (now < c.deadline_ns.load(std::memory_order_relaxed)) continue;
+                const std::uint64_t generation = c.vm_generation.load(std::memory_order_seq_cst);
+                if (c.turn_seq.load(std::memory_order_seq_cst) != seq) continue;
+                std::shared_ptr<Vm> vm;
+                {
+                    std::lock_guard<std::mutex> lock(registry_mutex);
+                    auto it = by_generation.find(generation);
+                    if (it != by_generation.end()) vm = it->second;
+                }
+                if (vm) fail(vm, FailReason::TurnDeadline, 0);
+            }
+        }
+    }
+
+    std::shared_ptr<Vm> resolve(const std::shared_ptr<const void>& handle_root, const std::weak_ptr<void>& weak,
+                                std::uint64_t generation, Status& status) const {
+        if (handle_root != root) {
+            status = Status::ForeignHandle;
+            return nullptr;
+        }
+        auto locked = std::static_pointer_cast<Vm>(weak.lock());
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        auto it = by_generation.find(generation);
+        if (!locked || it == by_generation.end() || it->second != locked) {
+            status = Status::StaleHandle;
+            return nullptr;
+        }
+        status = Status::Ok;
+        return locked;
+    }
+};
+
+namespace {
+std::future<TurnResult> ready_result(Status status) {
+    std::promise<TurnResult> promise;
+    TurnResult result;
+    result.status = status;
+    promise.set_value(std::move(result));
+    return promise.get_future();
+}
+} // namespace
+
+TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(limits)) {
+    if (limits.carriers == 0 || limits.max_vms == 0 || limits.carrier_stack_bytes < (std::size_t{64} << 10))
+        throw std::invalid_argument("TenantVmHost limits");
+    install_handlers_once();
+    Core* core = core_.get();
+    core->api.abi_version = ORES_VM_GUEST_ABI_VERSION;
+    core->api.alloc = &Core::host_alloc;
+    core->api.send = &Core::host_send;
+    core->api.spawn = &Core::host_spawn;
+    core->api.trap = &trap_from_guest;
+
+    for (std::uint32_t i = 0; i < limits.carriers; ++i) {
+        auto carrier = std::make_unique<Carrier>();
+        carrier->core = core;
+        const std::size_t total = kCarrierGuardBytes + limits.carrier_stack_bytes;
+        void* stack = mmap(nullptr, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        void* signal_stack = mmap(nullptr, kSignalStackBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (stack == MAP_FAILED || signal_stack == MAP_FAILED || mprotect(stack, kCarrierGuardBytes, PROT_NONE) != 0)
+            throw std::runtime_error("TenantVmHost: carrier stack");
+        carrier->stack = stack;
+        carrier->stack_guard_low = static_cast<std::uint8_t*>(stack);
+        carrier->signal_stack = signal_stack;
+        core->carriers.push_back(std::move(carrier));
+    }
+    // Every Carrier exists before any thread can scan the array.
+    for (auto& carrier : core->carriers) {
+        pthread_attr_t attributes;
+        pthread_attr_init(&attributes);
+        pthread_attr_setstack(&attributes, static_cast<std::uint8_t*>(carrier->stack) + kCarrierGuardBytes,
+                              limits.carrier_stack_bytes);
+        struct Start { Core* core; Carrier* carrier; };
+        auto* start = new Start{core, carrier.get()};
+        const int rc = pthread_create(&carrier->thread, &attributes, [](void* raw) -> void* {
+            auto* s = static_cast<Start*>(raw);
+            Core* c = s->core;
+            Carrier* self = s->carrier;
+            delete s;
+            c->carrier_main(self);
+            return nullptr;
+        }, start);
+        pthread_attr_destroy(&attributes);
+        if (rc != 0) throw std::runtime_error("TenantVmHost: carrier thread");
+    }
+    core->watchdog = std::thread([core] { core->watchdog_main(); });
+}
+
+TenantVmHost::~TenantVmHost() {
+    std::vector<std::shared_ptr<Vm>> remaining;
+    {
+        std::lock_guard<std::mutex> lock(core_->registry_mutex);
+        for (auto& entry : core_->by_generation) remaining.push_back(entry.second);
+    }
+    for (auto& vm : remaining) {
+        core_->fail(vm, FailReason::HostClosed, 0);
+        vm->closed.wait();
+    }
+    core_->watchdog_stop.store(true);
+    core_->watchdog.join();
+    {
+        std::lock_guard<std::mutex> lock(core_->ready_mutex);
+        core_->stopping = true;
+    }
+    core_->ready_cv.notify_all();
+    for (auto& carrier : core_->carriers) {
+        pthread_join(carrier->thread, nullptr);
+        munmap(carrier->stack, kCarrierGuardBytes + core_->limits.carrier_stack_bytes);
+        munmap(carrier->signal_stack, kSignalStackBytes);
+    }
+}
+
+VmOpenResult TenantVmHost::open(VmSpec spec) {
+    VmOpenResult out;
+    const auto refuse = [&](Status status) { out.status = status; return out; };
+    const VmLimits& l = spec.limits;
+    if (!valid_tenant_id(spec.tenant_id) || !valid_module(spec.module) || l.heap_bytes == 0 ||
+        l.heap_bytes > kAddressableBytes - (std::uint64_t{1} << 20) || l.max_actors == 0 ||
+        l.mailbox_capacity == 0 || l.max_inflight == 0 || l.max_parallel_turns == 0 ||
+        l.max_payload_bytes == 0 || l.max_reply_bytes == 0 || l.turn_deadline_ms == 0)
+        return refuse(Status::InvalidArgument);
+
+    auto vm = std::make_shared<Vm>();
+    vm->spec = std::move(spec);
+    vm->closed = vm->closed_promise.get_future().share();
+    {
+        std::lock_guard<std::mutex> lock(core_->registry_mutex);
+        // An id stays taken until its cage is gone, so a restart can never overlap the old VM.
+        if (core_->by_id.count(vm->spec.tenant_id)) return refuse(Status::DuplicateTenant);
+        if (core_->by_id.size() >= core_->limits.max_vms) return refuse(Status::TenantQuota);
+        if (vm->spec.limits.heap_bytes > core_->limits.max_admitted_heap_bytes - core_->admitted_heap)
+            return refuse(Status::HeapQuota);
+        // Reserve only: no memory is committed and nothing is readable yet.
+        void* cage = mmap(nullptr, kCageBytes, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+        if (cage == MAP_FAILED) return refuse(Status::OutOfAddressSpace);
+        vm->cage = static_cast<std::uint8_t*>(cage);
+        vm->committed = Core::page_size();
+        vm->bump = Core::page_size();
+        vm->generation = core_->next_generation++;
+        core_->admitted_heap += vm->spec.limits.heap_bytes;
+        core_->by_id.emplace(vm->spec.tenant_id, vm);
+        core_->by_generation.emplace(vm->generation, vm);
+    }
+    out.status = Status::Ok;
+    out.handle.root_ = core_->root;
+    out.handle.vm_ = vm;
+    out.handle.generation_ = vm->generation;
+    out.handle.closed_ = vm->closed;
+    return out;
+}
+
+VmSpawnResult TenantVmHost::spawn_actor(const VmHandle& handle, std::uint32_t kind) {
+    VmSpawnResult out;
+    Status status = Status::Ok;
+    auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
+    if (!vm) { out.status = status; return out; }
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    if (vm->current_phase() != Phase::Running) { out.status = Status::NotRunning; return out; }
+    std::uint64_t ref = 0;
+    out.status = core_->spawn_locked(vm, kind, ref);
+    if (out.status == Status::Ok) {
+        out.actor.root_ = handle.root_;
+        out.actor.vm_ = handle.vm_;
+        out.actor.generation_ = handle.generation_;
+        out.actor.ref_ = ref;
+    }
+    return out;
+}
+
+std::future<TurnResult> TenantVmHost::call(const VmActor& ref, std::vector<std::uint8_t> payload) {
+    Status status = Status::Ok;
+    auto vm = core_->resolve(ref.root_, ref.vm_, ref.generation_, status);
+    if (!vm) return ready_result(status);
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    if (vm->current_phase() != Phase::Running) return ready_result(Status::NotRunning);
+    Actor* actor = core_->resolve_actor_locked(*vm, ref.ref_);
+    if (!actor) return ready_result(Status::UnknownActor);
+    if (actor->stopping) return ready_result(Status::ActorStopping);
+    if (payload.size() > Core::mail_capacity(*actor->kind, vm->spec.limits)) return ready_result(Status::PayloadTooLarge);
+    if (actor->mailbox.size() >= vm->spec.limits.mailbox_capacity) return ready_result(Status::MailboxFull);
+    if (vm->inflight >= vm->spec.limits.max_inflight) return ready_result(Status::Busy);
+    Mail mail;
+    mail.bytes = std::move(payload);
+    mail.has_promise = true;
+    auto future = mail.promise.get_future();
+    actor->mailbox.push_back(std::move(mail));
+    ++vm->inflight;
+    core_->make_ready_locked(vm, static_cast<std::uint32_t>(ref.ref_));
+    return future;
+}
+
+Status TenantVmHost::stop_actor(const VmActor& ref) {
+    Status status = Status::Ok;
+    auto vm = core_->resolve(ref.root_, ref.vm_, ref.generation_, status);
+    if (!vm) return status;
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    if (vm->current_phase() != Phase::Running) return Status::NotRunning;
+    Actor* actor = core_->resolve_actor_locked(*vm, ref.ref_);
+    if (!actor) return Status::UnknownActor;
+    if (actor->stopping) return Status::ActorStopping;
+    actor->stopping = true;
+    if (!actor->running && actor->mailbox.empty())
+        core_->release_actor_locked(*vm, *actor, static_cast<std::uint32_t>(ref.ref_));
+    return Status::Ok;
+}
+
+Status TenantVmHost::begin_shutdown(const VmHandle& handle) {
+    Status status = Status::Ok;
+    auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
+    if (!vm) return status;
+    {
+        std::lock_guard<std::mutex> lock(vm->mutex);
+        if (vm->current_phase() != Phase::Running) return Status::NotRunning;
+        vm->phase.store(static_cast<int>(Phase::Quiescing), std::memory_order_seq_cst);
+    }
+    core_->maybe_retire(vm);
+    return Status::Ok;
+}
+
+Status TenantVmHost::kill(const VmHandle& handle) {
+    Status status = Status::Ok;
+    auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
+    if (!vm) return status;
+    core_->fail(vm, FailReason::HostKill, 0);
+    return Status::Ok;
+}
+
+VmTerminal TenantVmHost::wait_closed(const VmHandle& handle) const {
+    if (handle.root_ != core_->root || !handle.closed_.valid()) {
+        VmTerminal terminal;
+        terminal.detail = "foreign or empty handle";
+        return terminal;
+    }
+    return handle.closed_.get();
+}
+
+VmSnapshot TenantVmHost::snapshot(const VmHandle& handle) const {
+    VmSnapshot out;
+    Status status = Status::Ok;
+    auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
+    out.status = status;
+    if (!vm) return out;
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    out.phase = vm->current_phase();
+    out.generation = vm->generation;
+    out.committed_bytes = vm->committed;
+    out.used_bytes = vm->used;
+    out.turns = vm->turns;
+    out.cpu_ns = vm->cpu_ns.load(std::memory_order_relaxed);
+    out.live_actors = vm->live_actors;
+    out.inflight = vm->inflight;
+    return out;
+}
+
+HostStats TenantVmHost::stats() const {
+    HostStats out;
+    std::lock_guard<std::mutex> lock(core_->registry_mutex);
+    out.live_vms = core_->by_id.size();
+    out.admitted_heap_bytes = core_->admitted_heap;
+    out.traps_contained = core_->traps_contained.load();
+    out.kills_delivered = core_->kills_delivered.load();
+    return out;
+}
+
+} // namespace oreslang::runtime::vm

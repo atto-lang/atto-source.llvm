@@ -2,6 +2,11 @@
 
 Decision: 2026-10-12. Security audit / integration contract.
 
+> **Superseded in part, 2026-11-03.** Untrusted execution moves from one shared isolate to one
+> VM per tenant, up to 1000 in one OS process. Wherever this document fixes a single shared
+> untrusted Engine or pool, that no longer holds. The Java implementation has not changed yet.
+> See [TENANT_VM_IN_PROCESS_V1.md](TENANT_VM_IN_PROCESS_V1.md).
+
 ## Topology
 
 The default *application* topology has two trust domains, **not** one VM per actor:

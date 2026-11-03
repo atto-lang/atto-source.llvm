@@ -1,0 +1,14 @@
+#pragma once
+#include "oreslang/runtime/TenantVmGuestAbi.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+enum { KIND_COUNTER, KIND_MEMORY, KIND_FAULT, KIND_RELAY, KIND_SPAWNER, KIND_LARGE };
+enum { MEM_WRITE_STATE, MEM_READ_STATE, MEM_STATE_OFFSET, MEM_READ_OFFSET, MEM_WRITE_OFFSET, MEM_ALLOC,
+       MEM_ALLOC_UNTIL_REFUSED, MEM_FARTHEST_ACCESS, MEM_RULE_BREAKING_READ };
+enum { FAULT_NULL_OFFSET, FAULT_SPIN, FAULT_SPIN_IN_HOST_CALLS, FAULT_STACK, FAULT_TRAP, FAULT_DIVIDE,
+       FAULT_SLEEPLESS_BRIEFLY };
+extern const OresVmGuestModule ores_vm_test_module;
+#ifdef __cplusplus
+}
+#endif

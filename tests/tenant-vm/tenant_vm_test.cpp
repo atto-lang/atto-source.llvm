@@ -1,0 +1,695 @@
+// One OS process, many tenant VMs. Real cages, real signals, real concurrency.
+// Run one case by name: tenant_vm_test <case>
+#include "guests.h"
+#include "oreslang/runtime/TenantVm.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <csignal>
+#include <string>
+#include <sys/wait.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
+
+using namespace oreslang::runtime::vm;
+using Bytes = std::vector<std::uint8_t>;
+
+#if defined(TENANT_VM_TSAN_BUILD)
+#define SPIN_OP FAULT_SPIN_IN_HOST_CALLS
+#else
+#define SPIN_OP FAULT_SPIN
+#endif
+
+namespace {
+int failures = 0;
+#define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++failures; } } while (0)
+#define CHECK_EQ(a, b) do { const auto va = (a); const auto vb = (b); if (!(va == vb)) { std::fprintf(stderr, "  FAIL %s:%d: %s == %s\n", __FILE__, __LINE__, #a, #b); ++failures; } } while (0)
+#define CHECK_STATUS(actual, want) do { const Status va = (actual); if (va != (want)) { std::fprintf(stderr, "  FAIL %s:%d: got %s, want %s\n", __FILE__, __LINE__, to_string(va), to_string(want)); ++failures; } } while (0)
+#define CHECK_REASON(actual, want) do { const FailReason va = (actual); if (va != (want)) { std::fprintf(stderr, "  FAIL %s:%d: got %s, want %s\n", __FILE__, __LINE__, to_string(va), to_string(want)); ++failures; } } while (0)
+#define REQUIRE_OK(r) do { if ((r).status != Status::Ok) { std::fprintf(stderr, "  FAIL %s:%d: %s\n", __FILE__, __LINE__, to_string((r).status)); ++failures; return; } } while (0)
+
+using Ms = std::chrono::milliseconds;
+long long ms_since(std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration_cast<Ms>(std::chrono::steady_clock::now() - t).count();
+}
+
+VmSpec spec(const std::string& id) {
+    VmSpec s;
+    s.tenant_id = id;
+    s.module = &ores_vm_test_module;
+    s.limits.turn_deadline_ms = 2000;
+    return s;
+}
+Bytes words(std::initializer_list<std::int64_t> values) {
+    Bytes b(values.size() * 8);
+    std::size_t i = 0;
+    for (std::int64_t v : values) { std::memcpy(b.data() + i, &v, 8); i += 8; }
+    return b;
+}
+std::int64_t word(const Bytes& b) {
+    std::int64_t v = -999999;
+    if (b.size() == 8) std::memcpy(&v, b.data(), 8);
+    return v;
+}
+std::int64_t resident_kib() {
+    FILE* f = popen(("ps -o rss= -p " + std::to_string(getpid())).c_str(), "r");
+    long long kib = 0;
+    if (f) { if (std::fscanf(f, "%lld", &kib) != 1) kib = 0; pclose(f); }
+    return kib;
+}
+
+// ---------------------------------------------------------------------------
+
+// The stated requirement: 1000 VMs in one OS process, each with its own actors and state.
+void thousand_vms_in_one_process() {
+    HostLimits limits;
+    limits.carriers = 8;
+    TenantVmHost host(limits);
+    constexpr int kVms = 1000, kActorsPerVm = 100;
+    const auto base_kib = resident_kib();
+    std::vector<VmHandle> vms;
+    std::vector<std::vector<VmActor>> actors(kVms);
+    auto t = std::chrono::steady_clock::now();
+    for (int i = 0; i < kVms; ++i) {
+        auto v = host.open(spec("tenant-" + std::to_string(i)));
+        REQUIRE_OK(v);
+        vms.push_back(v.handle);
+        actors[i].reserve(kActorsPerVm);
+        for (int a = 0; a < kActorsPerVm; ++a) {
+            auto spawned = host.spawn_actor(v.handle, KIND_COUNTER);
+            REQUIRE_OK(spawned);
+            actors[i].push_back(spawned.actor);
+        }
+    }
+    const auto opened = ms_since(t);
+    t = std::chrono::steady_clock::now();
+    constexpr int kRounds = 3;
+    for (int round = 1; round <= kRounds; ++round) {
+        std::vector<std::future<TurnResult>> futures;
+        futures.reserve(kVms * kActorsPerVm);
+        for (int i = 0; i < kVms; ++i)
+            for (int a = 0; a < kActorsPerVm; ++a)
+                futures.push_back(host.call(actors[i][a], words({i * 1000 + a})));
+        std::size_t n = 0;
+        for (int i = 0; i < kVms; ++i)
+            for (int a = 0; a < kActorsPerVm; ++a) {
+                const auto r = futures[n++].get();
+                CHECK_STATUS(r.status, Status::Ok);
+                CHECK_EQ(word(r.payload), std::int64_t{i * 1000 + a} * round);
+            }
+    }
+    const auto ran = ms_since(t);
+    std::printf("  %d VMs, %d actors: open+spawn %lldms, %d turns %lldms, process pid %d, RSS +%.1f MiB, %.1f KiB/actor\n",
+                kVms, kVms * kActorsPerVm, static_cast<long long>(opened), kVms * kActorsPerVm * kRounds,
+                static_cast<long long>(ran), getpid(), (resident_kib() - base_kib) / 1024.0,
+                static_cast<double>(resident_kib() - base_kib) / (kVms * kActorsPerVm));
+    CHECK_EQ(host.stats().live_vms, std::size_t{kVms});
+    // Over the limit is a typed refusal.
+    CHECK_STATUS(host.open(spec("one-too-many")).status, Status::TenantQuota);
+}
+
+void equal_offsets_are_different_memory() {
+    TenantVmHost host;
+    auto a = host.open(spec("a"));
+    auto b = host.open(spec("b"));
+    REQUIRE_OK(a); REQUIRE_OK(b);
+    auto actor_a = host.spawn_actor(a.handle, KIND_MEMORY);
+    auto actor_b = host.spawn_actor(b.handle, KIND_MEMORY);
+    REQUIRE_OK(actor_a); REQUIRE_OK(actor_b);
+    const auto offset_a = word(host.call(actor_a.actor, words({MEM_STATE_OFFSET, 0, 0})).get().payload);
+    const auto offset_b = word(host.call(actor_b.actor, words({MEM_STATE_OFFSET, 0, 0})).get().payload);
+    CHECK_EQ(offset_a, offset_b); // same layout, same numbers
+
+    constexpr std::int64_t kSecret = 0x5EC12E7;
+    CHECK_STATUS(host.call(actor_a.actor, words({MEM_WRITE_STATE, kSecret, 0})).get().status, Status::Ok);
+    CHECK_EQ(word(host.call(actor_a.actor, words({MEM_READ_STATE, 0, 0})).get().payload), kSecret);
+    CHECK_EQ(word(host.call(actor_b.actor, words({MEM_READ_STATE, 0, 0})).get().payload), 0);
+    CHECK_EQ(word(host.call(actor_b.actor, words({MEM_READ_OFFSET, offset_a, 0})).get().payload), 0);
+}
+
+// Actors inside one VM message each other. Nothing can name another tenant's actor.
+void messaging_stays_inside_the_vm() {
+    TenantVmHost host;
+    auto a = host.open(spec("a"));
+    auto b = host.open(spec("b"));
+    REQUIRE_OK(a); REQUIRE_OK(b);
+    auto relay_a = host.spawn_actor(a.handle, KIND_RELAY);
+    auto counter_a = host.spawn_actor(a.handle, KIND_COUNTER);
+    auto padding_b = host.spawn_actor(b.handle, KIND_RELAY);
+    auto counter_b = host.spawn_actor(b.handle, KIND_COUNTER);
+    REQUIRE_OK(relay_a); REQUIRE_OK(counter_a); REQUIRE_OK(padding_b); REQUIRE_OK(counter_b);
+    CHECK_EQ(counter_a.actor.ref(), counter_b.actor.ref()); // identical refs, different VMs
+
+    const auto delivered = host.call(relay_a.actor, words({static_cast<std::int64_t>(counter_a.actor.ref()), 41})).get();
+    CHECK_EQ(word(delivered.payload), 1);
+    bool arrived = false;
+    for (int i = 0; i < 2000 && !arrived; ++i) {
+        arrived = word(host.call(counter_a.actor, words({0})).get().payload) == 41;
+        if (!arrived) std::this_thread::sleep_for(Ms(1));
+    }
+    CHECK(arrived);
+    // That same ref, used in tenant A, reached A's counter and never B's.
+    CHECK_EQ(word(host.call(counter_b.actor, words({0})).get().payload), 0);
+    // Unknown refs are refused rather than delivered anywhere.
+    CHECK_EQ(word(host.call(relay_a.actor, words({0x7777, 1})).get().payload), 0);
+    CHECK_EQ(word(host.call(relay_a.actor, words({static_cast<std::int64_t>((std::uint64_t{5} << 32) | counter_a.actor.ref()), 1})).get().payload), 0);
+}
+
+struct FaultCase { const char* name; int kind; Bytes message; FailReason want; std::uint32_t deadline_ms; };
+
+// Every fault ends exactly one VM. The carrier survives and the neighbour never notices.
+void faults_end_only_that_vm() {
+    HostLimits limits;
+    limits.carriers = 2; // few, so a lost carrier would show up at once
+    TenantVmHost host(limits);
+    auto neighbour = host.open(spec("neighbour"));
+    REQUIRE_OK(neighbour);
+    auto innocent = host.spawn_actor(neighbour.handle, KIND_COUNTER);
+    REQUIRE_OK(innocent);
+    std::int64_t value = 0;
+
+    const std::vector<FaultCase> cases = {
+        {"null-offset", KIND_FAULT, words({FAULT_NULL_OFFSET}), FailReason::MemoryFault, 2000},
+        {"past-committed-memory", KIND_MEMORY, words({MEM_READ_OFFSET, 0x70000000, 0}), FailReason::MemoryFault, 2000},
+        {"write-past-committed", KIND_MEMORY, words({MEM_WRITE_OFFSET, 0x70000000, 1}), FailReason::MemoryFault, 2000},
+        {"farthest-possible-access", KIND_MEMORY, words({MEM_FARTHEST_ACCESS, 0, 0}), FailReason::MemoryFault, 2000},
+        {"stack-overflow", KIND_FAULT, words({FAULT_STACK}), FailReason::StackOverflow, 2000},
+        {"trap-instruction", KIND_FAULT, words({FAULT_TRAP}), FailReason::Trap, 2000},
+#if !defined(TENANT_VM_TSAN_BUILD) // TSan defers async signals to its next interceptor, which a pure spin never reaches
+        {"spin-no-checks", KIND_FAULT, words({FAULT_SPIN}), FailReason::TurnDeadline, 100},
+#endif
+        {"spin-in-host-calls", KIND_FAULT, words({FAULT_SPIN_IN_HOST_CALLS}), FailReason::TurnDeadline, 100},
+    };
+    // Twice each, and on few carriers: recovery must leave the thread fully reusable,
+    // including the signal stack after an overflow.
+    for (int round = 0; round < 3; ++round) {
+        for (const FaultCase& c : cases) {
+            auto s = spec(c.name);
+            s.limits.turn_deadline_ms = c.deadline_ms;
+            auto v = host.open(s);
+            REQUIRE_OK(v);
+            auto actor = host.spawn_actor(v.handle, static_cast<std::uint32_t>(c.kind));
+            REQUIRE_OK(actor);
+            const auto start = std::chrono::steady_clock::now();
+            const auto result = host.call(actor.actor, c.message).get();
+            CHECK_STATUS(result.status, Status::TenantFailed);
+            const VmTerminal terminal = host.wait_closed(v.handle);
+            if (round == 0) std::printf("  %-26s %-14s %4lldms\n", c.name, to_string(terminal.reason), static_cast<long long>(ms_since(start)));
+            CHECK(terminal.phase == Phase::Failed);
+            CHECK_REASON(terminal.reason, c.want);
+            // Authority is gone, and the id is free again.
+            CHECK_STATUS(host.call(actor.actor, c.message).get().status, Status::StaleHandle);
+            CHECK_STATUS(host.spawn_actor(v.handle, 0).status, Status::StaleHandle);
+            value += 1;
+            CHECK_EQ(word(host.call(innocent.actor, words({1})).get().payload), value);
+        }
+    }
+    // Arithmetic traps only on some architectures; either result must leave the host fine.
+    auto d = host.open(spec("divide"));
+    REQUIRE_OK(d);
+    auto divider = host.spawn_actor(d.handle, KIND_FAULT);
+    REQUIRE_OK(divider);
+    const Status divided = host.call(divider.actor, words({FAULT_DIVIDE})).get().status;
+    CHECK(divided == Status::Ok || divided == Status::TenantFailed);
+    host.kill(d.handle);
+    host.wait_closed(d.handle);
+    value += 1;
+    CHECK_EQ(word(host.call(innocent.actor, words({1})).get().payload), value);
+    std::printf("  host stats: %llu traps contained, %llu carrier interrupts\n",
+                static_cast<unsigned long long>(host.stats().traps_contained),
+                static_cast<unsigned long long>(host.stats().kills_delivered));
+}
+
+// A fault in one actor takes down the other actors of that VM while they are mid-turn,
+// and nothing outside it. Turns on other carriers get interrupted, not waited for.
+void a_fault_stops_all_of_that_vm_running_in_parallel() {
+    HostLimits limits;
+    limits.carriers = 8;
+    TenantVmHost host(limits);
+    auto neighbour = host.open(spec("neighbour"));
+    REQUIRE_OK(neighbour);
+    auto innocent = host.spawn_actor(neighbour.handle, KIND_COUNTER);
+    REQUIRE_OK(innocent);
+    auto s = spec("doomed");
+    s.limits.max_parallel_turns = 4;
+    s.limits.turn_deadline_ms = 60000; // these spinners would outlive the test by themselves
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    std::vector<std::future<TurnResult>> spinners;
+    std::vector<VmActor> keep;
+    for (int i = 0; i < 3; ++i) {
+        auto a = host.spawn_actor(v.handle, KIND_FAULT);
+        REQUIRE_OK(a);
+        keep.push_back(a.actor);
+        spinners.push_back(host.call(a.actor, words({SPIN_OP})));
+    }
+    std::this_thread::sleep_for(Ms(50));
+    auto bomber = host.spawn_actor(v.handle, KIND_FAULT);
+    REQUIRE_OK(bomber);
+    const auto start = std::chrono::steady_clock::now();
+    CHECK_STATUS(host.call(bomber.actor, words({FAULT_TRAP})).get().status, Status::TenantFailed);
+    for (auto& f : spinners) CHECK_STATUS(f.get().status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::Trap);
+    CHECK(ms_since(start) < 1000);
+    CHECK_EQ(word(host.call(innocent.actor, words({7})).get().payload), 7);
+}
+
+void host_can_kill_a_spinning_vm() {
+    TenantVmHost host;
+    auto s = spec("spinner");
+    s.limits.turn_deadline_ms = 60000;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_FAULT);
+    REQUIRE_OK(a);
+    auto spinning = host.call(a.actor, words({SPIN_OP}));
+    std::this_thread::sleep_for(Ms(30));
+    const auto start = std::chrono::steady_clock::now();
+    CHECK_STATUS(host.kill(v.handle), Status::Ok);
+    CHECK_STATUS(spinning.get().status, Status::TenantFailed);
+    const auto closed = host.wait_closed(v.handle);
+    CHECK_REASON(closed.reason, FailReason::HostKill);
+    std::printf("  spinning VM killed in %lldms\n", static_cast<long long>(ms_since(start)));
+    CHECK(ms_since(start) < 500);
+}
+
+// Host calls run outside guest mode. A kill arriving during one must wait for its return,
+// with the host's locks released, and must then still take effect.
+void kills_during_host_calls_leave_locks_free() {
+    HostLimits limits;
+    limits.carriers = 4;
+    TenantVmHost host(limits);
+    for (int i = 0; i < 40; ++i) {
+        auto s = spec("churn-" + std::to_string(i));
+        s.limits.turn_deadline_ms = 60000;
+        auto v = host.open(s);
+        REQUIRE_OK(v);
+        auto a = host.spawn_actor(v.handle, KIND_FAULT);
+        REQUIRE_OK(a);
+        auto spinning = host.call(a.actor, words({FAULT_SPIN_IN_HOST_CALLS}));
+        std::this_thread::sleep_for(std::chrono::microseconds(200 * (i % 7)));
+        host.kill(v.handle);
+        CHECK_STATUS(spinning.get().status, Status::TenantFailed);
+        host.wait_closed(v.handle);
+    }
+    // Locks were all released: the host still works.
+    auto last = host.open(spec("after"));
+    REQUIRE_OK(last);
+    auto c = host.spawn_actor(last.handle, KIND_COUNTER);
+    REQUIRE_OK(c);
+    CHECK_EQ(word(host.call(c.actor, words({3})).get().payload), 3);
+}
+
+// Fairness is per tenant, not per actor: a noisy tenant cannot starve a quiet one.
+void one_tenant_cannot_starve_another() {
+    HostLimits limits;
+    limits.carriers = 2;
+    TenantVmHost host(limits);
+    auto noisy_spec = spec("noisy");
+    noisy_spec.limits.max_parallel_turns = 2;
+    noisy_spec.limits.max_inflight = 1u << 20;
+    noisy_spec.limits.turn_deadline_ms = 60000;
+    auto noisy = host.open(noisy_spec);
+    auto quiet = host.open(spec("quiet"));
+    REQUIRE_OK(noisy); REQUIRE_OK(quiet);
+    std::vector<VmActor> noise;
+    for (int i = 0; i < 2000; ++i) {
+        auto a = host.spawn_actor(noisy.handle, KIND_FAULT);
+        REQUIRE_OK(a);
+        noise.push_back(a.actor);
+    }
+    auto q = host.spawn_actor(quiet.handle, KIND_COUNTER);
+    REQUIRE_OK(q);
+    std::vector<std::future<TurnResult>> flood;
+    for (auto& a : noise)
+        for (int i = 0; i < 8; ++i) flood.push_back(host.call(a, words({FAULT_SLEEPLESS_BRIEFLY})));
+    std::vector<long long> latency;
+    for (int i = 0; i < 200; ++i) {
+        const auto t = std::chrono::steady_clock::now();
+        CHECK_STATUS(host.call(q.actor, words({1})).get().status, Status::Ok);
+        latency.push_back(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t).count());
+    }
+    std::sort(latency.begin(), latency.end());
+    const auto noisy_left = host.snapshot(noisy.handle).inflight;
+    std::printf("  quiet tenant beside %zu queued noisy turns: p50 %lldus, worst %lldus\n", noisy_left,
+                latency[latency.size() / 2], latency.back());
+    CHECK(noisy_left > 1000); // the noise was still there for the whole measurement
+#if defined(TENANT_VM_TIMING_ASSERTS)
+    CHECK(latency[latency.size() / 2] < 100000); // bounded by turn length, not by queue length
+#endif
+    host.kill(noisy.handle);
+    for (auto& f : flood) f.get();
+    host.wait_closed(noisy.handle);
+}
+
+void memory_is_bounded_per_vm() {
+    TenantVmHost host;
+    auto s = spec("small");
+    s.limits.heap_bytes = (7u << 20) / 2; // room for three 1 MiB actors, not four
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    // Budget refusals are typed and leave the VM healthy.
+    auto big = host.spawn_actor(v.handle, KIND_LARGE);
+    auto big2 = host.spawn_actor(v.handle, KIND_LARGE);
+    REQUIRE_OK(big); REQUIRE_OK(big2);
+    CHECK_STATUS(host.spawn_actor(v.handle, KIND_LARGE).status, Status::Ok);
+    CHECK_STATUS(host.spawn_actor(v.handle, KIND_LARGE).status, Status::HeapBudget);
+    CHECK_EQ(word(host.call(big.actor, words({9})).get().payload), 9);
+    CHECK(host.snapshot(v.handle).committed_bytes <= s.limits.heap_bytes + 65536);
+
+    // The actor heap is bump-allocated within its own budget.
+    auto heap_owner = host.open(spec("heap"));
+    REQUIRE_OK(heap_owner);
+    auto m = host.spawn_actor(heap_owner.handle, KIND_MEMORY);
+    REQUIRE_OK(m);
+    const auto first = word(host.call(m.actor, words({MEM_ALLOC, 100, 16})).get().payload);
+    const auto second = word(host.call(m.actor, words({MEM_ALLOC, 100, 16})).get().payload);
+    CHECK(first != 0 && second >= first + 100);
+    CHECK_EQ(word(host.call(m.actor, words({MEM_ALLOC, 8192, 16})).get().payload), 0); // over 4 KiB
+    CHECK_EQ(word(host.call(m.actor, words({MEM_ALLOC, 16, 3})).get().payload), 0);    // bad alignment
+    const auto count = word(host.call(m.actor, words({MEM_ALLOC_UNTIL_REFUSED, 64, 0})).get().payload);
+    CHECK(count > 0 && count < 64); // stopped by its budget
+
+    // Actor-count and input limits.
+    auto few_spec = spec("few");
+    few_spec.limits.max_actors = 2;
+    few_spec.limits.mailbox_capacity = 1;
+    auto few = host.open(few_spec);
+    REQUIRE_OK(few);
+    auto one = host.spawn_actor(few.handle, KIND_COUNTER);
+    REQUIRE_OK(one);
+    CHECK_STATUS(host.spawn_actor(few.handle, KIND_COUNTER).status, Status::Ok);
+    CHECK_STATUS(host.spawn_actor(few.handle, KIND_COUNTER).status, Status::ActorQuota);
+    CHECK_STATUS(host.spawn_actor(few.handle, 99).status, Status::BadKind);
+    CHECK_STATUS(host.call(one.actor, Bytes(1024)).get().status, Status::PayloadTooLarge);
+
+    // Host-level admission covers what all VMs may commit.
+    HostLimits tight;
+    tight.max_admitted_heap_bytes = 100;
+    TenantVmHost small_host(tight);
+    auto huge = spec("huge");
+    huge.limits.heap_bytes = 101;
+    CHECK_STATUS(small_host.open(huge).status, Status::HeapQuota);
+    huge.limits.heap_bytes = 100;
+    auto fits = small_host.open(huge);
+    REQUIRE_OK(fits);
+    CHECK_STATUS(small_host.kill(fits.handle), Status::Ok);
+    small_host.wait_closed(fits.handle);
+    auto again = spec("huge-2");
+    again.limits.heap_bytes = 100;
+    CHECK_STATUS(small_host.open(again).status, Status::Ok); // charge returned at retirement
+}
+
+void cpu_budget_is_enforced() {
+    TenantVmHost host;
+    auto s = spec("cpu");
+    s.limits.cpu_budget_ms = 20;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_FAULT);
+    REQUIRE_OK(a);
+    for (int i = 0; i < 1000; ++i) {
+        const Status status = host.call(a.actor, words({FAULT_SLEEPLESS_BRIEFLY})).get().status;
+        if (status != Status::Ok) break;
+    }
+    CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::CpuBudget);
+}
+
+// Actor slots and memory come back, unlike the single-use slots of NativeActorScheduler.
+void actor_churn_reuses_slots_and_scrubs_memory() {
+    TenantVmHost host;
+    auto s = spec("churn");
+    s.limits.max_actors = 4;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    const auto start_committed = host.snapshot(v.handle).committed_bytes;
+    VmActor previous;
+    bool have_previous = false;
+    for (int i = 0; i < 20000; ++i) {
+        auto a = host.spawn_actor(v.handle, KIND_MEMORY);
+        REQUIRE_OK(a);
+        // A fresh actor must see zeroes, even when it reuses a previous actor's memory.
+        CHECK_EQ(word(host.call(a.actor, words({MEM_READ_STATE, 0, 0})).get().payload), 0);
+        CHECK_STATUS(host.call(a.actor, words({MEM_WRITE_STATE, 0x5EC12E7, 0})).get().status, Status::Ok);
+        CHECK_STATUS(host.stop_actor(a.actor), Status::Ok);
+        CHECK_STATUS(host.call(a.actor, words({MEM_READ_STATE, 0, 0})).get().status, Status::UnknownActor);
+        if (have_previous) CHECK_STATUS(host.call(previous, words({MEM_READ_STATE, 0, 0})).get().status, Status::UnknownActor);
+        previous = a.actor;
+        have_previous = true;
+    }
+    const auto snapshot = host.snapshot(v.handle);
+    CHECK_EQ(snapshot.live_actors, std::size_t{0});
+    CHECK_EQ(snapshot.used_bytes, std::uint64_t{0});
+    CHECK(snapshot.committed_bytes <= start_committed + (std::uint64_t{2} << 20)); // no growth from churn
+}
+
+void guests_can_spawn_within_their_vm() {
+    TenantVmHost host;
+    auto s = spec("spawning");
+    s.limits.max_actors = 3;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto spawner = host.spawn_actor(v.handle, KIND_SPAWNER);
+    REQUIRE_OK(spawner);
+    const auto child = word(host.call(spawner.actor, words({KIND_COUNTER})).get().payload);
+    CHECK(child != 0);
+    CHECK(word(host.call(spawner.actor, words({KIND_COUNTER})).get().payload) != 0);
+    CHECK_EQ(word(host.call(spawner.actor, words({KIND_COUNTER})).get().payload), 0); // quota
+    CHECK_EQ(word(host.call(spawner.actor, words({99})).get().payload), 0);
+    CHECK_EQ(host.snapshot(v.handle).live_actors, std::size_t{3});
+}
+
+void shutdown_drains_then_retires() {
+    TenantVmHost host;
+    auto v = host.open(spec("drain"));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_COUNTER);
+    auto b = host.spawn_actor(v.handle, KIND_COUNTER);
+    REQUIRE_OK(a); REQUIRE_OK(b);
+    std::vector<std::future<TurnResult>> accepted;
+    for (int i = 0; i < 32; ++i) accepted.push_back(host.call(a.actor, words({1})));
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
+    const Status refused = host.call(b.actor, words({1})).get().status;
+    CHECK(refused == Status::NotRunning || refused == Status::StaleHandle);
+    for (auto& f : accepted) CHECK_STATUS(f.get().status, Status::Ok);
+    const VmTerminal terminal = host.wait_closed(v.handle);
+    CHECK(terminal.phase == Phase::Stopped);
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::StaleHandle);
+    CHECK(host.wait_closed(v.handle).phase == Phase::Stopped); // stable
+}
+
+void authority_is_bound_to_host_and_generation() {
+    TenantVmHost one, two;
+    auto a = one.open(spec("same"));
+    auto b = two.open(spec("same"));
+    REQUIRE_OK(a); REQUIRE_OK(b);
+    CHECK_EQ(a.handle.generation(), b.handle.generation()); // numbers collide by construction
+    auto actor_a = one.spawn_actor(a.handle, KIND_COUNTER);
+    REQUIRE_OK(actor_a);
+    CHECK_STATUS(two.spawn_actor(a.handle, 0).status, Status::ForeignHandle);
+    CHECK_STATUS(two.call(actor_a.actor, words({1})).get().status, Status::ForeignHandle);
+    CHECK_STATUS(two.kill(a.handle), Status::ForeignHandle);
+    CHECK_STATUS(one.call(VmActor{}, words({1})).get().status, Status::ForeignHandle);
+    CHECK_STATUS(one.spawn_actor(VmHandle{}, 0).status, Status::ForeignHandle);
+    CHECK_STATUS(one.open(spec("same")).status, Status::DuplicateTenant);
+    CHECK_EQ(word(one.call(actor_a.actor, words({2})).get().payload), 2);
+
+    // Restart: same id, new generation, fresh memory, and old refs stay dead.
+    CHECK_STATUS(one.kill(a.handle), Status::Ok);
+    one.wait_closed(a.handle);
+    auto restarted = one.open(spec("same"));
+    REQUIRE_OK(restarted);
+    CHECK(restarted.handle.generation() > a.handle.generation());
+    auto fresh = one.spawn_actor(restarted.handle, KIND_COUNTER);
+    REQUIRE_OK(fresh);
+    CHECK_EQ(fresh.actor.ref(), actor_a.actor.ref());
+    CHECK_STATUS(one.call(actor_a.actor, words({1})).get().status, Status::StaleHandle);
+    CHECK_EQ(word(one.call(fresh.actor, words({5})).get().payload), 5);
+
+    for (const char* id : {"", ".", "..", "a/b", "a b"}) {
+        auto bad = spec("x");
+        bad.tenant_id = id;
+        CHECK_STATUS(one.open(bad).status, Status::InvalidArgument);
+    }
+    auto no_module = spec("x");
+    no_module.module = nullptr;
+    CHECK_STATUS(one.open(no_module).status, Status::InvalidArgument);
+}
+
+// Following the addressing rule, a guest cannot reach a neighbour at any offset. The next
+// case is the control: breaking the rule reads other memory directly.
+void the_addressing_rule_is_what_isolates() {
+    TenantVmHost host;
+    auto victim = host.open(spec("victim"));
+    auto attacker = host.open(spec("attacker"));
+    REQUIRE_OK(victim); REQUIRE_OK(attacker);
+    auto v = host.spawn_actor(victim.handle, KIND_MEMORY);
+    auto a = host.spawn_actor(attacker.handle, KIND_MEMORY);
+    REQUIRE_OK(v); REQUIRE_OK(a);
+    constexpr std::int64_t kSecret = 0x5EC12E7;
+    CHECK_STATUS(host.call(v.actor, words({MEM_WRITE_STATE, kSecret, 0})).get().status, Status::Ok);
+    const auto state = word(host.call(a.actor, words({MEM_STATE_OFFSET, 0, 0})).get().payload);
+
+    // Inside the rule: sweep every committed offset. Nothing found but its own memory.
+    const auto committed = host.snapshot(attacker.handle).committed_bytes;
+    int found = 0;
+    for (std::int64_t offset = 4096 * 16; offset + 8 <= static_cast<std::int64_t>(committed) && offset < (1 << 20); offset += 4096 * 16)
+        if (word(host.call(a.actor, words({MEM_READ_OFFSET, offset, 0})).get().payload) == kSecret) ++found;
+    CHECK_EQ(found, 0);
+    CHECK_EQ(word(host.call(a.actor, words({MEM_READ_OFFSET, state, 0})).get().payload), 0);
+
+}
+
+// A rule-breaking access that lands on unmapped memory is caught and classified, so it costs
+// only that VM. One that lands on mapped memory is not caught, which the doc states plainly.
+void rule_breaking_read_is_contained_only_if_it_faults() {
+    TenantVmHost host;
+    auto v = host.open(spec("breaker"));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_MEMORY);
+    REQUIRE_OK(a);
+    CHECK_STATUS(host.call(a.actor, words({MEM_RULE_BREAKING_READ, 0x10, 0})).get().status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::WildAccess);
+    auto o = host.open(spec("reader"));
+    REQUIRE_OK(o);
+    auto r = host.spawn_actor(o.handle, KIND_MEMORY);
+    REQUIRE_OK(r);
+    // A mapped host address: the read succeeds, with host data, and nothing notices.
+    static std::int64_t host_secret = 0x1234567;
+    const auto stolen = host.call(r.actor, words({MEM_RULE_BREAKING_READ, static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&host_secret)), 0})).get();
+    CHECK_EQ(word(stolen.payload), host_secret);
+    std::printf("  rule-breaking guest read host memory: %s\n", word(stolen.payload) == host_secret ? "yes, as documented" : "no");
+}
+
+void concurrent_open_call_fault_kill_stress() {
+    HostLimits limits;
+    limits.carriers = 8;
+    TenantVmHost host(limits);
+    auto stable = host.open(spec("stable"));
+    REQUIRE_OK(stable);
+    auto counter = host.spawn_actor(stable.handle, KIND_COUNTER);
+    REQUIRE_OK(counter);
+    std::atomic<std::int64_t> expected{0};
+    std::atomic<int> survivors{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 8; ++t) {
+        threads.emplace_back([&, t] {
+            for (int i = 0; i < 150; ++i) {
+                auto s = spec("s" + std::to_string(t) + "-" + std::to_string(i));
+                s.limits.turn_deadline_ms = 50;
+                auto v = host.open(s);
+                if (v.status != Status::Ok) continue;
+                auto c = host.spawn_actor(v.handle, KIND_COUNTER);
+                auto f = host.spawn_actor(v.handle, KIND_FAULT);
+                if (c.status != Status::Ok || f.status != Status::Ok) continue;
+                auto good = host.call(c.actor, words({1}));
+                switch (i % 4) {
+                    case 0: (void)host.call(f.actor, words({FAULT_TRAP})); break;
+                    case 1: (void)host.call(f.actor, words({FAULT_NULL_OFFSET})); break;
+                    case 2: (void)host.call(f.actor, words({SPIN_OP})); host.kill(v.handle); break;
+                    case 3: host.begin_shutdown(v.handle); break;
+                }
+                const Status status = good.get().status;
+                if (status != Status::Ok && status != Status::TenantFailed) std::abort();
+                if (host.wait_closed(v.handle).phase == Phase::Stopped) ++survivors;
+                expected.fetch_add(1);
+                if (word(host.call(counter.actor, words({1})).get().payload) < 1) std::abort();
+            }
+        });
+    }
+    for (auto& t : threads) t.join();
+    CHECK_EQ(word(host.call(counter.actor, words({0})).get().payload), expected.load());
+    CHECK_EQ(host.stats().live_vms, std::size_t{1});
+    std::printf("  %lld VMs opened and ended, %d by clean shutdown\n", static_cast<long long>(expected.load()), survivors.load());
+}
+
+void destructor_retires_everything() {
+    for (int i = 0; i < 3; ++i) {
+        TenantVmHost host;
+        std::vector<std::future<TurnResult>> left;
+        std::vector<VmHandle> keep;
+        for (int v = 0; v < 8; ++v) {
+            auto s = spec("v" + std::to_string(v));
+            s.limits.turn_deadline_ms = 60000;
+            auto opened = host.open(s);
+            REQUIRE_OK(opened);
+            keep.push_back(opened.handle);
+            auto a = host.spawn_actor(opened.handle, KIND_FAULT);
+            REQUIRE_OK(a);
+            left.push_back(host.call(a.actor, words({SPIN_OP}))); // even while spinning
+        }
+    }
+}
+
+// A fault outside guest code is a bug in the host. It must stay fatal, not pass for a guest
+// fault, and handing it on must not cost later guest faults their handler.
+void a_host_fault_stays_fatal() {
+    TenantVmHost host;
+    const pid_t child = fork();
+    if (child == 0) {
+        *reinterpret_cast<volatile int*>(std::uintptr_t{8}) = 1;
+        _exit(0); // reached only if the fault was swallowed
+    }
+    int status = 0;
+    CHECK_EQ(waitpid(child, &status, 0), child);
+#if defined(TENANT_VM_TIMING_ASSERTS)
+    CHECK(WIFSIGNALED(status) && (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS));
+#else
+    // Under a sanitizer the previous handler is the sanitizer: it reports, then exits nonzero.
+    CHECK(WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0));
+#endif
+    // The parent's handler is untouched: guest faults still end only their VM.
+    auto v = host.open(spec("after"));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_FAULT);
+    REQUIRE_OK(a);
+    CHECK_STATUS(host.call(a.actor, words({FAULT_TRAP})).get().status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::Trap);
+}
+
+struct Case { const char* name; void (*run)(); };
+const Case cases[] = {
+    {"equal_offsets_are_different_memory", equal_offsets_are_different_memory},
+    {"messaging_stays_inside_the_vm", messaging_stays_inside_the_vm},
+    {"faults_end_only_that_vm", faults_end_only_that_vm},
+    {"a_fault_stops_all_of_that_vm_running_in_parallel", a_fault_stops_all_of_that_vm_running_in_parallel},
+    {"host_can_kill_a_spinning_vm", host_can_kill_a_spinning_vm},
+    {"kills_during_host_calls_leave_locks_free", kills_during_host_calls_leave_locks_free},
+    {"one_tenant_cannot_starve_another", one_tenant_cannot_starve_another},
+    {"memory_is_bounded_per_vm", memory_is_bounded_per_vm},
+    {"cpu_budget_is_enforced", cpu_budget_is_enforced},
+    {"actor_churn_reuses_slots_and_scrubs_memory", actor_churn_reuses_slots_and_scrubs_memory},
+    {"guests_can_spawn_within_their_vm", guests_can_spawn_within_their_vm},
+    {"shutdown_drains_then_retires", shutdown_drains_then_retires},
+    {"authority_is_bound_to_host_and_generation", authority_is_bound_to_host_and_generation},
+    {"the_addressing_rule_is_what_isolates", the_addressing_rule_is_what_isolates},
+    {"rule_breaking_read_is_contained_only_if_it_faults", rule_breaking_read_is_contained_only_if_it_faults},
+    {"concurrent_open_call_fault_kill_stress", concurrent_open_call_fault_kill_stress},
+    {"destructor_retires_everything", destructor_retires_everything},
+    {"a_host_fault_stays_fatal", a_host_fault_stays_fatal},
+    {"thousand_vms_in_one_process", thousand_vms_in_one_process},
+};
+} // namespace
+
+int main(int argc, char** argv) {
+    int ran = 0, failed = 0;
+    for (const Case& c : cases) {
+        if (argc > 1 && std::strcmp(argv[1], c.name) != 0) continue;
+        std::printf("[ RUN  ] %s\n", c.name);
+        std::fflush(stdout);
+        const int before = failures;
+        const auto start = std::chrono::steady_clock::now();
+        c.run();
+        const bool pass = failures == before;
+        std::printf("[ %s ] %s (%lldms)\n", pass ? " OK " : "FAIL", c.name, ms_since(start));
+        std::fflush(stdout);
+        ++ran;
+        if (!pass) ++failed;
+    }
+    std::printf("%d cases, %d failed\n", ran, failed);
+    return ran == 0 || failed != 0;
+}
