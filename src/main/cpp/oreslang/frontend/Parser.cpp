@@ -3656,6 +3656,36 @@ private:
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
             }
         }
+        // std.thread is deliberately NOT an alias for ordinary class/array
+        // method calls. Until the frontend has checked ThreadSpawn AST nodes,
+        // captured Send/Sync/loan proofs, isolate generation authority, and
+        // a scheduler-attached asynchronous join, accepting a scalar Call or
+        // ArrayCall here would permit partial IR or a blocking fallback.
+        //
+        // Preserve other identifiers named 'thread' or 'std': only the exact
+        // qualified spawn-call spelling is reserved at this M0 boundary.
+        if (token_.text == "thread" || token_.text == "std") {
+            Lexer lookahead = lexer_;
+            const auto dot = lookahead.next();
+            bool is_thread = token_.text == "thread";
+            if (!is_thread && dot.text == ".") {
+                const auto component = lookahead.next();
+                if (component.text == "thread") {
+                    is_thread = true;
+                }
+            }
+            if (is_thread) {
+                const auto member_dot = token_.text == "thread"
+                    ? dot : lookahead.next();
+                if (member_dot.text == "." &&
+                        lookahead.next().text == "spawn" &&
+                        lookahead.next().text == "(")
+                    fail("THREAD_SPAWN_BACKEND_UNSUPPORTED: typed thread spawn "
+                         "requires compiler-owned Send/Sync capture proofs, "
+                         "isolate-scoped native admission and asynchronous "
+                         "scheduler join lowering");
+            }
+        }
         // 'task' is contextual in Oreslang v2. Preserve ordinary identifiers
         // named task, but fail closed when it opens a task block.
         if (token_.text == "task") {
