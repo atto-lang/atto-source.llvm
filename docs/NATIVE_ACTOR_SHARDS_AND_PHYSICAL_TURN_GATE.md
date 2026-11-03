@@ -13,21 +13,23 @@ callback is running. Every read/write/integration and copied column
 snapshot verifies `ores_native_actor_scheduler_is_current_actor`.
 `copy_column_into(field, output, capacity)` copies into existing trusted-host
 storage without allocating and rejects undersized buffers. The legacy
-`snapshot_column()` still creates an uncharged detached vector, so it is
-not a guest-safe allocation API: P0 snapshot ownership/accounting in Java
-issue #1531 is required before exposing it in source lowering.
+`snapshot_column()` signature now fails closed instead of creating an
+uncharged detached vector; callers must use the leased snapshot or bounded
+copy API. P0 #1531 still gates source lowering.
 Pointers never leave this host API. An actor's logical heap/region
 identity is NOT tied to the pthread selected for its next mailbox turn.
 
 The new trusted host-only `snapshot_column_leased(field)` returns a
 noncopyable RAII `ActorColumnSnapshot`. Its allocation is atomically billed
 to both the exact actor-generation budget and VM budget before allocation.
-Only the creating shard can populate the snapshot. Read, metadata
-access and explicit `close()` require its live owner actor turn; foreign
-actor turns are rejected. `close()` is idempotent, scrubs/frees storage,
-then refunds both budgets. RAII destruction from a trusted host does not
-require an active actor turn and performs the same cleanup. The shard destructor has the same free-before-refund
-order. A standalone `native_actor_shard_snapshot_quota_and_generation`
+Only the creating shard can populate the snapshot. Read, metadata and
+bounds-checked `copy_into` are authorized either from the live owner actor
+turn or from a trusted host thread outside scheduler callbacks. A foreign
+actor carrier is rejected. Actor retirement revokes reads/copies, while a
+trusted external host may still call idempotent `close()` to scrub/free and
+refund the outstanding charge. RAII destruction provides the same cleanup
+without an active actor turn. The shard destructor has the same
+free-before-refund order. A standalone `native_actor_shard_snapshot_quota_and_generation`
 CTest exercises 1000 snapshots, generation fences, quota exhaustion and
 refunds.
 
@@ -36,12 +38,15 @@ all snapshots; snapshots must be closed/destroyed before reclaiming the
 native scheduler, since native actor-stop registration/revocation is not
 wired to these host-only handles yet. Therefore this is NOT a complete
 guest-visible snapshot lifecycle; P0 #1531 stays open. The legacy
-`snapshot_column()` vector copy remains unaccounted and host-only.
+`snapshot_column()` signature is retained only to reject old unmetered
+callers and no longer allocates a vector.
 
 In addition to the fixed 16 MiB per-shard limit, constructors now require
 distinct trusted host `ActorShardBudget` ledgers for the actor and its VM.
-Both are atomically reserved *before* allocation, rolled back on failure,
-and released after zeroing the stored scalars in the shard destructor.
+Both are reserved under a paired ledger lock *before* allocation, so the
+actor and VM charges commit at one linearization point with actor retirement.
+Allocation failure refunds the pair together; destruction releases the pair
+after zeroing/freeing the stored scalars.
 The host must keep both budgets alive longer than every associated shard
 and must pass the actor's correct budget; the ledgers themselves grant no
 access to data. This is a host-accounting substrate, **not** a verified

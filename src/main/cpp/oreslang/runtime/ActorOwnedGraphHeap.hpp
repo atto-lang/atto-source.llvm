@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <new>
 #include <optional>
@@ -158,7 +159,17 @@ public:
     ActorOwnedGraphHeap& operator=(const ActorOwnedGraphHeap&) = delete;
     ActorOwnedGraphHeap(ActorOwnedGraphHeap&&) = delete;
     ActorOwnedGraphHeap& operator=(ActorOwnedGraphHeap&&) = delete;
-    ~ActorOwnedGraphHeap() { erase_all(); }
+    ~ActorOwnedGraphHeap() noexcept {
+        // Destructor entry used to bypass the authenticated runtime retire()
+        // gate. In particular, a live Lease stores a pointer to borrow_gate_,
+        // which becomes dangling if this heap's owner destroys it early.
+        //
+        // There is no safe way to quarantine a stack-allocated C++ object
+        // after its destructor runs. Fail-stop rather than run drop glue,
+        // zero/free native payloads or invalidate an outstanding gate.
+        if (!borrow_gate_.seal_and_quiesced(owner_)) std::terminate();
+        erase_all();
+    }
 
     std::uint64_t heap_id() const noexcept { return heap_id_; }
     static constexpr std::size_t local_link_storage_bytes() noexcept {
