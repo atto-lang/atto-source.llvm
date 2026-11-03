@@ -77,6 +77,38 @@ def main():
         '.ores.pkg.toml': 'schema_version = "1"\n',
         'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
     }, 42))
+    # AttoLang .atto imports are first-class: an omitted suffix follows the
+    # importer, and a cross-version dependency must be explicit. Both .atto
+    # and .ores may coexist without nondeterministic file selection.
+    positives.extend([
+        ('atto-relative', {
+            'main.atto': 'import module Math from "./math"; pub fnc main():int{return Math.answer();}',
+            'math.atto': 'define module Math as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-project-root', {
+            'main.atto': 'import module Math from "+/math"; pub fnc main():int{return Math.answer();}',
+            'math.atto': 'define module Math as pub fnc answer():int{return 42;} end',
+            '.atto.pkg.toml': 'schema_version = "1"\\n',
+        }, 42),
+        ('atto-explicit-legacy', {
+            'main.atto': 'import module Math from "./math.ores"; pub fnc main():int{return Math.answer();}',
+            'math.ores': 'define module Math as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-root-explicit-legacy', {
+            'main.atto': 'import module Math from "+/math.ores"; pub fnc main():int{return Math.answer();}',
+            'math.ores': 'define module Math as pub fnc answer():int{return 42;} end',
+            '.atto.pkg.toml': 'schema_version = "1"\\n',
+        }, 42),
+        ('atto-same-stem-precedence', {
+            'main.atto': 'import module Math from "./math"; pub fnc main():int{return Math.answer();}',
+            'math.atto': 'define module Math as pub fnc answer():int{return 42;} end',
+            'math.ores': 'define module Math as pub fnc answer():int{return 1;} end',
+        }, 42),
+        ('legacy-explicit-atto', {
+            'main.ores': 'import module Math from "./math.atto"; pub fnc main():int{return Math.answer();}',
+            'math.atto': 'define module Math as pub fnc answer():int{return 42;} end',
+        }, 42),
+    ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -128,7 +160,8 @@ def main():
         for name, files, expected in positives:
             directory = root/name; directory.mkdir()
             for path, source in files.items(): (directory/path).write_text(source)
-            result = run([a.compiler, str(directory/'main.ores')])
+            entry_file = 'main.atto' if 'main.atto' in files else 'main.ores'
+            result = run([a.compiler, str(directory/entry_file)])
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
@@ -140,7 +173,9 @@ def main():
             executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
             if executed.returncode != expected: raise AssertionError((name, executed.returncode, executed.stderr))
             for path in files: (directory/(path+'.hidden')).rename(directory/path)
-            if a.java_command and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
+            if (a.java_command and entry_file == 'main.ores'
+                    and name not in ('named-arguments-native-only',
+                                     'qualified-generic-native-only')):
                 reference = run([*a.java_command, str(directory/'main.ores')])
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
@@ -152,6 +187,38 @@ def main():
             result = run([a.compiler, str(directory/'main.ores')])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        # New source cannot implicitly fall back to legacy files, and a
+        # modern package cannot have two authoritative root manifests.
+        atto_negatives = [
+            ('atto-no-relative-downgrade', {
+                'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return 0;}',
+                'lib.ores': library,
+            }, 'cannot resolve native import'),
+            ('atto-no-root-downgrade', {
+                'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
+                'lib.ores': library,
+                '.atto.pkg.toml': 'schema_version = "1"\\n',
+            }, 'cannot resolve native project-root import'),
+            ('atto-dual-manifest', {
+                'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
+                'lib.atto': library,
+                '.atto.pkg.toml': 'schema_version = "1"\\n',
+                '.ores.pkg.toml': 'schema_version = "1"\\n',
+            }, 'conflicting'),
+            ('atto-invalid-explicit-extension', {
+                'main.atto': 'import module Lib from "./lib.txt"; pub fnc main():int{return 0;}',
+                'lib.txt': library,
+            }, 'native module source must use .atto or legacy .ores extension'),
+        ]
+        for name, files, diagnostic in atto_negatives:
+            directory = root/name; directory.mkdir()
+            for file_name, source in files.items():
+                (directory/file_name).write_text(source)
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode,
+                                      result.stdout[:150], result.stderr))
             passed += 1
         directory=root/'project-root-duplicate-schema'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
