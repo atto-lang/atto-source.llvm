@@ -2,6 +2,7 @@
 
 #include "oreslang/types/NativeAggregateShape.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
 #include <set>
@@ -42,7 +43,7 @@ public:
         // before inserting the explicit name or advancing the source cursor.
         // A failed allocation must leave the previously checked plan intact.
         Write pending{next_element_, name, type, false};
-        writes_.reserve(writes_.size() + 1);
+        reserve_for_writes(1);
         explicit_names_.insert(name);
         static_assert(std::is_nothrow_move_constructible_v<Write>,
                       "spread-plan commits must not throw after name insertion");
@@ -62,7 +63,7 @@ public:
             pending.push_back(Write{element, field.name, field.type, true});
         // Reserve before changing source-order metadata. Moves below must not
         // allocate or throw, even if the caller injects allocation failures.
-        writes_.reserve(writes_.size() + pending.size());
+        reserve_for_writes(pending.size());
         static_assert(std::is_nothrow_move_constructible_v<Write>,
                       "spread-plan commits must not throw during projection");
         for (auto& write : pending)
@@ -97,6 +98,15 @@ public:
     std::size_t source_elements() const noexcept { return next_element_; }
 
 private:
+    // Reserve geometrically, preserving std::vector's amortized complexity.
+    // Exact-size reserve on every append would copy O(n^2) field strings.
+    void reserve_for_writes(std::size_t additional) {
+        const auto required = writes_.size() + additional;
+        if (required <= writes_.capacity()) return;
+        const auto grown = std::max<std::size_t>(8, writes_.capacity() * 2);
+        writes_.reserve(std::min<std::size_t>(8192, std::max(required, grown)));
+    }
+
     void require_budget(std::size_t additional_writes) const {
         if (next_element_ >= 1024 || additional_writes > 8192 - writes_.size())
             throw std::invalid_argument("AGGREGATE_SPREAD_PLAN_BUDGET");
