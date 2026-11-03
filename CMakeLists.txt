@@ -4614,8 +4614,9 @@ if(BUILD_TESTING AND UNIX)
 endif()
 
 
-# M0 native guest-source admission. This exercises the real LLVM frontend with
-# four negative .ores fixtures; no host-only model can substitute for this gate.
+# M0 AttoLang .atto guest-source admission. The actual LLVM compiler must
+# reject eight unsupported thread-spawn forms without emitting IR and must
+# compile the ordinary-function positive control. Host mocks are insufficient.
 # Thread lowering remains fail-closed until AST ownership + isolate generation
 # + async scheduler join are implemented and evidenced.
 if(BUILD_TESTING)
