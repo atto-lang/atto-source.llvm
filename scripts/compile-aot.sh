@@ -63,36 +63,65 @@ case "$(uname -s)" in
       aarch64|arm64) host_machine=183 ;;
       *) echo 'Unqualified Linux native AOT architecture.' >&2; exit 69 ;;
     esac
-    # Also reject a shared library or forged header with no executable entry
-    # or valid ELF64 program-header table. Only explicitly qualified little-
-    # endian ELF64 host targets are supported by this driver.
-    elf_ident_version="$(LC_ALL=C od -An -tu1 -j6 -N1 "$work/program" | tr -d '[:space:]')"
-    elf_version="$(LC_ALL=C od -An -tu4 -j20 -N4 "$work/program" | tr -d '[:space:]')"
-    elf_entry="$(LC_ALL=C od -An -tu8 -j24 -N8 "$work/program" | tr -d '[:space:]')"
-    elf_phoff="$(LC_ALL=C od -An -tu8 -j32 -N8 "$work/program" | tr -d '[:space:]')"
-    elf_ehsize="$(LC_ALL=C od -An -tu2 -j52 -N2 "$work/program" | tr -d '[:space:]')"
-    elf_phentsize="$(LC_ALL=C od -An -tu2 -j54 -N2 "$work/program" | tr -d '[:space:]')"
-    elf_phnum="$(LC_ALL=C od -An -tu2 -j56 -N2 "$work/program" | tr -d '[:space:]')"
-    image_bytes="$(wc -c < "$work/program" | tr -d '[:space:]')"
     [[ "$elf_class" == 2 && "$elf_data" == 1 &&
-       "$elf_ident_version" == 1 && "$elf_version" == 1 &&
-       ( "$elf_kind" == 2 || "$elf_kind" == 3 ) &&
-       "$elf_machine" == "$host_machine" &&
-       "$elf_entry" =~ ^[0-9]+$ && "$elf_entry" != 0 &&
-       "$elf_ehsize" == 64 && "$elf_phentsize" == 56 &&
-       "$elf_phnum" =~ ^[0-9]+$ &&
-       "$elf_phoff" =~ ^[0-9]+$ ]] || {
-      echo "ELF architecture, version, entrypoint or program-header mismatch" >&2
+       "$elf_kind" == 2 || "$elf_kind" == 3 ]] || {
+      echo "Wrong ELF class, endian or type: $elf_class $elf_data $elf_kind" >&2
       exit 65
     }
-    # Check bounds before addition/multiplication to avoid overflow on a
-    # corrupt 64-bit header. The file-size bound is much smaller than u64.
-    if (( elf_phnum == 0 || elf_phoff < 64 || elf_phoff > image_bytes ||
-          elf_phnum > image_bytes / elf_phentsize ||
-          elf_phoff > image_bytes - elf_phnum * elf_phentsize )); then
-      echo 'ELF program-header table is missing or outside the artifact.' >&2
+    [[ "$elf_machine" == "$host_machine" ]] || {
+      echo "ELF architecture mismatch: $elf_machine != $host_machine" >&2
       exit 65
-    fi
+    }
+    # ELF magic/machine alone can be forged. Require a real entrypoint and a
+    # bounded, executable PT_LOAD program header before atomic publication.
+    # Current release profile supports ordinary ELF64 files (<4 GiB); reject
+    # extended numbering or 64-bit table offsets until separately qualified.
+    elf_size="$(wc -c < "$work/program" | tr -d '[:space:]')"
+    [[ "$elf_size" -ge 120 && "$elf_size" -lt 4294967296 ]] || {
+      echo 'ELF image is too short or exceeds the bounded release profile.' >&2
+      exit 65
+    }
+    elf_ident_version="$(LC_ALL=C od -An -tu1 -j6 -N1 "$work/program" | tr -d '[:space:]')"
+    elf_version="$(LC_ALL=C od -An -tu4 -j20 -N4 "$work/program" | tr -d '[:space:]')"
+    elf_entry_lo="$(LC_ALL=C od -An -tu4 -j24 -N4 "$work/program" | tr -d '[:space:]')"
+    elf_entry_hi="$(LC_ALL=C od -An -tu4 -j28 -N4 "$work/program" | tr -d '[:space:]')"
+    phoff="$(LC_ALL=C od -An -tu4 -j32 -N4 "$work/program" | tr -d '[:space:]')"
+    phoff_hi="$(LC_ALL=C od -An -tu4 -j36 -N4 "$work/program" | tr -d '[:space:]')"
+    ehsize="$(LC_ALL=C od -An -tu2 -j52 -N2 "$work/program" | tr -d '[:space:]')"
+    phentsize="$(LC_ALL=C od -An -tu2 -j54 -N2 "$work/program" | tr -d '[:space:]')"
+    phnum="$(LC_ALL=C od -An -tu2 -j56 -N2 "$work/program" | tr -d '[:space:]')"
+    [[ "$elf_ident_version" == 1 && "$elf_version" == 1 &&
+       ( "$elf_entry_lo" != 0 || "$elf_entry_hi" != 0 ) &&
+       "$phoff_hi" == 0 && "$ehsize" == 64 && "$phentsize" == 56 &&
+       "$phnum" -gt 0 && "$phnum" -le 1024 && "$phoff" -ge 64 &&
+       $((phoff + phnum * phentsize)) -le "$elf_size" ]] || {
+      echo 'ELF entrypoint or program-header table is missing/invalid.' >&2
+      exit 65
+    }
+    executable_load=0
+    for ((index=0; index<phnum; index++)); do
+      header=$((phoff + index * phentsize))
+      ptype="$(LC_ALL=C od -An -tu4 -j"$header" -N4 "$work/program" | tr -d '[:space:]')"
+      [[ "$ptype" == 1 ]] || continue
+      pflags="$(LC_ALL=C od -An -tu4 -j"$((header + 4))" -N4 "$work/program" | tr -d '[:space:]')"
+      poffset="$(LC_ALL=C od -An -tu4 -j"$((header + 8))" -N4 "$work/program" | tr -d '[:space:]')"
+      poffset_hi="$(LC_ALL=C od -An -tu4 -j"$((header + 12))" -N4 "$work/program" | tr -d '[:space:]')"
+      pfilesz="$(LC_ALL=C od -An -tu4 -j"$((header + 32))" -N4 "$work/program" | tr -d '[:space:]')"
+      pfilesz_hi="$(LC_ALL=C od -An -tu4 -j"$((header + 36))" -N4 "$work/program" | tr -d '[:space:]')"
+      [[ "$poffset_hi" == 0 && "$pfilesz_hi" == 0 &&
+         "$poffset" -le "$elf_size" &&
+         "$pfilesz" -le $((elf_size - poffset)) ]] || {
+        echo 'ELF PT_LOAD segment is outside the native image.' >&2
+        exit 65
+      }
+      if (( (pflags & 1) != 0 && pfilesz > 0 )); then
+        executable_load=1
+      fi
+    done
+    [[ "$executable_load" == 1 ]] || {
+      echo 'ELF has no file-backed executable PT_LOAD segment.' >&2
+      exit 65
+    }
     ;;
   Darwin*)
     [[ "$magic" == cffaedfe ]] || {
