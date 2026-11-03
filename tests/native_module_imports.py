@@ -266,6 +266,33 @@ def main():
                                   executed.returncode, executed.stderr))
         passed += 1
 
+        if hasattr(os, 'symlink'):
+            directory = root/'atto-symlinked-import-source'
+            directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}')
+            (directory/'actual.atto').write_text(library)
+            (directory/'lib.atto').symlink_to(directory/'actual.atto')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or (
+                    'symlinked AttoLang source path' not in result.stderr):
+                raise AssertionError(('Atto canonical symlink import', result.stderr))
+            passed += 1
+
+            directory = root/'atto-symlinked-package-manifest'
+            directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}')
+            (directory/'lib.atto').write_text(library)
+            (directory/'manifest-target.toml').write_text('schema_version = "1"\\n')
+            (directory/'.atto.pkg.toml').symlink_to(directory/'manifest-target.toml')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or (
+                    'canonical AttoLang manifest cannot be a symlink'
+                    not in result.stderr):
+                raise AssertionError(('Atto canonical manifest symlink', result.stderr))
+            passed += 1
+
         # Physical aliases are not new code-unit identities.
         for alias in ('symlink', 'hardlink'):
             directory=root/alias; directory.mkdir()
