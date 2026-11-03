@@ -221,7 +221,7 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.ores", "");
         fs::create_symlink(dir/"absent.atto", dir/"lib.atto");
-        must_fail("dangling .atto blocks legacy fallback", "cannot resolve native project-root import",
+        must_fail("dangling .atto blocks legacy fallback", "symlinked AttoLang source path",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
@@ -230,8 +230,20 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(temp/"outside-modern.atto", "");
         fs::create_symlink(temp/"outside-modern.atto", dir/"lib.atto");
-        must_fail(".atto symlink target escape", "escapes physical package root",
+        must_fail(".atto symlink target escape", "symlinked AttoLang source path",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+#endif
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "atto-symlink-parent";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"real/lib.atto", "");
+        fs::create_directory_symlink(dir/"real", dir/"aliased");
+        must_fail("canonical Atto import cannot follow symlink parent",
+                  "symlinked AttoLang source path",
+                  [&] { (void)resolve(dir/"main.atto", "+/aliased/lib"); });
     }
 #endif
     {
