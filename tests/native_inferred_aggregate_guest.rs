@@ -118,9 +118,7 @@ fn main(){
                 .any(|token| token == code),
                 "{name}: expected exact diagnostic code {code}");
         }
-        // The remainder below rejects crash-like text, mutated sources,
-        // and artifacts; no host exception is a successful type rejection.
-            "{name}: rejected source leaked LLVM IR on stderr");
+        // Retain crash-text, source-integrity and artifact checks below.
         let diagnostic = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
         assert!(!["segmentation fault", "stack trace", "traceback", "fatal signal", "unhandled exception", "process crashed"].iter().any(|marker| diagnostic.contains(marker)),
             "{name}: compiler crash text is not a type-checking diagnostic");
