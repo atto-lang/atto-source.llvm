@@ -1,0 +1,11 @@
+// Native AttoLang .atto desktop configuration prerequisite.
+// It exports scalars only; no window, SDL3, actors or host imports.
+pub fnc desktop_initial_width(): int {
+    return 800;
+}
+pub fnc desktop_initial_height(): int {
+    return 500;
+}
+fnc desktop_unreachable_probe(): int {
+    return 999;
+}
