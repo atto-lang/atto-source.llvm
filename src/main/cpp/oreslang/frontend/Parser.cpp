@@ -3662,8 +3662,8 @@ private:
         // a scheduler-attached asynchronous join, accepting a scalar Call or
         // ArrayCall here would permit partial IR or a blocking fallback.
         //
-        // Preserve other identifiers named 'thread' or 'std': only the exact
-        // qualified spawn-call spelling is reserved at this M0 boundary.
+        // Preserve other identifiers named 'thread' or 'std': only a qualified
+        // spawn invocation (including generic call syntax) is reserved at this M0 boundary.
         if (token_.text == "thread" || token_.text == "std") {
             Lexer lookahead = lexer_;
             const auto dot = lookahead.next();
@@ -3677,9 +3677,10 @@ private:
             if (is_thread) {
                 const auto member_dot = token_.text == "thread"
                     ? dot : lookahead.next();
-                if (member_dot.text == "." &&
-                        lookahead.next().text == "spawn" &&
-                        lookahead.next().text == "(")
+                const auto member = lookahead.next();
+                const auto next = lookahead.next();
+                if (member_dot.text == "." && member.text == "spawn" &&
+                        (next.text == "(" || next.text == "<"))
                     fail("THREAD_SPAWN_BACKEND_UNSUPPORTED: typed thread spawn "
                          "requires compiler-owned Send/Sync capture proofs, "
                          "isolate-scoped native admission and asynchronous "
