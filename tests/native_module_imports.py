@@ -294,6 +294,34 @@ def main():
                                   result.stdout[:150], result.stderr))
         passed += 1
 
+        if hasattr(os, 'symlink'):
+            directory = root/'atto-relative-symlink-package-escape'; directory.mkdir()
+            package = directory/'pkg'; (package/'app').mkdir(parents=True)
+            (package/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+            outside = directory/'outside.atto'
+            outside.write_text(
+                'define module Outside as pub fnc answer():int{return 42;} end')
+            (package/'app/main.atto').write_text(
+                'import module Outside from "../outside"; pub fnc main():int{return 0;}')
+            (package/'outside.atto').symlink_to(outside)
+            result = run([a.compiler, str(package/'app/main.atto')])
+            if not result.returncode or result.stdout or 'escapes physical package root' not in result.stderr:
+                raise AssertionError(('relative symlink package escape', result.returncode,
+                                      result.stdout[:150], result.stderr))
+            passed += 1
+
+            directory = root/'atto-relative-dangling-modern-legacy'; directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "./lib"; pub fnc main():int{return 0;}')
+            (directory/'lib.atto').symlink_to(directory/'missing.atto')
+            (directory/'lib.ores').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
+                raise AssertionError(('relative dangling canonical collision', result.returncode,
+                                      result.stdout[:150], result.stderr))
+            passed += 1
+
         for name, main_source, library_source, diagnostic in negatives:
             directory = root/name; directory.mkdir()
             (directory/'main.ores').write_text(main_source)
