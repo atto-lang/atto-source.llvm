@@ -39,6 +39,8 @@ CRITICAL_TESTS = (
     "native_rt_while_loop_failclosed",
     "native_actor_owned_heap_contract",
     "native_ctest_manifest_harness_adversarial",
+    "native_aggregate_positive_harness_selftest",
+    "native_aggregate_positive_harness_selftest_python_O",
     "native_ownership_cfg_dataflow_fixed_point",
     "portable_target_abi_v1",
     "source_actor_compiled_native_lifecycle",
@@ -63,7 +65,10 @@ CRITICAL_TESTS = (
     "native_borrow_alias_matrix_sanitizer",
 )
 
-TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
+TIMED_TESTS = frozenset(CRITICAL_TESTS[:4]) | frozenset((
+    "native_aggregate_positive_harness_selftest",
+    "native_aggregate_positive_harness_selftest_python_O",
+))
 # Bind critical CTest *names* to the real commands in CMakeLists.txt. A
 # fabricated suite containing 'python -c pass' under a critical name is not
 # evidence that the native compiler/actor/supervisor tests were registered.
@@ -188,6 +193,14 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
                 or command[1:] != optimization + [command[-1]]
                 or not command[-1].endswith("/tests/test_contract_harness.py")):
             raise ManifestFailure(f"optimized harness has wrong interpreter/arguments: {name}")
+    elif name.startswith("native_aggregate_positive_harness_selftest"):
+        optimization = ["-O"] if name.endswith("_python_O") else []
+        if (not python_program(command[0])
+                or command[1:] != optimization + [command[-1]]
+                or not command[-1].endswith(
+                    "/tests/test_native_aggregate_positive_execution_harness.py")):
+            raise ManifestFailure(
+                "aggregate guest harness has wrong interpreter/arguments: " + name)
     elif name == "native_ctest_manifest_harness_adversarial":
         if (not python_program(command[0])
                 or command[1:4] != ["-m", "unittest", "discover"]
