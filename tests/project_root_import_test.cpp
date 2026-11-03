@@ -53,24 +53,16 @@ int main() {
     const auto resolve = [&](const fs::path& source, std::string_view raw) {
         return oreslang::resolve_project_root_import(source, raw, read_manifest);
     };
-    // The shared extension selector is used by both project-root and
-    // relative imports. Confirm it never guesses the other language's file.
-    using oreslang::project_root_import_detail::source_extension_for_implicit_import;
-    using oreslang::project_root_import_detail::source_extension_supported;
-    if (source_extension_for_implicit_import(fs::path("src/main.atto"))
-            != fs::path(".atto") ||
-        source_extension_for_implicit_import(fs::path("src/main.ores"))
-            != fs::path(".ores") ||
-        !source_extension_supported(fs::path("module.atto")) ||
-        !source_extension_supported(fs::path("module.ores")) ||
-        source_extension_supported(fs::path("module.txt")))
-        throw std::runtime_error("native shared import extension selector mismatch");
-    must_fail("unknown source extension", "must use .atto or legacy .ores",
-              [&] {
-                  (void)source_extension_for_implicit_import(
-                      fs::path("src/main.txt"));
-              });
-
+    // The merged resolver is deliberately fail-closed for extensionless
+    // .atto/.ores twins; keep explicit source extensions admitted.
+    using oreslang::project_root_import_detail::resolve_native_source_suffix;
+    if (resolve_native_source_suffix(fs::path("module.atto"))
+            != fs::path("module.atto") ||
+        resolve_native_source_suffix(fs::path("module.ores"))
+            != fs::path("module.ores"))
+        throw std::runtime_error("native explicit extension selector mismatch");
+    must_fail("invalid source suffix", "must use .atto or legacy .ores",
+              [&] { (void)resolve_native_source_suffix(fs::path("module.txt")); });
 
     {
         const auto dir = temp / "positive";
@@ -80,28 +72,32 @@ int main() {
         if (resolve(dir/"app/main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("positive project-root resolution mismatch");
     }
-    // New AttoLang packages select .atto by default, even if a same-named
-    // legacy .ores file exists. Cross-version imports must be explicit.
+    // New AttoLang packages may import legacy sources explicitly, but same-stem
+    // dual files require explicit disambiguation.
     {
         const auto dir = temp / "atto-positive";
         write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"app/main.atto", "");
         write_text(dir/"lib.atto", "");
         write_text(dir/"lib.ores", "");
-        if (resolve(dir/"app/main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
-            throw std::runtime_error("AttoLang implicit root import selected wrong extension");
+        must_fail("AttoLang twin source admission", "ambiguous native source import",
+                  [&] { (void)resolve(dir/"app/main.atto", "+/lib"); });
+        if (resolve(dir/"app/main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("AttoLang explicit modern import rejected");
         if (resolve(dir/"app/main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("AttoLang explicit legacy import rejected");
     }
-    // Legacy packages remain deterministic, with no surprise migration.
+    // Legacy packages also reject same-stem ambiguity without guessing.
     {
         const auto dir = temp / "legacy-precedence";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
         write_text(dir/"lib.atto", "");
         write_text(dir/"lib.ores", "");
-        if (resolve(dir/"main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
-            throw std::runtime_error("legacy implicit root import selected wrong extension");
+        must_fail("legacy twin source admission", "ambiguous native source import",
+                  [&] { (void)resolve(dir/"main.ores", "+/lib"); });
+        if (resolve(dir/"main.ores", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("legacy explicit root import rejected");
         if (resolve(dir/"main.ores", "+/lib.atto") != fs::canonical(dir/"lib.atto"))
             throw std::runtime_error("legacy explicit AttoLang import rejected");
     }
@@ -111,8 +107,10 @@ int main() {
         write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.ores", "");
-        must_fail("no implicit legacy downgrade", "cannot resolve native project-root import",
-                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        // Canonical migration policy admits a single legacy name when no
+        // modern sibling exists, while denying ambiguous dual names.
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("single legacy source was not resolved");
         if (resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("explicit legacy import should remain available");
     }
