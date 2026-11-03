@@ -16,6 +16,11 @@ For relative `./lib`, `../lib` and project-root `+/lib` imports:
 - If neither exists, fail at the ordinary canonical source resolution.
 - Explicit `lib.atto` and explicit `lib.ores` are accepted independently.
 - All other suffixes fail closed before any foreign-source import.
+- Package-less legacy relative imports retain their historical behavior.
+  Once the importing source is inside a directory governed by the nearest
+  `.ores.pkg.toml`, relative `../` may traverse only within that same
+  physical package. Escapes, nested-package crossings and symlink escapes are
+  rejected before the imported source is read.
 
 The change retains existing source-content UTF-8 checks, source identity
 checks, regular-file-only admission, package nesting detection and root
