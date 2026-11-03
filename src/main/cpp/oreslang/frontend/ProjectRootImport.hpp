@@ -40,7 +40,8 @@ inline void reject_nested_package(const fs::path& root, const fs::path& path) {
     for (fs::path parent = path.parent_path(); parent != root; parent = parent.parent_path()) {
         if (parent.empty() || parent == parent.root_path())
             throw std::runtime_error("native project-root import escapes physical package root");
-        if (exists_marker(parent / ".ores.pkg.toml"))
+        if (exists_marker(parent / ".atto.pkg.toml") ||
+                exists_marker(parent / ".ores.pkg.toml"))
             throw std::runtime_error("native project-root import crosses nested package boundary");
     }
 }
@@ -60,17 +61,26 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.[ \t]*(?:root|"root"|'root')[ \t]*=).*$)ores");
     const std::regex root_assignment(
         R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=.*$)ores");
+    // Until the native full TOML parser is integrated, admit only the
+    // location-independent default project root, never an arbitrary override.
+    const std::regex default_root_assignment(
+        R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=[ \t]*"\."[ \t]*(?:#.*)?$)ores");
 
     std::size_t version_count = 0;
+    std::size_t project_root_count = 0;
     bool in_root_section = true;
     bool in_project_section = false;
     std::istringstream lines(manifest_bytes);
     std::string line;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (std::regex_match(line, project_assignment) ||
-                (in_project_section && std::regex_match(line, root_assignment)))
+        if (std::regex_match(line, project_assignment))
             throw std::runtime_error("native project.root requires full TOML parser");
+        if (in_project_section && std::regex_match(line, root_assignment)) {
+            if (!std::regex_match(line, default_root_assignment) ||
+                    ++project_root_count > 1u)
+                throw std::runtime_error("native project.root requires full TOML parser");
+        }
 
         const auto first = line.find_first_not_of(" \t");
         if (first != std::string::npos && line[first] == '[') {
@@ -90,13 +100,20 @@ inline void validate_manifest(const std::string& manifest_bytes) {
 }
 
 /**
- * Resolve only the two admitted native source extensions. Extensionless
- * imports prefer canonical .atto, then fall back to legacy .ores, matching
- * Java and .NET. Inspect directory entries (not only target existence), so a
- * dangling .atto symlink is selected and rejected by canonical-file admission
- * rather than silently falling back to a shadowing legacy .ores file.
+ * Resolve native source extensions. Canonical .atto importers never silently
+ * select a legacy .ores dependency without an explicit suffix. Existing
+ * legacy importers retain their migration fallback. Inspect directory entries
+ * (not only target existence) so dangling .atto symlinks fail closed.
  */
-inline fs::path resolve_native_source_suffix(fs::path candidate) {
+inline bool is_atto_source(const fs::path& source) {
+    auto extension = source.extension().string();
+    for (char& value : extension)
+        value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
+    return extension == ".atto";
+}
+
+inline fs::path resolve_native_source_suffix(
+        fs::path candidate, bool canonical_atto_importer = false) {
     auto extension = candidate.extension().string();
     for (char& value : extension)
         value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
@@ -111,9 +128,8 @@ inline fs::path resolve_native_source_suffix(fs::path candidate) {
     fs::path legacy = candidate;
     legacy += ".ores";
     const bool has_modern = exists_marker(modern);
-    const bool has_legacy = exists_marker(legacy);
-    if (has_modern) return modern;
-    if (has_legacy) return legacy;
+    if (has_modern || canonical_atto_importer) return modern;
+    if (exists_marker(legacy)) return legacy;
     // Allow the caller's canonical-resolution path to produce its normal
     // missing-file diagnostic. Never search unrelated extension types.
     return modern;
@@ -163,7 +179,12 @@ inline std::filesystem::path resolve_project_root_import(
     fs::path cursor = source.parent_path();
     fs::path package_root;
     for (;;) {
-        const fs::path manifest = cursor / ".ores.pkg.toml";
+        // The nearest package boundary wins; canonical AttoLang manifests
+        // take priority over legacy manifests in the same directory.
+        const fs::path atto_manifest = cursor / ".atto.pkg.toml";
+        const fs::path legacy_manifest = cursor / ".ores.pkg.toml";
+        const fs::path manifest = exists_marker(atto_manifest)
+                ? atto_manifest : legacy_manifest;
         if (exists_marker(manifest)) {
             std::error_code regular_error;
             if (!fs::is_regular_file(manifest, regular_error) || regular_error)
@@ -186,12 +207,12 @@ inline std::filesystem::path resolve_project_root_import(
         cursor = parent;
     }
     if (package_root.empty())
-        throw std::runtime_error("native +/ imports require nearest .ores.pkg.toml");
+        throw std::runtime_error("native +/ imports require nearest .atto.pkg.toml or legacy .ores.pkg.toml");
 
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
     fs::path candidate = package_root / fs::path(std::string(suffix));
-    candidate = resolve_native_source_suffix(candidate);
+    candidate = resolve_native_source_suffix(candidate, is_atto_source(source));
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)
