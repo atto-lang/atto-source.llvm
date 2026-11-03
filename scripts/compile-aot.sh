@@ -54,10 +54,36 @@ case "$(uname -s)" in
       echo "Expected ELF native executable, found magic $magic" >&2
       exit 65
     }
+    elf_class="$(LC_ALL=C od -An -tu1 -j4 -N1 "$work/program" | tr -d '[:space:]')"
+    elf_data="$(LC_ALL=C od -An -tu1 -j5 -N1 "$work/program" | tr -d '[:space:]')"
+    elf_kind="$(LC_ALL=C od -An -tu2 -j16 -N2 "$work/program" | tr -d '[:space:]')"
+    elf_machine="$(LC_ALL=C od -An -tu2 -j18 -N2 "$work/program" | tr -d '[:space:]')"
+    case "$(uname -m)" in
+      x86_64) host_machine=62 ;;
+      aarch64|arm64) host_machine=183 ;;
+      *) echo 'Unqualified Linux native AOT architecture.' >&2; exit 69 ;;
+    esac
+    [[ "$elf_class" == 2 && "$elf_data" == 1 &&
+       ( "$elf_kind" == 2 || "$elf_kind" == 3 ) &&
+       "$elf_machine" == "$host_machine" ]] || {
+      echo "ELF architecture or executable type mismatch: class=$elf_class data=$elf_data kind=$elf_kind machine=$elf_machine" >&2
+      exit 65
+    }
     ;;
   Darwin*)
-    [[ "$magic" == cffaedfe || "$magic" == feedfacf ]] || {
-      echo "Expected Mach-O native executable, found magic $magic" >&2
+    [[ "$magic" == cffaedfe ]] || {
+      echo "Expected little-endian Mach-O 64-bit executable, found magic $magic" >&2
+      exit 65
+    }
+    macho_cpu="$(LC_ALL=C od -An -tu4 -j4 -N4 "$work/program" | tr -d '[:space:]')"
+    macho_kind="$(LC_ALL=C od -An -tu4 -j12 -N4 "$work/program" | tr -d '[:space:]')"
+    case "$(uname -m)" in
+      x86_64) host_cpu=16777223 ;;
+      arm64|aarch64) host_cpu=16777228 ;;
+      *) echo 'Unqualified macOS native AOT architecture.' >&2; exit 69 ;;
+    esac
+    [[ "$macho_kind" == 2 && "$macho_cpu" == "$host_cpu" ]] || {
+      echo "Mach-O architecture or executable type mismatch: cpu=$macho_cpu kind=$macho_kind" >&2
       exit 65
     }
     ;;
