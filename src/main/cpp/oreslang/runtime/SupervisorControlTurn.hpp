@@ -99,7 +99,11 @@ public:
     // A stopped child remains in-flight and keeps its reserved capacity when
     // the STOP effect is uncertain. No subsequent turns may run until the
     // trusted owner reconciles that exact actor incarnation.
-    bool stop_quarantined() const noexcept { return stop_pending_.has_value(); }
+    // Observers can run concurrently with the owner CONTROL turn. Do not
+    // read the mutable optional outside its exclusive lease (C++ data race).
+    bool stop_quarantined() const noexcept {
+        return stop_quarantined_.load(std::memory_order_acquire);
+    }
 
     void confirm_stopped(const SupervisorFailureLane::ActorKey& child) {
         if (lease_.test_and_set(std::memory_order_acquire)) {
@@ -116,6 +120,7 @@ public:
         // Only trusted host code may assert authoritative STOP acknowledgment.
         child_failures_.ack(child);
         stop_pending_.reset();
+        stop_quarantined_.store(false, std::memory_order_release);
     }
 
     std::size_t pending_count() const { return child_failures_.pending_count(); }
@@ -167,6 +172,9 @@ public:
                         // host. If allocation fails here, the host was not called
                         // and ordinary CONTROL retry remains safe.
                         stop_pending_ = next->actor;
+                        // Publish quarantine before any potentially effectful
+                        // host callback, including callbacks on foreign threads.
+                        stop_quarantined_.store(true, std::memory_order_release);
                         stop_may_have_effects = true;
                         if (hooks.on_stop(*next) != StopReceipt::Acknowledged) {
                             // Hold the event in-flight and the child slot
@@ -197,7 +205,10 @@ public:
                         break;
                 }
                 child_failures_.ack(next->actor);
-                if (stop_may_have_effects) stop_pending_.reset();
+                if (stop_may_have_effects) {
+                    stop_pending_.reset();
+                    stop_quarantined_.store(false, std::memory_order_release);
+                }
             } catch (...) {
                 // An effectful STOP may have succeeded before throwing:
                 // quarantine until the trusted host proves final disposition.
@@ -267,6 +278,7 @@ private:
     // Supervisor logical-turn owned, not a guest ActorRef or public token.
     // Retained on uncertain or throwing STOP effects for explicit reconciliation.
     std::optional<SupervisorFailureLane::ActorKey> stop_pending_;
+    std::atomic<bool> stop_quarantined_{false};
 
 };
 
