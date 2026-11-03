@@ -43,22 +43,53 @@ shared-memory capability remains mandatory under the runtime's isolate policy.
 
 ## Compiler tests
 
-Java: `MutableShareCompilerTest` has 30 authored JUnit tests covering distinct
+Java: `MutableShareCompilerTest` has 36 authored JUnit tests covering distinct
 AST forms, runtime handle identity (including nested sharing), exclusive-loan
 non-upgrade, invalid mutable objects/local mutexes/borrows/generics, forged
 nominals, restricted-operand admission order, nested capability denial, and
 malformed spellings. These tests must run under Maven/JUnit; source-only
 assertions do not establish execution.
 
-LLVM: `native_borrow_admission` contains 12 `rt mut share` compiler-negative
-contexts (20 native borrow denials total) and four real-IR positive controls,
+LLVM: `native_borrow_admission` contains 23 `rt mut share` compiler-negative
+contexts (31 native borrow denials total) and four canonical `.atto` real-IR positive controls,
 including a canonical `rt mut borrow` control. Negative cases demand the
 dedicated `rt mut share` diagnostic, **zero emitted IR**, no artifacts inside
 or beside the scratch fixture, and a normal nonzero compiler exit (not a crash).
-The Rust harness also has 17 authored source-free adversarial/predicate unit tests, including stderr IR, fast-exit output-budget, signal-termination, and parent-scratch artifact canaries.
+The Rust harness also has 28 authored source-free adversarial/predicate unit tests, including stderr IR, fast-exit output-budget, signal-termination, and parent-scratch artifact canaries.
 These additions require exact-head execution; earlier successful CI runs
 do not verify later commits. Native guarded `SharedMutex<T>` lowering remains
 unimplemented; a parser rejection is *not* native shared-mutable support.
+
+## AttoLang canonical source migration (2026-11-03)
+
+**Public name:** AttoLang. **New source files:** `.atto`. The existing
+`ores` Graal guest language ID, Java package names, native binary names,
+old repository names, private CI receipt schema and protocol ABI remain
+compatibility identifiers; changing them is not part of this ownership gate.
+
+- Java positive and negative ownership fixtures now live in
+  `src/test/resources/atto/ownership/*.atto` and are compiled with the
+  actual Java parser/type/ownership checker. The positive case is also
+  evaluated with Graal using its preserved `ores` language ID and a
+  canonical `.atto` source name. A single explicit legacy `.ores`
+  source-name regression remains. This JUnit path does **not** independently
+  prove CLI source file admission or import resolution.
+- LLVM's native borrow harness now writes every new compiler input as
+  `input.atto` (31 no-IR/no-artifact denials plus four valid IR controls).
+  Exactly one separate positive `input.ores` compiler control protects
+  legacy compatibility. Two new source-free predicates prove the compiler
+  harness passes the intended suffix; they are not real compiler passes.
+- Canonical CLI/import source admission is being developed independently
+  in Java PR #2460 and LLVM PR #1312. These source-branch implementations
+  have **not been integrated or validated against these ownership heads**.
+  Their exact-head code must be reconciled before an AttoLang guest parity
+  or release claim.
+- The latest exact-head ownership workflows did not record executed job
+  steps. Compiler-backed/JUnit results remain `NOT_EXECUTED` at the new
+  source commits. Older successful runs cannot be carried forward.
+- The cross-organization private-source transfer hold remains active.
+  Source-free test plans can pin Git blobs, but they do not authorize
+  private compiler-source transfer into an alternate organization.
 
 ## Future admission gates
 
