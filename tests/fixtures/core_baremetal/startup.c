@@ -90,16 +90,27 @@ static void harness_main(void) {
     write0("\n");
     exit_with(ADP_STOPPED_RUNTIME_ERROR_UNKNOWN);
 #else
-    volatile int64_t input = 5;
-    int64_t value = ores_core_entry(input);
-    if (value != 42) {
-        write0("ORES_CORE_BAREMETAL_FAIL value=");
-        write_i64(value);
-        write0("\n");
-        exit_with(ADP_STOPPED_RUNTIME_ERROR_UNKNOWN);
+    /* Each row drives a different path through app.ores: inside/outside the
+     * && / || window, and the lower and upper clamp bounds. */
+    static const struct { int64_t input; int64_t expected; } vectors[] = {
+        {5, 42}, {0, 7}, {2, 19}, {20, 265}, {-4, 102}, {200, 1300},
+    };
+    for (unsigned i = 0; i < sizeof(vectors) / sizeof(vectors[0]); ++i) {
+        volatile int64_t input = vectors[i].input;
+        int64_t value = ores_core_entry(input);
+        if (value != vectors[i].expected) {
+            write0("ORES_CORE_BAREMETAL_FAIL input=");
+            write_i64(vectors[i].input);
+            write0(" value=");
+            write_i64(value);
+            write0(" expected=");
+            write_i64(vectors[i].expected);
+            write0("\n");
+            exit_with(ADP_STOPPED_RUNTIME_ERROR_UNKNOWN);
+        }
     }
-    write0("ORES_CORE_BAREMETAL_PASS value=");
-    write_i64(value);
+    write0("ORES_CORE_BAREMETAL_PASS vectors=6 value=");
+    write_i64(ores_core_entry(5));
     write0("\n");
     exit_with(ADP_STOPPED_APPLICATION_EXIT);
 #endif

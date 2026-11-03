@@ -52,8 +52,13 @@ links and runs without an OS". CI runs it in
    link line. The image must resolve every symbol, contain no allocator
    definition, and have no `INTERP`/`DYNAMIC`/`TLS` segments or
    constructor/TLS sections.
-4. Boots the image on QEMU `lm3s6965evb` (Cortex-M3) and requires
-   `ORES_CORE_BAREMETAL_PASS value=42`.
+4. Boots the image on QEMU `lm3s6965evb` (Cortex-M3). The harness checks
+   six input/expected pairs that cover every branch of the guest (both sides
+   of the `&&`/`||` window, both clamp bounds) and requires
+   `ORES_CORE_BAREMETAL_PASS vectors=6 value=42`. The guest uses the whole
+   scalar subset the Cortex-M core path admits today: int/bool values,
+   checked arithmetic, negation, comparisons, `&&`/`||`, `if`, direct calls
+   and an `ores.core` import.
 5. Boots a second image whose harness feeds `INT64_MAX` to a checked
    multiply, and requires the Oreslang overflow trap to land in the
    platform's `HardFault_Handler`. Failure policy belongs to the platform,
@@ -84,3 +89,9 @@ Wider `ores.core` surface (slices, `Option`/`Result`, bounded actors) needs
 the same gate before it can claim freestanding status. The earlier
 Zephyr/QEMU run (`docs/CORTEXM_QEMU_EVIDENCE.md`) remains RTOS evidence, not
 no-OS evidence.
+
+The Cortex-M core path still rejects typed locals, loops, `Option`/`Result`,
+arrays and structs. It also rejects a bool-returning call used as an `if`
+condition, and reports that with a misleading "rejects main, effects or
+unbounded functions" diagnostic. Each of those needs compiler work before
+this gate can cover it.

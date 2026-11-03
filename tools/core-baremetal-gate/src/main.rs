@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const TARGET: &str = "thumbv7m-none-eabi";
 const QEMU_TIMEOUT: Duration = Duration::from_secs(30);
-const PASS_LINE: &str = "ORES_CORE_BAREMETAL_PASS value=42";
+const PASS_LINE: &str = "ORES_CORE_BAREMETAL_PASS vectors=6 value=42";
 const TRAP_LINE: &str = "ORES_CORE_TRAP hardfault";
 const GUEST_EXPORTS: &[&str] = &["ores_core_entry", "ores_core_overflow_probe"];
 const LINKER_SCRIPT_SYMBOLS: &[&str] = &[
@@ -262,7 +262,7 @@ impl Gate {
         require(out.status == Some(0) && console.contains(PASS_LINE), || {
             format!("bare-metal run did not pass (status {:?}):\n{}{}", out.status, out.stdout, out.stderr)
         })?;
-        self.pass("QEMU Cortex-M3 boots the ores.core image: entry(5) == 42");
+        self.pass("QEMU Cortex-M3 boots the ores.core image: 6 result vectors incl. entry(5) == 42");
         Ok(())
     }
 
