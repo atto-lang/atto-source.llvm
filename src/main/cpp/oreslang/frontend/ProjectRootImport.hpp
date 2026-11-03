@@ -186,6 +186,16 @@ inline std::filesystem::path resolve_project_root_import(
         const fs::path manifest = exists_marker(atto_manifest)
                 ? atto_manifest : legacy_manifest;
         if (exists_marker(manifest)) {
+            // Canonical package manifests are security-critical. Legacy
+            // manifest symlink behavior is compatibility-only; a canonical
+            // .atto.pkg.toml must not be a symlink even inside its directory.
+            if (manifest == atto_manifest) {
+                std::error_code symlink_error;
+                const auto entry = fs::symlink_status(manifest, symlink_error);
+                if (symlink_error || entry.type() == fs::file_type::symlink)
+                    throw std::runtime_error(
+                        "canonical AttoLang manifest cannot be a symlink");
+            }
             std::error_code regular_error;
             if (!fs::is_regular_file(manifest, regular_error) || regular_error)
                 throw std::runtime_error("native package manifest must be a regular file");
