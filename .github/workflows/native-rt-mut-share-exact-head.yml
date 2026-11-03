@@ -44,8 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          selected='^(native_compile_time_borrow_escape_admission|native_borrow_harness_predicates|native_project_root_import_security|native_source_module_graph_execution|numerics_atto_integer_guest)
-
+          selected="^(native_compile_time_borrow_escape_admission|native_borrow_harness_predicates|native_project_root_import_security|native_source_module_graph_execution|numerics_atto_integer_guest)$"
           # The test-name inventory is an admission control; an absent test
           # must never silently produce a green CTest result.
           listing="$(ctest --test-dir build -N -R "$selected")"
