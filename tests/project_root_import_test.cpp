@@ -191,13 +191,13 @@ int main() {
             throw std::runtime_error(".atto root import did not resolve");
     }
     {
-        const auto dir = temp / "canonical-precedence-source";
+        const auto dir = temp / "ambiguous-modern-legacy-source";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         write_text(dir/"lib.ores", "");
-        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
-            throw std::runtime_error("extensionless import must prefer canonical .atto");
+        must_fail("ambiguous .atto/.ores siblings", "ambiguous native source import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
         if (resolve(dir/"main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto")
                 || resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("explicit .atto/.ores suffix must disambiguate");
@@ -221,7 +221,25 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.ores", "");
         fs::create_symlink(dir/"absent.atto", dir/"lib.atto");
-        must_fail("dangling .atto blocks legacy fallback", "cannot resolve native project-root import",
+        must_fail("dangling .atto conflicts with legacy sibling", "ambiguous native source import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "same-inode-hardlink-twins";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        fs::create_hard_link(dir/"lib.atto", dir/"lib.ores");
+        must_fail("hardlink .atto/.ores twins", "ambiguous native source import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "same-inode-symlink-twins";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        fs::create_symlink(dir/"lib.atto", dir/"lib.ores");
+        must_fail("symlink .atto/.ores twins", "ambiguous native source import",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
