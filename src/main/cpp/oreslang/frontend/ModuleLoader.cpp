@@ -262,6 +262,9 @@ private:
                     dependency = project_root_import_detail::resolve_native_source_suffix(
                         current.path.parent_path() / fs::path(raw),
                         project_root_import_detail::is_atto_source(current.path));
+                    if (project_root_import_detail::is_atto_source(dependency)) {
+                        project_root_import_detail::reject_atto_symlink_components(dependency);
+                    }
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
