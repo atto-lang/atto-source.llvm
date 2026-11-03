@@ -79,6 +79,15 @@ static void hot_chain(void* p) {
     if (++chain.slices == 1) chain.reactor->emit();
     if (chain.reactor->deliveries == 0) check(chain.pool->try_submit(hot_chain, p));
 }
+// Deliberately broken polling adapter must not escape across a worker thread.
+struct FailingReactor final : Pool::Reactor {
+    std::atomic<bool> fail{false};
+    void poll(bool may_wait) override {
+        if (fail.load(std::memory_order_acquire)) throw std::runtime_error("poll failure");
+        if (may_wait) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    void wake() noexcept override {}
+};
 int main() {
     // Default is exactly two pool workers, not two plus a selector/helper.
     {
@@ -126,6 +135,22 @@ int main() {
         check(reactor.wakes == wakes_before_hot_queue); // executor busy, no polling lease
         check(!pool.try_submit(increment, &done));
         b.release = true; pool.close(); check(done == 1024); check(pool.completed() == 1025);
+    }
+    // After the first poll exception, seal admission and drain every previously
+    // accepted task without polling the broken reactor again.
+    {
+        FailingReactor reactor; Pool pool(reactor, 1, 1);
+        Block blocked;
+        check(pool.try_submit(block, &blocked));
+        until([&] { return blocked.entered.load(); });
+        std::atomic<int> done{0};
+        for (int i = 0; i < 128; ++i) check(pool.try_submit(increment, &done));
+        reactor.fail.store(true, std::memory_order_release);
+        blocked.release = true;
+        until([&] { return pool.failures() == 1; });
+        pool.close();
+        check(pool.failures() == 1 && done == 128 && pool.completed() == 129);
+        check(!pool.try_submit(increment, &done));
     }
     {
         Reactor reactor; bool denied = false;
