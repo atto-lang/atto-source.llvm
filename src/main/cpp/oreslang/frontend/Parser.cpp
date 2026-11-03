@@ -3293,6 +3293,13 @@ private:
             std::string operation(token_.text);
             if (operation == "mut") {
                 advance();
+                if (token_.text == "share") {
+                    // A source spelling alone never proves a native shared
+                    // allocation domain or a guarded SharedMutex<T> handle.
+                    // Reject before evaluating the operand or emitting IR.
+                    fail("native rt mut share requires verified SharedMutex<T> capability, "
+                         "guarded lowering and allocation-domain proof; refusing unsynchronized alias");
+                }
                 if (token_.text != "borrow")
                     fail("'rt mut' only supports borrowing; use 'rt mut borrow value'");
                 operation = "borrow";
