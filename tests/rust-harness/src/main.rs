@@ -325,80 +325,210 @@ fn nominal_type_binders(compiler: &Path) -> Result<(), String> {
 }
 
 
-fn assert_native_aot_artifact(image: &[u8]) -> Result<(), String> {
+// These parsers validate the linked native container, not the semantics of
+// guest execution. Every OS format is exercised on every CI runner so that
+// Linux-only CI cannot accidentally green-light incomplete PE/Mach-O gates.
+fn assert_native_aot_artifact_for(
+    image: &[u8],
+    os: &str,
+    arch: &str,
+) -> Result<(), String> {
     require(image.len() >= 64, "native AOT artifact is too small")?;
-    match std::env::consts::OS {
+    match os {
         "linux" => {
             require(image.starts_with(b"\x7fELF"), "expected ELF native executable")?;
-            require(image[4] == 2 && image[5] == 1, "expected little-endian ELF64")?;
+            require(image[4] == 2 && image[5] == 1 && image[6] == 1,
+                "expected little-endian ELF64 with current ident version")?;
             let kind = u16::from_le_bytes([image[16], image[17]]);
             require(kind == 2 || kind == 3, "expected ELF executable or PIE, not an object")?;
-            let expected_machine = match std::env::consts::ARCH {
+            let expected_machine = match arch {
                 "x86_64" => 62,
                 "aarch64" => 183,
                 other => return Err(format!("unsupported native AOT architecture: {other}")),
             };
             let machine = u16::from_le_bytes([image[18], image[19]]);
             require(machine == expected_machine, format!("wrong ELF machine: {machine}"))?;
+            let elf_version = u32::from_le_bytes(image[20..24].try_into().unwrap());
+            require(elf_version == 1, "unsupported ELF version")?;
+            let entry = u64::from_le_bytes(image[24..32].try_into().unwrap());
+            require(entry != 0, "ELF has no native entrypoint")?;
+            let phoff = u64::from_le_bytes(image[32..40].try_into().unwrap()) as usize;
+            let ehsize = u16::from_le_bytes(image[52..54].try_into().unwrap());
+            let phentsize = u16::from_le_bytes(image[54..56].try_into().unwrap()) as usize;
+            let phnum = u16::from_le_bytes(image[56..58].try_into().unwrap()) as usize;
+            require(ehsize == 64 && phentsize == 56 && phnum != 0 && phoff >= 64,
+                "ELF header or program-header table is invalid")?;
+            let phend = phoff.checked_add(phnum.checked_mul(phentsize)
+                .ok_or("ELF program-header table overflow")?)
+                .ok_or("ELF program-header offset overflow")?;
+            require(phend <= image.len(), "ELF program headers exceed file bounds")?;
+            let mut executable_load = false;
+            for index in 0..phnum {
+                let pos = phoff + index * phentsize;
+                let p_type = u32::from_le_bytes(image[pos..pos + 4].try_into().unwrap());
+                let p_flags = u32::from_le_bytes(image[pos + 4..pos + 8].try_into().unwrap());
+                if p_type != 1 {
+                    continue;
+                }
+                let offset = u64::from_le_bytes(image[pos + 8..pos + 16].try_into().unwrap());
+                let size = u64::from_le_bytes(image[pos + 32..pos + 40].try_into().unwrap());
+                require(offset.checked_add(size)
+                    .is_some_and(|end| end <= image.len() as u64),
+                    "ELF PT_LOAD extends outside the artifact")?;
+                if p_flags & 1 != 0 && size > 0 {
+                    executable_load = true;
+                }
+            }
+            require(executable_load, "ELF has no file-backed executable PT_LOAD segment")?;
         }
         "macos" => {
             require(&image[..4] == b"\xcf\xfa\xed\xfe", "expected thin Mach-O 64-bit executable")?;
-            let expected_cpu = match std::env::consts::ARCH {
+            let expected_cpu = match arch {
                 "x86_64" => 0x0100_0007u32,
                 "aarch64" => 0x0100_000cu32,
                 other => return Err(format!("unsupported native AOT architecture: {other}")),
             };
-            let cpu = u32::from_le_bytes([image[4], image[5], image[6], image[7]]);
+            let cpu = u32::from_le_bytes(image[4..8].try_into().unwrap());
             require(cpu == expected_cpu, format!("wrong Mach-O architecture: {cpu}"))?;
-            let file_type = u32::from_le_bytes([image[12], image[13], image[14], image[15]]);
+            let file_type = u32::from_le_bytes(image[12..16].try_into().unwrap());
             require(file_type == 2, "expected MH_EXECUTE, not a Mach-O object or dylib")?;
+            let commands = u32::from_le_bytes(image[16..20].try_into().unwrap()) as usize;
+            let command_bytes = u32::from_le_bytes(image[20..24].try_into().unwrap()) as usize;
+            let end = 32usize.checked_add(command_bytes).ok_or("Mach-O commands overflow")?;
+            require(commands > 0 && commands <= command_bytes / 8 && end <= image.len(),
+                "Mach-O load command table missing or out of bounds")?;
+            let mut pos = 32usize;
+            let mut has_segment = false;
+            let mut has_entry = false;
+            for _ in 0..commands {
+                require(pos.checked_add(8).is_some_and(|next| next <= end),
+                    "truncated Mach-O load command")?;
+                let cmd = u32::from_le_bytes(image[pos..pos + 4].try_into().unwrap());
+                let cmdsize = u32::from_le_bytes(image[pos + 4..pos + 8].try_into().unwrap()) as usize;
+                require(cmdsize >= 8 && pos.checked_add(cmdsize)
+                    .is_some_and(|next| next <= end), "invalid Mach-O command size")?;
+                if cmd == 0x19 {
+                    require(cmdsize >= 72, "truncated 64-bit Mach-O segment command")?;
+                    let initprot = u32::from_le_bytes(image[pos + 60..pos + 64].try_into().unwrap());
+                    if initprot & 4 != 0 { has_segment = true; }
+                }
+                if cmd == 0x80000028 || cmd == 0x5 { has_entry = true; }
+                pos += cmdsize;
+            }
+            require(pos == end && has_segment && has_entry,
+                "Mach-O missing executable segment or native entry command")?;
         }
         "windows" => {
             require(image.starts_with(b"MZ"), "expected PE executable")?;
-            let pe_offset = u32::from_le_bytes([image[60], image[61], image[62], image[63]]) as usize;
-            require(
-                pe_offset >= 64 && pe_offset <= image.len().saturating_sub(24),
-                "PE signature or COFF header falls outside the artifact",
-            )?;
+            let pe_offset = u32::from_le_bytes(image[60..64].try_into().unwrap()) as usize;
+            require(pe_offset >= 64 && pe_offset <= image.len().saturating_sub(24),
+                "PE signature or COFF header falls outside the artifact")?;
             require(&image[pe_offset..pe_offset + 4] == b"PE\0\0", "expected a valid PE signature")?;
-            let machine = u16::from_le_bytes([image[pe_offset + 4], image[pe_offset + 5]]);
-            let expected = match std::env::consts::ARCH {
+            let machine = u16::from_le_bytes(image[pe_offset + 4..pe_offset + 6].try_into().unwrap());
+            let expected = match arch {
                 "x86_64" => 0x8664u16,
                 "aarch64" => 0xaa64u16,
                 other => return Err(format!("unsupported native AOT architecture: {other}")),
             };
             require(machine == expected, format!("wrong PE architecture: {machine}"))?;
-            let flags = u16::from_le_bytes([image[pe_offset + 22], image[pe_offset + 23]]);
+            let sections = u16::from_le_bytes(image[pe_offset + 6..pe_offset + 8].try_into().unwrap()) as usize;
+            let optional_size = u16::from_le_bytes(image[pe_offset + 20..pe_offset + 22].try_into().unwrap()) as usize;
+            let flags = u16::from_le_bytes(image[pe_offset + 22..pe_offset + 24].try_into().unwrap());
             require(flags & 0x0002 != 0 && flags & 0x2000 == 0,
                 "PE artifact is not an executable or is a DLL")?;
+            require(sections != 0 && optional_size >= 112,
+                "PE is missing its sections or PE32+ optional header")?;
+            let opt_start = pe_offset + 24;
+            let opt_end = opt_start.checked_add(optional_size).ok_or("PE optional header overflow")?;
+            let section_end = opt_end.checked_add(sections.checked_mul(40)
+                .ok_or("PE section-table size overflow")?)
+                .ok_or("PE section-table offset overflow")?;
+            require(section_end <= image.len(), "PE optional header or section table out of bounds")?;
+            let magic = u16::from_le_bytes(image[opt_start..opt_start + 2].try_into().unwrap());
+            require(magic == 0x20b, "expected PE32+ optional header")?;
+            let entry = u32::from_le_bytes(image[opt_start + 16..opt_start + 20].try_into().unwrap());
+            require(entry != 0, "PE executable has no native entrypoint")?;
         }
         other => return Err(format!("unqualified native AOT host OS: {other}")),
     }
     Ok(())
 }
 
-// Executable header checks are not a substitute for execution. These adversarial
-// byte fixtures ensure the pre-execution ABI gate cannot accept trivial scripts,
-// empty link outputs, or a truncated/forged PE header.
+fn assert_native_aot_artifact(image: &[u8]) -> Result<(), String> {
+    assert_native_aot_artifact_for(image, std::env::consts::OS, std::env::consts::ARCH)
+}
+
+// Host-independent negative checks are distinct from the real compiler -> Clang
+// -> executable -> guest-result test. These byte probes must never be reported
+// as a guest AOT success.
 fn aot_artifact_header_selftest() -> Result<(), String> {
     for (name, payload) in [
         ("empty", vec![]),
         ("shell", b"#!/bin/sh\nexit 42\n".to_vec()),
         ("zeros", vec![0u8; 128]),
     ] {
-        require(assert_native_aot_artifact(&payload).is_err(),
-            format!("admitted forged native artifact: {name}"))?;
+        for (os, arch) in [("linux", "x86_64"), ("macos", "aarch64"), ("windows", "x86_64")] {
+            require(assert_native_aot_artifact_for(&payload, os, arch).is_err(),
+                format!("admitted forged native artifact: {name} on {os}"))?;
+        }
     }
-    let mut forged = vec![0u8; 128];
-    forged[..2].copy_from_slice(b"MZ");
-    forged[60..64].copy_from_slice(&125u32.to_le_bytes());
-    require(assert_native_aot_artifact(&forged).is_err(),
-        "admitted truncated PE signature/COFF header")?;
-    let mut forged = vec![0u8; 128];
-    forged[..4].copy_from_slice(b"\x7fELF");
-    require(assert_native_aot_artifact(&forged).is_err(),
-        "admitted truncated ELF without valid type/machine")?;
-    println!("native AOT artifact header negative selftest: PASS");
+
+    let mut elf = vec![0u8; 256];
+    elf[..4].copy_from_slice(b"\x7fELF");
+    elf[4] = 2; elf[5] = 1; elf[6] = 1;
+    elf[16..18].copy_from_slice(&3u16.to_le_bytes());
+    elf[18..20].copy_from_slice(&62u16.to_le_bytes());
+    elf[20..24].copy_from_slice(&1u32.to_le_bytes());
+    elf[32..40].copy_from_slice(&64u64.to_le_bytes());
+    elf[52..54].copy_from_slice(&64u16.to_le_bytes());
+    elf[54..56].copy_from_slice(&56u16.to_le_bytes());
+    elf[56..58].copy_from_slice(&1u16.to_le_bytes());
+    elf[64..68].copy_from_slice(&1u32.to_le_bytes());
+    elf[68..72].copy_from_slice(&5u32.to_le_bytes());
+    elf[72..80].copy_from_slice(&128u64.to_le_bytes());
+    elf[96..104].copy_from_slice(&32u64.to_le_bytes());
+    require(assert_native_aot_artifact_for(&elf, "linux", "x86_64").is_err(),
+        "admitted ELF ET_DYN object without a native entrypoint")?;
+    elf[24..32].copy_from_slice(&4096u64.to_le_bytes());
+    require(assert_native_aot_artifact_for(&elf, "linux", "aarch64").is_err(),
+        "admitted ELF binary with wrong architecture")?;
+    elf[68..72].copy_from_slice(&4u32.to_le_bytes());
+    require(assert_native_aot_artifact_for(&elf, "linux", "x86_64").is_err(),
+        "admitted ELF without an executable PT_LOAD segment")?;
+
+    let mut pe = vec![0u8; 256];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[60..64].copy_from_slice(&128u32.to_le_bytes());
+    pe[128..132].copy_from_slice(b"PE\0\0");
+    pe[132..134].copy_from_slice(&0x8664u16.to_le_bytes());
+    pe[134..136].copy_from_slice(&1u16.to_le_bytes());
+    pe[150..152].copy_from_slice(&2u16.to_le_bytes());
+    require(assert_native_aot_artifact_for(&pe, "windows", "x86_64").is_err(),
+        "admitted PE with executable flag but without a PE32+ optional header")?;
+    pe[150..152].copy_from_slice(&0x2002u16.to_le_bytes());
+    require(assert_native_aot_artifact_for(&pe, "windows", "x86_64").is_err(),
+        "admitted a PE DLL as an executable")?;
+    pe[60..64].copy_from_slice(&253u32.to_le_bytes());
+    require(assert_native_aot_artifact_for(&pe, "windows", "x86_64").is_err(),
+        "admitted truncated PE signature or COFF header")?;
+
+    let mut macho = vec![0u8; 128];
+    macho[..4].copy_from_slice(b"\xcf\xfa\xed\xfe");
+    macho[4..8].copy_from_slice(&0x0100_000cu32.to_le_bytes());
+    macho[12..16].copy_from_slice(&2u32.to_le_bytes());
+    require(assert_native_aot_artifact_for(&macho, "macos", "aarch64").is_err(),
+        "admitted Mach-O MH_EXECUTE without load commands")?;
+    macho[16..20].copy_from_slice(&1u32.to_le_bytes());
+    macho[20..24].copy_from_slice(&8u32.to_le_bytes());
+    macho[32..36].copy_from_slice(&0x19u32.to_le_bytes());
+    macho[36..40].copy_from_slice(&8u32.to_le_bytes());
+    require(assert_native_aot_artifact_for(&macho, "macos", "aarch64").is_err(),
+        "admitted truncated Mach-O segment command")?;
+
+    let host = std::env::current_exe().map_err(|e| format!("resolve native test harness: {e}"))?;
+    let bytes = fs::read(&host).map_err(|e| format!("read native test harness: {e}"))?;
+    assert_native_aot_artifact(&bytes)?;
+    println!("native AOT artifact format, architecture and adversarial tests: PASS (host binary only)");
     Ok(())
 }
 
