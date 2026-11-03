@@ -6,9 +6,11 @@ sources, fixtures and examples should use `.atto`.
 
 For relative `./lib`, `../lib` and project-root `+/lib` imports:
 
-- If `lib.atto` exists, prefer that physical file, even if a legacy
-  `lib.ores` sibling also exists. This matches Java and .NET resolution.
-- Otherwise, if `lib.ores` exists, accept the legacy file.
+- For a canonical `.atto` importer, extensionless `lib` resolves
+  **only** `lib.atto`, including when a same-basename `lib.ores` exists.
+  If `lib.atto` is missing the import fails; there is no silent downgrade.
+- Legacy `.ores` importers retain an explicit migration fallback to
+  `lib.ores` when a canonical `.atto` target is absent.
 - Inspect directory entries rather than only resolving target existence:
   a dangling `.atto` symlink must be selected and rejected by canonical-file
   admission, never silently bypassed in favor of a legacy sibling.
@@ -16,10 +18,14 @@ For relative `./lib`, `../lib` and project-root `+/lib` imports:
 - Explicit `lib.atto` and explicit `lib.ores` are accepted independently.
 - All other suffixes fail closed before any foreign-source import.
 
-The change retains existing source-content UTF-8 checks, source identity
-checks, regular-file-only admission, package nesting detection and root
-symlink boundary checks. It does not automatically rename `.ores.pkg.toml`
-or alter module runtime semantics.
+The stacked canonical-source milestone additionally admits
+`.atto.pkg.toml` as the preferred package manifest, with
+`.ores.pkg.toml` as a migration fallback at the same directory. It rejects
+nested package boundaries defined by **either** manifest spelling and
+accepts only the literal `[project] root = "."` subset until the native
+full TOML parser is integrated. Arbitrary root overrides continue to fail
+closed. Source UTF-8, physical identity, symlink/regular-file admission and
+module-runtime semantics remain unchanged.
 
 ## Tests and evidence
 
@@ -51,3 +57,16 @@ source-visibility and exact source-snapshot approval. A private destination,
 available Actions minutes and token-free GitHub-connector mirroring do
 **not** independently satisfy the incident release gates. This PR was
 developed in the source organization without cross-organization source copy.
+
+## Cross-backend canonicalization follow-up (2026-11-03)
+
+Java canonical `.atto` contract: [Java PR #2486](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/2486).
+Native cache package and guest gate: [LRU PR #9](https://github.com/lru-cache-atto/lru-cache.atto/pull/9).
+Portable conformance: [platform issue #320](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/320).
+
+New source files and package fixtures must be `.atto`, not `.ores`.
+Explicit legacy paths are retained only for migration. The native LLVM
+source/import implementation must be compiled and tested on the exact
+PR head with real executed CTest and `oreslang-llvmc` guest receipts before
+parity is promoted. Java source-org CI and cross-org mirrors cannot substitute
+for that evidence, and existing source transfer holds remain in force.
