@@ -6,12 +6,13 @@ sources, fixtures and examples should use `.atto`.
 
 For relative `./lib`, `../lib` and project-root `+/lib` imports:
 
-- If `lib.atto` exists, prefer that physical file, even if a legacy
-  `lib.ores` sibling also exists. This matches Java and .NET resolution.
-- Otherwise, if `lib.ores` exists, accept the legacy file.
+- If exactly one of `lib.atto` or legacy `lib.ores` exists, use that file.
+- If both names exist, reject the extensionless import as ambiguous and require
+  an explicit suffix. Migration must never silently change which source unit
+  is selected merely because a canonical `.atto` twin appears.
 - Inspect directory entries rather than only resolving target existence:
-  a dangling `.atto` symlink must be selected and rejected by canonical-file
-  admission, never silently bypassed in favor of a legacy sibling.
+  dangling symlinks, hardlink aliases and symlink aliases still count as
+  conflicting source names and therefore fail closed.
 - If neither exists, fail at the ordinary canonical source resolution.
 - Explicit `lib.atto` and explicit `lib.ores` are accepted independently.
 - All other suffixes fail closed before any foreign-source import.
@@ -30,8 +31,9 @@ nested-package and symlink-escape cases. Existing CTest name:
 `tests/native_module_imports.py` retains four actual-compiler `.atto`
 module graph cases (extensionless modern, explicit modern, explicit legacy,
 and project-root modern), plus the existing negative fail-before-IR cases.
-The canonical-over-legacy precedence, explicit case-insensitive `.ATTO`,
-and dangling-entry shadow cases are asserted by the native C++ resolver test;
+The dual-suffix ambiguity rule, explicit case-insensitive `.ATTO`,
+dangling-entry conflict, hardlink-alias and symlink-alias cases are asserted by
+the native C++ resolver test;
 they are host resolver evidence, not additional AOT guest execution. Existing
 CTest name: `native_source_module_graph_execution`.
 
