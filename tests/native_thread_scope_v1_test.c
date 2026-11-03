@@ -173,6 +173,72 @@ static void abnormal_exit_retains_quota_until_release(void) {
     assert(ores_native_thread_scope_close_v1(scope) == ORES_THREAD_OK_V1);
     assert(ores_native_thread_scope_destroy_v1(scope) == ORES_THREAD_OK_V1);
 }
+static void isolate_identity_fences_v1(void) {
+    const ores_native_thread_isolate_key_v1 expected = {91, 13, 4};
+    const ores_native_thread_isolate_key_v1 wrong_tenant = {92, 13, 4};
+    const ores_native_thread_isolate_key_v1 wrong_isolate = {91, 14, 4};
+    const ores_native_thread_isolate_key_v1 stale_generation = {91, 13, 3};
+    const ores_native_thread_isolate_key_v1 invalid = {0, 13, 4};
+    ores_native_thread_scope_v1 *scope = (ores_native_thread_scope_v1 *)1;
+    assert(ores_native_thread_scope_open_isolate_v1(invalid, 1, &scope)
+           == ORES_THREAD_BAD_ARGUMENT_V1);
+    assert(scope == NULL);
+    assert(ores_native_thread_scope_open_isolate_v1(expected, 1, &scope)
+           == ORES_THREAD_OK_V1);
+
+    const ores_native_thread_isolate_key_v1 wrong[] = {
+        wrong_tenant, wrong_isolate, stale_generation
+    };
+    for (unsigned i = 0; i < sizeof(wrong)/sizeof(wrong[0]); ++i) {
+        int *arg = owned(120 + (int)i);
+        ores_native_thread_v1 *handle = (ores_native_thread_v1 *)1;
+        assert(ores_native_thread_scope_spawn_isolate_v1(
+                   scope, wrong[i], worker, arg, drop_arg, &handle)
+               == ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1);
+        assert(handle == NULL);
+        assert(*arg == 120 + (int)i);
+        free(arg); /* rejected cross-tenant/epoch source keeps ownership */
+        assert(ores_native_thread_scope_close_isolate_v1(scope, wrong[i])
+               == ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1);
+        assert(ores_native_thread_scope_destroy_isolate_v1(scope, wrong[i])
+               == ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1);
+    }
+    unsigned outstanding = 99;
+    assert(ores_native_thread_scope_outstanding_v1(scope, &outstanding)
+           == ORES_THREAD_OK_V1 && outstanding == 0);
+
+    ores_native_thread_v1 *handle = NULL;
+    assert(ores_native_thread_scope_spawn_isolate_v1(
+               scope, expected, worker, owned(123), drop_arg, &handle)
+           == ORES_THREAD_OK_V1);
+    assert(handle != NULL);
+    assert(ores_native_thread_scope_close_isolate_v1(scope, stale_generation)
+           == ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1);
+    assert(ores_native_thread_scope_close_isolate_v1(scope, expected)
+           == ORES_THREAD_SCOPE_BUSY_V1);
+    assert(ores_native_thread_scope_destroy_isolate_v1(scope, expected)
+           == ORES_THREAD_SCOPE_BUSY_V1);
+    joined_release(handle, 123);
+    assert(ores_native_thread_scope_close_isolate_v1(scope, expected)
+           == ORES_THREAD_OK_V1);
+    assert(ores_native_thread_scope_destroy_isolate_v1(scope, expected)
+           == ORES_THREAD_OK_V1);
+
+    /* A legacy unbound host-only scope must never be mistaken for a keyed
+     * isolate-scoped capability even when the request fields look valid. */
+    ores_native_thread_scope_v1 *legacy = NULL;
+    assert(ores_native_thread_scope_open_v1(1, &legacy) == ORES_THREAD_OK_V1);
+    int *legacy_arg = owned(124);
+    ores_native_thread_v1 *denied = (ores_native_thread_v1 *)1;
+    assert(ores_native_thread_scope_spawn_isolate_v1(
+               legacy, expected, worker, legacy_arg, drop_arg, &denied)
+           == ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1);
+    assert(denied == NULL && *legacy_arg == 124);
+    free(legacy_arg);
+    assert(ores_native_thread_scope_close_v1(legacy) == ORES_THREAD_OK_V1);
+    assert(ores_native_thread_scope_destroy_v1(legacy) == ORES_THREAD_OK_V1);
+}
+
 int main(void) {
     ores_native_thread_scope_v1 *bad = (ores_native_thread_scope_v1 *)1;
     assert(ores_native_thread_scope_open_v1(1025, &bad)
@@ -181,10 +247,11 @@ int main(void) {
     basic_close_and_lifetime();
     concurrent_admission();
     abnormal_exit_retains_quota_until_release();
+    isolate_identity_fences_v1();
 #ifdef ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION
     rollback_on_failed_native_spawn();
 #endif
-    assert(atomic_load(&drops) == 6);
+    assert(atomic_load(&drops) == 7);
     puts("NATIVE_THREAD_SCOPE_QUOTA_PASS (host-only)");
     return 0;
 }
