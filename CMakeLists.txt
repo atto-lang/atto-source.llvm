@@ -4612,3 +4612,25 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_join_task_continuation_bridge_host_only
         PROPERTIES TIMEOUT 45)
 endif()
+
+# One physical carrier and a real pthread join. A pending logical join MUST
+# yield its carrier so other accepted DATA executes before its wake turn.
+# Host-only state-machine integration; not compiler-emitted .atto suspension.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-join-real-scheduler-test
+        tests/native_join_actor_scheduler_single_worker_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-join-real-scheduler-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-join-real-scheduler-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-join-real-scheduler-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-join-real-scheduler-test PRIVATE Threads::Threads)
+    add_test(NAME native_join_real_single_worker_scheduler_host_only
+        COMMAND oreslang-native-join-real-scheduler-test)
+    set_tests_properties(native_join_real_single_worker_scheduler_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
