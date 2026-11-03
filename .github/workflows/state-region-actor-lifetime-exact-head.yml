@@ -340,3 +340,71 @@ jobs:
           echo "ATTO_SOURCE_TREE=$SRC_TREE"
           sha256sum "$BUILD/oreslang-llvmc" \
             "$BUILD/oreslang-native-project-root-import-test"
+
+  native-atto-import-resolver-no-llvm:
+    # Keep native resolver evidence available without llvm-config, but do not
+    # label a header-only result as compiled AttoLang guest execution.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        mode: [optimized, asan-ubsan]
+    steps:
+      - name: Checkout exact source-repository head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Compile and execute real project-root resolver security suite
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMPILER: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          SRC_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test -n "$SRC_TREE"
+          case "$COMPILER" in
+            gcc)
+              CXX=g++
+              WARN=(-Wno-error=maybe-uninitialized)
+              ;;
+            clang)
+              CXX=clang++
+              WARN=()
+              ;;
+            *) exit 2 ;;
+          esac
+          case "$MODE" in
+            optimized) FLAGS=(-O2 -DNDEBUG) ;;
+            asan-ubsan)
+              # Clang's libstdc++ regex sanitizer instantiation is very slow
+              # with optimization on smaller runners. -O0 still executes
+              # both sanitizers against the checked-in production test.
+              if [[ "$COMPILER" == clang ]]; then
+                FLAGS=(-O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+              else
+                FLAGS=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+              fi
+              ;;
+            *) exit 2 ;;
+          esac
+          BIN="$RUNNER_TEMP/atto-project-root-security"
+          "$CXX" -std=c++20 -Wall -Wextra -Wpedantic -Werror \
+            "${WARN[@]}" "${FLAGS[@]}" \
+            -Isrc/main/cpp tests/project_root_import_test.cpp -o "$BIN"
+          "$BIN" | tee "$RUNNER_TEMP/atto-resolver-receipt"
+          grep -Fxq 'PASS project-root import resolver security cases' \
+            "$RUNNER_TEMP/atto-resolver-receipt"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "NATIVE_ATTO_RESOLVER_HEAD=$EXPECTED_HEAD"
+          echo "NATIVE_ATTO_RESOLVER_TREE=$SRC_TREE"
+          echo "NATIVE_ATTO_RESOLVER_GUEST_COMPILED=false"
+          sha256sum "$BIN"
