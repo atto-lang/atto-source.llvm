@@ -26,7 +26,8 @@ typedef enum ores_thread_status_v1 {
     ORES_THREAD_UNEXPECTED_EXIT_V1 = 8,
     ORES_THREAD_SCOPE_FULL_V1 = 9,
     ORES_THREAD_SCOPE_CLOSED_V1 = 10,
-    ORES_THREAD_SCOPE_BUSY_V1 = 11
+    ORES_THREAD_SCOPE_BUSY_V1 = 11,
+    ORES_THREAD_SCOPE_IDENTITY_MISMATCH_V1 = 12
 } ores_thread_status_v1;
 
 /* On successful spawn, owned_arg moves to the thread and drop_arg runs ONCE
@@ -58,6 +59,37 @@ ores_thread_status_v1 ores_native_thread_scope_outstanding_v1(
     ores_native_thread_scope_v1 *scope, unsigned *out);
 ores_thread_status_v1 ores_native_thread_scope_destroy_v1(
     ores_native_thread_scope_v1 *scope);
+
+/* Host-minted isolate routing identity (not a bearer secret).
+ * The native scheduler/IsolateVM must retain the opaque scope and supply
+ * an authenticated expected identity from its own execution context.
+ * Guest-controlled values must NEVER be accepted as this expected key.
+ * Forbid reusing a scope after a generation change; never confuse tenant
+ * equality with authority to access native thread resources.
+ *
+ * The older unkeyed v1 functions remain host ABI compatibility primitives,
+ * NOT compiler/guest entry points. Scoped compiler lowering must use the
+ * checked API below and preserve external caller-fencing on destruction. */
+typedef struct ores_native_thread_isolate_key_v1 {
+    uint64_t tenant_id;
+    uint64_t isolate_id;
+    uint64_t generation;
+} ores_native_thread_isolate_key_v1;
+
+ores_thread_status_v1 ores_native_thread_scope_open_isolate_v1(
+    ores_native_thread_isolate_key_v1 key, unsigned capacity,
+    ores_native_thread_scope_v1 **out);
+ores_thread_status_v1 ores_native_thread_scope_spawn_isolate_v1(
+    ores_native_thread_scope_v1 *scope,
+    ores_native_thread_isolate_key_v1 expected,
+    ores_native_thread_entry_v1 entry, void *owned_arg,
+    ores_native_thread_drop_v1 drop_arg, ores_native_thread_v1 **out);
+ores_thread_status_v1 ores_native_thread_scope_close_isolate_v1(
+    ores_native_thread_scope_v1 *scope,
+    ores_native_thread_isolate_key_v1 expected);
+ores_thread_status_v1 ores_native_thread_scope_destroy_isolate_v1(
+    ores_native_thread_scope_v1 *scope,
+    ores_native_thread_isolate_key_v1 expected);
 
 /* Join exactly once. Unexpected pthread_exit/cancel is reported AFTER a
  * successful physical pthread_join, so the caller must still release the
