@@ -3577,6 +3577,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(refreshed_actor_unsupported_field actor-unsupported-field.ores --diagnostic "expected 'int'")
 endif()
 
+if(BUILD_TESTING)
+    add_test(NAME native_aot_artifact_header_negative
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-artifact-header-selftest)
+    set_tests_properties(native_aot_artifact_header_negative PROPERTIES TIMEOUT 15)
+endif()
+
 if(BUILD_TESTING AND ORE_CLANG)
     add_test(NAME native_aot_driver
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-driver
