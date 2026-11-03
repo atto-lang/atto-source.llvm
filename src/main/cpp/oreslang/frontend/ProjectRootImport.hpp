@@ -122,6 +122,48 @@ inline fs::path resolve_native_source_suffix(fs::path candidate) {
     return modern;
 }
 
+inline void enforce_relative_import_package_boundary(
+        const fs::path& importing_source, const fs::path& dependency) {
+    std::error_code error;
+    const auto source = fs::canonical(importing_source, error);
+    if (error)
+        throw std::runtime_error("cannot resolve native importing source");
+
+    fs::path cursor = source.parent_path();
+    fs::path package_root;
+    for (;;) {
+        const fs::path manifest = cursor / ".ores.pkg.toml";
+        if (exists_marker(manifest)) {
+            std::error_code regular_error;
+            if (!fs::is_regular_file(manifest, regular_error) || regular_error)
+                throw std::runtime_error("native package manifest must be a regular file");
+            const auto physical_manifest = fs::canonical(manifest, error);
+            if (error)
+                throw std::runtime_error("cannot resolve native package manifest");
+            if (physical_manifest.parent_path() != cursor)
+                throw std::runtime_error(
+                    "native package manifest must reside within package directory");
+            package_root = cursor;
+            break;
+        }
+        if (cursor == cursor.root_path()) break;
+        const auto parent = cursor.parent_path();
+        if (parent.empty() || parent == cursor) break;
+        cursor = parent;
+    }
+    // Preserve package-less legacy relative imports. Once a package manifest
+    // exists, however, relative ../ must not become a package-boundary bypass.
+    if (package_root.empty()) return;
+
+    const auto physical_root = fs::canonical(package_root, error);
+    if (error)
+        throw std::runtime_error("cannot resolve native package root");
+    const auto physical_dependency = fs::canonical(dependency, error);
+    if (error)
+        throw std::runtime_error("cannot resolve native import dependency");
+    reject_nested_package(physical_root, physical_dependency);
+}
+
 inline void validate_suffix(std::string_view suffix) {
     if (suffix.empty())
         throw std::runtime_error("native project-root import requires a non-empty path");
