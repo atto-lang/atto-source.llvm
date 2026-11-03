@@ -1,0 +1,11 @@
+// AOT native-actor source proof: one compiled handler executed against TWO
+// actor-owned heap instances. This is the legacy bounded scalar actor subset,
+// not sealed state { ... } / critical handle_state or async guest suspension.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    const next: owned int = total + n;
+    total = next;
+    return total;
+  }
+}
