@@ -1068,8 +1068,8 @@ private:
                                  std::size_t* visited = nullptr) {
         std::size_t initial = 0;
         if (!visited) visited = &initial;
-        if (++*visited > 2048)
-            fail("NATIVE_MACRO_BUDGET: constant AST node limit exceeded (2048); runtime fallback is forbidden");
+        if (++*visited > 512)
+            fail("NATIVE_MACRO_BUDGET: constant AST node limit exceeded (512); runtime fallback is forbidden");
         if (depth > 64)
             fail("NATIVE_MACRO_BUDGET: constant expression nesting exceeds 64; runtime fallback is forbidden");
         using K = Expression::Kind;
