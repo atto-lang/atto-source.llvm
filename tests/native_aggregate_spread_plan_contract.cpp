@@ -137,6 +137,31 @@ int main() {
                  "AGGREGATE_SPREAD_PLAN_BUDGET"));
     CHECK(write_budget.source_ordered_writes().size() == 8192);
 
+    // Regress amortized source-order storage: exact-size reserve on each
+    // named write copies O(n^2) field strings at the 1,024-element budget.
+    // Geometric growth should require only a handful of vector reallocations.
+    NativeAggregateSpreadPlan growth(Kind::ReadonlyRecord);
+    std::size_t capacity_changes = 0;
+    std::size_t last_capacity = growth.source_ordered_writes().capacity();
+    for (int i = 0; i < 1024; ++i) {
+        growth.add_named("growth_" + std::to_string(i), "int");
+        const auto& writes = growth.source_ordered_writes();
+        CHECK(writes.size() == static_cast<std::size_t>(i + 1));
+        CHECK(writes.capacity() >= writes.size());
+        CHECK(writes.capacity() <= 8192);
+        if (writes.capacity() != last_capacity) {
+            CHECK(writes.capacity() > last_capacity);
+            ++capacity_changes;
+            last_capacity = writes.capacity();
+        }
+    }
+    CHECK(growth.source_elements() == 1024);
+    CHECK(capacity_changes >= 1 && capacity_changes <= 12);
+    CHECK(denies([&] { growth.add_named("overflow", "int"); },
+                 "AGGREGATE_SPREAD_PLAN_BUDGET"));
+    CHECK(growth.source_elements() == 1024);
+    CHECK(growth.source_ordered_writes().size() == 1024);
+
     // UTF-8 validation is byte-based and rejects embedded NUL and truncated
     // multibyte keys instead of treating them as distinct static field names.
     CHECK(denies([] {
