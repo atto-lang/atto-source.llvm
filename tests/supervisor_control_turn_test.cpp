@@ -17,6 +17,9 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     int stop_calls = 0;
     SupervisorControlTurn::StopReceipt stop_receipt =
             SupervisorControlTurn::StopReceipt::Acknowledged;
+    std::atomic<bool> hold_stop_callback{false};
+    std::atomic<bool> stop_entered{false};
+    std::atomic<bool> release_stop_callback{false};
     SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure&) override {
         CHECK(false && "actor terminal Throw may never reach supervisor on_throw");
         return next;
@@ -55,6 +58,11 @@ struct Hooks final : SupervisorControlTurn::Hooks {
             const SupervisorFailureLane::Failure&) override {
         order.push_back("stop");
         ++stop_calls;
+        if (hold_stop_callback.load(std::memory_order_acquire)) {
+            stop_entered.store(true, std::memory_order_release);
+            while (!release_stop_callback.load(std::memory_order_acquire))
+                std::this_thread::yield();
+        }
         if (stop_throws) throw std::runtime_error("ambiguous host STOP");
         return stop_receipt;
     }
@@ -270,6 +278,58 @@ int main() {
     CHECK(deniedStop && throwingHooks.stop_calls == 1);
     throwingStop.confirm_stopped(unknownReceipt);
     CHECK(throwingStop.reserved_count() == 0);
+
+    // A foreign host observer may poll STOP quarantine while the scheduler
+    // runs an effectful callback on its CONTROL carrier. This must never
+    // read the concurrently mutated stop_pending_ optional (undefined
+    // behavior under C++'s data-race rules).
+    SupervisorControlTurn concurrentStop(1);
+    Hooks held;
+    held.next = SupervisorControlTurn::Decision::Stop;
+    held.stop_receipt = SupervisorControlTurn::StopReceipt::Uncertain;
+    held.hold_stop_callback.store(true, std::memory_order_release);
+    Key heldChild{"held-stop", 19};
+    concurrentStop.reserve_child(heldChild);
+    CHECK(concurrentStop.publish_child(heldChild, Kind::Panic, "panic"));
+    std::atomic<bool> turnDone{false};
+    std::atomic<bool> turnSucceeded{false};
+    std::thread carrier([&] {
+        try {
+            turnSucceeded.store(
+                concurrentStop.admit_turn(held, false)
+                    == SupervisorControlTurn::Admitted::Control,
+                std::memory_order_release);
+        } catch (...) {
+            turnSucceeded.store(false, std::memory_order_release);
+        }
+        turnDone.store(true, std::memory_order_release);
+    });
+    bool entered = false;
+    for (int spin = 0; spin < 200000; ++spin) {
+        if (held.stop_entered.load(std::memory_order_acquire)) {
+            entered = true;
+            break;
+        }
+        std::this_thread::yield();
+    }
+    bool quarantineVisible = entered;
+    if (entered) {
+        for (int n = 0; n < 10000; ++n) {
+            if (!concurrentStop.stop_quarantined()) {
+                quarantineVisible = false;
+                break;
+            }
+        }
+    }
+    held.release_stop_callback.store(true, std::memory_order_release);
+    carrier.join();
+    CHECK(entered);
+    CHECK(quarantineVisible);
+    CHECK(turnDone.load(std::memory_order_acquire));
+    CHECK(turnSucceeded.load(std::memory_order_acquire));
+    CHECK(concurrentStop.stop_quarantined());
+    concurrentStop.confirm_stopped(heldChild);
+    CHECK(!concurrentStop.stop_quarantined());
 
     return 0;
 }
