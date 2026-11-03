@@ -65,6 +65,10 @@ static uint64_t verify_trace(
         CHECK(events[j].incarnation == incarnation);
         CHECK(events[j].slot_generation != 0);
     }
+    // One scratch slot may be recycled on every turn. A reused native
+    // handle must always carry a strictly newer generation, so stale handles
+    // can never alias the new owner of the same slot index.
+    uint64_t last_temporary_generation[8] = {0};
     for (uint32_t j = 0; j < turns; ++j) {
         const OresActorHeapAccessEvent* batch = &events[1u + j * 4u];
         const uint64_t epoch = (uint64_t)j + 2;
@@ -78,12 +82,22 @@ static uint64_t verify_trace(
         CHECK(batch[1].slot_index != 0);
         CHECK(batch[3].slot_index == batch[1].slot_index);
         CHECK(batch[3].slot_generation == batch[1].slot_generation);
+        CHECK(batch[0].slot_generation == events[0].slot_generation);
+        CHECK(batch[2].slot_generation == events[0].slot_generation);
+        CHECK(batch[1].slot_index < 8u);
+        CHECK(batch[1].slot_generation >
+              last_temporary_generation[batch[1].slot_index]);
+        last_temporary_generation[batch[1].slot_index] =
+            batch[1].slot_generation;
     }
     if (external_allocation) {
         const OresActorHeapAccessEvent* extra = &events[expected - 1u];
         CHECK(extra->kind == ORES_ACTOR_HEAP_ACCESS_ALLOC);
         CHECK(extra->turn_epoch == (uint64_t)turns + 2);
         CHECK(extra->slot_index != 0);
+        CHECK(extra->slot_index < 8u);
+        CHECK(extra->slot_generation >
+              last_temporary_generation[extra->slot_index]);
     }
     free(events);
     return domain;
