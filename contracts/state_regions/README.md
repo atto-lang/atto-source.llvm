@@ -405,3 +405,40 @@ suspension/cancellation, a general actor-owned region allocator, no host GC,
 or hard-real-time safety. These require separately validated compiler and
 runtime changes; do not merge or certify from this gate until there is a
 stepful exact-source native compilation receipt and independent review.
+
+## Compiler AOT heap-event witness gate (2026-11-03)
+
+The compiled-guest AOT acceptance harness now enables the native i64 heap's
+bounded access trace **before** the first actor turn. On successful execution,
+it must retrieve a complete snapshot for each actor and reject any overflow
+(`summary.dropped != 0`), missing events, cross-actor domains, wrong actor
+IDs/incarnations, or a generation mismatch between a temporary's allocation
+and corresponding drop.
+
+For each of the 2,009 guest handler invocations, the witness must show one
+field read, one owned scalar allocation, one field write and one owned scalar
+drop, all bound to the exact admitted actor turn epoch. It also expects each
+actor's single persistent field initialization and actor A's additional
+externally held lifetime slot. The expected snapshots are 4,002 events for
+actor A and 4,037 for actor B, with independent nonzero native heap domains.
+
+The source-hosted CI gate now requires actual **LLVM function definitions**
+for `oreslang_actor_Worker_init` and `oreslang_actor_Worker_on_message`,
+plus LLVM `call` instructions for scoped-new, scoped-drop, field-read and
+field-write. Merely declaring these symbols cannot satisfy the gate. Regex
+checks were verified locally against positive function-body and negative
+declaration-only synthetic IR samples.
+
+**Local evidence:** the exact updated C harness at Git blob
+`c64ad79b91e67451abbbf2122fe6ee700ed5e809` passes strict GCC and
+Clang C11 syntax checks (`-Wall -Wextra -Wpedantic -Werror`) against matching
+native ABI declarations. The Git hash of the reconstructed source was checked
+against the GitHub blob before the checks.
+
+**Not yet executed:** this exact 2,009-turn compiled-source binary,
+its heap-event snapshots, ASan/UBSan compiled-source mode, LLVM codegen and
+native linking. LLVM development headers / `llvm-config` are not installed in
+the local environment. A check that a test harness parses is not a guest
+execution receipt. The actual LLVM compiler and native binary must execute
+with an independently reviewable exact-source/tree/artifact identity before
+any claims of compiled actor parity or zero guest tracing GC.
