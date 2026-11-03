@@ -95,23 +95,10 @@ def main():
             '.ores.pkg.toml': 'schema_version = "1"\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
-        # Extensionless imports are canonicalized before module loading.
-        # A legacy twin may exist, but it must never shadow the .atto file.
-        ('atto-shadows-legacy-sibling', {
-            'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
-            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
-            'lib.ores': 'define module Lib as pub fnc answer():int{return 7;} end',
-        }, 42),
         ('atto-explicit-legacy-remains-selectable', {
             'main.atto': 'import module Lib from "./lib.ores"; pub fnc main():int{return Lib.answer();}',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 7;} end',
             'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
-        }, 42),
-        ('atto-root-shadows-legacy-sibling', {
-            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
-            '.ores.pkg.toml': 'schema_version = "1"\n',
-            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
-            'lib.ores': 'define module Lib as pub fnc answer():int{return 7;} end',
         }, 42),
         ('atto-diamond-linked-dependencies', {
             'main.atto': 'import module A from "./a"; import module B from "./b"; pub fnc main():int{return A.answer()+B.answer();}',
@@ -188,6 +175,36 @@ def main():
                 reference = run([*a.java_command, str(directory/entry)])
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
+            passed += 1
+        # Extensionless migration twins are ambiguous by policy. They must
+        # fail before LLVM IR is emitted; explicit suffixes remain selectable.
+        for name, main_source, project_root in (
+            ('atto-relative-ambiguous-twins',
+             'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}', False),
+            ('atto-root-ambiguous-twins',
+             'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}', True),
+        ):
+            directory = root/name; directory.mkdir()
+            (directory/'main.atto').write_text(main_source)
+            (directory/'lib.atto').write_text('define module Lib as pub fnc answer():int{return 42;} end')
+            (directory/'lib.ores').write_text('define module Lib as pub fnc answer():int{return 7;} end')
+            if project_root:
+                (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        if hasattr(os, 'link'):
+            directory = root/'atto-hardlink-ambiguous-twins'; directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}')
+            (directory/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            os.link(directory/'lib.atto', directory/'lib.ores')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
+                raise AssertionError(('atto hardlink twin ambiguity', result.returncode,
+                                      result.stdout[:150], result.stderr))
             passed += 1
         for name, main_source, library_source, diagnostic in negatives:
             directory = root/name; directory.mkdir()
