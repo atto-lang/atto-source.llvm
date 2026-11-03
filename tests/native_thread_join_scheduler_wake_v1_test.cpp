@@ -148,6 +148,26 @@ void test_cancel_and_retirement() {
         nullptr, std::weak_ptr<Gate>(gate),
         std::weak_ptr<NativeJoinSchedulerWakeQueueV1>(queue)));
 }
+void test_queue_retirement_drops_late_wake() {
+    NativeThreadJoinReaperV1 reaper(1, 1);
+    std::atomic<bool> release{false};
+    auto* native = spawn(803, &release);
+    auto completion = reaper.submit(native);
+    assert(completion && !native);
+    auto gate = std::make_shared<Gate>();
+    auto queue = std::make_shared<Queue>();
+    const std::weak_ptr<Queue> weak_queue = queue;
+    assert(NativeThreadJoinSchedulerWakeV1::subscribe(
+        completion, std::weak_ptr<Gate>(gate),
+        std::weak_ptr<NativeJoinSchedulerWakeQueueV1>(queue)));
+    // The native join must proceed despite scheduler retirement, without
+    // acquiring a strong reference to the retired queue or waking a Task.
+    queue.reset();
+    assert(weak_queue.expired());
+    release.store(true, std::memory_order_release);
+    await_join(completion, 803);
+    assert(gate->state.load(std::memory_order_acquire) == 0);
+}
 void test_completion_cancel_race() {
     NativeThreadJoinReaperV1 reaper(8, 2);
     for (int i = 0; i < 64; ++i) {
@@ -179,6 +199,7 @@ int main() {
     const int baseline = drops.load();
     test_before_and_after_join();
     test_cancel_and_retirement();
+    test_queue_retirement_drops_late_wake();
     test_completion_cancel_race();
-    assert(drops.load() == baseline + 68);
+    assert(drops.load() == baseline + 69);
 }
