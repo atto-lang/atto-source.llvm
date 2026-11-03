@@ -1,0 +1,16 @@
+// ores.core-only guest for the bare-metal Cortex-M3 gate.
+// No ores.std, no allocator, no actor runtime, no OS. Expected: entry(5) == 42.
+
+import module numeric from "ores.core/numeric";
+
+pub fnc ores_core_entry(int x): int {
+    return numeric.clamp_int(scale(x), 0, 1000) + numeric.max_int(x, 2);
+}
+
+pub fnc ores_core_overflow_probe(int x): int {
+    return x * x;
+}
+
+fnc scale(int x): int {
+    return x * 7 + 2;
+}
