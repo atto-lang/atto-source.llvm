@@ -1090,6 +1090,12 @@ if(BUILD_TESTING)
         --diagnostic "native floating division unsupported")
     oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
         --diagnostic "native floating division unsupported")
+    oreslang_contract_test(native_decimal_suffix_unavailable numeric-decimal-suffix-reject.ores
+        --diagnostic "native floating-point/decimal literal unsupported")
+    oreslang_contract_test(native_float_exponent_unavailable numeric-floating-exponent-reject.ores
+        --diagnostic "native floating-point/decimal literal unsupported")
+    oreslang_contract_test(native_float_fraction_unavailable numeric-floating-fraction-reject.ores
+        --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
         --diagnostic "native remainder requires a nonzero signed integer literal divisor")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
@@ -2831,6 +2837,8 @@ if(BUILD_TESTING)
         oreslang_contract_test(reject_scalar_constructor_effect_body
             class-scalar-constructor-effectful-body-reject.ores --diagnostic "native scalar constructor body must be empty or contain only")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(numerics_atto_integer_guest numerics-atto-main.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")
@@ -4491,4 +4499,17 @@ if(BUILD_TESTING)
     add_test(NAME native_select_continuation_generation_fence
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
+endif()
+
+
+# Dedicated semantic-admission test: unsupported new declarations must fail
+# before LLVM IR or native artifacts are emitted, never as generic parse errors.
+if(BUILD_TESTING)
+    add_test(NAME native_state_container_virtual_actor_source_admission
+        COMMAND "${CMAKE_COMMAND}"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/state-container-virtual-actor-admission"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/state_container_virtual_actor_admission.cmake")
+    set_tests_properties(native_state_container_virtual_actor_source_admission
+        PROPERTIES TIMEOUT 60)
 endif()
