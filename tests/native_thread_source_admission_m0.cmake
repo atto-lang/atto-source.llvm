@@ -13,7 +13,9 @@ set(cases
     "generic-spawn"
     "generic-qualified-spawn"
     "qualified-spawn-whitespace"
-    "spawn-with-comment")
+    "spawn-with-comment"
+    "bare-thread-spawn-value"
+    "bare-qualified-spawn-value")
 set(source_unqualified-spawn
     "fnc main(): int { return thread.spawn(1); }\n")
 set(source_qualified-spawn
@@ -32,6 +34,11 @@ set(source_qualified-spawn-whitespace
     "fnc main(): int { return std . thread . spawn (1); }\n")
 set(source_spawn-with-comment
     "fnc main(): int { return thread /* comment */ .spawn(1); }\n")
+
+set(source_bare-thread-spawn-value
+    "fnc main(): int { return thread.spawn; }\n")
+set(source_bare-qualified-spawn-value
+    "fnc main(): int { return std.thread.spawn; }\n")
 
 foreach(case_name IN LISTS cases)
   # Isolate each attempt in a clean, case-specific directory. Otherwise
