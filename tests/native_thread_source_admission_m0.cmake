@@ -1,4 +1,4 @@
-# Compiler-backed NEGATIVE source admission only. The native LLVM backend
+# Compiler-backed AttoLang (*.atto) NEGATIVE source admission only. The native LLVM backend
 # must never reinterpret std.thread.spawn as an ordinary scalar class method,
 # emit LLVM IR, or launch a blocking host pthread by accident.
 if(NOT DEFINED COMPILER OR NOT DEFINED WORKDIR)
@@ -28,7 +28,7 @@ set(source_generic-qualified-spawn
     "fnc main(): int { return std.thread.spawn<int>(1); }\n")
 
 foreach(case_name IN LISTS cases)
-  set(path "${WORKDIR}/${case_name}.ores")
+  set(path "${WORKDIR}/${case_name}.atto")
   file(WRITE "${path}" "${source_${case_name}}")
   file(GLOB before RELATIVE "${WORKDIR}" "${WORKDIR}/*")
   execute_process(
@@ -56,7 +56,7 @@ endforeach()
 # Preserve contextual ordinary identifiers: a user function named thread is
 # not itself the std.thread capability, and its ordinary scalar call remains
 # legal. This positive control prevents reserving all uses of "thread".
-set(ordinary_source "${WORKDIR}/ordinary-thread-identifier.ores")
+set(ordinary_source "${WORKDIR}/ordinary-thread-identifier.atto")
 file(WRITE "${ordinary_source}"
     "fnc thread(int value): int { return value; }\nfnc main(): int { return thread(7); }\n")
 file(GLOB before RELATIVE "${WORKDIR}" "${WORKDIR}/*")
