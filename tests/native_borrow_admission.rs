@@ -120,6 +120,10 @@ fn main() {
         ("state-backed-shared-container", "@StateBacked(MutableStateContainer(scope = #shared))\ndefine class Foo as\nstate {}\nend\n", "STATE_INJECTION_UNSUPPORTED: @StateBacked"),
         ("state-container-decorator", "@MutableStateContainer()\ndefine class Foo as\nend\n", "STATE_INJECTION_UNSUPPORTED: @MutableStateContainer"),
         ("existing-provider-injection", "@Inject(SessionState)\ndefine class Manager as\nend\n", "STATE_INJECTION_UNSUPPORTED: @Inject"),
+        ("bare-inject", "@Inject\ndefine class Foo as\nend\n", "STATE_INJECTION_UNSUPPORTED: @Inject"),
+        ("generic-inject", "@Inject<MutableStateContainer()>\ndefine class Foo as\nend\n", "STATE_INJECTION_UNSUPPORTED: @Inject"),
+        ("state-container-class", "@StateContainer()\ndefine class Foo as\nend\n", "STATE_INJECTION_UNSUPPORTED: @StateContainer"),
+        ("inject-on-callable", "@Inject(SessionState)\npub fnc main(): int { return 42; }\n", "STATE_INJECTION_UNSUPPORTED: @Inject"),
         ("implicit-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(v); }\n", "borrowed argument requires explicit rt borrow"),
         ("wrong-borrow-mutability", "fnc get(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return get(rt borrow v); }\n", "borrow mode does not match borrowed parameter"),
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
@@ -141,7 +145,7 @@ fn main() {
         check_case(&compiler, &root.0, name, source, None);
     }
     println!(
-        "PASS native borrow admission: twelve no-IR/no-artifact denials, four real IR controls"
+        "PASS native borrow admission: sixteen no-IR/no-artifact denials, four real IR controls"
     );
 }
 
