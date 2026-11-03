@@ -15,6 +15,10 @@ on:
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
+      - 'tests/project_root_import_test.cpp'
+      - 'tests/native_module_imports.py'
       - 'src/main/cpp/oreslang/runtime/StateRegionActorLifetimePin.hpp'
       - 'src/main/cpp/oreslang/runtime/OresTaskBoundStateRegion.h'
       - 'src/main/cpp/oreslang/runtime/NativeActorRetirementBarrier.hpp'
@@ -277,3 +281,62 @@ jobs:
           echo "COMPILER_GUEST_SCOPE=legacy-scalar-actor-only"
           echo "SOURCE_STATE_HANDLE_STATE_CERTIFIED=false"
           sha256sum "$RUNNER_TEMP/guest.o" "$RUNNER_TEMP/aot-two-actor-test"
+
+  attolang-native-module-imports:
+    # Compiler-backed .atto import graph and native resolver boundary checks.
+    # Never run a private-source mirror from unapproved forks/carrier repos.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable source-repository head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Compile resolver and AttoLang source/module graph; execute cases
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          SRC_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test -n "$SRC_TREE"
+          if command -v llvm-config >/dev/null 2>&1; then
+            LLVM_CONFIG=llvm-config
+          elif command -v llvm-config-18 >/dev/null 2>&1; then
+            LLVM_CONFIG=llvm-config-18
+          else
+            echo "Missing llvm-config; runner prerequisite, not compiler verdict" >&2
+            exit 2
+          fi
+          LLVM_DIR="$("$LLVM_CONFIG" --cmakedir)"
+          test -f "$LLVM_DIR/LLVMConfig.cmake"
+          if command -v clang-18 >/dev/null 2>&1; then
+            CLANG=clang-18
+          elif command -v clang >/dev/null 2>&1; then
+            CLANG=clang
+          else
+            echo "Missing Clang; runner prerequisite" >&2
+            exit 2
+          fi
+          BUILD="$RUNNER_TEMP/atto-native-import-build"
+          cmake -S . -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
+            "-DLLVM_DIR=$LLVM_DIR" -DBUILD_TESTING=ON
+          cmake --build "$BUILD" --target oreslang-llvmc \
+            oreslang-native-project-root-import-test -j2
+          test -x "$BUILD/oreslang-llvmc"
+          test -x "$BUILD/oreslang-native-project-root-import-test"
+          ctest --test-dir "$BUILD" --output-on-failure \
+            -R '^native_project_root_import_security$'
+          python3 tests/native_module_imports.py \
+            --compiler "$BUILD/oreslang-llvmc" --clang "$CLANG"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "ATTO_NATIVE_IMPORT_GRAPH_GUEST_EXECUTED=true"
+          echo "ATTO_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_SOURCE_TREE=$SRC_TREE"
+          sha256sum "$BUILD/oreslang-llvmc" \
+            "$BUILD/oreslang-native-project-root-import-test"
