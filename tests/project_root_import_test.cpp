@@ -263,6 +263,27 @@ int main() {
         must_fail("canonical malformed does not downgrade to legacy", "schema_version",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "atto-manifest-symlink";
+        write_text(dir/"manifest-target.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        fs::create_symlink(dir/"manifest-target.toml", dir/".atto.pkg.toml");
+        must_fail("canonical manifest symlink", "cannot be a symlink",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-dangling-manifest";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        fs::create_symlink(dir/"missing-manifest.toml", dir/".atto.pkg.toml");
+        must_fail("dangling canonical manifest must block downgrade",
+                  "cannot be a symlink",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+#endif
     {
         const auto dir = temp / "atto-nested-boundary";
         write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
