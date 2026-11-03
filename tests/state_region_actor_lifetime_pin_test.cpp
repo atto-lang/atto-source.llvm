@@ -31,7 +31,64 @@ static ores_state_task_identity execution_identity() {
     return out;
 }
 
+// Repeats the completion race on fresh pins so the one-winner fence is proven
+// by more than a single, usually uncontended, interleaving.
+static void one_winner_release_stress() {
+    constexpr std::uint64_t actor_id = 51;
+    constexpr std::uint64_t generation = 9;
+    constexpr int rounds = 2000;
+    constexpr int contenders = 8;
+
+    NativeActorGroup group(721, 1);
+    auto ref = group.adopt(721, actor_id, generation, [] {});
+    auto finalizer = group.runtime_finalizer(ref);
+    CHECK(group.mark_ready(ref));
+    OresActorArena* arena =
+        ores_actor_arena_open(actor_id, generation, 2, 64, 128);
+    CHECK(arena != nullptr);
+    ores_task_bound_state_region region =
+        ORES_TASK_BOUND_STATE_REGION_UNBOUND_INIT;
+    CHECK(ores_state_region_bind_actor_arena(&region, arena)
+        == ORES_STD_SYNC_GRANTED);
+    const auto owner = execution_identity();
+
+    for (int round = 0; round < rounds; ++round) {
+        auto request = ores_state_region_request(
+            &region, owner, ORES_STD_WRITE);
+        CHECK(request.code == ORES_STD_SYNC_GRANTED);
+        StateRegionActorLifetimePin pin(ref, *arena, region, request.ticket);
+        CHECK(ores_state_region_release(&region, owner, request.ticket).code
+            == ORES_STD_SYNC_GRANTED);
+
+        std::atomic<bool> start{false};
+        std::atomic<int> receipts{0};
+        std::vector<std::thread> observers;
+        observers.reserve(contenders);
+        for (int i = 0; i < contenders; ++i) {
+            observers.emplace_back([&] {
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                if (pin.release_after_ticket_retirement())
+                    receipts.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+        start.store(true, std::memory_order_release);
+        for (auto& observer : observers) observer.join();
+        CHECK(receipts.load(std::memory_order_relaxed) == 1);
+        CHECK(ref.outstanding_resource_loans() == 0);
+    }
+
+    group.close();
+    CHECK(finalizer.ready_for_resource_reclamation());
+    CHECK(finalizer.finalized());
+    ref.get_done().get();
+    ores_actor_arena_retire(arena);
+    CHECK(ores_actor_arena_try_destroy(arena) == 1);
+}
+
 int main() {
+    one_winner_release_stress();
+
     constexpr std::uint64_t actor_id = 41;
     constexpr std::uint64_t generation = 7;
 
@@ -111,6 +168,10 @@ int main() {
     NativeActorGroup stale_group(712, 1);
     auto stale = stale_group.adopt(
         712, actor_id, generation + 1, [] {});
+    // DONE settles only through the trusted finalizer; closing the group
+    // alone leaves stale.get_done() pending forever.
+    auto stale_finalizer = stale_group.runtime_finalizer(stale);
+    CHECK(stale_group.mark_ready(stale));
     bool rejected = false;
     try {
         StateRegionActorLifetimePin wrong(
@@ -122,6 +183,8 @@ int main() {
     CHECK(stale.outstanding_resource_loans() == 0);
     stale_group.close();
     CHECK(stale.outstanding_resource_loans() == 0);
+    CHECK(stale_finalizer.ready_for_resource_reclamation());
+    CHECK(stale_finalizer.finalized());
     stale.get_done().get();
     // Once this unrelated actor has reached a terminal resource state,
     // attempting a lifetime pin must fail *before* reading any arena fields.
@@ -134,6 +197,52 @@ int main() {
     }
     CHECK(terminal_rejected);
     CHECK(stale.outstanding_resource_loans() == 0);
+
+    // Same generation, different actor id: the arena owner must match too.
+    NativeActorGroup other_owner_group(713, 1);
+    auto other_owner = other_owner_group.adopt(
+        713, actor_id + 1, generation, [] {});
+    auto other_owner_finalizer = other_owner_group.runtime_finalizer(other_owner);
+    CHECK(other_owner_group.mark_ready(other_owner));
+    bool other_owner_rejected = false;
+    try {
+        StateRegionActorLifetimePin wrong_owner(
+            other_owner, *arena, region, request.ticket);
+    } catch (const std::invalid_argument&) {
+        other_owner_rejected = true;
+    }
+    CHECK(other_owner_rejected);
+    CHECK(other_owner.outstanding_resource_loans() == 0);
+    other_owner_group.close();
+    CHECK(other_owner_finalizer.finalized());
+    other_owner.get_done().get();
+
+    // A live ticket from a region bound to a sibling arena of the same actor
+    // incarnation must not pin this arena: the ticket and region agree with
+    // each other, so only the region/arena match can reject it.
+    OresActorArena* sibling_arena =
+        ores_actor_arena_open(actor_id, generation, 2, 64, 128);
+    CHECK(sibling_arena != nullptr);
+    ores_task_bound_state_region sibling_region =
+        ORES_TASK_BOUND_STATE_REGION_UNBOUND_INIT;
+    CHECK(ores_state_region_bind_actor_arena(&sibling_region, sibling_arena)
+        == ORES_STD_SYNC_GRANTED);
+    auto sibling_request = ores_state_region_request(
+        &sibling_region, owner, ORES_STD_WRITE);
+    CHECK(sibling_request.code == ORES_STD_SYNC_GRANTED);
+    bool sibling_rejected = false;
+    try {
+        StateRegionActorLifetimePin laundered(
+            ref, *arena, sibling_region, sibling_request.ticket);
+    } catch (const std::invalid_argument&) {
+        sibling_rejected = true;
+    }
+    CHECK(sibling_rejected);
+    CHECK(ref.outstanding_resource_loans() == 1);
+    CHECK(ores_state_region_release(&sibling_region, owner, sibling_request.ticket).code
+        == ORES_STD_SYNC_GRANTED);
+    ores_actor_arena_retire(sibling_arena);
+    CHECK(ores_actor_arena_try_destroy(sibling_arena) == 1);
 
     // Logical stop cannot physically reclaim the arena while the ticket lives.
     group.close();
