@@ -92,12 +92,12 @@ int main() {
           "non-member subscribed");
 
     auto first = bus.publish(a.group_id(), "reliable", 10, 1, "one");
-    check(first.accepted == 2 && !first.backpressured,
+    check(first.accepted == 2 && !first.backpressured && first.sequence == 1,
           "first reliable publication not admitted to both subscribers");
     check(bus.queued_payload_bytes() == 6,
           "reliable fanout byte ledger did not count both subscriber edges");
     auto blocked = bus.publish(a.group_id(), "reliable", 10, 1, "two");
-    check(blocked.backpressured && blocked.accepted == 0,
+    check(blocked.backpressured && blocked.accepted == 0 && blocked.sequence == 0,
           "reliable publication was partially admitted under backpressure");
     check(bus.queued_payload_bytes() == 6,
           "failed reliable admission changed byte accounting");
@@ -109,7 +109,7 @@ int main() {
           "reliable reads did not reclaim payload bytes");
 
     auto second = bus.publish(a.group_id(), "reliable", 10, 1, "two");
-    check(second.accepted == 2 && !second.backpressured,
+    check(second.accepted == 2 && !second.backpressured && second.sequence == 2,
           "reliable capacity was not reclaimed");
     check(bus.queued_payload_bytes() == 6,
           "second reliable fanout byte ledger mismatch");
@@ -132,7 +132,8 @@ int main() {
     check(bus.subscribe(a.group_id(), "latest", 11, 1), "latest subscribe");
     auto latest1 = bus.publish(a.group_id(), "latest", 10, 1, "old");
     auto latest2 = bus.publish(a.group_id(), "latest", 10, 1, "new");
-    check(latest1.accepted == 1 && latest2.coalesced == 1,
+    check(latest1.accepted == 1 && latest2.coalesced == 1
+            && latest1.sequence == 1 && latest2.sequence == 2,
           "LATEST did not coalesce unread value");
     check(bus.queued_payload_bytes() == 6,
           "LATEST replacement leaked or double-counted payload bytes");
@@ -142,10 +143,24 @@ int main() {
           "LATEST read did not reclaim replacement payload bytes");
 
     check(memberships.join(b, 10, 1), "publisher join B");
+    // Even without recipients, accepted publications consume a per-topic
+    // sequence. The separate bus does not alter primary test quotas.
+    NativeActorPubSubAdmission<std::string> empty_bus(memberships, 1, 4);
+    empty_bus.define_topic(
+            b.group_id(), "no-replay",
+            NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 1);
+    const auto empty_first = empty_bus.publish(
+            b.group_id(), "no-replay", 10, 1, "one");
+    const auto empty_second = empty_bus.publish(
+            b.group_id(), "no-replay", 10, 1, "two");
+    check(empty_first.sequence == 1 && empty_first.accepted == 0
+            && empty_second.sequence == 2 && empty_second.accepted == 0,
+          "zero-subscriber publications must sequence without replay");
     check(bus.subscribe(b.group_id(), "lossy", 11, 1), "lossy subscribe");
     auto lossy1 = bus.publish(b.group_id(), "lossy", 10, 1, "one");
     auto lossy2 = bus.publish(b.group_id(), "lossy", 10, 1, "two");
-    check(lossy1.accepted == 1 && lossy2.dropped == 1,
+    check(lossy1.accepted == 1 && lossy2.dropped == 1
+            && lossy1.sequence == 1 && lossy2.sequence == 2,
           "LOSSY did not drop on full queue");
     check(bus.queued_payload_bytes() == 6,
           "LOSSY drop changed byte accounting");
