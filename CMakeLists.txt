@@ -3591,6 +3591,15 @@ if(BUILD_TESTING AND ORE_CLANG)
     set_tests_properties(native_aot_driver PROPERTIES TIMEOUT 30)
 endif()
 
+# Independent source-free publication safety test. It uses fake guest IR and a
+# real linker; native_aot_driver above is the separate actual guest AOT gate.
+if(BUILD_TESTING AND ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME native_aot_publication_negative
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-compile-aot-publication.sh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh" "${ORE_CLANG}")
+    set_tests_properties(native_aot_publication_negative PROPERTIES TIMEOUT 30)
+endif()
+
 # Compiler-side nominal enum signature policy (host-only). This does NOT
 # admit same-arity guest overloads in native LLVM source or claim runtime parity.
 if(BUILD_TESTING)
