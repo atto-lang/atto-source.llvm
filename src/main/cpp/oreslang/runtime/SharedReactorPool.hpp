@@ -72,6 +72,12 @@ private:
             // Even a permanently full work queue receives an I/O check after
             // every 64 bounded host slices. Handlers themselves must cooperate.
             slices = 0;
+            // Shutdown and poll-failure paths drain accepted work without
+            // re-entering a closed or failing reactor.
+            {
+                std::lock_guard<std::mutex> lock(gate_);
+                if (closing_) continue;
+            }
             int absent = -1;
             if (poll_owner_.compare_exchange_strong(absent, static_cast<int>(slot),
                     std::memory_order_acquire)) {
