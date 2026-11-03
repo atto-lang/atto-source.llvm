@@ -14,6 +14,12 @@ fn temp() -> TempDir {
     let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let root = std::env::temp_dir().join(format!("attolang-infer-{}-{n}",std::process::id()));
     fs::create_dir(&root).expect("isolated temp directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("private compiler test directory");
+    }
     TempDir(root)
 }
 fn run(binary:&Path, args:&[&Path], dir:&Path)->std::process::Output {
@@ -92,9 +98,14 @@ fn main(){
             "{name}: unsupported source was compiled or crashed");
         assert!(result.stdout.is_empty(),"{name}: rejected source emitted LLVM IR");
         assert!(!result.stderr.is_empty(),"{name}: missing diagnostic");
+        assert!(!["; ModuleID", "source_filename =", "target triple =", "define "]
+            .iter().any(|marker| String::from_utf8_lossy(&result.stderr).contains(marker)),
+            "{name}: rejected source leaked LLVM IR on stderr");
         let diagnostic = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
         assert!(!["segmentation fault", "stack trace", "traceback", "fatal signal", "unhandled exception", "process crashed"].iter().any(|marker| diagnostic.contains(marker)),
             "{name}: compiler crash text is not a type-checking diagnostic");
+        assert!(!fs::symlink_metadata(&src).unwrap().file_type().is_symlink(),
+            "{name}: compiler replaced negative source with a symlink");
         assert_eq!(fs::read_to_string(&src).unwrap(),source,
             "{name}: compiler modified negative source");
         assert_eq!(read_dir(&work.0).unwrap().count(),1,
@@ -109,6 +120,8 @@ fn main(){
         assert!(output.status.success(),"{}: compile error: {}",name,String::from_utf8_lossy(&output.stderr));
         assert!(output.stdout.starts_with(b"; ModuleID"),"{name}: compiler emitted no LLVM IR");
         assert!(output.stderr.is_empty(),"{name}: unexpected compiler diagnostic");
+        assert!(!fs::symlink_metadata(&src).unwrap().file_type().is_symlink(),
+            "{name}: compiler replaced positive source with a symlink");
         assert_eq!(fs::read_to_string(&src).unwrap(),source,"{name}: source changed");
         assert_eq!(read_dir(&work.0).unwrap().count(),1,"{name}: compiler wrote a file");
         fs::write(&ir,output.stdout).unwrap();
