@@ -371,15 +371,23 @@ fn assert_native_aot_artifact_for(
                     continue;
                 }
                 let offset = u64::from_le_bytes(image[pos + 8..pos + 16].try_into().unwrap());
+                let vaddr = u64::from_le_bytes(image[pos + 16..pos + 24].try_into().unwrap());
                 let size = u64::from_le_bytes(image[pos + 32..pos + 40].try_into().unwrap());
+                let memsz = u64::from_le_bytes(image[pos + 40..pos + 48].try_into().unwrap());
+                require(size <= memsz, "ELF PT_LOAD filesz exceeds memsz")?;
                 require(offset.checked_add(size)
                     .is_some_and(|end| end <= image.len() as u64),
                     "ELF PT_LOAD extends outside the artifact")?;
-                if p_flags & 1 != 0 && size > 0 {
+                // An arbitrary nonzero e_entry and an unrelated executable
+                // PT_LOAD do not constitute an executable. The native entry
+                // must be in a file-backed executable load region.
+                if p_flags & 1 != 0 && size > 0 &&
+                    entry.checked_sub(vaddr).is_some_and(|delta| delta < size) {
                     executable_load = true;
                 }
             }
-            require(executable_load, "ELF has no file-backed executable PT_LOAD segment")?;
+            require(executable_load,
+                "ELF entrypoint is not mapped by a file-backed executable PT_LOAD")?;
         }
         "macos" => {
             require(&image[..4] == b"\xcf\xfa\xed\xfe", "expected thin Mach-O 64-bit executable")?;
@@ -489,7 +497,20 @@ fn aot_artifact_header_selftest() -> Result<(), String> {
     elf[96..104].copy_from_slice(&32u64.to_le_bytes());
     require(assert_native_aot_artifact_for(&elf, "linux", "x86_64").is_err(),
         "admitted ELF ET_DYN object without a native entrypoint")?;
+    // Structurally valid synthetic header: not executable guest evidence.
     elf[24..32].copy_from_slice(&4096u64.to_le_bytes());
+    elf[80..88].copy_from_slice(&4096u64.to_le_bytes());
+    elf[104..112].copy_from_slice(&32u64.to_le_bytes());
+    require(assert_native_aot_artifact_for(&elf, "linux", "x86_64").is_ok(),
+        "denied a structurally valid ELF header fixture")?;
+    elf[24..32].copy_from_slice(&8192u64.to_le_bytes());
+    require(assert_native_aot_artifact_for(&elf, "linux", "x86_64").is_err(),
+        "admitted executable segment with an unrelated ELF entrypoint")?;
+    elf[24..32].copy_from_slice(&4096u64.to_le_bytes());
+    elf[104..112].copy_from_slice(&31u64.to_le_bytes());
+    require(assert_native_aot_artifact_for(&elf, "linux", "x86_64").is_err(),
+        "admitted ELF PT_LOAD filesz greater than memsz")?;
+    elf[104..112].copy_from_slice(&32u64.to_le_bytes());
     require(assert_native_aot_artifact_for(&elf, "linux", "aarch64").is_err(),
         "admitted ELF binary with wrong architecture")?;
     elf[68..72].copy_from_slice(&4u32.to_le_bytes());
