@@ -45,10 +45,16 @@ fn has_definition(output: &str) -> bool {
     })
 }
 
-fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic: Option<&str>) {
+fn check_case_with_suffix(
+    compiler: &Path, root: &Path, name: &str,
+    source: &str, diagnostic: Option<&str>, suffix: &str,
+) {
+    // Only the canonical AttoLang suffix and an explicitly tested legacy
+    // compatibility suffix may enter the native admission harness.
+    assert!(matches!(suffix, "atto" | "ores"), "unsupported fixture suffix");
     let dir = root.join(name);
     fs::create_dir(&dir).unwrap();
-    let input = dir.join("input.ores");
+    let input = dir.join(format!("input.{suffix}"));
     fs::write(&input, source).unwrap();
     let before = entries(&dir);
     // Capture outside the fixture directory so any compiler-created entry,
@@ -162,6 +168,12 @@ fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic
     }
 }
 
+
+fn check_case(compiler: &Path, root: &Path, name: &str, source: &str, diagnostic: Option<&str>) {
+    // All new native ownership cases are real .atto files.
+    check_case_with_suffix(compiler, root, name, source, diagnostic, "atto");
+}
+
 fn main() {
     let args: Vec<_> = env::args_os().collect();
     assert_eq!(args.len(), 2, "usage: native_borrow_admission COMPILER");
@@ -220,8 +232,14 @@ fn main() {
     ] {
         check_case(&compiler, &root.0, name, source, None);
     }
+    // Backward compatibility is intentional and must not silently become the
+    // primary fixture format. This is the sole native legacy-suffix control.
+    check_case_with_suffix(
+        &compiler, &root.0, "legacy-ores-extension-control",
+        "pub fnc main(): int { return 42; }\n", None, "ores",
+    );
     println!(
-        "PASS native borrow admission: thirty-one no-IR/no-artifact denials, four real IR controls"
+        "PASS AttoLang native borrow admission: thirty-one no-IR/no-artifact .atto denials, four .atto IR controls, one legacy .ores IR control"
     );
 }
 
@@ -298,7 +316,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_source_rewrite() {
         assert_rejected_fake_compiler(
-            "printf 'mutated source\n' > input.ores\nprintf 'bad ownership\n' >&2\nexit 2",
+            "printf 'mutated source\n' > input.atto\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
@@ -306,7 +324,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_source_replacement_with_symlink() {
         assert_rejected_fake_compiler(
-            "rm input.ores\nln -s /dev/null input.ores\nprintf 'bad ownership\n' >&2\nexit 2",
+            "rm input.atto\nln -s /dev/null input.atto\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
@@ -441,7 +459,7 @@ mod tests {
     #[test]
     fn negative_admission_rejects_extra_symlink_artifact() {
         assert_rejected_fake_compiler(
-            "ln -s input.ores output.ll\nprintf 'bad ownership\n' >&2\nexit 2",
+            "ln -s input.atto output.ll\nprintf 'bad ownership\n' >&2\nexit 2",
         );
     }
 
@@ -533,10 +551,50 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn canonical_source_suffix_is_visible_to_invoked_compiler() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = Scratch::new();
+        let compiler = root.0.join("check-atto-suffix.sh");
+        fs::write(&compiler,
+            "#!/bin/sh\ncase \"$1\" in *.atto) printf 'expected failure\\n' >&2; exit 2;; *) exit 0;; esac\n",
+        ).unwrap();
+        let mut mode = fs::metadata(&compiler).unwrap().permissions();
+        mode.set_mode(0o700);
+        fs::set_permissions(&compiler, mode).unwrap();
+        check_case(
+            &compiler, &root.0, "suffix-check-atto",
+            "pub fnc main(): int { return rt mut share 42; }\n",
+            Some("expected failure"),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicitly_legacy_suffix_is_visible_only_when_requested() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = Scratch::new();
+        let compiler = root.0.join("check-legacy-suffix.sh");
+        fs::write(&compiler,
+            "#!/bin/sh\ncase \"$1\" in *.ores) printf 'expected failure\\n' >&2; exit 2;; *) exit 0;; esac\n",
+        ).unwrap();
+        let mut mode = fs::metadata(&compiler).unwrap().permissions();
+        mode.set_mode(0o700);
+        fs::set_permissions(&compiler, mode).unwrap();
+        check_case_with_suffix(
+            &compiler, &root.0, "suffix-check-legacy",
+            "pub fnc main(): int { return rt mut share 42; }\n",
+            Some("expected failure"), "ores",
+        );
+    }
+
     #[test]
     fn artifact_inventory_includes_created_directories() {
         let root = Scratch::new();
-        fs::write(root.0.join("input.ores"), "source").unwrap();
+        fs::write(root.0.join("input.atto"), "source").unwrap();
         let before = entries(&root.0);
         fs::create_dir(root.0.join("unexpected")).unwrap();
         assert_ne!(entries(&root.0), before);
