@@ -1119,6 +1119,9 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     pthread_cond_broadcast(&s->ready);
     unlock(s);
 }
+int ores_native_actor_scheduler_is_any_current_carrier(void) {
+    return executing != NULL;
+}
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
     return s && executing == s;
 }
