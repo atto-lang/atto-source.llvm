@@ -31,33 +31,33 @@ fn main(){
       }"#,42),
       ("infer-spread",r#"pub fnc main():int{
         const base = infer struct{x:20};
-        const next = infer struct{...base,y:22};
+        const next = infer struct{...base,y:23};
         return next.x + next.y;
-      }"#,42),
+      }"#,43),
       ("infer-record",r#"pub fnc main():int{
         const first = infer record{x:20};
-        const second = infer record{...first,y:22};
+        const second = infer record{...first,y:24};
         return second.x + second.y;
-      }"#,42),
+      }"#,44),
       ("override-type",r#"pub fnc main():int{
-        const first = infer struct{x:true,y:40};
+        const first = infer struct{x:true,y:43};
         const last = infer struct{...first,x:2};
         return last.x + last.y;
-      }"#,42),
+      }"#,45),
       ("computed-fields",r#"pub fnc main():int{
-        const first = infer struct{x:20+2,y:20};
+        const first = infer struct{x:20+2,y:24};
         return first.x + first.y;
-      }"#,42),
+      }"#,46),
       ("prior-scalar-local",r#"pub fnc main():int{
-        const int initial = 20;
+        const int initial = 25;
         const row = infer struct{x:initial,y:22};
         return row.x + row.y;
-      }"#,42),
+      }"#,47),
       ("original-unchanged",r#"pub fnc main():int{
         const old = record{x:20};
-        const new_row = record{...old,x:42};
+        const new_row = record{...old,x:48};
         return new_row.x - old.x + 20;
-      }"#,42)
+      }"#,48)
     ];
     const rejected=[
       ("missing spread source",r#"pub fnc main():int{
@@ -77,6 +77,12 @@ fn main(){
         return s.x;
       }"#)
     ];
+    let mut expected_exits = std::collections::BTreeSet::new();
+    for (_, _, expected) in &corpus {
+        assert!((1..=125).contains(expected), "invalid guest exit code");
+        assert!(expected_exits.insert(*expected), "duplicate expected guest exit code");
+    }
+    assert_eq!(expected_exits.len(), corpus.len(), "every native guest must have a distinct expected result");
     for (name, source) in rejected {
         let work=temp();
         let src=work.0.join("negative.atto");
@@ -86,6 +92,9 @@ fn main(){
             "{name}: unsupported source was compiled or crashed");
         assert!(result.stdout.is_empty(),"{name}: rejected source emitted LLVM IR");
         assert!(!result.stderr.is_empty(),"{name}: missing diagnostic");
+        let diagnostic = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
+        assert!(!["segmentation fault", "stack trace", "traceback", "fatal signal", "unhandled exception", "process crashed"].iter().any(|marker| diagnostic.contains(marker)),
+            "{name}: compiler crash text is not a type-checking diagnostic");
         assert_eq!(fs::read_to_string(&src).unwrap(),source,
             "{name}: compiler modified negative source");
         assert_eq!(read_dir(&work.0).unwrap().count(),1,
@@ -95,7 +104,6 @@ fn main(){
         let work=temp();
         let src=work.0.join("program.atto");
         let ir=work.0.join("program.ll");
-        let exe=work.0.join("program");
         fs::write(&src,source).unwrap();
         let output=run(&compiler,&[src.as_path()],&work.0);
         assert!(output.status.success(),"{}: compile error: {}",name,String::from_utf8_lossy(&output.stderr));
@@ -104,11 +112,14 @@ fn main(){
         assert_eq!(fs::read_to_string(&src).unwrap(),source,"{name}: source changed");
         assert_eq!(read_dir(&work.0).unwrap().count(),1,"{name}: compiler wrote a file");
         fs::write(&ir,output.stdout).unwrap();
-        let linked=run(&clang,&[Path::new("-O0"),Path::new("-x"),Path::new("ir"),ir.as_path(),Path::new("-o"),exe.as_path()],&work.0);
-        assert!(linked.status.success(),"{name}: clang linker failed: {}",String::from_utf8_lossy(&linked.stderr));
-        let executed=run(&exe,&[],&work.0);
-        assert_eq!(executed.status.code(),Some(expected),"{name}: guest exit != {expected}");
-        assert!(executed.stdout.is_empty() && executed.stderr.is_empty(),"{name}: guest emitted output");
+        for (opt, flag) in [(0, "-O0"), (2, "-O2")] {
+            let exe=work.0.join(format!("program-o{opt}"));
+            let linked=run(&clang,&[Path::new(flag),Path::new("-x"),Path::new("ir"),ir.as_path(),Path::new("-o"),exe.as_path()],&work.0);
+            assert!(linked.status.success(),"{name} -O{opt}: clang linker failed: {}",String::from_utf8_lossy(&linked.stderr));
+            let executed=run(&exe,&[],&work.0);
+            assert_eq!(executed.status.code(),Some(expected),"{name} -O{opt}: guest exit != {expected}");
+            assert!(executed.stdout.is_empty() && executed.stderr.is_empty(),"{name} -O{opt}: guest emitted output");
+        }
     }
     println!("real native inferred aggregate guest execution: {} positive, {} negative",corpus.len(),rejected.len());
 }
