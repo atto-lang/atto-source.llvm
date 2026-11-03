@@ -60,6 +60,18 @@ int main() {
     }
     check(c1_control_rejected,
           "typed bus accepted a Unicode C1-control topic name");
+    // UTF-8 whitespace-only topic keys must not differ from other backends.
+    for (const auto& invalid_name : {
+            std::string(" "), std::string("  "),
+            std::string("\\xC2\\xA0"), std::string("\\xE1\\x9A\\x80"),
+            std::string("\\xE2\\x80\\x83"), std::string("\\xE2\\x80\\xAF"),
+            std::string("\\xE3\\x80\\x80")}) {
+        check(rejected([&] {
+            bus.define_topic(a.group_id(), invalid_name,
+                    NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Lossy, 1);
+        }), "Unicode whitespace-only native topic was admitted");
+    }
+
     bus.define_topic(
             a.group_id(), "reliable",
             NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable,
