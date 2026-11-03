@@ -324,6 +324,53 @@ fn nominal_type_binders(compiler: &Path) -> Result<(), String> {
     Ok(())
 }
 
+
+fn assert_native_aot_artifact(image: &[u8]) -> Result<(), String> {
+    require(image.len() >= 64, "native AOT artifact is too small")?;
+    match std::env::consts::OS {
+        "linux" => {
+            require(image.starts_with(b"\x7fELF"), "expected ELF native executable")?;
+            require(image[4] == 2 && image[5] == 1, "expected little-endian ELF64")?;
+            let kind = u16::from_le_bytes([image[16], image[17]]);
+            require(kind == 2 || kind == 3, "expected ELF executable or PIE, not an object")?;
+            let expected_machine = match std::env::consts::ARCH {
+                "x86_64" => 62,
+                "aarch64" => 183,
+                other => return Err(format!("unsupported native AOT architecture: {other}")),
+            };
+            let machine = u16::from_le_bytes([image[18], image[19]]);
+            require(machine == expected_machine, format!("wrong ELF machine: {machine}"))?;
+        }
+        "macos" => {
+            require(&image[..4] == b"\xcf\xfa\xed\xfe", "expected thin Mach-O 64-bit executable")?;
+            let expected_cpu = match std::env::consts::ARCH {
+                "x86_64" => 0x0100_0007u32,
+                "aarch64" => 0x0100_000cu32,
+                other => return Err(format!("unsupported native AOT architecture: {other}")),
+            };
+            let cpu = u32::from_le_bytes([image[4], image[5], image[6], image[7]]);
+            require(cpu == expected_cpu, format!("wrong Mach-O architecture: {cpu}"))?;
+        }
+        "windows" => {
+            require(image.starts_with(b"MZ"), "expected PE executable")?;
+            let pe_offset = u32::from_le_bytes([image[60], image[61], image[62], image[63]]) as usize;
+            require(
+                image.get(pe_offset..pe_offset.saturating_add(4)) == Some(&b"PE\0\0"[..]),
+                "expected a valid PE signature",
+            )?;
+            let machine = u16::from_le_bytes([image[pe_offset + 4], image[pe_offset + 5]]);
+            let expected = match std::env::consts::ARCH {
+                "x86_64" => 0x8664u16,
+                "aarch64" => 0xaa64u16,
+                other => return Err(format!("unsupported native AOT architecture: {other}")),
+            };
+            require(machine == expected, format!("wrong PE architecture: {machine}"))?;
+        }
+        other => return Err(format!("unqualified native AOT host OS: {other}")),
+    }
+    Ok(())
+}
+
 fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-aot-").map_err(|e| e.to_string())?;
     let source = temp.path.join("main.ores");
@@ -339,6 +386,8 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
         .map_err(|e| format!("run AOT driver: {e}"))?;
     require(status.success(), format!("AOT driver failed: {status}"))?;
 
+    let original = fs::read(&output).map_err(|e| e.to_string())?;
+    assert_native_aot_artifact(&original)?;
     let status = Command::new(&output)
         .env_clear()
         .env("PATH", "/nonexistent")
@@ -349,7 +398,27 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
         format!("native output returned {:?}", status.code()),
     )?;
 
-    let original = fs::read(&output).map_err(|e| e.to_string())?;
+    // Two different accepted sources must produce two independently linked
+    // executables; reusing a stale scalar constant must not qualify AOT.
+    fs::write(&source, "fnc main(): int { return 7; }\n").map_err(|e| e.to_string())?;
+    let linked = Command::new(driver)
+        .arg(&source)
+        .arg(&output)
+        .env("ORESLANG_LLVMC", compiler)
+        .env("CLANG", clang)
+        .output()
+        .map_err(|e| format!("recompile distinct native source: {e}"))?;
+    require(linked.status.success(), format!("second native link failed: {}", stderr(&linked)))?;
+    let updated = fs::read(&output).map_err(|e| e.to_string())?;
+    assert_native_aot_artifact(&updated)?;
+    require(updated != original, "second guest source reused the original native artifact")?;
+    let status = Command::new(&output)
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .status()
+        .map_err(|e| format!("execute second native guest: {e}"))?;
+    require(status.code() == Some(7), format!("second native guest returned {:?}", status.code()))?;
+
     for text in [
         "import module spin from \"spin\";\n",
         "this is not Oreslang\n",
@@ -365,9 +434,19 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
             .map_err(|e| format!("run rejected AOT case: {e}"))?;
         require(!out.status.success(), format!("invalid source admitted: {text:?}"))?;
         require(
-            fs::read(&output).map_err(|e| e.to_string())? == original,
+            fs::read(&output).map_err(|e| e.to_string())? == updated,
             "failed compile changed existing native output",
         )?;
+        let absent = temp.path.join("rejected native app");
+        let rejected = Command::new(driver)
+            .arg(&source)
+            .arg(&absent)
+            .env("ORESLANG_LLVMC", compiler)
+            .env("CLANG", clang)
+            .output()
+            .map_err(|e| format!("run rejected fresh output: {e}"))?;
+        require(!rejected.status.success(), "invalid source admitted for a fresh output")?;
+        require(!absent.exists(), "invalid source published a new native artifact")?;
     }
 
     for entry in fs::read_dir(&temp.path).map_err(|e| e.to_string())? {
