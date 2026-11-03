@@ -253,6 +253,45 @@ int main() {
     }
 #endif
     {
+        const auto dir = temp / "relative-package-boundary";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"app/main.atto", "");
+        write_text(dir/"lib.atto", "");
+        oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+            dir/"app/main.atto", dir/"lib.atto");
+        write_text(temp/"outside-relative.atto", "");
+        must_fail("relative package escape", "escapes physical package root", [&] {
+            oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+                dir/"app/main.atto", temp/"outside-relative.atto");
+        });
+        write_text(dir/"nested/.ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("relative nested package crossing", "nested package boundary", [&] {
+            oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+                dir/"app/main.atto", dir/"nested/lib.atto");
+        });
+    }
+    {
+        const auto dir = temp / "relative-package-less";
+        write_text(dir/"app/main.atto", "");
+        write_text(temp/"package-less-relative.atto", "");
+        oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+            dir/"app/main.atto", temp/"package-less-relative.atto");
+    }
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "relative-symlink-escape";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(temp/"outside-relative-target.atto", "");
+        fs::create_symlink(temp/"outside-relative-target.atto", dir/"lib.atto");
+        must_fail("relative symlink package escape", "escapes physical package root", [&] {
+            oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+                dir/"main.atto", dir/"lib.atto");
+        });
+    }
+#endif
+    {
         const auto dir = temp / "extension";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
