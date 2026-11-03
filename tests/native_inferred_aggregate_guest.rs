@@ -98,8 +98,9 @@ fn main(){
             "{name}: unsupported source was compiled or crashed");
         assert!(result.stdout.is_empty(),"{name}: rejected source emitted LLVM IR");
         assert!(!result.stderr.is_empty(),"{name}: missing diagnostic");
+        let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!["; ModuleID", "source_filename =", "target triple =", "define "]
-            .iter().any(|marker| String::from_utf8_lossy(&result.stderr).contains(marker)),
+            .iter().any(|marker| stderr.contains(*marker)),
             "{name}: rejected source leaked LLVM IR on stderr");
         let diagnostic = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
         assert!(!["segmentation fault", "stack trace", "traceback", "fatal signal", "unhandled exception", "process crashed"].iter().any(|marker| diagnostic.contains(marker)),
