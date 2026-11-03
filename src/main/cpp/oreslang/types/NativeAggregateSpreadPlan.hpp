@@ -7,6 +7,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -35,10 +36,18 @@ public:
         require_budget(1);
         NativeAggregateShape candidate{result_kind_, {{name, type}}};
         candidate.canonicalize(); // rejects invalid and unsupported shapes
-        if (!explicit_names_.insert(name).second)
+        if (explicit_names_.find(name) != explicit_names_.end())
             throw std::invalid_argument("AGGREGATE_SPREAD_DUPLICATE_NAMED_FIELD: " + name);
-        writes_.push_back(Write{next_element_++, std::move(name),
-                                std::move(type), false});
+        // Complete all potentially throwing string copies and vector growth
+        // before inserting the explicit name or advancing the source cursor.
+        // A failed allocation must leave the previously checked plan intact.
+        Write pending{next_element_, name, type, false};
+        writes_.reserve(writes_.size() + 1);
+        explicit_names_.insert(name);
+        static_assert(std::is_nothrow_move_constructible_v<Write>,
+                      "spread-plan commits must not throw after name insertion");
+        writes_.push_back(std::move(pending));
+        ++next_element_;
     }
 
     // Source must already be a checked, accessible and closed static projection.
@@ -46,9 +55,19 @@ public:
     void add_checked_spread_projection(NativeAggregateShape source) {
         source.canonicalize();
         require_budget(source.fields.size());
-        const std::size_t element = next_element_++;
+        const std::size_t element = next_element_;
+        std::vector<Write> pending;
+        pending.reserve(source.fields.size());
         for (const auto& field : source.fields)
-            writes_.push_back(Write{element, field.name, field.type, true});
+            pending.push_back(Write{element, field.name, field.type, true});
+        // Reserve before changing source-order metadata. Moves below must not
+        // allocate or throw, even if the caller injects allocation failures.
+        writes_.reserve(writes_.size() + pending.size());
+        static_assert(std::is_nothrow_move_constructible_v<Write>,
+                      "spread-plan commits must not throw during projection");
+        for (auto& write : pending)
+            writes_.push_back(std::move(write));
+        ++next_element_;
     }
 
     // The output is a fresh row: rightmost write wins, including a new type.
