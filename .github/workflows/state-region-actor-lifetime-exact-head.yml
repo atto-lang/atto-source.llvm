@@ -9,8 +9,8 @@ on:
       - 'tests/native_actor_arena_denial_test.cpp'
       - 'tests/native_actor_stop_race_test.cpp'
       - 'tests/native_aot_two_actor_owned_counter_harness.c'
-      - 'tests/fixtures/native-aot-two-actor-owned-counter.ores'
-      - 'tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.ores'
+      - 'tests/fixtures/native-aot-two-actor-owned-counter.atto'
+      - 'tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.atto'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
@@ -226,13 +226,13 @@ jobs:
             echo "clang missing (runner/toolchain failure)" >&2
             exit 2
           fi
-          SRC=tests/fixtures/native-aot-two-actor-owned-counter.ores
+          SRC=tests/fixtures/native-aot-two-actor-owned-counter.atto
           IR="$RUNNER_TEMP/compiled-two-actor-owned-counter.ll"
           # Unsupported sealed actor state must fail before ANY IR output,
           # rather than silently falling back to the legacy scalar ABI.
           DENIED="$RUNNER_TEMP/unlowered-sealed-actor-state.ll"
           if "$COMPILER" --experimental-owned-int \
-              tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.ores \
+              tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.atto \
               > "$DENIED" 2> "$RUNNER_TEMP/sealed-actor-diagnostic"; then
             echo "unimplemented sealed state unexpectedly compiled" >&2
             exit 1
