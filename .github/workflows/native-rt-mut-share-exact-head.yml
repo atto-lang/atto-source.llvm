@@ -36,13 +36,21 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --target oreslang-llvmc oreslang-native-borrow-admission-build --parallel 2
+          cmake --build build --target oreslang-llvmc oreslang-native-borrow-admission-build oreslang-native-project-root-import-test --parallel 2
           test -x build/oreslang-llvmc
           test -x build/oreslang-native-borrow-admission
           test -x build/oreslang-native-borrow-predicates
-      - name: Execute native source to compiler admission and harness tests
+      - name: Execute canonical .atto compiler, imports, and ownership admission tests
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build --output-on-failure --timeout 120 -R '^(native_compile_time_borrow_escape_admission|native_borrow_harness_predicates)$'
-          echo 'NATIVE_BORROW_ADMISSION_TESTS=2'
+          selected='^(native_compile_time_borrow_escape_admission|native_borrow_harness_predicates|native_project_root_import_security|native_source_module_graph_execution|numerics_atto_integer_guest)
+
+          # The test-name inventory is an admission control; an absent test
+          # must never silently produce a green CTest result.
+          listing="$(ctest --test-dir build -N -R "$selected")"
+          printf '%s\n' "$listing"
+          count="$(printf '%s\n' "$listing" | grep -Ec '^[[:space:]]*Test #[0-9]+: ' || true)"
+          test "$count" -eq 5
+          ctest --test-dir build --output-on-failure --timeout 180 -R "$selected"
+          echo 'ATTO_NATIVE_OWNERSHIP_AND_IMPORT_TESTS=5'
