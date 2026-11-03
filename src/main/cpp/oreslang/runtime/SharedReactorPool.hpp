@@ -125,7 +125,11 @@ public:
         }
         // Publication precedes both wake paths. The reactor wake is sticky,
         // including a producer racing between the empty check and poll entry.
-        reactor_.wake(); ready_.notify_one();
+        // Lease acquisition precedes the poller's ready-queue check. If the
+        // lease is absent, a future poller observes this published work.
+        // Avoid a reactor syscall for every hot-queue submission.
+        if (poll_owner_.load(std::memory_order_acquire) != -1) reactor_.wake();
+        ready_.notify_one();
         return true;
     }
     std::size_t started_workers() {
