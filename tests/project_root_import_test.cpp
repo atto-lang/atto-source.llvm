@@ -83,7 +83,7 @@ int main() {
     {
         const auto dir = temp / "missing";
         write_text(dir/"main.ores", "");
-        must_fail("missing manifest", "nearest .ores.pkg.toml",
+        must_fail("missing manifest", "nearest .atto.pkg.toml",
                   [&] { (void)resolve(dir/"main.ores", "+/lib"); });
     }
     {
@@ -234,6 +234,55 @@ int main() {
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
 #endif
+    {
+        const auto dir = temp / "atto-canonical-manifest";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"999\"\\n");
+        write_text(dir/".atto.pkg.toml",
+                   "schema_version = \"1\"\\n[project]\\nname = \"attolang\"\\nroot = \".\"\\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("canonical .atto.pkg.toml was not selected");
+        if (resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("explicit legacy suffix must remain exact");
+        fs::remove(dir/"lib.atto");
+        must_fail("canonical no implicit legacy fallback",
+                  "cannot resolve native project-root import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("legacy importer migration fallback regressed");
+    }
+    {
+        const auto dir = temp / "atto-malformed-manifest";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\\n");
+        write_text(dir/".atto.pkg.toml", "schema_version = \"999\"\\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("canonical malformed does not downgrade to legacy", "schema_version",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-nested-boundary";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"nested/.atto.pkg.toml", "schema_version = \"1\"\\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("canonical nested boundary", "nested package boundary",
+                  [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-relative-no-fallback";
+        write_text(dir/"lib.ores", "");
+        const auto chosen = oreslang::project_root_import_detail::resolve_native_source_suffix(
+            dir/"lib", true);
+        if (chosen != dir/"lib.atto")
+            throw std::runtime_error("relative Atto import fell back to legacy .ores");
+        const auto legacy = oreslang::project_root_import_detail::resolve_native_source_suffix(
+            dir/"lib", false);
+        if (legacy != dir/"lib.ores")
+            throw std::runtime_error("legacy relative import fallback regressed");
+    }
     {
         const auto dir = temp / "extension";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
