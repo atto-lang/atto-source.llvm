@@ -112,6 +112,30 @@ inline bool is_atto_source(const fs::path& source) {
     return extension == ".atto";
 }
 
+/**
+ * Defensive path-admission check for canonical sources. This detects
+ * pre-existing symlinked leaves and ancestors. It is NOT a replacement for
+ * a descriptor-pinned, no-follow source read under hostile concurrent
+ * mutation; actual source admission must retain source identity checks.
+ */
+inline void reject_atto_symlink_components(const fs::path& path) {
+    fs::path current = fs::absolute(path).lexically_normal();
+    for (;;) {
+        std::error_code error;
+        const auto status = fs::symlink_status(current, error);
+        if (!error && status.type() == fs::file_type::symlink) {
+            throw std::runtime_error("symlinked AttoLang source path is not allowed");
+        }
+        if (error && error != std::errc::no_such_file_or_directory) {
+            throw std::runtime_error("cannot safely inspect AttoLang source path");
+        }
+        if (current == current.root_path()) break;
+        const auto parent = current.parent_path();
+        if (parent.empty() || parent == current) break;
+        current = parent;
+    }
+}
+
 inline fs::path resolve_native_source_suffix(
         fs::path candidate, bool canonical_atto_importer = false) {
     auto extension = candidate.extension().string();
@@ -172,6 +196,8 @@ inline std::filesystem::path resolve_project_root_import(
         throw std::runtime_error("native project-root resolver requires +/ import");
 
     std::error_code error;
+    if (is_atto_source(importing_source))
+        reject_atto_symlink_components(importing_source);
     const auto source = fs::canonical(importing_source, error);
     if (error)
         throw std::runtime_error("cannot resolve native importing source");
@@ -223,6 +249,8 @@ inline std::filesystem::path resolve_project_root_import(
     validate_suffix(suffix);
     fs::path candidate = package_root / fs::path(std::string(suffix));
     candidate = resolve_native_source_suffix(candidate, is_atto_source(source));
+    if (is_atto_source(candidate))
+        reject_atto_symlink_components(candidate);
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)
