@@ -264,6 +264,12 @@ private:
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
+                    try {
+                        project_root_import_detail::enforce_relative_import_package_boundary(
+                            current.path, dependency);
+                    } catch (const std::exception& boundary_error) {
+                        fail(current, boundary_error.what());
+                    }
                 }
 
                 const auto known = paths.find(dependency.string());
