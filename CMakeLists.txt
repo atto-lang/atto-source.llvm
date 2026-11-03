@@ -408,6 +408,17 @@ if(BUILD_TESTING)
     set_tests_properties(native_aggregate_negative_receipt_harness
         native_aggregate_negative_receipt_harness_python_O
         PROPERTIES TIMEOUT 20)
+    # Source-free adversarial checks for native guest status/IR admission.
+    # These are NOT actual AttoLang compiler or native guest tests.
+    add_test(NAME native_aggregate_positive_harness_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_aggregate_positive_execution_harness.py")
+    add_test(NAME native_aggregate_positive_harness_selftest_python_O
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_aggregate_positive_execution_harness.py")
+    set_tests_properties(native_aggregate_positive_harness_selftest
+        native_aggregate_positive_harness_selftest_python_O
+        PROPERTIES TIMEOUT 30)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
