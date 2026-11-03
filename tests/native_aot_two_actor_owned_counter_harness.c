@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 // Linked from an actual LLVM IR object emitted for
-// tests/fixtures/native-aot-two-actor-owned-counter.ores.
+// tests/fixtures/native-aot-two-actor-owned-counter.atto.
 // There are no host replacements for these two generated functions.
 extern void oreslang_actor_Worker_init(OresActorI64Heap*, uint64_t, uint64_t);
 extern int64_t oreslang_actor_Worker_on_message(
