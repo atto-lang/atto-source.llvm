@@ -260,9 +260,17 @@ private:
                     if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
                     dependency = fs::path(raw);
-                    if (dependency.extension().empty()) dependency += ".ores";
-                    if (dependency.extension() != ".ores")
-                        fail(current, "native module source must use .ores extension");
+                    if (dependency.extension().empty()) {
+                        try {
+                            dependency += project_root_import_detail::
+                                source_extension_for_implicit_import(current.path);
+                        } catch (const std::exception& error) {
+                            fail(current, error.what());
+                        }
+                    }
+                    if (!project_root_import_detail::source_extension_supported(dependency))
+                        fail(current,
+                            "native module source must use .atto or legacy .ores extension");
                     dependency = current.path.parent_path() / dependency;
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
