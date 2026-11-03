@@ -240,6 +240,7 @@ int main() {
         write_text(dir/".atto.pkg.toml",
                    "schema_version = \"1\"\n[project]\nname = \"attolang\"\nroot = \".\"\n");
         write_text(dir/"main.atto", "");
+        write_text(dir/"main.ores", "");
         write_text(dir/"lib.atto", "");
         write_text(dir/"lib.ores", "");
         if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
