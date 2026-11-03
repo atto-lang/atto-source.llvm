@@ -144,7 +144,7 @@ def main():
         ('init-hook', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}', 'define module Lib as fnc init():void{return;} pub fnc answer():int{return 42;} end', 'init hook'),
         ('missing-file', 'import module Lib from "./missing"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
         ('std-not-faked', 'import module Lib from "std/net"; pub fnc main():int{return 0;}', library, 'native ores.std package resolution remains unsupported'),
-        ('project-root-missing-manifest', 'import module Lib from "+/lib"; pub fnc main():int{return 0;}', library, 'nearest .ores.pkg.toml'),
+        ('project-root-missing-manifest', 'import module Lib from "+/lib"; pub fnc main():int{return 0;}', library, 'nearest .atto.pkg.toml'),
         ('directory', 'import module Lib from "./nested"; pub fnc main():int{return 0;}', library, 'cannot resolve native import'),
         ('unterminated-path', 'import module Lib from "./lib; pub fnc main():int{return 0;}', library, 'unterminated native string'),
         ('unsupported-dependency', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', 'define module Lib as pub async fnc answer():int{return 42;} end', 'native async Future<int> v1 callable must be private'),
@@ -213,6 +213,59 @@ def main():
         if not result.returncode or result.stdout or 'multiline TOML' not in result.stderr:
             raise AssertionError(('project-root multiline manifest',result.stderr))
         passed+=1
+        # Canonical .atto package requires a real native compiler verdict.
+        # These cases cannot be promoted from the header-only resolver unit.
+        for case, package_files, diagnostic in (
+            ('atto-canonical-missing-source', {
+                'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
+                '.atto.pkg.toml': 'schema_version = "1"\n',
+                'lib.ores': library,
+            }, 'cannot resolve native project-root import'),
+            ('atto-canonical-invalid-manifest', {
+                'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
+                '.atto.pkg.toml': 'schema_version = "999"\n',
+                '.ores.pkg.toml': 'schema_version = "1"\n',
+                'lib.atto': library,
+            }, 'schema_version'),
+            ('atto-relative-missing-source', {
+                'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return 0;}',
+                'lib.ores': library,
+            }, 'cannot resolve native import'),
+        ):
+            directory = root/case
+            directory.mkdir()
+            for filename, source_bytes in package_files.items():
+                (directory/filename).write_text(source_bytes)
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((case, diagnostic, result.returncode, result.stderr))
+            passed += 1
+
+        directory = root/'atto-canonical-package-guest'
+        directory.mkdir()
+        (directory/'main.atto').write_text(
+            'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}')
+        (directory/'lib.atto').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        (directory/'.atto.pkg.toml').write_text(
+            'schema_version = "1"\n[project]\nroot = "."\n')
+        (directory/'.ores.pkg.toml').write_text('schema_version = "999"\n')
+        result = run([a.compiler, str(directory/'main.atto')])
+        if result.returncode:
+            raise AssertionError(('canonical Atto package compile', result.stderr))
+        (directory/'guest.ll').write_text(result.stdout)
+        linked = run([a.clang, str(directory/'guest.ll'), '-O2', '-o',
+                      str(directory/'guest')])
+        if linked.returncode:
+            raise AssertionError(('canonical Atto package link', linked.stderr))
+        (directory/'main.atto').rename(directory/'main.atto.hidden')
+        (directory/'lib.atto').rename(directory/'lib.atto.hidden')
+        executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
+        if executed.returncode != 42:
+            raise AssertionError(('canonical Atto package native guest',
+                                  executed.returncode, executed.stderr))
+        passed += 1
+
         # Physical aliases are not new code-unit identities.
         for alias in ('symlink', 'hardlink'):
             directory=root/alias; directory.mkdir()
