@@ -3,6 +3,8 @@
 #include "oreslang/runtime/NativeThreadJoinReaperV1.hpp"
 
 #include <memory>
+#include <type_traits>
+#include <utility>
 
 namespace oreslang::runtime {
 
@@ -39,6 +41,13 @@ public:
             const std::shared_ptr<NativeJoinCompletionV1>& completion,
             std::weak_ptr<Gate> gate,
             std::weak_ptr<NativeJoinSchedulerWakeQueueV1> queue) {
+        // This callback may execute on a native join-reaper thread. Guest
+        // exceptions must never unwind through that boundary: reject a
+        // potentially throwing or non-boolean gate during compilation.
+        static_assert(
+            std::is_same_v<decltype(std::declval<Gate&>().notify_ready()), bool> &&
+                noexcept(std::declval<Gate&>().notify_ready()),
+            "native join wake gate notify_ready must return bool and be noexcept");
         if (!completion || gate.expired() || queue.expired()) return false;
         return completion->on_ready_once(
             [gate = std::move(gate), queue = std::move(queue)]() noexcept {
