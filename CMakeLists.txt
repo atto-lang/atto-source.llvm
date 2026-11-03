@@ -362,6 +362,17 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_aggregate_spread_type_plan
         COMMAND oreslang-native-aggregate-spread-plan-test)
+    # Allocation failure must not commit a partial inferred-row plan.
+    # This is a host-side C++ exception-safety check, not LLVM guest parity.
+    add_executable(oreslang-native-spread-allocation-atomic-test
+        tests/native_spread_failure_atomicity.cpp)
+    target_include_directories(oreslang-native-spread-allocation-atomic-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-spread-allocation-atomic-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-spread-allocation-atomic-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -Wno-mismatched-new-delete -UNDEBUG>)
+    add_test(NAME native_aggregate_spread_allocation_failure_atomicity
+        COMMAND oreslang-native-spread-allocation-atomic-test)
     # Real compiler negative admission: source aggregate kinds cannot erase
     # to i64 or publish unvalidated LLVM IR.
     add_test(NAME native_aggregate_shape_compiler_failclosed
