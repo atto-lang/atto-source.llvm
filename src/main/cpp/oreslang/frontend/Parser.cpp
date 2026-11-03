@@ -23,7 +23,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, String, Template, Symbol, End };
+enum class Kind { Identifier, Integer, Floating, String, Template, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -241,14 +241,13 @@ public:
                 ++at_;
             }
             // Match Java/Graal's real-literal boundaries before returning an
-            // integer token. Native LLVM is intentionally i64-only today:
-            // splitting 1.25 into 1 '.' 25, or 1e4 into 1 'e4', can
-            // misdiagnose or accidentally compile a different program.
-            bool real = false;
+            // integer token: splitting 1.25 into 1 '.' 25, or 1e4 into 1 'e4',
+            // can misdiagnose or accidentally compile a different program.
+            bool floating = false;
             if (at_ + 1 < source_.size() && source_[at_] == '.' &&
                     digit(source_[at_ + 1])) {
-                real = true;
-                at_ += 2;
+                floating = true;
+                ++at_;
                 while (at_ < source_.size() &&
                         (digit(source_[at_]) || source_[at_] == '_')) ++at_;
             }
@@ -258,7 +257,7 @@ public:
                 if (at_ < source_.size() &&
                         (source_[at_] == '+' || source_[at_] == '-')) ++at_;
                 if (at_ < source_.size() && digit(source_[at_])) {
-                    real = true;
+                    floating = true;
                     ++at_;
                     while (at_ < source_.size() &&
                             (digit(source_[at_]) || source_[at_] == '_')) ++at_;
@@ -268,16 +267,12 @@ public:
             }
             if (at_ < source_.size() && source_[at_] == 'd' &&
                     (at_ + 1 == source_.size() || !identifier_part(source_[at_ + 1]))) {
-                ++at_;
-                real = true;
-            }
-            if (real) {
                 throw std::runtime_error(
-                        "native floating-point/decimal literal unsupported until typed "
-                        "LLVM f32/f64 and exact decimal lowering (at byte " +
-                        std::to_string(start) + ")");
+                        "native floating-point/decimal literal unsupported until exact "
+                        "decimal lowering (at byte " + std::to_string(start) + ")");
             }
-            return {Kind::Integer, source_.substr(start, at_ - start), start};
+            return {floating ? Kind::Floating : Kind::Integer,
+                    source_.substr(start, at_ - start), start};
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
@@ -498,6 +493,7 @@ bool native_constructor_scalar_tree(const Expression& expr,
 std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     auto result = make_expression(source.kind, source.offset);
     result->integer = source.integer;
+    result->floating = source.floating;
     result->boolean = source.boolean;
     result->resolved_type = source.resolved_type;
     result->resolved_class = source.resolved_class;
@@ -1941,6 +1937,10 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
+                } else if (accept("f64")) {
+                    if (parameter.mode != Parameter::Mode::Value)
+                        fail("native f64 parameter must be passed by value, not borrow");
+                    parameter.scalar_type = ScalarType::F64;
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
                     // Deferred scalar aliases are admitted only after full resolution.
                 } else if (token_.kind == Kind::Identifier &&
@@ -1980,6 +1980,8 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
+            } else if (accept("f64")) {
+                value.return_type = ScalarType::F64;
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
             } else if (token_.kind == Kind::Identifier &&
@@ -2186,10 +2188,10 @@ private:
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "f64" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
-                binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                binding.scalar_type = accept("bool") ? ScalarType::Bool : accept("f64") ? ScalarType::F64 : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
                 binding.name = identifier();
                 require("=");
@@ -2461,7 +2463,7 @@ private:
                 statement.branch_local = std::move(local); return statement;
             }
             auto type_name = [&]() -> std::string {
-                for (const auto* scalar : {"int", "bool", "string", "String"})
+                for (const auto* scalar : {"int", "bool", "f64", "string", "String"})
                     if (accept(scalar)) return scalar;
                 return type_identifier();
             };
@@ -2471,6 +2473,7 @@ private:
             if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
             if (type == "Array") fail("ordered owning local requires scoped region/drop lowering");
             if (type == "int") local->scalar_type = ScalarType::I64;
+            else if (type == "f64") local->scalar_type = ScalarType::F64;
             else if (type == "bool") local->scalar_type = ScalarType::Bool;
             else if (type == "String" || type == "string") local->scalar_type = ScalarType::String;
             else if (scalar_alias_targets_.count(type)) local->pending_type_alias = type;
@@ -3268,12 +3271,10 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
-            if (token_.text == "/")
-                fail("native floating division unsupported: int/int yields float in Java; "
-                     "LLVM float typing and zero-divisor semantics are not implemented");
+            // Native division requires two explicitly typed f64 operands:
+            // int/int and mixed source expressions remain rejected by the
+            // scalar type passes (no implicit numeric conversions).
+            const bool division = token_.text == "/";
             const bool remainder = token_.text == "%";
             const auto offset = token_.offset;
             advance();
@@ -3298,7 +3299,8 @@ private:
                          "until typed zero-divisor effects are implemented");
             }
             auto expr = make_expression(remainder ? Expression::Kind::Remainder
-                                                 : Expression::Kind::Multiply, offset);
+                                                 : division ? Expression::Kind::Divide
+                                                            : Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = std::move(right);
             left = std::move(expr);
@@ -3630,6 +3632,12 @@ private:
         }
         if (accept("stdio")) {
             require(".");
+            // The canonical stream spelling used by Oreslang application
+            // sources is stdio.stdout.println/print. Resolve only the
+            // literal stdout stream at parse time and reuse the exact
+            // legacy stdio.println/print AST, effect and ownership path.
+            // No dynamic stream object or blocking I/O fallback exists.
+            if (accept("stdout")) require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
             expr->name = identifier();
             if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
@@ -3663,6 +3671,23 @@ private:
             }
             require(")");
             return inner;
+        }
+        if (token_.kind == Kind::Floating) {
+            // Locale-independent, bounded, once-rounded IEEE binary64 input.
+            // Preserve f64 identity throughout checking and LLVM lowering.
+            const std::string_view literal = token_.text;
+            if (literal.find('_') != std::string_view::npos)
+                fail("native f64 literal does not admit digit separators");
+            double number = 0.0;
+            const auto parsed = std::from_chars(literal.data(),
+                literal.data() + literal.size(), number, std::chars_format::general);
+            if (parsed.ec != std::errc{} ||
+                    parsed.ptr != literal.data() + literal.size())
+                fail("native f64 literal outside finite binary64 range or malformed");
+            auto expr = make_expression(Expression::Kind::Floating, offset);
+            expr->floating = number;
+            advance();
+            return expr;
         }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
@@ -4080,6 +4105,7 @@ private:
         require_expression_depth(depth, expr.offset);
         switch (expr.kind) {
             case Expression::Kind::Integer:
+            case Expression::Kind::Floating:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
                 return;
@@ -4211,6 +4237,7 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder:
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual:
@@ -4239,7 +4266,7 @@ private:
     }
 
     static const char* scalar_type_name(ScalarType type) {
-        return type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
+        return type == ScalarType::F64 ? "f64" : type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
     }
 
     static ScalarType validate_scalar_expression(
@@ -4263,6 +4290,8 @@ private:
 
             case Expression::Kind::Integer:
                 return ScalarType::I64;
+            case Expression::Kind::Floating:
+                return expr.resolved_type = ScalarType::F64;
             case Expression::Kind::Boolean:
                 return ScalarType::Bool;
             case Expression::Kind::String:
@@ -4275,14 +4304,18 @@ private:
                 // Non-scalar class/array/actor names are rejected by ownership
                 // if used as scalar values; treat their placeholder as i64 here
                 // only so field/borrow syntax can reach that stricter pass.
-                return found == variables.end() ? ScalarType::I64 : found->second;
+                // Codegen loads based on resolved_type: keep the actual
+                // source F64 in the AST, not its default i64 annotation.
+                return expr.resolved_type = found == variables.end()
+                    ? ScalarType::I64 : found->second;
             }
             case Expression::Kind::Field: {
                 if (expr.left) {
                     auto found = variables.find(native_place_key(expr));
-                    if (found != variables.end()) return found->second;
+                    if (found != variables.end())
+                        return expr.resolved_type = found->second;
                 }
-                return ScalarType::I64;
+                return expr.resolved_type = ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
                 std::string receiver;
@@ -4358,13 +4391,15 @@ private:
                 // a void call where a scalar value is required. Returning the
                 // placeholder here lets statement-position void calls reuse the
                 // exact same typed argument binder.
-                return signature.returns_void ? ScalarType::I64 : signature.return_type;
+                return expr.resolved_type = signature.returns_void
+                    ? ScalarType::I64 : signature.return_type;
             }
             case Expression::Kind::Negate: {
                 ScalarType operand = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
-                require_type(operand, ScalarType::I64, "unary '-'");
-                return ScalarType::I64;
+                if (operand != ScalarType::I64 && operand != ScalarType::F64)
+                    throw std::runtime_error("unary '-' requires int or f64");
+                return expr.resolved_type = operand;
             }
             case Expression::Kind::LogicalNot: {
                 ScalarType operand = validate_scalar_expression(
@@ -4384,21 +4419,30 @@ private:
                 auto right = validate_scalar_expression(*expr.right, variables, functions, depth + 1);
                 if (left == ScalarType::String) require_type(right, ScalarType::String, "string concatenation");
                 else {
-                    require_type(left, ScalarType::I64, "arithmetic");
-                    require_type(right, ScalarType::I64, "arithmetic");
+                    if (left != ScalarType::I64 && left != ScalarType::F64)
+                        throw std::runtime_error("arithmetic requires int or f64");
+                    require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
                 }
                 return expr.resolved_type = left;
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder: {
                 ScalarType left = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                require_type(left, ScalarType::I64, "arithmetic");
-                require_type(right, ScalarType::I64, "arithmetic");
-                return ScalarType::I64;
+                if (expr.kind == Expression::Kind::Divide) {
+                    require_type(left, ScalarType::F64, "f64 division (int/int unsupported)");
+                    require_type(right, ScalarType::F64, "f64 division (no implicit int conversion)");
+                } else {
+                    if (left != ScalarType::I64 && (left != ScalarType::F64 ||
+                            expr.kind == Expression::Kind::Remainder))
+                        throw std::runtime_error("arithmetic requires int or f64 (remainder int only)");
+                    require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
+                }
+                return expr.resolved_type = left;
             }
             case Expression::Kind::Less:
             case Expression::Kind::LessEqual:
@@ -4408,9 +4452,10 @@ private:
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                require_type(left, ScalarType::I64, "ordered comparison");
-                require_type(right, ScalarType::I64, "ordered comparison");
-                return ScalarType::Bool;
+                if (left != ScalarType::I64 && left != ScalarType::F64)
+                    throw std::runtime_error("ordered comparison requires int or f64");
+                require_type(right, left, "ordered comparison; implicit int/f64 conversion prohibited");
+                return expr.resolved_type = ScalarType::Bool;
             }
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual: {
@@ -4446,7 +4491,7 @@ private:
                 if (when_true != when_false)
                     throw std::runtime_error("ternary arms require a common scalar type at byte " +
                         std::to_string(expr.offset));
-                return when_true;
+                return expr.resolved_type = when_true;
             }
         }
         throw std::runtime_error("internal invalid native scalar expression kind");
@@ -4539,6 +4584,11 @@ private:
         for (const auto& cls : program.classes) {
             if (cls.constructor_exported && !cls.exported)
                 throw std::runtime_error("public constructor requires a public class");
+            // Native struct fields are still i64 slots. Reject an f64 member
+            // before any constructor/store could accidentally reinterpret bits.
+            for (const auto& field : cls.fields)
+                if (field.scalar_type == ScalarType::F64)
+                    throw std::runtime_error("native f64 class field requires typed struct layout and borrow proof");
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
@@ -4591,6 +4641,58 @@ private:
             // Parameter types, borrow modes and returns cannot select a slot.
             if (fn.name == "main" && functions.count("main"))
                 throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
+            // A guest f64 function is legal, but the OS process entry ABI
+            // remains an explicitly integer status. The generated C main
+            // must never treat an IEEE double as a signed exit code.
+            if (fn.name == "main" && (fn.return_type == ScalarType::F64 ||
+                    std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                        [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
+                throw std::runtime_error("native main does not admit f64 process ABI");
+            if (!fn.method_owner.empty() &&
+                    (fn.return_type == ScalarType::F64 ||
+                        std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                            [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
+                throw std::runtime_error("native f64 class method ABI not yet admitted");
+            const bool has_f64_function_abi = fn.return_type == ScalarType::F64 ||
+                std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                    [](const Parameter& p) { return p.scalar_type == ScalarType::F64; });
+            if (has_f64_function_abi) {
+                // First ABI slice is pure scalar: no owner/borrow/actor
+                // continuation or generic return may travel as an IEEE value.
+                if (!fn.generic_parameters.empty() || !fn.return_class.empty() ||
+                        !fn.return_sum.empty() || fn.has_declared_effects ||
+                        !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                        !fn.actor_field_writes.empty() || !fn.source_tasks.empty() ||
+                        !fn.future_pipelines.empty() || !fn.ready_await_actor.empty() ||
+                        !fn.done_await_actor.empty() || fn.scalar_while ||
+                        fn.caught_throw_value || !fn.caught_throw_defers.empty())
+                    throw std::runtime_error("native f64 function ABI requires pure synchronous scalar frame");
+                for (const auto& param : fn.parameters)
+                    if (param.mode != Parameter::Mode::Value ||
+                            !param.class_name.empty() || !param.generic_type.empty() ||
+                            !param.sum_type.empty())
+                        throw std::runtime_error("native f64 function ABI forbids borrowed or owned parameters");
+                for (const auto& local : fn.locals)
+                    if (local.heap_owned || local.int_array || local.new_class ||
+                            local.move_class || local.record_view ||
+                            !local.class_name.empty() || !local.task_await_name.empty() ||
+                            !local.future_await_name.empty())
+                        throw std::runtime_error("native f64 function ABI forbids owned local storage");
+                std::function<bool(const Statement&)> scalar_statement =
+                    [&](const Statement& statement) {
+                        const bool supported = statement.kind == Statement::Kind::ScopedLocal ||
+                            statement.kind == Statement::Kind::ScalarWrite ||
+                            statement.kind == Statement::Kind::Conditional ||
+                            statement.kind == Statement::Kind::Return;
+                        return supported &&
+                            std::all_of(statement.then_statements.begin(),
+                                statement.then_statements.end(), scalar_statement) &&
+                            std::all_of(statement.else_statements.begin(),
+                                statement.else_statements.end(), scalar_statement);
+                    };
+                if (!std::all_of(fn.statements.begin(), fn.statements.end(), scalar_statement))
+                    throw std::runtime_error("native f64 function ABI requires scalar-only structured statements");
+            }
             NativeCallSignature signature;
             signature.generics = fn.generic_parameters;
             for (const auto& param : fn.parameters) {
