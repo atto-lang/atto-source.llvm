@@ -283,3 +283,25 @@ This does not make offset bits alone a capability. The independently verified
 actor identity, object-start, generation and turn/borrow constraints remain
 mandatory at every runtime/LLVM dereference boundary.
 
+
+## Measured memory cost of checked compact fields (November 2026)
+
+The 50% RAM goal is not met by compressing the field alone. Measured with
+`sizeof` for `ActorCompactFieldStore` on arm64 macOS (1,024 nodes, 4 links each):
+
+| Per edge | Bytes |
+| --- | --- |
+| Raw 64-bit pointer | 8 |
+| Compact field in the object | 4 |
+| Out-of-line proof, `std::optional<Node>` | 48 |
+| Compact field plus proof | 52 |
+
+So an edge that needs a runtime proof costs about 6.5 times a raw pointer. Compact
+fields only save memory where the ledger entry is removed, which means the borrow
+checker statically proves the target's lifetime (`lifetime_proven` through a
+static borrow rather than through the ledger). Reducing the proof to a smaller
+generation word would also help, but must not reconstruct a proof from the offset.
+
+Until that elision exists, do not claim RAM savings for this store. Dense 32-bit
+indices with one generation per row, rather than per edge, are the cheaper option
+for table-shaped data.

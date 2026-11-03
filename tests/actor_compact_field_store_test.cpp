@@ -142,7 +142,7 @@ int main() {
                      "stale generation, retirement and recycled offsets\\n";
         return 0;
     } catch (const std::exception& e) {
-        std::cerr << "FAIL compact32 actor fields: " << e.what() << '\\n';
+        std::cerr << "FAIL compact32 actor fields: " << e.what() << '\n';
         return 1;
     }
 }

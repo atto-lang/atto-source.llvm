@@ -103,7 +103,7 @@ int main() {
                      "ActorRef and FFI isolation\\n";
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "FAIL managed ref layout plan: " << error.what() << '\\n';
+        std::cerr << "FAIL managed ref layout plan: " << error.what() << '\n';
         return 1;
     }
 }

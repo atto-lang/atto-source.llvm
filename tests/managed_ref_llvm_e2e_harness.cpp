@@ -120,6 +120,36 @@ int main() {
         must_trap([&] {
             (void)oreslang_test_read_compact(first, arena.data(), 16, &proof);
         }, "span below target allocation failed to trap");
+        proof.bytes = arena.size();
+
+        // Top of the encoding space: the proof accepts these bits, so only the
+        // span check stands between them and a wild 32 GiB offset.
+        const std::uint32_t highest_ref = UINT32_MAX;
+        std::memcpy(arena.data() + 8, &highest_ref, sizeof highest_ref);
+        proof.original_encoding = highest_ref;
+        must_trap([&] {
+            (void)oreslang_test_read_compact(first, arena.data(), arena.size(), &proof);
+        }, "high-bit compressed field failed to trap on span");
+        std::memcpy(arena.data() + 8, &stale_ref, sizeof stale_ref);
+        proof.original_encoding = stale_ref;
+
+        // Offsets assume an 8-byte base; a misaligned one must not be decoded.
+        proof.base = arena.data() + 1;
+        proof.bytes = 56;
+        must_trap([&] {
+            (void)oreslang_test_read_compact(first, arena.data() + 1, 56, &proof);
+        }, "misaligned arena base failed to trap");
+        proof.base = arena.data();
+        proof.bytes = arena.size();
+
+        // Stores go through the same checks as loads.
+        proof.active_generation = 101;
+        must_trap([&] {
+            oreslang_test_write_compact(first, arena.data(), arena.size(), &proof, 5);
+        }, "stale generation failed to trap before store");
+        proof.active_generation = 100;
+        require(oreslang_test_read_compact(first, arena.data(), arena.size(), &proof) == 99,
+                "valid reference no longer resolves after the rejected accesses");
 #endif
         std::cout << "PASS LLVM compact i32 physical load/store, stale/null/foreign/"
                      "out-of-bounds fail-closed access\n";

@@ -59,7 +59,9 @@ inline llvm::Value* emit_checked_actor_ref32_address(
         object_type->isVoidTy() || !object_type->isSized())
         throw std::invalid_argument("invalid actor reference LLVM operand types");
 
-    auto* check_ty = access.proof_check.getFunctionType();
+    // FunctionCallee accessors are non-const, so read them through a local copy.
+    llvm::FunctionCallee proof_check = access.proof_check;
+    auto* check_ty = proof_check.getFunctionType();
     if (!check_ty || check_ty->isVarArg() ||
         check_ty->getNumParams() != 4 ||
         check_ty->getReturnType() != i1 ||
@@ -100,7 +102,7 @@ inline llvm::Value* emit_checked_actor_ref32_address(
         access.original_proof, check_ty->getParamType(0));
     auto* auth_base = builder.CreatePointerCast(
         access.actor_arena_base, check_ty->getParamType(1));
-    auto* authorized = builder.CreateCall(access.proof_check,
+    auto* authorized = builder.CreateCall(proof_check,
         {auth_proof, auth_base, access.actor_arena_span, encoded},
         "ref32.authenticated");
     builder.CreateCondBr(authorized, bounds_block, trap_block);

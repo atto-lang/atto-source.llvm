@@ -582,7 +582,9 @@ if(BUILD_TESTING)
     add_executable(oreslang-managed-ref-llvm-lowering-test
         tests/managed_ref_llvm_lowering_test.cpp)
     target_include_directories(oreslang-managed-ref-llvm-lowering-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # SYSTEM: -Werror below is for this test, not for warnings in LLVM headers.
+    target_include_directories(oreslang-managed-ref-llvm-lowering-test SYSTEM PRIVATE
         "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-managed-ref-llvm-lowering-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(oreslang-managed-ref-llvm-lowering-test PRIVATE
@@ -592,36 +594,49 @@ if(BUILD_TESTING)
     set_tests_properties(native_compact32_llvm_checked_load_store
         PROPERTIES TIMEOUT 30)
 
-    # Execute the IR rather than trusting string/shape checks alone. The
-    # compatible Clang should match the LLVM major version when available.
+    # Execute the IR rather than trusting string/shape checks alone. IR must be
+    # compiled by the LLVM that produced it, so prefer that LLVM's own tools. A
+    # missing or mismatched toolchain fails this test rather than removing it.
     find_program(ORE_REF32_CLANG
         NAMES "clang++-${LLVM_VERSION_MAJOR}" clang++
-        clang++-19 clang++-18 clang++-17 clang++-16 clang++-15 clang++-14)
+        HINTS "${LLVM_TOOLS_BINARY_DIR}")
+    find_program(ORE_STRUCTURAL_RUSTC rustc)
+    set(ORE_REF32_CLANG_MAJOR "")
     if(ORE_REF32_CLANG)
         execute_process(COMMAND "${ORE_REF32_CLANG}" --version
             OUTPUT_VARIABLE ORE_REF32_CLANG_VERSION_TEXT
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET)
-        string(REGEX MATCH "version[ \t]+([0-9]+)"
-            ORE_REF32_CLANG_VERSION_MATCH "${ORE_REF32_CLANG_VERSION_TEXT}")
+        if(ORE_REF32_CLANG_VERSION_TEXT MATCHES "version[ \t]+([0-9]+)")
+            set(ORE_REF32_CLANG_MAJOR "${CMAKE_MATCH_1}")
+        endif()
     endif()
-    if(ORE_REF32_CLANG AND
-       CMAKE_MATCH_1 STREQUAL "${LLVM_VERSION_MAJOR}")
-        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    if(ORE_STRUCTURAL_RUSTC AND ORE_REF32_CLANG_MAJOR STREQUAL "${LLVM_VERSION_MAJOR}")
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-managed-ref-llvm-e2e"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-managed-ref-llvm-e2e"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e.rs"
+            VERBATIM)
+        add_custom_target(oreslang-managed-ref-llvm-e2e-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-managed-ref-llvm-e2e")
         add_test(NAME native_compact32_llvm_executable_e2e
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e.py"
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-managed-ref-llvm-e2e"
                 --ir-producer "$<TARGET_FILE:oreslang-managed-ref-llvm-lowering-test>"
                 --clang "${ORE_REF32_CLANG}"
                 --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e_harness.cpp")
         set_tests_properties(native_compact32_llvm_executable_e2e
             PROPERTIES TIMEOUT 180)
     else()
-        message(STATUS "Oreslang ref32 LLVM executable e2e requires Clang matching LLVM ${LLVM_VERSION_MAJOR}; skipping incompatible toolchain")
+        message(WARNING "ref32 LLVM e2e needs rustc and a Clang matching LLVM ${LLVM_VERSION_MAJOR}; registering it as a failing test")
+        add_test(NAME native_compact32_llvm_executable_e2e
+            COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
 
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 
     # Exact queue snapshots are pinned to the merged upstream Git objects.
     # An unsupported feature is NOT a blanket allowance to ignore arbitrary
