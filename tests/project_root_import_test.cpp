@@ -191,7 +191,7 @@ int main() {
     {
         const auto dir = temp / "unrelated-root-table-allowed";
         write_text(dir/".ores.pkg.toml",
-                   "schema_version = \"1\"\n[build.logging]\nname=\"safe\"\n[build]\nroot . config = \"src\"\n[project]\nname=\"demo\"\n");
+                   "schema_version = \"1\"\n[build.logging]\nname=\"safe\"\n[build]\nroot . config = \"src\"\nproject . root . path = \"metadata\"\n[project]\nname=\"demo\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
