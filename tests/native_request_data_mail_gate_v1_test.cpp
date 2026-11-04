@@ -84,6 +84,16 @@ void test_actual_scheduler_request_gate() {
         *s.scheduler, s.a, s.actor, 1);
     s.gate_b = std::make_unique<NativeRequestDataMailGateV1>(
         *s.scheduler, s.b, s.actor, 2);
+    // A pooled actor may handle other DATA mails, but an existing request
+    // store is pinned forever to its first bound original mailbox receive.
+    assert(!s.a->bind_original_mail_once(2));
+    bool wrong_mail_rejected = false;
+    try {
+        NativeRequestDataMailGateV1 wrong(*s.scheduler, s.a, s.actor, 2);
+    } catch (const std::invalid_argument&) {
+        wrong_mail_rejected = true;
+    }
+    assert(wrong_mail_rejected);
 
     deliver(s, 1);
     assert(s.a->get_copy(s.trace) == std::string("trace-A"));
