@@ -118,7 +118,8 @@ def main(compiler):
     assert deep_graph.returncode != 0, (
         deep_graph.returncode, deep_graph.stdout, deep_graph.stderr
     )
-    assert "status=known" not in deep_graph.stdout
+    # Independently resolved shallow leaves may be known; the deep root may not.
+    assert "main/0\tstatus=inconclusive" in deep_graph.stdout or not deep_graph.stdout
 
     # Duplicate and incompatible selectors are invocation errors (exit 2),
     # never an advisory PASS, and must not emit even partial analysis records.
