@@ -5,6 +5,7 @@ This is ordinary imported-module execution, NOT imported macro expansion.
 No source-free or stub compiler may satisfy the real LLVM guest CTest.
 """
 import argparse
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -57,7 +58,7 @@ def main():
     p.add_argument("--compiler", type=Path, required=True)
     p.add_argument("--clang", type=Path, required=True)
     args = p.parse_args()
-    if not args.compiler.is_file() or not args.clang.is_file():
+    if not args.compiler.is_file() or not shutil.which(str(args.clang)):
         raise AssertionError("real source compiler and clang paths are required")
 
     with tempfile.TemporaryDirectory(prefix="atto-llvm-logical-id-") as tmp:
