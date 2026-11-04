@@ -26,13 +26,14 @@ standalone critical/suspending execution into LLVM. The native actor
 scheduler, scoped permits and protected-state guest heap still require
 independent typed LLVM lowering.
 
-## Fourteen independent CTest acceptance cases
+## Sixteen independent CTest acceptance cases
 
 | Kind | Cases | Actual capability tested |
 | --- | ---: | --- |
 | Critical+suspends, both orders, fnc/routine/class/actor | 5 | compiler exit 1 with `E_CRITICAL_SUSPENDS_DECL` and no IR on stdout |
 | Lexical trivia around conflicting modifiers | 2 | same semantic code; comment/newline cannot bypass admission |
 | Lone critical/suspends, and lone critical-read | 3 | correctly fail closed with distinct native unsupported diagnostics |
+| Non-Copy class / Array sharing | 2 | real ownership checker emits `E_SHARE_MOVE_ONLY` before codegen, with no IR on stdout |
 | State-container protected heap | 1 | `STATE_CONTAINER_BACKEND_UNSUPPORTED` remains a hard backend denial |
 | Copyable `rt share`, `rt copy`, and `rt take` | 3 | production compiler generates LLVM IR and Clang-linked native executables exit 42 |
 
@@ -49,7 +50,7 @@ these receipts.
 | Java/Graal semantic contract | LLVM status of this patch |
 | --- | --- |
 | `E_CRITICAL_SUSPENDS_DECL` | **Implemented in LLVM source**, execution pending |
-| `E_SHARE_MOVE_ONLY` | **NOT IMPLEMENTED** for move-only class/array; Copy scalar positives only |
+| `E_SHARE_MOVE_ONLY` | **Implemented in LLVM source** for non-Copy array/class and owned-field value aliases; native execution pending |
 | `E_CRITICAL_READ_MUTATION` | **NOT IMPLEMENTED** for protected LRU objects; native state containers fail closed before body lowering |
 | `E_STATE_BORROW_ESCAPE` | **NOT IMPLEMENTED** for protected LRU objects; no sealed-state lexical loan lowering |
 
@@ -77,7 +78,7 @@ ctest --test-dir build -R '^atto_(critical|suspends|protected|copyable)' \
 ```
 
 Record exact compiler/head Git commit and tree, compiler toolchain versions,
-real nonzero GitHub Actions job steps, CTest XML with 14 unique, non-skipped,
+real nonzero GitHub Actions job steps, CTest XML with 16 unique, non-skipped,
 passing tests, positive native exit 42, and negative stderr/exit evidence.
 The `.github/workflows/atto-critical-ownership-llvm-parity.yml` gate also
 requires a clean checkout before and after testing.
@@ -91,8 +92,8 @@ LLVM issue #159 and Java issue #963. A workflow with `steps=[]` is
 Java PR #2499 contains authored `E_CRITICAL_SUSPENDS_DECL`, share-move-only
 and restricted scalar protected-state diagnostics. Its authored tests have
 not executed because its private source-owned runner also lacks admission.
-This LLVM child adds actual native AOT tests for the Copy subset and the
-critical/suspends parser negative contract, but neither PR demonstrates
+This LLVM child adds AOT test candidates for the Copy subset, general non-Copy share denial, and the
+critical/suspends parser negative contract; neither PR demonstrates
 guest parity until the runner executes.
 
 Keep this branch and its parent unmerged pending exact-head native test
