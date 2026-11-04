@@ -201,6 +201,16 @@ int main() {
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
+        const auto dir = temp / "canonical-directory-is-not-source";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        fs::create_directories(dir/"lib.atto");
+        write_text(dir/"lib.ores", "");
+        must_fail("canonical directory must block .ores fallback",
+                  "requires regular source file",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
         const auto dir = temp / "non-dot-project-root";
         write_text(dir/".atto.pkg.toml",
                    "schema_version = \"1\"\n[project]\nroot = \"../outside\"\n");
