@@ -3658,7 +3658,7 @@ if(BUILD_TESTING)
 
         # In addition to legacy .ores, run the three exact shared .atto
         # compiler-plus-Clang guest vectors. All must return native i64 42.
-        foreach(macro_case IN ITEMS literal-42 identity-42 nested-42)
+        foreach(macro_case IN ITEMS literal-42 identity-42 nested-42 arithmetic-42)
             set(macro_fixture
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_case}.atto")
             add_test(NAME "native_macro_shared_${macro_case}_linked_guest_aot_42"
@@ -3708,6 +3708,38 @@ if(BUILD_TESTING)
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
             set_tests_properties("native_macro_shared_${macro_case}_linked_guest_aot_42" PROPERTIES TIMEOUT 90)
         endforeach()
+    endif()
+endif()
+
+# Additional LLVM/.NET/Wasm shared macro vectors. A syntax identity
+# expression is not necessarily folded into `ret i64 42`, so link and
+# execute the emitted IR rather than accepting synthetic constant IR.
+if(BUILD_TESTING)
+    foreach(macro_case IN ITEMS unused-template-mismatch-reject unary-overflow-reject)
+        if(macro_case STREQUAL "unary-overflow-reject")
+            set(macro_diagnostic "NATIVE_MACRO_CONST_OVERFLOW")
+        else()
+            set(macro_diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
+        endif()
+        add_test(NAME "native_macro_shared_${macro_case}_no_ir"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_case}.atto"
+                "-DDIAGNOSTIC=${macro_diagnostic}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+        set_tests_properties("native_macro_shared_${macro_case}_no_ir" PROPERTIES TIMEOUT 25)
+    endforeach()
+    if(ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
+        add_test(NAME native_macro_shared_identity-expression-42_linked_guest_aot_42
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/identity-expression-42.atto"
+                "-DCLANG=${ORE_NATIVE_MACRO_CLANG_EXECUTABLE}"
+                "-DREQUIRE_LITERAL_IR_RETURN=OFF"
+                "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/macro-aot-shared-identity-expression-42"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+        set_tests_properties(native_macro_shared_identity-expression-42_linked_guest_aot_42
+            PROPERTIES TIMEOUT 90)
     endif()
 endif()
 

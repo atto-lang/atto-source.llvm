@@ -64,6 +64,22 @@ pub fnc main(): int {
   return identity!(syntax expr literal!(const 6 * 7));
 }
 )");
+    scalar_42(R"(
+define macro literal(Const<int> value) -> Syntax<Expr> {
+    return quote(value);
+}
+pub fnc main() -> int { return literal!(const (3 * 4) + (7 * 6) - 12); }
+)");
+    {
+        auto program = parse_program(R"(
+define macro identity(Syntax<Expr> value) -> Syntax<Expr> {
+    return value;
+}
+pub fnc main() -> int { return identity!(syntax expr (6 * 7)); }
+)");
+        const auto& result = program.functions.front().result;
+        check(result != nullptr && result->kind == Expression::Kind::Multiply);
+    }
     // Java/Graal identifier-free quote/unquote parity, deliberately limited
     // to repeated CLOSED literals: the two emitted nodes must have distinct
     // AST identities, not two shared pointers to caller-origin syntax.
@@ -234,6 +250,34 @@ define macro literal(Const<int> first, Const<int> second) -> Syntax<Expr> {
 pub fnc main(): int { return 42; }
 )");
 
+    denied(R"(
+define macro unsafe(Syntax<Expr> value) -> Syntax<Expr> {
+    return quote(unquote(value) + unquote(other));
+}
+pub fnc main() -> int { return 42; }
+)");
+    denied(R"(
+define macro literal(Const<int> value) -> Syntax<Expr> {
+    return quote(value);
+}
+pub fnc main() -> int { return literal!(const -(-9223372036854775808)); }
+)");
+    denied(R"(
+define macro syntax(Syntax<Expr> value) -> Syntax<Expr> { return value; }
+pub fnc main() -> int { return 42; }
+)");
+    denied(R"(
+define macro identity(Syntax<Expr> const) -> Syntax<Expr> { return const; }
+pub fnc main() -> int { return 42; }
+)");
+    denied(R"(
+define macro rt(Syntax<Expr> value) -> Syntax<Expr> { return value; }
+pub fnc main() -> int { return 42; }
+)");
+    denied(R"(
+define macro identity(Syntax<Expr> Expr) -> Syntax<Expr> { return Expr; }
+pub fnc main() -> int { return 42; }
+)");
     // Shared scalar profile: eight declarations per translation unit.
     const std::string identity_body =
         "(Syntax<Expr> value) -> Syntax<Expr> { return value; }";

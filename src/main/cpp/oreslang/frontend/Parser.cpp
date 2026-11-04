@@ -1030,15 +1030,28 @@ private:
                  std::string(token) + "'; runtime fallback is forbidden");
     }
 
-    // Only two syntactically closed typed AST forms may cross this boundary.
+    // Keep compiler-only tags and ownership spellings out of macro bindings.
+    // Diagnose these before identifier(), including tokens classified as
+    // keywords, so unused invalid declarations fail with the macro category.
+    static bool reserved_macro_binding(std::string_view name) {
+        return name == "quote" || name == "unquote" || name == "eval" ||
+               name == "const" || name == "syntax" || name == "expr" ||
+               name == "Const" || name == "Syntax" || name == "Expr" ||
+               name == "int" || name == "rt" || name == "define" ||
+               name == "pub" || name == "macro" || name == "return" ||
+               name == "fnc" || name == "main";
+    }
+
+    // Only three syntactically closed typed AST forms may cross this boundary.
     // Macro bodies are checked at declaration even when never invoked.
     void macro_declaration() {
         if (macros_.size() >= kMaxNativeMacroDefinitions)
             fail("NATIVE_MACRO_BUDGET: declaration budget exceeded; runtime fallback is forbidden");
+        if (reserved_macro_binding(token_.text))
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved macro declaration name; runtime fallback is forbidden");
         const std::string name = identifier();
-        if (name == "quote" || name == "unquote" || name == "eval" ||
-                !macros_.emplace(name, MacroKind::ConstIntQuote).second)
-            fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved or duplicate macro declaration; runtime fallback is forbidden");
+        if (!macros_.emplace(name, MacroKind::ConstIntQuote).second)
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: duplicate macro declaration; runtime fallback is forbidden");
         require_macro("(");
         MacroKind kind;
         if (accept("Const")) {
@@ -1050,9 +1063,9 @@ private:
         } else {
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: only Const<int> or Syntax<Expr> accepted before LLVM IR; runtime fallback is forbidden");
         }
-        const std::string parameter = identifier();
-        if (parameter == "quote" || parameter == "unquote" || parameter == "eval")
+        if (reserved_macro_binding(token_.text))
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved macro parameter; runtime fallback is forbidden");
+        const std::string parameter = identifier();
         require_macro(")"); require_macro("->");
         require_macro("Syntax"); require_macro("<"); require_macro("Expr"); require_macro(">");
         require_macro("{"); require_macro("return");

@@ -92,12 +92,12 @@ jobs:
             "$build/macro-selected-tests.txt"
           ctest --test-dir "$build" -V -R '^native_macro' --output-on-failure \
             --parallel 1 | tee "$build/macro-executed-tests.txt"
-          # 2 legacy .ores guests, 3 shared stage-0 .atto guests, 2 typed
-          # template .atto guests: no missing/hidden native execution slots.
+          # 2 legacy .ores guests, 5 existing shared .atto guests,
+          # 2 new shared arithmetic/expression guests: 9 linked guests total.
           receipts="$(grep -c 'MACRO_LLVM_LINKED_GUEST_AOT_PASS value=42 exit=42' \
             "$build/macro-executed-tests.txt" || true)"
-          if [[ "$receipts" -ne 7 ]]; then
-            echo "MACRO_LLVM_NOT_EXECUTED expected 7 linked guest receipts, got $receipts" >&2
+          if [[ "$receipts" -ne 9 ]]; then
+            echo "MACRO_LLVM_NOT_EXECUTED expected 9 linked guest receipts, got $receipts" >&2
             exit 1
           fi
           sha256sum "$build/oreslang-llvmc"
