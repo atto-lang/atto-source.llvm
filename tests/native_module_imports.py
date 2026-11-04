@@ -274,6 +274,7 @@ def main():
         directory=root/'project-root-dotted-build-allowed'; directory.mkdir()
         (directory/'.ores.pkg.toml').write_text(
             'schema_version = "1"\n[build]\nroot . config = "src"\n'
+            'project . root . path = "metadata"\n'
             '[build.metadata]\nnote = "safe"\n[project]\nname = "demo"\n')
         (directory/'lib.atto').write_text(
             'define module Lib as pub fnc answer():int{return 42;} end')
