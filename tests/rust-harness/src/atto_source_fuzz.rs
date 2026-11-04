@@ -164,6 +164,7 @@ pub(super) fn run_cases(
         let rejected = run(compiler, [OsStr::new("--target=host"), src.as_os_str()])?;
         require(
             !rejected.status.success()
+                && rejected.status.code().is_some()
                 && rejected.stdout.is_empty()
                 && !rejected.stderr.is_empty()
                 && rejected.stderr.len() < 16_384,
