@@ -613,6 +613,7 @@ static void* carrier(void* raw) {
                 abort();
             active_wake->state = WAKE_EMPTY;
             active_wake->ticket = (OresNativeWakeTicket){0};
+            active_wake->originating_data_mail = 0;
             --lane->wake_live;
             ++s->wakes_completed;
         }
@@ -1186,7 +1187,9 @@ int ores_native_actor_scheduler_current_data_issued_wake(
     lock(s);
     WakeCredit* w = matching_wake_locked(s, ticket);
     const int ok = w && w->state == WAKE_RESERVED
-        && w->originating_data_mail == expected_original_mail;
+        && w->originating_data_mail == expected_original_mail
+        && ores_execution_owns_running(
+            &s->actors[ticket.producer.actor_slot].authority, executing_claim);
     unlock(s);
     return ok;
 }
