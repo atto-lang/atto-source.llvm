@@ -1,0 +1,4 @@
+// Explicit take of a Copy scalar has no dangling owner or heap alias.
+pub fnc main(): int {
+  return rt take 42;
+}
