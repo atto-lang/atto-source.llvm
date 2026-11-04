@@ -162,9 +162,10 @@ public:
         return logical;
     }
 
-    std::string admit(const fs::path& source_path, const SourceIdentity& opened) {
-        if (!opened.valid)
-            throw std::runtime_error("native source identity requires a verified opened descriptor");
+    // Must be invoked before the linker opens/reads a dependency. Resolve
+    // only filesystem metadata here; no bytes of an unowned source may enter
+    // the compiler, even transiently.
+    std::string preflight_path(const fs::path& source_path) const {
         const auto lexical = absolute(source_path);
         std::error_code error;
         const auto physical = fs::canonical(lexical, error);
@@ -172,11 +173,6 @@ public:
         const auto status = fs::status(physical, error);
         if (error || !fs::is_regular_file(status))
             throw std::runtime_error("native source identity requires a regular file");
-        const auto same_path_identity = capture_source_identity(
-            physical.string().c_str(), 8u * 1024u * 1024u,
-            "native source exceeds 8 MiB identity budget");
-        if (!ores_source_identity_equal(same_path_identity, opened))
-            throw std::runtime_error("native source identity changed after descriptor read");
         const auto links = fs::hard_link_count(physical, error);
         if (error || links != 1)
             throw std::runtime_error("native source identity rejects hardlink aliases");
@@ -184,11 +180,9 @@ public:
         std::string logical;
         for (const auto& root : roots_) {
             fs::path relative;
-            // Imported paths may have been canonicalized by the existing
-            // resolver. A symlinked root itself is admitted with the same
-            // relative unit ID; only symlinks BELOW it are forbidden.
             if (!beneath(root.lexical, lexical, relative) &&
                 !beneath(root.real, lexical, relative)) continue;
+            // No symlink BELOW the allowed root may redirect provenance.
             if ((root.real / relative).lexically_normal() != physical)
                 throw std::runtime_error("native source identity rejects symlink/alias path");
             logical = root.prefix + "/" + relative.generic_string();
@@ -197,6 +191,19 @@ public:
         if (logical.empty())
             throw std::runtime_error("native source is outside declared source roots");
         require_canonical_id(logical);
+        return logical;
+    }
+
+    std::string admit(const fs::path& source_path, const SourceIdentity& opened) {
+        if (!opened.valid)
+            throw std::runtime_error("native source identity requires a verified opened descriptor");
+        const std::string logical = preflight_path(source_path);
+        const auto physical = fs::canonical(absolute(source_path));
+        const auto same_path_identity = capture_source_identity(
+            physical.string().c_str(), 8u * 1024u * 1024u,
+            "native source exceeds 8 MiB identity budget");
+        if (!ores_source_identity_equal(same_path_identity, opened))
+            throw std::runtime_error("native source identity changed after descriptor read");
         const auto known = by_id_.find(logical);
         if (known != by_id_.end()) {
             if (known->second.physical != physical ||
