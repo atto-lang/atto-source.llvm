@@ -179,6 +179,11 @@ inline std::filesystem::path resolve_project_root_import(
     const auto target = fs::canonical(candidate, error);
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
+    // Keep the explicit or inferred source dialect bound to the physical
+    // source. A cross-suffix symlink cannot silently select .ores for .atto.
+    if (target.extension() != candidate.extension())
+        throw std::runtime_error(
+            "native project-root import source suffix changes across symlink");
     reject_nested_package(physical_root, target);
     return target;
 }
