@@ -75,7 +75,7 @@ unique 'stdlib/testing_m2.atto'
 # The native guest stdout stream is bounded *during* capture, not
 # after a guest has already filled disk. Exit/PIPESTATUS and the verifier must
 # remain in the executable path.
-receipt_runner="$root/tests/atto_native_guest_receipts.sh"
+receipt_runner="${ATTO_NATIVE_GUEST_RECEIPT_SCRIPT:-$root/tests/atto_native_guest_receipts.sh}"
 verifier="$root/tests/verify_atto_guest_receipts.py"
 [[ -f "$receipt_runner" && ! -L "$receipt_runner" && -f "$verifier" && ! -L "$verifier" ]] ||
   die 'untrusted receipt runner or verifier'
@@ -198,10 +198,9 @@ if [[ "$#" -eq 0 ]]; then
   fi
   cp "$receipt_runner" "$tmp/mutated-stdout-runner.sh"
   sed -i 's/head -c 4097/cat/g' "$tmp/mutated-stdout-runner.sh"
-  # The contract validates the checked-in runner; mutation of a detached
-  # runner is not used as a source-root replacement.
-  if grep -Fq 'head -c 4097 > "$tmp/guest.stdout"' "$tmp/mutated-stdout-runner.sh"; then
-    die 'stdout capture mutant did not remove size limit'
+  if ATTO_NATIVE_GUEST_RECEIPT_SCRIPT="$tmp/mutated-stdout-runner.sh" \
+      bash "$0" "$workflow" >/dev/null 2>&1; then
+    die 'unbounded guest stdout capture accepted'
   fi
   cp "$workflow" "$tmp/fixture.yml"
   sed -i 's/persist-credentials: false/persist-credentials: true/g' "$tmp/fixture.yml"
