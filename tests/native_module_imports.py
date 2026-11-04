@@ -247,6 +247,14 @@ def main():
             ('escaped-project-assignment', '"proj\\u0065ct".root = "src"\n', 'escaped keys'),
             ('nested-project-descendant', '[project.root.extra]\nnote="ignored"\n', 'nested project table'),
             ('unknown-project-subtable', '[project.logging]\nnote="ignored"\n', 'nested project table'),
+            ('project-dotted-subkey', 'project.root.path = "elsewhere"\n', 'project.root'),
+            ('project-dotted-spaced-subkey', 'project . root . path = "elsewhere"\n', 'project.root'),
+            ('project-dotted-other', 'project.logging = "debug"\n', 'project.root'),
+            ('project-dotted-quoted', '"project" . "root" . "extra" = "x"\n', 'project.root'),
+            ('section-root-subkey', '[project]\nroot.path = "elsewhere"\n', 'project.root'),
+            ('section-root-spaced-subkey', '[project]\nroot . config = "elsewhere"\n', 'project.root'),
+            ('section-root-quoted-subkey', '[project]\n"root" . "config" = "elsewhere"\n', 'project.root'),
+            ('section-root-literal-subkey', "[project]\n'root' . 'path' = 'elsewhere'\n", 'project.root'),
             ('duplicate-project-table', '[project]\nname="first"\n[project]\nname="second"\n', 'duplicate project table'),
         ]
         for name, manifest_tail, diagnostic in manifest_rejects:
@@ -260,6 +268,28 @@ def main():
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
             passed+=1
+        # Dotted metadata outside [project] remains supported. Exercise
+        # the real compiler, Clang native link and guest exit rather than
+        # relying solely on the manifest reader's direct C++ oracle.
+        directory=root/'project-root-dotted-build-allowed'; directory.mkdir()
+        (directory/'.ores.pkg.toml').write_text(
+            'schema_version = "1"\n[build]\nroot . config = "src"\n'
+            '[build.metadata]\nnote = "safe"\n[project]\nname = "demo"\n')
+        (directory/'lib.atto').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        (directory/'main.atto').write_text(
+            'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}')
+        result=run([a.compiler,str(directory/'main.atto')])
+        if result.returncode:
+            raise AssertionError(('project-root dotted build positive compile', result.stderr))
+        (directory/'guest.ll').write_text(result.stdout)
+        linked=run([a.clang,str(directory/'guest.ll'),'-O0','-o',str(directory/'guest')])
+        if linked.returncode:
+            raise AssertionError(('project-root dotted build positive link', linked.stderr))
+        guest=run([str(directory/'guest')])
+        if guest.returncode != 42:
+            raise AssertionError(('project-root dotted build positive guest', guest.returncode, guest.stderr))
+        passed+=1
         # Physical aliases are not new code-unit identities.
         for alias in ('symlink', 'hardlink'):
             directory=root/alias; directory.mkdir()
