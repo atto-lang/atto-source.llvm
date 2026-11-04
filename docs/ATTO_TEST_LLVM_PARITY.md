@@ -45,6 +45,41 @@ at O0 and O2 without the ambient environment, and checks a legacy
 syntax, deliberately wrong native results, and replayable seeds.
 The independent Rust source-mutator tests the scalar native AOT subset. A **separate** native C stdin adapter now forwards bounded bytes into an LLVM-compiled `.atto` `fuzz_byte` function, checks the guest result against an independent property oracle, and rejects a deliberately wrong compiled mutant. The example `examples/atto-native-fuzz-project/atto-test.toml` points the merged Rust `atto test --fuzz` CLI at that built executable. It still does not establish direct `.atto` stdin I/O, coverage-guided fuzzing, async continuations, or live actor race detection.
 
+## Rust CLI and LLVM native stdin integration
+
+The LLVM native adapter uses a narrow scalar ABI:
+`fuzz_byte(i64) -> i64`, invoked for each bounded byte from native host stdin.
+It checks a simple independent `byte+1` property and deliberately mutated
+`byte+2` guest source. A valid `.atto` guest must compile to verified LLVM
+IR, pass the Rust no-GC IR auditor, link to the C adapter and execute.
+This still does not implement source-level AttoLang stdin I/O.
+
+The real Rust `atto test --fuzz` engine is already merged, but its
+opt-in `[fuzz].inconclusive_exits = [2]` semantics require
+[the companion test-CLI PR #26](https://github.com/ores-truffle-oreslang/oreslang-test.cli/pull/26).
+The native adapter reserves exit 2 for input-capacity and I/O failure;
+it reserves exit 77 for an observed scalar-property discrepancy. The
+explicit exit policy prevents an adapter admission failure from being
+published as a reproducible guest defect. Known sanitizer diagnostics
+override the exit policy. Both source PRs require independent review.
+
+The *manual cross-repository acceptance gate* is
+`scripts/test-atto-cli-llvm-fuzz-e2e.sh` with a real
+`oreslang-llvmc`, `clang`, `oreslang-no-gc-ir-audit` and
+installed `atto-test`. It demands **1,000** normal compiled-guest
+fuzz cases, a deliberately wrong compiled guest, Rust replay/shrinking,
+a one-byte reproducer, and direct native replay of the same discrepancy.
+It fails closed on a missing compiler or CLI: neither stubs nor synthetic
+compiler receipts are acceptable.
+
+The dedicated workflow separately executes
+`scripts/test-native-atto-fuzz-adapter-source-free.sh`, which compiles
+a simple C function to LLVM IR and links it against the exact C stdin
+adapter. Its six controls were independently exercised locally under
+Clang 17, including an ASan+UBSan linked build. This is **host/source-free
+adapter evidence**, not a compiler-backed `.atto` guest proof and
+cannot replace the six compiled CTest gates.
+
 ## Sanitizer/race fail-closed contract
 
 - Compile **and** link the instrumented native executable; ASan+UBSan
