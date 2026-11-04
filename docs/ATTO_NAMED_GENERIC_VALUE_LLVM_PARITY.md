@@ -58,32 +58,35 @@ slot, never the original source index.
 The focused workflow `.github/workflows/named-call-exact-head.yml`
 checks the exact Git commit/tree, builds `oreslang-llvmc` and its Rust
 test harness, requires all named-call CTests in the inventory, and runs
-the same selected suite. Its newly authored **17** CTests comprise:
+the same selected suite. Its newly authored **20** CTests comprise:
 
 - **5 positive native linked guest executions**: combined named generics
   + values, a direct-only routine, explicit inference hole, positional
   prefix, and reordered source-effect case (expected exits 42/42/42/42/12).
-- **1 additional positive `.atto` linked guest** running the same combined
-  generic/value ABI and expecting exit 42 (not merely a renamed `.ores` label).
+- **2 additional positive `.atto` linked guests**: the same combined
+  generic/value ABI, plus lowercase `<foo=int,bar=foo>` declaration/call labels
+  with reordered named values. Both expect exit 42.
 - **1 real LLVM IR-order assertion**, checking `read_second` precedes
   `read_first` after named binding.
 - **1 combinatorial real native test** that generates and compiles all 36
-  `3! × 3!` named type-argument and runtime value-argument permutations,
-  links every emitted IR module with Clang, executes all binaries and asserts
-  that each returns exactly 42; a sum-only oracle is intentionally avoided.
-- **9 negative real-compiler source checks** requiring rejection/diagnostic
+  `3! × 3!` named type-argument and runtime value-argument permutations as
+  canonical `.atto` source files. Every emitted IR module is linked and run
+  under both Clang `-O0` and `-O2` (72 executions); each must return exactly
+  42, rather than relying on a sum-only oracle.
+- **11 negative real-compiler source checks** requiring rejection/diagnostic
   before LLVM IR: bool/string type erasure, reordered bool actual,
   duplicated/unknown/ordered generic slots, value-slot collision,
-  unknown value label, and uninferable hole.
+  unknown value label, uninferable hole, and two case-sensitive `.atto`
+  generic-type/runtime-value label failures.
 
-These 17 dedicated CTests together require **42 native guest executions**
-(5 legacy-source guests, 1 AttoLang-source guest, 36 generated permutation
-guests), 1 IR-order proof and 9 source rejection cases. The workflow also
+These 20 dedicated CTests together require **79 native guest executions**
+(5 legacy-source guests, 2 AttoLang-source guests, 72 generated permutation
+guests), 1 IR-order proof and 11 source rejection cases. The workflow also
 requires the existing `native_source_module_graph_execution` and
 `native_project_root_import_security` CTests, which now cover `.atto`
 relative imports, project-root imports, mixed explicit extension migration,
 negative no-fallback cases, nested package fences and symlink escape.
-The workflow gates **27 CTest names** in total (8 original, 17 new,
+The workflow gates **30 CTest names** in total (8 original, 20 new,
 2 import/security suites). All are pending real execution. A test listing, authored test source, zero-step job, or
 host binder oracle does not establish execution. For promotion require
 exact-head source/tree attestation, nonzero executed job steps,
@@ -95,9 +98,9 @@ authorized transfer policy is reviewed and approved.
 
 ## Cross-backend progression
 
-Shared conformance `oreslang-platform-conformance` PR #345 expands the
-source-target-only corpus to 40 `.atto` cases (18 accept/22 reject). Its
-backend result fields are intentionally `pending`. Java #2507 covers
+Shared conformance `oreslang-platform-conformance` PR #345 **merged** and
+expanded the source-target-only corpus to 40 `.atto` cases (18 accept/22
+reject). Its backend result fields are intentionally `pending`. Java #2507 covers
 generic declaration/source binding; Java #2508 is a review of
 identity-bound named call optimizer proofs stacked on Java #2086.
 LLVM #1228 is a prerequisite for member-call fail-closed parsing.
