@@ -48,7 +48,7 @@ jobs:
         env:
           ORESLANG_LLVMC: ${{ runner.temp }}/atto-scalar-build/oreslang-llvmc
           CLANG: clang
-          ATTO_EXECUTED_STEPS: '4'
+          ATTO_EXECUTED_STEPS: '5'
           ATTO_RECEIPT_PATH: ${{ runner.temp }}/atto-scalar-v1-receipt.json
         run: |
           set -euo pipefail
