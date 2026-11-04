@@ -81,3 +81,34 @@ approval of the immutable source head/tree, exact destination numeric repo ID,
 protected-source policy, workflow and retention, plus unresolved exposure-gate
 closure **before** cross-org transfer. No private LLVM source has been mirrored;
 this draft must stay source-owned until approval is independently recorded.
+
+## Manifest and source graph stability (2026-11-04)
+
+The manifest-owned native loader now captures the canonical-first package
+marker through `AttoManifestSnapshot`: bounded 64 KiB, UTF-8 validated,
+schema checked, device/inode/size/mtime/ctime pinned to the bytes that were
+read. It reopens and compares the same manifest identity and content before
+returning an admitted graph. The loader also checks each physical source
+file's `SourceIdentity` again after resolving imports and before returning
+a root or linked Program, scoped to manifest-owned canonical graphs to avoid
+changing legacy/rootless admission semantics.
+
+A new independent CTest `native_atto_manifest_snapshot_security` exercises
+post-admission content mutation, same-byte inode replacement, deletion,
+symlink substitution, invalid schema, oversized manifest and malformed UTF-8.
+This is included in the exact-head source-owned workflow alongside the prior
+five tests. The full compiler fixture additionally requires malformed,
+oversized and symlinked manifest rejection with no emitted LLVM IR.
+
+**Evidence:** The new C++ snapshot test and the expanded real compiler guest
+test are AUTHORED, NOT_EXECUTED in this session. Existing earlier GCC/Clang
+and Clang ASan/UBSan host identity results apply only to the unchanged
+`HostLogicalUnitIds.hpp` and `native_host_logical_unit_ids_test.cpp` blobs,
+not automatically to the new code.
+
+**Remaining race boundary:** This is a bounded best-effort open/recheck
+protocol, not a transaction or immutable multi-file snapshot. Replacements
+restored between checks, mutation after `load_native_program` returns, and
+hostile concurrent writers are not proven impossible. Avoid claiming the
+source graph is immutable; a fully handle-pinned graph snapshot or versioned
+source content ledger and code-generation sealing remain future work.
