@@ -4336,6 +4336,19 @@ private:
                     bound[slot] = true;
                     const ScalarType actual = validate_scalar_expression(
                         *expr.arguments[i], variables, functions, depth + 1);
+                    // Generic native parameters are not dynamically typed:
+                    // stage one represents every admitted T as i64. Checking
+                    // only parameter_is_scalar skipped these parameters and
+                    // let bool/string actuals flow into an i64 LLVM ABI call.
+                    // Bind against the already-selected named formal slot,
+                    // not lexical source index, so reordered named arguments
+                    // cannot escape this constraint.
+                    if (!signature.parameter_generic_types[slot].empty() &&
+                            actual != ScalarType::I64)
+                        throw std::runtime_error(
+                            "native scalar generic argument '" + signature.parameters[slot] +
+                            "' requires int ABI, got " + scalar_type_name(actual) +
+                            " at byte " + std::to_string(expr.arguments[i]->offset));
                     if (signature.parameter_is_scalar[slot] &&
                             actual != signature.parameter_scalar_types[slot])
                         throw std::runtime_error("argument '" + signature.parameters[slot] +
