@@ -65,11 +65,14 @@ for kind in pass fail multi-pass multi-fail; do
       die "native guest unexpected stderr: $kind O$level"
     python3 "$verifier" "$tmp/guest.stdout" "$kind" "${statuses[0]}" ||
       die "guest-owned receipt stream invalid $kind O$level"
-    printf 'ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|%s|O%s|exit=%s|guest=executed|receipt=guest_stdout\n' \
-      "$kind" "$level" "$expected"
   done
   cmp -s "$tmp/$kind-O0.ll" "$tmp/$kind-O2.ll" ||
     die "native IR changed between O0/O2 toolchain executions: $kind"
+  # Neither O0 nor O2 may claim success before both runs and equal IR pass.
+  for level in 0 2; do
+    printf 'ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|%s|O%s|exit=%s|guest=executed|receipt=guest_stdout\n' \
+      "$kind" "$level" "$expected"
+  done
 done
 for source in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$source" | cut -d' ' -f1)" == "${original_hash["$source"]}" ]] ||
