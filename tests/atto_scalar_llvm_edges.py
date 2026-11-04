@@ -19,6 +19,7 @@ POSITIVE = (
     ("mixed-value-formals", "fnc add(x:int,int y):int{return x+y;}pub fnc main():int{return add(20,22);}", 42),
     ("grouped-type-first", "pub fnc main():int{int x=(2+3)*4;return x+22;}", 42),
     ("retired-symbols-in-comments", "pub fnc main():int{/* ^^ % ^ */return 42;} // ^^ % ^\n", 42),
+    ("branch-inferred-const", "pub fnc main():int{if(true){const x=7;return x*6;} fi return 0;}", 42),
 )
 NEGATIVE = (
     ("duplicate-formal", "fnc add(x:int,int x):int{return x;}pub fnc main():int{return add(20,22);}", "duplicate parameter"),
@@ -31,6 +32,8 @@ NEGATIVE = (
     ("i64-positive-overrange", "pub fnc main():int{return 9223372036854775808;}", "overflows signed 64-bit result"),
     ("i64-negative-overrange", "pub fnc main():int{return -9223372036854775809;}", "overflows signed 64-bit result"),
     ("no-bool-int-coercion", "pub fnc main():int{return true+2;}", None),
+    ("branch-inferred-const-rebind", "pub fnc main():int{if(true){const x=7;x=8;return x;} fi return 0;}", "assignment requires an unloaned mutable scalar slot"),
+    ("branch-inferred-nonliteral", "pub fnc main():int{if(true){const x=40+2;return x;} fi return 0;}", "native inferred const requires a checked int literal initializer"),
 )
 
 

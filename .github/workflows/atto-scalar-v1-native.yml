@@ -107,7 +107,7 @@ jobs:
           grep -q '"negative_sources_checked": 9' build/atto-scalar-v1-execution.log
           grep -q '"native_positive_executions": 20' build/atto-scalar-v1-execution.log
           grep -q '"native_optimizations": \["O0", "O2"\]' build/atto-scalar-v1-execution.log
-          grep -q 'ATTO_LLVM_SCALAR_EDGES_GUEST_EXECUTED:12 NEGATIVES_REJECTED:10' build/atto-scalar-v1-execution.log
+          grep -q 'ATTO_LLVM_SCALAR_EDGES_GUEST_EXECUTED:14 NEGATIVES_REJECTED:12' build/atto-scalar-v1-execution.log
           echo 'ATTO_LLVM_SCALAR_NATIVE_STEPFUL_EXECUTION_OBSERVED'
       - name: Confirm exact source tree not modified by tests
         shell: bash
