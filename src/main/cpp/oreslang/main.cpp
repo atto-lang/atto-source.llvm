@@ -209,8 +209,55 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
         std::vector<std::string> calls;
         bool unknown = false;
     };
+    // The shared direct-facts walker is broader than its complete
+    // exceptional-effect proof: checked arithmetic, deferred cleanup and
+    // mutable locals can fail in ways its RT effect bits do not describe.
+    // Only literal/variable/direct-call scalar expressions are complete in v0.
+    const auto scalar_proven = [](const auto& self, const oreslang::Expression* expr)
+            -> bool {
+        if (!expr) return true;
+        switch (expr->kind) {
+            case oreslang::Expression::Kind::Integer:
+            case oreslang::Expression::Kind::Boolean:
+            case oreslang::Expression::Kind::Variable:
+                return true;
+            case oreslang::Expression::Kind::Call:
+                if (expr->type_arguments_present || !expr->type_arguments.empty())
+                    return false;
+                for (const auto& argument : expr->arguments)
+                    if (!self(self, argument.get())) return false;
+                return true;
+            default:
+                return false;
+        }
+    };
+    const auto function_proven = [&](const oreslang::Function& fn) -> bool {
+        if (fn.has_declared_effects || fn.scalar_while ||
+            !fn.locals.empty() || !fn.early_returns.empty() ||
+            !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+            !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+            !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+            !fn.caught_throw_defers.empty() ||
+            !fn.return_class.empty() || !fn.return_sum.empty() ||
+            !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+            fn.async_source_i64 || !fn.ready_await_actor.empty() ||
+            !fn.done_await_actor.empty() || !fn.ready_future_name.empty() ||
+            !fn.ready_future_actor.empty() ||
+            fn.ready_await_form != oreslang::NativeAwaitForm::None)
+            return false;
+        for (const auto& param : fn.parameters)
+            if (!param.class_name.empty() || !param.sum_type.empty() ||
+                !param.generic_type.empty()) return false;
+        for (const auto& statement : fn.statements) {
+            if (statement.kind != oreslang::Statement::Kind::Return ||
+                !scalar_proven(scalar_proven, statement.expression.get()))
+                return false;
+        }
+        return scalar_proven(scalar_proven, fn.result.get());
+    };
     std::map<std::string, Row> rows;
     const bool unknown_source_surface =
+        !ast.sum_types.empty() || !ast.type_only_declarations.empty() ||
         !ast.imports.empty() || !ast.actors.empty() || !ast.classes.empty() ||
         !ast.cooperative_loops.empty() || !ast.generators.empty() ||
         !ast.contracts.empty() || !ast.conforms.empty();
@@ -229,7 +276,7 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
         Row row;
         row.direct = facts.effects;
         row.calls = facts.calls;
-        row.unknown = unknown_source_surface || fn.native_internal ||
+        row.unknown = unknown_source_surface || !function_proven(fn) || fn.native_internal ||
             !facts.effects.valid() || !facts.bounded_calls ||
             !facts.bounded_cleanup || facts.unsupported_runtime ||
             (fn.has_declared_effects && !fn.declared_effects.valid());
