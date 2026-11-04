@@ -59,6 +59,22 @@ int main() {
     must_fail(base / "parent-link" / "main.atto");
     must_fail(base / ".atto.pkg.toml");
     must_fail(base / "dangling.atto");
+    // A pinned handle must still read the original inode if the pathname is
+    // replaced with an attacker-controlled symlink after the open returns.
+    const int held = ores_open_source_fd((real / "main.atto").c_str());
+    if (held < 0) throw std::runtime_error("cannot pin original source");
+    write_file(base / "other.atto");
+    fs::rename(real / "main.atto", real / "original.atto");
+    fs::create_symlink(base / "other.atto", real / "main.atto");
+    char readback[128]{};
+    const auto read_size = ::read(held, readback, sizeof(readback));
+    ::close(held);
+    if (read_size <= 0 || std::string(readback, static_cast<std::size_t>(read_size))
+            .find("return 42;") == std::string::npos)
+        throw std::runtime_error("pinned original source descriptor changed");
+    must_fail(real / "main.atto");
+    fs::remove(real / "main.atto");
+    fs::rename(real / "original.atto", real / "main.atto");
     for (int i=0;i<1000;++i) must_open(real / "main.atto");
-    std::cout << "PINNED_ATTO_SOURCE_OPEN=PASS success=5 deny=4 descriptor_reopen=1000\n";
+    std::cout << "PINNED_ATTO_SOURCE_OPEN=PASS success=5 deny=5 descriptor_reopen=1000 pinned_replace=1\n";
 }
