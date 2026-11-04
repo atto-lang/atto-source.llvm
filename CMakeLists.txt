@@ -1111,6 +1111,18 @@ if(BUILD_TESTING)
         atto-critical-suspends-actor-method.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
     # Protected objects are NOT executable on LLVM. This checks fail-closed
     # source admission only, not E_CRITICAL_READ_MUTATION or state escape.
+    oreslang_contract_test(atto_critical_suspends_comment_trivia_rejected
+        atto-critical-suspends-trivia.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    oreslang_contract_test(atto_suspends_critical_line_trivia_rejected
+        atto-suspends-critical-trivia.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    # Mutation controls: neither a lone critical, lone suspends, nor
+    # adjacent critical-read may impersonate conflicting declaration effects.
+    oreslang_contract_test(atto_critical_only_remains_unlowered
+        atto-critical-only-unlowered.atto --diagnostic "native critical declaration requires compiler lowering")
+    oreslang_contract_test(atto_suspends_only_remains_unlowered
+        atto-suspends-only-unlowered.atto --diagnostic "native suspends declaration requires suspension-aware")
+    oreslang_contract_test(atto_critical_read_remains_unlowered
+        atto-critical-read-unlowered.atto --diagnostic "native reader/writer critical declaration requires")
     oreslang_contract_test(atto_protected_state_requires_typed_lowering
         atto-protected-state-unlowered.atto --diagnostic "STATE_CONTAINER_BACKEND_UNSUPPORTED")
     # Copy scalars retain parity with Java rt share Copy semantics.
