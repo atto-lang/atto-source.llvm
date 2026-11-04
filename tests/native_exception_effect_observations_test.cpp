@@ -122,6 +122,21 @@ void unsupported_and_duplicate_identity_are_not_certified() {
             "colliding resolution cannot choose arbitrary overload");
 }
 
+void declarations_do_not_invent_observed_effects() {
+    Program p;
+    auto fn = function("declares_throw", value(1));
+    fn.has_declared_effects = true;
+    fn.declared_effects.bits = static_cast<std::uint32_t>(FunctionEffect::Throw);
+    p.functions.push_back(std::move(fn));
+    const auto report = observe_exceptional_effects(p);
+    const auto* row = report.find("declares_throw/0");
+    require(row != nullptr, "declaration row retained");
+    require(row->has_unknown_call() && report.has_unknown(),
+            "declared may-effect cannot certify a runtime observation");
+    require(!row->has_observed(FunctionEffect::Throw),
+            "declared may-effect must not create synthetic observed throw");
+}
+
 void call_edge_budget_fails_closed() {
     Program p;
     auto root = function("root", value(0));
@@ -159,6 +174,7 @@ int main() {
     unresolved_and_known_effect_both_survive();
     recursive_effect_fixed_point();
     unsupported_and_duplicate_identity_are_not_certified();
+    declarations_do_not_invent_observed_effects();
     call_edge_budget_fails_closed();
     bounds_and_unmodeled_roots();
     return 0;
