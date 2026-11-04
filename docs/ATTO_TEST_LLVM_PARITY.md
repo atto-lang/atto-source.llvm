@@ -80,6 +80,44 @@ Clang 17, including an ASan+UBSan linked build. This is **host/source-free
 adapter evidence**, not a compiler-backed `.atto` guest proof and
 cannot replace the six compiled CTest gates.
 
+## Native fuzz builder hardening and evidence boundaries
+
+The native `scripts/build-native-atto-fuzz-target.sh` now enforces a
+**separate wall-clock limit** on each compiler, Rust no-GC IR auditor, and
+Clang invocation. `ATTO_FUZZ_BUILD_TIMEOUT_SECONDS` must be a canonical
+decimal integer **1–120** (default **60**); invalid inputs are rejected
+before any compiler invocation. GNU `timeout` is mandatory (`gtimeout`
+on systems where coreutils installs it under that name). Missing timeout
+support is **inconclusive/fail-closed**, not permission to run unbounded.
+A failed or timed-out step cannot replace the previously published
+executable.
+
+The workflow's separate **source-free** builder canary,
+`scripts/test-native-atto-fuzz-build-gates-source-free.sh`,
+uses *synthetic C-generated LLVM IR* to prove these admission paths,
+without claiming any AttoLang parser/compiler execution:
+
+- positive IR/native scalar oracle; two valid-IR but wrong host ABI
+  (wrong-arity/void-return) negatives;
+- an IR verifier failure, mandatory auditor denial (exit 7), and
+  **11 timeout mutations** (eight invalid budget strings and stalled
+  compiler/auditor/linker);
+- identity-preserving binary publication across every negative, with an
+  independent outer watchdog and a marker proving bad timeout strings
+  did not even launch the synthetic compiler.
+
+The exact committed builder blob
+`964b3decc9e76232b20ed4663043d64cef6d7cf5` and source-free
+builder-canary blob
+`b41035ea2beecd6ce9498e69bd18530cb91aa24a`
+were reconstructed and hash-matched against the GitHub copies; the
+canary **passed locally with Clang 17**. This is a local source-free
+build-gate result, **not** hosted Actions or compiler-backed guest
+parity. The compiled `.atto` source-negative harness also now refuses
+signal-terminated compiler crashes as valid syntax-rejection evidence.
+The Rust harness creates Unix scratch directories with mode `0700`,
+protecting temporary generated IR from permissive process umasks.
+
 ## Sanitizer/race fail-closed contract
 
 - Compile **and** link the instrumented native executable; ASan+UBSan
