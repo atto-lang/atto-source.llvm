@@ -16,7 +16,8 @@ enum class CoreProviderRequirement : std::uint32_t {
 
 enum class CompilerLibraryTier : std::uint8_t {
     Core,
-    Alloc
+    Alloc,
+    Std
 };
 
 constexpr std::uint32_t core_provider_bit(CoreProviderRequirement requirement) noexcept {
@@ -70,11 +71,24 @@ inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
     return is_reserved_core_import(raw) || is_reserved_alloc_import(raw);
 }
 
+// Only the scalar M0 module is supported. Unknown std/* and the full
+// TestCase/TestSuite module remain explicitly rejected, never filesystem
+// imports and never silently substituted with the scalar module.
+inline bool is_native_scalar_testing_import(std::string_view raw) noexcept {
+    return raw == "ores.std/testing_scalar" ||
+           raw == "ores.std/testing_scalar.atto" ||
+           raw == "std/testing_scalar" ||
+           raw == "std/testing_scalar.atto";
+}
+
 inline bool compiler_library_dependency_allowed(
         CompilerLibraryTier importer,
         CompilerLibraryTier dependency) noexcept {
-    return importer == CompilerLibraryTier::Alloc ||
-        dependency == CompilerLibraryTier::Core;
+    if (importer == CompilerLibraryTier::Core)
+        return dependency == CompilerLibraryTier::Core;
+    if (importer == CompilerLibraryTier::Alloc)
+        return dependency != CompilerLibraryTier::Std;
+    return true;
 }
 
 inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
@@ -174,6 +188,34 @@ end
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
+    static constexpr std::string_view kTestingScalarSource =
+R"ATTO_SCALAR(// AttoLang LLVM M0: compiler-owned, scalar-only test assertions.
+// This is NOT the full std/testing.atto TestCase/TestSuite/receipt protocol.
+// Exit status 0 = assertions passed; nonzero = failed. The calling guest
+// must propagate the returned status to its main() result.
+define module testing_scalar as
+  pub fnc equal_int(int actual, int expected): int {
+    return actual == expected ? 0 : 1;
+  }
+
+  pub fnc not_equal_int(int actual, int expected): int {
+    return actual != expected ? 0 : 1;
+  }
+
+  pub fnc combine_status(int first, int second): int {
+    return first != 0 ? 1 : (second != 0 ? 1 : 0);
+  }
+end
+)ATTO_SCALAR";
+    static constexpr CoreLibrarySource kTestingScalar{
+        CompilerLibraryTier::Std,
+        "ores.std/testing_scalar",
+        "testing_scalar",
+        "@ores.std/testing_scalar.atto",
+        kTestingScalarSource,
+        0u
+    };
+
     if (raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
     if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
@@ -181,6 +223,8 @@ end
     if (raw == "alloc/int_buffer_bundle" ||
             raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
+    if (is_native_scalar_testing_import(raw))
+        return &kTestingScalar;
     return nullptr;
 }
 
@@ -194,6 +238,12 @@ inline const CoreLibrarySource* find_alloc_library_source(
         std::string_view raw) noexcept {
     const auto* source = find_compiler_library_source(raw);
     return source && source->tier == CompilerLibraryTier::Alloc ? source : nullptr;
+}
+
+inline const CoreLibrarySource* find_std_scalar_testing_source(
+        std::string_view raw) noexcept {
+    const auto* source = find_compiler_library_source(raw);
+    return source && source->tier == CompilerLibraryTier::Std ? source : nullptr;
 }
 
 inline CoreClosureRequirements infer_core_closure_requirements(
