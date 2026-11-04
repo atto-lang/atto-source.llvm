@@ -1,0 +1,8 @@
+// Legacy actor API must not silently inherit sealed critical semantics.
+define actor Worker as {
+  let total: int = 0;
+  pub critical fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
