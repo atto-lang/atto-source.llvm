@@ -38,6 +38,11 @@ reset_manifests
 sed -i 's#^arith-add|positive/arith-add.atto|42#arith-add|positive/arith-add.atto|999#' "$tmp/cases.tsv"
 reject 'out-of-range native exit status'
 reset_manifests
+sed -i 's#^arith-add|positive/arith-add.atto|42$#arith-add|positive/arith-add.atto|42|#' "$tmp/cases.tsv"
+grep -Fqx 'arith-add|positive/arith-add.atto|42|' "$tmp/cases.tsv" ||
+  fail 'ineffective positive trailing-column mutation'
+reject 'positive manifest trailing empty field'
+reset_manifests
 sed -i 's#^arith-add|positive/arith-add.atto|42#arith-add|positive/arith-add.atto|139#' "$tmp/cases.tsv"
 reject 'signal-style native exit cannot be a success oracle'
 reset_manifests
@@ -56,6 +61,11 @@ reset_manifests
 sed -i 's#negative/unknown-function.atto#negative/../positive/arith-add.atto#' "$tmp/negative.tsv"
 reject 'negative traversal'
 reset_manifests
+sed -i 's#^unknown-function|negative/unknown-function.atto|unknown function$#unknown-function|negative/unknown-function.atto|unknown function|#' "$tmp/negative.tsv"
+grep -Fqx 'unknown-function|negative/unknown-function.atto|unknown function|' "$tmp/negative.tsv" ||
+  fail 'ineffective negative trailing-column mutation'
+reject 'negative manifest trailing empty field'
+reset_manifests
 sed -i 's#^invalid-syntax|negative/invalid-syntax.atto#invalid-syntax|negative/unknown-function.atto#' "$tmp/negative.tsv"
 reject 'duplicate negative source path'
 reset_manifests
@@ -66,4 +76,4 @@ if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
 python3 "$root/tests/verify_atto_guest_receipts.py" --self-test
-echo 'PASS: thirteen source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
+echo 'PASS: fifteen source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
