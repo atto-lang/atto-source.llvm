@@ -96,6 +96,12 @@ OresNativeActorRef ores_native_vm_spawn_ready(
 OresNativeActorRef ores_native_vm_spawn_supervised(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     size_t actor_slot, OresNativeActorRef supervisor);
+/* Identical supervised parent/child identity gate, with first native carrier
+ * started and checked in before the child reference/parentage is published.
+ * Failed creation consumes neither child slot nor supervisor registration. */
+OresNativeActorRef ores_native_vm_spawn_supervised_ready(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    size_t actor_slot, OresNativeActorRef supervisor);
 /* Return immutable registered parent, or zero ref for missing, stale,
  * unsupervised or invalid child. Host metadata only. */
 OresNativeActorRef ores_native_vm_supervisor_of(
