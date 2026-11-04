@@ -2084,9 +2084,12 @@ private:
                     // A named compiler key, not a guest runtime number.
                     require("key");
                     require("=");
-                    key_name = identifier();
-                    if (key_name == "default")
+                    // 'default' is a reserved lexer keyword. Diagnose this
+                    // explicitly before the generic identifier admission so
+                    // negative fixtures distinguish a forbidden key alias.
+                    if (token_.text == "default")
                         fail("TaskLocal<int> reserves key name default");
+                    key_name = identifier();
                 }
                 require(">");
                 return key_name;
