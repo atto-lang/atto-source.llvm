@@ -1,0 +1,58 @@
+name: Native AttoLang local context domains (host only)
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp"
+      - "tests/native_context_domains_v1_test.cpp"
+      - "CMakeLists.txt"
+      - ".github/workflows/native-local-context-domains-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-local-context:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {compiler: g++, mode: optimized}
+          - {compiler: clang++, mode: optimized}
+          - {compiler: g++, mode: asan-ubsan}
+          - {compiler: clang++, mode: asan-ubsan}
+          - {compiler: g++, mode: tsan}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v4
+        with:
+          persist-credentials: false
+      - name: Verify checked out native source blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "428a983b6bac96e4922435ba3fcaccb574fccccf"
+          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "fa771f61cce5e86289ca6976c39a53a787bb9a82"
+          printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and execute local-context native regression
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          flags=(-O2 -UNDEBUG)
+          if [[ "$MODE" == asan-ubsan ]]; then
+            flags=(-O1 -g -UNDEBUG -fno-omit-frame-pointer -fsanitize=address,undefined)
+            export ASAN_OPTIONS='detect_leaks=1:halt_on_error=1'
+            export UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1'
+          elif [[ "$MODE" == tsan ]]; then
+            flags=(-O1 -g -UNDEBUG -fno-omit-frame-pointer -fsanitize=thread)
+            export TSAN_OPTIONS='halt_on_error=1'
+          fi
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_context_domains_v1_test.cpp \
+            -o "$work/local-context-test"
+          "$work/local-context-test"
+          printf 'LOCAL_CONTEXT_DOMAINS_V1_EXACT_HEAD_HOST_PASS compiler=%s mode=%s\n' "$CXX" "$MODE"
