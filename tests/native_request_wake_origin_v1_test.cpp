@@ -40,6 +40,16 @@ void on_message(void* userdata, std::size_t actor_index, std::uint64_t message) 
         s.scheduler, s.actor, s.actor, message, 1, 1, 1, &issued));
     auto lease = NativeRequestWakeGateV1::capture(current, issued);
     assert(lease && !lease->authorized()); // WAKE not yet delivered
+    if (ordinal == 2) {
+        OresNativeWakeTicket old_ticket{};
+        {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            old_ticket = s.tickets[0];
+        }
+        // First wake remains RESERVED. Same actor and tenant, but this
+        // DIFFERENT DATA mail cannot rebind that wake to request #2.
+        assert(!NativeRequestWakeGateV1::capture(current, old_ticket));
+    }
     OresNativeWakeTicket forged = issued;
     forged.producer.generation++;
     assert(!NativeRequestWakeGateV1::capture(current, forged));
@@ -66,7 +76,7 @@ void on_wake(void* userdata, std::size_t actor_index,
     if (index == 0) {
         assert(outcome == ORES_NATIVE_WAKE_READY);
         assert(s.leases[0]->authorized());
-        assert(!s.leases[1]); // second admission has not yet happened
+        assert(!s.leases[1]->authorized()); // other request's wake is unrelated
         assert(s.leases[0]->get_copy(s.trace)
                 == std::string("original-request"));
         assert(s.leases[0]->set(s.trace, std::string("resumed-ready")));
@@ -107,6 +117,12 @@ void exercise_ready_cancelled_and_stale_wakes() {
         s.scheduler, s.actor, 1) == ORES_NATIVE_SEND_ACCEPTED);
     wait_counter(s, 1, false);
     assert(!s.leases[0]->authorized()); // external producer thread
+    assert(ores_native_actor_scheduler_try_send(
+        s.scheduler, s.actor, 2) == ORES_NATIVE_SEND_ACCEPTED);
+    wait_counter(s, 2, false);
+    assert(s.requests[1]->get_copy(s.trace) == std::string("original-request"));
+    assert(s.requests[0]->get_copy(s.trace) == std::string("original-request"));
+    // Both wake credits are outstanding, captured from distinct DATA mails.
     assert(ores_native_actor_scheduler_transfer_wake(
         s.scheduler, s.tickets[0]));
     assert(ores_native_actor_scheduler_publish_wake(
@@ -116,12 +132,7 @@ void exercise_ready_cancelled_and_stale_wakes() {
     assert(s.requests[0]->get_copy(s.trace) == std::string("resumed-ready"));
     assert(!s.requests[1]->get_copy(s.trace));
     assert(!s.leases[0]->authorized());
-
-    assert(ores_native_actor_scheduler_try_send(
-        s.scheduler, s.actor, 2) == ORES_NATIVE_SEND_ACCEPTED);
-    wait_counter(s, 2, false);
     assert(s.requests[1]->get_copy(s.trace) == std::string("original-request"));
-    assert(s.requests[0]->get_copy(s.trace) == std::string("resumed-ready"));
     assert(ores_native_actor_scheduler_transfer_wake(
         s.scheduler, s.tickets[1]));
     assert(ores_native_actor_scheduler_publish_wake(
