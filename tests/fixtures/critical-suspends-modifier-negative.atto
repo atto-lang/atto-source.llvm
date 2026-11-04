@@ -1,0 +1,2 @@
+// Canonical AttoLang negative: no critical+suspends declaration ordering.
+pub critical suspends fnc bad(): int { return 42; }
