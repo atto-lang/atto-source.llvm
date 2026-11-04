@@ -101,6 +101,12 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
         ("positive-single-column.atto", 1, 2),
         ("positive-three-columns.atto", 3, 3),
         ("positive-eight-columns.atto", 8, 2),
+        # Reuse the three mutation+teardown vectors from superseded #1384.
+        # These exercise field-sensitive initialization vs let writes,
+        # not just read-only column loads.
+        ("positive-one-column-close.atto", 1, 2),
+        ("positive-three-column-close.atto", 3, 2),
+        ("positive-eight-column-close.atto", 8, 2),
     ]
     for case_id, (name, field_count, capacity) in enumerate(legacy_positive):
         source = root / name
