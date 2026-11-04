@@ -1,0 +1,85 @@
+name: AttoLang LLVM 50-program native guest parity
+on:
+  pull_request:
+    paths:
+      - contracts/atto-parity-v1/shared-scalar50-v1.tsv
+      - tests/atto_shared_scalar50_native.cmake
+      - CMakeLists.txt
+      - .github/workflows/atto-scalar50-native.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-source-to-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }
+          persist-credentials: false
+      - name: Admit the exact PR source HEAD
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          git diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "LLVM source head: $EXPECTED_SOURCE_SHA"
+          echo "LLVM source tree: $(git rev-parse 'HEAD^{tree}')"
+      - name: Install LLVM/Clang toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev
+          clang --version
+      - name: Build the real LLVM source compiler
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DATTO_EXPECTED_SOURCE_SHA="$EXPECTED_SOURCE_SHA"
+          cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Validate the pinned corpus and execute all 50 native guest programs
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure -R '^atto_shared_scalar50_'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Audit exact-head native guest receipt
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const file = "build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json";
+            const r = JSON.parse(readFileSync(file,"utf8"));
+            const hash = /^[a-f0-9]{64}$/;
+            if (r.schema !== "atto-native-scalar50-v1" ||
+                r.verification !== "LLVM_NATIVE_GUEST_EXECUTED" ||
+                r.source_head !== process.env.EXPECTED_SOURCE_SHA ||
+                r.corpus_sha256 !== "210dbe7363e5388e4f82c4de9fe7f8136ee6a7dca698ce72165e006fd5ecb0db" ||
+                r.executed_cases !== 50 ||
+                !Array.isArray(r.results) || r.results.length !== 50 ||
+                !hash.test(r.compiler_sha256) || !hash.test(r.clang_sha256) ||
+                r.results.some((entry,i) =>
+                  entry.id !== "scalar-"+String(i+1).padStart(3,"0") ||
+                  entry.expected_exit !== entry.observed_exit ||
+                  !Number.isInteger(entry.observed_exit) ||
+                  entry.observed_exit < 0 || entry.observed_exit > 255 ||
+                  !hash.test(entry.source_sha256)))
+              throw Error("unverified or mismatched LLVM guest receipt");
+            console.log("Pinned source LLVM native guest exits verified: 50/50",r.source_head);
+          '
+      - name: Preserve native guest receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-llvm-native-scalar50
+          path: build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json
+          if-no-files-found: ignore
