@@ -196,4 +196,7 @@ for path in "${!original_hash[@]}"; do
     die "guest source/manifest mutated during compiler execution: $path"
 done
 
+# Two one-case guest ORES_TEST smokes are a separate gate (not TestSuite parity).
+ORESLANG_LLVMC="$compiler" CLANG="$clang_exe" ORES_NO_GC_IR_AUDIT="$auditor" \
+  bash "$root/tests/atto_native_guest_receipts.sh"
 printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=30|optimizations=2|negative=8|guest_receipt_protocol=UNSUPPORTED\n'
