@@ -1,0 +1,62 @@
+name: Tenant VM host and lowering
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/TenantVm*'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/tenant-vm/**'
+      - 'tools/tenant-vm/**'
+      - '.github/workflows/tenant-vm.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tenant-vm:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18-dev libzstd-dev wabt cmake cargo
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+      - name: Build the compiler, for real .atto source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/compiler -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build build/compiler --target oreslang-llvmc -j4
+      - name: Plain build and all tenant VM tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tests/tenant-vm -B build/tv -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
+          cmake --build build/tv -j4
+          ctest --test-dir build/tv --output-on-failure
+      - name: ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tests/tenant-vm -B build/tv-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DTENANT_VM_SANITIZE=ON -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
+          cmake --build build/tv-asan -j4
+          TENANT_VM_FUZZ_ROUNDS=400 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build/tv-asan --output-on-failure -E admission
+      - name: TSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tests/tenant-vm -B build/tv-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DTENANT_VM_TSAN=ON
+          cmake --build build/tv-tsan --target tenant_vm_test -j4
+          TENANT_VM_FUZZ_ROUNDS=60 TSAN_OPTIONS=halt_on_error=1 build/tv-tsan/tenant_vm_test

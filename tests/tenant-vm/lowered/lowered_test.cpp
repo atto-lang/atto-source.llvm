@@ -1,0 +1,496 @@
+// Lowered guests, loaded as a real service would load them, run as tenant VMs in one process.
+//   hostile_*:  Wasm the attacker controls, in both memory modes
+//   atto_*:     real AttoLang source, compiled by oreslang-llvmc and lowered
+#include "hostile_ops.h"
+#include "oreslang/runtime/TenantVm.hpp"
+#include "oreslang/runtime/TenantVmGuestLoader.hpp"
+
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <limits>
+#include <sstream>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+using namespace oreslang::runtime::vm;
+using Bytes = std::vector<std::uint8_t>;
+
+namespace {
+int failures = 0;
+#define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++failures; } } while (0)
+#define CHECK_STATUS(actual, want) do { const Status va = (actual); if (va != (want)) { std::fprintf(stderr, "  FAIL %s:%d: got %s, want %s\n", __FILE__, __LINE__, to_string(va), to_string(want)); ++failures; } } while (0)
+#define CHECK_REASON(actual, want) do { const FailReason va = (actual); if (va != (want)) { std::fprintf(stderr, "  FAIL %s:%d: got %s, want %s\n", __FILE__, __LINE__, to_string(va), to_string(want)); ++failures; } } while (0)
+#define REQUIRE_OK(r) do { if ((r).status != Status::Ok) { std::fprintf(stderr, "  FAIL %s:%d: %s\n", __FILE__, __LINE__, to_string((r).status)); ++failures; return; } } while (0)
+
+std::string g_root;
+
+std::string read_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::stringstream out;
+    out << in.rdbuf();
+    return out.str();
+}
+std::string library_path(const std::string& name) {
+#if defined(__APPLE__)
+    return g_root + "/" + name + "/guest.dylib";
+#else
+    return g_root + "/" + name + "/guest.so";
+#endif
+}
+std::string digest_of(const std::string& name) {
+    const std::string manifest = read_file(g_root + "/" + name + "/manifest.json");
+    const auto at = manifest.find("\"sha256\": \"");
+    if (at == std::string::npos) return "";
+    return manifest.substr(at + 11, 64);
+}
+LoadedGuest load(const std::string& name) {
+    LoadedGuest guest = load_guest_library(library_path(name), digest_of(name));
+    if (!guest.error.empty()) {
+        std::fprintf(stderr, "  FAIL loading %s: %s\n", name.c_str(), guest.error.c_str());
+        ++failures;
+    }
+    return guest;
+}
+VmSpec spec(const std::string& id, const LoadedGuest& guest, std::uint32_t deadline_ms = 2000) {
+    VmSpec s;
+    s.tenant_id = id;
+    s.module = guest.module;
+    s.module_owner = guest.owner;
+    s.limits.turn_deadline_ms = deadline_ms;
+    return s;
+}
+Bytes msg(std::int64_t op, std::int64_t a = 0, std::int64_t b = 0) {
+    Bytes out(24);
+    std::memcpy(out.data(), &op, 8);
+    std::memcpy(out.data() + 8, &a, 8);
+    std::memcpy(out.data() + 16, &b, 8);
+    return out;
+}
+[[maybe_unused]] Bytes one(std::int64_t v) {
+    Bytes out(8);
+    std::memcpy(out.data(), &v, 8);
+    return out;
+}
+std::int64_t word(const Bytes& b) {
+    std::int64_t v = -999999;
+    if (b.size() == 8) std::memcpy(&v, b.data(), 8);
+    return v;
+}
+volatile std::int64_t g_host_secret = 0x0BADC0DE5EC12E7;
+
+// ---------------------------------------------------------------- hostile Wasm
+
+// Every address class Wasm can express, including the halves of real host pointers.
+void attack_matrix(const char* library, bool bounded) {
+    const LoadedGuest guest = load(library);
+    if (!guest.module) return;
+    TenantVmHost host;
+    constexpr std::int64_t kSecret = 0x5EC12E7;
+    auto victim = host.open(spec("victim", guest));
+    REQUIRE_OK(victim);
+    auto victim_actor = host.spawn_actor(victim.handle, 0);
+    REQUIRE_OK(victim_actor);
+    CHECK(word(host.call(victim_actor.actor, msg(OP_ADD, kSecret)).get().payload) == kSecret);
+
+    const auto secret_address = reinterpret_cast<std::uintptr_t>(&g_host_secret);
+    const auto stack_address = reinterpret_cast<std::uintptr_t>(&failures);
+    const std::vector<std::int64_t> addresses = {
+        0, 8, 4095, 1 << 16, 1 << 20, 0x7FFFFFFF, 0x80000000LL, 0xFFFFFFF8LL, 0xFFFFFFFFLL,
+        static_cast<std::int64_t>(secret_address), static_cast<std::int64_t>(secret_address >> 32),
+        static_cast<std::int64_t>(stack_address), static_cast<std::int64_t>(stack_address >> 32),
+        static_cast<std::int64_t>(secret_address & 0xFFFFFFFF), -1, -8};
+    int attempts = 0, stayed = 0, faulted = 0;
+    const struct { std::int64_t op; std::int64_t b; } attacks[] = {
+        {OP_PEEK, 0}, {OP_PEEK_FAR, 0}, {OP_POKE, 0x41414141}, {OP_POKE, -1 /* largest displacement */}};
+    for (const auto& attack : attacks) {
+        for (const std::int64_t address : addresses) {
+            auto attacker = host.open(spec("attacker", guest));
+            REQUIRE_OK(attacker);
+            auto actor = host.spawn_actor(attacker.handle, 0);
+            REQUIRE_OK(actor);
+            const auto result = host.call(actor.actor, msg(attack.op, address, attack.b)).get();
+            ++attempts;
+            if (result.status == Status::Ok) {
+                CHECK(word(result.payload) != kSecret);
+                CHECK(word(result.payload) != g_host_secret);
+                ++stayed;
+                host.kill(attacker.handle);
+            } else {
+                ++faulted;
+            }
+            const VmTerminal terminal = host.wait_closed(attacker.handle);
+            if (result.status != Status::Ok) {
+                // The proof. Bounds mode stops it in generated code. Guard mode has no such
+                // check, so the access really happens, and the fault must be in its own cage.
+                const FailReason expected = bounded ? FailReason::Trap : FailReason::MemoryFault;
+                if (terminal.reason != expected) {
+                    std::fprintf(stderr, "  ESCAPE? op=%lld address=%#llx reason=%s\n", static_cast<long long>(attack.op),
+                                 static_cast<unsigned long long>(address), to_string(terminal.reason));
+                    ++failures;
+                }
+            }
+        }
+    }
+    std::printf("  %s: %d hostile accesses: %d in its own memory, %d stopped, 0 left the cage\n", library, attempts, stayed, faulted);
+    CHECK(host.stats().wild_accesses == 0);
+    CHECK(g_host_secret == 0x0BADC0DE5EC12E7);
+    CHECK(word(host.call(victim_actor.actor, msg(OP_ADD, 0)).get().payload) == kSecret);
+
+    // memory.grow is refused, not silently honoured past what the region holds.
+    auto probe = host.open(spec("probe", guest));
+    REQUIRE_OK(probe);
+    auto probe_actor = host.spawn_actor(probe.handle, 0);
+    CHECK(word(host.call(probe_actor.actor, msg(OP_GROW)).get().payload) == -1);
+
+    // Faults and hangs in lowered code cost one VM only.
+    struct { const char* name; std::int64_t op; std::int64_t a; FailReason want; std::uint32_t deadline; } cases[] = {
+        {"unreachable", OP_TRAP, 0, FailReason::Trap, 2000},
+        {"spin", OP_SPIN, 0, FailReason::TurnDeadline, 100},
+        {"recursion", OP_RECURSE, 0, FailReason::StackOverflow, 300}, // clang may make this a loop
+        {"indirect-call-out-of-range", OP_INDIRECT, 12345, FailReason::Trap, 2000},
+        {"indirect-call-null-slot", OP_INDIRECT, 0, FailReason::Trap, 2000},
+    };
+    std::int64_t expected = kSecret;
+    for (int round = 0; round < 3; ++round) {
+        for (const auto& c : cases) {
+            auto v = host.open(spec(c.name, guest, c.deadline));
+            REQUIRE_OK(v);
+            auto a = host.spawn_actor(v.handle, 0);
+            REQUIRE_OK(a);
+            CHECK_STATUS(host.call(a.actor, msg(c.op, c.a)).get().status, Status::TenantFailed);
+            const VmTerminal terminal = host.wait_closed(v.handle);
+            if (round == 0) std::printf("  %-28s %s\n", c.name, to_string(terminal.reason));
+            CHECK(terminal.reason == c.want || (c.op == OP_RECURSE && terminal.reason == FailReason::TurnDeadline));
+            expected += 1;
+            CHECK(word(host.call(victim_actor.actor, msg(OP_ADD, 1)).get().payload) == expected);
+        }
+    }
+}
+
+// Bounds checks also keep actors of one tenant apart. Without them they share a cage, which
+// is not a boundary this design promises, and is the reason bounds are the default.
+void actors_of_one_tenant() {
+    const LoadedGuest bounded = load("hostile_bounds");
+    if (!bounded.module) return;
+    TenantVmHost host;
+    auto v = host.open(spec("t", bounded));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, 0);
+    auto b = host.spawn_actor(v.handle, 0);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    CHECK(word(host.call(a.actor, msg(OP_ADD, 11)).get().payload) == 11);
+    CHECK(word(host.call(b.actor, msg(OP_ADD, 22)).get().payload) == 22);
+    CHECK(word(host.call(a.actor, msg(OP_ADD, 0)).get().payload) == 11); // memory is per actor
+    // The same address names a different actor's own memory, and past it Wasm traps. The region
+    // holds 128 KiB of memory and 4 KiB of scratch, so this is past a's memory by 1 MiB.
+    auto r = host.call(b.actor, msg(OP_PEEK, 1 << 20)).get();
+    CHECK_STATUS(r.status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::Trap);
+}
+
+// -------------------------------------------------------------- the loader
+
+void loader_admits_only_exact_bytes() {
+    // FIPS 180 test vectors.
+    CHECK(sha256_hex("abc", 3) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(sha256_hex("", 0) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    const std::string longer(1000, 'a');
+    CHECK(sha256_hex(longer.data(), longer.size()) == "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3");
+
+    const std::string path = library_path("hostile_bounds"), digest = digest_of("hostile_bounds");
+    CHECK(load_guest_library(path, digest).module != nullptr);
+    CHECK(load_guest_library(path, std::string(64, '0')).module == nullptr); // wrong digest
+    CHECK(load_guest_library(path, "").module == nullptr);
+    CHECK(load_guest_library(path + ".missing", digest).module == nullptr);
+    CHECK(load_guest_library(g_root, digest).module == nullptr); // a directory
+
+    // One changed byte in a copy, so the digest no longer matches.
+    const std::string copy = g_root + "/tampered.lib";
+    std::string bytes = read_file(path);
+    bytes[bytes.size() / 2] = static_cast<char>(bytes[bytes.size() / 2] ^ 1);
+    { std::ofstream out(copy, std::ios::binary | std::ios::trunc); out << bytes; }
+    CHECK(load_guest_library(copy, digest).module == nullptr);
+    // A symlink to the right bytes is refused too: names are not what is being admitted.
+    const std::string link = g_root + "/link.lib";
+    unlink(link.c_str());
+    if (symlink(path.c_str(), link.c_str()) == 0) CHECK(load_guest_library(link, digest).module == nullptr);
+    unlink(link.c_str());
+    unlink(copy.c_str());
+
+    // Libraries loaded one after another, each gone before the next, are each their own code.
+    // The first version of this loader on Linux returned the first library again and again. The
+    // two builds tell themselves apart by how they stop an out-of-range read.
+    for (int round = 0; round < 6; ++round) {
+        const bool bounded = round % 2 == 0;
+        TenantVmHost reloading;
+        LoadedGuest guest = load(bounded ? "hostile_bounds" : "hostile_guard");
+        auto v = reloading.open(spec("reload", guest));
+        REQUIRE_OK(v);
+        auto a = reloading.spawn_actor(v.handle, 0);
+        REQUIRE_OK(a);
+        CHECK_STATUS(reloading.call(a.actor, msg(OP_PEEK, 0x7FFFFFF0LL)).get().status, Status::TenantFailed);
+        CHECK_REASON(reloading.wait_closed(v.handle).reason, bounded ? FailReason::Trap : FailReason::MemoryFault);
+    }
+
+    // The library stays mapped for as long as a VM needs it, not as long as the caller holds it.
+    TenantVmHost host;
+    VmHandle handle;
+    VmActor actor;
+    {
+        LoadedGuest guest = load("hostile_bounds");
+        auto v = host.open(spec("kept", guest));
+        REQUIRE_OK(v);
+        handle = v.handle;
+        auto a = host.spawn_actor(v.handle, 0);
+        REQUIRE_OK(a);
+        actor = a.actor;
+    }
+    CHECK(word(host.call(actor, msg(OP_ADD, 7)).get().payload) == 7);
+    host.kill(handle);
+    host.wait_closed(handle);
+    // And loading repeatedly in one process leaves nothing behind that stops it working.
+    for (int i = 0; i < 200; ++i) {
+        LoadedGuest guest = load("hostile_bounds");
+        auto v = host.open(spec("churn", guest));
+        REQUIRE_OK(v);
+        auto a = host.spawn_actor(v.handle, 0);
+        CHECK(word(host.call(a.actor, msg(OP_ADD, i)).get().payload) == i);
+        host.kill(v.handle);
+        host.wait_closed(v.handle);
+    }
+}
+
+// ------------------------------------------------------------- real source
+
+#if defined(TENANT_VM_HAVE_ATTO)
+void atto_actor_state_is_private_and_durable() {
+    const LoadedGuest counter = load("atto_counter");
+    const LoadedGuest doubler = load("atto_doubler");
+    if (!counter.module || !doubler.module) return;
+    TenantVmHost host;
+    auto acme = host.open(spec("acme", counter));
+    auto globex = host.open(spec("globex", counter));
+    auto initech = host.open(spec("initech", doubler)); // other code, same export names, same process
+    REQUIRE_OK(acme);
+    REQUIRE_OK(globex);
+    REQUIRE_OK(initech);
+    auto a1 = host.spawn_actor(acme.handle, 0);
+    auto a2 = host.spawn_actor(acme.handle, 0);
+    auto g1 = host.spawn_actor(globex.handle, 0);
+    auto i1 = host.spawn_actor(initech.handle, 0);
+    REQUIRE_OK(a1);
+    REQUIRE_OK(a2);
+    REQUIRE_OK(g1);
+    REQUIRE_OK(i1);
+    std::int64_t expected = 0;
+    for (int i = 1; i <= 1000; ++i) {
+        expected += i;
+        CHECK(word(host.call(a1.actor, one(i)).get().payload) == expected); // survives every turn
+    }
+    CHECK(word(host.call(a2.actor, one(5)).get().payload) == 5);            // another actor
+    CHECK(word(host.call(g1.actor, one(7)).get().payload) == 7);            // another tenant
+    CHECK(word(host.call(i1.actor, one(0)).get().payload) == 2);            // another program
+    CHECK(word(host.call(i1.actor, one(0)).get().payload) == 4);
+    CHECK(word(host.call(a1.actor, one(0)).get().payload) == expected);     // nobody touched it
+    // A wrong message shape is the guest's typed error, not a fault.
+    auto wrong = host.call(a1.actor, Bytes(3)).get();
+    CHECK_STATUS(wrong.status, Status::GuestError);
+    // A stopped actor's replacement starts from its initializer, not what the last one left.
+    CHECK_STATUS(host.stop_actor(a2.actor), Status::Ok);
+    auto a3 = host.spawn_actor(acme.handle, 0);
+    REQUIRE_OK(a3);
+    CHECK(word(host.call(a3.actor, one(1)).get().payload) == 1);
+    std::printf("  1000 durable turns; state private per actor, tenant and program\n");
+}
+
+void atto_checked_arithmetic_ends_only_its_vm() {
+    const LoadedGuest counter = load("atto_counter");
+    if (!counter.module) return;
+    TenantVmHost host;
+    auto bystander = host.open(spec("bystander", counter));
+    REQUIRE_OK(bystander);
+    auto b = host.spawn_actor(bystander.handle, 0);
+    auto v = host.open(spec("overflows", counter));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, 0);
+    REQUIRE_OK(a);
+    const auto max = std::numeric_limits<std::int64_t>::max();
+    CHECK(word(host.call(a.actor, one(max)).get().payload) == max);
+    CHECK_STATUS(host.call(a.actor, one(1)).get().status, Status::TenantFailed); // checked add traps
+    CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::Trap);
+    CHECK(word(host.call(b.actor, one(3)).get().payload) == 3);
+}
+
+void atto_runaway_source_ends_only_its_vm() {
+    const LoadedGuest spin = load("atto_spin");
+    const LoadedGuest recurse = load("atto_recurse");
+    const LoadedGuest counter = load("atto_counter");
+    if (!spin.module || !recurse.module || !counter.module) return;
+    TenantVmHost host;
+    auto bystander = host.open(spec("bystander", counter));
+    REQUIRE_OK(bystander);
+    auto b = host.spawn_actor(bystander.handle, 0);
+    std::int64_t expected = 0;
+    for (int round = 0; round < 5; ++round) {
+        auto s = host.open(spec("spinner", spin, 100));
+        REQUIRE_OK(s);
+        auto sa = host.spawn_actor(s.handle, 0);
+        CHECK_STATUS(host.call(sa.actor, one(1)).get().status, Status::TenantFailed);
+        const FailReason spun = host.wait_closed(s.handle).reason;
+        CHECK(spun == FailReason::TurnDeadline || spun == FailReason::Trap); // the optimizer's choice
+
+        auto r = host.open(spec("recursive", recurse, 500));
+        REQUIRE_OK(r);
+        auto ra = host.spawn_actor(r.handle, 0);
+        CHECK_STATUS(host.call(ra.actor, one(1)).get().status, Status::TenantFailed);
+        const FailReason recursed = host.wait_closed(r.handle).reason;
+        CHECK(recursed == FailReason::StackOverflow || recursed == FailReason::TurnDeadline || recursed == FailReason::Trap);
+        if (round == 0) std::printf("  source spin: %s, source recursion: %s\n", to_string(spun), to_string(recursed));
+        expected += 1;
+        CHECK(word(host.call(b.actor, one(1)).get().payload) == expected);
+    }
+    CHECK(host.stats().wild_accesses == 0);
+}
+
+void atto_helper_functions_run_in_a_turn() {
+    const LoadedGuest work = load("atto_work");
+    if (!work.module) return;
+    TenantVmHost host;
+    auto v = host.open(spec("w", work));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, 0);
+    REQUIRE_OK(a);
+    CHECK(word(host.call(a.actor, one(10)).get().payload) == 55);
+    CHECK(word(host.call(a.actor, one(1000)).get().payload) == 500500);
+}
+
+// The stated requirement, with real compiled source instead of test guests.
+void atto_thousand_tenants_in_one_process() {
+    const LoadedGuest counter = load("atto_counter");
+    if (!counter.module) return;
+    HostLimits limits;
+    limits.carriers = 8;
+    TenantVmHost host(limits);
+    constexpr int kVms = 1000, kActors = 100, kRounds = 3;
+    struct Tenant { VmHandle handle; std::vector<VmActor> actors; };
+    std::vector<Tenant> tenants(kVms);
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kVms; ++i) {
+        VmSpec s = spec("tenant-" + std::to_string(i), counter);
+        s.limits.heap_bytes = std::uint64_t{32} << 20;
+        auto v = host.open(s);
+        REQUIRE_OK(v);
+        tenants[i].handle = v.handle;
+        for (int j = 0; j < kActors; ++j) {
+            auto a = host.spawn_actor(v.handle, 0);
+            REQUIRE_OK(a);
+            tenants[i].actors.push_back(a.actor);
+        }
+    }
+    // A distinct value per actor, so any crossed wire shows as a wrong total.
+    for (int round = 1; round <= kRounds; ++round) {
+        std::vector<std::future<TurnResult>> pending;
+        pending.reserve(kVms * kActors);
+        for (int i = 0; i < kVms; ++i)
+            for (int j = 0; j < kActors; ++j) pending.push_back(host.call(tenants[i].actors[j], one(i * 1000 + j)));
+        std::size_t at = 0;
+        for (int i = 0; i < kVms; ++i)
+            for (int j = 0; j < kActors; ++j) {
+                const auto r = pending[at++].get();
+                CHECK_STATUS(r.status, Status::Ok);
+                CHECK(word(r.payload) == (i * 1000 + j) * round);
+            }
+    }
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    std::printf("  %d tenants, %d compiled .atto actors, %d turns, one process: %lld ms\n", kVms, kVms * kActors, kVms * kActors * kRounds,
+                static_cast<long long>(ms));
+    CHECK(host.stats().live_vms == kVms);
+}
+#endif
+
+// Runs whatever the pipeline accepted, with hostile inputs. Used by the mutation fuzz, where this
+// process dying, or a fault outside the cage, is the failure. A guest ending its VM is fine.
+int run_accepted_guest(const std::string& name) {
+    const LoadedGuest guest = load(name);
+    if (!guest.module) return 3;
+    TenantVmHost host;
+    std::uint64_t seed = 0xC0FFEE;
+    const auto next = [&seed] {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        return seed;
+    };
+    auto bystander = host.open(spec("bystander", load("hostile_bounds")));
+    if (bystander.status != Status::Ok) return 4;
+    auto witness = host.spawn_actor(bystander.handle, 0);
+    std::int64_t expected = 0;
+    for (int i = 0; i < 40; ++i) {
+        auto v = host.open(spec("mutant", guest, 50));
+        if (v.status != Status::Ok) return 5;
+        auto a = host.spawn_actor(v.handle, 0);
+        if (a.status != Status::Ok) return 6;
+        for (int turn = 0; turn < 4; ++turn) {
+            auto r = host.call(a.actor, msg(static_cast<std::int64_t>(next() % 12), static_cast<std::int64_t>(next() >> (next() % 64)),
+                                            static_cast<std::int64_t>(next()))).get();
+            if (r.status == Status::TenantFailed || r.status == Status::NotRunning) break;
+        }
+        host.kill(v.handle);
+        host.wait_closed(v.handle);
+        expected += 1;
+        if (word(host.call(witness.actor, msg(OP_ADD, 1)).get().payload) != expected) return 7;
+    }
+    if (host.stats().wild_accesses != 0) {
+        std::fprintf(stderr, "a guest faulted outside its cage\n");
+        return 8;
+    }
+    return 0;
+}
+
+struct Case { const char* name; void (*run)(); };
+const Case cases[] = {
+    {"attack_matrix_bounds", [] { attack_matrix("hostile_bounds", true); }},
+    {"attack_matrix_guard_pages_alone", [] { attack_matrix("hostile_guard", false); }},
+    {"actors_of_one_tenant", actors_of_one_tenant},
+    {"loader_admits_only_exact_bytes", loader_admits_only_exact_bytes},
+#if defined(TENANT_VM_HAVE_ATTO)
+    {"atto_actor_state_is_private_and_durable", atto_actor_state_is_private_and_durable},
+    {"atto_checked_arithmetic_ends_only_its_vm", atto_checked_arithmetic_ends_only_its_vm},
+    {"atto_runaway_source_ends_only_its_vm", atto_runaway_source_ends_only_its_vm},
+    {"atto_helper_functions_run_in_a_turn", atto_helper_functions_run_in_a_turn},
+    {"atto_thousand_tenants_in_one_process", atto_thousand_tenants_in_one_process},
+#endif
+};
+} // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::fprintf(stderr, "usage: tenant_vm_lowered_test <lowered-dir> [case]\n");
+        return 2;
+    }
+    g_root = argv[1];
+    if (argc == 4 && std::strcmp(argv[2], "--run-accepted") == 0) return run_accepted_guest(argv[3]);
+    int ran = 0, failed = 0;
+    for (const Case& c : cases) {
+        if (argc > 2 && std::strcmp(argv[2], c.name) != 0) continue;
+        std::printf("[ RUN  ] %s\n", c.name);
+        std::fflush(stdout);
+        const int before = failures;
+        c.run();
+        const bool pass = failures == before;
+        std::printf("[ %s ] %s\n", pass ? " OK " : "FAIL", c.name);
+        std::fflush(stdout);
+        ++ran;
+        if (!pass) ++failed;
+    }
+#if !defined(TENANT_VM_HAVE_ATTO)
+    std::printf("NOT_EXECUTED: .atto cases, this build has no compiler or IR\n");
+#endif
+    std::printf("%d cases, %d failed\n", ran, failed);
+    return ran == 0 || failed != 0;
+}

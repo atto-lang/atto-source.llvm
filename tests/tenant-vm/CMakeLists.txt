@@ -36,24 +36,69 @@ endif()
 add_test(NAME tenant_vm_test COMMAND tenant_vm_test)
 set_tests_properties(tenant_vm_test PROPERTIES TIMEOUT 300)
 
-# Enforced path: Wasm validated and lowered to native. Needs WABT.
+# Enforced path: tenant source or Wasm, admitted and lowered to a loadable library. Needs WABT.
 find_program(WAT2WASM wat2wasm)
 find_program(WASM2C wasm2c)
 find_path(WASM_RT_INCLUDE wasm-rt.h)
-if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE)
+find_program(LOWER_CLANG NAMES clang clang-18 clang-19 clang-20)
+find_package(Python3 COMPONENTS Interpreter)
+# Optional, for .atto. The compiler may come from a different build.
+set(TENANT_VM_ATTO_COMPILER "" CACHE FILEPATH "oreslang-llvmc, to lower real .atto source")
+set(TENANT_VM_ATTO_IR_DIR "" CACHE PATH "IR already emitted by oreslang-llvmc --target=wasm32, one NAME.ll per fixture")
+set(TENANT_VM_WASM_CLANG "${LOWER_CLANG}" CACHE FILEPATH "clang that can target wasm32")
+find_program(TENANT_VM_WASM_LD NAMES wasm-ld wasm-ld-18 wasm-ld-19 wasm-ld-20)
+
+if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
+    set(LOWER "${CMAKE_CURRENT_LIST_DIR}/../../tools/tenant-vm/lower_guest.py")
+    set(ADAPTER "${CMAKE_CURRENT_LIST_DIR}/../../tools/tenant-vm/guest_adapter.c")
     set(GEN "${CMAKE_CURRENT_BINARY_DIR}/lowered")
-    file(MAKE_DIRECTORY "${GEN}")
-    add_custom_command(OUTPUT "${GEN}/guest.c" "${GEN}/guest.h"
-        COMMAND "${WAT2WASM}" "${CMAKE_CURRENT_LIST_DIR}/wasm/guest.wat" -o "${GEN}/guest.wasm"
-        COMMAND "${WASM2C}" "${GEN}/guest.wasm" -o "${GEN}/guest.c" --module-name=guest
-        DEPENDS wasm/guest.wat VERBATIM)
-    add_library(tenant_vm_lowered STATIC wasm/adapter.c "${GEN}/guest.c")
-    target_include_directories(tenant_vm_lowered PRIVATE "${GEN}" "${WASM_RT_INCLUDE}" wasm)
-    target_compile_definitions(tenant_vm_lowered PRIVATE WASM_RT_MEMCHECK_GUARD_PAGES=1 WASM_RT_USE_MMAP=1)
-    target_compile_options(tenant_vm_lowered PRIVATE -O2 -w -Wno-error -Wno-pedantic)
-    add_executable(tenant_vm_lowered_test wasm/lowered_test.cpp "${ROOT}/src/main/cpp/oreslang/runtime/TenantVm.cpp")
-    target_include_directories(tenant_vm_lowered_test PRIVATE wasm)
-    target_link_libraries(tenant_vm_lowered_test PRIVATE tenant_vm_lowered Threads::Threads)
-    add_test(NAME tenant_vm_lowered_test COMMAND tenant_vm_lowered_test)
-    set_tests_properties(tenant_vm_lowered_test PROPERTIES TIMEOUT 120)
+    set(LOWER_ARGS --include "${ROOT}/src/main/cpp" --adapter "${ADAPTER}" --wasm-rt-include "${WASM_RT_INCLUDE}"
+        --clang "${LOWER_CLANG}" --wat2wasm "${WAT2WASM}" --wasm2c "${WASM2C}")
+    set(LOWERED_OUTPUTS "")
+    function(lower_guest name input)
+        add_custom_command(OUTPUT "${GEN}/${name}/manifest.json"
+            COMMAND "${Python3_EXECUTABLE}" "${LOWER}" "${input}" --out "${GEN}/${name}" ${LOWER_ARGS} ${ARGN}
+            DEPENDS "${input}" "${LOWER}" "${ADAPTER}" VERBATIM)
+        set(LOWERED_OUTPUTS ${LOWERED_OUTPUTS} "${GEN}/${name}/manifest.json" PARENT_SCOPE)
+    endfunction()
+    set(HOSTILE "${CMAKE_CURRENT_LIST_DIR}/lowered/hostile.wat")
+    lower_guest(hostile_bounds "${HOSTILE}" --mode bounds)
+    lower_guest(hostile_guard "${HOSTILE}" --mode guard)
+
+    set(ATTO_DEFINITION "")
+    if(TENANT_VM_WASM_LD AND (TENANT_VM_ATTO_COMPILER OR TENANT_VM_ATTO_IR_DIR))
+        set(ATTO_DEFINITION TENANT_VM_HAVE_ATTO)
+        foreach(fixture counter doubler spin recurse work)
+            if(TENANT_VM_ATTO_COMPILER)
+                set(input "${CMAKE_CURRENT_LIST_DIR}/lowered/atto/${fixture}.atto")
+            else()
+                set(input "${TENANT_VM_ATTO_IR_DIR}/${fixture}.ll")
+            endif()
+            set(compiler_args "")
+            if(TENANT_VM_ATTO_COMPILER)
+                set(compiler_args --compiler "${TENANT_VM_ATTO_COMPILER}")
+            endif()
+            lower_guest(atto_${fixture} "${input}" ${compiler_args}
+                --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}")
+        endforeach()
+    endif()
+    add_custom_target(tenant_vm_lowered_guests ALL DEPENDS ${LOWERED_OUTPUTS})
+
+    add_executable(tenant_vm_lowered_test lowered/lowered_test.cpp
+        "${ROOT}/src/main/cpp/oreslang/runtime/TenantVm.cpp"
+        "${ROOT}/src/main/cpp/oreslang/runtime/TenantVmGuestLoader.cpp")
+    target_include_directories(tenant_vm_lowered_test PRIVATE lowered)
+    target_compile_definitions(tenant_vm_lowered_test PRIVATE ${ATTO_DEFINITION})
+    target_link_libraries(tenant_vm_lowered_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    add_dependencies(tenant_vm_lowered_test tenant_vm_lowered_guests)
+    if(TENANT_VM_SANITIZE)
+        target_compile_options(tenant_vm_lowered_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(tenant_vm_lowered_test PRIVATE -fsanitize=address,undefined)
+    endif()
+    add_test(NAME tenant_vm_lowered_test COMMAND tenant_vm_lowered_test "${GEN}")
+    set_tests_properties(tenant_vm_lowered_test PROPERTIES TIMEOUT 300)
+    add_test(NAME tenant_vm_admission_test COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/lowered/admission_test.py"
+        "${LOWER}" --wat2wasm "${WAT2WASM}" --runner "$<TARGET_FILE:tenant_vm_lowered_test>" --hostile "${HOSTILE}"
+        --lowered-root "${GEN}" ${LOWER_ARGS})
+    set_tests_properties(tenant_vm_admission_test PROPERTIES TIMEOUT 900)
 endif()

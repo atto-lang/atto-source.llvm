@@ -1,8 +1,8 @@
 ;; A guest with attacker-chosen behaviour, limited only by what Wasm can express. It has no
-;; way to write a host pointer: every address it can form is an i32 into imported memory.
+;; way to write a host pointer: every address it can form is an i32 into its actor's memory.
 (module $guest
-  (import "env" "memory" (memory 1 65536))
-  (table 1 funcref)
+  (import "env" "memory" (memory 2 2))
+  (table 1 1 funcref)
   (type $unused (func (param i64) (result i64)))
 
   (func $recurse (param $n i64) (result i64)
@@ -30,8 +30,8 @@
       (i64.store (local.get $state) (i64.add (i64.load (local.get $state)) (local.get $a)))
       (local.set $value (i64.load (local.get $state)))
       (br $done))
-      ;; read own state offset, for the test to learn the layout
-      (local.set $value (i64.extend_i32_u (local.get $state)))
+      ;; report memory.size and memory.grow, which must stay fixed
+      (local.set $value (i64.extend_i32_s (memory.grow (i32.const 1))))
       (br $done))
       ;; peek: any address it likes
       (local.set $value (i64.load (i32.wrap_i64 (local.get $a))))
@@ -39,8 +39,10 @@
       ;; peek with the largest static displacement Wasm allows
       (local.set $value (i64.load offset=4294967295 (i32.wrap_i64 (local.get $a))))
       (br $done))
-      ;; poke
-      (i64.store (i32.wrap_i64 (local.get $a)) (local.get $b))
+      ;; poke, with the largest displacement as well if b says so
+      (if (i64.eq (local.get $b) (i64.const -1))
+        (then (i64.store offset=4294967295 (i32.wrap_i64 (local.get $a)) (local.get $b)))
+        (else (i64.store (i32.wrap_i64 (local.get $a)) (local.get $b))))
       (br $done))
       unreachable)
       (loop $forever (br $forever)))

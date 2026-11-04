@@ -12,7 +12,8 @@
 //  - Faults: a trap unwinds that VM's turns. The carrier thread and every other VM go on.
 //  - Termination: a VM can be killed while spinning, with no cooperation from guest code,
 //    by interrupting its carriers. All its memory is discarded, so nothing needs unwinding.
-//  - Quotas: memory, actors, mailboxes, per-turn deadline and cumulative CPU.
+//  - Quotas: memory, actors, mailboxes, queued mail bytes, per-turn deadline, cumulative CPU.
+//  - Fairness: carriers go to the ready VM that has used the least CPU, however its turns are sized.
 //
 // What it does not give: protection from code that breaks the ABI's addressing rule, or
 // from a bug in this runtime. Both share one address space with every tenant, by design.
@@ -48,7 +49,8 @@ enum class Status {
     GuestError,
     ReplyTooLarge,
     TenantFailed,
-    HostClosed
+    HostClosed,
+    SignalHandlerLost // another component replaced our fault handler, so a guest fault would be fatal
 };
 const char* to_string(Status status) noexcept;
 
@@ -72,16 +74,18 @@ struct VmLimits {
     std::uint32_t max_actors = 4096;
     std::uint32_t mailbox_capacity = 64;   // per actor
     std::uint32_t max_inflight = 65536;    // mail queued across this VM
+    std::uint64_t max_queued_bytes = std::uint64_t{16} << 20; // host memory that mail may hold for this VM
     std::uint32_t max_parallel_turns = 4;  // carriers one tenant can hold at once
     std::uint32_t max_payload_bytes = 64 * 1024;
     std::uint32_t max_reply_bytes = 64 * 1024;
-    std::uint32_t turn_deadline_ms = 1000;
+    std::uint32_t turn_deadline_ms = 1000; // CPU time of one turn, with a wall-clock backstop
     std::uint64_t cpu_budget_ms = 0;       // cumulative turn time, 0 = unlimited
 };
 
 struct VmSpec {
     std::string tenant_id; // [A-Za-z0-9_.-]{1,128}, not "." or ".."
     const OresVmGuestModule* module = nullptr; // must outlive the VM; no writable globals
+    std::shared_ptr<const void> module_owner;  // released after the VM retires
     VmLimits limits;
 };
 
@@ -90,6 +94,10 @@ struct HostLimits {
     std::uint32_t carriers = 8;
     std::uint64_t max_admitted_heap_bytes = std::uint64_t{1} << 40;
     std::size_t carrier_stack_bytes = std::size_t{8} << 20;
+    std::uint64_t max_queued_bytes = std::uint64_t{4} << 30; // mail across all VMs
+    // A fault outside any cage means the boundary itself failed: lowered code broke the
+    // addressing rule, so memory safety of every tenant is in doubt. Stop rather than continue.
+    bool abort_on_wild_access = false;
 };
 
 // Published only after the cage is unmapped and no carrier can be inside this VM.
@@ -150,6 +158,8 @@ struct HostStats {
     std::uint64_t admitted_heap_bytes = 0;
     std::uint64_t traps_contained = 0;
     std::uint64_t kills_delivered = 0;
+    std::uint64_t wild_accesses = 0;  // nonzero means a compiler-path bug, see HostLimits
+    std::uint64_t queued_bytes = 0;
 };
 
 class TenantVmHost final {

@@ -10,12 +10,19 @@ extern "C" {
 typedef struct OresVmCHost OresVmCHost;
 typedef struct OresVmCVm OresVmCVm;
 typedef struct OresVmCActor OresVmCActor;
+typedef struct OresVmCGuest OresVmCGuest;
 
 OresVmCHost* ores_vm_c_host_new(uint32_t carriers, uint32_t max_vms);
 void ores_vm_c_host_free(OresVmCHost*);
 /* Status values are the integer value of oreslang::runtime::vm::Status; 0 is Ok. */
 OresVmCVm* ores_vm_c_open(OresVmCHost*, const char* tenant_id, const OresVmGuestModule*,
                           uint32_t turn_deadline_ms, int32_t* status);
+/* A lowered guest library, admitted by its SHA-256. NULL if it is not exactly those bytes. */
+OresVmCGuest* ores_vm_c_guest_load(const char* path, const char* sha256_hex);
+void ores_vm_c_guest_free(OresVmCGuest*);
+/* The VM keeps the library mapped for as long as it needs it. */
+OresVmCVm* ores_vm_c_open_guest(OresVmCHost*, const char* tenant_id, const OresVmCGuest*,
+                                uint32_t turn_deadline_ms, int32_t* status);
 void ores_vm_c_vm_free(OresVmCVm*);
 OresVmCActor* ores_vm_c_spawn(OresVmCHost*, OresVmCVm*, uint32_t kind, int32_t* status);
 void ores_vm_c_actor_free(OresVmCActor*);

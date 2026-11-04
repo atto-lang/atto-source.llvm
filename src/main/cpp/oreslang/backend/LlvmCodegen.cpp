@@ -2844,11 +2844,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 [&](const LocalBinding& f) { return f.name == write.field; });
             if (field == actor.fields.end() || !field->field_mutable)
                 throw std::runtime_error("invalid wasm32 actor field write");
-            auto* value = lower(*write.expression, b, i64, values, emptyFields, noFunctions);
+            auto* value = lower(*write.expression, b, i64, values, emptyFields, declarations);
             b.CreateStore(value, values.at(write.field));
         }
         auto* value = lower(*actor.on_message.result, b, i64, values,
-            emptyFields, noFunctions);
+            emptyFields, declarations);
         // Commit all private state only after evaluating the handler; no
         // host callback or suspension may interleave during this transition.
         for (std::size_t i = 0; i < actor.fields.size(); ++i)
