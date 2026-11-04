@@ -43,11 +43,12 @@ jobs:
       - name: Provision LLVM and Clang
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm-dev clang cmake ninja-build
+          sudo apt-get install -y --no-install-recommends llvm-dev clang cmake ninja-build rustc
           command -v llvm-config
           command -v clang
           command -v cmake
           command -v ninja
+          command -v rustc
       - name: Build real LLVM guest compiler
         shell: bash
         run: |
@@ -56,8 +57,15 @@ jobs:
           cmake -S . -B "$RUNNER_TEMP/dop-atto-build" -G Ninja \
             -DBUILD_TESTING=OFF -DLLVM_DIR="$LLVM_DIR" -DCMAKE_BUILD_TYPE=Release
           cmake --build "$RUNNER_TEMP/dop-atto-build" --target oreslang-llvmc --parallel 2
+          # compile-aot.sh requires the real Rust no-GC IR auditor.
+          # Its CMake target is not defined with BUILD_TESTING=OFF.
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs \
+            -o "$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit"
           test -x "$RUNNER_TEMP/dop-atto-build/oreslang-llvmc"
-          sha256sum "$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" "$(command -v clang)" examples/dop-cache/soa-int-update.atto
+          test -x "$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit"
+          sha256sum "$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" \
+            "$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit" \
+            "$(command -v clang)" examples/dop-cache/soa-int-update.atto
       - name: Validate shell verifier syntax
         shell: bash
         run: |
@@ -83,6 +91,17 @@ jobs:
           rc=$?
           set -e
           test "$rc" -eq 69
+      - name: Fail closed without no-GC auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          ORESLANG_LLVMC="$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" \
+            ORES_NO_GC_IR_AUDIT=/missing/oreslang-no-gc-ir-audit \
+            bash scripts/verify-dop-atto-aot.sh
+          rc=$?
+          set -e
+          test "$rc" -eq 69
       - name: Compile and execute real .atto guest AOT
         shell: bash
         env:
@@ -90,6 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           ORESLANG_LLVMC="$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" \
+            ORES_NO_GC_IR_AUDIT="$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit" \
             bash scripts/verify-dop-atto-aot.sh
           test "$(git rev-parse --verify HEAD)" = "$DOP_CHECKOUT_HEAD"
           test "$(git rev-parse --verify HEAD^{tree})" = "$DOP_CHECKOUT_TREE"
