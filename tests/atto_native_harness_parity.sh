@@ -17,6 +17,10 @@ die() { printf 'FAIL AttoLang LLVM native guest parity: %s\n' "$*" >&2; exit 1; 
 [[ -f "$manifest" && ! -L "$manifest" && -f "$negative_manifest" && ! -L "$negative_manifest" ]] ||
   die 'missing or symlinked trusted test manifests'
 [[ "$manifest" != "$negative_manifest" ]] || die 'manifests alias each other'
+[[ -d "$corpus" && ! -L "$corpus" &&
+   -d "$corpus/positive" && ! -L "$corpus/positive" &&
+   -d "$corpus/negative" && ! -L "$corpus/negative" ]] ||
+  die 'source corpus directories must be real, not symlinks'
 declare -A seen=()
 declare -a positive_ids=() positive_paths=() expected_exits=()
 declare -a negative_ids=() negative_paths=() diagnostic_needles=()
@@ -60,6 +64,14 @@ for path in "$manifest" "$negative_manifest" \
     "${positive_paths[@]/#/$corpus/}" "${negative_paths[@]/#/$corpus/}"; do
   [[ -f "$path" && ! -L "$path" ]] || die "nonregular source: $path"
 done
+
+# Pin reviewed v1 (ID, source, exit, and diagnostic) manifest maps.
+# Row counts and path shapes alone cannot detect valid substitutions.
+command -v git >/dev/null || die 'git hash-object required for pinned manifest identity'
+[[ "$(git hash-object -- "$manifest")" == "dc56b627a27764b9a8913800191420727372d081" ]] ||
+  die 'positive manifest differs from reviewed LLVM parity v1 contract'
+[[ "$(git hash-object -- "$negative_manifest")" == "c60defdb79a765b5a5287950b80ff9827e6e506b" ]] ||
+  die 'negative manifest differs from reviewed LLVM parity v1 contract'
 
 if [[ "$mode" == --inventory-only ]]; then
   echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=24 negative=3 (NO_COMPILER_EXECUTION)'
@@ -196,7 +208,8 @@ for path in "${!original_hash[@]}"; do
     die "guest source/manifest mutated during compiler execution: $path"
 done
 
-# Two one-case guest ORES_TEST smokes are a separate gate (not TestSuite parity).
+# Four guest-produced ORES_TEST smokes, including two multi-case summaries,
+# are a separate gate (not TestSuite implementation or Java TestKit parity).
 ORESLANG_LLVMC="$compiler" CLANG="$clang_exe" ORES_NO_GC_IR_AUDIT="$auditor" \
   bash "$root/tests/atto_native_guest_receipts.sh"
 printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=24|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED\n'
