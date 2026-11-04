@@ -26,7 +26,8 @@ printf '\x00\x01\x7f\xff' | "$good" >"$output" 2>"$errors"
 [[ ! -s "$output" && ! -s "$errors" ]] ||
   { echo 'empty input should be a clean no-op' >&2; exit 1; }
 # The exact maximum input must be admitted without writing diagnostics.
-head -c 65536 /dev/zero | "$good" >"$output" 2>"$errors"
+head -c 65536 /dev/zero > "$work/exact-bound.bin"
+"$good" < "$work/exact-bound.bin" >"$output" 2>"$errors"
 [[ ! -s "$output" && ! -s "$errors" ]] ||
   { echo 'maximally bounded LLVM fuzz input did not pass' >&2; exit 1; }
 bash "$builder" "$root/tests/fixtures/atto-fuzz-byte-mutant.atto" "$mutant"
@@ -39,7 +40,8 @@ set -e
 grep -Fq 'ATTO_LLVM_FUZZ_MISMATCH position=0 input=0 expected=1 got=2' "$errors" ||
   { echo 'compiled guest mutation failed to report a bounded byte discrepancy' >&2; exit 1; }
 set +e
-head -c 65537 /dev/zero | "$good" >"$output" 2>"$errors"
+head -c 65537 /dev/zero > "$work/over-bound.bin"
+"$good" < "$work/over-bound.bin" >"$output" 2>"$errors"
 status=$?
 set -e
 [[ "$status" == 2 && ! -s "$output" ]] ||
