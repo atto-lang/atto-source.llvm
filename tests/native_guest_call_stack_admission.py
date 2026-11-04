@@ -59,7 +59,7 @@ CASES.update({
     "acyclic_depth_64": (chain(63), 42),
     "acyclic_depth_65": (chain(64), None),
     "conditional_hidden_self_cycle": (
-        "fnc loop(int n): int { return n == 0 ? 0 : loop(n - 1); }\n"
+        "fnc recurse(int n): int { return n == 0 ? 0 : recurse(n - 1); }\n"
         "pub fnc main(): int { return 42; }\n", 42),
     "unreachable_self_cycle": (
         "fnc unused(int n): int { return unused(n - 1); }\n"
