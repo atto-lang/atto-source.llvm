@@ -16,7 +16,22 @@ typedef struct {
 } DuplicateAwaitContext;
 
 static int64_t simple_producer(void) {
+    int64_t missing = -1;
+    assert(!oreslang_source_task_local_i64_get_checked(&missing));
+    assert(missing == -1);
     return 7;
+}
+
+static int64_t tasklocal_producer(void) {
+    int64_t missing = -1;
+    assert(!oreslang_source_task_local_i64_get_checked(&missing));
+    assert(oreslang_source_task_local_i64_set_checked(41));
+    int64_t value = 0;
+    assert(oreslang_source_task_local_i64_get_checked(&value));
+    assert(value == 41);
+    // The compiler's checked guest intrinsics are identical to these wrappers.
+    oreslang_source_task_local_i64_set(42);
+    return oreslang_source_task_local_i64_get();
 }
 
 static void* duplicate_await(void* opaque) {
@@ -64,6 +79,23 @@ int main(void) {
         == ORES_SOURCE_TASK_ALREADY_CONSUMED);
 
     assert(oreslang_source_task_runtime_shutdown() == 1);
+    assert(oreslang_source_task_runtime_shutdown() == 1);
+
+    // No host thread may access the retired TaskLocal slot, even when it
+    // retains the typed function symbol. Next task begins with no value.
+    int64_t forbidden = -1;
+    assert(!oreslang_source_task_local_i64_set_checked(4));
+    assert(!oreslang_source_task_local_i64_get_checked(&forbidden));
+    assert(!oreslang_source_task_local_i64_get_checked(NULL));
+    void* owned = NULL;
+    assert(oreslang_source_task_start_i64_checked(tasklocal_producer, &owned)
+        == ORES_SOURCE_TASK_OK);
+    int64_t owned_result = 0;
+    assert(oreslang_source_task_await_i64_checked(owned, &owned_result)
+        == ORES_SOURCE_TASK_OK);
+    assert(owned_result == 42);
+    assert(!oreslang_source_task_local_i64_set_checked(42));
+    assert(!oreslang_source_task_local_i64_get_checked(&forbidden));
     assert(oreslang_source_task_runtime_shutdown() == 1);
 
     /*
