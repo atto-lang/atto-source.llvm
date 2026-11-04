@@ -11,7 +11,7 @@ trap 'rm -rf -- "$tmp"' EXIT
 
 fail() { echo "FAIL source-free AttoLang LLVM inventory: $*" >&2; exit 1; }
 bash "$runner" --inventory-only > "$tmp/positive.log"
-grep -Fqx 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=40 negative=3 (NO_COMPILER_EXECUTION)' \
+grep -Fqx 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=40 negative=6 (NO_COMPILER_EXECUTION)' \
   "$tmp/positive.log" || fail 'good inventory did not pass'
 reject() {
   label="$1"
@@ -44,8 +44,11 @@ cp "$negatives" "$tmp/negative.tsv"
 sed -i 's#negative/unknown-function.atto#negative/../positive/arith-add.atto#' "$tmp/negative.tsv"
 reject 'negative traversal'
 cp "$negatives" "$tmp/negative.tsv"
+sed -i '/^std-alias-attempt|/d' "$tmp/negative.tsv"
+reject 'missing reserved std negative'
+cp "$negatives" "$tmp/negative.tsv"
 if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
 python3 "$root/tests/verify_atto_guest_receipts.py" --self-test
-echo 'PASS: eight source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
+echo 'PASS: nine source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'

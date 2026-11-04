@@ -1,0 +1,3 @@
+// Reject unapproved alias, traversal or unknown reserved std namespace.
+import module Bad from "ores.std/testing/../scalar";
+pub fnc main(): int { return 0; }

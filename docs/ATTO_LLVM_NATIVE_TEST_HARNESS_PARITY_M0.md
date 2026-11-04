@@ -185,3 +185,14 @@ uses descriptor-bound O_NOFOLLOW/O_NONBLOCK bounded reads, and cannot silently
 skip negative checks under Python optimization. The focused CI workflow was
 repaired to one ten-step job and source-only tests now parse all eight shell
 blocks with `bash -n`. Runner admission and independent review remain gates.
+
+### Additional compiler-negative std namespace admission gates
+
+Added three checked-in `.atto` negatives for unapproved `std/` aliases,
+reserved import traversal-like spellings, and unknown `ores.std/testing`
+submodules, plus one dynamic Wasm freestanding reject for the admitted
+host-only scalar-testing path. These increase required compiler negatives
+from six to **ten** (six manifest fixtures + four dynamic). The scalar
+corpus requires 80 native O0/O2 executions; the concurrently added
+four receipt suites require eight more, so the combined target is **88
+native executions**. Zero-step CI is never execution evidence.

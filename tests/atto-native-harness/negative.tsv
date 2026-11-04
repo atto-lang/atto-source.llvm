@@ -2,3 +2,6 @@
 unknown-function|negative/unknown-function.atto|unknown function
 invalid-syntax|negative/invalid-syntax.atto|oreslang-llvmc:
 missing-import|negative/missing-import.atto|cannot resolve native import
+std-alias-attempt|negative/std-alias-attempt.atto|native ores.std package resolution remains unsupported
+std-traversal|negative/std-traversal.atto|native ores.std package resolution remains unsupported
+std-unknown|negative/std-unknown.atto|native ores.std package resolution remains unsupported

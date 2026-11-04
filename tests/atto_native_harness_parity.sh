@@ -46,7 +46,7 @@ while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
     die "missing or symlinked negative .atto source: $id"
   negative_ids+=("$id"); negative_paths+=("$path"); diagnostic_needles+=("$needle")
 done < "$negative_manifest"
-[[ "${#negative_ids[@]}" -eq 3 ]] || die 'expected exactly three negative fixtures'
+[[ "${#negative_ids[@]}" -eq 6 ]] || die 'expected exactly six negative fixtures'
 [[ -f "$corpus/positive/.atto.pkg.toml" && ! -L "$corpus/positive/.atto.pkg.toml" ]] ||
   die 'canonical package manifest is absent or symlinked'
 [[ -f "$corpus/positive/scalar-assert-lib.atto" && ! -L "$corpus/positive/scalar-assert-lib.atto" ]] ||
@@ -62,7 +62,7 @@ for path in "$manifest" "$negative_manifest" \
 done
 
 if [[ "$mode" == --inventory-only ]]; then
-  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=40 negative=3 (NO_COMPILER_EXECUTION)'
+  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=40 negative=6 (NO_COMPILER_EXECUTION)'
   exit 0
 fi
 [[ -x "$compiler" && ! -L "$compiler" ]] || die "missing non-symlink executable compiler: $compiler"
@@ -191,6 +191,24 @@ grep -Fq 'native ores.std package resolution remains unsupported' \
   "$tmp/unsupported-stdlib.stderr" ||
   die 'LLVM std/testing unsupported boundary lacks explicit diagnostic'
 
+# A wasm/freestanding module must never import hosted scalar std/testing,
+# even when its current helper implementations are effect-free.
+mkdir "$tmp/reject-freestanding-std"
+printf '%s\n' 'import module Test from "ores.std/testing/scalar"; pub fnc main(): int { return Test.expect_true(true); }' \
+  > "$tmp/reject-freestanding-std/main.atto"
+set +e
+timeout 30s "$compiler" --target=wasm32-unknown-unknown --library-profile=core \
+  "$tmp/reject-freestanding-std/main.atto" > "$tmp/reject-freestanding-std.ll" \
+  2> "$tmp/reject-freestanding-std.stderr"
+status=$?
+set -e
+[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 &&
+   ! -s "$tmp/reject-freestanding-std.ll" ]] ||
+  die 'LLVM admitted hosted scalar testing into freestanding wasm'
+grep -Fq 'native ores.std testing scalar requires hosted target' \
+  "$tmp/reject-freestanding-std.stderr" ||
+  die 'freestanding std/testing scalar rejection diagnostic missing'
+
 for path in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$path" | cut -d ' ' -f1)" == "${original_hash["$path"]}" ]] ||
     die "guest source/manifest mutated during compiler execution: $path"
@@ -199,4 +217,4 @@ done
 # Two one-case guest ORES_TEST smokes are a separate gate (not TestSuite parity).
 ORESLANG_LLVMC="$compiler" CLANG="$clang_exe" ORES_NO_GC_IR_AUDIT="$auditor" \
   bash "$root/tests/atto_native_guest_receipts.sh"
-printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED\n'
+printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=10|guest_receipt_protocol=UNSUPPORTED\n'
