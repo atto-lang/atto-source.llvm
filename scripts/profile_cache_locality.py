@@ -117,26 +117,30 @@ def verify_exact_source_tree(expected):
 
 
 def hash_executable(path):
-    """Fingerprint only a regular, bounded native executable, never a directory."""
+    """Hash one executable through a no-follow descriptor, not a racy pathname."""
     if not path.is_absolute():
         raise ValueError("benchmark executable path must be absolute")
-    link_info = path.lstat()
-    if not stat.S_ISREG(link_info.st_mode):
-        raise ValueError("benchmark executable path must be a regular file, not a symlink")
-    info = path.stat()
-    if not os.access(path, os.X_OK):
-        raise ValueError("benchmark binary must be executable")
-    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
-            or info.st_size <= 0 or info.st_size > 512 * 1024 * 1024):
-        raise ValueError("benchmark executable must be a single-link regular file of 1..512 MiB")
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("platform cannot safely bind benchmark executable identity")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError("benchmark executable path must be a regular file, not a symlink") from exc
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_size <= 0 or info.st_size > 512 * 1024 * 1024):
+            raise ValueError("benchmark executable must be a single-link regular file of 1..512 MiB")
+        if info.st_mode & 0o111 == 0:
+            raise ValueError("benchmark binary must be executable")
+        digest = hashlib.sha256()
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
-    again = path.stat()
-    if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
-            again.st_dev, again.st_ino, again.st_size, again.st_mtime_ns, again.st_ctime_ns):
-        raise RuntimeError("benchmark executable changed while being hashed")
+        again = os.fstat(stream.fileno())
+        if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+                again.st_dev, again.st_ino, again.st_size, again.st_mtime_ns, again.st_ctime_ns):
+            raise RuntimeError("benchmark executable changed while being hashed")
     return digest.hexdigest(), info.st_size
 
 
