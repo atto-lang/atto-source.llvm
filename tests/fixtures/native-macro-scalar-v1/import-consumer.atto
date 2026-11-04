@@ -1,0 +1,5 @@
+import * as lib from "./import-producer.atto";
+
+pub fnc main() -> int {
+    return lib.literal!(const 40 + 2);
+}
