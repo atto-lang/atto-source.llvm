@@ -36,6 +36,31 @@ void on_actor_message(void* user, std::size_t index, std::uint64_t payload) {
         assert(actor_local_set_on_turn_v1(s.scheduler, s.actors[index],
             *s.scope[index], s.stamps[index], s.key,
             static_cast<int>(100 + index)));
+        assert(!actor_local_erase_on_turn_v1(
+            s.scheduler, s.actors[index], *s.scope[1-index],
+            s.stamps[1-index], s.key));
+        auto wrong_tenant = s.stamps[index];
+        ++wrong_tenant.tenant;
+        assert(!actor_local_erase_on_turn_v1(
+            s.scheduler, s.actors[index], *s.scope[index],
+            wrong_tenant, s.key));
+        auto wrong_isolate = s.stamps[index];
+        ++wrong_isolate.isolate;
+        assert(!actor_local_erase_on_turn_v1(
+            s.scheduler, s.actors[index], *s.scope[index],
+            wrong_isolate, s.key));
+        assert(actor_local_erase_on_turn_v1(
+            s.scheduler, s.actors[index], *s.scope[index],
+            s.stamps[index], s.key));
+        assert(!actor_local_erase_on_turn_v1(
+            s.scheduler, s.actors[index], *s.scope[index],
+            s.stamps[index], s.key));
+        assert(!actor_local_get_on_turn_v1(
+            s.scheduler, s.actors[index], *s.scope[index],
+            s.stamps[index], s.key));
+        assert(actor_local_set_on_turn_v1(s.scheduler, s.actors[index],
+            *s.scope[index], s.stamps[index], s.key,
+            static_cast<int>(100 + index)));
     } else {
         assert(actor_local_get_on_turn_v1(s.scheduler, s.actors[index],
             *s.scope[index], s.stamps[index], s.key) ==
@@ -91,6 +116,9 @@ int main() {
     assert(!actor_local_set_on_turn_v1(
         s.scheduler, s.actors[0], *s.scope[0],
         s.stamps[0], s.key, 999));
+    assert(!actor_local_erase_on_turn_v1(
+        s.scheduler, s.actors[0], *s.scope[0],
+        s.stamps[0], s.key));
 
     round(s, 1);
     round(s, 2);
