@@ -238,3 +238,41 @@ explicitly unsupported, because a full Java-equivalent `TestBody`
 callable, dynamic `TestSuite` dispatcher, arbitrary string IDs and
 canonical escaping, nested suite model and actor TestKit are outstanding.
 No private-source export or unreviewed cross-organization carrier is authorized.
+
+## M2 registered scalar body dispatch — authored, not natively verified
+
+The scoped `stdlib/testing_m2.atto` module is embedded byte-for-byte as
+compiler-owned `ores.std/testing/m2.atto` with explicit legacy `.ores`
+compatibility and stable unit identity. This module builds on M1
+`TestCase`/`TestSuite`/`RunSummary` and the scalar assertion helpers;
+it is hosted only. Freestanding Wasm import rejects with nonzero compiler
+status, no partial IR, and the existing hosted-only diagnostic.
+
+M2 introduces a **restricted `RegisteredCase`** with integer identity,
+body opcode, operands, selected/skipped flags, visited flag and invocation
+counter. `run_one` checks fail-fast, duplicate admission and quota **before**
+dispatch. Supported body IDs invoke only four pure scalar test functions
+(eq, ne, lt, gt). Skipped/filtered cases never call a body; invalid body IDs
+return `-3` without modifying the suite. `run_pair` enforces distinct IDs
+before execution and runs at most two cases in registration order. The guest
+evaluates the bodies and verifies the resulting suite counts and native status
+before writing its own `ORES_TEST` records.
+
+Six additional `.atto` cases test PASS/PASS, FAIL + fail-fast suppression,
+FILTER/SKIP suppression, invalid-body rejection and recovery, duplicate-ID
+rejection and recovery, and once-only admission. The previous scalar and M1
+fixtures remain intact.
+
+**Current authored acceptance matrix:** 40 scalar programs × O0/O2 = 80
+native executions; 20 guest-owned receipt programs × O0/O2 = 40, for
+**120 required native processes**, plus **11 compiler-negative scenarios**.
+All real native results remain **NOT_EXECUTED** until a stepful exact-head
+source-owning CI run with build, no-GC auditor, Clang, guest processes, stdout
+and exit receipts has completed. Source-readback and verifier mutations are
+not native compiler passes.
+
+**M2 is not full `std/testing` parity:** It does not register arbitrary
+user-defined functions or closures, implement first-class callable
+`TestBody`, dynamic test lists or suite trees, arbitrary names with escape
+validation, cross-suite duplicate-name fencing, or Java-equivalent callbacks.
+The unqualified `ores.std/testing` import must continue failing closed.
