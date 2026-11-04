@@ -80,7 +80,7 @@ unimplemented cases.
 The native `--analyze` mode additionally prints a bounded, human-readable
 observation line to stderr, including `functions`, `call_edges`,
 `unresolved_edges`, `throw_observed`, `raise_observed`,
-`panic_observed`, and `unknown`. It uses the existing compiler-owned
+`panic_observed`, `graph_unknown`, and `semantic_proof=0`. It uses the existing compiler-owned
 `RealtimeAnalysis.hpp` direct-facts walker, then propagates those
 observations through resolved function name/arity calls with a monotone
 fixed-point algorithm. Recursive cycles cannot erase effects. Missing,
