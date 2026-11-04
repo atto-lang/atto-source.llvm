@@ -3,6 +3,7 @@
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/types/NativeGuestCallGraphGate.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -18,6 +19,8 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/IRBuilder.h"
 #include "oreslang/backend/LlvmCompat.hpp"
 #include "llvm/IR/Intrinsics.h"
@@ -71,6 +74,11 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    // Present only for the qualified scalar-recursive module. No owned
+    // resources, critical regions, suspension, FFI or actor effects occur
+    // on this fast failure path until a cleanup-safe frame ABI exists.
+    llvm::GlobalVariable* guest_frame_exhausted = nullptr;
+    llvm::BasicBlock* guest_frame_failed_return = nullptr;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -632,8 +640,24 @@ llvm::Value* lower(const Expression& expr,
                 ordered.push_back(moves->result_destination);
                 ordered.push_back(moves->result_region);
             }
-            return builder.CreateCall(callee, ordered,
+            llvm::Value* result = builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
+            if (moves && moves->guest_frame_exhausted) {
+                // Scalar recursive execution only: short-circuit immediately
+                // after every guest call, including calls in argument lists.
+                // Otherwise an arithmetic overflow on the error sentinel
+                // could still turn a budget failure into llvm.trap/abort.
+                llvm::Value* exhausted = builder.CreateLoad(
+                    builder.getInt1Ty(), moves->guest_frame_exhausted,
+                    "atto.call.exhausted");
+                auto* parent = builder.GetInsertBlock()->getParent();
+                auto* continue_block = llvm::BasicBlock::Create(
+                    builder.getContext(), "atto.call.continue", parent);
+                builder.CreateCondBr(
+                    exhausted, moves->guest_frame_failed_return, continue_block);
+                builder.SetInsertPoint(continue_block);
+            }
+            return result;
         }
     }
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
@@ -644,6 +668,11 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider) {
+    const bool bounded_scalar_recursion =
+        require_native_guest_call_graph_bounded(source, true);
+    if (bounded_scalar_recursion && (wasm32_target || cortex_m_target))
+        throw std::runtime_error(
+            "native recursive scalar frames require a host TLS carrier ABI");
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -835,6 +864,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     }
     auto* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+    llvm::GlobalVariable* guest_frame_depth = nullptr;
+    llvm::GlobalVariable* guest_frame_exhausted = nullptr;
+    if (bounded_scalar_recursion) {
+        // Each physical OS carrier has independent budget state. These globals
+        // are NOT physical actor stacks and NOT proof of recoverable SIGSEGV.
+        guest_frame_depth = new llvm::GlobalVariable(
+            module, i64, false, llvm::GlobalValue::InternalLinkage,
+            llvm::ConstantInt::get(i64, 0), "__atto_guest_depth");
+        guest_frame_depth->setThreadLocal(true);
+        guest_frame_exhausted = new llvm::GlobalVariable(
+            module, llvm::Type::getInt1Ty(context), false,
+            llvm::GlobalValue::InternalLinkage,
+            llvm::ConstantInt::getFalse(context), "__atto_guest_exhausted");
+        guest_frame_exhausted->setThreadLocal(true);
+    }
     llvm::Type* loan_ptr = native_pointer_type(context, i64);
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
     // pointers on modern LLVM while preserving pre-18 typed-pointer support.
@@ -1071,7 +1115,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            (fn.native_internal || fn.async_source_i64)
+            (bounded_scalar_recursion || fn.native_internal || fn.async_source_i64)
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
@@ -1088,7 +1132,32 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
+        llvm::BasicBlock* admission = bounded_scalar_recursion
+            ? llvm::BasicBlock::Create(context, "atto.frame.admission", function)
+            : nullptr;
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
+        llvm::BasicBlock* frame_failed = bounded_scalar_recursion
+            ? llvm::BasicBlock::Create(context, "atto.frame.failed.return", function)
+            : nullptr;
+        if (bounded_scalar_recursion) {
+            llvm::IRBuilder<> guard(admission);
+            llvm::Value* depth = guard.CreateLoad(i64, guest_frame_depth,
+                "atto.frame.depth.before");
+            llvm::BasicBlock* denied = llvm::BasicBlock::Create(
+                context, "atto.frame.denied", function);
+            llvm::BasicBlock* admitted = llvm::BasicBlock::Create(
+                context, "atto.frame.admitted", function);
+            guard.CreateCondBr(guard.CreateICmpUGE(depth,
+                llvm::ConstantInt::get(i64, 64)), denied, admitted);
+            guard.SetInsertPoint(denied);
+            guard.CreateStore(guard.getTrue(), guest_frame_exhausted);
+            // This call was not admitted: do not decrement the previous depth.
+            guard.CreateRet(llvm::ConstantInt::get(i64, 0));
+            guard.SetInsertPoint(admitted);
+            guard.CreateStore(guard.CreateAdd(depth,
+                llvm::ConstantInt::get(i64, 1)), guest_frame_depth);
+            guard.CreateBr(entry);
+        }
         llvm::IRBuilder<> builder(entry);
         std::unordered_map<std::string, llvm::Value*> storage;
         std::unordered_map<std::string, llvm::Value*> field_storage;
@@ -1302,6 +1371,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         region_moves.layouts = &layouts;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.guest_frame_exhausted = guest_frame_exhausted;
+        region_moves.guest_frame_failed_return = frame_failed;
 
         std::unordered_map<std::string, llvm::Value*> source_task_handles;
         for (const auto& task : fn.source_tasks) {
@@ -2390,6 +2461,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.CreateCall(arrayAbort, {});
             builder.CreateUnreachable();
         }
+        if (bounded_scalar_recursion) {
+            llvm::IRBuilder<> failure(frame_failed);
+            failure.CreateRet(llvm::ConstantInt::get(i64, 0));
+            // Every accepted return releases exactly one logical frame.
+            // The denied entry is excluded (it never incremented depth).
+            // No cleanup/ownership path is admitted in this subset.
+            for (auto& block : *function) {
+                if (block.getName() == "atto.frame.denied") continue;
+                auto* ret = llvm::dyn_cast<llvm::ReturnInst>(block.getTerminator());
+                if (!ret) continue;
+                llvm::IRBuilder<> unwind(ret);
+                llvm::Value* current = unwind.CreateLoad(
+                    i64, guest_frame_depth, "atto.frame.depth.release");
+                unwind.CreateStore(unwind.CreateSub(current,
+                    llvm::ConstantInt::get(i64, 1)), guest_frame_depth);
+            }
+        }
     }
 
 
@@ -2873,6 +2961,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
         llvm::IRBuilder<> builder(entry);
         llvm::Function* guest = declarations.at(native_function_slot("main", 0));
+        if (bounded_scalar_recursion) {
+            // This OS main invocation is the only permitted root of the
+            // checked scalar graph. Clear stale state before guest entry.
+            builder.CreateStore(llvm::ConstantInt::get(i64, 0), guest_frame_depth);
+            builder.CreateStore(builder.getFalse(), guest_frame_exhausted);
+        }
         llvm::FunctionCallee string_end;
         llvm::FunctionCallee record_end;
         if (string_runtime) {
@@ -2900,6 +2994,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.SetInsertPoint(ready);
         }
         llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* budget_exhausted = bounded_scalar_recursion
+            ? builder.CreateLoad(builder.getInt1Ty(), guest_frame_exhausted,
+                "atto.guest.budget.exhausted")
+            : builder.getFalse();
         llvm::Value* tasks_ok = has_source_tasks
             ? builder.CreateICmpEQ(
                 builder.CreateCall(taskShutdown),
@@ -2921,8 +3019,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 result, llvm::ConstantInt::get(i64, 255), "valid.exit.status");
             valid = builder.CreateAnd(valid, output_ok);
             llvm::Value* narrowed = builder.CreateTrunc(result, i32);
-            builder.CreateRet(builder.CreateSelect(valid, narrowed,
-                llvm::ConstantInt::get(i32, 1), "checked.exit.status"));
+            llvm::Value* ordinary_status = builder.CreateSelect(valid, narrowed,
+                llvm::ConstantInt::get(i32, 1), "checked.exit.status");
+            // 75 = Atto native guest-frame budget exhausted (distinct from
+            // ordinary 1=invalid source exit). No process abort or signal.
+            builder.CreateRet(builder.CreateSelect(budget_exhausted,
+                llvm::ConstantInt::get(i32, 75), ordinary_status,
+                "atto.budget.typed.exit"));
         }
     }
 
