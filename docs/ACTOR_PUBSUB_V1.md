@@ -33,6 +33,30 @@ Golden source parity fixture: `contracts/v1/fixtures/actor-pubsub-v1.ores`.
 The backend must either execute this fixture with the normative output or reject the unsupported source surface before lowering; host-only scaffolding is not parity evidence.
 
 
+## Nonblocking RELIABLE native host admission (not compiled guest parity)
+
+The native `NativeActorPubSubAdmission<T>::try_publish_reliable`
+entrypoint delegates to authenticated, generation-fenced publication and
+reports a `std::optional<PublishReceipt>`. Success is present only when
+all RELIABLE recipient reservations succeeded; a Full refusal returns empty
+and does not consume a topic-local u64 sequence or enqueue a partial
+fanout. A revoked actor generation, unknown or closed topic, malformed UTF-8
+payload, or LATEST/LOSSY policy still fails explicitly.
+
+The RELIABLE-only policy check occurs while the membership/topic publication
+locks are held; a caller cannot validate one policy and publish against a
+different topic state after a concurrent replacement. The original native
+`publish` API retains its existing delivery-policy behavior. Neither API
+grants lifecycle authority to group members.
+
+This is a **host C++ reference/runtime substrate**, not a source
+`Topic<T>.try_publish` guest intrinsic. LLVM's `.atto` ActorGroup/Topic
+fixtures remain explicit compiler negatives until source lowering, typed
+`Result<PublishReceipt, PublishError>`, guest authorization, continuation
+handling and executable guest traces exist. Java exposes a corresponding
+host-only `Optional<PublishReceipt>` admission primitive, but matching
+host APIs do not certify portable source parity.
+
 ## Current LLVM lowering foundation
 
 The native runtime now exposes three layers without claiming positive source parity:
