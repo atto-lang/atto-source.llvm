@@ -427,6 +427,15 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Real .atto compiled positive control and negative host-I/O source admission.
+    # This is fail-closed unsupported-surface evidence, NOT runtime parity.
+    add_test(NAME llvm_atto_unsupported_host_permissions_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_permissions_guest_failclosed.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(llvm_atto_unsupported_host_permissions_fail_closed
+        PROPERTIES TIMEOUT 120)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.
