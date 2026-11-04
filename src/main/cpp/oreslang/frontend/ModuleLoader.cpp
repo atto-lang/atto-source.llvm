@@ -290,7 +290,11 @@ private:
                     // discovery (which stats .atto/.ores candidates). Outside
                     // paths must be rejected regardless of whether they exist.
                     const auto unresolved = current.path.parent_path() / fs::path(raw);
-                    frontend::logical_source_detail::checked_relative_source_path(
+                    // Reject symlinked ancestor directories too, before
+                    // resolve_native_source_suffix probes either file name.
+                    // The lexical gate alone cannot stop an in-root alias
+                    // directory redirecting exists_marker() outside the root.
+                    frontend::logical_source_detail::no_symlink_components(
                         unresolved, source_admission->root());
                     dependency = project_root_import_detail::resolve_native_source_suffix(
                         unresolved, project_root_import_detail::is_atto_source(current.path));
