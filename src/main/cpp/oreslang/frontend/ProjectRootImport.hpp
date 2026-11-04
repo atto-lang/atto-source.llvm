@@ -56,10 +56,15 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         R"ores(^[ \t]*(?:schema_version|"schema_version"|'schema_version')[ \t]*=.*$)ores");
     const std::regex project_section(
         R"ores(^[ \t]*\[[ \t]*(?:project|"project"|'project')[ \t]*\][ \t]*(?:#.*)?$)ores");
+    // TOML dotted keys admit arbitrary whitespace and nested assignments.
+    // The narrow manifest reader does not implement project.* semantics,
+    // so reject every dotted project key rather than only project.root =.
     const std::regex project_assignment(
-        R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.[ \t]*(?:root|"root"|'root')[ \t]*=).*$)ores");
+        R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.).*$)ores");
+    // Likewise, inside [project], root.anything is a root value even when
+    // separated by spaces or quoted as a TOML key component.
     const std::regex root_assignment(
-        R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=.*$)ores");
+        R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*(?:=|\.).*$)ores");
     // The manifest parser intentionally supports only a narrow TOML subset.
     // Reject nested root tables and project arrays-of-tables: otherwise a
     // valid TOML project.root value is silently ignored, changing the
