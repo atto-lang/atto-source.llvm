@@ -36,6 +36,13 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)"
           printf 'ATTO_EXACT_SOURCE_HEAD=%s\n' "$EXPECTED_SOURCE_HEAD"
           printf 'ATTO_EXACT_SOURCE_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+      - name: Verify source-free native LLVM IR stdin adapter controls (before package installation)
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          clang_bin="$(command -v clang)"
+          bash scripts/test-native-atto-fuzz-adapter-source-free.sh "$clang_bin"
       - name: Install LLVM and Rust host toolchains
         shell: bash
         run: |
@@ -44,9 +51,6 @@ jobs:
           sudo apt-get install -y build-essential cmake clang llvm-dev cargo rustc python3
           clang --version
           rustc --version
-      - name: Verify source-free native LLVM IR stdin adapter controls
-        shell: bash
-        run: bash scripts/test-native-atto-fuzz-adapter-source-free.sh "$(command -v clang)"
       - name: Verify Rust source-fuzz host oracle
         run: cargo test --manifest-path tests/rust-harness/Cargo.toml --locked
       - name: Build actual LLVM compiler and Rust native test harness
