@@ -215,6 +215,8 @@ public:
             return std::get<I>(state_->columns).size();
         }
 
+        // Physical-index access is host-trusted only: a bare dense row number
+        // is not a guest capability and does not carry generation identity.
         Value get(std::size_t index) const {
             if (!state_) throw std::logic_error("released inverted column loan");
             std::lock_guard<std::mutex> lock(state_->mutex);
@@ -225,6 +227,8 @@ public:
             return column[index];
         }
 
+        // Physical-index writes are likewise host-only. Guest row views must
+        // use the owner-issued capability path below, not this method.
         void set(std::size_t index, Value value) requires (Write) {
             if (!state_) throw std::logic_error("released inverted column loan");
             std::lock_guard<std::mutex> lock(state_->mutex);
@@ -232,7 +236,27 @@ public:
             auto& column = std::get<I>(state_->columns);
             if (index >= column.size())
                 throw std::out_of_range("inverted column loan index out of range");
+            validate_field(value);
             column[index] = value;
+        }
+
+        // Capability-checked row access. Resolve owner, issuer, slot and
+        // generation while holding the same lock used by erase/owner close.
+        // These are the only loan accessors eligible for future guest lowering;
+        // source-level nonescape/borrow checking remains a separate gate.
+        Value read_handle(const Handle& handle) const {
+            if (!state_) throw std::logic_error("released inverted column loan");
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            const auto row = resolve(*state_, handle);
+            return std::get<I>(state_->columns)[row];
+        }
+
+        void write_handle(const Handle& handle, Value value) requires (Write) {
+            if (!state_) throw std::logic_error("released inverted column loan");
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            const auto row = resolve(*state_, handle);
+            validate_field(value);
+            std::get<I>(state_->columns)[row] = value;
         }
 
         void release() noexcept {

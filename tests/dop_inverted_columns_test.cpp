@@ -35,6 +35,14 @@ static_assert(std::is_same_v<
         decltype(std::declval<Store::Loan<0, false>>().get(std::size_t{})),
         float>);
 static_assert(!std::is_copy_constructible_v<Store::Loan<0, true>>);
+static_assert(std::is_same_v<decltype(
+        std::declval<Store::Loan<0, false>>().read_handle(
+            std::declval<const Store::Handle&>())), float>);
+template<class T> concept HasHandleWrite = requires(T& loan, const Store::Handle& handle) {
+    loan.write_handle(handle, 1.0f);
+};
+static_assert(!HasHandleWrite<Store::Loan<0, false>>);
+static_assert(HasHandleWrite<Store::Loan<0, true>>);
 static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
 static_assert(!std::is_default_constructible_v<Store::Handle>);
@@ -47,6 +55,7 @@ template<class E, class F> static void expect(F f) {
 }
 int main() {
     Store a, b;
+    const auto foreign_row = b.push(9.5f, 900, false);
     auto h0 = a.push(1.5f, 100, true);
     auto h1 = a.push(2.5f, 200, false);
     auto h2 = a.push(3.5f, 300, true);
@@ -119,7 +128,11 @@ int main() {
         auto r2 = a.borrow_read<0>();
         auto w = a.borrow_write<1>();
         check(r.size() == 3 && r.get(1) == 2.5f);
-        w.set(1, 999);
+        check(r.read_handle(h1) == 2.5f);
+        expect<std::out_of_range>([&] { (void)r.read_handle(foreign_row); });
+        expect<std::out_of_range>([&] { w.write_handle(foreign_row, 999); });
+        w.write_handle(h1, 999);
+        check(w.read_handle(h1) == 999);
         check(r2.get(0) == 1.5f);
         expect<std::logic_error>([&] { (void)a.borrow_write<0>(); });
         expect<std::logic_error>([&] { (void)a.borrow_read<1>(); });
@@ -147,6 +160,11 @@ int main() {
     expect<std::out_of_range>([&] { (void)a.get<0>(saved_middle); });
     expect<std::out_of_range>([&] { (void)a.index(3); });
     expect<std::out_of_range>([&] { a.set<0>(h1, 1.0f); });
+    {
+        auto checked = a.borrow_read<0>();
+        expect<std::out_of_range>([&] { (void)checked.read_handle(h1); });
+        check(checked.read_handle(reused) == 4.5f);
+    }
     // Disjoint columns can be mutated concurrently without touching layout or identities.
     std::atomic<bool> start{false};
     std::thread t1([&] {
@@ -320,10 +338,11 @@ int main() {
     std::optional<Store::Loan<0, false>> carried;
     {
         auto owner = std::make_unique<Store>();
-        owner->push(7.5f, 7, true);
+        const auto owned_row = owner->push(7.5f, 7, true);
         carried.emplace(owner->borrow_read<0>());
         owner.reset();
         expect<std::logic_error>([&] { (void)carried->size(); });
+        expect<std::logic_error>([&] { (void)carried->read_handle(owned_row); });
     }
     carried.reset();
     // Owner IDs are shared across distinct template instantiations.
