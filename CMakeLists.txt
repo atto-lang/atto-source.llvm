@@ -421,6 +421,21 @@ if(BUILD_TESTING)
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_atto_stack_admission_and_shallow_process
         PROPERTIES TIMEOUT 120)
+    # Linux: build a real .atto recursive scalar guest as a native shared
+    # image, invoke its generated entry from one MultiActorCarrier callback,
+    # and verify A's typed terminal cleanup before B uses the same 1MiB worker.
+    # This is compiler-backed fnc guest + HOST actor adapter, not AttoLang
+    # source actor declaration lowering or supervisor restart evidence.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_atto_compiled_guest_on_shared_carrier
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_actor_carrier_compiled.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_SOURCE_I64_CLANG}"
+                --cxx "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(native_atto_compiled_guest_on_shared_carrier
+            PROPERTIES TIMEOUT 180)
+    endif()
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.
