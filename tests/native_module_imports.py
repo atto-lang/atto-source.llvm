@@ -274,7 +274,7 @@ def main():
         (directory/'outside.atto').write_text(
             'define module Outside as pub fnc answer():int{return 42;} end')
         result = run([a.compiler, str(package/'app/main.atto')])
-        if not result.returncode or result.stdout or 'escapes physical package root' not in result.stderr:
+        if not result.returncode or result.stdout or 'outside the admitted project root' not in result.stderr:
             raise AssertionError(('relative package escape', result.returncode,
                                   result.stdout[:150], result.stderr))
         passed += 1
@@ -305,7 +305,7 @@ def main():
                 'import module Outside from "../outside"; pub fnc main():int{return 0;}')
             (package/'outside.atto').symlink_to(outside)
             result = run([a.compiler, str(package/'app/main.atto')])
-            if not result.returncode or result.stdout or 'escapes physical package root' not in result.stderr:
+            if not result.returncode or result.stdout or 'native source symlink alias denied' not in result.stderr:
                 raise AssertionError(('relative symlink package escape', result.returncode,
                                       result.stdout[:150], result.stderr))
             passed += 1
@@ -355,7 +355,7 @@ def main():
             if alias == 'symlink': target.symlink_to(source)
             else: os.link(source, target)
             result=run([a.compiler,str(source)])
-            diagnostic = 'hardlink' if alias == 'hardlink' else 'cannot import itself'
+            diagnostic = 'hardlink' if alias == 'hardlink' else 'native source symlink alias denied'
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((alias,result.stderr))
             passed+=1
