@@ -28,7 +28,16 @@ impl TempDir {
             .as_nanos();
         let name = format!("{prefix}{}-{nanos}-{counter}", std::process::id());
         let path = env::temp_dir().join(name);
-        fs::create_dir(&path)?;
+        // The native harness writes compiler-generated IR and guest binaries
+        // here. Set permissions at creation, not afterwards: a permissive
+        // caller umask must not expose private CI source/outputs to peers.
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&path)?;
         Ok(Self { path })
     }
 }
