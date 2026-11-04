@@ -230,6 +230,30 @@ def main():
         if not result.returncode or result.stdout or 'multiline TOML' not in result.stderr:
             raise AssertionError(('project-root multiline manifest',result.stderr))
         passed+=1
+        # TOML's nested project.root table syntax is not implemented by
+        # the bounded native manifest reader. Reject it before any guest IR;
+        # never silently reinterpret a caller-selected package root.
+        manifest_rejects = [
+            ('nested-project-root', '[project.root]\nnote = "ignored"\n', 'project.root'),
+            ('nested-project-root-array', '[[project.root]]\nnote = "ignored"\n', 'project.root'),
+            ('nested-project-root-quoted', "['project'.'root']\nnote = 'ignored'\n", 'project.root'),
+            ('nested-project-root-mixed', '["project" . "root"] # comment\nnote = "ignored"\n', 'project.root'),
+            ('project-array', '[[project]]\nroot = "src"\n', 'project.root'),
+            ('project-array-quoted', '[["project"]]\nroot = "src"\n', 'project.root'),
+            ('project-array-spaced', "[[ 'project' ]]\nroot = 'src'\n", 'project.root'),
+            ('duplicate-project-table', '[project]\nname="first"\n[project]\nname="second"\n', 'duplicate project table'),
+        ]
+        for name, manifest_tail, diagnostic in manifest_rejects:
+            directory=root/name; directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}')
+            (directory/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n' + manifest_tail)
+            result=run([a.compiler,str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
         # Physical aliases are not new code-unit identities.
         for alias in ('symlink', 'hardlink'):
             directory=root/alias; directory.mkdir()
