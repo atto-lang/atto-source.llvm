@@ -592,6 +592,22 @@ void* oreslang_source_actor_spawn(
         ores_native_vm_spawn_ready(group.vm, ORES_NATIVE_VM_MAIN, slot);
     ensure(instance->ref.scheduler_domain
         && instance->ref.actor_slot == slot);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (slot == 0) {
+        /* Exact-source e2e receipt: the actor is not published with a
+         * phantom carrier, and no other domain starts from an idle spawn. */
+        ensure(ores_native_vm_started_carriers(
+            group.vm, ORES_NATIVE_VM_MAIN) == 1);
+        ensure(ores_native_vm_started_carriers(
+            group.vm, ORES_NATIVE_VM_SHARED) == 0);
+        ensure(ores_native_vm_started_carriers(
+            group.vm, ORES_NATIVE_VM_TRUSTED_PRIVATE) == 0);
+        ensure(ores_native_vm_started_carriers(
+            group.vm, ORES_NATIVE_VM_UNTRUSTED) == 0);
+        fprintf(stderr,
+            "SOURCE_ACTOR_FIRST_CARRIER_READY main=1 shared=0 private=0 untrusted=0\\n");
+    }
+#endif
     group.live++;
     if (group.live > group.peak) group.peak = group.live;
 
