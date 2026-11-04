@@ -167,6 +167,26 @@ public:
         return pinned->value;
     }
 
+    // Explicit per-key retirement frees one quota slot. A retired value's
+    // destructor must not execute under the request lock, since it may
+    // synchronously close/cancel/inspect this same request.
+    template <typename T>
+    bool erase(const RequestLocalKeyV1<T>& key) {
+        std::shared_ptr<CellBase> retired;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!open_ || cancellation_->is_cancelled())
+                return false;
+            const auto found = slots_.find(key.id_);
+            if (found == slots_.end())
+                return false;
+            retired = std::move(found->second);
+            slots_.erase(found);
+        }
+        retired.reset();
+        return true;
+    }
+
     bool close() noexcept {
         std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> retired;
         {
