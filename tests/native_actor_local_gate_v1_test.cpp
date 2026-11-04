@@ -20,7 +20,7 @@ void real_native_execution_claims_gate_actor_local_access() {
     ActorLocalStoreV1 first(identity(1));
     ActorLocalKeyV1<std::string> label;
     NativeActorLocalGateV1 gate(authority, first, identity(1));
-    OresExecutionClaim turn = {0};
+    OresExecutionClaim turn{};
     assert(!gate.set(turn, label, std::string("not-admitted")));
     assert(ores_execution_enter(&authority, 1, 33, 0, &turn));
     assert(gate.authorized(turn));
@@ -45,7 +45,7 @@ void real_native_execution_claims_gate_actor_local_access() {
     assert(!gate.authorized(turn));
     assert(!gate.get_copy(turn, label));
 
-    OresExecutionClaim resumed = {0};
+    OresExecutionClaim resumed{};
     assert(ores_execution_enter(&authority, 1, 44, 0, &resumed));
     assert(resumed.sequence != turn.sequence);
     assert(!gate.get_copy(turn, label)); // prior physical claim is stale
@@ -58,7 +58,7 @@ void real_native_execution_claims_gate_actor_local_access() {
     assert(ores_execution_retired(&authority, 1));
     assert(first.close()); // physical teardown before next incarnation
     assert(ores_execution_restart(&authority) == 2);
-    OresExecutionClaim next = {0};
+    OresExecutionClaim next{};
     assert(ores_execution_enter(&authority, 2, 45, 0, &next));
     assert(!gate.authorized(next)); // stale store cannot revive by ABA
     assert(!gate.set(next, label, std::string("wrong-generation")));
