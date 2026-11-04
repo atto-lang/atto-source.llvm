@@ -1,0 +1,4 @@
+// Unsupported semantics must not emit partial IR or a false test receipt.
+pub fnc main(): int {
+  return undefined_atto_test_runtime_hook(42);
+}
