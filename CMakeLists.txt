@@ -2863,6 +2863,11 @@ if(BUILD_TESTING)
                 -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 -p "test_atto_scalar_native_gate.py" -v)
         set_tests_properties(atto_scalar_v1_native_harness_adversarial PROPERTIES TIMEOUT 45)
+        add_test(NAME atto_scalar_v1_subprocess_harness_adversarial
+            COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+                -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+                -p "test_atto_scalar_subprocess.py" -v)
+        set_tests_properties(atto_scalar_v1_subprocess_harness_adversarial PROPERTIES TIMEOUT 40)
         add_test(NAME atto_scalar_v1_source_unit_migration
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_source_unit_migration.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
