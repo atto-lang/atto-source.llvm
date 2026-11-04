@@ -245,10 +245,40 @@ define module testing_m1 as
     pub let int filtered = 0;
   end
 
+  // Guard all public counters before a test body executes or a summary
+  // is published. Bounds precede additions to prevent signed overflow.
+  pub fnc valid_state(borrow TestSuite suite): bool {
+    if suite.total < 0 || suite.total > 1024 ||
+      suite.filtered < 0 || suite.filtered > 1024 ||
+      suite.passed < 0 || suite.passed > 1024 ||
+      suite.failed < 0 || suite.failed > 1024 ||
+      suite.skipped < 0 || suite.skipped > 1024 ||
+      suite.last_id < 0 || suite.halted < 0 || suite.halted > 1; then
+      return false;
+    fi
+    if suite.total != suite.passed + suite.failed + suite.skipped; then
+      return false;
+    fi
+    if suite.total + suite.filtered == 0 && suite.last_id != 0; then
+      return false;
+    fi
+    if suite.total + suite.filtered > 0 && suite.last_id <= 0; then
+      return false;
+    fi
+    if suite.halted != 0 && (!suite.fail_fast || suite.failed != 1); then
+      return false;
+    fi
+    if suite.fail_fast && suite.failed > 0 && suite.halted == 0; then
+      return false;
+    fi
+    return true;
+  }
+
   pub fnc should_run(borrow TestSuite suite, borrow TestCase candidate): bool {
-    return suite.halted == 0 && candidate.selected && !candidate.skipped &&
+    return valid_state(rt borrow suite) &&
+      suite.halted == 0 && candidate.selected && !candidate.skipped &&
       candidate.id > 0 && candidate.id > suite.last_id &&
-      suite.total >= 0 && suite.total < 1024;
+      suite.total < 1024;
   }
 
   // 0 PASS, 1 FAIL, 2 SKIP, 3 FILTER, 4 NOT_RUN after fail-fast;
@@ -264,16 +294,21 @@ define module testing_m1 as
     if candidate.id <= suite.last_id; then
       return -4;
     fi
+    // Quota failures take precedence for synthetic capacity tests; otherwise
+    // never normalize corrupt counters into a plausible accepted state.
+    if !candidate.selected && suite.filtered >= 1024; then
+      return -2;
+    fi
+    if candidate.selected && suite.total >= 1024; then
+      return -2;
+    fi
+    if !valid_state(rt borrow suite); then
+      return -1;
+    fi
     if !candidate.selected; then
-      if suite.filtered >= 1024; then
-        return -2;
-      fi
       suite.filtered = suite.filtered + 1;
       suite.last_id = candidate.id;
       return 3;
-    fi
-    if suite.total >= 1024; then
-      return -2;
     fi
     suite.total = suite.total + 1;
     suite.last_id = candidate.id;
@@ -297,26 +332,8 @@ define module testing_m1 as
   // A positive suite result is NOT a cryptographic or untrusted-run receipt:
   // guests currently own these public counters.
   pub fnc finish(borrow TestSuite suite, borrow mut RunSummary result): int {
-    // Validate before addition and before publishing ANY summary fields.
-    if suite.total < 0 || suite.total > 1024 ||
-      suite.filtered < 0 || suite.filtered > 1024 ||
-      suite.passed < 0 || suite.failed < 0 || suite.skipped < 0 ||
-      suite.last_id < 0 || suite.halted < 0 || suite.halted > 1; then
-      return 2;
-    fi
-    if suite.total != suite.passed + suite.failed + suite.skipped; then
-      return 2;
-    fi
-    if suite.total + suite.filtered == 0 && suite.last_id != 0; then
-      return 2;
-    fi
-    if suite.total + suite.filtered > 0 && suite.last_id <= 0; then
-      return 2;
-    fi
-    if suite.halted != 0 && (!suite.fail_fast || suite.failed != 1); then
-      return 2;
-    fi
-    if suite.fail_fast && suite.failed > 0 && suite.halted == 0; then
+    // Invalid suites leave the previously published result untouched.
+    if !valid_state(rt borrow suite); then
       return 2;
     fi
     result.total = suite.total;
@@ -404,6 +421,11 @@ define module testing_m2 as
     // The M1 ledger also enforces this at commit to catch mixed M1/M2 use.
     if candidate.id <= suite.last_id; then
       return -4;
+    fi
+    // Public suite fields can be corrupted by a guest. Never run an
+    // executable body against an inconsistent/overflowing ledger.
+    if !Ledger.valid_state(rt borrow suite); then
+      return -1;
     fi
 
     snapshot.id = candidate.id;
