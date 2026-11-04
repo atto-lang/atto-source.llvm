@@ -1,0 +1,58 @@
+name: Atto MCP M0 LLVM-native host policy (NOT guest parity)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/McpDevControlM0.hpp'
+      - 'tests/native_mcp_dev_control_m0_test.cpp'
+      - 'tests/test_mcp_m0_manifest.py'
+      - 'contracts/mcp-dev-control-llvm-m0-v1.json'
+      - 'docs/MCP_M0_LLVM_NATIVE_CONTRACT.md'
+      - 'CMakeLists.txt'
+      - '.github/workflows/mcp-m0-native-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-mcp-m0:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        variant: [optimized, sanitized]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source head and report tree
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          echo "SOURCE_SHA=$EXPECTED_SHA"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Verify source-free manifest agreement
+        run: python3 tests/test_mcp_m0_manifest.py
+      - name: Compile and execute native policy tests
+        env:
+          CXX: ${{ matrix.compiler }}
+          VARIANT: ${{ matrix.variant }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" --version
+          flags=(-O2 -DNDEBUG)
+          if [[ "$VARIANT" == sanitized ]]; then
+            flags=(-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
+          fi
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+            "${flags[@]}" -I src/main/cpp \
+            tests/native_mcp_dev_control_m0_test.cpp -o "$RUNNER_TEMP/mcp-m0-native"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/mcp-m0-native"
+          echo 'EVIDENCE_SCOPE=LLVM_NATIVE_HOST_ONLY_NO_GUEST_OR_MCP_TRANSPORT'

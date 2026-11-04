@@ -1,0 +1,37 @@
+{
+  "schema": "atto.mcp.dev-control.llvm.native-m0.v1",
+  "upstreamSchema": "atto.mcp.dev-control.m0.v1",
+  "protocolVersion": "2026-07-28",
+  "upstreamPR": "ores-truffle-oreslang/oreslang-platform-conformance#326",
+  "upstreamPinnedHeadAtAuthoring": "9ff485ba236ba6d2eaeb71c86815e155c1028c05",
+  "enabledByDefault": false,
+  "evidenceScope": "LLVM_NATIVE_HOST_ONLY_NOT_GUEST_PARITY",
+  "methods": ["server/discover", "tools/list", "resources/list", "resources/read"],
+  "resources": [
+    {"suffix": "process/summary", "scope": "inspect:summary"},
+    {"suffix": "actors/counters", "scope": "inspect:metrics"},
+    {"suffix": "tasks/counters", "scope": "inspect:metrics"},
+    {"suffix": "scheduler/counters", "scope": "inspect:metrics"},
+    {"suffix": "upgrade/status", "scope": "inspect:upgrade_status"}
+  ],
+  "budgets": {
+    "maxFrameBytes": 32768,
+    "maxResponseBytes": 65536,
+    "maxJsonDepth": 12,
+    "maxRequestsPerSecond": 8,
+    "maxRequestsPerMinute": 60,
+    "maxInflight": 2,
+    "maxPrincipalStates": 64,
+    "maxReplayNonces": 128,
+    "clockSkewMs": 30000,
+    "replayWindowMs": 60000,
+    "deadlineMs": 500
+  },
+  "descriptorId": "fnv1a64(atto.mcp.dev-control.m0.v1/suffix): host-only compile-time prototype",
+  "notImplemented": [
+    "guest MCP language API", "compiler-owned per-program descriptor emission",
+    "OS peer authentication", "MCP wire/JSON decoder", "durable audit",
+    "native process summary snapshot", "MCP server listener", "five-backend guest parity",
+    "hot upgrade or mutation", "runtime reflection", "JIT fallback"
+  ]
+}
