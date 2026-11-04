@@ -1,6 +1,9 @@
 // Linux M1: compiler-generated scalar .atto guest code executed *inside*
 // the native shared carrier through an explicit host adapter. This is NOT
 // native lowering of an AttoLang actor declaration or supervisor restart.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
 #include "oreslang/runtime/MultiActorCarrier.hpp"
 
 #include <atomic>
