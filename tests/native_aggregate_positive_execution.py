@@ -237,11 +237,14 @@ def main():
     positive_names = [name for name, _, _, _ in POSITIVE]
     expected_exits = [status for _, _, _, status in POSITIVE]
     negative_names = [name for name, _, _ in NEGATIVE]
-    require(len(positive_names) == 4 and len(negative_names) == 4 and
-            len(set(positive_names + negative_names)) == 8 and
-            len(set(expected_exits)) == 4 and
+    # Pin the executable admission gate to the same 7+7 corpus as the
+    # independent source-free harness tests. An expanded registry must not be
+    # rejected by an obsolete 4+4 guard before the real compiler is invoked.
+    require(len(positive_names) == 7 and len(negative_names) == 7 and
+            len(set(positive_names + negative_names)) == 14 and
+            len(set(expected_exits)) == 7 and
             all(type(exit_code) is int and 0 < exit_code < 128 for exit_code in expected_exits),
-            "aggregate executable acceptance requires four distinct positives, exits and four distinct negatives")
+            "aggregate executable acceptance requires seven distinct positives, exits and seven distinct negatives")
     observations = []
     with tempfile.TemporaryDirectory(prefix="oreslang-native-aggregate-") as tmp:
         root = Path(tmp)
