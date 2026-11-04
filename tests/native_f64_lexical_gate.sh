@@ -13,9 +13,23 @@ scratch="$(mktemp -d)"
 trap 'rm -rf -- "$scratch"' EXIT
 pass=0
 reject=0
+# A repeated case ID must not be able to satisfy totals by substituting for
+# a missing fixture. Baseline macOS Bash 3.2-compatible: no associative arrays.
+: > "$scratch/.case_ids"
+register_case() {
+  local case_id="$1"
+  [[ "$case_id" =~ ^[a-z0-9_]+$ ]] ||
+    { echo "NATIVE_F64_INVALID_CASE_ID: $case_id" >&2; exit 1; }
+  if grep -Fxq -- "$case_id" "$scratch/.case_ids"; then
+    echo "NATIVE_F64_DUPLICATE_CASE_ID: $case_id" >&2
+    exit 1
+  fi
+  printf '%s\n' "$case_id" >> "$scratch/.case_ids"
+}
 
 positive() {
   local name="$1" source="$2" expected_exit="${3:-42}"
+  register_case "$name"
   printf '%s\n' "$source" > "$scratch/$name.atto"
   "$compiler" --target=host "$scratch/$name.atto" \
     > "$scratch/$name.ll" 2> "$scratch/$name.compiler.stderr" ||
@@ -41,6 +55,7 @@ positive() {
 
 negative() {
   local name="$1" source="$2" expected_diagnostic="$3"
+  register_case "$name"
   printf '%s\n' "$source" > "$scratch/$name.atto"
   local compile_rc=0
   "$compiler" --target=host "$scratch/$name.atto" \
@@ -125,6 +140,23 @@ positive f64_ternary_false 'pub fnc main(): int {
   return 86;
 }'
 positive integer_control 'pub fnc main(): int { return 42; }'
+positive f64_nested_local_read_exit_37 'pub fnc main(): int {
+  val float first = 0.1;
+  val float second = first + 0.2;
+  val float third = second * 2.0;
+  if third > 0.59; then
+    if third < 0.61; then return 37; fi
+  fi
+  return 86;
+}' 37
+positive f64_repeated_variable_reads_exit_95 'pub fnc main(): int {
+  val f64 base = 1.25;
+  val f64 twice = base + base;
+  val f64 total = twice + base;
+  if total == 3.75; then return 95; fi
+  return 86;
+}' 95
+
 positive f64_false_ordered_exit_86 'pub fnc main(): int {
   val float value = 0.3;
   if value > 0.7; then return 42; fi
@@ -244,6 +276,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }' 'native branch-local f64 storage requires scoped double lowering'
 
-[[ "$pass" -eq 23 && "$reject" -eq 16 ]] ||
+[[ "$pass" -eq 25 && "$reject" -eq 16 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=23; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only, not num.atto library execution)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=25; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only, not num.atto library execution)"
