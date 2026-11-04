@@ -36,6 +36,13 @@ struct Unit {
     std::unordered_map<std::string, bool> class_exports;
     std::unordered_map<std::string, bool> constructor_exports;
 };
+frontend::SourceStamp source_stamp(const SourceIdentity& identity) {
+    return frontend::SourceStamp{
+        identity.device, identity.inode, identity.size,
+        identity.mtime_sec, identity.mtime_nsec,
+        identity.ctime_sec, identity.ctime_nsec, identity.valid
+    };
+}
 class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
@@ -60,7 +67,7 @@ public:
                 if (project_root_import_detail::exists_marker(cursor / ".atto.pkg.toml") ||
                         project_root_import_detail::exists_marker(cursor / ".ores.pkg.toml")) {
                     logical_units = std::make_unique<frontend::HostLogicalUnitIds>(cursor);
-                    (void)logical_units->admit(entry_path);
+                    const auto logical_entry_id = logical_units->admit(entry_path);
                     // Bind the selected project path to the descriptor already
                     // read by the CLI, not a later filesystem alias.
                     const auto candidate_path = entry_path.string();
@@ -69,6 +76,7 @@ public:
                         "native entry exceeds 8 MiB source read budget");
                     if (!ores_source_identity_equal(identity, after))
                         throw std::runtime_error("ATTO_UNIT_SOURCE_CHANGED: entry source identity changed");
+                    logical_units->bind_opened_source(logical_entry_id, source_stamp(identity));
                     break;
                 }
                 if (cursor == cursor.root_path()) break;
@@ -161,6 +169,8 @@ private:
         auto unit = std::make_unique<Unit>();
         unit->logical_unit_id = logical_units && !compiler_owned_library
             ? logical_units->admit(path) : path.generic_string();
+        if (logical_units && !compiler_owned_library)
+            logical_units->bind_opened_source(unit->logical_unit_id, source_stamp(identity));
         unit->path = std::move(path); unit->identity = identity;
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
         unit->compiler_owned_library = compiler_owned_library;
@@ -311,8 +321,15 @@ private:
 
                 // Use the unresolved, compiler-owned pathname. Resolving
                 // symlinks before admission would erase an unsafe alias.
-                if (logical_units)
-                    (void)logical_units->admit(admission_path);
+                if (logical_units) {
+                    const auto logical_dependency_id = logical_units->admit(admission_path);
+                    const auto pinned_path = admission_path.string();
+                    const auto source_at_resolution = capture_source_identity(
+                        pinned_path.c_str(), max_bytes,
+                        "native source exceeds 8 MiB admission limit");
+                    logical_units->bind_opened_source(
+                        logical_dependency_id, source_stamp(source_at_resolution));
+                }
                 const auto known = paths.find(dependency.string());
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
