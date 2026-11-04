@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -70,6 +71,59 @@ struct Expression {
     bool type_arguments_present = false;
     mutable std::string sum_type;
 };
+
+// Returns each lexical source argument's checked declaration slot for native
+// Array<T> builtins. Only these runtime-owned methods have stable, statically
+// known parameter names; this is not dynamic member-name dispatch.
+inline std::vector<std::size_t> native_array_argument_slots(const Expression& expr) {
+    if (expr.kind != Expression::Kind::ArrayCall)
+        throw std::runtime_error("native array binder requires a member call");
+    const bool get = expr.name == "get";
+    const bool add = expr.name == "add";
+    const bool set = expr.name == "set";
+    if (!(get || add || set))
+        throw std::runtime_error(
+            "native Array<int> effect supports only add(value) or set(index,value); "
+            "scalar expression supports only get(index)");
+    const std::size_t expected = set ? 2 : 1;
+    if (expr.arguments.size() != expected)
+        throw std::runtime_error("native Array method argument arity mismatch");
+    if (!expr.argument_names.empty() &&
+        expr.argument_names.size() != expr.arguments.size())
+        throw std::runtime_error("invalid native member argument layout");
+    std::vector<bool> filled(expected, false);
+    std::vector<std::size_t> source_to_formal;
+    source_to_formal.reserve(expected);
+    bool saw_named = false;
+    std::size_t positional = 0;
+    for (std::size_t i = 0; i < expected; ++i) {
+        const std::string label = expr.argument_names.empty()
+            ? std::string{} : expr.argument_names[i];
+        std::size_t slot = positional;
+        if (!label.empty()) {
+            saw_named = true;
+            if (label == "index" && (get || set)) slot = 0;
+            else if (label == "value" && add) slot = 0;
+            else if (label == "value" && set) slot = 1;
+            else throw std::runtime_error(
+                "unknown named native array argument '" + label +
+                "' for '" + expr.name + "'");
+        } else {
+            if (saw_named)
+                throw std::runtime_error(
+                    "positional member argument cannot follow named argument");
+            ++positional;
+        }
+        if (slot >= expected || filled[slot])
+            throw std::runtime_error(
+                "duplicate native array argument binding for '" + expr.name + "'");
+        filled[slot] = true;
+        source_to_formal.push_back(slot);
+    }
+    for (bool used : filled)
+        if (!used) throw std::runtime_error("incomplete native array argument binding");
+    return source_to_formal;
+}
 
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
