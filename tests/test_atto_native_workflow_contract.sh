@@ -22,6 +22,12 @@ receipt_line="$(gate_line "printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|")"
 unique() { [[ "$(count "$1")" -eq 1 ]] || die "expected exactly one: $1"; }
 unique 'name: AttoLang LLVM native harness executable parity (O0 O2)'
 unique '  atto-native-executable:'
+unique "      - 'CMakeLists.txt'"
+unique "      - 'cmake/**'"
+unique "      - 'src/main/**'"
+unique "      - 'tests/**'"
+unique "      - 'scripts/**'"
+unique "      - 'stdlib/**'"
 unique 'Checkout exact source head without persistent credentials'
 unique 'Bind exact commit and tree'
 unique 'Verify source-free inventory and adversarial fixture mutations'
@@ -36,19 +42,22 @@ unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=4|optimizations=2|native=8
 [[ "$(grep -Ec "^          test .*ATTO_LLVM_NATIVE_HOST_OBSERVED.*-eq 80$" "$workflow")" -eq 1 ]] ||
   die 'native scalar guest count is not 80'
 unique "grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|'"
-unique "tests/atto_native_guest_receipts.sh"
-unique "tests/verify_atto_guest_receipts.py"
 unique 'ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"'
 unique 'oreslang-no-gc-ir-audit-build'
 unique 'oreslang-core-library-sources-test'
 unique 'native_core_library_registry_provider_policy'
-unique 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
-unique 'tests/core_library_sources_test.cpp'
 unique 'oreslang-no-gc-ir-audit-tests-build'
 unique "ctest --test-dir build --output-on-failure --no-tests=error -R '^(native_no_gc_ir_audit_unit|native_core_library_registry_provider_policy)$'"
 unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=10|guest_receipt_protocol=UNSUPPORTED"
 unique 'atto_native_harness_compiler_guest_o0_o2'
 unique 'atto_native_harness_inventory_source_only'
+[[ -f "$root/tests/atto_native_guest_receipts.sh" &&
+   ! -L "$root/tests/atto_native_guest_receipts.sh" &&
+   -f "$root/tests/verify_atto_guest_receipts.py" &&
+   ! -L "$root/tests/verify_atto_guest_receipts.py" ]] ||
+  die 'guest receipt verification dependencies missing or symlinked'
+grep -Fq 'tests/atto_native_guest_receipts.sh' "$runner" ||
+  die 'native compiler harness does not run guest receipt suites'
 [[ "$(count 'native_project_root_import_security')" -eq 2 ]] || die 'expected one CTest inventory and one execution'
 [[ "$(count 'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"')" -eq 2 ]] || die 'expected two exact-head checks'
 unique 'persist-credentials: false'
@@ -135,5 +144,13 @@ if [[ "$#" -eq 0 ]]; then
   if ATTO_NATIVE_HARNESS_SCRIPT="$tmp/mutated-harness.sh" bash "$0" "$workflow" >/dev/null 2>&1; then
     die 'source harness bypassed mandatory no-GC auditor'
   fi
+  grep -Fvx "      - 'src/main/**'" "$workflow" > "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'compiler-only change no longer triggers parity'
+  fi
+  grep -Fvx "      - 'CMakeLists.txt'" "$workflow" > "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'build-system change no longer triggers parity'
+  fi
 fi
-echo 'PASS LLVM canonical .atto workflow source-only admission (seven adversarial mutations)'
+echo 'PASS LLVM canonical .atto workflow source-only admission (nine adversarial mutations)'
