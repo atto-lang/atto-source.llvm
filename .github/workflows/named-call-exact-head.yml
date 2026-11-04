@@ -5,9 +5,11 @@ on:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'CMakeLists.txt'
       - 'tests/fixtures/named-call-*.ores'
       - 'tests/fixtures/named-member-*.ores'
+      - 'tests/fixtures/named-generic-value-*.ores'
       - '.github/workflows/named-call-exact-head.yml'
   workflow_dispatch:
 
@@ -60,6 +62,21 @@ jobs:
             native_named_call_unknown_label
             native_named_call_duplicate_slot
             native_named_call_positional_after_named
+            native_atto_named_generic_value_lexical_ir_order
+            native_atto_named_generic_value_combined_guest
+            native_atto_named_generic_value_routine_guest
+            native_atto_named_generic_value_inference_hole_guest
+            native_atto_named_generic_value_positional_prefix_guest
+            native_atto_named_generic_value_source_order_guest
+            native_atto_named_generic_reject_bool_as_i64
+            native_atto_named_generic_reject_string_as_i64
+            native_atto_named_generic_reject_reordered_bool
+            native_atto_named_generic_reject_duplicate_type
+            native_atto_named_generic_reject_unknown_type
+            native_atto_named_generic_reject_positional_after_named_type
+            native_atto_named_generic_reject_duplicate_value_slot
+            native_atto_named_generic_reject_unknown_value
+            native_atto_named_generic_reject_uninferable_hole
           )
           for name in "${required[@]}"; do
             if ! grep -Fxq -- "$name" build/named-call-test-names.txt; then
@@ -70,5 +87,5 @@ jobs:
           echo "NAMED_CALL_MANIFEST_PASS: ${#required[@]} required tests registered"
       - name: Execute parser, diagnostic, lexical order and native guest tests
         run: |
-          ctest --test-dir build -R '^native_named_(call_|member_)' \
+          ctest --test-dir build -R '^(native_named_(call_|member_)|native_atto_named_generic_)' \
             --output-on-failure --no-tests=error --timeout 180 --parallel 2
