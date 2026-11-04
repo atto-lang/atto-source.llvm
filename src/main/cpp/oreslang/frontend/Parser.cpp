@@ -4113,17 +4113,13 @@ private:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::ArrayCall:
-                // Only proven named extensions are rewritten into checked
-                // Call nodes. A remaining native ArrayCall must never ignore
-                // a label or an inconsistent source-to-argument mapping.
-                if (!expr.argument_names.empty() &&
-                    expr.argument_names.size() != expr.arguments.size())
-                    throw std::runtime_error("invalid native member argument layout");
-                for (const auto& label : expr.argument_names)
-                    if (!label.empty())
-                        throw std::runtime_error(
-                            "named native array/member arguments require checked lowering at byte " +
-                            std::to_string(expr.offset));
+                // Native array builtins have an explicit static signature:
+                // get(index), add(value), set(index,value). Preflight the
+                // complete name/arity permutation before any argument subtree.
+                // Other member calls must have become proven extension Calls.
+                (void)native_array_argument_slots(expr);
+                if (!expr.left)
+                    throw std::runtime_error("native array member call lacks receiver");
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
@@ -4318,30 +4314,27 @@ private:
                 return ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
-                // Independently reject a lowered or synthesized member call
-                // that still has unproven labels before scalar validation.
-                if (!expr.argument_names.empty() &&
-                    expr.argument_names.size() != expr.arguments.size())
-                    throw std::runtime_error("invalid native member argument layout");
-                for (const auto& label : expr.argument_names)
-                    if (!label.empty())
-                        throw std::runtime_error(
-                            "named native array/member arguments require checked lowering at byte " +
-                            std::to_string(expr.offset));
-                std::string receiver;
-                if (expr.left) receiver = native_place_key(*expr.left);
+                // Resolve every label and index before typechecking any
+                // actual, including when set(value: ..., index: ...) reverses
+                // declaration order. Source expression traversal stays lexical.
+                const auto slots = native_array_argument_slots(expr);
+                const bool has_named = std::any_of(expr.argument_names.begin(),
+                    expr.argument_names.end(),
+                    [](const std::string& label) { return !label.empty(); });
+                const std::string receiver = expr.left ? native_place_key(*expr.left)
+                                                       : std::string{};
                 const auto element_slot = variables.find(receiver + ".$element");
-                const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
-                const std::size_t expected = expr.name == "get" || expr.name == "add"
-                    ? 1 : expr.name == "set" ? 2 : 0;
-                if (expected == 0 || expr.arguments.size() != expected)
-                    throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index) at byte " +
-                        std::to_string(expr.offset));
+                if (has_named && element_slot == variables.end())
+                    throw std::runtime_error(
+                        "named native array/member arguments require checked receiver");
+                const ScalarType element = element_slot == variables.end()
+                    ? ScalarType::I64 : element_slot->second;
                 for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
                     const auto& argument = expr.arguments[i];
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
-                    const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
+                    const bool index = (expr.name == "get" || expr.name == "set")
+                        && slots[i] == 0;
                     if (actual != (index ? ScalarType::I64 : element))
                         throw std::runtime_error(std::string(element == ScalarType::I64
                             ? "native Array<int> arguments require int, got "
