@@ -132,13 +132,15 @@ and executed before a 52-case guest report can be certified.
 ## Canonical host-policy authorization coverage (not guest parity)
 
 The native_scoped_policy_oracle.cpp executable evaluates the actual compiled
-C++ ScopedPolicy against the 45 canonical authorization cases, and the
-SHA-256-pinned verify_native_policy_vectors.py script checks each exact
-decision without shell evaluation. The remaining seven serialization
-cases are explicitly NOT_EXECUTED by this oracle; no runtime-report JSON
-or executed-guest certification is generated. Passing this CTest proves
-only C++ host-policy decisions, not real guest operations, native executable
-permission manifests, flags-2-env integration or syscall containment.
+C++ ScopedPolicy against 45 canonical authorization decisions and calls the
+bounded internal serialized-policy parser for seven admission decisions.
+The SHA-256-pinned verify_native_policy_vectors.py checks all 52 expected
+results without shell evaluation. A passing CTest proves only native C++
+host-policy semantics; it does not execute a linked .atto guest or produce
+a certified guest-runtime parity report. Serialized policy arguments are
+NOT public CLI flags: flags-2-env remains the required external parser.
+Actual guest operations, native artifact manifests, and syscall confinement
+remain outstanding.
 
 ## Required negative gates before release
 

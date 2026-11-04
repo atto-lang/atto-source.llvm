@@ -13,6 +13,7 @@ on:
       - "contracts/v1/scoped_file_boundary.hpp"
       - "contracts/v1/scoped_file_boundary_test.cpp"
       - "contracts/v1/native_scoped_policy_oracle.cpp"
+      - "contracts/v1/scoped_permission_serialization.hpp"
       - "contracts/v1/verify_native_policy_vectors.py"
       - ".github/workflows/scoped-native-policy-test.yml"
   workflow_dispatch:
@@ -53,7 +54,7 @@ jobs:
         run: |
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -I contracts/v1 contracts/v1/scoped_file_boundary_test.cpp -o /tmp/ores-native-files-clang
           ASAN_OPTIONS=detect_leaks=1 /tmp/ores-native-files-clang
-      - name: Execute all 45 canonical host authorization vectors (NOT guest parity)
+      - name: Execute 52 canonical C++ host policy vectors (NOT guest parity)
         run: |
           c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/native_scoped_policy_oracle.cpp -o /tmp/ores-native-permission-oracle
           python3 contracts/v1/verify_native_policy_vectors.py --binary /tmp/ores-native-permission-oracle
@@ -75,11 +76,13 @@ jobs:
               "canonical_vectors": 52,
               "authorization_cases": 45,
               "deserialization_cases_in_corpus": 7,
+              "host_authorization_cases_executed": 45,
+              "host_serialization_cases_executed": 7,
               "native_commands_completed": [
                   "gcc-scoped-policy", "clang-scoped-policy",
                   "gcc-pinned-tcp", "clang-pinned-tcp",
                   "gcc-scoped-file", "clang-scoped-file-sanitized",
-                  "gcc-native-host-authorization-45"
+                  "gcc-native-host-policy-52"
               ],
               "scope": "host-policy-only",
               "compiler_executed": False,
