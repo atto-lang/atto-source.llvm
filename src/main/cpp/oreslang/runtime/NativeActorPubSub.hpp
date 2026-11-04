@@ -329,6 +329,34 @@ public:
             std::uint64_t publisher_id,
             std::uint64_t publisher_generation,
             const T& value) {
+        return publish_internal(
+            group_id, name, publisher_id, publisher_generation, value, false);
+    }
+
+    // Host-only nonblocking RELIABLE admission. Empty means Full; rejected
+    // identity, invalid payload, unsupported delivery policy and closed
+    // group/topic remain explicit exceptions, not silent empty results.
+    // This is NOT source-level Topic<T>.try_publish guest lowering.
+    std::optional<PublishReceipt> try_publish_reliable(
+            std::uint64_t group_id,
+            const std::string& name,
+            std::uint64_t publisher_id,
+            std::uint64_t publisher_generation,
+            const T& value) {
+        auto receipt = publish_internal(
+            group_id, name, publisher_id, publisher_generation, value, true);
+        if (receipt.backpressured) return std::nullopt;
+        return receipt;
+    }
+
+private:
+    PublishReceipt publish_internal(
+            std::uint64_t group_id,
+            const std::string& name,
+            std::uint64_t publisher_id,
+            std::uint64_t publisher_generation,
+            const T& value,
+            bool require_reliable) {
         /*
          * Reject unauthorized publishers before allocating a frozen payload.
          * The locked view below revalidates membership at the actual commit
@@ -368,12 +396,16 @@ public:
                     "publication requires live ActorGroup membership");
             std::lock_guard<std::mutex> guard(mutex_);
             TopicRecord& topic = require_topic_locked(group_id, name);
+            if (require_reliable && topic.policy != DeliveryPolicy::Reliable)
+                throw std::invalid_argument(
+                    "try_publish_reliable requires a RELIABLE topic");
             prune_stale_locked(group_id, topic, memberships);
             return publish_locked(
                 topic, std::move(frozen), payload_bytes);
         });
     }
 
+public:
     // No publish_system bypass on the general admission surface: the host
     // must supply authenticated supervisor/CONTROL authority through a
     // separately reviewed, non-guest API before system publications exist.
