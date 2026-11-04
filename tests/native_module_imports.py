@@ -147,6 +147,21 @@ def main():
             'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; } define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
         }, 42),
     ])
+    # Match Java's portable MAX_EXPANSIONS=128 with an executed native
+    # 128-call boundary, not merely a checked constant in compiler source.
+    def imported_identity_quota_program(count):
+        declarations = ''.join(
+            f'val quota_{i}:int=lib.identity!(syntax expr 1);'
+            for i in range(count))
+        return ('import * as lib from "./producer.atto"; '
+                'pub fnc main():int{' + declarations + 'return 42;}')
+
+    identity_producer = (
+        'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }')
+    positives.append(('atto-linked-public-syntax-budget-exactly-128', {
+        'main.atto': imported_identity_quota_program(128),
+        'producer.atto': identity_producer,
+    }, 42))
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -583,6 +598,22 @@ def main():
                                       result.stdout[:150], result.stderr,
                                       'unexpected compiler artifacts', sorted(artifacts)))
             passed += 1
+
+        # The first expansion beyond the shared portable limit must fail
+        # before writing LLVM IR, object files or a native executable.
+        directory = root/'atto-linked-syntax-budget-129'; directory.mkdir()
+        (directory/'producer.atto').write_text(identity_producer)
+        (directory/'main.atto').write_text(imported_identity_quota_program(129))
+        compiler = os.path.abspath(shutil.which(a.compiler) or a.compiler)
+        before = {p.name for p in directory.iterdir()}
+        result = run([compiler, str(directory/'main.atto')], cwd=directory)
+        artifacts = {p.name for p in directory.iterdir()} - before
+        if (not result.returncode or result.stdout
+                or 'NATIVE_MACRO_BUDGET' not in result.stderr or artifacts):
+            raise AssertionError(('imported syntax expansion budget 129',
+                                  result.returncode, result.stdout[:150],
+                                  result.stderr, sorted(artifacts)))
+        passed += 1
 
         # A normal module import cannot forge compile-time macro provenance.
         directory=root/'atto-linked-macro-forged-module-alias'; directory.mkdir()
