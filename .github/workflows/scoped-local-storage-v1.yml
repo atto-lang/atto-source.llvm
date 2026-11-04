@@ -5,7 +5,9 @@ on:
       - "src/main/cpp/oreslang/runtime/ScopedLocalStorageV1.hpp"
       - "tests/native_scoped_local_storage_v1_test.cpp"
       - "src/main/cpp/oreslang/runtime/NativeActorLocalGateV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h"
       - "tests/native_actor_local_gate_v1_test.cpp"
+      - "tests/native_execution_authority_test.c"
       - "scripts/test-scoped-locals-v1.sh"
       - ".github/workflows/scoped-local-storage-v1.yml"
   workflow_dispatch:
@@ -25,4 +27,8 @@ jobs:
           git rev-parse HEAD
           git rev-parse HEAD^{tree}
       - name: gcc and clang host-only tests
+        run: bash scripts/test-scoped-locals-v1.sh
+      - name: gcc and clang ASan UBSan host-only tests
+        env:
+          ORES_SCOPED_LOCAL_RUN_SANITIZERS: "1"
         run: bash scripts/test-scoped-locals-v1.sh
