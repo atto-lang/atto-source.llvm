@@ -100,6 +100,10 @@ pub fnc main(): int {
     denied(twice_def
         + "pub fnc main(): int { return twice!(syntax expr 20 + 1); }");
     denied(twice_def
+        + "pub fnc main(): int { return twice!(syntax expr 9223372036854775807); }");
+    denied(twice_def
+        + "pub fnc main(): int { return twice!(syntax expr -9223372036854775808); }");
+    denied(twice_def
         + "fnc helper(): int { return 21; }"
           "pub fnc main(): int { return twice!(syntax expr helper()); }");
     denied(R"(
