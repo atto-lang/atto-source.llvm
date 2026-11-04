@@ -57,7 +57,8 @@ def command_key(command, expected):
     # comparator must not accept options the actual executable rejects.
     require(isinstance(command, list) and len(command) >= 2
             and all(isinstance(arg, str) for arg in command), "invalid command")
-    require(Path(command[0]).name == "native_actor_shard_layout_bench",
+    require(Path(command[0]).name in ("native_actor_shard_layout_bench",
+                                      "oreslang-native-actor-shard-bench"),
             "not the native actor shard layout benchmark")
     require(command.count("--layout") == 1 and command[1:3] == ["--layout", expected]
             and not any(arg.startswith("--layout=") for arg in command),
