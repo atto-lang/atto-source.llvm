@@ -1,7 +1,10 @@
 #pragma once
 
 #include "oreslang/frontend/SourceInput.hpp"
+#include "oreslang/frontend/ProjectRootImport.hpp"
 #include <filesystem>
+#include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -73,6 +76,44 @@ class HostLogicalSourceUnitIds final {
                     throw std::runtime_error("native external root ordinal is invalid");
         }
     }
+    static void validate_root_marker(const fs::path& marker, bool canonical) {
+        const auto path = marker.string();
+        const auto expected = capture_source_identity(
+            path.c_str(), 64u * 1024u, "native project marker exceeds 64 KiB");
+        const auto contents = read_regular_source(
+            path.c_str(), 64u * 1024u,
+            "native project marker exceeds 64 KiB", nullptr, &expected);
+        require_valid_source_utf8(contents);
+        if (!canonical) {
+            project_root_import_detail::validate_manifest(contents);
+            return;
+        }
+        // Safe canonical M0 TOML subset; refuse unknown metadata rather than
+        // accepting it as an implicit root authority. Full TOML is pending.
+        const std::regex root_line(R"(^[ \t]*root[ \t]*=[ \t]*"\."[ \t]*(?:#.*)?$)");
+        std::istringstream input(contents);
+        std::string line;
+        bool project = false;
+        bool root = false;
+        while (std::getline(input, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const auto first = line.find_first_not_of(" \t");
+            if (first == std::string::npos || line[first] == '#') continue;
+            if (line == "[project]" && !project) {
+                project = true;
+                continue;
+            }
+            if (project && !root && std::regex_match(line, root_line)) {
+                root = true;
+                continue;
+            }
+            throw std::runtime_error(
+                "unsupported canonical .atto.pkg.toml metadata or duplicate root");
+        }
+        if (!project || !root)
+            throw std::runtime_error(
+                "canonical .atto.pkg.toml requires [project] root = \".\"");
+    }
     static fs::path discover_project_root(const fs::path& entry) {
         const auto path = absolute(entry);
         fs::path cursor = path.parent_path();
@@ -86,6 +127,7 @@ class HostLogicalSourceUnitIds final {
                 if (status.type() != fs::file_type::not_found) {
                     if (!fs::is_regular_file(status))
                         throw std::runtime_error("source project root marker must be regular and not symlinked");
+                    validate_root_marker(candidate, std::string_view(marker) == ".atto.pkg.toml");
                     return cursor;
                 }
             }
