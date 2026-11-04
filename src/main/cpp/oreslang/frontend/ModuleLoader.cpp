@@ -1,4 +1,5 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
+#include "oreslang/frontend/HostLogicalSourceUnitIds.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
 #include <filesystem>
@@ -16,6 +17,7 @@ constexpr std::size_t max_bytes = 8u * 1024u * 1024u;
 constexpr std::size_t max_units = 128, max_depth = 32;
 struct Unit {
     fs::path path;
+    std::string logical_id;
     SourceIdentity identity;
     Program program;
     std::string prefix;
@@ -37,6 +39,7 @@ class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
+    std::unique_ptr<HostLogicalSourceUnitIds> source_ids;
     bool owned, scalar_loop, host;
     std::uint32_t root_provider_bits = 0;
 public:
@@ -45,9 +48,14 @@ public:
         : owned(owned), scalar_loop(scalar_loop), host(host),
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
+        // The real entry path is admitted before its absolute host name is
+        // discarded for compiler metadata. Never share the registry across builds.
+        source_ids = std::make_unique<HostLogicalSourceUnitIds>(fs::path(path));
+        const auto entry_logical_id = source_ids->admit(fs::path(path), identity);
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
-              frontend::CompilerLibraryTier::Core, root_provider_bits);
+              frontend::CompilerLibraryTier::Core, root_provider_bits,
+              entry_logical_id);
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
@@ -118,7 +126,8 @@ private:
     std::size_t visit(fs::path path, std::string text, SourceIdentity identity,
                       std::size_t depth, bool compiler_owned_library,
                       frontend::CompilerLibraryTier compiler_library_tier,
-                      std::uint32_t admitted_core_provider_bits) {
+                      std::uint32_t admitted_core_provider_bits,
+                      std::string logical_id) {
         if (depth > max_depth) throw std::runtime_error("native import graph exceeds 32 edges of depth");
         if (units.size() >= max_units) throw std::runtime_error("native import graph exceeds 128 source files");
         if (text.size() > max_bytes - bytes) throw std::runtime_error("native import graph exceeds 8 MiB aggregate source limit");
@@ -129,6 +138,7 @@ private:
         const auto index = units.size();
         auto unit = std::make_unique<Unit>();
         unit->path = std::move(path); unit->identity = identity;
+        unit->logical_id = std::move(logical_id);
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
         unit->compiler_owned_library = compiler_owned_library;
         unit->compiler_library_tier = compiler_library_tier;
@@ -193,7 +203,7 @@ private:
                     selected = visit(
                         fs::path(unit_id), std::string(library->source),
                         SourceIdentity{}, depth + 1, true, library->tier,
-                        library->admitted_provider_bits);
+                        library->admitted_provider_bits, unit_id);
                 }
                 auto& target = *units[selected];
                 if (target.program.module != library->module_name)
@@ -237,6 +247,7 @@ private:
                         "freestanding native imports require compiler-owned ores.core/* modules");
 
                 fs::path dependency;
+                fs::path lexical_dependency;
                 if (raw.rfind("+/", 0) == 0) {
                     try {
                         dependency = resolve_project_root_import(
@@ -256,11 +267,13 @@ private:
                     } catch (const std::exception& error) {
                         fail(current, error.what());
                     }
+                    lexical_dependency = dependency;
                 } else {
                     if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
                     dependency = project_root_import_detail::resolve_native_source_suffix(
                         current.path.parent_path() / fs::path(raw));
+                    lexical_dependency = dependency;
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
@@ -272,26 +285,36 @@ private:
                     }
                 }
 
+                // Bind the lexical import path to the opened descriptor's
+                // identity before recognizing a cached dependency or a cycle.
+                // A second name for the same source must not silently collapse.
+                const auto dependency_path = dependency.string();
+                const auto expected_child_identity = capture_source_identity(
+                    dependency_path.c_str(), max_bytes - read_bytes,
+                    "native import graph exceeds 8 MiB source read budget");
+                if (dependency == current.path ||
+                    same_file(current.identity, expected_child_identity))
+                    fail(current, "source file cannot import itself through a filesystem alias");
+                const auto child_logical_id =
+                    source_ids->admit(lexical_dependency, expected_child_identity);
                 const auto known = paths.find(dependency.string());
                 selected = known == paths.end() ? units.size() : known->second;
-                if (selected == index) fail(current, "source file cannot import itself");
+                if (selected != units.size() &&
+                    units[selected]->logical_id != child_logical_id)
+                    fail(current, "linked import resolved a conflicting logical unit ID");
                 if (selected == units.size()) {
-                    const auto dependency_path = dependency.string();
-                    const auto expected_child_identity = capture_source_identity(
-                        dependency_path.c_str(), max_bytes - read_bytes,
-                        "native import graph exceeds 8 MiB source read budget");
                     SourceIdentity child_identity;
                     auto child_text = read_regular_source(
                         dependency_path.c_str(), max_bytes - read_bytes,
                         "native import graph exceeds 8 MiB source read budget",
                         &child_identity, &expected_child_identity);
                     read_bytes += child_text.size();
+                    (void)source_ids->admit(lexical_dependency, child_identity);
                     // Compare descriptor identities too: hard-link aliases must
                     // not bypass self-edge rejection or duplicate unit identity.
                     for (std::size_t i = 0; i < units.size(); ++i) {
                         if (same_file(units[i]->identity, child_identity)) {
-                            selected = i;
-                            break;
+                            fail(current, "native source has a second physical name for one logical unit");
                         }
                     }
                     if (selected == index)
@@ -300,9 +323,8 @@ private:
                         selected = visit(
                             dependency, std::move(child_text), child_identity,
                             depth + 1, false,
-                            frontend::CompilerLibraryTier::Core, 0u);
-                    else
-                        paths.emplace(dependency.string(), selected);
+                            frontend::CompilerLibraryTier::Core, 0u,
+                            child_logical_id);
                 }
             }
             if (imported.local_name == current.program.module)
