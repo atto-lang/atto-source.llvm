@@ -1,0 +1,36 @@
+// Linear model y = w * x + b, fitted by full-batch gradient descent.
+define module model as
+  pub define class Params as
+    pub val float w;
+    pub val float b;
+  end
+
+  pub define class Sample as
+    pub val float x;
+    pub val float y;
+  end
+
+  pub fnc predict(borrow Params p, float x): float {
+    return p.w * x + p.b;
+  }
+
+  pub fnc loss(borrow Params p, borrow Sample s): float {
+    val float e = predict(rt borrow p, s.x) - s.y;
+    return e * e;
+  }
+
+  pub fnc grad_w(borrow Params p, borrow Sample s): float {
+    return 2 * (predict(rt borrow p, s.x) - s.y) * s.x;
+  }
+
+  pub fnc grad_b(borrow Params p, borrow Sample s): float {
+    return 2 * (predict(rt borrow p, s.x) - s.y);
+  }
+
+  pub fnc apply(borrow Params p, float gw, float gb, float rate): Params {
+    if !(rate > 0.0 && rate <= 1.0) then
+      rt fail("learning rate out of range");
+    fi
+    return new Params(p.w - rate * gw, p.b - rate * gb);
+  }
+end

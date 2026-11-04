@@ -1,0 +1,48 @@
+fnc classify(float x): int {
+  if x < 0.0 then
+    return -1;
+  elif x == 0.0 then
+    return 0;
+  else
+    return 1;
+  fi
+  return 2;
+}
+
+fnc newton_sqrt(float v): float {
+  let float estimate = v;
+  let int iterations = 0;
+  loop {
+    iterations = iterations + 1;
+    val float next = 0.5 * (estimate + v / estimate);
+    if next == estimate then break; fi
+    if iterations > 64 then break; fi
+    estimate = next;
+  }
+  return estimate;
+}
+
+pub routine main(): void {
+  stdio.stdout.println(classify(-2.5));
+  stdio.stdout.println(classify(0));
+  stdio.stdout.println(classify(0.25));
+  stdio.stdout.println(newton_sqrt(2.0));
+  stdio.stdout.println(newton_sqrt(1.0e10));
+  let int odd_total = 0;
+  let int i = 0;
+  while i < 20 do
+    i = i + 1;
+    if i % 2 == 0 then continue; fi
+    if i > 15 then break; fi
+    val int doubled = i * 2;
+    odd_total = odd_total + doubled;
+  done
+  stdio.stdout.println(odd_total);
+  for (let int k = 3; k > 0; k--) {
+    for int j = 0; j < 5; j++ do
+      if j == k then break; fi
+      odd_total = odd_total + 1;
+    done
+  }
+  stdio.stdout.println(odd_total);
+}

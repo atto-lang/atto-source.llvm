@@ -1,0 +1,33 @@
+import class Params, Sample from './model';
+import fnc predict, loss, grad_w, grad_b, apply from './model';
+
+pub routine main(): void {
+  val Sample a = new Sample(1, 5.0);
+  val Sample c = new Sample(2.0, 7.0);
+  val Sample d = new Sample(3.0, 9.0);
+  let Params p = new Params(0, 0.0);
+  for let step = 0; step < 500; step++ do
+    val float wa = grad_w(rt borrow p, rt borrow a);
+    val float wc = grad_w(rt borrow p, rt borrow c);
+    val float wd = grad_w(rt borrow p, rt borrow d);
+    val float ba = grad_b(rt borrow p, rt borrow a);
+    val float bc = grad_b(rt borrow p, rt borrow c);
+    val float bd = grad_b(rt borrow p, rt borrow d);
+    val float gw = (wa + wc + wd) / 3;
+    val float gb = (ba + bc + bd) / 3;
+    p = apply(rt borrow p, gw, gb, 0.05);
+    if step % 100 == 0 then
+      val float la = loss(rt borrow p, rt borrow a);
+      val float lc = loss(rt borrow p, rt borrow c);
+      val float ld = loss(rt borrow p, rt borrow d);
+      val float total = la + lc + ld;
+      stdio.stdout.write("step=");
+      stdio.stdout.write(step);
+      stdio.stdout.write(" loss=");
+      stdio.stdout.println(total);
+    fi
+  done
+  stdio.stdout.println(p.w);
+  stdio.stdout.println(p.b);
+  stdio.stdout.println(predict(rt borrow p, 10));
+}

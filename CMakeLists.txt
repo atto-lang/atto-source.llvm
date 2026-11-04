@@ -2421,6 +2421,26 @@ if(BUILD_TESTING)
         endif()
         set_tests_properties(native_class_string_parity_${mode} PROPERTIES TIMEOUT 180)
     endforeach()
+    # Float source executes natively and matches Java stdout byte for byte.
+    if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-float-ml"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_float_ml.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-float-ml"
+            DEPENDS tests/native_float_ml.rs
+            VERBATIM)
+        add_custom_target(oreslang-native-float-ml-bin ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-float-ml")
+        add_test(NAME native_float_ml
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-float-ml"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-float")
+        set_tests_properties(native_float_ml PROPERTIES TIMEOUT 240)
+    else()
+        add_test(NAME native_float_ml COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
     # Unary + now lowers as an int-only identity under the existing typed
     # scalar checker. Verify guest compilation, real AOT execution, and
     # fail-closed type/range/recursion rejection without Python tooling.

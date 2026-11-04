@@ -1,0 +1,48 @@
+define class Rect as
+  pub val float w;
+  pub val float h;
+  pub area(): float { return self.w * self.h; }
+  pub scaled(float k): Rect { return new Rect(self.w * k, self.h * k); }
+end
+
+fnc safe_div(float a, float b): Result<float, String> {
+  if b == 0.0 then return Err("zero divisor"); fi
+  return Ok(a / b);
+}
+
+fnc positive(float v): Option<float> {
+  if v > 0.0 then return Some(v); fi
+  return None;
+}
+
+pub routine main(): void {
+  val Rect r = new Rect(2, 3.5);
+  stdio.stdout.println(r.area());
+  val Rect s = r.scaled(2);
+  stdio.stdout.println(s.area());
+
+  val Array<float> xs = new Array<float>();
+  xs.add(1.5);
+  xs.add(2);
+  xs.add(0.1 + 0.2);
+  xs.set(1, 2.25);
+  stdio.stdout.println(xs.get(1));
+  stdio.stdout.println(xs.size);
+  let float total = 0;
+  for const x of xs do
+    total = total + x;
+  done
+  stdio.stdout.println(total);
+
+  val Result<float, String> ok = safe_div(3, 4);
+  stdio.stdout.println(ok.is_ok());
+  stdio.stdout.println(ok.unwrap());
+  val Result<float, String> bad = safe_div(1.0, 0.0);
+  stdio.stdout.println(bad.is_err());
+  stdio.stdout.println(bad.unwrap_or(-1.0));
+  val Option<float> none = positive(-1.0);
+  stdio.stdout.println(none.is_none());
+  stdio.stdout.println(none.unwrap_or(9.5));
+  val Option<float> some = positive(0.75);
+  stdio.stdout.println(some.unwrap() * 2);
+}

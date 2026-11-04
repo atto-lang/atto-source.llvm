@@ -1,0 +1,20 @@
+define class State as
+  pub val float w;
+  pub val int steps;
+end
+fnc advance(borrow State s, float rate): State {
+  return new State(s.w + rate, s.steps + 1);
+}
+pub routine main(): void {
+  let State s = new State(0.0, 0);
+  for int i = 0; i < 200000; i++ do
+    s = advance(rt borrow s, 0.5);
+    if i % 50000 == 0 then stdio.stdout.println("checkpoint"); fi
+  done
+  stdio.stdout.println(s.w);
+  stdio.stdout.println(s.steps);
+  for int i = 0; i < 70000; i++ do
+    stdio.stdout.println(i);
+  done
+  stdio.stdout.println("done");
+}

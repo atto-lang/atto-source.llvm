@@ -1,0 +1,49 @@
+// One sigmoid neuron trained on OR, in a single file beside its module.
+define module neuron as
+  pub fnc exp_approx(float x): float {
+    let float term = 1.0;
+    let float sum = 1.0;
+    for int n = 1; n < 30; n++ do
+      term = term * x / n;
+      sum = sum + term;
+    done
+    return sum;
+  }
+
+  pub fnc sigmoid(float x): float {
+    return 1 / (1 + exp_approx(0 - x));
+  }
+
+  fnc hidden_helper(): int { return 1; }
+
+  pub fnc helper_value(): int { return hidden_helper(); }
+end
+
+pub routine main(): void {
+  let float w0 = 0.1;
+  let float w1 = -0.2;
+  let float bias = 0.05;
+  val Array<float> xa = new Array<float>();
+  val Array<float> xb = new Array<float>();
+  val Array<float> ys = new Array<float>();
+  xa.add(0); xb.add(0); ys.add(0);
+  xa.add(0); xb.add(1); ys.add(1);
+  xa.add(1); xb.add(0); ys.add(1);
+  xa.add(1); xb.add(1); ys.add(1);
+  for let epoch = 0; epoch < 400; epoch++ do
+    for int i = 0; i < ys.size; i++ do
+      val float p = neuron.sigmoid(w0 * xa.get(i) + w1 * xb.get(i) + bias);
+      val float delta = (p - ys.get(i)) * p * (1 - p);
+      w0 = w0 - 0.5 * delta * xa.get(i);
+      w1 = w1 - 0.5 * delta * xb.get(i);
+      bias = bias - 0.5 * delta;
+    done
+  done
+  stdio.stdout.println(w0);
+  stdio.stdout.println(w1);
+  stdio.stdout.println(bias);
+  for int i = 0; i < ys.size; i++ do
+    stdio.stdout.println(neuron.sigmoid(w0 * xa.get(i) + w1 * xb.get(i) + bias));
+  done
+  stdio.stdout.println(neuron.helper_value());
+}

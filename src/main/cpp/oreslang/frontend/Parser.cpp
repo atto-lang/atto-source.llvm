@@ -4124,6 +4124,7 @@ private:
 
     std::string type_identifier() {
         auto name = identifier();
+        if (name == "f32") fail("native f32 requires binary32 lowering; use float or f64");
         if ((name == "Option" || name == "Result") && accept("<")) {
             NativeSumType type; type.kind = name == "Option" ? NativeSumType::Kind::Option : NativeSumType::Kind::Result;
             auto payload = [&]() -> ScalarType {
