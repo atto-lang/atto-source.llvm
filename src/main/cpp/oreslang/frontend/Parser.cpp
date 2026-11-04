@@ -1322,6 +1322,9 @@ private:
             require("int");
             require("=");
             field.initializer = expression();
+            if (actor.sealed_scalar_state &&
+                    !native_constructor_scalar_tree(*field.initializer))
+                fail("native sealed actor state initializer must be pure scalar");
             require(";");
             actor.fields.push_back(std::move(field));
         }
@@ -1424,14 +1427,19 @@ private:
         }
         require("return");
         method.result = expression();
-        if (!method.locals.empty()) {
-            // This slice has one drop epilogue. No taken/moved or borrowed
-            // reference can escape the handler in its scalar return value.
+        if (actor.sealed_scalar_state || !method.locals.empty()) {
+            // The critical state turn may not perform arbitrary calls,
+            // blocking I/O, suspension or any effectful guest expression.
+            // With owned locals, this also preserves one LIFO drop epilogue.
             if (!native_constructor_scalar_tree(*method.result))
-                fail("native actor owned temporary return requires pure scalar expression");
+                fail(actor.sealed_scalar_state
+                    ? "native sealed critical handler requires pure scalar return"
+                    : "native actor owned temporary return requires pure scalar expression");
             for (const auto& write : method.actor_field_writes)
                 if (!native_constructor_scalar_tree(*write.expression))
-                    fail("native actor owned temporary field write requires pure scalar expression");
+                    fail(actor.sealed_scalar_state
+                        ? "native sealed critical handler requires pure scalar state write"
+                        : "native actor owned temporary field write requires pure scalar expression");
         }
         require(";");
         require("}");
