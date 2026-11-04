@@ -12,6 +12,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${CMAKE_COMMAND}" -E env
             "ORESLANG_LLVMC=$<TARGET_FILE:oreslang-llvmc>"
             "CLANG=clang"
+            "ORES_NO_GC_IR_AUDIT=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
             bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_native_harness_parity.sh" --run)
     set_tests_properties(atto_native_harness_compiler_guest_o0_o2
         PROPERTIES TIMEOUT 900 LABELS "attolang;compiler-backed;native")

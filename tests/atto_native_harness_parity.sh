@@ -66,6 +66,9 @@ if [[ "$mode" == --inventory-only ]]; then
   exit 0
 fi
 [[ -x "$compiler" && ! -L "$compiler" ]] || die "missing non-symlink executable compiler: $compiler"
+# Every emitted native IR must pass the production no-GC screen before Clang.
+auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
+[[ -x "$auditor" && ! -L "$auditor" ]] || die "missing native no-GC IR auditor: $auditor"
 clang_exe="$(command -v "$clang")" || die "missing Clang"
 [[ -x "$clang_exe" ]] || die 'Clang is not executable'
 command -v timeout >/dev/null || die 'timeout required'
@@ -94,6 +97,10 @@ for idx in "${!positive_ids[@]}"; do
       { head -c 4096 "$tmp/compile.err" >&2; die "compiler did not produce admitted IR: $id O$level exit=$compiled"; }
     grep -Eq 'define[[:space:]]+i32[[:space:]]+@main\(' "$ir" ||
       die "compiler produced IR without a native main: $id O$level"
+    timeout 20s "$auditor" "$ir" >/dev/null 2> "$tmp/audit-$id-O$level.err" || {
+      head -c 4096 "$tmp/audit-$id-O$level.err" >&2
+      die "mandatory native no-GC IR audit rejected guest: $id O$level"
+    }
     timeout 60s "$clang_exe" "-O$level" -x ir "$ir" -o "$exe" \
       > "$tmp/clang.stdout" 2> "$tmp/clang.err" ||
       { head -c 4096 "$tmp/clang.err" >&2; die "LLVM IR did not link: $id O$level"; }
@@ -106,12 +113,16 @@ for idx in "${!positive_ids[@]}"; do
       die "wrong native guest OS result: $id O$level expected=$expected got=$status"
     [[ ! -s "$tmp/guest.stdout" && ! -s "$tmp/guest.stderr" ]] ||
       die "unexpected guest stdout/stderr: $id O$level"
-    # This host-observed marker is NOT a guest-generated ORES_TEST receipt.
-    printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|%s|O%s|exit=%s|compiler=real|clang=real|guest=executed\n' \
-      "$id" "$level" "$expected"
   done
   cmp -s "$tmp/$id-O0.ll" "$tmp/$id-O2.ll" ||
     die "compiler IR changed between optimization-mode invocations: $id"
+  # Only publish per-level success after O0/O2 compilation, no-GC audit,
+  # native guest exits and IR equality ALL succeeded.
+  for level in 0 2; do
+    # Host-observed, not a guest-generated ORES_TEST receipt.
+    printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|%s|O%s|exit=%s|compiler=real|clang=real|no_gc_ir_audit=passed|guest=executed\n' \
+      "$id" "$level" "$expected"
+  done
 done
 
 # Fail-closed source admission: nonzero status alone cannot count as a

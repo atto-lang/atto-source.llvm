@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang llvm-dev
+          sudo apt-get install -y build-essential cmake clang llvm-dev rustc
           clang --version | head -n 1
           cmake --version | head -n 1
       - name: Build production LLVM AttoLang compiler and native security tests
@@ -61,7 +61,9 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-no-gc-ir-audit-build oreslang-no-gc-ir-audit-tests-build
+          test -x build/oreslang-no-gc-ir-audit
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^native_no_gc_ir_audit_unit$'
           test -x build/oreslang-llvmc
       - name: Verify CTest source and compiler-backed registrations are separate
         shell: bash
@@ -81,6 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG="$(command -v clang)" \
+          ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit" \
             bash tests/atto_native_harness_parity.sh --run \
             | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
           test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 48

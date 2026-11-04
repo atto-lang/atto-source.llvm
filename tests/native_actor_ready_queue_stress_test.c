@@ -14,7 +14,9 @@
  *   - every accepted CONTROL ran exactly once.
  */
 #if defined(__linux__)
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE /* cpu_set_t, sched_getaffinity */
+#endif
 #endif
 #define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/NativeActorScheduler.h"

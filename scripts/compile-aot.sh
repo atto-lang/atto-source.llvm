@@ -2,7 +2,14 @@
 # Compile the admitted host-language subset to a standalone native executable.
 # Unsupported source must fail in oreslang-llvmc, never fall back to an interpreter.
 set -euo pipefail
-[[ $# == 2 ]] || { echo 'Usage: scripts/compile-aot.sh source.ores output-executable' >&2; exit 64; }
+[[ $# == 2 ]] || { echo 'Usage: scripts/compile-aot.sh source.atto|source.ores output-executable' >&2; exit 64; }
+# Clang optimization level only; frontend semantics and the native no-GC IR
+# admission gate must remain identical at both levels.
+opt_level="${ORESLANG_LLVM_AOT_OPT_LEVEL:-2}"
+case "$opt_level" in
+  0|2) ;;
+  *) echo 'ORESLANG_LLVM_AOT_OPT_LEVEL must be 0 or 2.' >&2; exit 64 ;;
+esac
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 compiler="${ORESLANG_LLVMC:-$root/build/oreslang-llvmc}"
 clang="${CLANG:-clang}"
@@ -39,10 +46,10 @@ if grep -Eq 'declare .*@oreslang_int_array_' "$work/program.ll"; then
   runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
 fi
 if (( ${#runtime_sources[@]} )); then
-  "$clang" -O2 -x ir "$work/program.ll" -x c -std=c11 \
+  "$clang" "-O${opt_level}" -x ir "$work/program.ll" -x c -std=c11 \
     -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
 else
-  "$clang" -O2 -x ir "$work/program.ll" -o "$work/program"
+  "$clang" "-O${opt_level}" -x ir "$work/program.ll" -o "$work/program"
 fi
 mv -f -- "$work/program" "$output_file"
 printf 'Native executable: %s\n' "$output_file"
