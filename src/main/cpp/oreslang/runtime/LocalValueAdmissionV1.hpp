@@ -7,6 +7,9 @@
 #include <initializer_list>
 #include <string_view>
 #include <type_traits>
+#if __cplusplus >= 202002L
+#include <span>
+#endif
 
 namespace oreslang::runtime {
 
@@ -23,6 +26,11 @@ struct IsLocalBorrowedViewV1<std::basic_string_view<C, Traits>>
 template <typename T>
 struct IsLocalBorrowedViewV1<std::initializer_list<T>>
     : std::true_type {};
+
+#if __cplusplus >= 202002L
+template <typename T, std::size_t Extent>
+struct IsLocalBorrowedViewV1<std::span<T, Extent>> : std::true_type {};
+#endif
 
 template <typename T>
 inline constexpr bool local_value_allowed_v1 =
