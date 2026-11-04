@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -39,6 +40,25 @@ public:
     LogicalMutex& operator=(const LogicalMutex&) = delete;
 
     [[nodiscard]] Request request() { return queue_.request(); }
+    // try_request is an immediate admission attempt, never a waiter.
+    [[nodiscard]] std::optional<Token> try_request() { return queue_.try_request(); }
+    // Retire only queued tickets; a live protected callback must finish
+    // before its state/arena is reclaimed.
+    [[nodiscard]] CriticalGate::Retirement retire() {
+        // The admission/callback boundary and retirement use identical lock
+        // ordering. Receipts are owned by the scheduler after this returns;
+        // never notify or run guest code under lease_mu_.
+        std::lock_guard<std::mutex> lock(lease_mu_);
+        return queue_.retire();
+    }
+    [[nodiscard]] bool retired() const { return queue_.retired(); }
+    /** Quiescence checks and closure must be atomic with native admission and
+     * with any in-flight protected callback. */
+    [[nodiscard]] bool retire_if_quiescent() {
+        std::lock_guard<std::mutex> lock(lease_mu_);
+        return !active_ && queue_.retire_if_quiescent();
+    }
+    [[nodiscard]] bool quiescent() const { return queue_.quiescent(); }
     [[nodiscard]] bool owns(Token token) const { return queue_.holds(token); }
     [[nodiscard]] std::size_t waiting() const { return queue_.waiting(); }
 
@@ -48,7 +68,7 @@ public:
      */
     [[nodiscard]] Token release(Token token) {
         std::lock_guard<std::mutex> lock(lease_mu_);
-        if (active_ && queue_.holds(token)) {
+        if (active_ && active_token_ == token) {
             throw std::logic_error("cannot release logical mutex during protected callback");
         }
         return queue_.release(token);
@@ -64,22 +84,33 @@ public:
     auto with_owner(Token token, Fn&& fn)
             -> std::invoke_result_t<Fn&, T&> {
         using Result = std::invoke_result_t<Fn&, T&>;
-        static_assert(!std::is_reference_v<Result> && !std::is_pointer_v<Result>,
-                      "native logical mutex protected references cannot escape");
+        // Arbitrary aggregates can hide borrowed pointers/references (including
+        // reference_wrapper, span, view and custom borrowed envelopes). Until
+        // the guest borrow checker can certify an owned copy-out, native
+        // protected callbacks may return only values with no reference graph.
+        static_assert(std::is_void_v<Result> || std::is_arithmetic_v<Result>
+                          || std::is_enum_v<Result>,
+                      "native logical mutex may return only void or scalar values; "
+                      "aggregate and borrowed-view copy-out requires ownership proof");
         {
             std::lock_guard<std::mutex> lock(lease_mu_);
             if (!queue_.holds(token)) {
                 throw std::logic_error("native logical mutex access without owning ticket");
             }
+            if (queue_.retired()) {
+                throw std::logic_error("retired logical mutex cannot enter new protected body");
+            }
             if (active_) {
                 throw std::logic_error("simultaneous logical mutex protected callbacks");
             }
             active_ = true;
+            active_token_ = token;
         }
         struct LeaseEnd final {
             LogicalMutex& mutex;
             ~LeaseEnd() noexcept {
                 std::lock_guard<std::mutex> lock(mutex.lease_mu_);
+                mutex.active_token_ = {};
                 mutex.active_ = false;
             }
         } leaseEnd{*this};
@@ -94,6 +125,7 @@ private:
     CriticalGate queue_;
     mutable std::mutex lease_mu_;
     bool active_ = false;
+    Token active_token_;
     T state_;
 };
 
