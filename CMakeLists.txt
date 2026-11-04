@@ -324,6 +324,14 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Exact compiled-source CLI receipt: LLVM source validation is genuine,
+    # exceptional may-effect inference is intentionally inconclusive.
+    add_test(NAME native_exception_effect_analyze_inconclusive_cli
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_effect_analyze_boundary.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_exception_effect_analyze_inconclusive_cli
+        PROPERTIES TIMEOUT 60)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
