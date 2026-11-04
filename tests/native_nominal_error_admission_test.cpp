@@ -62,6 +62,32 @@ int main() {
     auto forged_nested = classes;
     forged_nested[1].verified_stdlib_root = true;
     require(ErrorOperandVerdict::InvalidHierarchy, nominal("pkg.MyError"), forged_nested);
+    auto any_value = primitive;
+    any_value.shape = ExceptionalValueShape::Any;
+    require(ErrorOperandVerdict::UnknownType, any_value, classes);
+    any_value.shape = ExceptionalValueShape::Unknown;
+    require(ErrorOperandVerdict::UnknownType, any_value, classes);
+    any_value.shape = ExceptionalValueShape::Null;
+    require(ErrorOperandVerdict::NullOperand, any_value, classes);
+    any_value.shape = ExceptionalValueShape::Structural;
+    require(ErrorOperandVerdict::NotNominal, any_value, classes);
+    auto shared = nominal("pkg.MyError");
+    shared.ownership = ExceptionalOwnership::Shared;
+    require(ErrorOperandVerdict::BorrowedOperand, shared, classes);
+    std::vector<ResolvedErrorClass> excessive_classes;
+    for (std::size_t n = 0; n <= kMaxErrorClasses; ++n)
+        excessive_classes.push_back({"pkg.C" + std::to_string(n), "", false});
+    require(ErrorOperandVerdict::ClassBudgetExceeded,
+            nominal("pkg.C0"), excessive_classes);
+    std::vector<ResolvedErrorClass> deep_classes = {
+        {"std/error.Error", "", true}
+    };
+    for (unsigned n = 0; n < kMaxErrorAncestry + 2; ++n)
+        deep_classes.push_back({"pkg.Deep" + std::to_string(n),
+            n == 0 ? "std/error.Error" : "pkg.Deep" + std::to_string(n - 1), false});
+    require(ErrorOperandVerdict::HierarchyTooDeep,
+            nominal("pkg.Deep" + std::to_string(kMaxErrorAncestry + 1)),
+            deep_classes);
     forged_classes[0].verified_stdlib_root = false;
     require(ErrorOperandVerdict::UnverifiedCanonicalRoot,
             nominal("std/error.Error"), forged_classes);
