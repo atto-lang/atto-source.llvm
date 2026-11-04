@@ -45,6 +45,9 @@ SUITES = {
         b"ORES_TEST|SUMMARY|total=1|passed=0|failed=0|skipped=1|filtered=0\n", 1),
     "m1-filtered": (
         b"ORES_TEST|SUMMARY|total=0|passed=0|failed=0|skipped=0|filtered=1\n", 1),
+    "m1-invariants": (
+        b"ORES_TEST|PASS|llvm-m1/contracts/atomic-recovery|\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
     "bounded-pp": (
         b"ORES_TEST|PASS|llvm-native/bounded/first|\n"
         b"ORES_TEST|PASS|llvm-native/bounded/second|\n"

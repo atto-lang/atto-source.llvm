@@ -26,7 +26,7 @@ for source in "$corpus/pass.atto" "$corpus/fail.atto" "$corpus/multi-pass.atto" 
     "$corpus/bounded_testkit.atto" "$corpus/bounded-pp.atto" "$corpus/bounded-pf.atto" \
     "$corpus/bounded-fp.atto" "$corpus/bounded-ff.atto" \
     "$corpus/m1-pass.atto" "$corpus/m1-fail-fast.atto" "$corpus/m1-filter-skip.atto" \
-    "$corpus/m1-skipped.atto" "$corpus/m1-filtered.atto" \
+    "$corpus/m1-skipped.atto" "$corpus/m1-filtered.atto" "$corpus/m1-invariants.atto" \
     "$root/stdlib/testing_m1.atto" "$root/src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp" \
     "$runtime" "$verifier"; do
   [[ -f "$source" && ! -L "$source" ]] || die "source absent or symlinked: $source"
@@ -35,7 +35,7 @@ done
 python3 "$verifier" --self-test
 PYTHONOPTIMIZE=2 python3 "$verifier" --self-test
 for kind in pass fail multi-pass multi-fail bounded-pp bounded-pf bounded-fp bounded-ff \
-    m1-pass m1-fail-fast m1-filter-skip m1-skipped m1-filtered; do
+    m1-pass m1-fail-fast m1-filter-skip m1-skipped m1-filtered m1-invariants; do
   source="$corpus/$kind.atto"
   expected=0
   case "$kind" in
@@ -85,4 +85,4 @@ for source in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$source" | cut -d' ' -f1)" == "${original_hash["$source"]}" ]] ||
     die "guest input mutated during compiler execution: $source"
 done
-echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=13|optimizations=2|native=26|testkit=PARTIAL_M1'
+echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=14|optimizations=2|native=28|testkit=PARTIAL_M1'
