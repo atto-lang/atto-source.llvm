@@ -62,6 +62,16 @@ so the reader cannot silently lose its no-follow admission policy. Legacy
 `.ores` files keep existing compatibility semantics; source extension
 detection remains case-insensitive for `.ATTO`.
 
+The module loader now keeps the canonical path used for module graph identity
+separate from the unresolved selected path used for source-byte admission.
+For both relative `./` and project-root `+/` imports, `.atto` bytes must
+be opened through the original selected path; otherwise canonicalization
+would erase a link injected between resolution and the eventual open.
+The project-root resolver exposes this original path through an optional
+out-parameter without changing the canonical identity returned to existing
+callers. A host test changes a valid imported source into a symlink *after*
+root resolution and requires the original read path to fail closed.
+
 This closes the previous race where a link could be inserted after a
 preflight `symlink_status` check but before the file descriptor opened.
 It does **not** make project-root resolution, nested-package detection,
