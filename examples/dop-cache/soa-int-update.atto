@@ -1,0 +1,26 @@
+// AttoLang guest CPU SoA reference workload. Native LLVM AOT evidence gate.
+// Two separately owned, contiguous native int columns, no actor-owned arena
+// or guest-selectable physical layout. Each column stays under the current
+// native Array<int> limit of 65,536 elements.
+// Expected checksum: 32768*32767/2 + 32768*20 = 537509888.
+pub routine main(): int {
+  val Array<int> positions = new Array<int>();
+  val Array<int> velocities = new Array<int>();
+  for (let int row = 0; row < 32768; row = row + 1) {
+    positions.add(row);
+    velocities.add(2);
+  }
+  for (let int step = 0; step < 10; step = step + 1) {
+    for (let int row = 0; row < 32768; row = row + 1) {
+      positions.set(row, positions.get(row) + velocities.get(row));
+    }
+  }
+  let int checksum = 0;
+  for (let int row = 0; row < 32768; row = row + 1) {
+    checksum = checksum + positions.get(row);
+  }
+  return checksum == 537509888
+      && positions.get(0) == 20
+      && positions.get(32767) == 32787
+      && velocities.get(32767) == 2 ? 0 : 1;
+}

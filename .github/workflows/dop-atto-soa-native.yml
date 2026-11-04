@@ -1,0 +1,97 @@
+name: Native AttoLang DOP SoA guest AOT smoke
+on:
+  pull_request:
+    paths:
+      - 'examples/dop-cache/**'
+      - 'scripts/verify-dop-atto-aot.sh'
+      - 'scripts/test_verify_dop_atto_aot.py'
+      - 'scripts/compile-aot.sh'
+      - '.github/workflows/dop-atto-soa-native.yml'
+      - 'src/main/cpp/oreslang/**'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-guest:
+    # Never check out a fork's head inside this private-source workflow.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head and tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_head="$(git rev-parse --verify HEAD)"
+          actual_tree="$(git rev-parse --verify HEAD^{tree})"
+          test "$actual_head" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'DOP_CHECKOUT_HEAD=%s\nDOP_CHECKOUT_TREE=%s\n' "$actual_head" "$actual_tree" >> "$GITHUB_ENV"
+          printf 'Exact DOP guest checkout: head=%s tree=%s\n' "$actual_head" "$actual_tree"
+      - name: Run negative verifier regression suite (host harness only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -v -s scripts -p 'test_verify_dop_atto_aot.py'
+      - name: Provision LLVM and Clang
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends llvm-dev clang cmake ninja-build
+          command -v llvm-config
+          command -v clang
+          command -v cmake
+          command -v ninja
+      - name: Build real LLVM guest compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_DIR="$(llvm-config --cmakedir)"
+          cmake -S . -B "$RUNNER_TEMP/dop-atto-build" -G Ninja \
+            -DBUILD_TESTING=OFF -DLLVM_DIR="$LLVM_DIR" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/dop-atto-build" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/dop-atto-build/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" "$(command -v clang)" examples/dop-cache/soa-int-update.atto
+      - name: Validate shell verifier syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/compile-aot.sh
+          bash -n scripts/verify-dop-atto-aot.sh
+      - name: Fail closed without compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          ORESLANG_LLVMC=/missing/oreslang-llvmc bash scripts/verify-dop-atto-aot.sh
+          rc=$?
+          set -e
+          test "$rc" -eq 69
+      - name: Fail closed without Clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          ORESLANG_LLVMC="$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" \
+            CLANG=/missing/clang bash scripts/verify-dop-atto-aot.sh
+          rc=$?
+          set -e
+          test "$rc" -eq 69
+      - name: Compile and execute real .atto guest AOT
+        shell: bash
+        env:
+          CLANG: clang
+        run: |
+          set -euo pipefail
+          ORESLANG_LLVMC="$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" \
+            bash scripts/verify-dop-atto-aot.sh
+          test "$(git rev-parse --verify HEAD)" = "$DOP_CHECKOUT_HEAD"
+          test "$(git rev-parse --verify HEAD^{tree})" = "$DOP_CHECKOUT_TREE"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'Verified guest source head=%s tree=%s\n' "$DOP_CHECKOUT_HEAD" "$DOP_CHECKOUT_TREE"
