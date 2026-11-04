@@ -97,6 +97,9 @@ struct DirectFacts {
     bool bounded_calls = true;
     bool unsupported_runtime = false;
     bool call_budget_exceeded = false;
+    // Checked scalar arithmetic can trap. This RT walker records a conservative
+    // observation for the separate exceptional-effect adapter, not a typed Panic.
+    bool unproved_checked_arithmetic = false;
     std::size_t call_limit = 0;
     std::uint64_t loop_iterations = 0;
 };
@@ -129,6 +132,16 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         scan_expression(argument.get(), facts);
         if (facts.call_budget_exceeded) return;
     }
+
+    // LLVM checked arithmetic may trap on overflow (and some divide paths).
+    // Do not silently report an effect-closed ordinary call graph simply
+    // because the RT effect bitset has no typed overflow/error category.
+    if (expr->kind == Expression::Kind::Negate ||
+        expr->kind == Expression::Kind::Add ||
+        expr->kind == Expression::Kind::Subtract ||
+        expr->kind == Expression::Kind::Multiply ||
+        expr->kind == Expression::Kind::Remainder)
+        facts.unproved_checked_arithmetic = true;
 
     switch (expr->kind) {
         case Expression::Kind::SumConstruct:
