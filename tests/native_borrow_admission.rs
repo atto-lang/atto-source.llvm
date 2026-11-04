@@ -65,6 +65,12 @@ fn check_case_with_suffix(
     // A failed compiler must not leave artifacts alongside its fixture.
     let stdout_file = fs::File::create(&stdout_path).unwrap();
     let stderr_file = fs::File::create(&stderr_path).unwrap();
+    // Capture file names alone are not sufficient provenance: a malicious
+    // compiler can replace an existing log with a symlink or another file.
+    let capture_before = [
+        fs::symlink_metadata(&stdout_path).unwrap(),
+        fs::symlink_metadata(&stderr_path).unwrap(),
+    ];
     let root_before = entries(root);
     let mut child = Command::new(compiler)
         .arg(&input)
@@ -88,6 +94,23 @@ fn check_case_with_suffix(
         }
         thread::sleep(Duration::from_millis(10));
     };
+    // Bind captured diagnostics to the original regular files, not merely
+    // to unchanged directory-entry names. Check before reading either path.
+    for (stream_path, original) in [(&stdout_path, &capture_before[0]),
+                                    (&stderr_path, &capture_before[1])] {
+        let current = fs::symlink_metadata(stream_path)
+            .expect("compiler removed its harness-owned capture file");
+        assert!(current.file_type().is_file(),
+            "{name}: compiler replaced harness-owned capture file: {}", stream_path.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!((current.dev(), current.ino()), (original.dev(), original.ino()),
+                "{name}: compiler replaced harness-owned capture file: {}", stream_path.display());
+        }
+        #[cfg(not(unix))]
+        let _ = original;
+    }
     // The running-process check can race a compiler that exits immediately.
     // Enforce the output budget again before reading any potentially huge file.
     for stream_path in [&stdout_path, &stderr_path] {
@@ -468,6 +491,41 @@ mod tests {
     fn negative_admission_rejects_mixed_ir_and_failure_banner() {
         assert_rejected_fake_compiler(
             "printf '; ownership failed\ndefine i64 @main() {\n'\nprintf 'bad ownership\n' >&2\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    fn check_replaced_capture_file(script_body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let root = Scratch::new();
+        let compiler = root.0.join("capture-replacement-compiler.sh");
+        fs::write(&compiler, format!("#!/bin/sh\n{script_body}\n")).unwrap();
+        let mut permissions = fs::metadata(&compiler).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&compiler, permissions).unwrap();
+        let caught = std::panic::catch_unwind(|| check_case(
+            &compiler,
+            &root.0,
+            "invalid-mutable-share",
+            "pub fnc main(): int { return rt mut share 42; }\n",
+            Some("bad ownership"),
+        ));
+        assert_panicked_for(caught, "compiler replaced harness-owned capture file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_capture_symlink_replacement() {
+        check_replaced_capture_file(
+            "rm ../invalid-mutable-share.stdout\nln -s /dev/null ../invalid-mutable-share.stdout\nprintf 'bad ownership\\n' >&2\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_capture_regular_file_replacement() {
+        check_replaced_capture_file(
+            "rm ../invalid-mutable-share.stderr\nprintf 'bad ownership\\n' > ../invalid-mutable-share.stderr\nexit 2",
         );
     }
 
