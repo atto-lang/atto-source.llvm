@@ -201,6 +201,38 @@ void unmodeled_declaration_roots_fail_closed() {
     must_be_unknown("conformance declarations do not certify effect closure");
 }
 
+std::unique_ptr<Expression> checked_add() {
+    auto expr = std::make_unique<Expression>();
+    expr->kind = Expression::Kind::Add;
+    expr->left = value(1);
+    expr->right = value(2);
+    return expr;
+}
+
+void checked_math_is_unknown_without_inventing_panic() {
+    Program p;
+    p.functions.push_back(function("top_level", checked_add()));
+    auto nested = function("nested_initializer", value(3));
+    LocalBinding temp{};
+    temp.name = "sum";
+    temp.initializer = checked_add();
+    nested.locals.push_back(std::move(temp));
+    p.functions.push_back(std::move(nested));
+    p.functions.push_back(function("literal", value(42)));
+    const auto report = observe_exceptional_effects(p);
+    for (const char* identity : {"top_level/0", "nested_initializer/0"}) {
+        const auto* row = report.find(identity);
+        require(row && row->unproved_direct && row->has_unknown_call(),
+                "checked arithmetic must remain unknown, including nested initializer");
+        require(!row->has_observed(FunctionEffect::Panic),
+                "a possible arithmetic trap is not automatically typed actor Panic");
+    }
+    const auto* pure = report.find("literal/0");
+    require(pure && !pure->has_unknown_call(),
+            "arithmetic uncertainty must not contaminate independent literals");
+    require(report.has_unknown(),
+            "the overall graph cannot be called closed with checked arithmetic");
+}
 void standalone_generic_body_is_unknown() {
     Program p;
     auto fn = function("generic", value(7));
@@ -224,5 +256,6 @@ int main() {
     bounds_and_unmodeled_roots();
     unmodeled_declaration_roots_fail_closed();
     standalone_generic_body_is_unknown();
+    checked_math_is_unknown_without_inventing_panic();
     return 0;
 }
