@@ -63,6 +63,11 @@ entry file, a relative import, or a `+/` package-root import.
 Same-suffix symlinks remain permitted, and explicitly importing the
 physical `.ores` file from `.atto` (or vice versa) remains supported.
 
+Native entry filenames must also be explicitly `.atto` or `.ores`: the
+loader rejects extensionless, unrelated, uppercase-case-mismatched and
+double-extension filenames before parsing, with zero emitted LLVM IR.
+Four new negative cases are in `native_source_module_graph_execution`.
+
 The `native_source_module_graph_execution` suite has seven additional
 regression scenarios: both suffix directions for entry, relative and
 project-root imports must reject with no LLVM IR; a same-suffix `.atto`
