@@ -94,4 +94,24 @@ if ORES_NO_GC_IR_AUDIT="$tmp/missing-auditor" "$root/scripts/compile-aot.sh" "$s
     echo 'missing native no-GC auditor was accepted' >&2; exit 1
 fi
 [[ ! -e "$tmp/bin/missing-auditor-result" ]] || { echo 'missing auditor published an artifact' >&2; exit 1; }
-printf '%s\n' 'HOST-PIPELINE-PASS|clang_o0=1|clang_o2=1|default_o2=1|invalid_settings=4|synthetic_auditor_checks=1|auditor_negative=1|guest_compiler=NOT_EXECUTED'
+# Alias protection must cover the no-GC auditor as well as compiler/Clang.
+# An older driver overwrote the auditing executable with an ELF here.
+auditor_sha="$(sha256sum "$ORES_NO_GC_IR_AUDIT" | cut -d' ' -f1)"
+for candidate in direct hardlink symlink; do
+    output="$tmp/bin/auditor-$candidate"
+    case "$candidate" in
+        direct) output="$ORES_NO_GC_IR_AUDIT" ;;
+        hardlink) ln -- "$ORES_NO_GC_IR_AUDIT" "$output" ;;
+        symlink) ln -s -- "$ORES_NO_GC_IR_AUDIT" "$output" ;;
+    esac
+    if "$root/scripts/compile-aot.sh" "$source" "$output" > "$tmp/alias-$candidate.out" 2> "$tmp/alias-$candidate.err"; then
+        echo "no-GC auditor $candidate alias was accepted" >&2; exit 1
+    fi
+    grep -Fq 'must not alias' "$tmp/alias-$candidate.err" || {
+        echo "auditor $candidate alias rejected for wrong reason" >&2; exit 1;
+    }
+    [[ "$(sha256sum "$ORES_NO_GC_IR_AUDIT" | cut -d' ' -f1)" == "$auditor_sha" ]] || {
+        echo "no-GC auditor changed via $candidate output alias" >&2; exit 1;
+    }
+done
+printf '%s\n' 'HOST-PIPELINE-PASS|clang_o0=1|clang_o2=1|default_o2=1|invalid_settings=4|synthetic_auditor_checks=1|auditor_negative=1|auditor_alias_denials=3|guest_compiler=NOT_EXECUTED'
