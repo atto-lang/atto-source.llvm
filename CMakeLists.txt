@@ -324,6 +324,17 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Compiler-owned nominal Error proof policy. Host-only proof object test:
+    # native source throw/raise/panic remain fail-closed.
+    add_executable(oreslang-native-nominal-error-admission-test
+        tests/native_nominal_error_admission_test.cpp)
+    target_include_directories(oreslang-native-nominal-error-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-nominal-error-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_nominal_error_admission_host_only
+        COMMAND oreslang-native-nominal-error-admission-test)
+    set_tests_properties(native_nominal_error_admission_host_only PROPERTIES TIMEOUT 15)
     # Compiler AST effect observations: bounded direct/transitive may-effect
     # flags, unresolved call propagation, recursive graph convergence.
     # Host AST model only; typed escaping effects are not yet admitted.
