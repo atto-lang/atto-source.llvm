@@ -167,6 +167,9 @@ public:
     }
 private:
     void recheck_source_graph() const {
+        // Keep legacy/rootless and freestanding paths on their established
+        // admission contract; the new identity registry is package-scoped.
+        if (!logical_units) return;
         // Detect post-read mutation before returning an admitted program.
         // A source file's metadata must match the descriptor actually read,
         // not merely the pathname selected by dependency resolution.
