@@ -895,6 +895,14 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_durable_m0_comment_nontrigger
         durable-m0-quoted-comments-native.atto --ir "ret i64 42")
 
+    # Same 1,671-byte canonical manifest reference checked in .NET/Wasm and
+    # platform conformance. This does NOT imply LLVM emitted the manifest.
+    add_test(NAME native_durable_m0_manifest_v1_reference_bytes
+        COMMAND "${CMAKE_COMMAND}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/durable-m0/v1/verify-manifest.cmake")
+    set_tests_properties(native_durable_m0_manifest_v1_reference_bytes
+        PROPERTIES TIMEOUT 15)
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
