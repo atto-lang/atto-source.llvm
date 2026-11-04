@@ -2833,6 +2833,24 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(numerics_atto_integer_guest numerics-atto-main.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
+        # Shared .atto v1 scalar corpus from common-source #217. The first
+        # seven positive cases fit OS exit status; signed i64 extremes still
+        # require a separate typed-value witness and are NOT certified here.
+        oreslang_contract_test(atto_scalar_precedence ../../contracts/atto-scalar-v1/positive/precedence.atto --run 14 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_scalar_grouping ../../contracts/atto-scalar-v1/positive/parentheses.atto --run 20 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_scalar_type_first_local ../../contracts/atto-scalar-v1/positive/type-first-readonly.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_scalar_typed_const ../../contracts/atto-scalar-v1/positive/typed-const-readonly.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_scalar_inferred_const ../../contracts/atto-scalar-v1/positive/inferred-const-readonly.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_scalar_legacy_pure_call ../../contracts/atto-scalar-v1/positive/pure-call.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_scalar_type_first_parameter ../../contracts/atto-scalar-v1/positive/type-first-parameter.atto --run 42 --clang "${ORE_CLANG}")
+        add_test(NAME atto_scalar_v1_exact_source_only
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_v1_source.py")
+        set_tests_properties(atto_scalar_v1_exact_source_only PROPERTIES TIMEOUT 30)
+        add_test(NAME atto_scalar_v1_removed_operators_denied
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_llvm_negative.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>")
+        set_tests_properties(atto_scalar_v1_removed_operators_denied PROPERTIES TIMEOUT 40)
+
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")
