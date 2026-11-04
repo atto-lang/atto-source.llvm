@@ -244,6 +244,38 @@ def main():
                 raise AssertionError((name, 'failed compile emitted side artifact'))
             passed += 1
 
+        for name, source, extra_files, diagnostic in (
+            ('atto-modern-nested-package',
+             'import module Lib from "+/nested/lib"; pub fnc main():int{return 0;}',
+             {'nested/.atto.pkg.toml': 'schema_version = "1"\n',
+              'nested/lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end'},
+             'nested package boundary'),
+            ('atto-modern-relative-escape',
+             'import module Lib from "../../outside"; pub fnc main():int{return 0;}',
+             {'outside.atto': 'define module Lib as pub fnc answer():int{return 42;} end'},
+             'escapes physical package root'),
+        ):
+            directory = root/name; directory.mkdir()
+            package = directory/'package'
+            package.mkdir()
+            (package/'.atto.pkg.toml').write_text('schema_version = "1"\n')
+            source_dir = package/'src'
+            source_dir.mkdir()
+            (source_dir/'main.atto').write_text(source)
+            for file_path, data in extra_files.items():
+                destination = (directory/file_path if name.endswith('escape')
+                               else package/file_path)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(data)
+            before = set(directory.rglob('*'))
+            result = run([a.compiler, str(source_dir/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode,
+                                      result.stdout[:150], result.stderr))
+            if set(directory.rglob('*')) != before:
+                raise AssertionError((name, 'failed compile emitted output'))
+            passed += 1
+
         # Project-root security failures must be compiler failures too, not
         # only host-resolver unit failures. Every case requires zero IR.
         directory = root/'atto-root-nested-package-boundary'; directory.mkdir()
