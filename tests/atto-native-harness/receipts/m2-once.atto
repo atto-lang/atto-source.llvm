@@ -1,5 +1,6 @@
 // Compiler-owned M2 source-executed scalar bodies (not indirect user closures).
 import module M2 from "ores.std/testing/m2";
+import module Ledger from "ores.std/testing/m1";
 import class RegisteredCase from "ores.std/testing/m2.atto";
 import class TestSuite from "ores.std/testing/m1";
 import class RunSummary from "ores.std/testing/m1.ores";
@@ -14,14 +15,12 @@ pub routine main(): int {
   val int first = M2.run_one(rt mut borrow suite, rt mut borrow once);
   val int again = M2.run_one(rt mut borrow suite, rt mut borrow once);
   let mut RunSummary summary = new RunSummary();
-  val int status = M2.run_pair(rt mut borrow suite, rt mut borrow once, rt mut borrow once, rt mut borrow summary);
-  if first != 0 || again != -4 || status != -5 ||
-    suite.total != 1 || suite.passed != 1 || once.invocations != 1 ||
-    once.visited != 1; then
+  val int finish_status = Ledger.finish(rt borrow suite, rt mut borrow summary);
+  if first != 0 || again != -4 || finish_status != 0 ||
+    suite.total != 1 || summary.passed != 1 || summary.total != 1 ||
+    once.invocations != 1 || once.visited != 1; then
     return 3;
   fi
-  val int finished = M2.run_one(rt mut borrow suite, rt mut borrow once);
-  if finished != -4; then return 3; fi
   stdio.println("ORES_TEST|PASS|llvm-m2/once/body|");
   stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0");
   return 0;
