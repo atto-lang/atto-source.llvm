@@ -192,6 +192,20 @@ def main():
         require("@oreslang_int_array_try_new" in modern_bundle.stdout,
                 "canonical .atto transitive allocation lost provider gate")
 
+        if args.clang:
+            bundle_ll = root / "modern-bundle.ll"
+            bundle_exe = root / "modern-bundle"
+            bundle_ll.write_text(modern_bundle.stdout, encoding="utf-8")
+            linked = run([
+                args.clang, "-O2", "-Wno-override-module", "-std=c11",
+                "-x", "ir", str(bundle_ll), "-x", "c", str(runtime_c),
+                "-I", str(include), "-o", str(bundle_exe),
+            ])
+            require(linked.returncode == 0, linked.stderr)
+            executed = run([str(bundle_exe)])
+            require(executed.returncode == 42,
+                    "compiled .atto transitive alloc bundle did not execute to 42")
+
         invalid_suffix = root / "invalid-alloc-suffix.atto"
         invalid_suffix.write_text(
             'import module int_buffer from "alloc/int_buffer.txt"; '
@@ -224,16 +238,17 @@ def main():
         # No freestanding allocator provider ABI exists yet. Fail before IR,
         # rather than silently binding to libc or an ambient runtime allocator.
         for target in ("wasm32-unknown-unknown", "thumbv7m-none-eabi"):
-            rejected = run([
-                args.compiler,
-                "--library-profile=core",
-                "--target=" + target,
-                str(main_source),
-            ])
-            reject(
-                rejected,
-                "freestanding alloc/* requires an explicit allocator provider",
-            )
+            for source in (main_source, modern_source, modern_bundle_source):
+                rejected = run([
+                    args.compiler,
+                    "--library-profile=core",
+                    "--target=" + target,
+                    str(source),
+                ])
+                reject(
+                    rejected,
+                    "freestanding alloc/* requires an explicit allocator provider",
+                )
 
     print(
         "compiler-owned alloc tier, allocator ABI, alias identity, "
