@@ -20,6 +20,10 @@ typedef struct {
     int consuming;
     int consumed;
     int producer_on_carrier;
+    // The current restricted TaskLocal<int> specialization owns one inline
+    // scalar value. It is retired with this SourceTask, never pthread TLS.
+    int task_local_present;
+    int64_t task_local_i64;
 } SourceTaskI64;
 
 typedef struct {
@@ -63,6 +67,49 @@ static void task_worker(void* context, size_t actor_index, uint64_t payload) {
     task->done = 1;
     if (pthread_cond_broadcast(&task->completed) != 0) abort();
     if (pthread_mutex_unlock(&task->mutex) != 0) abort();
+}
+
+static SourceTaskI64* current_tasklocal_owner_locked(void) {
+    // Called only with runtime.mutex held, which pins scheduler/task lifetime.
+    // Scheduler-issued callback execution claims, not caller integer stamps,
+    // are the only authority for the current Task's i64 slot.
+    if (runtime.closing || !runtime.task || !runtime.scheduler ||
+        !ores_native_actor_scheduler_is_current_actor(
+            runtime.scheduler, runtime.actor))
+        return NULL;
+    return runtime.task;
+}
+
+int oreslang_source_task_local_i64_set_checked(int64_t value) {
+    if (pthread_mutex_lock(&runtime.mutex) != 0) abort();
+    SourceTaskI64* task = current_tasklocal_owner_locked();
+    int ok = task != NULL;
+    if (ok) {
+        task->task_local_i64 = value;
+        task->task_local_present = 1;
+    }
+    if (pthread_mutex_unlock(&runtime.mutex) != 0) abort();
+    return ok;
+}
+
+int oreslang_source_task_local_i64_get_checked(int64_t* out_value) {
+    if (!out_value) return 0;
+    if (pthread_mutex_lock(&runtime.mutex) != 0) abort();
+    SourceTaskI64* task = current_tasklocal_owner_locked();
+    int ok = task != NULL && task->task_local_present;
+    if (ok) *out_value = task->task_local_i64;
+    if (pthread_mutex_unlock(&runtime.mutex) != 0) abort();
+    return ok;
+}
+
+void oreslang_source_task_local_i64_set(int64_t value) {
+    if (!oreslang_source_task_local_i64_set_checked(value)) abort();
+}
+
+int64_t oreslang_source_task_local_i64_get(void) {
+    int64_t result = 0;
+    if (!oreslang_source_task_local_i64_get_checked(&result)) abort();
+    return result;
 }
 
 int oreslang_source_task_start_i64_checked(
