@@ -1,5 +1,5 @@
 """Fail-closed compiler -> native LLVM guest ELF descriptor retention proof."""
-import argparse, json, re, shutil, subprocess, tempfile
+import argparse, hashlib, json, os, re, shutil, subprocess, tempfile
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -32,17 +32,26 @@ def main():
     p.add_argument('--compiler',type=Path,required=True)
     p.add_argument('--clang',default='clang')
     p.add_argument('--objcopy',default='objcopy')
+    p.add_argument('--report', type=Path, default=None, help='write a success-only exact-source receipt')
     args=p.parse_args()
+    # Never let a stale receipt survive a failed or unexecuted run.
+    if args.report is not None and args.report.exists():
+        args.report.unlink()
     if not __debug__: raise SystemExit('INVALID_TEST_ENVIRONMENT: Python -O disables assertions')
     if not args.compiler.is_file(): raise SystemExit('NOT_EXECUTED: LLVM compiler missing')
     if not shutil.which(args.clang) or not shutil.which(args.objcopy) or not shutil.which('readelf'):
         raise SystemExit('NOT_EXECUTED: clang/objcopy missing')
     compiler=args.compiler.resolve()
     manifests=[]
+    executed=[]
     with tempfile.TemporaryDirectory(prefix='atto-m1-aot-') as tmp:
         work=Path(tmp)
         for ext in ('atto','ores'):
             src=ROOT/'tests/fixtures'/f'mcp-descriptor-public.{ext}'
+            # Compare bytes in the native executable against an independently
+            # invoked compiler metadata mode, not just a hand-written fixture.
+            canonical=ok([compiler,'--mcp-descriptors',src]).stdout.encode('utf-8')
+            assert canonical and len(canonical)<=8192
             cmd=[compiler,'--mcp-embed-descriptors',src]
             ir=ok(cmd).stdout
             assert ir==ok(cmd).stdout, 'non-deterministic LLVM IR'
@@ -64,6 +73,13 @@ def main():
                 ok([args.objcopy,'--dump-section',f'.atto.mcp.v1={blob}',binary])
                 payload=blob.read_bytes()
                 assert payload.endswith(b'\0') and payload.count(b'\0')==1 and len(payload)<=8193
+                assert payload[:-1]==canonical, (
+                    f'{ext} {optimization}: embedded bytes differ from compiler metadata')
+                symbols=ok(['readelf','-Ws',binary]).stdout
+                matches=[row for row in symbols.splitlines()
+                         if row.split() and row.split()[-1]=='__atto_mcp_descriptor_v1']
+                assert any('GLOBAL' in row and 'OBJECT' in row for row in matches), (
+                    f'{ext} {optimization}: descriptor symbol not globally visible')
                 manifest=json.loads(payload[:-1])
                 assert manifest['schema']=='atto.mcp.aot-descriptors.m1.v1'
                 assert manifest['abi']=='atto.mcp.native.descriptor.v1'
@@ -73,6 +89,14 @@ def main():
                 assert [(x['name'],x['arity']) for x in manifest['descriptors']]==[('add',2),('main',0)]
                 assert b'hidden' not in payload and b'/tmp/' not in payload
                 manifests.append(manifest)
+                executed.append({
+                    'sourceExtension':ext, 'optimization':optimization,
+                    'exitCode':result.returncode,
+                    'nativeSha256':hashlib.sha256(binary.read_bytes()).hexdigest(),
+                    'descriptorSha256':hashlib.sha256(payload).hexdigest(),
+                    'compilerMetadataSha256':hashlib.sha256(canonical).hexdigest(),
+                    'descriptorBytes':len(payload)
+                })
         assert len(manifests)==4 and all(x==manifests[0] for x in manifests), (
             '.atto/.ores or -O0/-O2 descriptor mismatch')
         source=ROOT/'tests/fixtures/mcp-descriptor-public.atto'
@@ -100,5 +124,30 @@ def main():
           ('--mcp-embed-descriptors','--target=wasm32'),
           ('--mcp-embed-descriptors','--profile=native-hard-rt')]:
             assert run([compiler,*flags,source]).returncode!=0, f'unsupported mode accepted: {flags}'
+    assert len(executed)==4 and len({(x['sourceExtension'],x['optimization']) for x in executed})==4
+    assert len({x['descriptorSha256'] for x in executed})==1
+    if args.report is not None:
+        def git_id(revision):
+            p=subprocess.run(['git','-C',str(ROOT),'rev-parse',revision],
+                             capture_output=True,text=True,timeout=10)
+            if p.returncode: raise AssertionError('no exact Git source identity for receipt')
+            return p.stdout.strip()
+        head=git_id('HEAD')
+        tree=git_id('HEAD^{tree}')
+        expected=os.environ.get('EXPECTED_HEAD','')
+        if expected and head != expected:
+            raise AssertionError('source head differs from trusted workflow head')
+        receipt={
+            'schema':'atto.mcp.llvm-aot-guest-evidence.v1',
+            'evidenceClassification':'COMPILER_BACKED_NATIVE_GUEST_EXECUTED',
+            'headSha':head,'treeSha':tree,
+            'compilerSha256':hashlib.sha256(compiler.read_bytes()).hexdigest(),
+            'cases':executed,
+            'defaultRetention':'ABSENT_AT_O0_AND_O2',
+            'negativeAdmissions':'PASS',
+            'scope':'M1_ELF_GUEST_DESCRIPTOR_ONLY_NOT_MCP_SERVER'
+        }
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
     print('LLVM compiler -> .atto/.ores O0/O2 native guest + GC-preserved descriptor PASS')
 if __name__=='__main__': main()
