@@ -598,10 +598,18 @@ public:
                 fail("native contract imports require a validated cross-unit linker");
             ModuleImport imported;
             imported.offset = token_.offset;
-            imported.selected_class = accept("class");
-            if (!imported.selected_class) require("module");
-            imported.selected_module = identifier();
-            imported.local_name = accept("as") ? identifier() : imported.selected_module;
+            if (accept("*")) {
+                // A v1 star import is a compile-time macro namespace, not
+                // authority to import arbitrary runtime symbols.
+                imported.macro_namespace = true;
+                require("as");
+                imported.local_name = identifier();
+            } else {
+                imported.selected_class = accept("class");
+                if (!imported.selected_class) require("module");
+                imported.selected_module = identifier();
+                imported.local_name = accept("as") ? identifier() : imported.selected_module;
+            }
             if (!module_names_.insert(imported.local_name).second)
                 fail("duplicate imported module binding '" + imported.local_name + "'");
             require("from");
@@ -637,9 +645,8 @@ public:
                 exported = true;
             }
             if (token_.text == "macro") {
-                if (exported) fail("NATIVE_MACRO_EXPANDER_REQUIRED: public macro export needs checked module visibility before LLVM IR; runtime fallback is forbidden");
                 advance();
-                macro_declaration();
+                macro_declaration(exported);
                 continue;
             }
             if (token_.text == "mtd") {
@@ -729,8 +736,9 @@ public:
                     public_class = true;
                 }
                 if (token_.text == "macro") {
-                    fail("NATIVE_MACRO_EXPANDER_REQUIRED: define macro is compile-time-only; "
-                         "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+                    advance();
+                    macro_declaration(public_class);
+                    continue;
                 }
                 if (token_.text == "mtd") {
                     program.functions.push_back(extension_method(public_class));
@@ -787,14 +795,15 @@ public:
         resolve_alias_uses(program);
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty() && program.generators.empty() &&
-                program.type_only_declarations.empty())
-            fail("expected at least one function, generator, actor or type-only declaration");
+                program.type_only_declarations.empty() && native_macro_declarations_.empty())
+            fail("expected at least one function, generator, actor, type-only or macro declaration");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.generators.empty() || !program.actors.empty() ||
                  !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
+        program.native_macros = std::move(native_macro_declarations_);
         program.sum_types = std::move(sum_types_);
         return program;
     }
@@ -1221,7 +1230,7 @@ private:
         return next_lexer.next();
     }
 
-    enum class MacroKind { ConstIntQuote, SyntaxExprIdentity, SyntaxExprLiteralTwice };
+    using MacroKind = NativeMacroDecl::Kind;
     static constexpr std::size_t kMaxNativeMacroDefinitions = 8;
     static constexpr std::size_t kMaxNativeMacroExpansions = 128;
 
@@ -1233,7 +1242,7 @@ private:
 
     // Only two syntactically closed typed AST forms may cross this boundary.
     // Macro bodies are checked at declaration even when never invoked.
-    void macro_declaration() {
+    void macro_declaration(bool exported) {
         if (macros_.size() >= kMaxNativeMacroDefinitions)
             fail("NATIVE_MACRO_BUDGET: declaration budget exceeded; runtime fallback is forbidden");
         const std::string name = identifier();
@@ -1283,6 +1292,7 @@ private:
         }
         require_macro(";"); require_macro("}");
         macros_.at(name) = kind;
+        native_macro_declarations_.push_back(NativeMacroDecl{name, kind, exported});
     }
 
     // Constant evaluation visits the already parsed expression AST, never
@@ -3918,6 +3928,25 @@ private:
         else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
+        if (token_.text == "!" && expr->name.find('.') != std::string::npos) {
+            // Parse as typed AST, defer *only* trusted imported namespace
+            // expansion to ModuleLoader after the source graph is bound.
+            const auto alias = expr->name.substr(0, expr->name.find('.'));
+            if (!module_names_.count(alias))
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: unknown macro namespace");
+            advance();
+            require_macro("(");
+            if (accept("const")) {
+                expr->imported_macro_const_argument = true;
+            } else {
+                require_macro("syntax");
+                require_macro("expr");
+            }
+            expr->kind = Expression::Kind::ImportedMacro;
+            expr->arguments.push_back(expression());
+            require_macro(")");
+            return expr;
+        }
         if (token_.text == "!") return macro_expression(expr->name, offset);
         if (generic_call_type_arguments_ahead()) {
             require("<");
@@ -5855,6 +5884,7 @@ private:
     Token token_;
     std::unordered_set<std::string> module_names_;
     std::unordered_map<std::string, MacroKind> macros_;
+    std::vector<NativeMacroDecl> native_macro_declarations_;
     std::size_t macro_expansions_ = 0;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
