@@ -32,7 +32,7 @@ define i32 @wrong_main() {
 }
 IR
     ;;
-  typed_link_fail|constant_42|script_shim)
+  typed_link_fail|constant_42|script_shim|mutate_ir_on_link)
     cat <<'IR'
 define i32 @main() {
   %real = alloca double, align 8
@@ -49,12 +49,21 @@ cat > "$scratch/mock-clang" <<'MOCK'
 set -euo pipefail
 [[ "$#" -ge 5 ]] || exit 70
 if [[ "$MOCK_MODE" == typed_link_fail ]]; then exit 88; fi
-[[ "$MOCK_MODE" == constant_42 || "$MOCK_MODE" == script_shim ]] || exit 71
+[[ "$MOCK_MODE" == constant_42 || "$MOCK_MODE" == script_shim || "$MOCK_MODE" == mutate_ir_on_link ]] || exit 71
 output=""
+ir=""
 while (( $# > 0 )); do
-  if [[ "$1" == -o && $# -ge 2 ]]; then output="$2"; shift 2; else shift; fi
+  if [[ "$1" == -o && $# -ge 2 ]]; then output="$2"; shift 2
+  else
+    case "$1" in *.ll) ir="$1";; esac
+    shift
+  fi
 done
 [[ -n "$output" ]] || exit 72
+if [[ "$MOCK_MODE" == mutate_ir_on_link ]]; then
+  [[ -f "$ir" ]] || exit 74
+  printf ';adversarial post-compile mutation\n' >> "$ir"
+fi
 if [[ "$MOCK_MODE" == script_shim ]]; then
   printf '#!/bin/sh\nexit 42\n' > "$output"
 else
@@ -95,4 +104,5 @@ reject wrong_entry wrong_entry 'NATIVE_F64_MISSING_NATIVE_MAIN: scalar_local'
 reject failed_link typed_link_fail 'NATIVE_F64_LINK_FAILED: scalar_local O0'
 reject shell_native_shim script_shim 'NATIVE_F64_LINK_NOT_NATIVE_IMAGE: scalar_local O0'
 reject fabricated_constant_42 constant_42 'NATIVE_F64_EXIT_MISMATCH: f64_nested_local_read_exit_37 O0 rc=42 expected=37'
-echo "HOST_ONLY_F64_GATE_ADVERSARIAL_PASS=5; NO_ATTO_COMPILER_OR_GUEST_EXECUTED"
+reject mutated_ir_during_link mutate_ir_on_link 'NATIVE_F64_SOURCE_OR_IR_MUTATED: scalar_local O0'
+echo "HOST_ONLY_F64_GATE_ADVERSARIAL_PASS=6; NO_ATTO_COMPILER_OR_GUEST_EXECUTED"
