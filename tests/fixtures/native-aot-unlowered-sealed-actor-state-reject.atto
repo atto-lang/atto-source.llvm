@@ -1,10 +1,12 @@
-// Must fail before IR emission. Legacy actor scalar field lowering must
-// NEVER silently stand in for sealed state + critical handle_state semantics.
+// Historically this fixture rejected all sealed state. The compiler now
+// lowers only non-suspending scalar state. Suspension while a critical actor
+// turn owns the region must still fail before any LLVM IR is emitted.
 define actor StrictCounter as {
   state {
     let count: int = 0;
   }
-  pub critical handle_state(int delta): int {
-    return delta;
+  pub critical suspends fnc handle_state(int delta): int {
+    count = count + delta;
+    return count;
   }
 }
