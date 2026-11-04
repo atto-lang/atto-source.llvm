@@ -126,6 +126,39 @@ positive f64_ternary_false 'pub fnc main(): int {
 }'
 positive integer_control 'pub fnc main(): int { return 42; }'
 
+# Numerical M1 scalar prerequisites only: these do NOT execute num.atto's
+# imported f64 List/Result/test-harness library or sqrt implementation.
+positive num_m1_negative_domain 'pub fnc main(): int {
+  val f64 negative = 0.0 - 1.0;
+  if negative < 0.0; then return 42; fi
+  return 86;
+}'
+positive num_m1_tiny_magnitude 'pub fnc main(): int {
+  val f64 tiny = 1.0e-100;
+  if tiny > 0.0; then
+    if tiny < 1.0e-99; then return 42; fi
+  fi
+  return 86;
+}'
+positive num_m1_huge_magnitude 'pub fnc main(): int {
+  val f64 huge = 1.0e300;
+  if huge > 1.0e299; then
+    if huge < 1.0e301; then return 42; fi
+  fi
+  return 86;
+}'
+positive num_m1_overflow_infinity 'pub fnc main(): int {
+  val f64 overflowed = 1.0e308 * 1.0e308;
+  if overflowed > 1.0e308; then return 42; fi
+  return 86;
+}'
+positive num_m1_scalar_reduction_seed 'pub fnc main(): int {
+  val f64 reduced = 1.0 + 2.0 + 3.0 + 4.0;
+  if reduced == 10.0; then return 42; fi
+  return 86;
+}'
+
+
 negative implicit_int_to_f64 'pub fnc main(): int {
   val f64 value = 1;
   return 42;
@@ -174,6 +207,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }' 'native branch-local f64 storage requires scoped double lowering'
 
-[[ "$pass" -eq 14 && "$reject" -eq 12 ]] ||
+[[ "$pass" -eq 19 && "$reject" -eq 12 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=14; NEGATIVE_NO_IR_PASS=12 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=19; NEGATIVE_NO_IR_PASS=12 (M1 scalar prereqs only, not num.atto library execution)"
