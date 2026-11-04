@@ -3,7 +3,7 @@
 name: AttoLang LLVM native harness executable parity (O0 O2)
 on:
   pull_request:
-    # Compiler/runtime/stdlib/build changes must trigger native guest evidence.
+    # Compiler, runtime, build, stdlib and test changes must run native parity.
     paths:
       - 'CMakeLists.txt'
       - 'cmake/**'
@@ -15,6 +15,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
       - 'tests/core_library_sources_test.cpp'
       - 'stdlib/testing_m1.atto'
+      - 'stdlib/testing_m2.atto'
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/project_root_import_test.cpp'
       - 'tests/atto-native-harness/**'
@@ -100,10 +101,10 @@ jobs:
             | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
           test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 80
           test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 6
-          test "$(grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 28
-          grep -Fqx 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=14|optimizations=2|native=28|testkit=PARTIAL_M1' \
+          test "$(grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 46
+          grep -Fqx 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=23|optimizations=2|native=46|testkit=PARTIAL_M2' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=10|guest_receipt_protocol=UNSUPPORTED' \
+          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=11|guest_receipt_protocol=UNSUPPORTED' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
       - name: Assert unchanged source and exact head after execution
         shell: bash

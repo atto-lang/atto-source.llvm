@@ -20,30 +20,55 @@ receipt_line="$(gate_line "printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|")"
   die 'unsafe native guest audit or receipt ordering'
 
 unique() { [[ "$(count "$1")" -eq 1 ]] || die "expected exactly one: $1"; }
-# Reject historical duplicate/truncated workflow checker source.
+# The checker must itself contain exactly one genuine completion and guest-gate block.
 [[ "$(grep -c "^echo 'PASS LLVM canonical" "$0")" -eq 1 ]] ||
-  die 'workflow checker source contains duplicated completion path'
+  die 'duplicate workflow checker completion block'
 [[ "$(grep -c '^unique "tests/atto_native_guest_receipts.sh"' "$0")" -eq 1 ]] ||
-  die 'workflow checker source contains duplicated guest assertions'
+  die 'duplicate workflow guest-gate block'
 unique 'name: AttoLang LLVM native harness executable parity (O0 O2)'
-# The checked-in AttoLang source must byte-match the compiler-owned
-# embedded canonical library; host or symlink fallback cannot substitute it.
-python3 - "$root/stdlib/testing_m1.atto" \
+# Canonical .atto modules must be byte-identical to the compiler-owned
+# hosted M1/M2 sources. This is source-static, NOT compiled guest proof.
+python3 - "$root/stdlib/testing_m1.atto" "$root/stdlib/testing_m2.atto" \
   "$root/src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp" <<'PY'
 from pathlib import Path
 import sys
-source, header = (Path(p) for p in sys.argv[1:])
-if not source.is_file() or source.is_symlink() or not header.is_file() or header.is_symlink():
-    raise SystemExit("M1 compiler source is absent or symlinked")
+
+m1, m2, header = (Path(p) for p in sys.argv[1:])
+for source in (m1, m2, header):
+    if not source.is_file() or source.is_symlink():
+        raise SystemExit("compiler-owned testing source absent or symlinked")
+
 text = header.read_text()
-start, end = 'R"ATTO_M1(', ')ATTO_M1";'
-if text.count(start) != 1 or text.count(end) != 1:
-    raise SystemExit("missing or duplicated compiler-owned M1 source")
-embedded = text.split(start, 1)[1].split(end, 1)[0]
-if embedded != source.read_text():
-    raise SystemExit("compiler-owned M1 source drift")
+for name, source, tag in (("M1", m1, "ATTO_M1"), ("M2", m2, "ATTO_M2")):
+    start, end = 'R"' + tag + '(', ')' + tag + '";'
+    if text.count(start) != 1 or text.count(end) != 1:
+        raise SystemExit("missing/duplicated compiler-owned " + name + " module")
+    embedded = text.split(start, 1)[1].split(end, 1)[0]
+    if embedded != source.read_text():
+        raise SystemExit("compiler-owned " + name + " source drift")
+    changed = embedded.replace("pub fnc ", "pub fnc mutation_", 1)
+    if changed == embedded or changed == source.read_text():
+        raise SystemExit("ineffective compiler-owned source mutation: " + name)
+    if name == "M1":
+        if embedded.count("suite.last_id = candidate.id;") != 2:
+            raise SystemExit("M1 replay identity must commit on selected/filtered paths")
+        if "candidate.id <= suite.last_id" not in embedded:
+            raise SystemExit("M1 no longer guards duplicate/out-of-order IDs")
+    if name == "M2":
+        body = embedded.split("pub fnc run_one(", 1)[1].split("pub fnc run_pair(", 1)[0]
+        if body.index("let mut TestCase snapshot") > body.index("if suite.halted"):
+            raise SystemExit("M2 class owner declared after control flow")
+        invoke_at = body.index("val int outcome = invoke_scalar_body(")
+        for guard in ("if candidate.visited != 0", "if candidate.id <= suite.last_id",
+                      "if suite.total >= 1024"):
+            if guard not in body or body.index(guard) > invoke_at:
+                raise SystemExit("M2 replay/quota guard bypassed before test body: " + guard)
+        pair = embedded.split("pub fnc run_pair(", 1)[1]
+        if pair.index("first.id >= second.id") > pair.index("run_one(rt mut borrow"):
+            raise SystemExit("M2 pair identity must be preflighted before test execution")
 PY
 
+unique 'stdlib/testing_m2.atto'
 unique '  atto-native-executable:'
 unique "      - 'CMakeLists.txt'"
 unique "      - 'cmake/**'"
@@ -61,18 +86,18 @@ unique 'Execute 40 actual .atto guests at Clang O0 and O2'
 unique 'Assert unchanged source and exact head after execution'
 unique 'Preserve host-observed native evidence (not ORES_TEST guest receipts)'
 unique 'bash tests/atto_native_harness_parity.sh --run'
-unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=14|optimizations=2|native=28|testkit=PARTIAL_M1'
+unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=23|optimizations=2|native=46|testkit=PARTIAL_M2'
 [[ "$(grep -Ec "^          test .*ATTO_LLVM_NATIVE_HOST_OBSERVED.*-eq 80$" "$workflow")" -eq 1 ]] ||
   die 'native scalar guest count is not 80'
 unique "grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|'"
-[[ "$(grep -Ec "^          test .*ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED.*-eq 28$" "$workflow")" -eq 1 ]] ||
-  die 'expected exactly 28 compiled native guest receipt executions'
+[[ "$(grep -Ec "^          test .*ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED.*-eq 46$" "$workflow")" -eq 1 ]] ||
+  die 'expected exactly 46 compiled native guest receipt executions'
 unique "tests/atto_native_guest_receipts.sh"
 unique "tests/verify_atto_guest_receipts.py"
-[[ "$(grep -Fc 'python3 "$root/tests/test_atto_native_guest_receipts_cli.py"' "$root/tests/test_atto_native_parity_manifest.sh")" -eq 1 ]] ||
-  die 'native fixture inventory omits subprocess CLI positive/negative controls'
-[[ "$(grep -Fc 'PYTHONOPTIMIZE=2 python3 "$root/tests/test_atto_native_guest_receipts_cli.py"' "$root/tests/test_atto_native_parity_manifest.sh")" -eq 1 ]] ||
-  die 'native fixture inventory omits optimized-mode CLI controls'
+[[ "$(grep -Fxc 'python3 "$root/tests/test_atto_native_guest_receipts_cli.py"' "$root/tests/test_atto_native_parity_manifest.sh")" -eq 1 ]] ||
+  die 'normal-mode three-argument CLI subprocess check missing'
+[[ "$(grep -Fxc 'PYTHONOPTIMIZE=2 python3 "$root/tests/test_atto_native_guest_receipts_cli.py"' "$root/tests/test_atto_native_parity_manifest.sh")" -eq 1 ]] ||
+  die 'optimized-mode three-argument CLI subprocess check missing'
 unique 'ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"'
 unique 'oreslang-no-gc-ir-audit-build'
 unique 'oreslang-core-library-sources-test'
@@ -81,7 +106,7 @@ unique 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
 unique 'tests/core_library_sources_test.cpp'
 unique 'oreslang-no-gc-ir-audit-tests-build'
 unique "ctest --test-dir build --output-on-failure --no-tests=error -R '^(native_no_gc_ir_audit_unit|native_core_library_registry_provider_policy)$'"
-unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=10|guest_receipt_protocol=UNSUPPORTED"
+unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=11|guest_receipt_protocol=UNSUPPORTED"
 unique 'atto_native_harness_compiler_guest_o0_o2'
 unique 'atto_native_harness_inventory_source_only'
 [[ "$(count 'native_project_root_import_security')" -eq 2 ]] || die 'expected one CTest inventory and one execution'
@@ -156,6 +181,11 @@ if [[ "$#" -eq 0 ]]; then
     die 'unterminated workflow CI shell quote was accepted'
   fi
   cp "$workflow" "$tmp/fixture.yml"
+  sed -i 's/-eq 46/-eq 45/g' "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'reduced M2 guest-execution gate accepted'
+  fi
+  cp "$workflow" "$tmp/fixture.yml"
   sed -i 's/persist-credentials: false/persist-credentials: true/g' "$tmp/fixture.yml"
   if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
     die 'persistent GitHub checkout credentials accepted'
@@ -172,11 +202,11 @@ if [[ "$#" -eq 0 ]]; then
   fi
   grep -Fvx "      - 'src/main/**'" "$workflow" > "$tmp/fixture.yml"
   if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
-    die 'compiler-source parity workflow trigger removed'
+    die 'compiler-source CI path trigger removed'
   fi
   grep -Fvx "      - 'CMakeLists.txt'" "$workflow" > "$tmp/fixture.yml"
   if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
-    die 'build-system parity workflow trigger removed'
+    die 'CMake CI path trigger removed'
   fi
 fi
-echo 'PASS LLVM canonical .atto workflow source-only admission (nine adversarial mutations)'
+echo 'PASS LLVM canonical .atto workflow source-only admission (ten adversarial mutations)'

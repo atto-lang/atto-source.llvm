@@ -27,6 +27,10 @@ for source in "$corpus/pass.atto" "$corpus/fail.atto" "$corpus/multi-pass.atto" 
     "$corpus/bounded-fp.atto" "$corpus/bounded-ff.atto" \
     "$corpus/m1-pass.atto" "$corpus/m1-fail-fast.atto" "$corpus/m1-filter-skip.atto" \
     "$corpus/m1-skipped.atto" "$corpus/m1-filtered.atto" "$corpus/m1-invariants.atto" \
+    "$corpus/m1-replay.atto" "$corpus/m2-replay.atto" "$corpus/m2-out-of-order.atto" \
+    "$corpus/m2-pass.atto" "$corpus/m2-fail-fast.atto" "$corpus/m2-filter-skip.atto" \
+    "$corpus/m2-invalid-recover.atto" "$corpus/m2-duplicate-recover.atto" "$corpus/m2-once.atto" \
+    "$root/stdlib/testing_m2.atto" \
     "$root/stdlib/testing_m1.atto" "$root/src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp" \
     "$runtime" "$verifier"; do
   [[ -f "$source" && ! -L "$source" ]] || die "source absent or symlinked: $source"
@@ -35,11 +39,13 @@ done
 python3 "$verifier" --self-test
 PYTHONOPTIMIZE=2 python3 "$verifier" --self-test
 for kind in pass fail multi-pass multi-fail bounded-pp bounded-pf bounded-fp bounded-ff \
-    m1-pass m1-fail-fast m1-filter-skip m1-skipped m1-filtered m1-invariants; do
+    m1-pass m1-fail-fast m1-filter-skip m1-skipped m1-filtered m1-invariants \
+    m2-pass m2-fail-fast m2-filter-skip m2-invalid-recover m2-duplicate-recover m2-once \
+    m1-replay m2-replay m2-out-of-order; do
   source="$corpus/$kind.atto"
   expected=0
   case "$kind" in
-    fail|multi-fail|bounded-pf|bounded-fp|bounded-ff|m1-fail-fast|m1-skipped|m1-filtered)
+    fail|multi-fail|bounded-pf|bounded-fp|bounded-ff|m1-fail-fast|m1-skipped|m1-filtered|m2-fail-fast|m2-filter-skip)
       expected=1 ;;
   esac
   for level in 0 2; do
@@ -85,4 +91,4 @@ for source in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$source" | cut -d' ' -f1)" == "${original_hash["$source"]}" ]] ||
     die "guest input mutated during compiler execution: $source"
 done
-echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=14|optimizations=2|native=28|testkit=PARTIAL_M1'
+echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=23|optimizations=2|native=46|testkit=PARTIAL_M2'

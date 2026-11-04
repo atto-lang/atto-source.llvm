@@ -1,0 +1,37 @@
+// A filtered identity is consumed: another object with the same ID must
+// never execute its poison test body or change the suite counters.
+import module M2 from "ores.std/testing/m2";
+import module Ledger from "ores.std/testing/m1";
+import class RegisteredCase from "ores.std/testing/m2.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut RegisteredCase filtered = new RegisteredCase();
+  let mut RegisteredCase replay = new RegisteredCase();
+  let mut RegisteredCase valid = new RegisteredCase();
+  let mut RunSummary summary = new RunSummary();
+  filtered.id = 1;
+  filtered.selected = false;
+  filtered.body_kind = 99;
+  replay.id = 1;
+  replay.body_kind = 99;
+  valid.id = 2;
+  valid.body_kind = 1;
+  valid.actual = 42;
+  valid.expected = 42;
+  val int skipped = M2.run_one(rt mut borrow suite, rt mut borrow filtered);
+  val int denied = M2.run_one(rt mut borrow suite, rt mut borrow replay);
+  val int accepted = M2.run_one(rt mut borrow suite, rt mut borrow valid);
+  val int denied_again = M2.run_one(rt mut borrow suite, rt mut borrow replay);
+  val int status = Ledger.finish(rt borrow suite, rt mut borrow summary);
+  if skipped != 3 || denied != -4 || accepted != 0 || denied_again != -4 ||
+    status != 0 || suite.last_id != 2 || suite.total != 1 ||
+    suite.filtered != 1 || summary.passed != 1 || summary.filtered != 1 ||
+    replay.invocations != 0 || replay.visited != 0 ||
+    filtered.invocations != 0 || filtered.visited != 1 ||
+    valid.invocations != 1 || valid.visited != 1; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m2/identity/replay-denied|");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=1");
+  return status;
+}

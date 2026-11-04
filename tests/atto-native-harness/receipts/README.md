@@ -46,3 +46,42 @@ The combined runner now requires 13 guest programs at both O0/O2 =
 0 verified until stepful exact-head native CI**; 10 negative compiler
 admission checks also remain unexecuted. Hosted-only import of M1
 remains forbidden in freestanding targets.
+
+## LLVM M2: restricted registered-body execution
+
+`stdlib/testing_m2.atto` is a compiler-owned, hosted, source-level AttoLang
+module that accepts `RegisteredCase` descriptors. Cases choose one of four
+pure scalar assertion operations through a numeric body opcode. M2 runs the
+assertion *inside* `run_one` after filtering, skipping, fail-fast,
+duplicate-admission, ID and quota gates. The `run_pair` convenience routine
+prechecks two integer IDs and admits at most two cases. No indirect function
+values, user closures, actor transport or runtime JIT is introduced.
+
+The six `m2-*.atto` native candidates test ordered dispatch, failure and
+fail-fast, skip/filter non-execution, invalid-body atomic rejection, duplicate
+ID rejection, and once-only admission; each checks invocation counts and
+returns a truthful native exit before emitting static scoped case identities.
+This is NOT the Java `TestBody` callable contract or dynamic suite hierarchy.
+Canonical `std/testing` remains deliberately unsupported.
+
+Combined authored requirement: **40 scalar × two + 20 receipt suites × two
+= 120 native executions**, plus **11 compiler-negative scenarios**. Run
+classification remains `NOT_EXECUTED` until real, source-pinned compiler
+and O0/O2 executable jobs produce stepful receipts under an authorized runner.
+
+
+## Replay-fencing regression cases (Nov 4, 2026)
+
+`m1-replay.atto`, `m2-replay.atto` and `m2-out-of-order.atto`
+cover the previously missing distinct-instance replay gap. M1 `record`
+uses `TestSuite.last_id` to enforce strictly increasing integer IDs for
+selected, skipped **and filtered** cases. M2 `run_one` checks this before
+invoking a scalar body; `run_pair` performs complete identity and visited
+preflight before either body executes. All rejected paths preserve the
+previous counters and accepted ID. This scope deliberately does not claim
+string-name uniqueness or arbitrary callable registration.
+
+**Latest authored gate:** 23 receipt programs × Clang O0/O2 = **46**
+native guest processes, plus 80 scalar executions = **126 required**,
+and 11 compiler-negative scenarios. No exact-head native pass is counted
+without a source-authorized, nonzero-step compiler-backed CI job.
