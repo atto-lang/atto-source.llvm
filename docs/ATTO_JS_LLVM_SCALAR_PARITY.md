@@ -46,7 +46,7 @@ On an authorized source checkout with LLVM libraries, Clang and CMake installed:
 ```bash
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target oreslang-llvmc --parallel 2
-ctest --test-dir build --output-on-failure -R '^atto_(shared_scalar50|checked_i64)_'
+ctest --test-dir build --output-on-failure -R '^atto_(shared_scalar50|checked_i64|i64_original)_'
 ```
 
 Run the dedicated exact-head workflow `.github/workflows/atto-scalar50-native.yml` for PR-head checkout, compiler and Clang identity, and both JSON receipts.
