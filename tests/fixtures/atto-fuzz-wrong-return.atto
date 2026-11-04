@@ -1,0 +1,4 @@
+// Compiler-valid declaration, invalid host fuzz_byte(i64) ABI (void return).
+pub fnc fuzz_byte(int octet): void {
+  return;
+}
