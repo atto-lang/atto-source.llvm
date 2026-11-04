@@ -7,6 +7,7 @@
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
+#include "oreslang/types/NominalErrorAdmission.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -2994,6 +2995,31 @@ private:
                     fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done is lowered");
                 }
                 continue;
+            }
+            if (token_.text == "throw" || token_.text == "raise" ||
+                    token_.text == "panic") {
+                // Outside the narrow legacy caught-int-throw slice, no guest
+                // exceptional operand has a trusted nominal Error proof yet.
+                // Class names or source-supplied imports cannot forge one.
+                const std::string operation(token_.text);
+                advance();
+                ExceptionalOperandProof operand;
+                if (token_.kind == Kind::Integer ||
+                        token_.text == "true" || token_.text == "false")
+                    operand.shape = ExceptionalValueShape::Primitive;
+                else if (token_.kind == Kind::String)
+                    operand.shape = ExceptionalValueShape::String;
+                else if (token_.text == "null")
+                    operand.shape = ExceptionalValueShape::Null;
+                else if (token_.text == "Any")
+                    operand.shape = ExceptionalValueShape::Any;
+                // All other expressions remain Unknown until the native
+                // type resolver provides canonical trusted ancestry metadata.
+                const auto verdict = require_nominal_error_operand(operand, {});
+                fail("native exception/control effect unsupported: " +
+                    operation + " requires owned non-null canonical std/error.Error "
+                    "or proven nominal descendant (" +
+                    std::string(error_operand_verdict_name(verdict)) + ")");
             }
             if (token_.text != "defer" && exceptional_control(token_.text))
                 fail("native exception/control effect unsupported");
