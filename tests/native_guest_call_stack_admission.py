@@ -51,8 +51,8 @@ CASES.update({
         "fnc f(): int { return 41; }\n"
         "fnc f(int value): int { return value + 1; }\n"
         "pub fnc main(): int { return f(f()); }\n", 42),
-    "unqualified_side_effect_recursive": (
-        "fnc descend(int n): int { return stdio.println(n) + descend(n - 1); }\n"
+    "exported_recursive_helper_denied": (
+        "pub fnc descend(int n): int { return descend(n - 1); }\n"
         "pub fnc main(): int { return descend(100000); }\n", None),
 })
 
