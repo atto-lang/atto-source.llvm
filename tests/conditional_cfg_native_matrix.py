@@ -141,7 +141,7 @@ POSITIVE["side-effect-condition"] = '\nfnc one(): int { return 1; }\npub fnc mai
 # These must be compiler-backed guest executions, not host parser simulations.
 POSITIVE["guard-success-fallthrough"] = """
 fnc bounded(int x): int {
-  guard x > 0 { return 1; }
+  guard x > 0 { return 1 }
   guard x < 10, x != 5 { return 2; }
   return 42;
 }
