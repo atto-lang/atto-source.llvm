@@ -52,6 +52,32 @@ int main(void) {
     check(ores_native_actor_pubsub_join(
         runtime, 2, subscriber) == ORES_NATIVE_PUBSUB_OK);
 
+    /* Same portable ASCII 1..128-byte name grammar in both native lanes.
+     * Invalid attempts must not consume any typed-topic ledger entries. */
+    char exactly_128[129];
+    char too_long[130];
+    memset(exactly_128, 'a', 128);
+    exactly_128[0] = 'A';
+    exactly_128[128] = '\0';
+    memset(too_long, 'a', 129);
+    too_long[129] = '\0';
+    const char* invalid_names[] = {
+        "", ".hidden", "_hidden", "9events", "bad space",
+        "bad:colon", "bad\\\\slash", "trailing ", "\xC3\xA9",
+        "events\xC3\xA9", too_long
+    };
+    for (size_t i = 0; i < sizeof invalid_names / sizeof invalid_names[0]; ++i) {
+        check(ores_native_actor_pubsub_define_i64_topic(
+            runtime, 1, invalid_names[i],
+            ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_INVALID);
+        check(ores_native_actor_pubsub_define_utf8_topic(
+            runtime, 1, invalid_names[i],
+            ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_INVALID);
+    }
+    check(ores_native_actor_pubsub_define_i64_topic(
+        runtime, 1, exactly_128,
+        ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_OK);
+
     /* A C1 Unicode control is legal UTF-8 but not a legal topic name.
      * .NET rejects U+0085 through char.IsControl; native lanes must agree. */
     check(ores_native_actor_pubsub_define_utf8_topic(
