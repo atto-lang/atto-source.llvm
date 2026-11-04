@@ -72,3 +72,13 @@ source tests compile/link/run on Java/Graal and LLVM with identical semantics,
 with adversarial cases for conflicts, callback purity, invalid routing,
 overflow, cancellation/ownership and step exhaustion. No host-language
 StateGraph reimplementation or source-only static contract qualifies.
+
+## Second shared scalar cycle probe
+
+`contracts/stategraph-portability/shared-bounded-cycle.ores` has identical
+Git blob `3c69cdf00c4e1390898ef0594eba76c54c0e2d7f` in the StateGraph,
+Java, and LLVM repositories. A recursive bounded state transition, zero and
+negative budget guards, and conditional termination all must execute and exit
+42 with empty stdout/stderr on both compilers. This is not actor or generic
+StateGraph execution. The source uses `if ...; do`, which the current native
+LLVM parser admits; a source-only check does not establish runtime acceptance.
