@@ -129,6 +129,13 @@ inline std::filesystem::path resolve_project_root_import(
     const auto source = fs::canonical(importing_source, error);
     if (error)
         throw std::runtime_error("cannot resolve native importing source");
+    // This resolver is also called directly by tests and embedding clients,
+    // not only by ModuleLoader's protected entry/graph path. Never allow an
+    // aliased .atto file to inherit the legacy .ores import dialect (or vice
+    // versa) merely because canonicalization changed its source suffix.
+    if (importing_source.extension() != source.extension())
+        throw std::runtime_error(
+            "native importing source suffix changes across symlink");
 
     fs::path cursor = source.parent_path();
     fs::path package_root;
