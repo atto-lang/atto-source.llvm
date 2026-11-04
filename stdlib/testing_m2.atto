@@ -55,6 +55,11 @@ define module testing_m2 as
     if candidate.id <= 0 || candidate.invocations != 0; then
       return -1;
     fi
+    // Reject identity replay BEFORE evaluating an otherwise eligible body.
+    // The M1 ledger also enforces this at commit to catch mixed M1/M2 use.
+    if candidate.id <= suite.last_id; then
+      return -4;
+    fi
 
     snapshot.id = candidate.id;
     snapshot.selected = candidate.selected;
@@ -94,8 +99,15 @@ define module testing_m2 as
     borrow mut RegisteredCase second,
     borrow mut RunSummary result
   ): int {
-    if first.id == second.id; then
+    // Preflight both identities and visited flags before any body executes.
+    // A later invalid pair must not consume the first case irreversibly.
+    if first.id <= 0 || second.id <= 0 || first.id >= second.id ||
+      first.id <= suite.last_id || second.id <= suite.last_id; then
       return -5;
+    fi
+    if first.visited != 0 || second.visited != 0 ||
+      first.invocations != 0 || second.invocations != 0; then
+      return -4;
     fi
     val int first_status = run_one(rt mut borrow suite, rt mut borrow first);
     if first_status < 0; then
