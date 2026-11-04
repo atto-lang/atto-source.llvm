@@ -194,3 +194,47 @@ C++17/C++20, Clang C++17/C++20 and Clang C++20 ASan/UBSan.
 Full RequestLocal and ActorLocal/TaskLocal/ThreadLocal repository tests have
 only been **authored**, not executed on the source-org CI runner; do not
 promote model/isolated header evidence to full guest parity.
+
+
+## 2026-11-04: compiler-issued named i64 keys and shutdown lifecycle repair
+
+The narrow LLVM guest source slice now admits at most eight statically named
+TaskLocal<int> initializers inside the single capture-free Task<int> producer
+in top-level main. A named key uses TaskLocal<int, key=trace>.set(9), with
+a matching TaskLocal<int, key=trace>.get(). Existing TaskLocal<int>.set/get
+is the unnamed default key. The parser rejects duplicate names, unknown read
+keys, wrong types, source-capture escapes, reserved key aliases, and a ninth
+key.
+
+Slots are assigned in deterministic source order, not supplied as guest
+integer arguments. LLVM emits constant slots and deterministic type-tagged
+FNV-derived key descriptors via the reserved keyed native ABI. Native per-Task
+storage authenticates the current scheduler actor turn and binds each slot
+to its first admitted typed tag. A different tag cannot overwrite or read
+that slot even after clear; raw host-slot APIs cannot access compiler-tagged
+cells. The tag is a type-integrity check, NOT an unforgeable guest capability.
+This is not generic TaskLocal<T>, task inheritance or continuation migration.
+
+The exact-head guest harness now AUTHORED two positive compiler/native programs
+(legacy default and two named keys, each expecting native exit code 42), and
+14 negative compiler fixtures. The native C host test AUTHORED wrong-tag,
+wrong-type-namespace, quota, clear/reuse, post-retirement and foreign-thread
+denial checks.
+
+**Premature shutdown repair:** SourceTaskRuntime previously set closing before
+verifying that an in-flight producer had finished. A callback using TaskLocal
+could then be denied and aborted. Shutdown now verifies completed + consumed
+under the task mutex before installing the closing fence; early shutdown
+fails without disrupting the producer. A new C regression requests shutdown
+while a producer is intentionally held active, and requires eventual normal
+TaskLocal completion.
+
+**ActorLocal host adapter:** actor_local_erase_on_turn_v1 now requires real
+scheduler actor-turn authentication, matching set/get. Negative test cases
+cover wrong actor, wrong tenant/isolate stamp, foreign thread and stale actor
+generation. The scheduler still does not independently mint tenant/isolate
+for a guest-visible ActorLocal capability; guest exposure remains blocked.
+
+All new exact-source tests remain NOT_EXECUTED until real GitHub Actions runner
+admission (or an independently authorized source carrier) permits them to run
+with nonzero steps. No cross-organization private LLVM Git tree mirror occurred.
