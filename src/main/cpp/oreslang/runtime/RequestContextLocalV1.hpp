@@ -123,6 +123,19 @@ public:
                actor.generation == identity_.actor.generation;
     }
 
+    // Trusted-ingress one-shot binding: a logical request-local context may
+    // never be rebound to a later user mail on the same pooled actor. The
+    // caller must supply the scheduler-issued original DATA-mail identity,
+    // not guest strings or the physical carrier's previous message. This is
+    // a necessary host check, NOT sufficient guest authentication by itself.
+    bool bind_original_mail_once(std::uint64_t admitted_mail) {
+        if (!admitted_mail) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!open_ || cancellation_->is_cancelled()) return false;
+        if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
+        return original_mail_sequence_ == admitted_mail;
+    }
+
     bool active() const {
         std::lock_guard<std::mutex> lock(mutex_);
         // Read cancellation under the same lock as slot admission; cancellation
@@ -239,6 +252,7 @@ private:
     const TaskCancellation::Ptr cancellation_;
     mutable std::mutex mutex_;
     bool open_ = true;
+    std::uint64_t original_mail_sequence_ = 0; // immutable once bound
     std::size_t used_bytes_ = 0;
     std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> slots_;
     TaskCancellation::Subscription revocation_;
