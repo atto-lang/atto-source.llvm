@@ -78,6 +78,8 @@ jobs:
             native_atto_named_generic_value_combined_guest
             native_atto_named_generic_value_dot_atto_guest
             native_atto_named_generic_value_lowercase_dot_atto_guest
+            native_atto_named_generic_value_large_type_list_guest
+            native_atto_named_generic_value_overlapping_labels_guest
             native_source_module_graph_execution
             native_project_root_import_security
             native_atto_named_generic_value_routine_guest
