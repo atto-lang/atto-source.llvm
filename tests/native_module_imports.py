@@ -251,7 +251,7 @@ def main():
                     'define module Lib as pub fnc answer():int{return 42;} end')
                 (directory/('lib'+logical)).symlink_to('real'+physical)
                 if mode == 'project-root':
-                    (directory/'.ores.pkg.toml').write_text('schema_version = "1"\\n')
+                    (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
                 reference = '+/lib' if mode == 'project-root' else './lib'
                 entry=directory/('main'+logical)
                 entry.write_text(
