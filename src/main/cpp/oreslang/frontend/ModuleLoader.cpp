@@ -135,8 +135,17 @@ private:
         const auto index = units.size();
         auto unit = std::make_unique<Unit>();
         unit->path = std::move(path); unit->identity = identity;
-        if (!compiler_owned_library)
+        if (!compiler_owned_library) {
             unit->logical_source_id = source_admission->admit(unit->path, identity);
+            // The descriptor snapshot supplied by the bounded reader must
+            // still identify the same object when compiler parsing begins.
+            const auto physical_name = unit->path.string();
+            const auto current_identity = capture_source_identity(
+                physical_name.c_str(), max_bytes,
+                "native source exceeds 8 MiB identity check budget");
+            if (!ores_source_identity_equal(identity, current_identity))
+                throw std::runtime_error("native source identity changed after bounded read");
+        }
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
         unit->compiler_owned_library = compiler_owned_library;
         unit->compiler_library_tier = compiler_library_tier;
@@ -285,6 +294,15 @@ private:
                 }
 
                 const auto known = paths.find(dependency.string());
+                if (known != paths.end()) {
+                    const auto known_path = dependency.string();
+                    const auto current_identity = capture_source_identity(
+                        known_path.c_str(), max_bytes,
+                        "native source exceeds 8 MiB identity check budget");
+                    // A cycle/backedge is free of a new unit charge, but
+                    // never exempts the source from identity revalidation.
+                    source_admission->admit(dependency, current_identity);
+                }
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
                 if (selected == units.size()) {
