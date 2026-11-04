@@ -144,6 +144,31 @@ end
     scalar_value(prefix + broad + "); }", 256);
     denied(prefix + "(" + broad + "+" + broad + ")" + "); }");
 
+    // Compiler intrinsics are not shadowable, even by never-invoked macro
+    // declarations. These are typed compile-time denials, not ordinary calls.
+    denied(R"(
+define macro quote(Const<int> value) -> Syntax<Expr> { return quote(value); }
+pub fnc main(): int { return 42; }
+)");
+    denied(R"(
+define macro literal(Const<int> quote) -> Syntax<Expr> { return quote(quote); }
+pub fnc main(): int { return 42; }
+)");
+    denied(R"(
+define macro identity(Syntax<Expr> unquote) -> Syntax<Expr> { return unquote; }
+pub fnc main(): int { return 42; }
+)");
+    denied(R"(
+define macro literal(Const<int> value) -> Syntax<Decl> { return quote(value); }
+pub fnc main(): int { return 42; }
+)");
+    denied(R"(
+define macro literal(Const<int> first, Const<int> second) -> Syntax<Expr> {
+  return quote(first);
+}
+pub fnc main(): int { return 42; }
+)");
+
     // Shared scalar profile: eight declarations per translation unit.
     const std::string identity_body =
         "(Syntax<Expr> value) -> Syntax<Expr> { return value; }";
