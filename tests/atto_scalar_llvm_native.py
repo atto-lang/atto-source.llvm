@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+from atto_scalar_subprocess import run_bounded
 
 ROOT = Path(__file__).resolve().parents[1]
 BLOB = "43c4d295a237e483f70722bd90ec10d273b73854"
@@ -107,17 +108,7 @@ def load_corpus(root=ROOT):
 
 
 def execute(argv, cwd, seconds=25):
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        result = subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL,
-                                stdout=out, stderr=err, timeout=seconds,
-                                check=False)
-        out.seek(0, 2)
-        err.seek(0, 2)
-        require(out.tell() <= LIMIT and err.tell() <= LIMIT,
-                "compiler/native guest exceeded 4MiB output budget")
-        out.seek(0)
-        err.seek(0)
-        return result.returncode, out.read(), err.read()
+    return run_bounded(argv, cwd, timeout=seconds, limit=LIMIT)
 
 
 def native_ir(ir):
