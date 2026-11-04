@@ -237,6 +237,11 @@ private:
                         "freestanding native imports require compiler-owned ores.core/* modules");
 
                 fs::path dependency;
+                // Resolve a stable canonical unit identity separately from the
+                // pathname handed to the descriptor-pinned source reader.
+                // canonical() erases leaf and ancestor symlink components and
+                // must never choose the pathname used for a .atto file open.
+                fs::path admission_path;
                 if (raw.rfind("+/", 0) == 0) {
                     try {
                         dependency = resolve_project_root_import(
@@ -252,7 +257,7 @@ private:
                                     nullptr, &expected_manifest);
                                 require_valid_source_utf8(bytes);
                                 return bytes;
-                            });
+                            }, &admission_path);
                     } catch (const std::exception& error) {
                         fail(current, error.what());
                     }
@@ -265,6 +270,7 @@ private:
                     if (project_root_import_detail::is_atto_source(dependency)) {
                         project_root_import_detail::reject_atto_symlink_components(dependency);
                     }
+                    admission_path = dependency;
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
@@ -274,7 +280,7 @@ private:
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
                 if (selected == units.size()) {
-                    const auto dependency_path = dependency.string();
+                    const auto dependency_path = admission_path.string();
                     const auto expected_child_identity = capture_source_identity(
                         dependency_path.c_str(), max_bytes - read_bytes,
                         "native import graph exceeds 8 MiB source read budget");
