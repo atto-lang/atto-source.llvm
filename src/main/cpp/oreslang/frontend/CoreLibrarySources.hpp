@@ -247,7 +247,8 @@ define module testing_m1 as
 
   pub fnc should_run(borrow TestSuite suite, borrow TestCase candidate): bool {
     return suite.halted == 0 && candidate.selected && !candidate.skipped &&
-      candidate.id > suite.last_id && suite.total < 1024;
+      candidate.id > 0 && candidate.id > suite.last_id &&
+      suite.total >= 0 && suite.total < 1024;
   }
 
   // 0 PASS, 1 FAIL, 2 SKIP, 3 FILTER, 4 NOT_RUN after fail-fast;
@@ -291,17 +292,35 @@ define module testing_m1 as
     return 1;
   }
 
-  // Returns nonzero on empty/skipped/filtered-only suites or any failure.
-  // The caller must never treat a failed/empty summary as a green test run.
+  // Returns 2 on structurally corrupt ledgers, without touching result.
+  // Returns 1 on empty/skipped/filtered-only suites or any failure.
+  // A positive suite result is NOT a cryptographic or untrusted-run receipt:
+  // guests currently own these public counters.
   pub fnc finish(borrow TestSuite suite, borrow mut RunSummary result): int {
+    // Validate before addition and before publishing ANY summary fields.
+    if suite.total < 0 || suite.total > 1024 ||
+      suite.filtered < 0 || suite.filtered > 1024 ||
+      suite.passed < 0 || suite.failed < 0 || suite.skipped < 0 ||
+      suite.last_id < 0 || suite.halted < 0 || suite.halted > 1; then
+      return 2;
+    fi
+    if suite.total != suite.passed + suite.failed + suite.skipped; then
+      return 2;
+    fi
+    if suite.total + suite.filtered == 0 && suite.last_id != 0; then
+      return 2;
+    fi
+    if suite.total + suite.filtered > 0 && suite.last_id <= 0; then
+      return 2;
+    fi
+    if suite.halted != 0 && (!suite.fail_fast || suite.failed == 0); then
+      return 2;
+    fi
     result.total = suite.total;
     result.passed = suite.passed;
     result.failed = suite.failed;
     result.skipped = suite.skipped;
     result.filtered = suite.filtered;
-    if result.total != result.passed + result.failed + result.skipped; then
-      return 2;
-    fi
     if result.passed + result.failed == 0; then
       return 1;
     fi
