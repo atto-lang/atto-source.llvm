@@ -12,7 +12,7 @@ there is no duplicate parser or Python source-mutator.
 | Canonical `.atto` and legacy `.ores` | Native import resolver accepts both and rejects ambiguous extensionless twins | Import/source admission |
 | `.atto` to LLVM IR, native link, and exit | `atto_native_aot_guest_exit_42` and seeded source mutation | Compiler-backed native guest **only after execution** |
 | Deterministic source mutation | Rust `atto-source-fuzz`, seed 1729, 8 cases, O0/O2 and negative oracle | Compiler-backed **source** fuzz, not stdin fuzz |
-| `atto test --fuzz` black-box stdin corpus | Rust test CLI `[fuzz].command` | **Not** wired to LLVM source compilation; scalar guest does not demonstrate stdin fuzz |
+| `atto test --fuzz` black-box stdin corpus | Native LLVM `fuzz_byte(i64)` + bounded C stdin adapter, configured through merged Rust CLI `[fuzz].command` | **Compiler-backed guest call via host transport**; no AttoLang stdin API or universal corpus coverage |
 | Native ASan+UBSan and TSan | Instrumented C/C++ actor suites and deliberate detector controls | Host/native runtime, not all compiled guest memory paths |
 | `atto test --race --trace` | Strict bounded Rust offline JSONL analysis | Offline trace, not an authenticated live runtime record |
 | Bare `atto test --race` | Fail-closed exit 2 | Live trusted instrumentation **not implemented** |
@@ -24,7 +24,7 @@ there is no duplicate parser or Python source-mutator.
 ```sh
 cargo test --manifest-path tests/rust-harness/Cargo.toml --locked
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-cmake --build build --target oreslang-llvmc oreslang-rust-test-harness --parallel 2
+cmake --build build --target oreslang-llvmc oreslang-rust-test-harness oreslang-no-gc-ir-audit-build --parallel 2
 ctest --test-dir build -N -R '^atto_(llvm|native)_'
 ctest --test-dir build --output-on-failure -R '^atto_(llvm|native)_'
 bash scripts/test-verify-native-sanitizer-controls.sh
@@ -32,10 +32,10 @@ bash scripts/verify-native-sanitizer-controls.sh address undefined thread
 ```
 
 The dedicated `atto-native-test-parity.yml` workflow pins the exact PR
-head and Git tree, checks an inventory of **five** Linux tests, and executes:
+head and Git tree, checks an inventory of **six** Linux tests, and executes:
 a Rust host-only oracle self-test; a real compiler-backed source-mutator;
 a linked canonical `.atto` guest returning 42; and invalid source
-rejection without partial LLVM IR; and a real compiler-generated `.atto` actor handler linked against the native actor-owned heap with ASan+UBSan. Zero-step jobs are not test evidence.
+rejection without partial LLVM IR; and a real compiler-generated `.atto` actor handler linked against the native actor-owned heap with ASan+UBSan; and a byte-level stdin adapter feeding the compiled `.atto` function with a deliberate guest mutant. Zero-step jobs are not test evidence.
 
 The source-mutator generates `.atto` programs in a temporary directory
 and computes independent addition oracles in the OS exit domain [0,192].
@@ -43,8 +43,7 @@ It emits LLVM IR using `oreslang-llvmc --target=host`, links and executes
 at O0 and O2 without the ambient environment, and checks a legacy
 `.ores` counterpart. It additionally checks unknown calls, invalid
 syntax, deliberately wrong native results, and replayable seeds.
-This tests only the current **scalar native AOT subset**; it does not
-fuzz stdin, channels, async continuations, actor turns or shared heaps.
+The independent Rust source-mutator tests the scalar native AOT subset. A **separate** native C stdin adapter now forwards bounded bytes into an LLVM-compiled `.atto` `fuzz_byte` function, checks the guest result against an independent property oracle, and rejects a deliberately wrong compiled mutant. The example `examples/atto-native-fuzz-project/atto-test.toml` points the merged Rust `atto test --fuzz` CLI at that built executable. It still does not establish direct `.atto` stdin I/O, coverage-guided fuzzing, async continuations, or live actor race detection.
 
 ## Sanitizer/race fail-closed contract
 
