@@ -14,6 +14,7 @@ on:
       - 'tests/native_macro_aot_admission_test.cpp'
       - 'tests/native_macro_guest_aot.cmake'
       - 'tests/native_macro_reject.cmake'
+      - 'tests/native_imported_macro_filesystem_security.py'
       - 'tests/fixtures/native-macro-scalar-v1/**'
       - 'tests/native_module_imports.py'
       - 'tests/contract.py'
@@ -111,6 +112,7 @@ jobs:
             native_macro_imported_legacy_no_ir \
             native_macro_imported_duplicate-alias_no_ir \
             native_macro_imported_overflow_no_ir \
+            native_macro_imported_filesystem_security \
             native_macro_shared_literal-42_linked_guest_aot_42 \
             native_macro_shared_identity-42_linked_guest_aot_42 \
             native_macro_shared_nested-42_linked_guest_aot_42 \
