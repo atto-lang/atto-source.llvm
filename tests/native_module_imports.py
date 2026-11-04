@@ -119,6 +119,12 @@ def main():
             'base.atto': 'define module Base as pub fnc answer():int{return 21;} end',
         }, 42),
     ])
+    positives.extend([
+        ('atto-linked-public-const-macro', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.literal!(const 40 + 2);}',
+            'producer.atto': 'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
+        }, 42),
+    ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -426,20 +432,55 @@ def main():
             if not result.returncode or result.stdout or 'hardlink' not in result.stderr:
                 raise AssertionError(('unseen hardlink alias', result.returncode, result.stdout[:150], result.stderr))
             passed+=1
-        # Java's linked source-macro positive remains explicitly unsupported
-        # on this native frontend. Never mistake a successful source import
-        # or runtime symbol for compile-time macro expansion.
-        directory=root/'atto-imported-macro-must-reject'; directory.mkdir()
+        # True imported macro semantics: only checked, public producer AST
+        # declarations from the admitted logical source-unit graph may expand.
+        macro_cases = [
+            ('private-export',
+             'define macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
+             'return lib.literal!(const 40 + 2);',
+             'NATIVE_MACRO_PRIVATE'),
+            ('unclosed-const',
+             'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
+             'val n:int=42; return lib.literal!(const n);',
+             'NATIVE_MACRO_CONST_UNCLOSED'),
+            ('overflow',
+             'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
+             'return lib.literal!(const 9223372036854775807 + 1);',
+             'NATIVE_MACRO_CONST_OVERFLOW'),
+            ('unsupported-template',
+             'define pub macro literal(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+             'return lib.literal!(const 42);',
+             'NATIVE_MACRO_EXPANDER_REQUIRED'),
+            ('unsupported-signature',
+             'define pub macro literal(Syntax<Other> value) -> Syntax<Expr> { return value; }',
+             'return lib.literal!(const 42);',
+             'NATIVE_MACRO_EXPANDER_REQUIRED'),
+            ('runtime-star-namespace',
+             'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); } pub fnc attack():int{return 7;}',
+             'return lib.literal!(const 42);',
+             'native macro namespace requires a standalone macro-only'),
+        ]
+        for name, producer, body, diagnostic in macro_cases:
+            directory = root / ('atto-linked-macro-' + name); directory.mkdir()
+            (directory/'producer.atto').write_text(producer)
+            (directory/'main.atto').write_text(
+                'import * as lib from "./producer.atto"; '
+                'pub fnc main():int{' + body + '}')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        # A normal module import cannot forge compile-time macro provenance.
+        directory=root/'atto-linked-macro-forged-module-alias'; directory.mkdir()
         (directory/'producer.atto').write_text(
             'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }')
-        (directory/'consumer.atto').write_text(
-            'import * as lib from "./producer.atto"; '
-            'pub fnc main() -> int { return lib.literal!(const 40 + 2); }')
-        result=run([a.compiler,str(directory/'consumer.atto')])
-        if not result.returncode or result.stdout:
-            raise AssertionError(('unsupported imported macro must reject without IR',
-                                  result.returncode, result.stdout[:150], result.stderr))
-        passed+=1
+        (directory/'main.atto').write_text(
+            'import module Lib as lib from "./producer.atto"; '
+            'pub fnc main():int{return lib.literal!(const 42);}')
+        result=run([a.compiler, str(directory/'main.atto')])
+        if not result.returncode or result.stdout or 'does not declare selected module' not in result.stderr:
+            raise AssertionError(('forged macro import alias', result.returncode, result.stdout[:150], result.stderr))
+        passed += 1
         # Every unsupported target fails before emitting even a module header.
         for target in ('wasm32', 'thumbv7m-none-eabi'):
             result=run([a.compiler,'--target='+target,str(root/'private-helper/main.ores')])
