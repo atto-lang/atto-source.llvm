@@ -39,6 +39,16 @@ pub fnc main(): int { return add<int, C=int>(19, 23); }
     "inferred-hole-with-other-default": ("""fnc identity<A, B=int>(A value): A { return value; }
 pub fnc main(): int { return identity<_, B=int>(42); }
 """, 42),
+    # Joint name binding must NOT reorder lexical expressions or ABI slots.
+    "generic-and-value-reordered": ("""fnc combine<A=int, B=A>(A first, B second): int { return first * 10 + second; }
+pub fnc main(): int { return combine<B=int, A=int>(second: 2, first: 4); }
+""", 42),
+    "positional-generic-and-named-value": ("""fnc add<T=int>(T first, T second): int { return first + second; }
+pub fnc main(): int { return add<int>(19, second: 23); }
+""", 42),
+    "inferred-generic-and-reordered-value": ("""fnc add<T>(T first, T second): int { return first + second; }
+pub fnc main(): int { return add(second: 23, first: 19); }
+""", 42),
 }
 INVALID = {
     "missing-required": ("""fnc fixed<T>(): int { return 42; }
@@ -82,6 +92,24 @@ pub fnc main(): int { return fixed<int>(); }
     "self-dependent-default": ("""fnc fixed<A=A>(): int { return 42; }
 pub fnc main(): int { return fixed(); }
 """, "forward or self-referential generic default"),
+    "duplicate-named-value-with-generics": ("""fnc add<T>(T first, T second): int { return first + second; }
+pub fnc main(): int { return add<T=int>(first: 19, first: 23); }
+""", "duplicate named argument"),
+    "unknown-named-value-with-generics": ("""fnc add<T>(T first, T second): int { return first + second; }
+pub fnc main(): int { return add<T=int>(unknown: 19, second: 23); }
+""", "unknown named argument"),
+    "positional-after-named-value-with-generics": ("""fnc add<T>(T first, T second): int { return first + second; }
+pub fnc main(): int { return add<T=int>(second: 23, 19); }
+""", "positional argument cannot follow named argument"),
+    "nonscalar-named-vector": ("""fnc fixed<T=int>(): int { return 42; }
+pub fnc main(): int { return fixed<T=Vector<int>>(); }
+""", "native scalar generic type requires int"),
+    "nonscalar-named-arraylist": ("""fnc fixed<T=int>(): int { return 42; }
+pub fnc main(): int { return fixed<T=ArrayList<int>>(); }
+""", "native scalar generic type requires int"),
+    "overfull-named-value-call": ("""fnc add(int first, int second): int { return first + second; }
+pub fnc main(): int { return add(first: 19, second: 23, extra: 1); }
+""", "unknown function or wrong call arity"),
 }
 
 _CASE_ID = re.compile(r"generics\.scalar\.[a-z0-9]+(?:-[a-z0-9]+)*\Z")
