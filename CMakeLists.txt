@@ -46,6 +46,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Real LLVM/Clang canonical-if parity test. This checks the actual Oreslang
+    # source compiler and a guest executable, not a host-language graph model.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_program(ORE_STATEGRAPH_CLANG_EXECUTABLE NAMES clang)
+        if(ORE_STATEGRAPH_CLANG_EXECUTABLE)
+            add_test(NAME stategraph_canonical_then_native_guest
+                COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-stategraph-canonical-then-native.sh"
+                    "$<TARGET_FILE:oreslang-llvmc>" "${ORE_STATEGRAPH_CLANG_EXECUTABLE}")
+            set_tests_properties(stategraph_canonical_then_native_guest PROPERTIES TIMEOUT 125)
+        endif()
+    endif()
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
