@@ -1,0 +1,10 @@
+// A sealed actor handler without critical must not compile.
+define actor Worker as {
+  state {
+    let total: int = 0;
+  }
+  pub fnc handle_state(int n): int {
+    total = total + n;
+    return total;
+  }
+}
