@@ -41,8 +41,8 @@ No guest `.atto` code was compiled by these host tests.
 
 ## New restricted LLVM source-level TaskLocal<int> integration (not parity-certified)
 
-`SourceTaskRuntime.c` now embeds one inline i64 TaskLocal cell in the actual
-`SourceTaskI64` object. Both checked and fail-closed guest ABI functions
+`SourceTaskRuntime.c` now embeds eight fixed-size i64 TaskLocal cells in the actual
+`SourceTaskI64` object. The compiled `.atto` specialization still uses only slot zero. Trusted host-only checked slot-index APIs support eight independent cells with get/set/clear, bounds checks, and zero allocation; slot numbers are **not** a guest API. Both checked and fail-closed guest ABI functions
 require `ores_native_actor_scheduler_is_current_actor` for the current
 scheduler's active Task producer. Foreign threads, stale completions and
 retired Tasks cannot read/write it. The slot is zero-initialized and its
@@ -74,9 +74,28 @@ and rejects raw FFI function calls from guest source.
 out-of-turn/stale read/write denials and fresh slot state over repeated
 scheduler Task admissions. `native_actorlocal_authenticated_scheduler_turn`
 tests two actors with actual scheduler callbacks, rejecting foreign threads,
-wrong actor and wrong-generation accesses.
+wrong actor, wrong-generation accesses, and retirement before real actor termination.
+The bridge cross-checks the current actor claim against the scheduler's actor
+allocation kind/domain/owner/generation, and exposes a terminal-fenced close
+that refuses to block a scheduler carrier.
 
 **Evidence status:** [workflow run #41774058053](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41774058053)
 reported `steps=null` for all six jobs (including the compiled-guest job).
 They are **NOT_EXECUTED**. New native and guest paths remain draft and
 unverified by stepful CI, despite already-authored code and tests.
+
+## Explicit remaining authorization limits
+
+The eight-slot i64 specialization is **not** a generic `TaskLocal<T>`
+implementation and cannot be used as evidence of task inheritance or carrier
+migration. A future compiler-generated key descriptor must bind each static
+key to a slot and enforce ownership, Copy/Send and task lineage. The native
+SourceTask runtime still admits only one capture-free live Task per process.
+
+The ActorLocal scheduler adapter proves the *actor incarnation* using a real
+actor execution claim and allocation record. The `tenant` and `isolate`
+fields in `ExecutionStampV1` remain host-supplied; this adapter alone does
+not authenticate tenant or isolate scope. Guest API exposure is blocked until
+that authority is derived from trusted scheduler/tenant admission, not caller
+supplied identity. The source repository's GitHub Actions remain a zero-step
+runner-admission blocker.
