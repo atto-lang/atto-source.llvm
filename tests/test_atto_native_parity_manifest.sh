@@ -38,6 +38,12 @@ reset_manifests
 sed -i 's#^arith-add|positive/arith-add.atto|42#arith-add|positive/arith-add.atto|999#' "$tmp/cases.tsv"
 reject 'out-of-range native exit status'
 reset_manifests
+sed -i 's#^arith-add|positive/arith-add.atto|42#arith-add|positive/arith-add.atto|139#' "$tmp/cases.tsv"
+reject 'signal-style native exit cannot be a success oracle'
+reset_manifests
+sed -i 's#^arith-add|positive/arith-add.atto|42#arith-add|positive/arith-add.atto|124#' "$tmp/cases.tsv"
+reject 'timeout-status native exit cannot be a success oracle'
+reset_manifests
 sed -i '/^arith-add|/d' "$tmp/cases.tsv"
 reject 'missing positive'
 reset_manifests
@@ -60,4 +66,4 @@ if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
 python3 "$root/tests/verify_atto_guest_receipts.py" --self-test
-echo 'PASS: eleven source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
+echo 'PASS: thirteen source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
