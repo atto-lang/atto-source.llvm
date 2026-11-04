@@ -83,6 +83,12 @@ size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot);
+/* Java/Graal first-actor parity, opt-in: start one native worker in this
+ * domain, await its scheduler-loop receipt, then publish ActorRef.
+ * Further idle actor refs use the same worker; independent runnable lanes
+ * scale up to carrier_workers. This does not enable untrusted isolation. */
+OresNativeActorRef ores_native_vm_spawn_ready(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot);
 /* Trusted host-only immutable parentage. Child and supervisor must be distinct
  * live actors in the SAME VM domain. A child slot is single-use. No delegation
  * capability is granted to guest code, and no cross-domain parent is allowed.
