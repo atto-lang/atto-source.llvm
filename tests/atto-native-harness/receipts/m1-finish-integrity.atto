@@ -8,13 +8,23 @@ import class RunSummary from "ores.std/testing/m1";
 pub routine main(): int {
   let mut TestSuite suite = new TestSuite();
   let mut TestCase active = new TestCase();
+  let mut TestCase later = new TestCase();
   let mut RunSummary summary = new RunSummary();
+  later.id = 2;
   active.id = 1;
   active.outcome = 0;
   if Ledger.record(rt mut borrow suite, rt borrow active) != 0; then return 3; fi
   if Ledger.finish(rt borrow suite, rt mut borrow summary) != 0; then return 3; fi
   if summary.total != 1 || summary.passed != 1 || suite.last_id != 1; then return 3; fi
 
+  // Corrupted counters must block *new* admission and should_run as well
+  // as finalization. A fabricated count must not become a green summary.
+  suite.passed = 1025;
+  if Ledger.should_run(rt borrow suite, rt borrow later); then return 3; fi
+  if Ledger.record(rt mut borrow suite, rt borrow later) != -1; then return 3; fi
+  if suite.total != 1 || suite.passed != 1025 || suite.last_id != 1; then return 3; fi
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.passed = 1;
   // Every invalid state must fail without overwriting a previously valid result.
   suite.passed = 2;
   if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
