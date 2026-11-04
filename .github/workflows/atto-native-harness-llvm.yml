@@ -13,6 +13,8 @@ on:
       - 'tests/core_library_sources_test.cpp'
       - 'tests/test_atto_testing_scalar_contract.sh'
       - 'tests/atto_native_harness_parity.sh'
+      - 'tests/atto_native_guest_receipts.sh'
+      - 'tests/verify_atto_guest_receipts.py'
       - 'tests/test_atto_native_parity_manifest.sh'
       - 'tests/test_atto_native_workflow_contract.sh'
       - 'tests/cmake/AttoNativeHarnessParity.cmake'
@@ -58,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang llvm-dev
+          sudo apt-get install -y build-essential cmake clang llvm-dev rustc
           clang --version | head -n 1
           cmake --version | head -n 1
       - name: Build production LLVM AttoLang compiler and native security tests
@@ -66,7 +68,9 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-core-library-sources-test
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-core-library-sources-test oreslang-no-gc-ir-audit-build oreslang-no-gc-ir-audit-tests-build
+          test -x build/oreslang-no-gc-ir-audit
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^native_no_gc_ir_audit_unit$'
           test -x build/oreslang-llvmc
       - name: Verify CTest source and compiler-backed registrations are separate
         shell: bash
@@ -87,10 +91,14 @@ jobs:
         run: |
           set -euo pipefail
           ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG="$(command -v clang)" \
+          ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit" \
             bash tests/atto_native_harness_parity.sh --run \
             | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
           test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 60
           test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 5
+          test "$(grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 4
+          grep -Fqx 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=2|optimizations=2|native=4|testkit=NOT_IMPLEMENTED' \
+            "$RUNNER_TEMP/atto-llvm-native-parity.txt"
           grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=30|optimizations=2|negative=8|guest_receipt_protocol=UNSUPPORTED' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
       - name: Assert unchanged source and exact head after execution
