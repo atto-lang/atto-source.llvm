@@ -158,6 +158,17 @@ int main(void) {
     while (!atomic_load_explicit(
                &tasklocal_producer_ready, memory_order_acquire))
         sched_yield();
+    // A premature external shutdown MUST fail without closing the active
+    // producer: its next authenticated TaskLocal read/write must still work.
+    // Before the fix shutdown set runtime.closing=1 while awaiting the task,
+    // so the producer's checked TaskLocal calls failed or aborted.
+    assert(oreslang_source_task_runtime_shutdown() == 0);
+    assert(oreslang_source_task_runtime_shutdown() == 0);
+    void* rejected_concurrent = NULL;
+    assert(oreslang_source_task_start_i64_checked(
+        simple_producer, &rejected_concurrent)
+        == ORES_SOURCE_TASK_RESOURCE_EXHAUSTED);
+    assert(rejected_concurrent == NULL);
     // Reject foreign access WHILE the right Task is actively running.
     assert(!oreslang_source_task_local_i64_set_checked(99));
     assert(!oreslang_source_task_local_i64_get_checked(&forbidden));
