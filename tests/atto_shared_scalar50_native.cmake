@@ -96,9 +96,8 @@ foreach(line IN LISTS lines)
     set(prefix "${WORKDIR}/scalar-${ordinal}")
     set(source_file "${prefix}.atto")
     set(ir_file "${prefix}.ll")
-    set(native_file "${prefix}.native")
-    file(REMOVE "${ir_file}" "${native_file}")
-    # No trailing newline: field bytes match the JavaScript corpus exactly.
+    file(REMOVE "${ir_file}" "${prefix}.O0.native" "${prefix}.O2.native")
+    # No trailing newline: the full source field is byte-identical across backends.
     file(WRITE "${source_file}" "${source}")
     file(SHA256 "${source_file}" source_sha256)
     execute_process(COMMAND "${COMPILER}" "${source_file}"
@@ -111,25 +110,31 @@ foreach(line IN LISTS lines)
     if(ir_bytes LESS 16 OR ir_bytes GREATER 131072)
       message(FATAL_ERROR "empty or unbounded LLVM IR for scalar-${ordinal}")
     endif()
-    execute_process(COMMAND "${CLANG}" -Wno-override-module -x ir "${ir_file}" -o "${native_file}"
-      RESULT_VARIABLE link_code OUTPUT_VARIABLE link_stdout
-      ERROR_VARIABLE link_stderr TIMEOUT 20)
-    if(NOT "${link_code}" STREQUAL "0" OR NOT EXISTS "${native_file}" OR
-       NOT "${link_stdout}" STREQUAL "")
-      message(FATAL_ERROR "Clang native link failed for scalar-${ordinal}: ${link_code}: ${link_stderr}")
-    endif()
-    execute_process(COMMAND "${native_file}"
-      RESULT_VARIABLE observed OUTPUT_VARIABLE guest_stdout
-      ERROR_VARIABLE guest_stderr TIMEOUT 5)
-    if(NOT "${observed}" STREQUAL "${expected}" OR
-       NOT "${guest_stdout}" STREQUAL "" OR NOT "${guest_stderr}" STREQUAL "")
-      message(FATAL_ERROR "LLVM native guest scalar-${ordinal}: expected exit ${expected}; got ${observed}; stdout=${guest_stdout}; stderr=${guest_stderr}")
-    endif()
+    # Optimize the SAME checked native IR at both O0 and O2. This detects
+    # optimizer-dependent differences, not only frontend/codegen acceptance.
+    foreach(opt IN ITEMS O0 O2)
+      set(native_file "${prefix}.${opt}.native")
+      execute_process(COMMAND "${CLANG}" "-${opt}" -Wno-override-module -x ir "${ir_file}" -o "${native_file}"
+        RESULT_VARIABLE link_code OUTPUT_VARIABLE link_stdout
+        ERROR_VARIABLE link_stderr TIMEOUT 20)
+      if(NOT "${link_code}" STREQUAL "0" OR NOT EXISTS "${native_file}" OR
+         NOT "${link_stdout}" STREQUAL "")
+        message(FATAL_ERROR "Clang ${opt} native link failed for scalar-${ordinal}: ${link_code}: ${link_stderr}")
+      endif()
+      execute_process(COMMAND "${native_file}"
+        RESULT_VARIABLE observed OUTPUT_VARIABLE guest_stdout
+        ERROR_VARIABLE guest_stderr TIMEOUT 5)
+      if(NOT "${observed}" STREQUAL "${expected}" OR
+         NOT "${guest_stdout}" STREQUAL "" OR NOT "${guest_stderr}" STREQUAL "")
+        message(FATAL_ERROR "LLVM native guest scalar-${ordinal} ${opt}: expected exit ${expected}; got ${observed}; stdout=${guest_stdout}; stderr=${guest_stderr}")
+      endif()
+      set("observed_${opt}" "${observed}")
+    endforeach()
     if(NOT observations STREQUAL "")
       string(APPEND observations ",\n")
     endif()
     string(APPEND observations
-      "    {\"id\":\"scalar-${ordinal}\",\"expected_exit\":${expected},\"observed_exit\":${observed},\"source_sha256\":\"${source_sha256}\"}")
+      "    {\"id\":\"scalar-${ordinal}\",\"expected_exit\":${expected},\"observed_exit\":${observed_O0},\"observed_exit_o2\":${observed_O2},\"source_sha256\":\"${source_sha256}\"}")
   endif()
 endforeach()
 if(NOT count EQUAL 50)
@@ -158,7 +163,7 @@ if(MODE STREQUAL "native")
   if(NOT DEFINED REPORT OR REPORT STREQUAL "")
     set(REPORT "${WORKDIR}/llvm-scalar50-native-receipt.json")
   endif()
-  file(WRITE "${REPORT}" "{\n  \"schema\":\"atto-native-scalar50-v1\",\n  \"verification\":\"LLVM_NATIVE_GUEST_EXECUTED\",\n  \"source_head\":\"${source_head}\",\n  \"source_tree\":\"${source_tree}\",\n  \"corpus_sha256\":\"${corpus_sha256}\",\n  \"compiler_sha256\":\"${compiler_sha256}\",\n  \"clang_sha256\":\"${clang_sha256}\",\n  \"executed_cases\":${count},\n  \"results\":[\n${observations}\n  ]\n}\n")
+  file(WRITE "${REPORT}" "{\n  \"schema\":\"atto-native-scalar50-v1\",\n  \"verification\":\"LLVM_NATIVE_GUEST_EXECUTED\",\n  \"source_head\":\"${source_head}\",\n  \"source_tree\":\"${source_tree}\",\n  \"corpus_sha256\":\"${corpus_sha256}\",\n  \"compiler_sha256\":\"${compiler_sha256}\",\n  \"clang_sha256\":\"${clang_sha256}\",\n  \"optimization_modes\":[\"O0\",\"O2\"],\n  \"executed_guest_processes\":100,\n  \"executed_cases\":${count},\n  \"results\":[\n${observations}\n  ]\n}\n")
   message(STATUS "LLVM native source-to-IR-to-Clang guest execution: ${count}/${count} passed; receipt ${REPORT}")
 else()
   message(STATUS "HOST-ONLY scalar50 manifest validation: ${count} source rows, no guest executed")
