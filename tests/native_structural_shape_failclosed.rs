@@ -53,6 +53,11 @@ fn main() {
         ("struct spread appends field", "pub fnc main():int { const p = infer struct{x:40}; const q = infer struct{...p,y:2}; return q.y+p.x; }\n"),
         ("record type changing override", "pub fnc main():int { const p = record{x:true,y:40}; const q = record{...p,x:2}; return q.x+q.y; }\n"),
         ("multiple spread operands", "pub fnc main():int { const a = record{x:20}; const b = record{y:22}; const c = record{...a,...b}; return c.x+c.y; }\n"),
+        // Java type/value-context parity: the type declaration provides
+        // metadata; it must not be mistaken for an executable record value.
+        ("named readonly record value", "pub fnc main():int { type Row = record { foo: int }; const Row row = record { foo: 42 }; return row.foo; }\n"),
+        ("named inferred readonly record", "pub fnc main():int { type Row = record { foo: int }; const Row row = infer record { foo: 41 }; return row.foo; }\n"),
+        ("named inferred exact struct", "pub fnc main():int { type Point = struct { x: int }; const Point p = infer struct { x: 43 }; return p.x; }\n"),
     ];
     for (name, source) in aggregate_positives.iter() {
         let compiled = compile(&compiler, &tmp.0, source);
@@ -76,7 +81,13 @@ fn main() {
         ("invalid nested aggregate value", "fnc main():int { const p = infer record{x:record{y:1}}; return 42; }\n"),
         ("wrong final field type", "fnc main():int { const p = infer record{x:42}; const q = infer record{...p,x:true}; return q.x; }\n"),
         ("record spread rejects scalar operand", "fnc main():int { const q = record{...42,x:1}; return q.x; }\n"),
-        ("structural view and inferred aggregate", "fnc take(structural { id:int } x):int{return x.id;} fnc main():int { const row = infer record{id:42}; return take(row); }\n")
+        ("structural view and inferred aggregate", "fnc take(structural { id:int } x):int{return x.id;} fnc main():int { const row = infer record{id:42}; return take(row); }\n"),
+        // Exact kind/shape checks must not erase a record into a struct
+        // just because both use the same physical scalar fields.
+        ("typed record rejects exact struct", "pub fnc main():int { type Row = record { foo: int }; const Row row = infer struct { foo: 42 }; return row.foo; }\n"),
+        ("typed record rejects wrong field", "pub fnc main():int { type Row = record { foo: int }; const Row row = record { bar: 42 }; return 42; }\n"),
+        ("typed record rejects changed field type", "pub fnc main():int { type Row = record { foo: int }; const Row row = record { foo: true }; return 42; }\n"),
+        ("const type is not a declaration", "const type Row = record { foo: int }; pub fnc main():int { return 42; }\n")
     ];
     for (name, src) in probes {
         let output = compile(&compiler, &tmp.0, src);
