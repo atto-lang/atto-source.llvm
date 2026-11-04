@@ -37,6 +37,9 @@ typedef struct {
     OresNativeWakeOutcome outcome;
     WakeState state;
     uint64_t generation; /* never recycled at UINT64_MAX */
+    /* Runtime-authenticated source DATA-mail at WAKE reservation, 0 for
+     * outside-DATA and generic callback reservations. Never guest supplied. */
+    uint64_t originating_data_mail;
 } WakeCredit;
 typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
@@ -398,6 +401,7 @@ static void release_wake_locked(OresNativeActorScheduler* s,
     --lane->wake_live;
     credit->state = WAKE_EMPTY;
     credit->ticket = (OresNativeWakeTicket){0};
+    credit->originating_data_mail = 0;
     maybe_finish_stopped_locked(s, i);
 }
 /* Read back this carrier's OS affinity: a successful pthread_attr call is
@@ -1140,6 +1144,15 @@ int ores_native_actor_scheduler_reserve_wake(
     }
     if (ok) {
         ++w->generation;
+        /* Scheduler->authority lock order. A producer thread, CONTROL or
+         * WAKE callback cannot forge the original DATA-mail provenance. */
+        w->originating_data_mail =
+            executing == s && executing_data_mail_sequence
+            && executing_actor.scheduler_domain == producer.scheduler_domain
+            && executing_actor.actor_slot == producer.actor_slot
+            && executing_actor.generation == producer.generation
+            && ores_execution_owns_running(&lane->authority, executing_claim)
+            ? executing_data_mail_sequence : 0;
         const size_t slot = (size_t)(w - lane->wakes);
         w->ticket = (OresNativeWakeTicket){
             .producer = producer, .target = target,
