@@ -30,7 +30,8 @@ public:
           actor_(actor), original_mail_(original_admitted_mail) {
         if (!request_ || !request_->identity().valid()
                 || !request_->belongs_to(actor_)
-                || !original_mail_) {
+                || !original_mail_
+                || !request_->bind_original_mail_once(original_mail_)) {
             throw std::invalid_argument("invalid native DATA-mail request binding");
         }
     }
