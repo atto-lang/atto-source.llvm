@@ -122,7 +122,25 @@ fn audit_file(path: &str) -> Result<(), String> {
     // Open once and bind checks to the opened descriptor. Metadata followed by
     // fs::read(path) permits a path swap or file growth between the size check
     // and the allocation. Read at most MAX+1 bytes even if the file grows.
-    let input = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    #[cfg(target_os = "linux")]
+    let input = {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Linux O_NONBLOCK avoids hanging on a FIFO; O_NOFOLLOW binds the
+        // opened descriptor to a non-symlink path component at the leaf.
+        fs::OpenOptions::new().read(true)
+            .custom_flags(0o4000 | 0o400000)
+            .open(path)
+            .map_err(|e| format!("{path}: {e}"))?
+    };
+    #[cfg(not(target_os = "linux"))]
+    let input = {
+        let path_metadata = fs::symlink_metadata(path)
+            .map_err(|e| format!("{path}: {e}"))?;
+        if !path_metadata.is_file() {
+            return Err("IR input must be a regular, non-symlink file".into());
+        }
+        fs::File::open(path).map_err(|e| format!("{path}: {e}"))?
+    };
     let metadata = input.metadata().map_err(|e| format!("{path}: {e}"))?;
     if !metadata.is_file() {
         return Err("IR input must be a regular file".into());
@@ -205,6 +223,25 @@ mod tests {
         let dir = std::env::temp_dir();
         let result = audit_file(dir.to_str().expect("temp dir UTF-8"));
         assert!(result.is_err(), "directories must not be accepted as IR input");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = path.with_extension("ll-link");
+            symlink(&path, &link).expect("make symlink");
+            let result = audit_file(link.to_str().expect("symlink path UTF-8"));
+            assert!(result.is_err(), "symlinked IR must be refused");
+            fs::remove_file(link).expect("remove symlink");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let fifo = path.with_extension("fifo");
+            let status = std::process::Command::new("mkfifo")
+                .arg(&fifo).status().expect("run mkfifo");
+            assert!(status.success(), "mkfifo test setup");
+            let result = audit_file(fifo.to_str().expect("FIFO path UTF-8"));
+            assert!(result.is_err(), "FIFO IR must be refused without blocking");
+            fs::remove_file(fifo).expect("remove FIFO");
+        }
     }
 
     #[test]
