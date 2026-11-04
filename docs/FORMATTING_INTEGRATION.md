@@ -74,3 +74,35 @@ call graph closure including unknown dispatch, recover subtraction,
 actor panic bypass and supervisor CONTROL, plus executed Java/LLVM
 source fixtures and exact-head CI. Do not change the 2 to 0 for
 unimplemented cases.
+
+## Compiler-AST observation slice (non-certifying)
+
+The native `--analyze` mode additionally prints a bounded, human-readable
+observation line to stderr, including `functions`, `call_edges`,
+`unresolved_edges`, `throw_observed`, `raise_observed`,
+`panic_observed`, and `unknown`. It uses the existing compiler-owned
+`RealtimeAnalysis.hpp` direct-facts walker, then propagates those
+observations through resolved function name/arity calls with a monotone
+fixed-point algorithm. Recursive cycles cannot erase effects. Missing,
+ambiguous, generic-unproven or unmodeled calls propagate an unresolved
+marker; exceeded function or edge budgets are inconclusive.
+
+These bits record **syntactically possible activity in admitted native AST**,
+not typed escaping-effect sets. A locally caught throw may be reported, a
+declared `using throw` cannot invent an observed throw, and a zero value
+never proves a callable has no escaping effect. The scanned graph does not
+fully model actors, class/constructor initialization, external imports,
+dynamic dispatch, ordinary catch/recover paths, async continuation ownership,
+or exception ABI. Exit 2 and the explicit `effects inconclusive` diagnostic
+remain mandatory, even when the observed bits are zero.
+
+The host-only CTest `native_exception_effect_observations_host_only`
+exercises direct/transitive flags, missing-call propagation, recursion,
+generic and duplicate identity, declared-effect non-certification, and
+adversarial graph budgets. The real-compiler CTest
+`native_exception_effect_analyze_inconclusive_cli` exercises native
+`.atto` source including an already-supported caught throw and a
+potentially failing arithmetic call, as well as unknown/unsupported grammar
+and no-IR/no-mutation assertions. Neither test has yet yielded an
+inspectable exact-head compiler execution receipt on the blocked source
+organization; do not count them as PASS before a stepful authorized run.
