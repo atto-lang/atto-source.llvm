@@ -77,6 +77,13 @@ end
 ORES
 compile_positive implicit_modern_with_legacy_shadow
 
+# Java compatibility: absent modern file permits a legacy .ores migration
+# dependency. The guest implementation remains authored in AttoLang.
+new_case legacy_only_migration_fallback main.atto
+mv -- "$work/legacy_only_migration_fallback/math.atto" \
+  "$work/legacy_only_migration_fallback/math.ores"
+compile_positive legacy_only_migration_fallback
+
 new_case missing_dependency main.atto
 rm -- "$work/missing_dependency/math.atto"
 compile_negative missing_dependency
@@ -106,7 +113,7 @@ if [[ "$(uname -s)" != "MINGW"* && "$(uname -s)" != "MSYS"* ]]; then
   ln -s "missing-canonical.atto" "$work/dangling_modern_with_legacy_shadow/math.atto"
   cp -- "$fixtures/math.atto" "$work/dangling_modern_with_legacy_shadow/math.ores"
   compile_negative dangling_modern_with_legacy_shadow
-  echo "ATTO_FIRST_LLVM_AOT_GATE=6_EXECUTED_4_REJECTED"
+  echo "ATTO_FIRST_LLVM_AOT_GATE=8_EXECUTED_4_REJECTED"
 else
-  echo "ATTO_FIRST_LLVM_AOT_GATE=6_EXECUTED_3_REJECTED_NO_SYMLINK_TEST"
+  echo "ATTO_FIRST_LLVM_AOT_GATE=8_EXECUTED_3_REJECTED_NO_SYMLINK_TEST"
 fi
