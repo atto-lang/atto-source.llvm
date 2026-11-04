@@ -25,6 +25,9 @@ GUEST
 "$clang" -S -emit-llvm -O0 "$work/good.c" -o "$work/good.ll"
 cat > "$work/compiler" <<'COMPILER'
 #!/usr/bin/env bash
+if [[ -n "${ATTO_SOURCE_FREE_INVOCATION_LOG:-}" ]]; then
+  printf 'compiler_invoked\\n' >> "$ATTO_SOURCE_FREE_INVOCATION_LOG"
+fi
 cat "$ATTO_SOURCE_FREE_IR"
 COMPILER
 cat > "$work/auditor" <<'AUDITOR'
@@ -116,6 +119,8 @@ cmp -s "$target" "$work/preserved" ||
 export ORES_NO_GC_IR_AUDIT="$work/auditor"
 
 # An invalid timeout may not launch ANY compiler, even one that could work.
+: > "$work/compiler-invocations"
+export ATTO_SOURCE_FREE_INVOCATION_LOG="$work/compiler-invocations"
 for bad in 0 00 01 121 999 -1 1s abc; do
   set +e
   ATTO_FUZZ_BUILD_TIMEOUT_SECONDS="$bad" bash "$builder" \
@@ -127,6 +132,9 @@ for bad in 0 00 01 121 999 -1 1s abc; do
   cmp -s "$target" "$work/preserved" ||
     { echo "invalid timeout overwrote preserved executable ($bad)" >&2; exit 1; }
 done
+[[ ! -s "$work/compiler-invocations" ]] ||
+  { echo 'malformed build timeout launched a compiler before failing admission' >&2; exit 1; }
+unset ATTO_SOURCE_FREE_INVOCATION_LOG
 
 # Outer independent watchdog is a fixture safety net; an *internal* one-second
 # timeout must fire well before the outer ten-second watchdog.
