@@ -6,6 +6,7 @@ on:
       - 'scripts/verify-dop-atto-aot.sh'
       - 'scripts/test_verify_dop_atto_aot.py'
       - 'scripts/compile-aot.sh'
+      - 'scripts/audit_no_gc_ir.rs'
       - '.github/workflows/dop-atto-soa-native.yml'
       - 'src/main/cpp/oreslang/**'
       - 'CMakeLists.txt'
@@ -131,7 +132,19 @@ jobs:
             echo "LLVM accepted more than 64 ordered locals" >&2
             exit 1
           fi
-          grep -F 'native ordered root local limit exceeded (64)' "$work/diagnostic"
+          grep -F 'native root local limit exceeded (64)' "$work/diagnostic"
+          # The same 64-binding aggregate ceiling must also apply when all
+          # declarations precede the first effect (the old bypass).
+          {
+            printf 'pub routine main(): int {\n'
+            for i in $(seq 0 64); do printf '  let int p%s = %s;\n' "$i" "$i"; done
+            printf '  return p0;\n}\n'
+          } > "$work/prefix-too-many.atto"
+          if "$compiler" --target=host "$work/prefix-too-many.atto" >"$work/out.ll" 2>"$work/diagnostic"; then
+            echo "LLVM accepted more than 64 initial root locals" >&2
+            exit 1
+          fi
+          grep -F 'native root local limit exceeded (64)' "$work/diagnostic"
       - name: Fail closed without compiler
         shell: bash
         run: |
