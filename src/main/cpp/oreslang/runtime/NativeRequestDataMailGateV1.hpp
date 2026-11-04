@@ -19,6 +19,7 @@
 namespace oreslang::runtime {
 
 class NativeRequestDataMailGateV1 final {
+    friend class NativeRequestWakeGateV1;
 public:
     NativeRequestDataMailGateV1(
             OresNativeActorScheduler& scheduler,
