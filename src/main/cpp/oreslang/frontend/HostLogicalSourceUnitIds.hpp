@@ -184,9 +184,11 @@ public:
         std::string logical;
         for (const auto& root : roots_) {
             fs::path relative;
-            if (!beneath(root.lexical, lexical, relative)) continue;
-            // Root-directory symlinks may be configured, but no component
-            // BELOW a declared root may redirect or collapse source identity.
+            // Imported paths may have been canonicalized by the existing
+            // resolver. A symlinked root itself is admitted with the same
+            // relative unit ID; only symlinks BELOW it are forbidden.
+            if (!beneath(root.lexical, lexical, relative) &&
+                !beneath(root.real, lexical, relative)) continue;
             if ((root.real / relative).lexically_normal() != physical)
                 throw std::runtime_error("native source identity rejects symlink/alias path");
             logical = root.prefix + "/" + relative.generic_string();
