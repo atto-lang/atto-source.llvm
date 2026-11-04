@@ -48,6 +48,16 @@ SUITES = {
     "m1-invariants": (
         b"ORES_TEST|PASS|llvm-m1/contracts/atomic-recovery|\n"
         b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
+    "m1-replay": (
+        b"ORES_TEST|PASS|llvm-m1/identity/no-replay|\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=1\n", 0),
+    "m2-replay": (
+        b"ORES_TEST|PASS|llvm-m2/identity/replay-denied|\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=1\n", 0),
+    "m2-out-of-order": (
+        b"ORES_TEST|PASS|llvm-m2/order/first|\n"
+        b"ORES_TEST|PASS|llvm-m2/order/second|\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0\n", 0),
     "m2-pass": (
         b"ORES_TEST|PASS|llvm-m2/dispatch/equality|\n"
         b"ORES_TEST|PASS|llvm-m2/dispatch/less|\n"
