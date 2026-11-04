@@ -122,6 +122,21 @@ void unsupported_and_duplicate_identity_are_not_certified() {
             "colliding resolution cannot choose arbitrary overload");
 }
 
+void call_edge_budget_fails_closed() {
+    Program p;
+    auto root = function("root", value(0));
+    for (std::size_t i = 0; i <= realtime_detail::kMaxRealtimeCallEdges; ++i) {
+        Statement statement{};
+        statement.kind = Statement::Kind::Call;
+        statement.expression = call("external");
+        root.statements.push_back(std::move(statement));
+    }
+    p.functions.push_back(std::move(root));
+    const auto report = observe_exceptional_effects(p);
+    require(report.budget_exceeded && report.has_unknown(),
+            "call-edge overflow must not return a partial clean observation");
+}
+
 void bounds_and_unmodeled_roots() {
     Program p;
     p.imports.emplace_back();
@@ -144,6 +159,7 @@ int main() {
     unresolved_and_known_effect_both_survive();
     recursive_effect_fixed_point();
     unsupported_and_duplicate_identity_are_not_certified();
+    call_edge_budget_fails_closed();
     bounds_and_unmodeled_roots();
     return 0;
 }
