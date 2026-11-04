@@ -1,0 +1,3 @@
+// A T specialized to native int cannot accept a string actual.
+fnc identity<T>(T value): T { return value; }
+pub fnc main(): int { return identity<T=int>(value: "unsafe"); }
