@@ -67,8 +67,9 @@ those broader guarantees still require reviewed provenance and source
 digest evidence.
 
 `tests/native_pinned_atto_source_open_test.cpp` exercises five allowed
-paths, four denied source/manifest alias paths and 1,000 reopened
-descriptors. The exact source blob was compiled and run locally against
+paths, five denied source/manifest alias paths, 1,000 reopened descriptors,
+and a post-open mutation that replaces the admitted pathname with a
+symlink while a pinned descriptor must still read the original bytes. The exact source blob was compiled and run locally against
 both GCC 14 and Clang 17 using ASan/UBSan and `-Werror`; those are
 **component-only local results**. CI now includes this dedicated source
 unit under GCC/Clang sanitizers and a CTest name
