@@ -47,6 +47,9 @@ and inserts:
 5. An OS main wrapper that resets the budget at root entry, checks the
    exhaustion flag and maps it to process exit code **75**, not `abort`.
    Ordinary scalar main values still follow the existing 0..255 exit ABI.
+6. An out-of-band exported `__atto_guest_frame_exhausted_status()` ABI
+   returns the actual compiler-maintained per-thread failure flag (0 or 1).
+   Native adapters **must not** infer stack failure from status 75 alone.
 
 The compiler keeps nested recursive helper symbols internal to the module
 in this slice, to prevent arbitrary host reentry that bypasses the root
@@ -55,9 +58,10 @@ count; **proper tail-call optimization is not yet proven**.
 
 **Status limitation:** A process exit status is an observable *test
 convention*, not a distinct language-level `Result` type or actor failure
-cause. An ordinary program could also return 75; the internal TLS failure
-flag, not the exit code alone, is the source of truth. Thread-local counters
-are not actor-owned and must be released/reset before a different actor turn.
+cause. An ordinary program could also return 75; only the independent
+compiler-generated status query disambiguates those outcomes. Thread-local
+counters are not actor-owned and must be released/reset at every admitted
+execution boundary. Native actor-generation frame state is still pending.
 
 ## Native actor carrier substrate (host only)
 
@@ -69,10 +73,24 @@ generation-fenced failure marker, does not credit its message, and executes
 worker-owned cleanup before retiring the actor.
 
 `native_actor_stack_budget_failure_host_only` models actor A failing and
-actor B later completing on the **same** carrier. At present its source is a
-host callback that *simulates* a bounded budget result. The compiler-generated
-scalar exit/status ABI is **not yet wired into actor handler lowering**. This
-is not proof of compiler-generated AttoLang actor A/B survival.
+actor B later completing on the **same** carrier using a host-simulated
+budget status.
+
+`native_atto_compiled_guest_on_shared_carrier` goes further on Linux:
+the real AttoLang native compiler emits two recursive scalar `.atto`
+programs as LLVM IR, Clang links them into two native shared libraries,
+and a single `MultiActorCarrier` worker calls both through an explicit
+C++ adapter under a 1 MiB pthread stack. A's recursion sets the compiler
+failure flag and retires its actor after cleanup; B deliberately returns the
+**same ordinary integer 75** with the flag clear and completes on that
+same physical worker. This checks out-of-band failure classification and
+prevents a spoofed numeric value from being interpreted as a resource
+failure. Compiler and image hashes are emitted in the test receipt.
+
+**Limit:** These are actual compiled AttoLang **functions** hosted by C++
+actor callbacks, not compiler-generated AttoLang `actor` declarations,
+source actor mailbox semantics or supervisor restart. The adapter must
+not be promoted as completed actor-language LLVM parity.
 
 ## Focused tests to execute
 
@@ -85,7 +103,7 @@ cmake --build build --target \
   oreslang-native-guest-call-graph-test \
   oreslang-native-actor-stack-budget-model-test
 ctest --test-dir build --output-on-failure \
-  -R 'native_guest_call_graph_gate_host_only|native_atto_stack_admission_and_shallow_process|native_actor_stack_budget_failure_host_only'
+  -R 'native_guest_call_graph_gate_host_only|native_atto_stack_admission_and_shallow_process|native_actor_stack_budget_failure_host_only|native_atto_compiled_guest_on_shared_carrier'
 ```
 
 - C++ host checker: 64/65 static graph, malformed edges, cycles, arity,
