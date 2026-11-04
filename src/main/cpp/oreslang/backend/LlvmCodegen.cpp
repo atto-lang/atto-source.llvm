@@ -151,6 +151,10 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Value*>& field_storage,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
+    // Defense in depth: no pending compile-time import may be lowered into
+    // an ordinary runtime call, even if a future AST visitor omits a path.
+    if (expr.imported_macro_pending)
+        throw std::runtime_error("NATIVE_MACRO_UNEXPANDED: pending imported macro cannot enter LLVM IR");
     switch (expr.kind) {
         case Expression::Kind::SumConstruct: {
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
