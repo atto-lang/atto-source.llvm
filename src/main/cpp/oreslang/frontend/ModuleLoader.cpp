@@ -1,6 +1,7 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
+#include "oreslang/frontend/HostLogicalUnitIds.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -38,6 +39,7 @@ class Loader {
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
     bool owned, scalar_loop, host;
+    std::unique_ptr<frontend::HostLogicalUnitIds> logical_units;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
@@ -46,6 +48,23 @@ public:
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
+        // Canonical Atto packages use project-root-relative source IDs.
+        // Legacy/rootless inputs keep their existing admission behavior.
+        if (project_root_import_detail::is_atto_source(fs::path(path))) {
+            fs::path cursor = fs::canonical(path).parent_path();
+            for (;;) {
+                if (project_root_import_detail::exists_marker(cursor / ".atto.pkg.toml") ||
+                    project_root_import_detail::exists_marker(cursor / ".ores.pkg.toml")) {
+                    logical_units = std::make_unique<frontend::HostLogicalUnitIds>(cursor);
+                    (void)logical_units->admit(fs::canonical(path));
+                    break;
+                }
+                if (cursor == cursor.root_path()) break;
+                const auto parent = cursor.parent_path();
+                if (parent.empty() || parent == cursor) break;
+                cursor = parent;
+            }
+        }
         visit(fs::canonical(path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
         if (units.front()->program.imports.empty()) {
@@ -270,6 +289,9 @@ private:
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
                 }
 
+                // Enforce compiler-owned logical identity before parsing or linking.
+                if (logical_units)
+                    (void)logical_units->admit(dependency);
                 const auto known = paths.find(dependency.string());
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
