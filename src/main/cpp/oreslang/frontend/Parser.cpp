@@ -149,7 +149,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "and", "or", "xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -239,6 +239,43 @@ public:
             ++at_;
             while (at_ < source_.size() && (digit(source_[at_]) || source_[at_] == '_')) {
                 ++at_;
+            }
+            // Match Java/Graal's real-literal boundaries before returning an
+            // integer token. Native LLVM is intentionally i64-only today:
+            // splitting 1.25 into 1 '.' 25, or 1e4 into 1 'e4', can
+            // misdiagnose or accidentally compile a different program.
+            bool real = false;
+            if (at_ + 1 < source_.size() && source_[at_] == '.' &&
+                    digit(source_[at_ + 1])) {
+                real = true;
+                at_ += 2;
+                while (at_ < source_.size() &&
+                        (digit(source_[at_]) || source_[at_] == '_')) ++at_;
+            }
+            if (at_ < source_.size() && (source_[at_] == 'e' || source_[at_] == 'E')) {
+                const std::size_t exponent = at_;
+                ++at_;
+                if (at_ < source_.size() &&
+                        (source_[at_] == '+' || source_[at_] == '-')) ++at_;
+                if (at_ < source_.size() && digit(source_[at_])) {
+                    real = true;
+                    ++at_;
+                    while (at_ < source_.size() &&
+                            (digit(source_[at_]) || source_[at_] == '_')) ++at_;
+                } else {
+                    at_ = exponent; // Let existing parser diagnose malformed syntax.
+                }
+            }
+            if (at_ < source_.size() && source_[at_] == 'd' &&
+                    (at_ + 1 == source_.size() || !identifier_part(source_[at_ + 1]))) {
+                ++at_;
+                real = true;
+            }
+            if (real) {
+                throw std::runtime_error(
+                        "native floating-point/decimal literal unsupported until typed "
+                        "LLVM f32/f64 and exact decimal lowering (at byte " +
+                        std::to_string(start) + ")");
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
@@ -608,7 +645,11 @@ public:
                 type_only_declaration(program, true, exported);
                 continue;
             }
-            if (token_.text == "model")
+            if (token_.text == "state" && peek_next().text == "container")
+                    fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
+                if (token_.text == "virtual" && peek_next().text == "actor")
+                    fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
+                if (token_.text == "model")
                 fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
             if (accept("enum")) {
                 if (token_.text != "MaxActorThreads")
@@ -690,6 +731,10 @@ public:
                     type_only_declaration(program, true, public_class);
                     continue;
                 }
+                if (token_.text == "state" && peek_next().text == "container")
+                    fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
+                if (token_.text == "virtual" && peek_next().text == "actor")
+                    fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
                 if (token_.text == "model")
                     fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
@@ -3285,6 +3330,13 @@ private:
             std::string operation(token_.text);
             if (operation == "mut") {
                 advance();
+                if (token_.text == "share") {
+                    // A source spelling alone never proves a native shared
+                    // allocation domain or a guarded SharedMutex<T> handle.
+                    // Reject before evaluating the operand or emitting IR.
+                    fail("native rt mut share requires verified SharedMutex<T> capability, "
+                         "guarded lowering and allocation-domain proof; refusing unsynchronized alias");
+                }
                 if (token_.text != "borrow")
                     fail("'rt mut' only supports borrowing; use 'rt mut borrow value'");
                 operation = "borrow";

@@ -1,0 +1,8 @@
+// Canonical AttoLang extension smoke for the LLVM integer scalar subset.
+pub fnc main(): int {
+  return add(40, 2);
+}
+
+fnc add(int left, int right): int {
+  return left + right;
+}
