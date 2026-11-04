@@ -1,4 +1,5 @@
 import module Run from "ores.std/testing/m1";
+import module Scalar from "ores.std/testing/scalar";
 import class TestCase from "ores.std/testing/m1.atto";
 import class TestSuite from "ores.std/testing/m1";
 import class RunSummary from "ores.std/testing/m1.ores";
@@ -19,7 +20,7 @@ pub routine main(): int {
   stdio.println("ORES_TEST|SKIP|llvm-m1/select/skip|maintenance");
   let mut TestCase active = new TestCase();
   active.id = 3;
-  active.outcome = 0;
+  active.outcome = Scalar.expect_equal_int(6 * 7, 42);
   if !Run.should_run(rt borrow suite, rt borrow active); then return 3; fi
   if Run.record(rt mut borrow suite, rt borrow active) != 0; then return 3; fi
   stdio.println("ORES_TEST|PASS|llvm-m1/select/pass|");
