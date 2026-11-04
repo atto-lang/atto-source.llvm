@@ -104,5 +104,31 @@ int main() {
     for (auto& worker : readers) worker.join();
     assert(concurrent.freed() && concurrent.pin_count() == 0);
     assert(failures.load(std::memory_order_relaxed) == 0);
+
+    // Wrong-owner read takes the *other* slab's lock. Prior code loaded a
+    // non-atomic pin.active_ while its owning thread released that pin,
+    // creating a C++ data race. Keep the pin object alive until readers join.
+    FrozenTcpSlab owned(std::vector<std::uint8_t>{17});
+    FrozenTcpSlab unrelated(std::vector<std::uint8_t>{19});
+    auto receipt = owned.try_pin();
+    assert(receipt);
+    std::atomic<bool> read_ready{false};
+    std::atomic<bool> read_finished{false};
+    std::thread foreign_reader([&] {
+        read_ready.store(true, std::memory_order_release);
+        for (int i = 0; i < 65536; ++i) {
+            if (unrelated.read_byte(*receipt, 0).has_value())
+                failures.fetch_add(1, std::memory_order_relaxed);
+        }
+        read_finished.store(true, std::memory_order_release);
+    });
+    while (!read_ready.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    assert(owned.release_pin(*receipt));
+    foreign_reader.join();
+    assert(read_finished.load(std::memory_order_acquire));
+    assert(!owned.release_pin(*receipt));
+    owned.retire();
+    assert(owned.freed() && failures.load(std::memory_order_relaxed) == 0);
     return 0;
 }
