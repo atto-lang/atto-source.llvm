@@ -15,7 +15,7 @@ pass=0
 reject=0
 
 positive() {
-  local name="$1" source="$2"
+  local name="$1" source="$2" expected_exit="${3:-42}"
   printf '%s\n' "$source" > "$scratch/$name.atto"
   "$compiler" --target=host "$scratch/$name.atto" \
     > "$scratch/$name.ll" 2> "$scratch/$name.compiler.stderr" ||
@@ -32,7 +32,7 @@ positive() {
   local rc=0
   "$scratch/$name.native" > "$scratch/$name.stdout" \
     2> "$scratch/$name.stderr" || rc=$?
-  [[ "$rc" -eq 42 && ! -s "$scratch/$name.stdout" &&
+  [[ "$rc" -eq "$expected_exit" && ! -s "$scratch/$name.stdout" &&
      ! -s "$scratch/$name.stderr" ]] ||
     { echo "NATIVE_F64_EXIT_MISMATCH: $name rc=$rc" >&2; exit 1; }
   pass=$((pass + 1))
@@ -125,6 +125,22 @@ positive f64_ternary_false 'pub fnc main(): int {
   return 86;
 }'
 positive integer_control 'pub fnc main(): int { return 42; }'
+positive f64_false_ordered_exit_86 'pub fnc main(): int {
+  val float value = 0.3;
+  if value > 0.7; then return 42; fi
+  return 86;
+}' 86
+positive f64_false_equal_exit_17 'pub fnc main(): int {
+  val f64 value = 0.3 + 0.7;
+  if value == 1.1; then return 42; fi
+  return 17;
+}' 17
+positive f64_nan_is_not_less_exit_29 'pub fnc main(): int {
+  val f64 nan = 0.0 / 0.0;
+  if nan < 0.0; then return 42; fi
+  return 29;
+}' 29
+
 
 # Numerical M1 scalar prerequisites only: these do NOT execute num.atto's
 # imported f64 List/Result/test-harness library or sqrt implementation.
@@ -228,6 +244,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }' 'native branch-local f64 storage requires scoped double lowering'
 
-[[ "$pass" -eq 20 && "$reject" -eq 16 ]] ||
+[[ "$pass" -eq 23 && "$reject" -eq 16 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=20; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only, not num.atto library execution)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=23; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only, not num.atto library execution)"
