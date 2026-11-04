@@ -42,6 +42,32 @@ if "$compiler" --check --tree-shake "$tmp/good.atto" > "$tmp/out" 2> "$tmp/err";
   exit 1
 fi
 
+
+# The --check path is a real parser/semantic admission, not a regex scan.
+# Exception-control lowering is not supported even if an effect is declared.
+for effect in throw raise panic; do
+  printf 'fnc main(): int { %s 42; return 0; }\n' "$effect" > "$tmp/unsupported.atto"
+  if "$compiler" --check "$tmp/unsupported.atto" > "$tmp/out" 2> "$tmp/err"; then
+    echo "--check falsely admitted unsupported $effect" >&2
+    exit 1
+  fi
+done
+
+# Existing native 'using' metadata cannot stand in for transitive effect inference.
+printf 'fnc helper(): int { return 1; }\nfnc main(): int using throw { return helper(); }\n' \
+  > "$tmp/transitive.atto"
+if "$compiler" --check "$tmp/transitive.atto" > "$tmp/out" 2> "$tmp/err"; then
+  echo "--check falsely accepted effects with unproven call summaries" >&2
+  exit 1
+fi
+
+# The source-admission mode must not create a guest-code artifact.
+if find "$tmp" -type f \( -name '*.ll' -o -name '*.bc' -o -name '*.o' -o -name '*.wasm' \) \
+    | grep .; then
+  echo "--check emitted a codegen artifact" >&2
+  exit 1
+fi
+
 # All input paths remain byte-identical.
 cmp "$fixtures/cfg-guard-call.ores" "$tmp/good.atto"
 printf 'fnc main(): int { return ;\n' | cmp - "$tmp/bad.atto"
