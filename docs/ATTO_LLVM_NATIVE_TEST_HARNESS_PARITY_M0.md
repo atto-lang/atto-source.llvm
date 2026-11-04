@@ -28,7 +28,7 @@ A passing count from this subset must never be reported as the Java native
 | Canonical/legacy peer precedence | `.atto` wins; legacy explicit | `.atto` wins; `.atto` caller requires explicit `.ores` |
 | Native `std/testing.atto` module | authored in Java compiler | **UNSUPPORTED: explicitly rejected** |
 | `TestCase`, `TestSuite`, `RunSummary` | authored in AttoLang stdlib | **NOT IMPLEMENTED** |
-| Guest-created `ORES_TEST` machine events | Java workflow requires receipts | **NOT IMPLEMENTED** |
+| Guest-created `ORES_TEST` machine events | Java workflow requires receipts | three ad hoc suites; full TestKit **NOT IMPLEMENTED** |
 | Actor probes, virtual clock, cancellation | proposals only | **NOT IMPLEMENTED** |
 | LLVM O0/O2 native guest execution | separate runtime | required by this LLVM workflow |
 
@@ -37,7 +37,10 @@ A passing count from this subset must never be reported as the Java native
 - Checkout exact PR head, record complete tree SHA, reject modified tracked
   files before/after; no private cross-organization mirror.
 - Execute `bash tests/test_atto_native_parity_manifest.sh` and reject all
-  source-free inventory mutations. These checks never increment guest count.
+  source-free inventory mutations. Freeze both original 24/3 manifest maps
+  to their reviewed Git blob identities so a valid-looking case/exit/diagnostic
+  substitution cannot silently alter the portable parity contract.
+  These checks never increment guest count.
 - Build **real** `oreslang-llvmc` via CMake; execute updated C++ project-root
   import security tests.
 - For each of 24 reviewed `.atto` sources, run the compiler twice to emit
@@ -136,14 +139,30 @@ compiler admissions. No cross-organization private source transfer is used.
 
 ## Scoped guest-owned receipt smoke (not yet executed)
 
-Two additional `.atto` one-case guest suites now emit either `ORES_TEST|PASS`
-or `ORES_TEST|FAIL` plus their truthful final summary and native exit.
+The original two one-case `.atto` suites emit `ORES_TEST|PASS` or
+`ORES_TEST|FAIL`. A third `mixed.atto` suite produces two *ordered*
+guest-owned case receipts, a PASS followed by an intentional FAIL, and
+`total=2|passed=1|failed=1` with nonzero native exit. The host verifier
+now refuses duplicate, missing, reordered or false-summary mixed receipts.
 LLVM-produced IR is audited by the mandatory no-GC checker, linked against
 the native string-region runtime, and executed with Clang O0/O2. Stdout is a
 pipe for the nonblocking reactor; host verification checks exact event bytes,
 ordering, summary and exit, with adversarial source-only mutations.
 
-This is four **potential** new native executions distinct from the 48 scalar
-runs. The native `ores.std/testing` TestCase/TestSuite library, full Java
+This is six **required, not yet verified** O0/O2 native executions
+distinct from the 48 scalar runs (54 total). The native `ores.std/testing` TestCase/TestSuite library, full Java
 40-case parity, filtering, skip/fail-fast and nested suites remain unsupported.
 No parity claim is valid until an exact-head workflow records real steps.
+
+
+### Reconciled parity-gate review requirements
+
+The focused `pull_request` workflow now covers compiler/runtime source,
+CMake, scripts, stdlib, and all tests; a compiler-only change must not
+silently skip the real LLVM guest check. Nine source-only workflow mutations
+exercise trigger/receipt/auditor omissions, while the fixture-inventory test
+requires 11 rejection mutations. These are authored static checks, **not**
+compiler or native evidence. Host-observed receipt markers for each suite are
+printed only after **both** O0 and O2, transcript checks and exact IR equality.
+Release still requires a stepful source-org CI run, exact-head source identity,
+real no-GC audit and all 54 native executions, plus independent review.
