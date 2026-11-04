@@ -34,6 +34,8 @@ def verify(payload: bytes, kind: str, exit_code: int) -> bool:
 
 
 def self_test() -> None:
+    if not __debug__:
+        raise RuntimeError("verifier mutation assertions disabled by Python -O")
     for kind, code in (("pass", 0), ("fail", 1),
                        ("multi-pass", 0), ("multi-mixed", 1)):
         valid = expected(kind)
