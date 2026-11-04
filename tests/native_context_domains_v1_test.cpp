@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace oreslang::runtime;
@@ -90,6 +91,43 @@ void test_exact_drop_and_physical_tls() {
     assert(!num.get_copy());
 }
 
+// Destruction of a ThreadLocal value may run arbitrary user-defined host
+// code. Reentering the TLS map during C++ thread_local object teardown must
+// fail closed, not mutate the container while its destructor is running.
+struct ThreadExitReentrantDrop {
+    ThreadLocalKeyV1<ThreadExitReentrantDrop>* key;
+    std::shared_ptr<std::atomic<int>> drops;
+    ThreadExitReentrantDrop(
+        ThreadLocalKeyV1<ThreadExitReentrantDrop>* k,
+        std::shared_ptr<std::atomic<int>> counter)
+        : key(k), drops(std::move(counter)) {}
+    ThreadExitReentrantDrop(const ThreadExitReentrantDrop&) = default;
+    ThreadExitReentrantDrop(ThreadExitReentrantDrop&& other) noexcept
+        : key(std::exchange(other.key, nullptr)),
+          drops(std::move(other.drops)) {}
+    ~ThreadExitReentrantDrop() {
+        if (!key) return;
+        assert(!key->get_copy());
+        assert(!key->erase());
+        ++*drops;
+    }
+};
+
+void test_reentrant_physical_tls_thread_exit() {
+    auto drops = std::make_shared<std::atomic<int>>(0);
+    ThreadLocalKeyV1<ThreadExitReentrantDrop> key;
+    for (int cycle = 0; cycle != 32; ++cycle) {
+        std::thread worker([&] {
+            assert(key.set(ThreadExitReentrantDrop(&key, drops)));
+            // The destructor reenters the same TLS key after scope starts
+            // closing; it must observe a closed scope, never a freed cell.
+        });
+        worker.join();
+        assert(*drops == cycle + 1);
+        assert(!key.get_copy());
+    }
+}
+
 struct ReentrantCopy {
     std::shared_ptr<ActorLocalScopeV1> scope;
     explicit ReentrantCopy(std::shared_ptr<ActorLocalScopeV1> value)
@@ -165,6 +203,7 @@ void test_bounds_and_close_race() {
 int main() {
     test_isolation_and_migration();
     test_exact_drop_and_physical_tls();
+    test_reentrant_physical_tls_thread_exit();
     test_reentrant_copy_safe_retirement();
     test_bounds_and_close_race();
     std::puts("LOCAL_CONTEXT_DOMAINS_V1_HOST_PASS");
