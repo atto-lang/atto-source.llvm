@@ -75,3 +75,25 @@ jobs:
           ctest --test-dir build \
             -R '^(native_atto_named_generic_value_source_execution(_O2)?|native_scalar_generic_contract_harness_selftest|native_int_array_source_execution|native_named_call_(lexical_ir_order|reordered_guest|mixed_guest|mut_borrow_binding|overload_arity_guest))$' \
             --output-on-failure --no-tests=error --timeout 240 --parallel 2
+
+      - name: Build ASan and UBSan instrumented LLVM frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-sanitized \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined'
+          cmake --build build-sanitized --target oreslang-llvmc --parallel 2
+      - name: Execute named scalar source admission under ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-sanitized \
+            -R '^native_atto_named_generic_value_source_execution$' \
+            --output-on-failure --no-tests=error --timeout 240
