@@ -35,9 +35,12 @@ for relative in "$@"; do
     timeout --signal=TERM 15s "$executable" > "$tmp/out-$n-$level" 2> "$tmp/err-$n-$level" || code=$?
     [[ "$code" == 42 ]] || { echo "guest O$level $relative exited $code" >&2; exit 1; }
     cmp -s "$input" "$tmp/pristine-$n" || { echo 'source mutated' >&2; exit 1; }
-    printf 'ATTO_LLVM_NATIVE_GUEST_PASS|head=%s|source=%s|O%s|exit=42|source_sha256=%s|ir_sha256=%s|binary_sha256=%s\n' "$EXPECTED_HEAD" "$relative" "$level" "$source_hash" "$(sha256sum "$ir" | cut -d' ' -f1)" "$(sha256sum "$executable" | cut -d' ' -f1)"
   done
   cmp -s "$tmp/program-$n-0.ll" "$tmp/program-$n-2.ll" || { echo 'frontend IR not deterministic across Clang options' >&2; exit 1; }
+  # Emit success only after the complete O0/O2 pair passes the IR parity gate.
+  for level in 0 2; do
+    printf 'ATTO_LLVM_NATIVE_GUEST_PASS|head=%s|source=%s|O%s|exit=42|source_sha256=%s|ir_sha256=%s|binary_sha256=%s\n' "$EXPECTED_HEAD" "$relative" "$level" "$source_hash" "$(sha256sum "$ir" | cut -d' ' -f1)" "$(sha256sum "$executable" | cut -d' ' -f1)"
+  done
   n=$((n + 1))
 done
 unset ORESLANG_LLVM_AOT_OPT_LEVEL
