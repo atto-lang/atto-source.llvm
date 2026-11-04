@@ -78,8 +78,18 @@ def main() -> int:
             )
             assert result.stdout == "", "unadmitted effect grammar emitted LLVM IR"
 
-        for args in [("--analyze", "--rt-check", str(atto)),
-                     ("--analyze", "--analyze", str(atto))]:
+        # Ensure unsupported modes cannot quietly change meaning of --analyze.
+        incompatible = [
+            "--rt-check", "--tree-shake", "--constraint-descriptors",
+            "--target=host", "--profile=native-hard-rt",
+            "--rt-report=analysis.txt", "--library-profile=std",
+            "--allocator-provider=bounded-arena",
+        ]
+        rejected = [("--analyze", "--analyze", str(atto))]
+        for flag in incompatible:
+            rejected.append(("--analyze", flag, str(atto)))
+            rejected.append((flag, "--analyze", str(atto)))
+        for args in rejected:
             result = run(*args)
             assert result.returncode == 2, (args, result.returncode, result.stderr)
             assert result.stdout == "", "rejected flags must not emit LLVM IR"
