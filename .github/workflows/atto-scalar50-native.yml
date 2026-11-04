@@ -4,6 +4,8 @@ on:
     paths:
       - contracts/atto-parity-v1/shared-scalar50-v1.tsv
       - tests/atto_shared_scalar50_native.cmake
+      - tests/atto_checked_i64_native.cmake
+      - contracts/atto-parity-v1/js-checked-i64-candidates.json
       - CMakeLists.txt
       - .github/workflows/atto-scalar50-native.yml
   workflow_dispatch:
@@ -12,7 +14,7 @@ permissions:
 jobs:
   native-source-to-guest:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -43,14 +45,14 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
             -DATTO_EXPECTED_SOURCE_SHA="$EXPECTED_SOURCE_SHA"
           cmake --build build --target oreslang-llvmc --parallel 2
-      - name: Validate the pinned corpus and execute all 50 native guest programs
+      - name: Validate both corpora and execute 100 native checked-i64 and scalar guests
         run: |
           set -euo pipefail
-          ctest --test-dir build --output-on-failure -R '^atto_shared_scalar50_'
+          ctest --test-dir build --output-on-failure -R '^atto_(shared_scalar50|checked_i64)_'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - name: Audit exact-head native guest receipt
+      - name: Audit exact-head native guest receipts
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
@@ -76,10 +78,44 @@ jobs:
               throw Error("unverified or mismatched LLVM guest receipt");
             console.log("Pinned source LLVM native guest exits verified: 50/50",r.source_head);
           '
+
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const path = "build/atto-checked-i64-native/llvm-checked-i64-native-receipt.json";
+            const r = JSON.parse(readFileSync(path,"utf8"));
+            const hash = /^[a-f0-9]{64}$/;
+            const ids=new Set();
+            if(r.schema!=="atto-llvm-checked-i64-native-v1" ||
+               r.verification!=="LLVM_NATIVE_GUEST_EXECUTED" ||
+               r.source_head!==process.env.EXPECTED_SOURCE_SHA ||
+               r.corpus_sha256!=="5fd8ed522dfaaead8dc1b2d780159a4f156482124b7515d0a788245fc594ebc8" ||
+               r.values_checked!==37 || r.overflow_guests_trapped!==13 ||
+               !Array.isArray(r.results) || r.results.length!==50 ||
+               !hash.test(r.compiler_sha256)||!hash.test(r.clang_sha256))
+              throw Error("checked-i64 LLVM native receipt metadata invalid");
+            let values=0,traps=0;
+            for(const item of r.results){
+              if(typeof item.id!=="string"||ids.has(item.id)||
+                 !hash.test(item.original_source_sha256)||
+                 !hash.test(item.native_source_sha256))
+                throw Error("invalid source identity or duplicate checked-i64 case");
+              ids.add(item.id);
+              if(item.kind==="value"&&item.native_observed==="value-eq"&&
+                 item.raw_guest_result==="42")values++;
+              else if(item.kind==="checked-overflow"&&
+                      item.native_observed==="overflow-trap"&&
+                      /^(Illegal instruction|Trace\/breakpoint trap|Abort trap)$/.test(item.raw_guest_result))traps++;
+              else throw Error("invalid raw guest result for "+item.id);
+            }
+            if(values!==37||traps!==13)throw Error("checked-i64 native guest inventory mismatch");
+            console.log("LLVM full-width i64 equality: 37/37; checked traps: 13/13",r.source_head);
+          '
       - name: Preserve native guest receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: atto-llvm-native-scalar50
-          path: build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json
+          path: |
+            build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json
+            build/atto-checked-i64-native/llvm-checked-i64-native-receipt.json
           if-no-files-found: ignore
