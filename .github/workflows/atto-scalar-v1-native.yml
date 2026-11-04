@@ -8,8 +8,8 @@ on:
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/atto_scalar_llvm_native.py'
       - 'tests/atto_scalar_source_unit_migration.py'
-      - 'tests/atto_scalar_llvm_negative.py'
-      - 'tests/atto_scalar_v1_source.py'
+      - 'tests/rust-harness/src/main.rs'
+      - 'tests/rust-harness/src/atto_scalar_v1.rs'
       - 'tests/test_atto_scalar_native_gate.py'
       - 'CMakeLists.txt'
       - '.github/workflows/atto-scalar-v1-native.yml'
@@ -46,15 +46,17 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3 cargo
           clang --version
-      - name: Check source inventory and adversarial verifier with Python optimizations
+      - name: Verify exact 19 .atto sources and adversarial fixtures with Rust
         shell: bash
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           set -euo pipefail
-          python3 tests/atto_scalar_v1_source.py
+          cargo build --locked --release --manifest-path tests/rust-harness/Cargo.toml --target-dir build/rust-test-harness-target
+          build/rust-test-harness-target/release/oreslang-llvm-test-harness atto-scalar-source "$PWD"
+          build/rust-test-harness-target/release/oreslang-llvm-test-harness atto-scalar-selftest "$PWD"
           python3 -m unittest discover -s tests -p 'test_atto_scalar_native_gate.py' -v
           python3 -O -m unittest discover -s tests -p 'test_atto_scalar_native_gate.py' -v
       - name: Build actual native LLVM compiler from exact source HEAD
@@ -62,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --parallel 2 --target oreslang-llvmc
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-rust-test-harness
       - name: Check native typed-i64, legacy and negative CTest inventory
         shell: bash
         run: |
@@ -70,6 +72,8 @@ jobs:
           ctest --test-dir build -N > build/atto-scalar-inventory.txt
           cat build/atto-scalar-inventory.txt
           for name in atto_scalar_v1_exact_source_only \
+                      atto_scalar_v1_source_integrity_negative_controls \
+                      atto_scalar_canonical_add \
                       atto_scalar_v1_native_harness_adversarial \
                       atto_scalar_v1_full_i64_native \
                       atto_scalar_v1_source_unit_migration \

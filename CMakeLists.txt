@@ -2833,16 +2833,24 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(numerics_atto_integer_guest numerics-atto-main.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
-        # Shared .atto v1 scalar corpus from common-source #217. The first
-        # seven positive cases fit OS exit status; signed i64 extremes still
-        # require a separate typed-value witness and are NOT certified here.
-        oreslang_contract_test(atto_scalar_precedence ../../contracts/atto-scalar-v1/positive/precedence.atto --run 14 --clang "${ORE_CLANG}")
-        oreslang_contract_test(atto_scalar_grouping ../../contracts/atto-scalar-v1/positive/parentheses.atto --run 20 --clang "${ORE_CLANG}")
-        oreslang_contract_test(atto_scalar_type_first_local ../../contracts/atto-scalar-v1/positive/type-first-readonly.atto --run 42 --clang "${ORE_CLANG}")
-        oreslang_contract_test(atto_scalar_typed_const ../../contracts/atto-scalar-v1/positive/typed-const-readonly.atto --run 42 --clang "${ORE_CLANG}")
-        oreslang_contract_test(atto_scalar_inferred_const ../../contracts/atto-scalar-v1/positive/inferred-const-readonly.atto --run 42 --clang "${ORE_CLANG}")
-        oreslang_contract_test(atto_scalar_legacy_pure_call ../../contracts/atto-scalar-v1/positive/pure-call.atto --run 42 --clang "${ORE_CLANG}")
-        oreslang_contract_test(atto_scalar_type_first_parameter ../../contracts/atto-scalar-v1/positive/type-first-parameter.atto --run 42 --clang "${ORE_CLANG}")
+        # Exact common-source v1 AttoLang .atto fixtures, now through the
+        # source-owned Rust native harness. Eight OS exit values are admissible.
+        # Full signed-i64 extrema require the separate typed-i64 observer gate.
+        function(atto_scalar_native_guest name id)
+            add_test(NAME ${name}
+                COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" atto-scalar-guest
+                    "$<TARGET_FILE:oreslang-llvmc>"
+                    "${ORE_CLANG}" "${CMAKE_CURRENT_SOURCE_DIR}" "${id}")
+            set_tests_properties(${name} PROPERTIES TIMEOUT 90)
+        endfunction()
+        atto_scalar_native_guest(atto_scalar_canonical_add canonical-add)
+        atto_scalar_native_guest(atto_scalar_precedence precedence)
+        atto_scalar_native_guest(atto_scalar_grouping parentheses)
+        atto_scalar_native_guest(atto_scalar_type_first_local type-first-readonly)
+        atto_scalar_native_guest(atto_scalar_typed_const typed-const-readonly)
+        atto_scalar_native_guest(atto_scalar_inferred_const inferred-const-readonly)
+        atto_scalar_native_guest(atto_scalar_legacy_pure_call pure-call)
+        atto_scalar_native_guest(atto_scalar_type_first_parameter type-first-parameter)
         # Verify typed signed i64 through the compiler-owned guest function,
         # NOT through low-byte POSIX exit status. Negative overflow must trap
         # or be rejected with a compiler-owned failure; never silently wrap.
@@ -2859,13 +2867,20 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_source_unit_migration.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
         set_tests_properties(atto_scalar_v1_source_unit_migration PROPERTIES TIMEOUT 90)
+        # Source-only and rejected-source gates are distinct from actual
+        # compiler -> LLVM IR -> Clang -> linked guest execution.
         add_test(NAME atto_scalar_v1_exact_source_only
-            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_v1_source.py")
-        set_tests_properties(atto_scalar_v1_exact_source_only PROPERTIES TIMEOUT 30)
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" atto-scalar-source
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME atto_scalar_v1_source_integrity_negative_controls
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" atto-scalar-selftest
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(atto_scalar_v1_exact_source_only
+            atto_scalar_v1_source_integrity_negative_controls PROPERTIES TIMEOUT 40)
         add_test(NAME atto_scalar_v1_removed_operators_denied
-            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_llvm_negative.py"
-                --compiler "$<TARGET_FILE:oreslang-llvmc>")
-        set_tests_properties(atto_scalar_v1_removed_operators_denied PROPERTIES TIMEOUT 40)
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" atto-scalar-negative
+                "$<TARGET_FILE:oreslang-llvmc>" "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(atto_scalar_v1_removed_operators_denied PROPERTIES TIMEOUT 50)
 
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
