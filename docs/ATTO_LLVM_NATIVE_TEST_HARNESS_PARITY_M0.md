@@ -116,7 +116,7 @@ and [#2495](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/2
 It authors an `ores.std/testing` implementation, 132 registered native test
 cases in six manifest-backed suites, 40 ordered machine receipts and four
 deliberately failing guests. LLVM **does not yet implement that module**.
-The present LLVM subset only verifies 19 independent source programs at two
+The present LLVM subset only verifies 24 independent source programs at two
 Clang optimization settings, with a host-observed exit marker. The negative
 `ores.std/testing` admission test must continue to reject until LLVM actually
 has library parsing, lowering, and guest-produced per-case receipt emission.
@@ -130,6 +130,6 @@ have experienced zero-step admission failures; check job steps before claiming
 any executable parity.
 
 The focused LLVM workflow uses a **single** source-free gate, a real native
-compiler build, C++ import security checks, 38 potential guest executions
+compiler build, C++ import security checks, 48 potential guest executions
 (24 sources × two Clang optimization levels), and six potential negative
 compiler admissions. No cross-organization private source transfer is used.
