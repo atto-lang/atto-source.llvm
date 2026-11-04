@@ -584,8 +584,13 @@ llvm::Value* lower(const Expression& expr,
             std::vector<llvm::Value*> ordered(expr.arguments.size(), nullptr);
             std::vector<const Expression*> ordered_source(expr.arguments.size(), nullptr);
             std::vector<bool> filled(expr.arguments.size(), false);
+            std::vector<std::size_t> source_to_formal;
+            source_to_formal.reserve(expr.arguments.size());
             std::size_t positional = 0;
             bool named_seen = false;
+            // Preflight every label/slot before lowering even the first actual.
+            // A late unknown or duplicate label must never partially emit IR
+            // for an earlier side-effectful argument in an alternate pass.
             for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
                 const std::string label = expr.argument_names.empty()
                         ? std::string{} : expr.argument_names[i];
@@ -614,8 +619,16 @@ llvm::Value* lower(const Expression& expr,
                     throw std::runtime_error("duplicate native named call binding");
                 }
                 filled[target] = true;
+                source_to_formal.push_back(target);
+            }
+            if (!std::all_of(filled.begin(), filled.end(), [](bool slot) { return slot; })) {
+                throw std::runtime_error("incomplete native named call binding");
+            }
+            // After the entire permutation has been proven, evaluate each
+            // source expression exactly once in its original lexical order.
+            for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                const std::size_t target = source_to_formal[i];
                 ordered_source[target] = expr.arguments[i].get();
-                // Emit instructions in source order, not in formal-slot order.
                 ordered[target] = lower(*expr.arguments[i], builder, i64,
                                         storage, field_storage, functions, moves);
             }
