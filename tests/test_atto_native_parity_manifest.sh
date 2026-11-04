@@ -44,8 +44,20 @@ cp "$negatives" "$tmp/negative.tsv"
 sed -i 's#negative/unknown-function.atto#negative/../positive/arith-add.atto#' "$tmp/negative.tsv"
 reject 'negative traversal'
 cp "$negatives" "$tmp/negative.tsv"
+# Shape-valid substitutions retain existing rows/paths but change semantics.
+cp "$cases" "$tmp/cases.tsv"
+sed -i 's#^arith-add|positive/arith-add.atto|42$#arith-add|positive/arith-subtract.atto|42#' "$tmp/cases.tsv"
+reject 'valid-shape positive source swap'
+cp "$cases" "$tmp/cases.tsv"
+sed -i 's#^arith-add|positive/arith-add.atto|42$#arith-add|positive/arith-add.atto|41#' "$tmp/cases.tsv"
+reject 'plausible native exit swap'
+cp "$cases" "$tmp/cases.tsv"
+cp "$negatives" "$tmp/negative.tsv"
+sed -i 's#unknown function#unknown symbol#' "$tmp/negative.tsv"
+reject 'valid-shape diagnostic swap'
+cp "$negatives" "$tmp/negative.tsv"
 if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
 python3 "$root/tests/verify_atto_guest_receipts.py" --self-test
-echo 'PASS: eight source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
+echo 'PASS: eleven source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
