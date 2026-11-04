@@ -442,6 +442,26 @@ struct ScalarGenerator {
     bool exported = false;
 };
 
+// Closed LLVM M1 compile-time macro interface. Only two already-validated
+// typed-AST transformations may cross a source-unit boundary; the caller
+// must bind the exported signature to an admitted physical producer.
+enum class NativeMacroKind { ConstIntQuote, SyntaxExprIdentity };
+struct NativeMacroSignature {
+    std::string name;
+    NativeMacroKind kind = NativeMacroKind::ConstIntQuote;
+};
+struct NativeMacroImport {
+    std::string alias;
+    std::string path;
+};
+struct NativeMacroBinding {
+    std::string alias;
+    std::string path;
+    std::string logical_owner;
+    std::string source_sha256;
+    std::vector<NativeMacroSignature> exports;
+};
+
 struct ModuleImport {
     bool selected_class = false;
     std::string selected_module;
@@ -485,8 +505,16 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
+// Linker-only API: imported bindings must be derived from verified descriptor-
+// bound producer sources, never from an untrusted guest-supplied resolution map.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
-                                 bool experimental_rt_scalar_loop = false);
+                                 bool experimental_rt_scalar_loop = false,
+                                 const std::vector<NativeMacroBinding>& imported_macros = {});
+// Lexer-backed import admission, restricted to leading macro star imports.
+std::vector<NativeMacroImport> scan_native_macro_import_headers(std::string_view source);
+// Parses entire public-macro-only producer unit using the same typed parser as
+// same-file macro declarations. No guest runtime lowering or textual expansion.
+std::vector<NativeMacroSignature> parse_native_public_macro_exports(std::string_view source);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang
