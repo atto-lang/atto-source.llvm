@@ -10,6 +10,7 @@ on:
       - 'tests/fixtures/named-call-*.ores'
       - 'tests/fixtures/named-member-*.ores'
       - 'tests/fixtures/named-generic-value-*.ores'
+      - 'tests/rust-harness/src/main.rs'
       - '.github/workflows/named-call-exact-head.yml'
   workflow_dispatch:
 
