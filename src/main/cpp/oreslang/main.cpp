@@ -8,6 +8,7 @@
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
+#include "oreslang/types/ExceptionalEffectObservations.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -447,6 +448,22 @@ int main(int argc, char** argv) {
             // never an effect-clean PASS. The formatter maps this exit 2 to 2.
             (void)oreslang::emit_verified_llvm_ir(
                 ast, false, false, false);
+            const auto observations = oreslang::observe_exceptional_effects(ast);
+            const auto bits = observations.observed_exception_bits();
+            const auto seen = [&](oreslang::FunctionEffect effect) {
+                return (bits & static_cast<std::uint32_t>(effect)) != 0;
+            };
+            // A false observation does not mean an escaping effect is
+            // impossible: unresolved calls and typed unwind are unproved.
+            std::cerr << "oreslang-llvmc: compiler AST effect observations "
+                      << "(non-certifying): functions=" << observations.functions.size()
+                      << " call_edges=" << observations.scanned_edges
+                      << " unresolved_edges=" << observations.unresolved_edges
+                      << " throw_observed=" << seen(oreslang::FunctionEffect::Throw)
+                      << " raise_observed=" << seen(oreslang::FunctionEffect::Raise)
+                      << " panic_observed=" << seen(oreslang::FunctionEffect::Panic)
+                      << " unknown=" << observations.has_unknown()
+                      << "\n";
             std::cerr << "oreslang-llvmc: exception-effect analysis unsupported "
                          "(native source validation only; effects inconclusive)\n";
             return 2;
