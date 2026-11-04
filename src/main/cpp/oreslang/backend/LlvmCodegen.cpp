@@ -852,6 +852,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             return !fn.source_tasks.empty() || !fn.future_pipelines.empty();
         });
     llvm::FunctionCallee taskStart, taskAwait, taskShutdown;
+    llvm::FunctionCallee taskLocalSet, taskLocalGet;
+    const bool has_task_local_i64 = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [](const Function& fn) {
+            return std::any_of(
+                fn.source_tasks.begin(), fn.source_tasks.end(),
+                [](const SourceTaskI64Binding& task) {
+                    return task.task_local_i64_initial != nullptr;
+                });
+        });
+    if (has_task_local_i64) {
+        taskLocalSet = module.getOrInsertFunction(
+            "oreslang_source_task_local_i64_set",
+            llvm::FunctionType::get(
+                llvm::Type::getVoidTy(context), {i64}, false));
+        taskLocalGet = module.getOrInsertFunction(
+            "oreslang_source_task_local_i64_get",
+            llvm::FunctionType::get(i64, {}, false));
+    }
     if (has_source_tasks) {
         taskStart = module.getOrInsertFunction(
             "oreslang_source_task_start_i64",
@@ -1305,9 +1324,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
         std::unordered_map<std::string, llvm::Value*> source_task_handles;
         for (const auto& task : fn.source_tasks) {
-            if (!has_source_tasks || !task.result)
+            if (!has_source_tasks ||
+                (!task.result && !task.task_local_i64_return) ||
+                (task.task_local_i64_return &&
+                 (!task.task_local_i64_initial || !has_task_local_i64)))
                 throw std::runtime_error(
-                    "source Task<int> lacks runtime/result lowering");
+                    "source Task<int> lacks authorized runtime/result lowering");
             auto* producer = llvm::Function::Create(
                 llvm::FunctionType::get(i64, {}, false),
                 llvm::Function::InternalLinkage,
@@ -1318,9 +1340,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     context, "entry", producer));
             const std::unordered_map<std::string, llvm::Value*> no_storage;
             const std::unordered_map<std::string, llvm::Value*> no_fields;
-            auto* produced = lower(
-                *task.result, producer_builder, i64,
-                no_storage, no_fields, declarations);
+            if (task.task_local_i64_initial) {
+                auto* initialized = lower(
+                    *task.task_local_i64_initial, producer_builder, i64,
+                    no_storage, no_fields, declarations);
+                producer_builder.CreateCall(taskLocalSet, {initialized});
+            }
+            auto* produced = task.task_local_i64_return
+                ? producer_builder.CreateCall(
+                    taskLocalGet, {}, task.name + ".tasklocal.i64")
+                : lower(*task.result, producer_builder, i64,
+                        no_storage, no_fields, declarations);
             producer_builder.CreateRet(produced);
             source_task_handles.emplace(
                 task.name,
