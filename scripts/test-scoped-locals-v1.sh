@@ -19,6 +19,10 @@ for CXX in g++ clang++; do
     -I"$ROOT/src/main/cpp" "$ROOT/tests/native_scoped_request_parity_v1_test.cpp" \
     -o "$OUT/native-scoped-request-parity-$CXX"
   "$OUT/native-scoped-request-parity-$CXX"
+  "$CXX" -std=c++17 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+    -I"$ROOT/src/main/cpp" "$ROOT/tests/native_request_mail_gate_v1_test.cpp" \
+    -o "$OUT/native-request-mail-gate-$CXX"
+  "$OUT/native-request-mail-gate-$CXX"
 done
 if [ "$found" -eq 0 ]; then echo 'No C++17 compiler available' >&2; exit 1; fi
 # Compile-time scope confusion must fail, not reinterpret actor keys as TaskLocal.
@@ -68,7 +72,7 @@ done
 if [ "${ORES_SCOPED_LOCAL_RUN_SANITIZERS:-0}" = "1" ]; then
   for CXX in g++ clang++; do
     if ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
-    for testfile in native_scoped_local_storage_v1_test native_actor_local_gate_v1_test native_scoped_request_parity_v1_test; do
+    for testfile in native_scoped_local_storage_v1_test native_actor_local_gate_v1_test native_scoped_request_parity_v1_test native_request_mail_gate_v1_test; do
       "$CXX" -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
         -fsanitize=address,undefined -fno-omit-frame-pointer \
         -I"$ROOT/src/main/cpp" "$ROOT/tests/$testfile.cpp" \
