@@ -4,6 +4,10 @@ on:
     paths:
       - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
+      - 'tests/core_library_sources_test.cpp'
+      - 'tests/core_library_imports.py'
+      - 'tests/alloc_library_imports.py'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/project_root_import_test.cpp'
       - 'tests/native_module_imports.py'
@@ -70,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-core-library-sources-test
       - name: Require exact import and canonical .atto CTest inventory
         shell: bash
         run: |
@@ -80,6 +84,9 @@ jobs:
           for name in \
             native_source_module_graph_execution \
             native_project_root_import_security \
+            native_core_library_registry_provider_policy \
+            native_core_library_import_resolution \
+            native_alloc_library_import_resolution \
             numerics_atto_integer_guest \
             atto_shared_scalar_guest
           do
@@ -90,7 +97,20 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build \
-            -R '^(native_source_module_graph_execution|native_project_root_import_security|numerics_atto_integer_guest|atto_shared_scalar_guest)$' \
+            -R '^(native_source_module_graph_execution|native_project_root_import_security|native_core_library_registry_provider_policy|native_core_library_import_resolution|native_alloc_library_import_resolution|numerics_atto_integer_guest|atto_shared_scalar_guest) \
+            --output-on-failure --timeout 180
+      - name: Reverify source identity after tests
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "FINAL_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "FINAL_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+ \
             --output-on-failure --timeout 180
       - name: Reverify source identity after tests
         shell: bash
