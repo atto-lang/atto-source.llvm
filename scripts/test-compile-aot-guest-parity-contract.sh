@@ -29,7 +29,17 @@ entry:
 }
 IR
 COMPILER
-chmod 700 "$tmp/bin/oreslang-llvmc"
+cat > "$tmp/bin/oreslang-no-gc-ir-audit" <<'AUDITOR'
+#!/usr/bin/env bash
+# Synthetic-only audit stub: never source-code or production IR proof.
+set -euo pipefail
+[[ "$#" == 1 && -s "$1" ]] || exit 72
+if [[ "${ATTO_HOST_AUDIT_REJECT:-0}" == 1 ]]; then
+  echo 'synthetic IR auditor rejected compilation' >&2
+  exit 73
+fi
+AUDITOR
+chmod 700 "$tmp/bin/oreslang-llvmc" "$tmp/bin/oreslang-no-gc-ir-audit"
 (
   cd "$tmp/repo"
   git init -q
@@ -39,6 +49,7 @@ chmod 700 "$tmp/bin/oreslang-llvmc"
 )
 export EXPECTED_HEAD="$(git -C "$tmp/repo" rev-parse HEAD)"
 export ORESLANG_LLVMC="$tmp/bin/oreslang-llvmc"
+export ORES_NO_GC_IR_AUDIT="$tmp/bin/oreslang-no-gc-ir-audit"
 export CLANG="$(command -v clang)"
 unset ORESLANG_LLVM_AOT_OPT_LEVEL
 if ! bash "$tmp/repo/scripts/test-compile-aot-guest-parity.sh" > "$tmp/positive.stdout" 2> "$tmp/positive.stderr"; then
@@ -63,4 +74,12 @@ grep -Fq 'frontend IR not deterministic across Clang options' "$tmp/negative.std
   echo 'IR divergence was rejected for the wrong reason' >&2
   exit 1
 }
-printf '%s\n' 'HOST_ONLY_PARITY_HARNESS_CONTRACT_PASS|synthetic_baseline=1|o0_o2_ir_divergence_rejected=1|real_compiler=NOT_EXECUTED|atto_guest=NOT_EXECUTED'
+# The synthetic auditor's negative control proves publication never precedes admission.
+if ATTO_HOST_AUDIT_REJECT=1 bash "$tmp/repo/scripts/test-compile-aot-guest-parity.sh" > "$tmp/audit-negative.stdout" 2> "$tmp/audit-negative.stderr"; then
+  echo 'synthetic no-GC admission failure was accepted' >&2; exit 1
+fi
+grep -Fq 'synthetic IR auditor rejected compilation' "$tmp/audit-negative.stderr" || { echo 'synthetic auditor negative failed for a different reason' >&2; exit 1; }
+if grep -Fq 'ATTO_LLVM_NATIVE_GUEST_PASS|' "$tmp/audit-negative.stdout"; then
+  echo 'guest PASS receipt emitted despite rejected no-GC IR' >&2; exit 1
+fi
+printf '%s\n' 'HOST_ONLY_PARITY_HARNESS_CONTRACT_PASS|synthetic_baseline=1|o0_o2_ir_divergence_rejected=1|no_gc_auditor_negative=1|real_compiler=NOT_EXECUTED|atto_guest=NOT_EXECUTED'

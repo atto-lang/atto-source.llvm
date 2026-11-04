@@ -76,7 +76,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev cmake ninja-build
           /usr/bin/clang-19 --version
-      - name: Build source-owned oreslang-llvmc
+      - name: Build source-owned oreslang-llvmc and mandatory no-GC IR auditor
         shell: bash
         run: |
           set -euo pipefail
@@ -84,10 +84,19 @@ jobs:
           cmake --build "$RUNNER_TEMP/atto-llvm-compiler" --target oreslang-llvmc --parallel 2
           test -x "$RUNNER_TEMP/atto-llvm-compiler/oreslang-llvmc"
           sha256sum "$RUNNER_TEMP/atto-llvm-compiler/oreslang-llvmc"
+          # BUILD_TESTING=OFF does not define the CMake audit target. Compile
+          # and test the audited Rust source directly; never skip this gate.
+          command -v rustc
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit"
+          rustc --edition=2021 -D warnings --test scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit-tests"
+          "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit-tests" --test-threads=1
+          test -x "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit"
+          sha256sum "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit"
       - name: Execute real AttoLang O0/O2 native guests
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           ORESLANG_LLVMC: ${{ runner.temp }}/atto-llvm-compiler/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-llvm-compiler/oreslang-no-gc-ir-audit
           CLANG: /usr/bin/clang-19
         shell: bash
         run: |

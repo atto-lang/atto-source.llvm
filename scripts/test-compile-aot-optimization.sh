@@ -21,18 +21,31 @@ entry:
 }
 IR
 COMPILER
+cat > "$tmp/no-gc-auditor" <<'AUDITOR'
+#!/usr/bin/env bash
+# Synthetic host-only auditor. Production IR acceptance uses the Rust auditor.
+set -euo pipefail
+[[ "$#" == 1 && -s "$1" ]] || exit 72
+printf '%s\n' "$(sha256sum "$1" | cut -d' ' -f1)" >> "$ATTO_AUDITOR_LOG"
+if [[ "${ATTO_AUDITOR_REJECT:-0}" == 1 ]]; then
+  echo 'synthetic no-GC auditor rejected IR' >&2
+  exit 73
+fi
+AUDITOR
 cat > "$tmp/clang-recorder" <<'CLANG'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$@" > "$ATTO_CLANG_ARGV_LOG"
 exec "$ATTO_REAL_CLANG" "$@"
 CLANG
-chmod 700 "$tmp/stand-in-compiler" "$tmp/clang-recorder"
+chmod 700 "$tmp/stand-in-compiler" "$tmp/clang-recorder" "$tmp/no-gc-auditor"
 export ORESLANG_LLVMC="$tmp/stand-in-compiler"
 export CLANG="$tmp/clang-recorder"
 export ATTO_REAL_CLANG="$real_clang"
 export ATTO_EXPECTED_SOURCE="$source"
 export ATTO_CLANG_ARGV_LOG="$tmp/clang-argv"
+export ORES_NO_GC_IR_AUDIT="$tmp/no-gc-auditor"
+export ATTO_AUDITOR_LOG="$tmp/auditor-argv"
 for level in 0 2; do
     export ORESLANG_LLVM_AOT_OPT_LEVEL="$level"
     output="$tmp/bin/native-$level"
@@ -68,4 +81,17 @@ if "$root/scripts/compile-aot.sh" "$source" "$source" > /dev/null 2>&1; then
     exit 1
 fi
 cmp -s "$source" "$tmp/pristine-source" || { echo 'source modified after alias attempt' >&2; exit 1; }
-printf '%s\n' 'HOST-PIPELINE-PASS|clang_o0=1|clang_o2=1|default_o2=1|invalid_settings=4|guest_compiler=NOT_EXECUTED'
+[[ "$(wc -l < "$ATTO_AUDITOR_LOG")" -ge 3 ]] || { echo 'no-GC auditor did not inspect each emitted IR' >&2; exit 1; }
+# A rejected IR must never publish a replacement or damage a previous executable.
+cp -- "$tmp/bin/default" "$tmp/bin/preserved"
+preserved_sha="$(sha256sum "$tmp/bin/preserved" | cut -d' ' -f1)"
+if ATTO_AUDITOR_REJECT=1 "$root/scripts/compile-aot.sh" "$source" "$tmp/bin/preserved" > "$tmp/audit-refused.out" 2> "$tmp/audit-refused.err"; then
+    echo 'no-GC audit rejection was bypassed' >&2; exit 1
+fi
+grep -Fq 'synthetic no-GC auditor rejected IR' "$tmp/audit-refused.err" || { echo 'audit negative failed for another reason' >&2; exit 1; }
+[[ "$(sha256sum "$tmp/bin/preserved" | cut -d' ' -f1)" == "$preserved_sha" ]] || { echo 'audit rejection clobbered previous executable' >&2; exit 1; }
+if ORES_NO_GC_IR_AUDIT="$tmp/missing-auditor" "$root/scripts/compile-aot.sh" "$source" "$tmp/bin/missing-auditor-result" > /dev/null 2>&1; then
+    echo 'missing native no-GC auditor was accepted' >&2; exit 1
+fi
+[[ ! -e "$tmp/bin/missing-auditor-result" ]] || { echo 'missing auditor published an artifact' >&2; exit 1; }
+printf '%s\n' 'HOST-PIPELINE-PASS|clang_o0=1|clang_o2=1|default_o2=1|invalid_settings=4|synthetic_auditor_checks=1|auditor_negative=1|guest_compiler=NOT_EXECUTED'

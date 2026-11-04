@@ -149,7 +149,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "and", "or", "xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -3330,6 +3330,13 @@ private:
             std::string operation(token_.text);
             if (operation == "mut") {
                 advance();
+                if (token_.text == "share") {
+                    // A source spelling alone never proves a native shared
+                    // allocation domain or a guarded SharedMutex<T> handle.
+                    // Reject before evaluating the operand or emitting IR.
+                    fail("native rt mut share requires verified SharedMutex<T> capability, "
+                         "guarded lowering and allocation-domain proof; refusing unsynchronized alias");
+                }
                 if (token_.text != "borrow")
                     fail("'rt mut' only supports borrowing; use 'rt mut borrow value'");
                 operation = "borrow";

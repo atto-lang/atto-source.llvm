@@ -3,9 +3,8 @@
 # Unsupported source must fail in oreslang-llvmc, never fall back to an interpreter.
 set -euo pipefail
 [[ $# == 2 ]] || { echo 'Usage: scripts/compile-aot.sh source.atto|source.ores output-executable' >&2; exit 64; }
-# Preserve legacy default O2 while allowing actual O0/O2 binary differential
-# runs. These are Clang optimization settings, not a promise that the Oreslang
-# frontend itself has disabled every optimization.
+# Clang optimization level only; frontend semantics and the native no-GC IR
+# admission gate must remain identical at both levels.
 opt_level="${ORESLANG_LLVM_AOT_OPT_LEVEL:-2}"
 case "$opt_level" in
   0|2) ;;
@@ -21,6 +20,8 @@ output_file="$output_dir/$(basename "$2")"
 [[ ! -d "$output_file" ]] || { echo 'Output must be a file, not a directory.' >&2; exit 64; }
 [[ "$source_file" != "$output_file" ]] || { echo 'Source and executable paths must differ.' >&2; exit 64; }
 [[ -x "$compiler" ]] || { echo 'Build oreslang-llvmc first or set ORESLANG_LLVMC.' >&2; exit 69; }
+auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
+[[ -x "$auditor" ]] || { echo 'Build oreslang-no-gc-ir-audit first or set ORES_NO_GC_IR_AUDIT.' >&2; exit 69; }
 clang_path="$(command -v "$clang")" || { echo 'Install Clang or set CLANG.' >&2; exit 69; }
 # Compare identities, not just spellings: a symlink or hard link must not let
 # publication replace the source compiler or native toolchain executable.
@@ -32,6 +33,8 @@ fi
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 "$compiler" --target=host "$source_file" > "$work/program.ll"
+# Known tracing-GC IR screen; not a complete linked-image/FFI collector proof.
+"$auditor" "$work/program.ll" >/dev/null
 runtime_sources=()
 if grep -Eq 'declare .*@ores_string_' "$work/program.ll"; then
   runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeStringRegion.c")
@@ -50,3 +53,4 @@ else
 fi
 mv -f -- "$work/program" "$output_file"
 printf 'Native executable: %s\n' "$output_file"
+
