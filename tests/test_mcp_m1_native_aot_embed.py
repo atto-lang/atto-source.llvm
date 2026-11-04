@@ -1,5 +1,5 @@
 """Fail-closed compiler -> native LLVM guest ELF descriptor retention proof."""
-import argparse, json, shutil, subprocess, tempfile
+import argparse, json, re, shutil, subprocess, tempfile
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -9,14 +9,33 @@ def ok(cmd):
     p=run(cmd)
     if p.returncode: raise AssertionError(f"{cmd[0]} failed {p.returncode}: {p.stderr[:500]}")
     return p
+def sections(binary):
+    out=ok(['readelf','-W','-S',binary]).stdout
+    rows=[]
+    for line in out.splitlines():
+        match=re.match(
+            r'^\s*\[\s*\d+\]\s+\.atto\.mcp\.v1\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+',
+            line)
+        if match:
+            rows.append((match.group(1),match.group(6)))
+    return rows
+
+def read_only_descriptor(binary):
+    found=sections(binary)
+    assert len(found)==1, f'expected one ELF descriptor section: {found}'
+    kind, flags=found[0]
+    assert kind=='PROGBITS' and 'A' in flags and 'W' not in flags and 'X' not in flags, \
+        f'unsafe ELF MCP descriptor flags: {found}'
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument('--compiler',type=Path,required=True)
     p.add_argument('--clang',default='clang')
     p.add_argument('--objcopy',default='objcopy')
     args=p.parse_args()
+    if not __debug__: raise SystemExit('INVALID_TEST_ENVIRONMENT: Python -O disables assertions')
     if not args.compiler.is_file(): raise SystemExit('NOT_EXECUTED: LLVM compiler missing')
-    if not shutil.which(args.clang) or not shutil.which(args.objcopy):
+    if not shutil.which(args.clang) or not shutil.which(args.objcopy) or not shutil.which('readelf'):
         raise SystemExit('NOT_EXECUTED: clang/objcopy missing')
     compiler=args.compiler.resolve()
     manifests=[]
@@ -36,6 +55,7 @@ def main():
                 source_ir,'-Wl,--gc-sections','-o',binary])
             result=run([binary])
             assert result.returncode==42, f'guest returned {result.returncode}: {result.stderr[:300]}'
+            read_only_descriptor(binary)
             blob=work/f'{ext}.bin'
             ok([args.objcopy,'--dump-section',f'.atto.mcp.v1={blob}',binary])
             payload=blob.read_bytes()
@@ -44,6 +64,7 @@ def main():
             assert manifest['schema']=='atto.mcp.aot-descriptors.m1.v1'
             assert manifest['abi']=='atto.mcp.native.descriptor.v1'
             assert manifest['generation_binding']=='host_runtime_required'
+            assert re.fullmatch(r'[0-9a-f]{16}',manifest['module_id'])
             assert manifest['executed_guest'] is False
             assert [(x['name'],x['arity']) for x in manifest['descriptors']]==[('add',2),('main',0)]
             assert b'hidden' not in payload and b'/tmp/' not in payload
@@ -52,6 +73,13 @@ def main():
         source=ROOT/'tests/fixtures/mcp-descriptor-public.atto'
         ordinary=ok([compiler,source]).stdout
         assert '@__atto_mcp_descriptor_v1' not in ordinary and '.atto.mcp.v1' not in ordinary
+        ordinary_ir=work/'no-embed.ll'
+        ordinary_ir.write_text(ordinary)
+        ordinary_binary=work/'no-embed-guest'
+        ok([args.clang,'-x','ir','-O2','-fdata-sections',ordinary_ir,
+            '-Wl,--gc-sections','-o',ordinary_binary])
+        assert run([ordinary_binary]).returncode==42
+        assert sections(ordinary_binary)==[], 'default compilation leaked metadata'
         for flags in [
           ('--mcp-embed-descriptors','--mcp-embed-descriptors'),
           ('--mcp-embed-descriptors','--mcp-descriptors'),
