@@ -187,6 +187,19 @@ pub fnc main(): int {
 }
 """
 
+
+POSITIVE["guard-enclosing-then-else"] = """
+fnc bounded(int x): int {
+  if (x > 0); then
+    guard x < 10 { return 1; }
+  else
+    return 2;
+  fi
+  return 42;
+}
+pub fnc main(): int { return bounded(3); }
+"""
+
 NEGATIVE["guard-incomplete-nested-if"] = ("""
 pub fnc main(): int {
   guard false {
