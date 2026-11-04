@@ -33,16 +33,36 @@ set +e
 rc=$?
 set -e
 if [ "$rc" -ne 42 ]; then echo "FAIL: closed MIR native exit: $rc"; exit 1; fi
-"$emitter" bounds "$scratch/bounds.ll"
-for guard in 'icmp ult i64' 'call void @llvm.trap()'; do
- if ! grep -Fq "$guard" "$scratch/bounds.ll"; then
-   echo "FAIL: bounds MIR omitted guard $guard"; exit 1
- fi
+# Detached values must survive owner writes, swap-delete and volatile close,
+# including reads of an immutable column. Compile the actual generated IR
+# under both optimization modes rather than accepting metadata-only evidence.
+for mode in snapshot snapshot-id; do
+ "$emitter" "$mode" "$scratch/$mode.ll"
+ for guard in 'icmp ult i64' 'icmp ne i64' 'store volatile i1 false, ptr %alive' 'store i64 99, ptr'; do
+  if ! grep -Fq "$guard" "$scratch/$mode.ll"; then
+   echo "FAIL: $mode missing detached SSA/owner guard: $guard"; exit 1
+  fi
+ done
+ for opt in -O0 -O2; do
+  "$clang" "$opt" -x ir "$scratch/$mode.ll" -o "$scratch/$mode$opt"
+  set +e
+  "$scratch/$mode$opt" >/dev/null 2>&1
+  rc=$?
+  set -e
+  if [ "$rc" -ne 42 ]; then echo "FAIL: $mode $opt returned $rc, expected detached 42"; exit 1; fi
+ done
 done
-"$clang" -x ir "$scratch/bounds.ll" -o "$scratch/bounds"
+for bad in bounds snapshot-bounds; do
+ "$emitter" "$bad" "$scratch/$bad.ll"
+ for guard in 'icmp ult i64' 'call void @llvm.trap()'; do
+  if ! grep -Fq "$guard" "$scratch/$bad.ll"; then
+   echo "FAIL: $bad omitted guard $guard"; exit 1
+  fi
+ done
+ "$clang" -x ir "$scratch/$bad.ll" -o "$scratch/$bad"
 # A shell status of 132/133 is ambiguous: a program can return that exit code
 # without receiving SIGILL/SIGTRAP. Python retains the actual signal number.
-python3 - "$scratch/bounds" <<'PY'
+python3 - "$scratch/$bad" <<'PY'
 import resource
 import signal
 import subprocess
@@ -61,15 +81,16 @@ if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
         f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
     )
 PY
-for rejected in immutable missing-operand unclosed snapshot; do
+done
+for rejected in immutable missing-operand unclosed invalid-snapshot; do
  if "$emitter" "$rejected" "$scratch/$rejected.ll" >"$scratch/$rejected.out" 2>"$scratch/$rejected.err"; then
    echo "FAIL: MIR compiler admitted $rejected"; exit 1
  fi
  if [ -s "$scratch/$rejected.ll" ] || [ -s "$scratch/$rejected.out" ]; then
    echo "FAIL: emitted unsafe $rejected IR"; exit 1
  fi
- if [ "$rejected" = snapshot ] && ! grep -Fq 'snapshot value lowering not implemented' "$scratch/$rejected.err"; then
-   echo "FAIL: missing compiler-owned unsupported-snapshot diagnostic"; exit 1
+ if [ "$rejected" = invalid-snapshot ] && ! grep -Fq 'invalid inverted snapshot value reference' "$scratch/$rejected.err"; then
+   echo "FAIL: missing typed snapshot-reference diagnostic"; exit 1
  fi
 done
-printf 'PASS: strict C++17 typed MIR -> real native LLVM IR (exit 42, owner close erasure, bounds trap, four rejects)\n'
+printf 'PASS: strict C++17 typed MIR -> native LLVM IR (detached snapshots O0/O2 exit 42, volatile close, two bounds traps, four rejects)\n'
