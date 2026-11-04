@@ -892,6 +892,41 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Durable M0 language declarations are compiler-metadata only in Java.
+    # LLVM does not have the history/manifest/replay ABI, so native compilation
+    # must fail with the same explicit capability marker for all introducers.
+    # These invoke the real oreslang-llvmc; they cannot be green on a parser mock.
+    oreslang_contract_test(native_durable_m0_activity_failclosed
+        durable-m0-activity-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_workflow_failclosed
+        durable-m0-workflow-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_public_activity_failclosed
+        durable-m0-public-activity-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_public_workflow_failclosed
+        durable-m0-public-workflow-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_nested_comment_failclosed
+        durable-m0-comment-gap-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    # A durable declaration in comments must not poison an ordinary scalar guest.
+    oreslang_contract_test(native_durable_m0_comment_nontrigger
+        durable-m0-quoted-comments-native.atto --ir "ret i64 42")
+
+    add_test(NAME native_durable_m0_shared_corpus_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture "${CMAKE_CURRENT_SOURCE_DIR}/contracts/durable-m0/v1/checkout.atto"
+            --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    set_tests_properties(native_durable_m0_shared_corpus_failclosed
+        PROPERTIES TIMEOUT 30)
+
+    # Same 1,671-byte canonical manifest reference checked in .NET/Wasm and
+    # platform conformance. This does NOT imply LLVM emitted the manifest.
+    add_test(NAME native_durable_m0_manifest_v1_reference_bytes
+        COMMAND "${CMAKE_COMMAND}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/durable-m0/v1/verify-manifest.cmake")
+    set_tests_properties(native_durable_m0_manifest_v1_reference_bytes
+        PROPERTIES TIMEOUT 15)
+
     # A .atto guest fixture is NOT accepted as a working actor pipeline:
     # LLVM must reject before emitting partial IR until typed nested graph
     # lowering, supervisor scopes and transactional start are implemented.
@@ -913,6 +948,16 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_connect_generic_failclosed
         actor-connect-generic-unsupported.atto
         --diagnostic "ACTOR_CONNECT_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_pipe_comments_gap_failclosed
+        actor-pipe-comment-gap-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_connect_namespace_failclosed
+        actor-connect-namespace-unsupported.atto
+        --diagnostic "ACTOR_CONNECT_LLVM_NOT_IMPLEMENTED")
+    # Compiler-positive control: reserved factory names inside comments do
+    # not trigger source admission; actual Clang executable must exit 7.
+    oreslang_contract_test(native_actor_pipe_lexical_comment_control
+        actor-pipe-lexical-control.atto --run 7 --clang "${ORE_CLANG}")
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
@@ -976,15 +1021,12 @@ if(BUILD_TESTING)
         --diagnostic "native async gen* requires scheduler-owned async iterator continuation lowering")
     oreslang_contract_test(native_generator_v1_suspend_failclosed
         generator-v1-suspend-reject.ores
-        --diagnostic "native suspend gen* requires scheduler-owned async iterator continuation lowering")
+        --diagnostic "native suspends declaration requires suspension-aware borrow checking")
     foreach(generator_case IN ITEMS
             legacy-fnc legacy-routine legacy-async-fnc)
-        add_test(NAME native_generator_v1_${generator_case}_failclosed
-            COMMAND "$<TARGET_FILE:oreslang-llvmc>"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generator-v1-${generator_case}-reject.ores")
-        set_tests_properties(native_generator_v1_${generator_case}_failclosed PROPERTIES
-            WILL_FAIL TRUE
-            PASS_REGULAR_EXPRESSION "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering")
+        # WILL_FAIL inverts a matched PASS_REGULAR_EXPRESSION, so that form could never pass.
+        oreslang_contract_test(native_generator_v1_${generator_case}_failclosed
+            generator-v1-${generator_case}-reject.ores --diagnostic "native generator v1 requires iterator-frame, ownership and LLVM continuation lowering")
     endforeach()
 
     add_executable(oreslang-ownership-cfg-dataflow-test
@@ -1142,7 +1184,7 @@ if(BUILD_TESTING)
     # where arm returns retain FUNCTION_RETURN semantics. Async suspension,
     # replay-unsafe subjects, duplicate cases, and nb dispatch stay fail-closed.
     oreslang_contract_test(native_value_match_arm_result
-        dispatch-value-match-run.ores --ir "cmp.eq.i1")
+        dispatch-value-match-run.ores --ir "ternary.merge")
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir
@@ -1157,7 +1199,7 @@ if(BUILD_TESTING)
         dispatch-negative-zero-duplicate-reject.ores
         --diagnostic "duplicate native value switch case")
     oreslang_contract_test(native_value_switch_arm_result
-        dispatch-value-switch-run.ores --ir "cmp.eq.i1")
+        dispatch-value-switch-run.ores --ir "ternary.merge")
     oreslang_contract_test(native_do_match_function_return
         dispatch-do-match-run.ores --ir "return.snapshot.slot")
     oreslang_contract_test(native_do_switch_function_return
@@ -1234,7 +1276,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_exit_reject_unsupported_explicit_exit exit-unsupported-process-exit.ores
         --diagnostic "oreslang-llvmc:")
     oreslang_contract_test(native_exit_reject_unsupported_async_root exit-unsupported-async-main.ores
-        --diagnostic "native actor/async declaration requires")
+        --diagnostic "native first async Future<int> producer requires async fnc")
     oreslang_contract_test(native_exit_void_main_ir exit-void-main.ores
         --ir "define i32 @main()")
     if(ORE_CLANG)
@@ -1508,15 +1550,15 @@ if(BUILD_TESTING)
         set_tests_properties(native_branch_local_scope_source_execution
             native_branch_local_scope_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
-    oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
+    oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "llvm.sadd.with.overflow.i64" --run 28 --clang "${ORE_CLANG}")
     # Proven-nonescaping integer-field classes are stack-only and emit no
     # malloc, tracing collector roots, or native heap calls.
     oreslang_contract_test(owned_stack_class owned-stack-class.ores --ir "alloca %Box")
     oreslang_contract_test(reject_owned_stack_escape owned-stack-escape.ores --diagnostic "class is non-Copy")
     oreslang_contract_test(reject_owned_stack_unknown_field owned-stack-bad-field.ores --diagnostic "unknown class field")
     oreslang_contract_test(reject_owned_stack_duplicate_field owned-stack-double-field.ores --diagnostic "duplicate class field")
-    oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
-    oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
+    oreslang_contract_test(negative_literal negative-literal.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(nested_comments nested-comments.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_owned_lexical_lifetime owned-lexical-main.ores --no-native-abi --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_identifier owned-identifier-main.ores --no-native-abi --ir "call i64 @owned")
     # Port the unique generated stress corpus from old stacked #72 without its
@@ -2453,9 +2495,9 @@ if(BUILD_TESTING)
 
     # Native i64 is a Copy value: rt copy/rt share are scalar value copies,
     # while rt take invalidates named scalar binding until function exit.
-    oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores --ir "ret i64 42")
-    oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores --ir "ret i64 42")
-    oreslang_contract_test(native_rt_share_scalar native-rt-share-scalar.ores --ir "ret i64 42")
+    oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_rt_share_scalar native-rt-share-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(reject_take_then_reuse native-reject-take-then-reuse.ores --diagnostic "use of explicitly moved int")
     oreslang_contract_test(reject_take_call_arg_overlap native-reject-take-call-args.ores --diagnostic "use of explicitly moved int")
     oreslang_contract_test(reject_double_take native-reject-double-take.ores --diagnostic "use of explicitly moved int")
@@ -3012,7 +3054,23 @@ if(BUILD_TESTING)
             class-scalar-constructor-effectful-body-reject.ores --diagnostic "native scalar constructor body must be empty or contain only")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(numerics_atto_integer_guest numerics-atto-main.atto --run 42 --clang "${ORE_CLANG}")
+        # LLVM compiler-produced AttoXP scalar guests; FFI linking is separate.
+        oreslang_contract_test(attoxp_counter_guest_42 attoxp-counter-main.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_counter_guest_reset attoxp-counter-reset.atto --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_counter_guest_decrement attoxp-counter-decrement.atto --run 41 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
+        # Same byte-exact scalar corpus in LLVM, .NET and Wasm. These are
+        # genuine LLVM compiler/Clang/OS guest tests, not UI/FFI parity.
+        # Host integrity only; compile/link/run evidence comes from guest CTests below.
+        add_test(NAME attoxp_scalar_shared_source_pins
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/attoxp_scalar_manifest_test.py")
+        set_tests_properties(attoxp_scalar_shared_source_pins PROPERTIES TIMEOUT 15)
+        oreslang_contract_test(attoxp_scalar_guest_answer42 ../../contracts/attoxp-scalar-v1/answer-42.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_scalar_guest_decrement41 ../../contracts/attoxp-scalar-v1/decrement-41.atto --run 41 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_scalar_guest_reset0 ../../contracts/attoxp-scalar-v1/reset-zero.atto --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_scalar_guest_multiply42 ../../contracts/attoxp-scalar-v1/multiply-42.atto --run 42 --clang "${ORE_CLANG}")
+
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")
@@ -3942,6 +4000,9 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/FreestandingIntArrayRegion.c)
     target_include_directories(oreslang-freestanding-int-array-region-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # The test performs its setup inside assert(), so Release must keep assertions.
+    target_compile_options(oreslang-freestanding-int-array-region-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     add_test(NAME native_freestanding_int_array_region
         COMMAND oreslang-freestanding-int-array-region-test)
     set_tests_properties(native_freestanding_int_array_region PROPERTIES TIMEOUT 10)

@@ -135,3 +135,62 @@ unexecuted because source-org Actions jobs show zero recorded steps. Ordinary
 `Other.pipe(...)` expressions are not caught by the reserved Actor namespace
 guard; their separate native type admissibility remains governed by the
 existing compiler.
+
+## 2026-11-04 hardening audit: immutable metadata and resource bounds
+
+The new source-free planner revision:
+
+- Makes `NestedPipePart` construction state inaccessible to external
+  mutation. The only legal constructors are the `actor(...)` and
+  `group(...)` factory methods; descriptors remain move-only.
+- Makes `NestedPipePlan` non-default-constructible outside the validated
+  planner, with **const-only** accessors for actor/edge/supervisor lists
+  and total-slot receipts. `nested_pipe_restart_targets` can no longer
+  accept an arbitrarily constructed/edited instance from ordinary C++ callers.
+  This still **does not** turn metadata into an authenticated runtime
+  supervisor ticket; the actual runtime must verify actor incarnations,
+  caller authority and current generations independently.
+- Binds the *number of nested group segments* independently of actor
+  stages (default/hard maximum: 2,048 segments) to prevent excess
+  all-group tree expansion. Retains maximum 64 depth, 1,024 actors,
+  1,023 DATA edges, 256 analysis scopes, 65,536 messages/edge, and
+  1,000,000 aggregate forward DATA message slots.
+- Bounds actor type and port labels at **256 bytes each** and rejects
+  NUL/control bytes before copying into plans or diagnostics. Full Unicode
+  validity/normalization and type identity remain compiler responsibilities,
+  not guarantees of this standalone host planner.
+- Adds static assertions and C++ adversarial test cases for forged plan
+  creation, mutable accessors, over-limit segment admission, oversized
+  metadata and embedded NULs.
+
+**Evidence boundary:** New C++ hardening has been committed but still
+requires *fresh execution* of exact-head standalone GCC/Clang+ASan/UBSan
+tests. Earlier five local native passes apply only to the older
+`6990d9c...` planner/`fec517d...` test blobs, not the updated ones.
+The `.atto` source fixtures remain expected compiler rejections, never
+positive guest factory execution. The full LLVM/CMake + CTest build and
+source-org Actions remain unverified unless fresh stepful logs are available.
+
+The branch was semantically reconciled with `main` using main's
+parser/CMake files as the base and adding only the feature's
+separately delimited admission and CTest gates. This preserves
+unrelated recent LLVM work.
+
+## Reproduction of the hardened model
+
+On an approved, source-local environment with Clang and GCC, execute:
+
+```sh
+bash scripts/test-nested-actor-pipe-host.sh
+```
+
+This fails if either compiler is missing or any of the five host
+executions fails (Clang/GCC O0/O2 and Clang ASan+UBSan). The script
+prints `SOURCE_FREE_ONLY`; it does not build `oreslang-llvmc`.
+
+The strict CTest suite also registers eight `.atto` compiler-denial
+cases for unsupported `Actor.pipe`/`Actor.connect` spellings and
+one **positive** comment-only lexical-control `.atto` fixture that
+must compile and exit 7 under Clang. These compiler cases have not
+yet been executed against the hardened branch; no green checks may be
+inferred from merely registering them.

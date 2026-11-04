@@ -54,6 +54,16 @@ static NestedPipePart nested(
 
 static_assert(!std::is_copy_constructible<NestedPipePart>::value,
               "unstarted pipe construction descriptors must not be copyable");
+static_assert(!std::is_default_constructible<NestedPipePart>::value,
+              "unstarted pipe descriptors must be factory-constructed");
+static_assert(!std::is_default_constructible<NestedPipePlan>::value,
+              "only the checked planner can create a graph plan");
+static_assert(std::is_same<decltype(std::declval<NestedPipePlan&>().actors()),
+                           const std::vector<PlannedPipeActor>&>::value,
+              "actor list must not be mutable after planning");
+static_assert(std::is_same<decltype(std::declval<NestedPipePlan&>().scopes()),
+                           const std::vector<PlannedPipeScope>&>::value,
+              "supervisor selection must not accept edited children");
 static_assert(std::is_move_constructible<NestedPipePart>::value,
               "unstarted pipe construction descriptors must allow ownership moves");
 
@@ -64,22 +74,22 @@ int main() {
     }, "invalid nested actor pipe supervisor policy");
     {
         const auto graph = check_nested_actor_pipeline(nested());
-        check(graph.actors.size() == 4 && graph.edges.size() == 3,
+        check(graph.actors().size() == 4 && graph.edges().size() == 3,
               "nested graph did not flatten 4 nodes/3 DATA edges");
-        check(graph.actors[0].stage.actor_type == "Reader" &&
-                graph.actors[3].stage.actor_type == "Writer", "stage order changed");
-        check(graph.edges[0].payload == "Bytes" &&
-                graph.edges[1].payload == "Csv" &&
-                graph.edges[2].payload == "Rows", "edge type order changed");
-        check(graph.edges[0].capacity == 1024 &&
-                graph.edges[1].capacity == 1024 &&
-                graph.edges[2].capacity == 1024 &&
-                graph.total_slots == 3072, "capacity inheritance failed");
-        check(graph.scopes.size() == 1 && graph.scopes[0].physical_supervisor,
+        check(graph.actors()[0].stage.actor_type == "Reader" &&
+                graph.actors()[3].stage.actor_type == "Writer", "stage order changed");
+        check(graph.edges()[0].payload == "Bytes" &&
+                graph.edges()[1].payload == "Csv" &&
+                graph.edges()[2].payload == "Rows", "edge type order changed");
+        check(graph.edges()[0].capacity == 1024 &&
+                graph.edges()[1].capacity == 1024 &&
+                graph.edges()[2].capacity == 1024 &&
+                graph.total_slots() == 3072, "capacity inheritance failed");
+        check(graph.scopes().size() == 1 && graph.scopes()[0].physical_supervisor,
               "outer explicit supervision must produce one physical scope");
-        check(graph.scopes[0].children.size() == 4 &&
-                !graph.scopes[0].children[1].is_supervisor, "plain nested segment reparented actors");
-        check(graph.actors[1].owner_scope == "root", "unsupervised inner scope minted owner");
+        check(graph.scopes()[0].children.size() == 4 &&
+                !graph.scopes()[0].children[1].is_supervisor, "plain nested segment reparented actors");
+        check(graph.actors()[1].owner_scope == "root", "unsupervised inner scope minted owner");
     }
     {
         const auto graph = check_nested_actor_pipeline(
@@ -88,25 +98,25 @@ int main() {
                 actor("T1", PipeRole::transform, "Bytes", "Csv"),
                 actor("T2", PipeRole::transform, "Csv", "Rows"),
                 actor("Writer", PipeRole::writable, "Rows", "")));
-        check(graph.actors.size() == 4 && graph.edges.size() == 3,
+        check(graph.actors().size() == 4 && graph.edges().size() == 3,
               "flat chain not equivalent to nested");
-        check(graph.total_slots == 3072, "flat capacities not equivalent");
+        check(graph.total_slots() == 3072, "flat capacities not equivalent");
     }
     {
         const auto graph = check_nested_actor_pipeline(
             nested(16, PipeRestartStrategy::one_for_one));
-        check(graph.scopes.size() == 2 && graph.scopes[1].parent_path == "root" &&
-                graph.scopes[1].path == "root/1", "nested supervisor parent wrong");
-        check(graph.scopes[0].children.size() == 3 &&
-                graph.scopes[0].children[1].is_supervisor, "nested scope not one child");
-        check(graph.actors[1].owner_scope == "root/1" &&
-                graph.actors[2].owner_scope == "root/1", "inner actors wrong supervisor");
-        check(graph.edges[0].capacity == 1024 && graph.edges[1].capacity == 16 &&
-                graph.edges[2].capacity == 1024 && graph.total_slots == 2064,
+        check(graph.scopes().size() == 2 && graph.scopes()[1].parent_path == "root" &&
+                graph.scopes()[1].path == "root/1", "nested supervisor parent wrong");
+        check(graph.scopes()[0].children.size() == 3 &&
+                graph.scopes()[0].children[1].is_supervisor, "nested scope not one child");
+        check(graph.actors()[1].owner_scope == "root/1" &&
+                graph.actors()[2].owner_scope == "root/1", "inner actors wrong supervisor");
+        check(graph.edges()[0].capacity == 1024 && graph.edges()[1].capacity == 16 &&
+                graph.edges()[2].capacity == 1024 && graph.total_slots() == 2064,
               "nested internal edge capacity leaked to boundaries");
-        check(graph.edges[0].owner_scope == "root" &&
-                graph.edges[1].owner_scope == "root/1" &&
-                graph.edges[2].owner_scope == "root", "wrong cross-boundary edge owner");
+        check(graph.edges()[0].owner_scope == "root" &&
+                graph.edges()[1].owner_scope == "root/1" &&
+                graph.edges()[2].owner_scope == "root", "wrong cross-boundary edge owner");
         auto restart = nested_pipe_restart_targets(graph, "root", "root/0");
         check(restart == std::vector<std::string>({"root/0","root/1","root/2"}),
               "one_for_all restart did not treat nested supervisor as one child");
@@ -127,7 +137,7 @@ int main() {
     }
     {
         const auto graph = check_nested_actor_pipeline(nested(std::nullopt,std::nullopt,std::nullopt));
-        check(graph.scopes.size() == 1 && !graph.scopes[0].physical_supervisor,
+        check(graph.scopes().size() == 1 && !graph.scopes()[0].physical_supervisor,
               "unsupervised graph must inherit caller supervisor");
         must_reject([&] {
             (void)nested_pipe_restart_targets(graph, "root", "root/0");
@@ -180,6 +190,28 @@ int main() {
         limits.max_stages = 3;
         must_reject([&] { (void)check_nested_actor_pipeline(nested(),limits); }, "stage budget");
     }
+
+    must_reject([] {
+        auto limits = NestedPipeLimits{};
+        limits.max_segments = 1;
+        (void)check_nested_actor_pipeline(nested(), limits);
+    }, "segment budget");
+    must_reject([] {
+        auto limits = NestedPipeLimits{};
+        limits.max_segments = 2049;
+        (void)check_nested_actor_pipeline(nested(), limits);
+    }, "resource limits");
+    must_reject([] {
+        (void)check_nested_actor_pipeline(pipe_segment(std::nullopt, std::nullopt,
+            NestedPipePart::actor({std::string(257, 'A'), PipeRole::readable, "", "Bytes"}),
+            actor("Writer", PipeRole::writable, "Bytes", "")));
+    }, "metadata byte budget");
+    must_reject([] {
+        (void)check_nested_actor_pipeline(pipe_segment(std::nullopt, std::nullopt,
+            actor("Reader", PipeRole::readable, "", "Bytes"),
+            NestedPipePart::actor({"Writer", PipeRole::writable,
+                std::string("By") + char(0) + "tes", ""})));
+    }, "metadata control byte");
     {
         auto limits = NestedPipeLimits{};
         limits.max_edges = 2;
