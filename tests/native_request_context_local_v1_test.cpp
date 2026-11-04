@@ -274,6 +274,11 @@ struct ReentrantRequestDrop {
         : on_drop(std::move(callback)) {}
     ReentrantRequestDrop(ReentrantRequestDrop&&) noexcept = default;
     ReentrantRequestDrop(const ReentrantRequestDrop&) = default;
+    // A user-defined destructor suppresses the implicit move constructor.
+    // Without an explicit move, set(T) copies the callback twice and runs it
+    // on temporary/parameter teardown before the stored cell is replaced.
+    ReentrantRequestDrop(ReentrantRequestDrop&& other) noexcept
+        : on_drop(std::move(other.on_drop)) {}
     ~ReentrantRequestDrop() { if (on_drop) on_drop(); }
 };
 
