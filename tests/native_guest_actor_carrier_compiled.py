@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Compile .atto recursion into a shared image and execute it on one real
-MultiActorCarrier worker via a C++ host adapter, followed by a sibling actor.
+"""Two *actual compiled* .atto scalar guests on one native MultiActorCarrier.
 
-NOT source-compiled AttoLang actor declarations or supervisor recovery.
+Guest A recursively exhausts its checked frame budget, guest B *normally*
+returns the same number 75 with no failure flag. A C++ adapter maps the
+out-of-band compiler flag into a native actor outcome. This is not native
+AttoLang actor declaration lowering or supervised restart.
 """
 import argparse
 import hashlib
@@ -11,6 +13,20 @@ import resource
 import subprocess
 import sys
 import tempfile
+
+SOURCES = {
+    "exhausted": (
+        "fnc count_down(int n): int { return 1 + count_down(n - 1); }\n"
+        "pub fnc main(): int { return count_down(100000); }\n"
+    ),
+    "normal_75": (
+        # Unreachable recursive helper activates the checked-frame ABI
+        # while main deliberately returns the same number as the exhaustion
+        # process exit code. A status-only adapter would misclassify it.
+        "fnc unused(int n): int { return unused(n - 1); }\n"
+        "pub fnc main(): int { return 75; }\n"
+    ),
+}
 
 def checked(command, *, timeout=75, low_stack=False):
     preexec = None
@@ -44,23 +60,32 @@ def main():
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix="atto-native-actor-guest-m1-") as tmp:
         directory = Path(tmp)
-        source = directory / "recursive.atto"
-        source.write_text(
-            "fnc count_down(int n): int { return 1 + count_down(n - 1); }\n"
-            "pub fnc main(): int { return loop(100000); }\n",
-            encoding="utf-8")
         compiler = str(args.compiler.resolve())
         clang = str(args.clang.resolve())
         cxx = str(args.cxx.resolve())
-        ir_result = checked([compiler, str(source)])
-        if b"__atto_guest_exhausted" not in ir_result.stdout or b"define i32 @main(" not in ir_result.stdout:
-            raise RuntimeError("real compiled guest frame ABI not present")
-        ir = directory / "guest.ll"
-        ir.write_bytes(ir_result.stdout)
-        image = directory / "libatto_guest.so"
-        checked([clang, "-O0", "-shared", "-fPIC", "-x", "ir", str(ir), "-o", str(image)])
-        if not image.is_file():
-            raise RuntimeError("native guest dynamic library was not created")
+        images = {}
+        digests = {}
+        for label, text in SOURCES.items():
+            source = directory / (label + ".atto")
+            source.write_text(text, encoding="utf-8")
+            ir_result = checked([compiler, str(source)])
+            if (b"__atto_guest_exhausted" not in ir_result.stdout or
+                    b"define i32 @main(" not in ir_result.stdout or
+                    b"__atto_guest_frame_exhausted_status" not in ir_result.stdout):
+                raise RuntimeError(label + ": real compiler did not emit checked frame/status ABI")
+            ir = directory / (label + ".ll")
+            ir.write_bytes(ir_result.stdout)
+            image = directory / ("libatto_" + label + ".so")
+            checked([clang, "-O0", "-shared", "-fPIC", "-x", "ir", str(ir), "-o", str(image)])
+            if not image.is_file():
+                raise RuntimeError(label + ": compiled native guest library absent")
+            images[label] = image
+            digests[label] = {
+                "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "llvm_ir_sha256": hashlib.sha256(ir_result.stdout).hexdigest(),
+                "guest_image_sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+            }
+
         test = root / "tests/native_guest_actor_carrier_compiled_test.cpp"
         runtime = root / "src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp"
         executable = directory / "carrier_guest"
@@ -70,14 +95,15 @@ def main():
             "-I", str(root / "src/main/cpp"),
             str(test), str(runtime), "-ldl", "-o", str(executable),
         ])
-        observed = checked([str(executable), str(image)], low_stack=True)
-        if observed.stdout != b"ATTO_SOURCE_COMPILED_GUEST_ON_SHARED_NATIVE_CARRIER_OK\n" or observed.stderr:
-            raise RuntimeError("shared-carrier guest acceptance receipt mismatched")
-        print("PASS compiled .atto recursive guest + native actor host adapter",
+        observed = checked([
+            str(executable), str(images["exhausted"]),
+            str(images["normal_75"])], low_stack=True)
+        if (observed.stdout != b"ATTO_TWO_COMPILED_GUESTS_SHARED_NATIVE_CARRIER_OK\n"
+                or observed.stderr):
+            raise RuntimeError("two compiled guests carrier receipt mismatch")
+        print("PASS compiled .atto guests A=failure B=normal-return-75",
               "carrier_stack_limit=1MiB",
-              "source_sha256=" + hashlib.sha256(source.read_bytes()).hexdigest(),
-              "llvm_ir_sha256=" + hashlib.sha256(ir_result.stdout).hexdigest(),
-              "guest_image_sha256=" + hashlib.sha256(image.read_bytes()).hexdigest(),
+              "evidence=" + repr(digests),
               "carrier_image_sha256=" + hashlib.sha256(executable.read_bytes()).hexdigest(),
               "compiler_sha256=" + hashlib.sha256(args.compiler.read_bytes()).hexdigest())
     return 0
