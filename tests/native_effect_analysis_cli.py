@@ -173,6 +173,21 @@ def main(compiler):
     )
     assert "main/0\tstatus=known" not in unresolved.stdout
 
+    # Escaped/truncated callable identities can collide in a human-readable
+    # receipt. The native parser may reject oversized names outright; it
+    # must never certify the result as a uniquely identified pure callable.
+    long_name = "n" * 260
+    identity = run(
+        compiler,
+        f"fnc {long_name}(): int {{ return 42; }}\n"
+        f"pub fnc main(): int {{ return {long_name}(); }}\n",
+        flags=("--analyze",),
+    )
+    assert identity.returncode != 0, (
+        identity.returncode, identity.stdout, identity.stderr
+    )
+    assert "status=known" not in identity.stdout
+
     # Malformed source cannot be reported as admitted or effect-free.
     malformed = run(compiler, "pub fnc main(): int { return ; }\n",
                     flags=("--analyze",))
