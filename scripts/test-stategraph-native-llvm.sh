@@ -48,6 +48,31 @@ if [[ "$generic_status" -ne 42 || -s "$tmp/out" ]]; then
 fi
 printf 'SG_LLVM_GENERIC_NATIVE_GUEST_PASS blob=%s result=42\n' "$(git rev-parse "HEAD:$generic")"
 
+
+# Canonical scalar-superstep semantics: the IDENTICAL Oreslang bytes are in
+# StateGraph, Java/Graal and LLVM. Does not assert generic graph lowering.
+superstep=contracts/stategraph-portability/shared-superstep-scalar.ores
+expected_superstep_blob=0c1213cbedaf439e8f554627cf2174f4f2684d94
+[[ -f "$superstep" && ! -L "$superstep" ]]
+git ls-files --error-unmatch -- "$superstep" >/dev/null
+[[ "$(git hash-object "$superstep")" = "$expected_superstep_blob" ]] ||
+  { echo 'SG_LLVM_SHARED_SUPERSTEP_SOURCE_DRIFT' >&2; exit 1; }
+[[ "$(git rev-parse "HEAD:$superstep")" = "$expected_superstep_blob" ]] ||
+  { echo 'SG_LLVM_SHARED_SUPERSTEP_HEAD_DRIFT' >&2; exit 1; }
+timeout --kill-after=3s 90s bash scripts/compile-aot.sh "$superstep" "$tmp/superstep" ||
+  { echo 'SG_LLVM_SHARED_SUPERSTEP_COMPILE_NOT_ACCEPTED' >&2; exit 1; }
+[[ -x "$tmp/superstep" ]]
+set +e
+timeout --kill-after=3s 30s "$tmp/superstep" > "$tmp/out" 2> "$tmp/err"
+superstep_status=$?
+set -e
+if [[ "$superstep_status" -ne 42 || -s "$tmp/out" || -s "$tmp/err" ]]; then
+  cat "$tmp/err" >&2
+  echo "SG_LLVM_SHARED_SUPERSTEP_GUEST_NOT_ACCEPTED status=$superstep_status" >&2
+  exit 1
+fi
+printf 'SG_LLVM_SHARED_SUPERSTEP_NATIVE_PASS blob=%s guest_exit=42\n' "$expected_superstep_blob"
+
 for name in scalar guard nominal; do
   source="tests/fixtures/stategraph-parity-$name.ores"
   git ls-files --error-unmatch "$source" >/dev/null
