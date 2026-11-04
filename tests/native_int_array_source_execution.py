@@ -109,7 +109,8 @@ pub fnc main(): int {
   values.set(value: source_value(), index: source_index());
   return values.get(index: 0);
 }
-""", 42, 1),    "named-constructor-owned-array-swap": ("""define class Pair as
+""", 42, 1),
+    "named-constructor-owned-array-swap": ("""define class Pair as
   pub final mut Array<int> left;
   pub final mut Array<int> right;
 end
