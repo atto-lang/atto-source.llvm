@@ -2052,6 +2052,30 @@ private:
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
         };
+        // Parse constructor argument labels without reordering source AST.
+        // Both val/const and let/let mut local construction use this path.
+        auto parse_constructor_actuals = [&](LocalBinding& binding) {
+            bool saw_named = false;
+            std::unordered_set<std::string> seen_labels;
+            if (!accept(")")) {
+                do {
+                    if (named_argument_ahead()) {
+                        std::string name = identifier();
+                        require(":");
+                        if (!seen_labels.insert(name).second)
+                            fail("duplicate named constructor argument '" + name + "'");
+                        saw_named = true;
+                        binding.constructor_argument_names.push_back(std::move(name));
+                    } else {
+                        if (saw_named)
+                            fail("positional constructor argument cannot follow named argument");
+                        binding.constructor_argument_names.emplace_back();
+                    }
+                    binding.constructor_arguments.push_back(expression());
+                } while (accept(","));
+                require(")");
+            }
+        };
         auto source_task_local = [&]() {
             if (!(token_.text == "let" && peek_next().text == "Task"))
                 return false;
@@ -2282,10 +2306,7 @@ private:
                     } else {
                     if (type_identifier() != type) fail("class constructor type mismatch");
                     require("(");
-                    if (!accept(")")) {
-                        do binding.constructor_arguments.push_back(expression()); while (accept(","));
-                        require(")");
-                    }
+                    parse_constructor_actuals(binding);
                     binding.new_class = true;
                     }
                 }
@@ -2331,11 +2352,7 @@ private:
                     const std::string ctor = type_identifier();
                     if (ctor != binding.class_name) fail("class constructor type mismatch");
                     require("(");
-                    if (!accept(")")) {
-                        do binding.constructor_arguments.push_back(expression());
-                        while (accept(","));
-                        require(")");
-                    }
+                    parse_constructor_actuals(binding);
                     binding.new_class = true;
                 } else {
                     require("rt");
