@@ -1,6 +1,7 @@
 // Compiler AST effect observations. No guest throw/raise/panic execution claim.
 #include "oreslang/types/ExceptionalEffectObservations.hpp"
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <string>
