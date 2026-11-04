@@ -89,6 +89,7 @@ jobs:
                r.verification!=="LLVM_NATIVE_GUEST_EXECUTED" ||
                r.source_head!==process.env.EXPECTED_SOURCE_SHA ||
                r.corpus_sha256!=="5fd8ed522dfaaead8dc1b2d780159a4f156482124b7515d0a788245fc594ebc8" ||
+               r.equality_control_guests!==2 ||
                r.values_checked!==37 || r.overflow_guests_trapped!==13 ||
                !Array.isArray(r.results) || r.results.length!==50 ||
                !hash.test(r.compiler_sha256)||!hash.test(r.clang_sha256))
