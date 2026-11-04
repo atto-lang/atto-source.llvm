@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 
 
@@ -125,6 +126,42 @@ def main():
             'producer.atto': 'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
         }, 42),
     ])
+    # Two-file imported Syntax<Expr> expansion must remain compile-time only.
+    # The single-use path forwards caller AST once; repeated unquote is only
+    # allowed for a checked, closed integer literal (no duplicated effects).
+    positives.extend([
+        ('atto-linked-public-syntax-identity', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.identity!(syntax expr 42);}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+        }, 42),
+        ('atto-linked-public-syntax-identity-call', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc forty():int{return 40;} pub fnc main():int{return lib.identity!(syntax expr forty()+2);}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+        }, 42),
+        ('atto-linked-public-syntax-twice', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.twice!(syntax expr 21);}',
+            'producer.atto': 'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+        }, 42),
+        ('atto-linked-public-syntax-nested', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.identity!(syntax expr lib.twice!(syntax expr 21));}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; } define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+        }, 42),
+    ])
+    # Match Java's portable MAX_EXPANSIONS=128 with an executed native
+    # 128-call boundary, not merely a checked constant in compiler source.
+    def imported_identity_quota_program(count):
+        declarations = ''.join(
+            f'val quota_{i}:int=lib.identity!(syntax expr 1);'
+            for i in range(count))
+        return ('import * as lib from "./producer.atto"; '
+                'pub fnc main():int{' + declarations + 'return 42;}')
+
+    identity_producer = (
+        'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }')
+    positives.append(('atto-linked-public-syntax-budget-exactly-128', {
+        'main.atto': imported_identity_quota_program(128),
+        'producer.atto': identity_producer,
+    }, 42))
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -188,6 +225,8 @@ def main():
             for path in files: (directory/path).rename(directory/(path+'.hidden'))
             executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
             if executed.returncode != expected: raise AssertionError((name, executed.returncode, executed.stderr))
+            if name.startswith('atto-linked-public-') and (executed.stdout or executed.stderr):
+                raise AssertionError((name, 'unexpected native guest output', executed.stdout, executed.stderr))
             for path in files: (directory/(path+'.hidden')).rename(directory/path)
             if a.java_command and entry == 'main.ores' and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
                 reference = run([*a.java_command, str(directory/entry)])
@@ -524,6 +563,58 @@ def main():
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
             passed += 1
+        # Imported syntax forms preserve the local typed-AST safety floor.
+        syntax_negative_cases = [
+            ('twice-runtime-call',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc effect():int{return 21;} pub fnc main():int{return lib.twice!(syntax expr effect());}',
+             'repeated unquote requires a closed integer literal'),
+            ('twice-variable',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc main():int{val value:int=21;return lib.twice!(syntax expr value);}',
+             'repeated unquote requires a closed integer literal'),
+            ('twice-overflow',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc main():int{return lib.twice!(syntax expr 4611686018427387904);}',
+             'NATIVE_MACRO_CONST_OVERFLOW'),
+            ('identity-wrong-argument-kind',
+             'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+             'pub fnc main():int{return lib.identity!(const 42);}',
+             'NATIVE_MACRO_EXPANDER_REQUIRED'),
+        ]
+        for name, producer, consumer, diagnostic in syntax_negative_cases:
+            directory = root / ('atto-linked-syntax-' + name); directory.mkdir()
+            (directory/'producer.atto').write_text(producer)
+            (directory/'main.atto').write_text(
+                'import * as lib from "./producer.atto"; ' + consumer)
+            # Run in an isolated cwd so a rejected compiler cannot leave a
+            # hidden .ll/.o/native executable and still claim zero-IR denial.
+            compiler = os.path.abspath(shutil.which(a.compiler) or a.compiler)
+            before = {p.name for p in directory.iterdir()}
+            result = run([compiler, str(directory/'main.atto')], cwd=directory)
+            artifacts = {p.name for p in directory.iterdir()} - before
+            if not result.returncode or result.stdout or diagnostic not in result.stderr or artifacts:
+                raise AssertionError((name, result.returncode,
+                                      result.stdout[:150], result.stderr,
+                                      'unexpected compiler artifacts', sorted(artifacts)))
+            passed += 1
+
+        # The first expansion beyond the shared portable limit must fail
+        # before writing LLVM IR, object files or a native executable.
+        directory = root/'atto-linked-syntax-budget-129'; directory.mkdir()
+        (directory/'producer.atto').write_text(identity_producer)
+        (directory/'main.atto').write_text(imported_identity_quota_program(129))
+        compiler = os.path.abspath(shutil.which(a.compiler) or a.compiler)
+        before = {p.name for p in directory.iterdir()}
+        result = run([compiler, str(directory/'main.atto')], cwd=directory)
+        artifacts = {p.name for p in directory.iterdir()} - before
+        if (not result.returncode or result.stdout
+                or 'NATIVE_MACRO_BUDGET' not in result.stderr or artifacts):
+            raise AssertionError(('imported syntax expansion budget 129',
+                                  result.returncode, result.stdout[:150],
+                                  result.stderr, sorted(artifacts)))
+        passed += 1
+
         # A normal module import cannot forge compile-time macro provenance.
         directory=root/'atto-linked-macro-forged-module-alias'; directory.mkdir()
         (directory/'producer.atto').write_text(
