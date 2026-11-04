@@ -2565,6 +2565,8 @@ private:
                     }
                     require("{");
                     require("return");
+                    if (!value.return_class.empty())
+                        fail("native guard class return requires ownership-aware exit lowering");
                     Statement terminal;
                     terminal.kind = Statement::Kind::Return; terminal.offset = offset;
                     if (!value.returns_void) terminal.expression = expression();
@@ -2905,6 +2907,8 @@ private:
                 }
             }
             if (token_.text == "guard") {
+                if (terminal_try_finally)
+                    fail("native protected guard requires verified cleanup-aware lowering");
                 if (return_guards_started)
                     fail("native guard cannot follow legacy return guards");
                 const auto offset = token_.offset;
@@ -2918,6 +2922,8 @@ private:
                 }
                 require("{");
                 require("return");
+                if (!value.return_class.empty())
+                    fail("native guard class return requires ownership-aware exit lowering");
                 if (++branch_count > 128) fail("native structured guard limit exceeded (128)");
                 Statement terminal;
                 terminal.kind = Statement::Kind::Return; terminal.offset = offset;
