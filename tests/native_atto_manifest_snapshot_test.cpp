@@ -78,5 +78,5 @@ int main() {
     rejects("malformed UTF-8", "valid UTF-8",
             [&] { (void)AttoManifestSnapshot(marker); });
 
-    std::cout << "ATTO_MANIFEST_SNAPSHOT_HOST_ONLY_OK checks=9\n";
+    std::cout << "ATTO_MANIFEST_SNAPSHOT_HOST_ONLY_OK checks=10\n";
 }
