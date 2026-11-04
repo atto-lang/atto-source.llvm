@@ -39,6 +39,7 @@ required_tests=(
   reject_guest_actor_group_join
   reject_guest_actor_group_shadow
   reject_shared_actor_pubsub_source_corpus
+  source_actor_pubsub_atto_fixture_identity
   native_actor_multi_group_membership
   native_actor_pubsub_admission
   native_actor_pubsub_c_abi

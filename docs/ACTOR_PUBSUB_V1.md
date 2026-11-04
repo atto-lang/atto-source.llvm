@@ -4,6 +4,29 @@ LLVM: NativeActorMembershipRegistry is the current host-side membership substrat
 
 Normative contract: `contracts/v1/actor-pubsub-v1.json`.
 
+### Portable topic-name parity boundary
+
+The host-side C++ admission API and the i64/UTF-8 C ABI now share one
+nonallocating, locale-independent topic-identity rule:
+`^[A-Za-z][A-Za-z0-9._/-]{0,127}$` (case-sensitive ASCII, 1–128 bytes).
+Invalid UTF-8 bytes, Unicode names, whitespace, embedded NUL in C++ `std::string`
+names, and 129-byte names fail before topic-ledger mutation.
+The C-string ABI cannot represent an embedded NUL inside one topic name:
+its bounded scan validates the terminated prefix supplied by its caller.
+
+This aligns the topic-name identity portion of proposed portable PubSub
+conformance PR #305 (including PS018), but is **not** execution of the
+26 PS action vectors. The LLVM host substrate and portable reference also
+differ in lifecycle and authority: native `try_read` immediately dequeues
+instead of retaining in-flight capacity, and guest `ActorGroup`/`Topic`
+source lowering remains unsupported and fail-closed. The host ABI is not
+an authenticated, stable, compiler-generated guest API.
+
+Native verification gates: CTests `native_actor_pubsub_admission` and
+`native_actor_pubsub_c_abi` must execute on a source-local runner with
+recorded steps; the source parser rejection gate must continue to pass.
+An Actions run failed before any steps is `NOT_EXECUTED`.
+
 No `define publisher` or `define subscriber` language forms are introduced. The shared source model is `ActorGroup`, `Topic<T>`, `Subscription<T>`, and `PublishReceipt`; actors may belong to multiple groups simultaneously, and group membership is never lifecycle ownership.
 
 Golden source parity fixture: `contracts/v1/fixtures/actor-pubsub-v1.ores`.
