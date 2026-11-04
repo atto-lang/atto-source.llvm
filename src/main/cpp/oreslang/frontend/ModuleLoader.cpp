@@ -102,11 +102,11 @@ public:
         }
         visit(fs::canonical(entry_path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
-        if (package_manifest) package_manifest->recheck();
+        recheck_source_graph();
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
-            if (package_manifest) package_manifest->recheck();
+            recheck_source_graph();
             return root;
         }
         Program linked;
@@ -162,10 +162,33 @@ public:
             }
         }
         resolve_and_validate_program(linked);
-        if (package_manifest) package_manifest->recheck();
+        recheck_source_graph();
         return linked;
     }
 private:
+    void recheck_source_graph() const {
+        // Detect post-read mutation before returning an admitted program.
+        // A source file's metadata must match the descriptor actually read,
+        // not merely the pathname selected by dependency resolution.
+        for (const auto& holder : units) {
+            const auto& unit = *holder;
+            if (unit.compiler_owned_library) continue;
+            const auto pathname = unit.path.string();
+            SourceIdentity after{};
+            try {
+                after = capture_source_identity(
+                    pathname.c_str(), max_bytes,
+                    "native source exceeds 8 MiB admission limit");
+            } catch (const std::exception&) {
+                throw std::runtime_error(
+                    "ATTO_UNIT_SOURCE_CHANGED: " + unit.logical_unit_id);
+            }
+            if (!ores_source_identity_equal(unit.identity, after))
+                throw std::runtime_error(
+                    "ATTO_UNIT_SOURCE_CHANGED: " + unit.logical_unit_id);
+        }
+        if (package_manifest) package_manifest->recheck();
+    }
     [[noreturn]] static void fail(const Unit& unit, const std::string& reason) {
         throw std::runtime_error(unit.path.string() + ": " + reason);
     }
