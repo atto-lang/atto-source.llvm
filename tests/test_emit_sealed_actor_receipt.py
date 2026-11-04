@@ -48,6 +48,22 @@ class ReceiptTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         module.check_ir(p, handler)
 
+    def test_commented_out_ownership_calls_do_not_count(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / 'guest.ll'
+            good = GOOD.replace('HANDLER', 'oreslang_actor_Worker_handle_state')
+            # A comment that looks like an LLVM instruction was previously
+            # admitted by an unanchored 'call' regex.
+            for bad in (
+                good.replace('  call void @ores_actor_i64_heap_scoped_drop(',
+                             '  ; call void @ores_actor_i64_heap_scoped_drop('),
+                good.replace('  %r = call i64 @ores_actor_i64_heap_field_read(',
+                             '  ; %r = call i64 @ores_actor_i64_heap_field_read('),
+            ):
+                p.write_text(bad)
+                with self.assertRaises(ValueError):
+                    module.check_ir(p, 'oreslang_actor_Worker_handle_state')
+
     def test_bad_head_and_mode_refused_before_git(self):
         with tempfile.TemporaryDirectory() as td:
             for mode, head in [('optimized', 'not-a-head'), ('fuzz', 'a'*40)]:
