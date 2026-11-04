@@ -1,0 +1,22 @@
+import module Run from "ores.std/testing/m1";
+import class TestCase from "ores.std/testing/m1.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1.ores";
+
+// Skipped-only suites must have a truthful summary and a nonzero native exit.
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase skipped_case = new TestCase();
+  skipped_case.id = 1;
+  skipped_case.skipped = true;
+  if Run.record(rt mut borrow suite, rt borrow skipped_case) != 2; then return 3; fi
+  stdio.println("ORES_TEST|SKIP|llvm-m1/empty/skip|not-run");
+  let mut RunSummary summary = new RunSummary();
+  val int status = Run.finish(rt borrow suite, rt mut borrow summary);
+  if status != 1 || summary.total != 1 || summary.passed != 0 ||
+     summary.failed != 0 || summary.skipped != 1 || summary.filtered != 0; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=0|failed=0|skipped=1|filtered=0");
+  return status;
+}
