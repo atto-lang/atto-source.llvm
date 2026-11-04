@@ -45,15 +45,26 @@ for name, source, tag in (("M1", m1, "ATTO_M1"), ("M2", m2, "ATTO_M2")):
     if changed == embedded or changed == source.read_text():
         raise SystemExit("ineffective compiler-owned source mutation: " + name)
     if name == "M1":
-        finish = embedded.split("pub fnc finish(", 1)[1]
-        require_before = finish.index("result.total = suite.total;")
+        state = embedded.split("pub fnc valid_state(", 1)[1].split("pub fnc should_run(", 1)[0]
         for guard in ("suite.total < 0", "suite.filtered < 0",
+                      "suite.passed > 1024", "suite.failed > 1024",
+                      "suite.skipped > 1024",
                       "suite.total != suite.passed + suite.failed + suite.skipped",
                       "suite.total + suite.filtered > 0 && suite.last_id <= 0",
                       "suite.halted != 0 && (!suite.fail_fast || suite.failed != 1)",
                       "suite.fail_fast && suite.failed > 0 && suite.halted == 0"):
-            if guard not in finish or finish.index(guard) > require_before:
-                raise SystemExit("M1 RunSummary validation must precede output: " + guard)
+            if guard not in state:
+                raise SystemExit("M1 integrity preflight missing: " + guard)
+        should = embedded.split("pub fnc should_run(", 1)[1].split("pub fnc record(", 1)[0]
+        if "valid_state(rt borrow suite)" not in should:
+            raise SystemExit("M1 should_run skipped suite integrity guard")
+        admission = embedded.split("pub fnc record(", 1)[1].split("pub fnc finish(", 1)[0]
+        if (admission.index("if !valid_state(rt borrow suite)") >
+                admission.index("suite.total = suite.total + 1;")):
+            raise SystemExit("M1 record mutates counters before integrity guard")
+        finish = embedded.split("pub fnc finish(", 1)[1]
+        if finish.index("if !valid_state(rt borrow suite)") > finish.index("result.total = suite.total;"):
+            raise SystemExit("M1 RunSummary published before suite validation")
         if embedded.count("suite.last_id = candidate.id;") != 2:
             raise SystemExit("M1 replay identity must commit on selected/filtered paths")
         if "candidate.id <= suite.last_id" not in embedded:
@@ -64,6 +75,7 @@ for name, source, tag in (("M1", m1, "ATTO_M1"), ("M2", m2, "ATTO_M2")):
             raise SystemExit("M2 class owner declared after control flow")
         invoke_at = body.index("val int outcome = invoke_scalar_body(")
         for guard in ("if candidate.visited != 0", "if candidate.id <= suite.last_id",
+                      "if !Ledger.valid_state(rt borrow suite)",
                       "if suite.total >= 1024"):
             if guard not in body or body.index(guard) > invoke_at:
                 raise SystemExit("M2 replay/quota guard bypassed before test body: " + guard)
@@ -90,6 +102,8 @@ grep -Fq 'MAX_RECEIPT_BYTES = 4096' "$verifier" ||
   die 'native receipt publisher lost independently observed guest exit'
 [[ "$(grep -Fc 'm1-finish-integrity' "$receipt_runner")" -eq 2 ]] ||
   die 'M1 invalid ledger test must appear in both source hash and execution loop'
+[[ "$(grep -Fc 'm2-corrupt-state' "$receipt_runner")" -eq 2 ]] ||
+  die 'M2 corrupted-ledger test must appear in both source hash and execution loop'
 
 unique '  atto-native-executable:'
 unique 'Checkout exact source head without persistent credentials'
