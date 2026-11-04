@@ -8,6 +8,8 @@ on:
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/atto_scalar_llvm_native.py'
       - 'tests/atto_scalar_source_unit_migration.py'
+      - 'tests/atto_scalar_subprocess.py'
+      - 'tests/test_atto_scalar_subprocess.py'
       - 'tests/rust-harness/src/main.rs'
       - 'tests/rust-harness/src/atto_scalar_v1.rs'
       - 'tests/test_atto_scalar_native_gate.py'
@@ -59,6 +61,8 @@ jobs:
           build/rust-test-harness-target/release/oreslang-llvm-test-harness atto-scalar-selftest "$PWD"
           python3 -m unittest discover -s tests -p 'test_atto_scalar_native_gate.py' -v
           python3 -O -m unittest discover -s tests -p 'test_atto_scalar_native_gate.py' -v
+          python3 -m unittest discover -s tests -p 'test_atto_scalar_subprocess.py' -v
+          python3 -O -m unittest discover -s tests -p 'test_atto_scalar_subprocess.py' -v
       - name: Build actual native LLVM compiler from exact source HEAD
         shell: bash
         run: |
@@ -75,6 +79,7 @@ jobs:
                       atto_scalar_v1_source_integrity_negative_controls \
                       atto_scalar_canonical_add \
                       atto_scalar_v1_native_harness_adversarial \
+                      atto_scalar_v1_subprocess_harness_adversarial \
                       atto_scalar_v1_full_i64_native \
                       atto_scalar_v1_source_unit_migration \
                       atto_scalar_v1_removed_operators_denied \

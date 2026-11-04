@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from atto_scalar_subprocess import run_bounded
 
 
 def require(ok, explanation):
@@ -12,18 +13,8 @@ def require(ok, explanation):
         raise RuntimeError(explanation)
 
 
-def execute(args, cwd):
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        result = subprocess.run(args, cwd=cwd, stdin=subprocess.DEVNULL,
-                                stdout=out, stderr=err, timeout=25, check=False)
-        out.seek(0, 2)
-        err.seek(0, 2)
-        require(out.tell() <= 2 * 1024 * 1024 and
-                err.tell() <= 2 * 1024 * 1024,
-                "source-unit compiler exceeded bounded output")
-        out.seek(0)
-        err.seek(0)
-        return result.returncode, out.read(), err.read()
+def execute(argv, cwd):
+    return run_bounded(argv, cwd, timeout=25, limit=2 * 1024 * 1024)
 
 
 def run(compiler, clang):

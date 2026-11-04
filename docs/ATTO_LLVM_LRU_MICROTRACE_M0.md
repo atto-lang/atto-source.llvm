@@ -55,6 +55,35 @@ cannot validate LLVM guest compilation without separately approved source
 transfer. The private publisher governance issue remains
 https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/962.
 
+## Source-organization exact-head execution workflow
+
+`.github/workflows/atto-lru-llvm-m0.yml` adds a focused **source-local**
+LLVM CI job that checks out the immutable PR head (not an automatically
+generated merge tree), checks the source/tree identity before build, installs
+LLVM and Clang, verifies all four pinned fixture Git blobs plus seven
+negative source/CTest mutations, builds the **actual** `oreslang-llvmc` binary,
+and verifies exactly five registered CTests. It runs the four real compiler
+→ LLVM IR → Clang → native guest programs, plus the source integrity check,
+and requires a CTest JUnit report with exactly five distinct, successful,
+non-skipped cases. A zero-test or unlaunched compiler cannot produce the
+`ATTO_LLVM_LRU_GUEST_EXECUTION=PASS` marker. The workflow rechecks the
+source tree after tests and captures the CTest inventory/JUnit/logs in a
+private source-owned artifact.
+
+`tests/test_atto_lru_workflow_contract.py` checks that these controls are
+present and tests fail-closed behavior for a no-op compiler build, missing
+native CTest, removed skip detection, unpinned checkout and an injected
+`continue-on-error` bypass. These are **host/static workflow policy tests**,
+not compiler-backed guest results.
+
+The current source organization has private Actions jobs ending with
+`steps=null`. Workflow YAML and test definitions alone do not change
+the evidence classification; the new job must actually execute nonempty
+steps on its exact head and pass before declaring even this *narrow*
+four-microtrace LLVM slice. The seven complete LRU cache fixtures and
+Java/LLVM cross-backend parity remain separate unverified milestones.
+
+
 ## Additional native AoS / AoSoA microtraces
 
 Four independently authored `.atto` compiler-to-LLVM-IR-to-Clang CTest candidates:

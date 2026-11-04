@@ -2863,6 +2863,11 @@ if(BUILD_TESTING)
                 -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 -p "test_atto_scalar_native_gate.py" -v)
         set_tests_properties(atto_scalar_v1_native_harness_adversarial PROPERTIES TIMEOUT 45)
+        add_test(NAME atto_scalar_v1_subprocess_harness_adversarial
+            COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+                -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+                -p "test_atto_scalar_subprocess.py" -v)
+        set_tests_properties(atto_scalar_v1_subprocess_harness_adversarial PROPERTIES TIMEOUT 40)
         add_test(NAME atto_scalar_v1_source_unit_migration
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_source_unit_migration.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
@@ -2882,9 +2887,8 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:oreslang-llvmc>" "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(atto_scalar_v1_removed_operators_denied PROPERTIES TIMEOUT 50)
 
-        # AttoLang LRU microtraces: actual LLVM compiler -> IR -> Clang
-        # process, including linked native int-array runtime for three cases.
-        # These remain NOT_EXECUTED until source-owned CI runs real steps.
+        # Native LLVM LRU microtraces (four real AttoLang compiler -> Clang guests).
+        # Admit source-only inventory independently; never count a zero-step job.
         oreslang_contract_test(atto_lru_hash_quotient ../../contracts/atto-lru-llvm-v1/hash-quotient.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_lru_probe_wrap ../../contracts/atto-lru-llvm-v1/probe-wrap.atto --run 17 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
         oreslang_contract_test(atto_lru_slot_recycle ../../contracts/atto-lru-llvm-v1/slot-recycle.atto --run 29 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
