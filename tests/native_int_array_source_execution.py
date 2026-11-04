@@ -208,7 +208,8 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
     with tempfile.TemporaryDirectory(prefix="oreslang-array-source-") as directory:
         work = Path(directory)
         for name, (source, exit_code, owners) in POSITIVE.items():
-            source_path = work / f"{name}.ores"
+            suffix = ".atto" if name == "named-call-positional-array-baseline" else ".ores"
+            source_path = work / f"{name}{suffix}"
             source_path.write_text(source, encoding="utf-8")
             compiled = run([str(compiler), str(source_path)])
             if compiled.returncode != 0 or compiled.stderr:
