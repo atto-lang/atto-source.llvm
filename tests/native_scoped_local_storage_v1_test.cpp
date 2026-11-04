@@ -1,0 +1,122 @@
+#include "oreslang/runtime/ScopedLocalStorageV1.hpp"
+
+#include <atomic>
+#include <cassert>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace oreslang::runtime;
+
+namespace {
+ScopedLocalIdentityV1 id(std::uint64_t owner, std::uint64_t gen = 1) {
+    return {11, 22, 33, owner, gen};
+}
+
+void actor_incarnation_and_domain_fences() {
+    ActorLocalKeyV1<std::string> label;
+    ActorLocalStoreV1 first(id(5)), restarted(id(5, 2));
+    auto foreign_tenant = id(5); foreign_tenant.tenant = 44;
+    auto foreign_isolate = id(5); foreign_isolate.isolate = 55;
+    assert(first.set(label, id(5), std::string("actor-one")));
+    assert(first.get_copy(label, id(5)) == std::string("actor-one"));
+    assert(!first.get_copy(label, id(5, 2)));
+    assert(!first.get_copy(label, foreign_tenant));
+    assert(!first.set(label, foreign_isolate, std::string("wrong")));
+    assert(!restarted.get_copy(label, id(5, 2)));
+    assert(restarted.set(label, id(5, 2), std::string("actor-two")));
+    assert(first.close());
+    assert(!first.close());
+    assert(!first.get_copy(label, id(5)));
+    assert(!first.set(label, id(5), std::string("stale")));
+    assert(restarted.get_copy(label, id(5, 2)) == std::string("actor-two"));
+}
+
+void logical_task_moves_without_inheriting_thread_local() {
+    TaskLocalKeyV1<int> context;
+    ThreadLocalKeyV1<int> native_tls;
+    TaskLocalStoreV1 parent(id(71)), child(id(72));
+    assert(parent.set(context, id(71), 100));
+    std::thread thread_a([&] {
+        assert(PhysicalThreadLocalStoreV1::set(native_tls, 41));
+        assert(parent.get_copy(context, id(71)) == 100);
+        assert(!child.get_copy(context, id(72)));
+    });
+    thread_a.join();
+    std::thread thread_b([&] {
+        assert(!PhysicalThreadLocalStoreV1::get_copy(native_tls));
+        assert(parent.get_copy(context, id(71)) == 100);
+        // Explicit copy is isolated; child tasks must not implicitly inherit.
+        assert(child.set(context, id(72), *parent.get_copy(context, id(71))));
+        assert(child.get_copy(context, id(72)) == 100);
+        assert(PhysicalThreadLocalStoreV1::set(native_tls, 99));
+    });
+    thread_b.join();
+    assert(!PhysicalThreadLocalStoreV1::get_copy(native_tls));
+    assert(parent.set(context, id(71), 101));
+    assert(child.get_copy(context, id(72)) == 100);
+    assert(parent.close());
+    assert(!parent.get_copy(context, id(71)));
+    assert(child.get_copy(context, id(72)) == 100);
+}
+
+void physical_carrier_reuse_and_scrub() {
+    ThreadLocalKeyV1<std::string> marker;
+    assert(PhysicalThreadLocalStoreV1::set(marker, std::string("tenant-A")));
+    // A different logical actor on SAME thread still observes native TLS.
+    // Runtime/compiler must NEVER treat that as actor or tenant authority.
+    assert(PhysicalThreadLocalStoreV1::get_copy(marker) == std::string("tenant-A"));
+    PhysicalThreadLocalStoreV1::clear_current_thread();
+    assert(!PhysicalThreadLocalStoreV1::get_copy(marker));
+}
+
+void exhaustion_and_atomic_replacement() {
+    ActorLocalStoreV1 store(id(9));
+    std::vector<ActorLocalKeyV1<int>> keys;
+    for (int i=0; i<33; ++i) keys.emplace_back();
+    for (int i=0; i<32; ++i) assert(store.set(keys[i], id(9), i));
+    assert(!store.set(keys[32], id(9), 999));
+    assert(store.get_copy(keys[31], id(9)) == 31);
+    assert(store.set(keys[0], id(9), 902));
+    assert(store.get_copy(keys[0], id(9)) == 902);
+}
+
+void close_racing_writer() {
+    for (int n=0; n<100; ++n) {
+        TaskLocalStoreV1 store(id(static_cast<std::uint64_t>(n+100)));
+        TaskLocalKeyV1<int> key;
+        std::atomic<bool> go{false};
+        std::thread writer([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            for (int i=0; i<100; ++i) {
+                if (!store.set(key, id(static_cast<std::uint64_t>(n+100)), i)) break;
+                (void)store.get_copy(key, id(static_cast<std::uint64_t>(n+100)));
+            }
+        });
+        go.store(true, std::memory_order_release);
+        store.close();
+        writer.join();
+        assert(!store.get_copy(key, id(static_cast<std::uint64_t>(n+100))));
+        assert(!store.set(key, id(static_cast<std::uint64_t>(n+100)), 42));
+    }
+}
+
+void invalid_identity_denied() {
+    bool threw=false;
+    try { ActorLocalStoreV1 invalid({}); }
+    catch (const std::invalid_argument&) { threw=true; }
+    assert(threw);
+}
+}
+
+int main() {
+    actor_incarnation_and_domain_fences();
+    logical_task_moves_without_inheriting_thread_local();
+    physical_carrier_reuse_and_scrub();
+    exhaustion_and_atomic_replacement();
+    close_racing_writer();
+    invalid_identity_denied();
+    std::puts("SCOPED_LOCAL_HOST_ONLY_PASS");
+}
