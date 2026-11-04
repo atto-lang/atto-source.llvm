@@ -880,6 +880,15 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto-first-parity")
         set_tests_properties(native_atto_first_source_import_aot_parity
             PROPERTIES TIMEOUT 90)
+        # Independent source-free fault injection: fake compilers must never
+        # yield a successful parity verdict. Does NOT count as native guest PASS.
+        add_test(NAME native_atto_first_aot_gate_fault_injection
+            COMMAND "${ORE_ATTO_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_atto_first_aot_import_gate.sh"
+                "${ORE_RT_AOT_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto-first-parity")
+        set_tests_properties(native_atto_first_aot_gate_fault_injection
+            PROPERTIES TIMEOUT 60)
     endif()
 
     # Pure host resolver security test for canonical +/ project-root imports.
