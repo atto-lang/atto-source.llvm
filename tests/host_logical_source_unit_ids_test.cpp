@@ -98,7 +98,7 @@ int main() {
     });
     rejects("unicode path denied conservatively", "noncanonical", [] {
         (void)HostLogicalSourceUnitIds::validated_logical_id(
-            "project/\xe2\x80\xaeback.atto");
+            std::string("project/") + "\xe2\x80\xae" + "back.atto");
     });
 
     // In-package symlink aliases never acquire a second compiler identity.
