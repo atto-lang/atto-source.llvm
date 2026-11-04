@@ -117,7 +117,9 @@ inline void no_symlink_components(const fs::path& original, const fs::path& root
         next /= component;
         std::error_code error;
         const auto status = fs::symlink_status(next, error);
-        if (error || fs::is_symlink(status))
+        if (error && error != std::errc::no_such_file_or_directory)
+            throw std::runtime_error("cannot safely inspect native source path");
+        if (!error && fs::is_symlink(status))
             throw std::runtime_error("native source symlink alias denied");
     }
 }
