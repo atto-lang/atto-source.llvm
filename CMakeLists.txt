@@ -46,6 +46,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # M0 native LLVM source-call stack hardening: conservative graph check,
+    # NOT guest-executed actor recovery or physical native stack isolation.
+    add_executable(oreslang-native-guest-call-graph-test
+        tests/native_guest_call_graph_gate_test.cpp)
+    target_include_directories(oreslang-native-guest-call-graph-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-guest-call-graph-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_guest_call_graph_gate_host_only
+        COMMAND oreslang-native-guest-call-graph-test)
+    set_tests_properties(native_guest_call_graph_gate_host_only PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
@@ -384,6 +396,15 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Exact compiler -> LLVM IR -> Clang native .atto positive plus denial
+    # of recursion with no emitted IR. Fail if the toolchain is missing.
+    add_test(NAME native_atto_stack_admission_and_shallow_process
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_call_stack_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_atto_stack_admission_and_shallow_process
+        PROPERTIES TIMEOUT 120)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.

@@ -8,6 +8,7 @@
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
+#include "oreslang/types/NativeGuestCallGraphGate.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -731,6 +732,11 @@ int main(int argc, char** argv) {
             };
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
+        // On shared native actor carriers, running out of the OS stack can
+        // terminate the process. Until checked compiler-managed frames exist,
+        // reject unbounded recursion rather than emitting a crashable call.
+        oreslang::require_native_guest_call_graph_bounded(ast);
+
         if (tree_shake) {
             // Tree shaking is an optimization, not conditional compilation.
             // Validate/codegen the complete admitted source once before pruning
