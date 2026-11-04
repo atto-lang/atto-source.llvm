@@ -80,6 +80,25 @@ for CC in gcc clang; do
   "$OUT/native-original-data-mail-$CC"
 done
 
+# C11 scheduler + C++ RequestLocal gate integration. Compile the REAL native
+# scheduler source as C, not through a C++ shim (C ABI/C11 atomics matter).
+for pair in gcc:g++ clang:clang++; do
+  CC="${pair%%:*}"
+  CXX="${pair#*:}"
+  if ! command -v "$CC" >/dev/null 2>&1 || \
+     ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
+  "$CC" -std=c11 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+    -I"$ROOT/src/main/cpp" \
+    -c "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
+    -o "$OUT/native-scheduler-$CC.o"
+  "$CXX" -std=c++17 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+    -I"$ROOT/src/main/cpp" \
+    "$ROOT/tests/native_request_data_mail_gate_v1_test.cpp" \
+    "$OUT/native-scheduler-$CC.o" \
+    -o "$OUT/native-request-data-mail-gate-$CXX"
+  "$OUT/native-request-data-mail-gate-$CXX"
+done
+
 # Optional exact-source sanitizer matrix, enabled by the source-local workflow.
 if [ "${ORES_SCOPED_LOCAL_RUN_SANITIZERS:-0}" = "1" ]; then
   for CC in gcc clang; do
@@ -92,6 +111,25 @@ if [ "${ORES_SCOPED_LOCAL_RUN_SANITIZERS:-0}" = "1" ]; then
       -o "$OUT/asan-native-original-data-mail-$CC"
     ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
       "$OUT/asan-native-original-data-mail-$CC"
+  done
+  for pair in gcc:g++ clang:clang++; do
+    CC="${pair%%:*}"
+    CXX="${pair#*:}"
+    if ! command -v "$CC" >/dev/null 2>&1 || \
+       ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
+    "$CC" -std=c11 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+      -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -I"$ROOT/src/main/cpp" \
+      -c "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
+      -o "$OUT/asan-native-scheduler-$CC.o"
+    "$CXX" -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+      -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -I"$ROOT/src/main/cpp" \
+      "$ROOT/tests/native_request_data_mail_gate_v1_test.cpp" \
+      "$OUT/asan-native-scheduler-$CC.o" \
+      -o "$OUT/asan-native-request-data-mail-$CXX"
+    ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
+      "$OUT/asan-native-request-data-mail-$CXX"
   done
   for CXX in g++ clang++; do
     if ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
