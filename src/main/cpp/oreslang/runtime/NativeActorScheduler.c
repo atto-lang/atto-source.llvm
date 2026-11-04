@@ -659,11 +659,13 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
     size_t initialized = 0;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
+    s->sequence_slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     if (wake_callback) s->wake_slots = (WakeCredit*)calloc(
         actors * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR, sizeof(WakeCredit));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
     s->carrier_slots = (CarrierSlot*)calloc(workers, sizeof(CarrierSlot));
-    if (!s->actors || !s->slots || (wake_callback && !s->wake_slots)
+    if (!s->actors || !s->slots || !s->sequence_slots
+            || (wake_callback && !s->wake_slots)
             || !s->threads || !s->carrier_slots)
         goto allocation_failed;
     for (size_t w = 0; w < workers; ++w)
@@ -686,6 +688,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
         for (int k = 0; k < TURN_CLASSES; ++k)
             s->actors[i].rq_next[k] = s->actors[i].rq_prev[k] = RQ_NIL;
         s->actors[i].messages = s->slots + i * capacity;
+        s->actors[i].mail_sequences = s->sequence_slots + i * capacity;
         s->actors[i].wakes = wake_callback
             ? s->wake_slots + i * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR : NULL;
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
@@ -709,6 +712,7 @@ allocation_failed:
     free(s->carrier_slots);
     free(s->threads);
     free(s->slots);
+    free(s->sequence_slots);
     free(s->wake_slots);
     free(s->actors);
     free(s);
@@ -1520,6 +1524,7 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     free(s->carrier_slots);
     free(s->threads);
     free(s->slots);
+    free(s->sequence_slots);
     free(s->wake_slots);
     free(s->actors);
     free(s);
