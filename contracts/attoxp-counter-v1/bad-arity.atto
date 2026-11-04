@@ -1,0 +1,2 @@
+pub fnc add(int left, int right): int { return left + right; }
+pub fnc main(): int { return add(42); }

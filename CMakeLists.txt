@@ -2976,6 +2976,19 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(numerics_atto_integer_guest numerics-atto-main.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
+        # Independently authored AttoXP scalar counter parity candidates.
+        # Each call uses this LLVM frontend, emitted LLVM IR, clang and
+        # a linked native guest. No host-model shortcut or borrowed source.
+        oreslang_contract_test(attoxp_counter_two_args_guest
+            ../../contracts/attoxp-counter-v1/two-args.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_counter_nested_calls_guest
+            ../../contracts/attoxp-counter-v1/nested-call.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_counter_reset_guest
+            ../../contracts/attoxp-counter-v1/reset-add.atto --run 42 --clang "${ORE_CLANG}")
+        add_test(NAME attoxp_counter_llvm_negative
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/attoxp_counter_llvm_negative.py"
+              --compiler "$<TARGET_FILE:oreslang-llvmc>")
+        set_tests_properties(attoxp_counter_llvm_negative PROPERTIES TIMEOUT 30)
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")
