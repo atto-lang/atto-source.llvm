@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -145,6 +146,40 @@ void attack_matrix(const char* library, bool bounded) {
     REQUIRE_OK(probe);
     auto probe_actor = host.spawn_actor(probe.handle, 0);
     CHECK(word(host.call(probe_actor.actor, msg(OP_GROW)).get().payload) == -1);
+
+    // Host calls with references it made up. Each is refused, and a refusal ends only this VM.
+    for (const std::int64_t bad : {std::int64_t{-1}, std::int64_t{1} << 40, std::int64_t{999},
+                                   static_cast<std::int64_t>(secret_address)}) {
+        for (const std::int64_t op : {std::int64_t{OP_VM_SEND}, std::int64_t{OP_VM_STOP}, std::int64_t{OP_VM_SPAWN}}) {
+            auto v = host.open(spec("forger", guest));
+            REQUIRE_OK(v);
+            auto a = host.spawn_actor(v.handle, 0);
+            REQUIRE_OK(a);
+            CHECK_STATUS(host.call(a.actor, msg(op, bad, 1)).get().status, Status::TenantFailed);
+            CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::Trap);
+        }
+    }
+    {
+        // References from another VM mean nothing here: the slot resolves to this VM's own actor,
+        // or to nothing. So a real spawn in one, used in another, cannot touch the first.
+        auto one = host.open(spec("one", guest));
+        auto two = host.open(spec("two", guest));
+        REQUIRE_OK(one);
+        REQUIRE_OK(two);
+        auto a1 = host.spawn_actor(one.handle, 0);
+        auto a2 = host.spawn_actor(two.handle, 0);
+        const auto reference = word(host.call(a1.actor, msg(OP_VM_SPAWN, 0)).get().payload);
+        CHECK(reference != 0);
+        CHECK_STATUS(host.call(a2.actor, msg(OP_VM_STOP, reference)).get().status, Status::TenantFailed);
+        CHECK_REASON(host.wait_closed(two.handle).reason, FailReason::Trap);
+        // And it still works where it belongs.
+        const auto live = host.snapshot(one.handle).live_actors;
+        CHECK(live == 2);
+        host.call(a1.actor, msg(OP_VM_STOP, reference)).get();
+        CHECK(host.snapshot(one.handle).live_actors == 1);
+        host.kill(one.handle);
+        host.wait_closed(one.handle);
+    }
 
     // Faults and hangs in lowered code cost one VM only.
     struct { const char* name; std::int64_t op; std::int64_t a; FailReason want; std::uint32_t deadline; } cases[] = {
@@ -369,6 +404,107 @@ void atto_helper_functions_run_in_a_turn() {
     CHECK(word(host.call(a.actor, one(1000)).get().payload) == 500500);
 }
 
+// A real program: main spawns workers of two types, sends to them, and stops them.
+// Ordered traps unless it sees 1, 2, 3... in order, so a reordered or lost message ends the VM.
+void run_main(TenantVmHost& host, const VmHandle& vm, std::uint32_t main_kind, std::int64_t expected) {
+    auto entry = host.spawn_actor(vm, main_kind);
+    REQUIRE_OK(entry);
+    auto r = host.call(entry.actor, {}).get();
+    CHECK_STATUS(r.status, Status::Ok);
+    CHECK(word(r.payload) == expected);
+    CHECK_STATUS(host.call(entry.actor, {}).get().status, Status::GuestError); // main runs once
+}
+
+void atto_main_spawns_sends_and_stops() {
+    const LoadedGuest fleet = load("atto_fleet");
+    if (!fleet.module) return;
+    CHECK(fleet.module->kind_count == 3); // Ordered, Summer, main
+    TenantVmHost host;
+    for (int round = 0; round < 200; ++round) {
+        auto v = host.open(spec("fleet", fleet));
+        REQUIRE_OK(v);
+        run_main(host, v.handle, 2, 43);
+        CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
+        const VmTerminal terminal = host.wait_closed(v.handle); // drains every worker first
+        CHECK(terminal.phase == Phase::Stopped);
+        CHECK_REASON(terminal.reason, FailReason::None);
+    }
+    // Everything ran: 1 main + 10 + 10 + 3 worker turns. All three workers ended and were released.
+    auto v = host.open(spec("counted", fleet));
+    REQUIRE_OK(v);
+    run_main(host, v.handle, 2, 43);
+    for (int i = 0; i < 2000; ++i) {
+        const auto s = host.snapshot(v.handle);
+        if (s.live_actors == 1 && s.inflight == 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const auto s = host.snapshot(v.handle);
+    CHECK(s.turns == 24 + 1); // the second call to main is a turn as well
+    CHECK(s.live_actors == 1);
+    CHECK(s.status == Status::Ok);
+    std::printf("  main spawned 3 workers of 2 types, 23 sends in order, all stopped and released\n");
+}
+
+// Proves the check above has teeth: the same worker, sent 2 first, ends the VM.
+void atto_misordered_mail_is_detected() {
+    const LoadedGuest misordered = load("atto_misordered");
+    if (!misordered.module) return;
+    TenantVmHost host;
+    auto v = host.open(spec("misordered", misordered));
+    REQUIRE_OK(v);
+    auto entry = host.spawn_actor(v.handle, 1);
+    REQUIRE_OK(entry);
+    (void)host.call(entry.actor, {}).get(); // may see Ok, or TenantFailed if the worker got there first
+    const VmTerminal terminal = host.wait_closed(v.handle);
+    CHECK_REASON(terminal.reason, FailReason::Trap);
+}
+
+// A full mailbox cannot lose a message quietly: the VM ends and says so.
+void atto_refused_send_ends_the_vm() {
+    const LoadedGuest fleet = load("atto_fleet");
+    if (!fleet.module) return;
+    TenantVmHost host;
+    VmSpec s = spec("tiny-mailbox", fleet);
+    s.limits.mailbox_capacity = 1;
+    s.limits.max_parallel_turns = 1; // nothing drains while main runs
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto entry = host.spawn_actor(v.handle, 2);
+    REQUIRE_OK(entry);
+    CHECK_STATUS(host.call(entry.actor, {}).get().status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::Trap);
+}
+
+void atto_thousand_tenants_run_programs() {
+    const LoadedGuest fleet = load("atto_fleet");
+    if (!fleet.module) return;
+    TenantVmHost host;
+    constexpr int kVms = 1000;
+    std::vector<VmHandle> vms;
+    std::vector<std::future<TurnResult>> results;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kVms; ++i) {
+        VmSpec s = spec("program-" + std::to_string(i), fleet);
+        s.limits.heap_bytes = std::uint64_t{8} << 20;
+        auto v = host.open(s);
+        REQUIRE_OK(v);
+        vms.push_back(v.handle);
+        auto entry = host.spawn_actor(v.handle, 2);
+        REQUIRE_OK(entry);
+        results.push_back(host.call(entry.actor, {}));
+    }
+    for (auto& r : results) CHECK(word(r.get().payload) == 43);
+    for (auto& v : vms) CHECK_STATUS(host.begin_shutdown(v), Status::Ok);
+    for (auto& v : vms) {
+        const VmTerminal terminal = host.wait_closed(v);
+        CHECK(terminal.phase == Phase::Stopped);
+    }
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    std::printf("  %d tenants each ran a spawn, send and stop program to completion, one process: %lld ms\n", kVms,
+                static_cast<long long>(ms));
+    CHECK(host.stats().wild_accesses == 0);
+}
+
 // The stated requirement, with real compiled source instead of test guests.
 void atto_thousand_tenants_in_one_process() {
     const LoadedGuest counter = load("atto_counter");
@@ -436,7 +572,7 @@ int run_accepted_guest(const std::string& name) {
         auto a = host.spawn_actor(v.handle, 0);
         if (a.status != Status::Ok) return 6;
         for (int turn = 0; turn < 4; ++turn) {
-            auto r = host.call(a.actor, msg(static_cast<std::int64_t>(next() % 12), static_cast<std::int64_t>(next() >> (next() % 64)),
+            auto r = host.call(a.actor, msg(static_cast<std::int64_t>(next() % 13), static_cast<std::int64_t>(next() >> (next() % 64)),
                                             static_cast<std::int64_t>(next()))).get();
             if (r.status == Status::TenantFailed || r.status == Status::NotRunning) break;
         }
@@ -464,6 +600,10 @@ const Case cases[] = {
     {"atto_runaway_source_ends_only_its_vm", atto_runaway_source_ends_only_its_vm},
     {"atto_helper_functions_run_in_a_turn", atto_helper_functions_run_in_a_turn},
     {"atto_thousand_tenants_in_one_process", atto_thousand_tenants_in_one_process},
+    {"atto_main_spawns_sends_and_stops", atto_main_spawns_sends_and_stops},
+    {"atto_misordered_mail_is_detected", atto_misordered_mail_is_detected},
+    {"atto_refused_send_ends_the_vm", atto_refused_send_ends_the_vm},
+    {"atto_thousand_tenants_run_programs", atto_thousand_tenants_run_programs},
 #endif
 };
 } // namespace

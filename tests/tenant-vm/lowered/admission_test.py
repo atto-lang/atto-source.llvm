@@ -28,6 +28,8 @@ REFUSE = {
     "memory larger than an actor": '(module (import "env" "memory" (memory 3)) (func (export "turn") (param i64 i32 i32 i32 i32 i32) (result i64) (i64.const 0)))',
     "memory maximum larger than an actor": '(module (import "env" "memory" (memory 2 65536)) (func (export "turn") (param i64 i32 i32 i32 i32 i32) (result i64) (i64.const 0)))',
     "function import": '(module (import "env" "memory" (memory 2 2)) (import "env" "system" (func (param i32))) (func (export "turn") (param i64 i32 i32 i32 i32 i32) (result i64) (i64.const 0)))',
+    "host import with the wrong signature": '(module (import "env" "memory" (memory 2 2)) (import "env" "oreslang_vm_send" (func (param i32))) (func (export "turn") (param i64 i32 i32 i32 i32 i32) (result i64) (i64.const 0)))',
+    "host import from another module": '(module (import "env" "memory" (memory 2 2)) (import "wasi" "oreslang_vm_send" (func (param i64 i64))) (func (export "turn") (param i64 i32 i32 i32 i32 i32) (result i64) (i64.const 0)))',
     "global import": '(module (import "env" "memory" (memory 2 2)) (import "env" "secret" (global i64)) (func (export "turn") (param i64 i32 i32 i32 i32 i32) (result i64) (i64.const 0)))',
     "table import": '(module (import "env" "memory" (memory 2 2)) (import "env" "t" (table 1 funcref)) (func (export "turn") (param i64 i32 i32 i32 i32 i32) (result i64) (i64.const 0)))',
     "growable table": '(module (import "env" "memory" (memory 2 2)) (table 1 funcref) (func (export "turn") (param i64 i32 i32 i32 i32 i32) (result i64) (i64.const 0)))',
@@ -165,8 +167,9 @@ with tempfile.TemporaryDirectory(prefix="tenant-vm-admission-") as temporary:
             mutated = bytearray(original)
             for _ in range(rng.randint(1, 3)):
                 at = rng.randrange(code_start, code_end)
-                # Bias toward memory-access opcodes and their immediates, where an escape would be.
-                mutated[at] = rng.choice([0x28, 0x29, 0x36, 0x37, 0x2D, 0x3A, 0x10, 0x11, 0x40, 0x3F, 0x24, 0x23, rng.randrange(256), rng.randrange(256)])
+                # Bias toward memory-access opcodes and their immediates, where an escape would be,
+                # and small values, which turn calls into calls of the host imports.
+                mutated[at] = rng.choice([0x28, 0x29, 0x36, 0x37, 0x2D, 0x3A, 0x10, 0x11, 0x40, 0x3F, 0x24, 0x23, 0, 1, 2, rng.randrange(256), rng.randrange(256)])
             path = tmp / "survivor.wasm"
             path.write_bytes(bytes(mutated))
             mode = "guard" if survivors % 2 else "bounds"

@@ -3,8 +3,8 @@
 One OS process hosts up to 1000 tenants, with one VM per tenant and that tenant's actors inside
 it. On GraalVM a VM is a Graal isolate. On LLVM, Wasm and .NET it is what this document describes.
 
-Status: working runtime with end-to-end evidence, including real `.atto` source. The source that
-reaches a VM is still a narrow subset (see [What `.atto` can do](#what-atto-can-do-in-a-vm)). All
+Status: working runtime with end-to-end evidence, including whole `.atto` programs that spawn, send
+and stop. The language subset is still narrow (see [What `.atto` can do](#what-atto-can-do-in-a-vm)). All
 evidence below is local: no GitHub Actions job has run this code. No backend is certified as a
 production boundary.
 
@@ -25,7 +25,7 @@ OS process
 | Heap-base-relative access | Addressing rule | Guest accesses are `cage + u32 base + u32 offset + displacement` and cannot name anything else |
 | Trusted compiler | Lowering pipeline | Admission, validation and compile flags, in `tools/tenant-vm/lower_guest.py` |
 | Isolate teardown | Retirement | Interrupt its carriers, unmap the cage; nothing to unwind |
-| One failure domain per isolate | Same, for now | A trap ends every actor in that VM, and only that VM. See gate 2 |
+| One failure domain per isolate | Same, for now | A trap ends every actor in that VM, and only that VM. See gate 1 |
 
 **An actor's memory.** Each actor's linear memory is its own region of the cage, so fields, data and
 stack persist across turns and actors of one module do not collide. The Wasm instance itself
@@ -76,7 +76,7 @@ What each step contributes:
 
 | Step | What it refuses or ensures |
 |---|---|
-| Admit (own parser, fails closed) | Own memory, shared or 64-bit memory, any import but `env.memory`, growable or large tables, start functions, unknown sections, oversized modules, functions and local counts |
+| Admit (own parser, fails closed) | Own memory, shared or 64-bit memory, any import but `env.memory` and three host calls with exact signatures, growable or large tables, start functions, unknown sections, oversized modules, functions and local counts |
 | wasm2c | Full validation, with every feature disabled except an allowlist, read from the tool's own `--help`. Newer wabt enables memory64, multi-memory and tail calls by default |
 | clang | No asserts, no stack protector calls, `-fwrapv`, `-fno-strict-aliasing`, `-fno-finite-loops`, stack clash protection where supported, and a hard limit on frame size, half the carrier's guard |
 | Library check | Only allowlisted imports, no thread-locals, one known writable global |
@@ -119,20 +119,31 @@ machines used here are arm64, except under emulation where it could not be teste
 
 ## What `.atto` can do in a VM
 
-The compiler's wasm32 target is deliberately narrow, and this is now the main limit.
+`oreslang-llvmc --target=wasm32 --guest-abi=tenant-vm` compiles a whole program for a VM. Without that
+flag the browser ABI is unchanged, and `spawn`, `send` and `stop` are still refused.
 
 | | |
 |---|---|
-| Works | One `define actor` per module, with 1 to 16 integer fields; `on_message(int): int`; checked arithmetic that traps; calls to top-level functions, including recursion and `if` |
-| Refused by the compiler | `spawn`, `send`, `stop`, tasks, `await`, more than one actor per module, `while` and locals in a handler, class-array fields, heap-owned regions |
+| Works | Several `define actor` types with 1 to 16 integer fields; `on_message(int): int`; a `main` that spawns, sends and stops; checked arithmetic that traps; calls to top-level functions, including recursion and `if` |
+| Refused by the compiler | `await`, tasks, `while` and locals in a handler, class-array fields, heap-owned regions |
+| Language limit, on every backend | `ActorRef` lives only in `main`, so actors cannot message each other, and nothing reads a reply to a `send` |
 | Message ABI | One `i64` in, one `i64` out |
 
-So real source runs and is isolated, but it cannot yet start or message other actors. Lowering those
-to the `alloc`, `send` and `spawn` host calls, which already exist and are fuzzed, is the next piece
-of work. It needs a compiled form of `ActorRef`, and the host calls added to the admission allowlist.
+**Kinds.** Each actor type is a kind, in source order, and `main` is the last one: the manifest records
+them. A host runs a program by spawning the `main` kind and calling it once. A second call is a typed
+guest error.
 
-The one compiler change here lets a wasm32 handler call functions. It used to pass an empty function
-table, so a call failed with an internal `unordered_map::at` error.
+**Host imports.** `oreslang_vm_spawn`, `oreslang_vm_send` and `oreslang_vm_stop` are the only functions a
+module may import, and admission checks each signature, since C linking would not notice a wrong one.
+References are `i64`, and resolve only inside the caller's VM.
+
+**A refused operation ends the VM.** Source has no way to see that a `spawn` or `send` was refused, say
+because a mailbox is full. A turn cannot block, and carrying on would turn a lost message into a wrong
+answer that looks fine. So a program sending faster than its workers drain needs a larger
+`mailbox_capacity`. Whether it should wait instead is a question for the restart and pipeline work.
+
+Two compiler changes, both only reachable on wasm32: a handler can call functions, where it used to fail
+with an internal `unordered_map::at` error, and the flag above.
 
 ## Backends
 
@@ -198,12 +209,16 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Claim | Result | Where |
 |---|---|---|
 | 1000 tenants, 100,000 **compiled `.atto`** actors, one process | 300,000 correct turns, 0.4-1.4 s including startup | macOS, Linux |
+| Whole `.atto` programs run in a VM | `main` starts workers of 2 types, 23 sends arrive in order (a worker traps otherwise, and a misordered program does trap), all stop and are released. 200 rounds | macOS, Linux, x86_64 under QEMU |
+| 1000 tenants each run that program | To completion in one process, 45-130 ms natively | macOS, Linux, x86_64 under QEMU |
+| A refused send cannot lose mail quietly | A full mailbox ends the VM | macOS, Linux |
+| Forged references | Made-up references, and a real one used in another VM, are refused and end only the caller's VM | macOS, Linux |
 | `.atto` state is private and durable | 1000 turns; separate per actor, tenant and program | macOS, Linux |
 | `.atto` overflow, recursion and runaway end one VM | Trap and StackOverflow; bystander unaffected across 5 rounds | macOS, Linux |
 | Hostile Wasm stays in its cage | 64 attacks in each mode, including host pointer halves and maximum displacement: 12 in its own memory, 52 stopped, 0 left. Guard mode: all 52 fault inside its own cage | macOS, Linux |
-| Admission refuses hostile modules | 27 hand-written cases, 0 accepted | macOS, Linux |
+| Admission refuses hostile modules | 29 hand-written cases, 0 accepted | macOS, Linux |
 | Mutated modules cannot crash the pipeline | 1000 mutations: 995 refused, 5 accepted, 0 crashed | Linux |
-| Mutants that pass admission stay in the cage when run | 10,538 code mutations biased to memory and call instructions: 400 accepted, half in each mode, and all 400 run with hostile inputs. No process death, no fault outside the cage, witness tenant unaffected | Linux |
+| Mutants that pass admission stay in the cage when run | 7,699 code mutations biased to memory and call instructions, in a module that imports the host calls: 400 accepted, half in each mode, and all 400 run with hostile inputs. No process death, no fault outside the cage, witness tenant unaffected | Linux |
 | Hostile host calls cannot fault the host | 640,000 random boundary-biased calls in 400 VMs, under ASan+UBSan, with a witness tenant unaffected | Linux |
 | Heap free reuses memory, tolerates abuse | 100,000 alloc/free cycles on a 64 KiB heap; poisoned free lists, double and wild frees | macOS, Linux |
 | Loader admits exact bytes only | Wrong digest, tampered copy, symlink, directory all refused; 200 reloads | macOS, Linux |
@@ -212,14 +227,16 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Mail quota holds | Per VM and host; a dead VM returns all of it | macOS, Linux |
 | 1000 VMs, 100,000 test actors | About 20 ms to create, 300,000 turns in 0.5-0.7 s; RSS +100 MiB on Linux, +440 MiB on macOS (larger pages) | macOS, Linux |
 | Kill spinning code without cooperation | Under 1 ms | macOS, Linux |
-| ASan+UBSan on host | Clean, core and lowered, 31 + 9 cases | Linux |
-| TSan on host | No races in 31 cases, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
+| ASan+UBSan on host | Clean, core and lowered, 31 + 13 cases | Linux |
+| TSan on host | No races in 31 cases and in real spawn, send and stop programs, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
+| Compiler build with gcc, host with gcc | 31 + 13 cases | Linux |
+| Existing wasm32 and rejection tests | 171 of 172 pass. `native_exit_reject_unsupported_async_root` fails the same way without this change | Linux |
 | Wasmtime targeted kill | 6 spinning tenants ended one at a time, none early, worst about 2 ms | macOS |
 | Wasmtime: 1000 Stores | 200,000 turns at about 1.3M/s, contained faults and memory bomb | macOS |
 | .NET hosts 1000 VMs through the loader | 30,000 correct turns, while the CLR forced 545 GCs and caught about 1.09M null faults; wrong digest refused | Linux, CoreCLR JIT |
-| x86_64 under emulation | 31 of 31 core cases, 9 of 9 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
+| x86_64 under emulation | 31 of 31 core cases, 13 of 13 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
 | Real x86_64 hardware, other kernels, PKU | **Not run** | |
-| NativeAOT on ABI v2 | **Not rerun**, passed on v1 | |
+| NativeAOT on ABI v3 | **Not rerun**, passed on v1 | |
 | Wasmtime on Linux, .NET on macOS | **Not run** | |
 | GitHub Actions | **Not run**: source-org jobs fail to start on billing, and `.github/workflows/tenant-vm.yml` is ready for when that is resolved. Private source was deliberately not mirrored to another org | |
 
@@ -271,15 +288,16 @@ If the compiler cannot be built here, `-DTENANT_VM_ATTO_IR_DIR=` takes IR it emi
 
 ## Open gates
 
-In priority order. The first version of this list put a heap and host-call coverage after loading. The
-audit moved host calls first, since they could end the process, and that is done.
+In priority order. Done since the first version: `.atto` to a VM, code loading, host-call coverage, the
+targeted Wasmtime kill, and the audit, which found what most needed doing first.
 
-1. **Source `spawn`, `send`, `stop`, and more than one actor per module.** The largest gap: see above.
-2. **Actor restart from stored state.** A fault currently ends every actor in the VM. The project's direction is to
+1. **Actor restart from stored state.** A fault currently ends every actor in the VM. The project's direction is to
    restart a failed actor, since a VM holds hundreds or thousands of them. With bounds checks a
    Wasm trap has not touched memory outside its actor, so it could end only that actor, reserving VM
    failure for faults the checks should have made impossible. It needs a decision on where stored state
    lives and on restart budgets. Not started here.
+2. **Actor-to-actor messaging, loops and locals in handlers, richer messages.** Language and compiler work,
+   on every backend. The host calls this needs already exist.
 3. **Reconcile with the process-worker direction and `tenant-isolation-v1.json`.** A decision, not code.
 4. **Durable heap for real programs.** `alloc` and `free` exist with size classes, and memory persists.
    Nothing compiled calls them yet, nothing suspends across `await`, and zero-GC for real programs

@@ -52,6 +52,14 @@ ALLOWED_IMPORTS = {
 }
 ALLOWED_WRITABLE_SYMBOLS = {"g_host"}
 
+# The only functions a module may import, each with exactly this signature (0x7E is i64). The adapter
+# defines them for this signature, and C linking would not notice a module that declared another.
+HOST_IMPORTS = {
+    "oreslang_vm_spawn": ((0x7E,), (0x7E,)),
+    "oreslang_vm_send": ((0x7E, 0x7E), ()),
+    "oreslang_vm_stop": ((0x7E,), ()),
+}
+
 # The only proposals lowered code may use. Each wabt release turns more on by default (memory64,
 # multi-memory and tail calls among them), and some of those would break the addressing rule. So
 # everything else a given tool can disable is disabled, including features it adds later.
@@ -140,6 +148,8 @@ def admit(data, required_exports, memory_bytes):
     seen, last_order = set(), 0
     memory_imported = False
     table_slots = 0
+    types = []
+    imported_functions = set()
     exports = {}
     function_count = 0
     # The order Wasm requires, with data count (12) between element (9) and code (10).
@@ -160,9 +170,24 @@ def admit(data, required_exports, memory_bytes):
             raise Refused(f"section {section} is duplicated or out of order")
         seen.add(section)
         last_order = order[section]
-        if section == 2:
+        if section == 1:
+            for _ in range(body.u32()):
+                if body.byte() != 0x60:
+                    raise Refused("a type that is not a function type")
+                params = tuple(body.byte() for _ in range(body.u32()))
+                results = tuple(body.byte() for _ in range(body.u32()))
+                types.append((params, results))
+        elif section == 2:
             for _ in range(body.u32()):
                 module, name, kind = body.name(), body.name(), body.byte()
+                if module == "env" and kind == 0 and name in HOST_IMPORTS:
+                    index = body.u32()
+                    if index >= len(types) or types[index] != HOST_IMPORTS[name]:
+                        raise Refused(f"import {name} does not have its required signature")
+                    if name in imported_functions:
+                        raise Refused(f"duplicate import {name}")
+                    imported_functions.add(name)
+                    continue
                 if (module, name, kind) != ("env", "memory", 2):
                     raise Refused(f"import {module}.{name} of kind {kind} is not allowed")
                 if memory_imported:
@@ -266,17 +291,36 @@ def to_wasm(args, work, memory_bytes):
     elif source.suffix == ".wat":
         run([args.wat2wasm, *locked_features(args.wat2wasm), str(source), "-o", str(wasm)], args, "wat2wasm")
     elif source.suffix in (".atto", ".ores", ".ll"):
-        ir = source.read_bytes() if source.suffix == ".ll" else run([args.compiler, "--target=wasm32", str(source)], args, "compile")
+        ir = source.read_bytes() if source.suffix == ".ll" else run(
+            [args.compiler, "--target=wasm32", "--guest-abi=tenant-vm", str(source)], args, "compile")
         (work / "guest.ll").write_bytes(ir)
+        actors, has_main = source_kinds(ir.decode("utf-8", "replace"))
+        exports = [f"--export=oreslang_vm_actor_{i}_{name}" for i in range(actors) for name in ("init", "on_message")]
+        if has_main:
+            exports.append("--export=main")
         run([args.wasm_clang or args.clang, "--target=wasm32-unknown-unknown", "-Oz", "-nostdlib", "-x", "ir", "-mno-bulk-memory",
              "-mno-reference-types", "-mno-simd128", "-c", str(work / "guest.ll"), "-o", str(work / "guest.o")], args, "IR to wasm32")
         run([args.wasm_ld, "--no-entry", "--import-memory", "--gc-sections", f"--initial-memory={memory_bytes}",
              f"--max-memory={memory_bytes}", "-z", f"stack-size={memory_bytes // 2}", "--stack-first",
-             "--export=oreslang_wasm_actor_init", "--export=oreslang_wasm_actor_on_message",
+             "--allow-undefined-file=" + str(write_allowed_undefined(work)), *exports,
              str(work / "guest.o"), "-o", str(wasm)], args, "wasm-ld")
     else:
         raise Refused(f"unknown input type {source.suffix}")
     return wasm
+
+
+def source_kinds(ir):
+    """Actor types, in the order the compiler numbered them, and whether there is a main."""
+    indexes = sorted(int(m) for m in re.findall(r"define i64 @oreslang_vm_actor_(\d+)_on_message\(", ir))
+    if not indexes or indexes != list(range(len(indexes))):
+        raise Refused("no tenant VM actors in this IR; was it compiled with --guest-abi=tenant-vm?")
+    return len(indexes), re.search(r"define i64 @main\(\)", ir) is not None
+
+
+def write_allowed_undefined(work):
+    path = work / "host-imports.txt"
+    path.write_text("".join(name + "\n" for name in HOST_IMPORTS))
+    return path
 
 
 def symbols(args, library):
@@ -337,7 +381,10 @@ def lower(args):
         work = Path(temporary)
         wasm = to_wasm(args, work, memory_bytes)
         data = wasm.read_bytes()
-        required = ["oreslang_wasm_actor_init", "oreslang_wasm_actor_on_message"] if source_actor else ["turn"]
+        actors, has_main = source_kinds((work / "guest.ll").read_text(errors="replace")) if source_actor else (0, False)
+        required = [f"oreslang_vm_actor_{i}_{name}" for i in range(actors) for name in ("init", "on_message")]
+        required += ["main"] if has_main else []
+        required = required if source_actor else ["turn"]
         report = admit(data, required, memory_bytes)
 
         # Validation happens here too, with every feature the admission does not expect turned off.
@@ -356,13 +403,17 @@ def lower(args):
         defines += ["-DWASM_RT_MEMCHECK_BOUNDS_CHECK=1"] if args.mode == "bounds" else ["-DWASM_RT_MEMCHECK_GUARD_PAGES=1", "-DWASM_RT_SKIP_SIGNAL_RECOVERY=1"]
         if source_actor:
             header = (work / "guest.h").read_text()
-            names = {}
-            for export, key in (("init", "ORES_VM_EXPORT_INIT"), ("on_message", "ORES_VM_EXPORT_ON_MESSAGE")):
-                match = re.search(r"\b(w2c_guest_\w*?actor\w*?" + export + r")\(", header)
+            def generated(export):
+                match = re.search(r"\b(w2c_guest_" + re.escape(export) + r")\(", header)
                 if not match:
                     raise Refused(f"generated header does not declare the {export} export")
-                names[key] = match.group(1)
-            defines += ["-DORES_VM_SOURCE_ACTOR=1"] + [f"-D{key}={value}" for key, value in names.items()]
+                return match.group(1)
+            lines = [f"ORES_VM_ACTOR({i}, {generated(f'oreslang_vm_actor_{i}_init')}, {generated(f'oreslang_vm_actor_{i}_on_message')})"
+                     for i in range(actors)]
+            if has_main:
+                lines.append(f"ORES_VM_MAIN({actors}, {generated('main')})")
+            (work / "kinds.inc").write_text("\n".join(lines) + "\n")
+            defines += ["-DORES_VM_SOURCE_ACTOR=1"]
         # NDEBUG: an assert in generated code would abort the process, with every tenant in it.
         flags = ["-std=c11", "-O2", "-DNDEBUG", "-fPIC", "-w", "-fvisibility=hidden", "-fwrapv", "-fno-strict-aliasing",
                  "-fno-delete-null-pointer-checks", "-fno-finite-loops", "-fno-stack-protector", "-fno-sanitize=all",
@@ -394,6 +445,8 @@ def lower(args):
             "memory_bytes": memory_bytes,
             "scratch_bytes": args.scratch_bytes,
             "admission": report,
+            # Kinds are actor types in source order, then main if there is one.
+            "kinds": {"actors": actors, "main": actors if has_main else None},
             "tools": {name: run([tool, "--version"], args, name).decode(errors="replace").splitlines()[0]
                       for name, tool in (("clang", args.clang), ("wasm2c", args.wasm2c))},
         }

@@ -2,6 +2,9 @@
 ;; way to write a host pointer: every address it can form is an i32 into its actor's memory.
 (module $guest
   (import "env" "memory" (memory 2 2))
+  (import "env" "oreslang_vm_spawn" (func $vm_spawn (param i64) (result i64)))
+  (import "env" "oreslang_vm_send" (func $vm_send (param i64 i64)))
+  (import "env" "oreslang_vm_stop" (func $vm_stop (param i64)))
   (table 1 1 funcref)
   (type $unused (func (param i64) (result i64)))
 
@@ -21,10 +24,11 @@
     (local.set $a (i64.load offset=8 (local.get $input)))
     (local.set $b (i64.load offset=16 (local.get $input)))
     (block $done
+      (block $case_stop (block $case_send (block $case_spawn
       (block $case_indirect (block $case_recurse (block $case_spin (block $case_trap
       (block $case_poke (block $case_peek_far (block $case_peek (block $case_read (block $case_add
         (br_table $case_add $case_read $case_peek $case_peek_far $case_poke $case_trap
-                  $case_spin $case_recurse $case_indirect $done
+                  $case_spin $case_recurse $case_indirect $case_spawn $case_send $case_stop $done
                   (i32.wrap_i64 (local.get $op))))
       ;; add: state += a
       (i64.store (local.get $state) (i64.add (i64.load (local.get $state)) (local.get $a)))
@@ -50,6 +54,13 @@
       (br $done))
       ;; indirect call through an empty table slot, at a chosen index
       (local.set $value (call_indirect (type $unused) (i64.const 0) (i32.wrap_i64 (local.get $a))))
+      (br $done))
+      ;; host calls, with whatever references it likes
+      (local.set $value (call $vm_spawn (local.get $a)))
+      (br $done))
+      (call $vm_send (local.get $a) (local.get $b))
+      (br $done))
+      (call $vm_stop (local.get $a))
       (br $done))
     (i64.store (local.get $output) (local.get $value))
     (i64.const 8)))

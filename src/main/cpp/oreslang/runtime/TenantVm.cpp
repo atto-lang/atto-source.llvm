@@ -850,6 +850,24 @@ struct TenantVmHost::Core {
         return result;
     }
 
+    int stop_impl(const std::shared_ptr<Vm>& shared, std::uint64_t target) {
+        std::lock_guard<std::mutex> lock(shared->mutex);
+        if (shared->current_phase() != Phase::Running) return 0;
+        Actor* actor = resolve_actor_locked(*shared, target);
+        if (!actor || actor->stopping) return 0;
+        actor->stopping = true;
+        if (!actor->running && actor->mailbox.empty())
+            release_actor_locked(*shared, *actor, static_cast<std::uint32_t>(target));
+        return 1;
+    }
+
+    static int host_stop(std::uint64_t target) {
+        Carrier* c = host_enter();
+        const int result = static_cast<Core*>(c->core)->stop_impl(*c->vm, target);
+        host_leave(c);
+        return result;
+    }
+
     static std::uint32_t mail_capacity(const OresVmGuestKind& kind, const VmLimits& limits) {
         // Input shares scratch with output. Half each keeps a reply possible.
         return std::min(kind.scratch_bytes / 2, limits.max_payload_bytes);
@@ -1022,6 +1040,7 @@ TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(lim
     core->api.free = &Core::host_free;
     core->api.send = &Core::host_send;
     core->api.spawn = &Core::host_spawn;
+    core->api.stop = &Core::host_stop;
     core->api.trap = &trap_from_guest;
 
     const auto give_up = [core](const char* what) {

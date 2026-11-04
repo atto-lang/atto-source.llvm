@@ -643,7 +643,8 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
-                                  bool bounded_allocator_provider) {
+                                  bool bounded_allocator_provider,
+                                  bool tenant_vm_guest) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -668,8 +669,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
     // Its state lives in private Wasm globals owned by exactly one Worker.
     // Native scheduler, ActorRef, suspension and supervisor APIs remain gated.
+    if (tenant_vm_guest && !wasm32_target)
+        throw std::runtime_error("the tenant VM guest ABI requires --target=wasm32");
     if (wasm32_target) {
-        if (source.actors.size() > 1)
+        // The tenant VM ABI has one Wasm instance per actor, as this one does, and a kind per actor
+        // type, so a module can hold several. Its host carries spawn, send and stop.
+        if (source.actors.size() > 1 && !tenant_vm_guest)
             throw std::runtime_error("wasm32 actor guest supports one actor per instance");
         for (const auto& actor : source.actors) {
             if (actor.fields.empty() || actor.fields.size() > 16)
@@ -688,9 +693,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             // exception ABI, even if an LLVM optimizer could emit its blocks.
             if (fn.caught_throw_value)
                 throw std::runtime_error("wasm32 native caught-throw guest unsupported");
-            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
-                !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
+            if (!fn.actor_field_writes.empty() ||
+                (!tenant_vm_guest && (!fn.actor_spawns.empty() || !fn.actor_sends.empty() || !fn.actor_stops.empty())))
                 throw std::runtime_error("wasm32 actor operations are not implemented");
+            // A turn cannot suspend in a tenant VM, so these have no lowering there yet.
+            if (!fn.ready_await_actor.empty() || !fn.done_await_actor.empty() || !fn.ready_future_name.empty())
+                throw std::runtime_error("wasm32 actor await is not implemented");
             if (!fn.source_tasks.empty() || !fn.future_pipelines.empty())
                 throw std::runtime_error(
                     "wasm32 source Task/Future scheduler runtime is not implemented");
@@ -958,6 +966,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
+    if (!source.actors.empty() && wasm32_target && tenant_vm_guest) {
+        // References are i64 here, and name actors only within the caller's own VM. Each import is
+        // checked against exactly this signature when the guest is admitted.
+        auto* voidTy = llvm::Type::getVoidTy(context);
+        sourceSpawn = module.getOrInsertFunction("oreslang_vm_spawn", llvm::FunctionType::get(i64, {i64}, false));
+        sourceSend = module.getOrInsertFunction("oreslang_vm_send", llvm::FunctionType::get(voidTy, {i64, i64}, false));
+        sourceStop = module.getOrInsertFunction("oreslang_vm_stop", llvm::FunctionType::get(voidTy, {i64}, false));
+    }
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         fieldInit = module.getOrInsertFunction("ores_actor_i64_heap_field_init",
@@ -1153,6 +1169,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // trusted top-level main; it cannot enter scalar values or calls.
         std::unordered_map<std::string, llvm::Value*> actorRefs;
         for (const auto& spawn : fn.actor_spawns) {
+            if (tenant_vm_guest) {
+                const auto kind = std::find_if(source.actors.begin(), source.actors.end(),
+                    [&](const ActorDecl& a) { return a.name == spawn.actor_type; }) - source.actors.begin();
+                actorRefs.emplace(spawn.name, builder.CreateCall(sourceSpawn,
+                    {llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(kind))}, spawn.name + ".actor.ref"));
+                continue;
+            }
             llvm::Value* ctor = builder.CreatePointerCast(actorInits.at(spawn.actor_type),
                 native_ptr);
             llvm::Value* handler = builder.CreatePointerCast(actorHandlers.at(spawn.actor_type),
@@ -2780,8 +2803,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // exclusively to one dedicated Worker; no native OresVM symbols/imports.
     // INIT -> ACTIVE -> STOPPED is monotonic; any illegal call traps. This
     // is NOT source ActorRef/spawn/send/suspend/supervisor lowering.
-    if (wasm32_target && !source.actors.empty()) {
-        const auto& actor = source.actors.front();
+    // The tenant VM ABI repeats this per actor type, with the type's index as its kind.
+    if (wasm32_target && !source.actors.empty()) for (std::size_t actor_index = 0;
+            actor_index < (tenant_vm_guest ? source.actors.size() : std::size_t{1}); ++actor_index) {
+        const auto& actor = source.actors[actor_index];
+        const std::string export_prefix = tenant_vm_guest
+            ? "oreslang_vm_actor_" + std::to_string(actor_index) + "_" : std::string("oreslang_wasm_actor_");
         auto* voidTy = llvm::Type::getVoidTy(context);
         auto* zero = llvm::ConstantInt::get(i64, 0);
         auto* one = llvm::ConstantInt::get(i64, 1);
@@ -2812,7 +2839,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         };
         auto* initialize = llvm::Function::Create(
             llvm::FunctionType::get(voidTy, {}, false),
-            llvm::Function::ExternalLinkage, "oreslang_wasm_actor_init", module);
+            llvm::Function::ExternalLinkage, export_prefix + "init", module);
         llvm::IRBuilder<> init(llvm::BasicBlock::Create(context, "entry", initialize));
         guard(init, initialize, zero);
         const std::unordered_map<std::string, llvm::Value*> noStorage;
@@ -2827,7 +2854,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
         auto* handler = llvm::Function::Create(
             llvm::FunctionType::get(i64, {i64}, false),
-            llvm::Function::ExternalLinkage, "oreslang_wasm_actor_on_message", module);
+            llvm::Function::ExternalLinkage, export_prefix + "on_message", module);
         llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", handler));
         guard(b, handler, one);
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
@@ -2857,7 +2884,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
         auto* teardown = llvm::Function::Create(
             llvm::FunctionType::get(voidTy, {}, false),
-            llvm::Function::ExternalLinkage, "oreslang_wasm_actor_teardown", module);
+            llvm::Function::ExternalLinkage, export_prefix + "teardown", module);
         llvm::IRBuilder<> finish(llvm::BasicBlock::Create(context, "entry", teardown));
         guard(finish, teardown, one);
         for (auto* field : globals) finish.CreateStore(zero, field);

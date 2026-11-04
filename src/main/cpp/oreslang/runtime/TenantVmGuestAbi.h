@@ -1,6 +1,6 @@
 #pragma once
 /*
- * Guest ABI v2 for code running inside an in-process tenant VM.
+ * Guest ABI v3 for code running inside an in-process tenant VM.
  *
  * Graal isolates work because guest code is produced by a trusted compiler and can only
  * name memory relative to its isolate's heap base. This is the same contract:
@@ -25,7 +25,7 @@
 extern "C" {
 #endif
 
-#define ORES_VM_GUEST_ABI_VERSION 2u
+#define ORES_VM_GUEST_ABI_VERSION 3u
 
 /* The only form a guest memory access may take. */
 #define ORES_VM_AT(type, cage, offset) \
@@ -45,6 +45,8 @@ typedef struct {
     int (*send)(uint64_t target, uint32_t offset, uint32_t length);
     /* New actor in this VM. 0 when refused. */
     uint64_t (*spawn)(uint32_t kind);
+    /* Its queued mail still runs, then it ends. Also accepts this actor's own reference. 1 if accepted. */
+    int (*stop)(uint64_t target);
     /* Ends this VM. Does not return. For checks in lowered code (Wasm `unreachable`). */
     void (*trap)(void);
 } OresVmHostApi;

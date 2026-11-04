@@ -126,7 +126,8 @@ static int64_t hostile(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64
         case HOSTILE_SCRIPT: {
             for (uint32_t at = in + 32; at + 32 <= in + in_len; at += 32) {
                 const uint64_t x = (uint64_t)READ_I64(cage, at + 8), y = (uint64_t)READ_I64(cage, at + 16), z = (uint64_t)READ_I64(cage, at + 24);
-                switch ((uint64_t)READ_I64(cage, at) % 5) {
+                switch ((uint64_t)READ_I64(cage, at) % 6) {
+                    case 5: value += h->stop(x); break;
                     case 0: value += h->alloc((uint32_t)x, (uint32_t)y) != 0; break;
                     case 1: value += h->free((uint32_t)x, (uint32_t)y, (uint32_t)z); break;
                     case 2: value += h->send(x, (uint32_t)y, (uint32_t)z); break;
