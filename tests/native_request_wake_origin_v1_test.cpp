@@ -16,7 +16,7 @@ struct Scenario {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef actor{};
     TaskCancellation::Ptr cancellation{TaskCancellation::root()};
-    RequestContextLocalV1::Ptr request;
+    RequestContextLocalV1::Ptr requests[2];
     RequestLocalKeyV1<std::string> trace;
     OresNativeWakeTicket tickets[2]{};
     std::unique_ptr<NativeRequestWakeGateV1> leases[2];
@@ -32,7 +32,7 @@ void on_message(void* userdata, std::size_t actor_index, std::uint64_t message) 
     assert(message == 1 || message == 2);
     const auto ordinal = static_cast<int>(message);
     NativeRequestDataMailGateV1 current(
-        *s.scheduler, s.request, s.actor, message);
+        *s.scheduler, s.requests[ordinal-1], s.actor, message);
     assert(current.authorized());
     assert(current.set(s.trace, std::string("original-request")));
     OresNativeWakeTicket issued{};
@@ -97,9 +97,11 @@ void exercise_ready_cancelled_and_stale_wakes() {
     assert(s.scheduler);
     s.actor = ores_native_actor_scheduler_spawn(s.scheduler, 0);
     assert(s.actor.scheduler_domain);
-    s.request = RequestContextLocalV1::open(
+    s.requests[0] = RequestContextLocalV1::open(
         {3, 4, 701, 1, s.actor}, s.cancellation);
-    assert(s.request);
+    s.requests[1] = RequestContextLocalV1::open(
+        {3, 4, 702, 1, s.actor}, s.cancellation);
+    assert(s.requests[0] && s.requests[1]);
 
     assert(ores_native_actor_scheduler_try_send(
         s.scheduler, s.actor, 1) == ORES_NATIVE_SEND_ACCEPTED);
@@ -111,12 +113,15 @@ void exercise_ready_cancelled_and_stale_wakes() {
         s.scheduler, s.tickets[0], ORES_NATIVE_WAKE_READY)
         == ORES_NATIVE_WAKE_PUBLISHED);
     wait_counter(s, 1, true);
-    assert(s.request->get_copy(s.trace) == std::string("resumed-ready"));
+    assert(s.requests[0]->get_copy(s.trace) == std::string("resumed-ready"));
+    assert(!s.requests[1]->get_copy(s.trace));
     assert(!s.leases[0]->authorized());
 
     assert(ores_native_actor_scheduler_try_send(
         s.scheduler, s.actor, 2) == ORES_NATIVE_SEND_ACCEPTED);
     wait_counter(s, 2, false);
+    assert(s.requests[1]->get_copy(s.trace) == std::string("original-request"));
+    assert(s.requests[0]->get_copy(s.trace) == std::string("resumed-ready"));
     assert(ores_native_actor_scheduler_transfer_wake(
         s.scheduler, s.tickets[1]));
     assert(ores_native_actor_scheduler_publish_wake(
@@ -131,7 +136,8 @@ void exercise_ready_cancelled_and_stale_wakes() {
     assert(ores_native_actor_scheduler_try_destroy(s.scheduler));
     s.leases[0].reset();
     s.leases[1].reset();
-    assert(s.request->close());
+    assert(s.requests[0]->close());
+    assert(s.requests[1]->close());
     s.cancellation->retire();
 }
 } // namespace
