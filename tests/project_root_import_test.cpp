@@ -71,12 +71,14 @@ int main() {
             validate_manifest(std::string(65537, 'x'));
         });
         const std::string with_nul =
-            std::string("schema_version = \\"1\\"\\n") +
-            std::string("note = \\"good\\"\\n") + std::string(1, '\\0');
+            std::string(R"manifest(schema_version = "1"
+note = "good"
+)manifest") + std::string(1, '\0');
         must_fail("direct manifest NUL", "contains NUL", [&] {
             validate_manifest(with_nul);
         });
-        validate_manifest(std::string("schema_version = \\"1\\"\\n"));
+        validate_manifest(std::string(R"manifest(schema_version = "1"
+)manifest"));
     }
     {
         const auto dir = temp / "quoted-key";
