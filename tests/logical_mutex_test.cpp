@@ -97,5 +97,65 @@ int main() {
         mutex.with_owner(unwinding.token, [](int&) { throw std::runtime_error("guest failure"); });
     } catch (const std::runtime_error&) {}
     check(!mutex.release(unwinding.token), "exception must retire callback lease");
+    {
+        LogicalMutex<int> protectedState(10);
+        auto owner = protectedState.try_request();
+        check(owner.has_value(), "idle logical mutex try_request failed");
+        check(!protectedState.try_request().has_value(), "busy logical mutex try_request succeeded");
+        auto pending = protectedState.request();
+        check(pending.admission == Admission::queued, "logical mutex pending slot absent");
+        const auto retired = protectedState.retire();
+        check(retired.cancelled_waiters.size() == 1
+              && retired.cancelled_waiters.front() == pending.token,
+              "logical mutex dropped the cancellation ticket");
+        check(retired.revoked_owner == *owner, "logical mutex lost owner identity");
+        check(!protectedState.quiescent(), "live logical callback marked quiescent");
+        bool deniedAfterRetirement = false;
+        try {
+            protectedState.with_owner(*owner, [](int& value) { value += 5; });
+        } catch (const std::logic_error&) {
+            deniedAfterRetirement = true;
+        }
+        check(deniedAfterRetirement, "retired owner began new protected callback");
+        check(!protectedState.release(pending.token), "revoked logical ticket released owner");
+        check(!protectedState.release(*owner), "retired logical mutex handed off owner");
+        check(protectedState.quiescent(), "logical mutex not quiescent after callback retirement");
+        bool reject = false;
+        try { (void)protectedState.request(); } catch (const std::logic_error&) { reject = true; }
+        check(reject, "retired logical mutex permitted new admission");
+    }
+
+    // Race retirement against an executing native protected callback.
+    // Retirement must not reclaim active state or admit another callback.
+    for (int i = 0; i < 128; ++i) {
+        LogicalMutex<int> gate(0);
+        auto owner = gate.try_request();
+        check(owner.has_value(), "race setup missing owner");
+        std::atomic<bool> inside{false}, finish{false};
+        std::thread worker([&] {
+            gate.with_owner(*owner, [&](int& value) {
+                inside.store(true, std::memory_order_release);
+                while (!finish.load(std::memory_order_acquire)) std::this_thread::yield();
+                ++value;
+            });
+        });
+        while (!inside.load(std::memory_order_acquire)) std::this_thread::yield();
+        const auto retired = gate.retire();
+        check(retired.cancelled_waiters.empty() && retired.revoked_owner == *owner,
+              "retirement with active owner lost owner receipt");
+        check(!gate.quiescent(), "retirement reclaimed an active protected body");
+        check(!gate.retire_if_quiescent(), "retired active body reported quiescence");
+        bool earlyReleaseRejected = false;
+        try { (void)gate.release(*owner); }
+        catch (const std::logic_error&) { earlyReleaseRejected = true; }
+        check(earlyReleaseRejected,
+              "retirement bypassed the active callback's release fence");
+        finish.store(true, std::memory_order_release);
+        worker.join();
+        check(!gate.release(*owner), "retired callback handed off owner");
+        check(gate.quiescent(), "retired callback failed to quiesce");
+        check(gate.retire_if_quiescent(),
+              "physically unwound retired callback did not quiesce");
+    }
     return 0;
 }
