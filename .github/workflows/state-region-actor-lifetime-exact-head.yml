@@ -13,6 +13,7 @@ on:
       - 'tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.atto'
       - 'tests/fixtures/native-aot-sealed-two-actor-owned-counter.atto'
       - 'tests/fixtures/native-aot-sealed-state-wasm-reject.atto'
+      - 'tests/fixtures/native-aot-sealed-state-cortexm-reject.atto'
       - 'tests/fixtures/native-aot-sealed-state-missing-critical-reject.atto'
       - 'tests/fixtures/native-aot-legacy-critical-reject.atto'
       - 'tests/fixtures/native-aot-sealed-state-effectful-write-reject.atto'
@@ -350,6 +351,19 @@ jobs:
           test ! -s "$WASM_DENIED"
           grep -Fq 'wasm32 sealed critical actor state requires separate turn/heap lowering' \
             "$RUNNER_TEMP/sealed-wasm.err"
+          # Cortex-M's freestanding static actor bootstrap is NOT the hosted
+          # native actor heap ABI. Reject sealed state before ANY IR output.
+          CORTEX_DENIED="$RUNNER_TEMP/sealed-cortexm-denied.ll"
+          if "$COMPILER" --target=thumbv7m-none-eabi \
+              --experimental-sealed-scalar-state \
+              tests/fixtures/native-aot-sealed-state-cortexm-reject.atto \
+              > "$CORTEX_DENIED" 2> "$RUNNER_TEMP/sealed-cortexm.err"; then
+            echo "unlowered Cortex-M sealed state unexpectedly admitted" >&2
+            exit 1
+          fi
+          test ! -s "$CORTEX_DENIED"
+          grep -Fq 'cortex-m sealed critical actor state requires target-specific owned turn lowering' \
+            "$RUNNER_TEMP/sealed-cortexm.err"
           "$CLANG" -x ir "${FLAGS[@]}" -c "$SEALED_IR" \
             -o "$RUNNER_TEMP/guest-sealed.o"
           "$CLANG" -x c -std=c11 "${FLAGS[@]}" -Wall -Wextra -Wpedantic -Werror \
