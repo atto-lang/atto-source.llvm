@@ -83,7 +83,7 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     // ores.core / .ores imports are aliases of the SAME compiled unit. They
     // must never create duplicate module identities or provider bypasses.
     static constexpr std::string_view kNumericSource =
-R"ORES_CORE(// Compiler-owned ores.core source.
+R"ORES_CORE(// Compiler-owned AttoLang atto.core source (ores.core is a legacy alias).
 // This module has no OS, Java, filesystem, network, process, actor-scheduler,
 // or ambient project dependency.
 
