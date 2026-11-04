@@ -11,6 +11,7 @@ on:
       - 'stdlib/testing_scalar.atto'
       - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
       - 'tests/core_library_sources_test.cpp'
+      - 'tests/test_atto_testing_scalar_contract.sh'
       - 'tests/atto_native_harness_parity.sh'
       - 'tests/test_atto_native_parity_manifest.sh'
       - 'tests/test_atto_native_workflow_contract.sh'
@@ -51,6 +52,7 @@ jobs:
           bash tests/atto_native_harness_parity.sh --inventory-only
           bash tests/test_atto_native_parity_manifest.sh
           bash tests/test_atto_native_workflow_contract.sh
+          bash tests/test_atto_testing_scalar_contract.sh
       - name: Install native compiler toolchain
         shell: bash
         run: |
