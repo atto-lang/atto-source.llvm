@@ -105,3 +105,47 @@ runner-admission blocker.
 PhysicalThreadLocalsV1 now marks its storage closing before releasing per-thread values. Get, set and erase reject reentrant value destructors during thread exit. A native regression covers 32 thread-exit cycles. The local C++17 teardown model passed GCC, Clang and Clang ASan/UBSan; these results do not certify the full repository binary.
 
 The native local-context GitHub workflow now checks out the exact PR head and verifies refreshed header and test object hashes. The source organization's Actions jobs remain unexecuted. A separate source-free GitHub Actions canary in benefactor-cc/benefactor-e2e (run 41776988571) completed five steps successfully, demonstrating runner capacity only. No AttoLang source was moved. The repository's cross-organization private-source approval list remains empty, so source mirroring is prohibited until independent authorization.
+
+## 2026-11-04 four-domain follow-up audit
+
+**RequestLocal reentrant copy safety:** `RequestContextLocalV1::get_copy`
+now pins the typed cell under its mutex and copies outside that mutex.
+Previously a value's C++ copy constructor could call `close`, cancel the
+request, or replace its own cell while the lock was held, causing deadlock.
+The pinned shared cell stays alive during the copy; a read authorized before
+concurrent cancellation may complete with an owned snapshot. The regression
+adds 48 alternating reentrant close/cancel copies, a replacement destructor
+reentry probe, and assertions that no later read or set succeeds after close.
+
+**Trusted request actor-turn adapter:** `RequestLocalSchedulerTurnV1.hpp`
+checks the real scheduler's current actor claim, allocation kind/domain/slot/
+generation and the request scope's actor binding before invoking host storage
+APIs. A raw scope pointer outside an actor turn cannot use this adapter.
+However, it does **not** authenticate the request ID, tenant or isolate from
+an HTTP ingress/continuation ticket; this is an important blocker before
+exposing any RequestLocal accessor as a guest intrinsic.
+
+**Shared host value type admission:** `LocalValueAdmissionV1.hpp` is used by
+all four host storage domains to reject raw pointers/references, top-level
+`std::reference_wrapper`, `std::basic_string_view`,
+`std::initializer_list` and types with potentially throwing destructors.
+This is only shallow C++ host admission; composite types may still contain
+borrowed aliases, so guest compiler `Copy`/`Send`/ownership analysis remains
+mandatory. Negative `static_assert` cases were added to Task/Actor/Thread
+and Request host tests.
+
+**Testing boundary:** The exact Git blob
+`7360f5a623093d367578ab3e9d811c521003d450` for the new admission
+policy compiled and executed with GCC -O2, Clang -O2, and Clang ASan/UBSan
+locally, including positive and negative compile-time assertions. A separate
+source-free RequestLocal pin-then-copy model passed 1,000 synchronous
+reentrant close operations and 200 concurrent-close runs with GCC, Clang,
+and Clang ASan/UBSan. **Neither model proves that the full RequestLocal
+runtime and scheduler tests executed.** Those native exact-head and compiled
+`.atto` gates still require real source CI with nonzero steps.
+
+Both native-local-context and native-request-context GitHub workflows now
+verify the **exact pull-request head** and current policy, source, test and
+scheduler Git blob hashes. Zero-step CI failures are runner admission failures,
+not an AttoLang pass or failing unit-test result. No private-source export to
+another organization occurred; the authorization hold remains in force.
