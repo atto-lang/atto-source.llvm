@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -60,12 +61,25 @@ inline std::uint64_t next_key() {
 }
 
 struct CellBase {
+    explicit CellBase(std::size_t payload) : bytes(payload) {}
     virtual ~CellBase() = default;
+    const std::size_t bytes;
 };
 template <class T> struct Cell final : CellBase {
-    explicit Cell(T item) : value(std::move(item)) {}
+    Cell(T item, std::size_t payload)
+        : CellBase(payload), value(std::move(item)) {}
     const T value;
 };
+
+// Dynamic host payloads other than UTF-8 strings fail closed until explicit
+// bounded type descriptors exist. This does not replace the guest ownership
+// checker: trivially-copyable host structs may still carry forbidden pointers.
+template <class T>
+std::size_t value_bytes(const T& value) noexcept {
+    if constexpr (std::is_same_v<T, std::string>) return value.size();
+    else if constexpr (std::is_trivially_copyable_v<T>) return sizeof(T);
+    else return std::numeric_limits<std::size_t>::max();
+}
 
 template <class T> constexpr bool local_value_allowed_v =
     std::is_copy_constructible_v<T> && !std::is_pointer_v<T> &&
@@ -103,6 +117,7 @@ class LogicalLocalStoreV1 final {
     template <class T> using Cell = scoped_local_detail_v1::Cell<T>;
 public:
     static constexpr std::size_t max_slots = 32;
+    static constexpr std::size_t max_bytes = 8192;
     explicit LogicalLocalStoreV1(ScopedLocalIdentityV1 identity)
         : owner_(identity) {
         if (!owner_.valid()) throw std::invalid_argument("invalid scoped local owner");
@@ -121,23 +136,50 @@ public:
     template <class T>
     bool set(const ScopedLocalKeyV1<T, Scope>& key,
              const ScopedLocalIdentityV1& caller, T value) {
-        auto next = std::make_shared<Cell<T>>(std::move(value));
+        const std::size_t bytes = scoped_local_detail_v1::value_bytes(value);
+        if (bytes > max_bytes) return false;
+        auto next = std::make_shared<Cell<T>>(std::move(value), bytes);
         std::shared_ptr<Base> replaced;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!open_ || !owner_.equals(caller)) return false;
             const auto found = slots_.find(key.id_);
+            const std::size_t previous =
+                found == slots_.end() ? 0 : found->second->bytes;
+            if ((found == slots_.end() && slots_.size() >= max_slots)
+                    || bytes > max_bytes - (used_bytes_ - previous)) return false;
             if (found == slots_.end()) {
-                if (slots_.size() >= max_slots) return false;
                 slots_.emplace(key.id_, std::move(next));
             } else {
                 replaced.swap(found->second);
                 found->second = std::move(next);
             }
+            used_bytes_ = used_bytes_ - previous + bytes;
         }
-        // Do not run arbitrary T destructors while the store lock is held.
-        replaced.reset();
+        replaced.reset(); // destructor outside the store mutex
         return true;
+    }
+
+    template <class T>
+    bool remove(const ScopedLocalKeyV1<T, Scope>& key,
+                const ScopedLocalIdentityV1& caller) {
+        std::shared_ptr<Base> retired;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!open_ || !owner_.equals(caller)) return false;
+            const auto found = slots_.find(key.id_);
+            if (found == slots_.end()) return false;
+            used_bytes_ -= found->second->bytes;
+            retired = std::move(found->second);
+            slots_.erase(found);
+        }
+        retired.reset();
+        return true;
+    }
+
+    std::size_t used_bytes() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return used_bytes_;
     }
 
     template <class T>
@@ -170,6 +212,7 @@ public:
             if (!open_) return false;
             open_ = false;
             old.swap(slots_);
+            used_bytes_ = 0;
         }
         old.clear();
         return true;
@@ -180,6 +223,7 @@ private:
     const ScopedLocalIdentityV1 owner_;
     mutable std::mutex mutex_;
     bool open_ = true;
+    std::size_t used_bytes_ = 0;
     std::unordered_map<std::uint64_t, std::shared_ptr<Base>> slots_;
 };
 
@@ -192,39 +236,64 @@ using TaskLocalStoreV1 = LogicalLocalStoreV1<ScopedLocalScopeV1::Task>;
 class PhysicalThreadLocalStoreV1 final {
     using Base = scoped_local_detail_v1::CellBase;
     template <class T> using Cell = scoped_local_detail_v1::Cell<T>;
-    static std::unordered_map<std::uint64_t, std::shared_ptr<Base>>& slots() {
-        static thread_local std::unordered_map<std::uint64_t,
-                                               std::shared_ptr<Base>> local;
+    struct State {
+        std::unordered_map<std::uint64_t, std::shared_ptr<Base>> slots;
+        std::size_t used_bytes = 0;
+    };
+    static State& state() {
+        static thread_local State local;
         return local;
     }
 public:
     static constexpr std::size_t max_slots = 32;
+    static constexpr std::size_t max_bytes = 8192;
     template <class T>
     static bool set(const ThreadLocalKeyV1<T>& key, T value) {
-        auto next = std::make_shared<Cell<T>>(std::move(value));
-        auto& entries = slots();
+        const std::size_t bytes = scoped_local_detail_v1::value_bytes(value);
+        if (bytes > max_bytes) return false;
+        auto next = std::make_shared<Cell<T>>(std::move(value), bytes);
+        auto& local = state();
+        auto& entries = local.slots;
         auto it = entries.find(key.id_);
+        const std::size_t previous = it == entries.end() ? 0 : it->second->bytes;
+        if ((it == entries.end() && entries.size() >= max_slots)
+                || bytes > max_bytes - (local.used_bytes - previous)) return false;
+        std::shared_ptr<Base> retired;
         if (it == entries.end()) {
-            if (entries.size() >= max_slots) return false;
             entries.emplace(key.id_, std::move(next));
         } else {
-            auto previous = std::move(it->second);
+            retired = std::move(it->second);
             it->second = std::move(next);
-            previous.reset();
         }
+        local.used_bytes = local.used_bytes - previous + bytes;
+        retired.reset();
         return true;
     }
     template <class T>
     static std::optional<T> get_copy(const ThreadLocalKeyV1<T>& key) {
-        const auto& entries = slots();
+        const auto& entries = state().slots;
         const auto it = entries.find(key.id_);
         if (it == entries.end()) return std::nullopt;
         return std::static_pointer_cast<const Cell<T>>(it->second)->value;
     }
+    template <class T>
+    static bool remove(const ThreadLocalKeyV1<T>& key) {
+        auto& local = state();
+        auto it = local.slots.find(key.id_);
+        if (it == local.slots.end()) return false;
+        local.used_bytes -= it->second->bytes;
+        auto retired = std::move(it->second);
+        local.slots.erase(it);
+        retired.reset();
+        return true;
+    }
+    static std::size_t used_bytes() { return state().used_bytes; }
     static void clear_current_thread() {
         std::unordered_map<std::uint64_t, std::shared_ptr<Base>> old;
-        old.swap(slots());
-        old.clear(); // not on an arbitrary actor-callback lane
+        auto& local = state();
+        old.swap(local.slots);
+        local.used_bytes = 0;
+        old.clear(); // destructor outside the bucket
     }
 };
 
