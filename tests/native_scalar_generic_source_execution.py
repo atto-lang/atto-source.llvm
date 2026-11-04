@@ -263,6 +263,9 @@ def verify(compiler, clang):
             executed = run([str(exe)])
             if executed.returncode != exit_code:
                 raise AssertionError(f"{name}: guest exit {executed.returncode}, expected {exit_code}, stderr={executed.stderr!r}")
+            if executed.stdout or executed.stderr:
+                raise AssertionError(f"{name}: scalar guest unexpectedly emitted output: "
+                                     f"stdout={executed.stdout!r}, stderr={executed.stderr!r}")
             print(f"PASS guest {name}: {exit_code}", flush=True)
         for name, (source, diagnostic) in INVALID.items():
             path = tmp / (name + ".atto")
