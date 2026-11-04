@@ -210,9 +210,19 @@ void test_capacity_and_replay_fail_closed() {
     assert(scope->get_copy(keys[31]) == 31);
     assert(scope->set(keys[0], 123)); // replacement does not use extra slot
     assert(scope->get_copy(keys[0]) == 123);
+    // Explicit erase must restore capacity without running value destructor
+    // under the scope lock and without permitting double retirement.
+    assert(scope->erase(keys[1]));
+    assert(!scope->erase(keys[1]));
+    assert(!scope->get_copy(keys[1]));
+    assert(scope->set(keys[32], 999));
+    assert(scope->get_copy(keys[32]) == 999);
+    assert(scope->erase(keys[32]));
+    assert(!scope->erase(keys[32]));
     assert(scope->close());
     assert(!scope->get_copy(keys[0]));
     assert(!scope->set(keys[0], 2));
+    assert(!scope->erase(keys[0]));
     authority->retire();
 }
 
@@ -297,6 +307,10 @@ void test_request_reentrant_drop_after_replacement() {
     })));
     assert(scope->set(key, ReentrantRequestDrop([] {})));
     assert(callbacks.load() == 1);
+    // Erase runs destructor of the replacement AFTER removing the cell.
+    assert(scope->erase(key));
+    assert(!scope->erase(key));
+    assert(!scope->get_copy(key));
     assert(scope->close());
     scope.reset();
     cancellation->retire();
