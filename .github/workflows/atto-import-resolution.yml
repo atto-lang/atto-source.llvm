@@ -56,7 +56,9 @@ jobs:
               -Isrc/main/cpp tests/project_root_import_test.cpp \
               -o "/tmp/atto-root-import-${compiler}"
             "/tmp/atto-root-import-${compiler}"
-            "${compiler}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG               -Isrc/main/cpp tests/host_logical_source_unit_ids_test.cpp               -o "/tmp/atto-host-logical-ids-${compiler}"
+            "${compiler}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+              -Isrc/main/cpp tests/host_logical_source_unit_ids_test.cpp \
+              -o "/tmp/atto-host-logical-ids-${compiler}"
             "/tmp/atto-host-logical-ids-${compiler}"
           done
       - name: Resolver ASan and UBSan
