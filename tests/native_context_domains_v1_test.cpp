@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -89,6 +90,42 @@ void test_exact_drop_and_physical_tls() {
     assert(!num.get_copy());
 }
 
+struct ReentrantCopy {
+    std::shared_ptr<ActorLocalScopeV1> scope;
+    explicit ReentrantCopy(std::shared_ptr<ActorLocalScopeV1> value)
+        : scope(std::move(value)) {}
+    ReentrantCopy(ReentrantCopy&&) noexcept = default;
+    ReentrantCopy(const ReentrantCopy& other) : scope(other.scope) {
+        // A read that copied under the scope mutex would deadlock here.
+        assert(scope->close());
+    }
+};
+
+struct ThreadReentrantCopy {
+    std::function<void()> on_copy;
+    explicit ThreadReentrantCopy(std::function<void()> callback)
+        : on_copy(std::move(callback)) {}
+    ThreadReentrantCopy(ThreadReentrantCopy&&) noexcept = default;
+    ThreadReentrantCopy(const ThreadReentrantCopy& other)
+        : on_copy(other.on_copy) { on_copy(); }
+};
+
+void test_reentrant_copy_safe_retirement() {
+    auto actor = ActorLocalScopeV1::open(actor_a);
+    ActorLocalKeyV1<ReentrantCopy> actor_key;
+    assert(actor->set(actor_a, actor_key, ReentrantCopy(actor)));
+    auto copied = actor->get_copy(actor_a, actor_key);
+    assert(copied);
+    assert(!actor->is_open());
+    assert(!actor->get_copy(actor_a, actor_key));
+
+    ThreadLocalKeyV1<ThreadReentrantCopy> tls_key;
+    assert(tls_key.set(ThreadReentrantCopy([&] { (void)tls_key.erase(); })));
+    auto tls_snapshot = tls_key.get_copy();
+    assert(tls_snapshot);
+    assert(!tls_key.get_copy());
+}
+
 void test_bounds_and_close_race() {
     assert(!TaskLocalScopeV1::open({}));
     assert(!ActorLocalScopeV1::open({}));
@@ -128,6 +165,7 @@ void test_bounds_and_close_race() {
 int main() {
     test_isolation_and_migration();
     test_exact_drop_and_physical_tls();
+    test_reentrant_copy_safe_retirement();
     test_bounds_and_close_race();
     std::puts("LOCAL_CONTEXT_DOMAINS_V1_HOST_PASS");
 }
