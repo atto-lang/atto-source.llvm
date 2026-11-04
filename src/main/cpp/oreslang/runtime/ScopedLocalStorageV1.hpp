@@ -7,9 +7,10 @@
 // supply identity from the scheduler's authenticated logical execution lease,
 // never from guest arguments, callback provenance or an OS thread-local.
 //
-// This host substrate bounds SLOT COUNT only. It dynamically allocates, is
-// unsuitable for a sealed hard-real-time turn, and must not accept guest
-// owned/raw capabilities without compiler Sendable and ownership checks.
+// This host substrate bounds 32 slots and 8 KiB of value PAYLOAD bytes per
+// store. It still dynamically allocates (including container metadata) and is
+// unsuitable for a sealed hard-real-time turn. Guest-owned capabilities require
+// compiler Sendable/ownership admission before any host storage access.
 
 #include <atomic>
 #include <cstddef>
@@ -71,14 +72,47 @@ template <class T> struct Cell final : CellBase {
     const T value;
 };
 
+// Strict Unicode scalar validation: reject overlong encodings, surrogate
+// codepoints, continuation-byte prefixes, >U+10FFFF and truncated tails.
+// Source-level String is Unicode, not a way to smuggle arbitrary host bytes.
+inline bool valid_utf8(const std::string& value) noexcept {
+    const auto* data = reinterpret_cast<const unsigned char*>(value.data());
+    std::size_t offset = 0;
+    while (offset < value.size()) {
+        const unsigned char first = data[offset];
+        if (first <= 0x7f) { ++offset; continue; }
+        std::uint32_t scalar;
+        std::uint32_t minimum;
+        std::size_t total;
+        if (first >= 0xc2 && first <= 0xdf) {
+            total = 2; scalar = first & 0x1f; minimum = 0x80;
+        } else if (first >= 0xe0 && first <= 0xef) {
+            total = 3; scalar = first & 0x0f; minimum = 0x800;
+        } else if (first >= 0xf0 && first <= 0xf4) {
+            total = 4; scalar = first & 0x07; minimum = 0x10000;
+        } else return false;
+        if (total > value.size() - offset) return false;
+        for (std::size_t index = 1; index < total; ++index) {
+            const unsigned char part = data[offset + index];
+            if ((part & 0xc0) != 0x80) return false;
+            scalar = (scalar << 6) | (part & 0x3f);
+        }
+        if (scalar < minimum || scalar > 0x10ffff
+                || (scalar >= 0xd800 && scalar <= 0xdfff)) return false;
+        offset += total;
+    }
+    return true;
+}
+
 // This host entrypoint deliberately admits only primitive scalar / enum
-// values and bounded UTF-8 strings. is_trivially_copyable<T> is NOT enough:
-// e.g. struct { void* capability; } is trivially copyable yet would leak a
-// raw host pointer across domains. Struct/record support must be introduced
-// only with compiler-checked, transitive ownership/type descriptors.
+// values and bounded valid UTF-8 strings. is_trivially_copyable<T> is NOT
+// enough: a plain struct can conceal a host pointer or privileged capability.
+// Struct/record values require transitive compiler-owned type descriptors.
 template <class T>
 std::size_t value_bytes(const T& value) noexcept {
-    if constexpr (std::is_same_v<T, std::string>) return value.size();
+    if constexpr (std::is_same_v<T, std::string>)
+        return valid_utf8(value) ? value.size()
+                                 : std::numeric_limits<std::size_t>::max();
     else if constexpr (std::is_arithmetic_v<T> || std::is_enum_v<T>)
         return sizeof(T);
     else {
