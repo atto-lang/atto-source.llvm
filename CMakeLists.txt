@@ -4763,3 +4763,6 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_request_context_local_host_only
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Canonical AttoLang native-compiled scalar guest subset, not ORES_TEST parity.
+include("${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/AttoNativeHarnessParity.cmake")
