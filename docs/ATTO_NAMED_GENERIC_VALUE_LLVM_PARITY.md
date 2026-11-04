@@ -83,6 +83,21 @@ importing-source filenames directly (four C++ negative assertions), even
 when called without the module loader. These are **registered, not yet
 executed** until an authorized runner is admitted.
 
+## TOML project-root manifest admission
+
+The small native `.ores.pkg.toml` reader must not silently ignore TOML
+`[project.root]`, quoted/dotted variants, `[[project.root]]`, or
+`[[project]]`. A `project.root` setting would otherwise appear accepted
+while `+/` imports continue resolving from the manifest directory,
+potentially crossing a caller's intended package boundary. Such declarations
+now fail closed pending a complete TOML parser. Duplicate `[project]`
+tables are also rejected; unrelated `[build] root=...` remains allowed.
+
+Added **8 negative compiler scenarios** to `native_source_module_graph_execution`
+requiring no LLVM IR and **9 direct resolver cases** (8 negative and one
+unrelated-root positive) to `native_project_root_import_security`. These
+are authored tests, not backend execution evidence.
+
 ## Generic-call token lookahead and separate binding namespaces
 
 The native parser used to inspect only **64** tokens when deciding
