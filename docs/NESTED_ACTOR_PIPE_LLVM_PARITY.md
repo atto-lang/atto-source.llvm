@@ -117,3 +117,21 @@ and conformance
 [run 41754205765](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41754205765)
 completed unsuccessfully with **zero job steps**. They provide no
 source-test verdict.
+
+## Java fail-closed admission alignment
+
+The Java/Graal backend merged
+[PR #2512](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/2512),
+which explicitly rejects `Actor.pipe` and `Actor.connect` as compiler-reserved
+intrinsics rather than accidentally falling through to dynamic method invocation.
+This LLVM draft adds the corresponding lexical-token-aware primary-expression
+gate for `Actor.pipe(...)`, `Actor.pipe<...>(...)`, `Actor::pipe(...)`,
+`Actor.connect(...)`, and `Actor.connect<...>(...)`, plus six negative
+`.atto` source contracts counting the recursive case.
+
+These gates establish a **proposed common fail-closed boundary**, not positive
+execution parity. The LLVM tests require a built native compiler and are still
+unexecuted because source-org Actions jobs show zero recorded steps. Ordinary
+`Other.pipe(...)` expressions are not caught by the reserved Actor namespace
+guard; their separate native type admissibility remains governed by the
+existing compiler.

@@ -898,6 +898,21 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_nested_actor_pipe_guest_failclosed
         nested-actor-pipe-unsupported.atto
         --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_pipe_type_sugar_failclosed
+        actor-pipe-types-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_pipe_generic_failclosed
+        actor-pipe-generic-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_pipe_namespace_failclosed
+        actor-pipe-namespace-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_connect_guest_failclosed
+        actor-connect-unsupported.atto
+        --diagnostic "ACTOR_CONNECT_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_connect_generic_failclosed
+        actor-connect-generic-unsupported.atto
+        --diagnostic "ACTOR_CONNECT_LLVM_NOT_IMPLEMENTED")
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
