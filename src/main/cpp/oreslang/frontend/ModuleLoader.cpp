@@ -304,6 +304,12 @@ private:
                     // not bypass self-edge rejection or duplicate unit identity.
                     for (std::size_t i = 0; i < units.size(); ++i) {
                         if (same_file(units[i]->identity, child_identity)) {
+                            // One inode cannot be admitted as both .atto and
+                            // .ores. Hard links bypass canonical-suffix checks;
+                            // accepting both would select an import dialect
+                            // based on visitation order.
+                            if (units[i]->path.extension() != dependency.extension())
+                                fail(current, "native source hard-link aliases disagree on .atto/.ores dialect");
                             selected = i;
                             break;
                         }
