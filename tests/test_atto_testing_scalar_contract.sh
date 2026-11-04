@@ -19,7 +19,12 @@ done
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 awk '
-  /^R"ATTO_SCALAR\(/ { inside=1; next }
+  /^R"ATTO_SCALAR\(/ {
+    inside=1
+    sub(/^R"ATTO_SCALAR\(/, "")
+    print
+    next
+  }
   /^\)ATTO_SCALAR";$/ { inside=0; next }
   inside { print }
 ' "$header" > "$tmp/compiled-source.atto"
