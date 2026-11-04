@@ -62,6 +62,9 @@ jobs:
           # Its CMake target is not defined with BUILD_TESTING=OFF.
           rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs \
             -o "$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit"
+          rustc --edition=2021 --test -D warnings scripts/audit_no_gc_ir.rs \
+            -o "$RUNNER_TEMP/dop-atto-build/audit-no-gc-ir-tests"
+          timeout 20s "$RUNNER_TEMP/dop-atto-build/audit-no-gc-ir-tests"
           test -x "$RUNNER_TEMP/dop-atto-build/oreslang-llvmc"
           test -x "$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit"
           sha256sum "$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" \
