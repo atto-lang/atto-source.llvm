@@ -246,6 +246,26 @@ int main() {
                   [&] { (void)resolve(dir/"main.atto", "+/aliased/lib"); });
     }
 #endif
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "atto-entry-file-symlink";
+        write_text(dir/".atto.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/"real.atto", "");
+        write_text(dir/"lib.atto", "");
+        fs::create_symlink(dir/"real.atto", dir/"main.atto");
+        must_fail("canonical entry source symlink", "symlinked AttoLang source path",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-entry-parent-symlink";
+        write_text(dir/".atto.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/"real/main.atto", "");
+        write_text(dir/"lib.atto", "");
+        fs::create_directory_symlink(dir/"real", dir/"alias");
+        must_fail("canonical entry parent symlink", "symlinked AttoLang source path",
+                  [&] { (void)resolve(dir/"alias/main.atto", "+/lib"); });
+    }
+#endif
     {
         const auto dir = temp / "atto-canonical-manifest";
         write_text(dir/".ores.pkg.toml", "schema_version = \"999\"\n");
@@ -265,6 +285,16 @@ int main() {
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
         if (resolve(dir/"main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("legacy importer migration fallback regressed");
+    }
+    {
+        const auto dir = temp / "atto-duplicate-project-table";
+        write_text(dir/".atto.pkg.toml",
+                   "schema_version = \\"1\\"\\n[project]\\nname = \\"first\\"\\n"
+                   "[project]\\nroot = \\".\\"\\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("canonical duplicate project table", "duplicate [project]",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
         const auto dir = temp / "atto-malformed-manifest";
