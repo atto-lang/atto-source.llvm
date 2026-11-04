@@ -940,6 +940,7 @@ int ores_native_actor_scheduler_priority_inheritance_enabled(
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
+        || s->actors[i].accepted_user_messages == UINT64_MAX
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
         || s->accepted >= UINT64_MAX - s->reserved_wakes
         || !execution_slot_available_locked(s)) {
@@ -953,11 +954,16 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
         return 0;
     }
     if (new_lane) ++s->runnable_lanes;
+    /* The source-mail ordinal is minted at SUCCESSFUL enqueue, not inferred
+     * from payload, carrier, or the number of completed callbacks. The pair
+     * lives in parallel preallocated ring slots and cannot be reassigned by a
+     * producer's Future completion or a guest-supplied token. */
+    const uint64_t admitted_sequence = a->accepted_user_messages + UINT64_C(1);
     a->messages[a->tail] = payload;
+    a->mail_sequences[a->tail] = admitted_sequence;
     if (++a->tail == s->per_actor_capacity) a->tail = 0;
     a->queued++;
-    if (a->accepted_user_messages == UINT64_MAX) abort();
-    ++a->accepted_user_messages;
+    a->accepted_user_messages = admitted_sequence;
     s->reserved_executions++;
     s->accepted++;
     s->outstanding++;
@@ -1021,7 +1027,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
-        } else if (lane->queued + lane->active >= s->per_actor_capacity) {
+        } else if (lane->accepted_user_messages == UINT64_MAX
+                || lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
         } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
                 || !execution_slot_available_locked(s)) {
