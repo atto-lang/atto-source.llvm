@@ -1,0 +1,4 @@
+// Verify native rt copy of a Copy scalar through actual LLVM/Clang execution.
+pub fnc main(): int {
+  return rt copy 42;
+}
