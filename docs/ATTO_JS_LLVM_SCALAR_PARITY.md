@@ -100,3 +100,52 @@ minimum plus zero returned 42 after full-width equality, while maximum plus
 one through `llvm.sadd.with.overflow.i64` triggered an `Illegal instruction`
 trap. This validates the host LLVM IR / Clang behavior **without** exercising
 `oreslang-llvmc`; do not cite it as compiled AttoLang source parity.
+
+## Dual optimization execution and receipt comparison
+
+The source-local LLVM CTest harness now compiles the same compiler-emitted IR
+with both Clang `-O0` and `-O2` and executes both binaries:
+
+| Native matrix | Source cases | Guest processes |
+| --- | ---: | ---: |
+| Canonical byte-identical scalar50 | 50 | 100 |
+| Checked-i64 values and overflows | 50 | 100 |
+| Equality true/false controls | 2 | 4 |
+| **Total** | **102** | **204** |
+
+An LLVM optimizer-dependent value difference, missing or non-signal overflow,
+missing O2 guest result or a dishonest process-count receipt fails the native
+gate. The workflow independently binds the two receipts to the source HEAD
+and Git tree, checks the built compiler SHA-256, recomputes all 100 original
+source hashes and the 37 generated full-width equality-wrapper hashes.
+
+Run synthetic offline JS/LLVM comparison regressions with:
+
+`node --test tests/atto_js_llvm_receipt_comparison.test.mjs`
+
+When two **separately acquired** exact-head JS and LLVM receipts exist, compare
+them without transferring private compiler source or using cross-org tokens:
+
+`node scripts/compare-atto-js-llvm-receipts.mjs /path/to/js-receipt.json /path/to/llvm-checked-i64-native-receipt.json`
+
+The comparator validates both manifests, 50 per-case IDs, expected/observed
+semantics, signed-i64 value wrappers, O0/O2 trap classifications, source SHA-256
+and compiler-source receipt identities. Its output is deliberately
+`RECEIPT_CONTENT_MATCH_ONLY`, with both `execution_attested:false` and
+`cross_backend_parity_verified:false`: two plausible JSON blobs are **not**
+independent runner attestation, even if their 50 case contents match.
+
+An isolated V8 test adapter ran all 14 authored synthetic comparator cases
+(1 admissible shape and 13 mutations): **14/14** passed. This was neither a
+Node 22 CI job nor LLVM-native guest execution. A local CMake 3.31.6 check of
+the **actual pinned** checked-i64 corpus (SHA-256
+`5fd8ed522dfaaead8dc1b2d780159a4f156482124b7515d0a788245fc594ebc8`)
+accepted 37 value cases and 13 overflow expectations. Hand-authored LLVM IR
+probes linked and ran with Clang 17 at both O0/O2: `INT64_MIN+0` returned 42
+and `INT64_MAX+1` trapped. These are host/toolchain probes only.
+
+The source-org GitHub Actions runner still fails at zero steps. Until an
+authorized source runner compiles and executes all **204** guest processes,
+actual LLVM parity is **not verified**. A successful comparison report
+must only be promoted after independently authenticating both workflows'
+nonzero executed steps and exact input head/tree/compiler receipts.
