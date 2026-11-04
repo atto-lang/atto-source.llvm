@@ -88,7 +88,8 @@ def main(compiler):
         argument_effect.returncode, argument_effect.stdout, argument_effect.stderr
     )
     assert "status=inconclusive" in argument_effect.stdout
-    assert "status=known" not in argument_effect.stdout
+    assert "main/0\tstatus=inconclusive" in argument_effect.stdout, argument_effect.stdout
+    # The unrelated `identity` definition may still have a known narrow-scope row.
 
     # Transitive unknown observations must contaminate the callers too.
     transitive_unknown = run(
@@ -147,7 +148,7 @@ def main(compiler):
     assert recursive.returncode != 0, (
         recursive.returncode, recursive.stdout, recursive.stderr
     )
-    assert "status=known" not in recursive.stdout
+    assert "main/0\tstatus=known" not in recursive.stdout
 
     # An unresolved target is not a trusted typed-effect summary.
     unresolved = run(
@@ -158,7 +159,7 @@ def main(compiler):
     assert unresolved.returncode != 0, (
         unresolved.returncode, unresolved.stdout, unresolved.stderr
     )
-    assert "status=known" not in unresolved.stdout
+    assert "main/0\tstatus=known" not in unresolved.stdout
 
     # Malformed source cannot be reported as admitted or effect-free.
     malformed = run(compiler, "pub fnc main(): int { return ; }\n",
