@@ -24,6 +24,9 @@ static_assert(!local_value_allowed_v1<int*>);
 static_assert(!local_value_allowed_v1<std::reference_wrapper<int>>);
 static_assert(!local_value_allowed_v1<std::string_view>);
 static_assert(!local_value_allowed_v1<std::initializer_list<int>>);
+#if __cplusplus >= 202002L
+static_assert(!local_value_allowed_v1<std::span<int>>);
+#endif
 
 namespace {
 using Context = RequestContextLocalV1;
