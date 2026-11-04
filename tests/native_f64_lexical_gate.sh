@@ -80,6 +80,19 @@ positive() {
     [[ -x "$image" && ! -s "$scratch/$name.O$opt.link.stderr" &&
        ! -s "$scratch/$name.O$opt.link.stdout" ]] ||
       { echo "NATIVE_F64_LINK_DIAGNOSTIC: $name O$opt" >&2; exit 1; }
+    # The actual Clang linker must have produced a native image, not a
+    # shell/Node shim that merely returns the expected case exit code.
+    # Header admission is not independent toolchain provenance/signing.
+    local native_magic
+    native_magic="$(od -An -tx1 -N4 "$image" | tr -d '[:space:]')"
+    case "$native_magic" in
+      7f454c46|feedface|feedfacf|cefaedfe|cffaedfe|cafebabe|bebafeca|4d5a*)
+        ;;
+      *)
+        echo "NATIVE_F64_LINK_NOT_NATIVE_IMAGE: $name O$opt" >&2
+        exit 1
+        ;;
+    esac
     local image_hash_before
     image_hash_before="$(hash_evidence "$image")"
     printf '%s\n' "$image_hash_before"
