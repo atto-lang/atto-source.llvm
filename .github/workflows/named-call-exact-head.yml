@@ -66,6 +66,11 @@ jobs:
             native_named_member_duplicate_label
             native_named_member_positional_after_named
             native_named_call_lexical_ir_order
+            native_named_call_reordered_guest
+            native_named_call_mixed_guest
+            native_named_call_mut_borrow_binding
+            native_named_call_overload_arity_guest
+            native_named_call_mut_borrow_conflict
             native_named_call_unknown_label
             native_named_call_duplicate_slot
             native_named_call_positional_after_named
