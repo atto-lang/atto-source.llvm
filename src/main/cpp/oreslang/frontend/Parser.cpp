@@ -4423,6 +4423,17 @@ private:
                     const std::size_t slot = source_to_formal[i];
                     const ScalarType actual = validate_scalar_expression(
                         *expr.arguments[i], variables, functions, depth + 1);
+                    // A generic formal in this LLVM stage represents
+                    // precisely int64, not an erased dynamic/any slot.
+                    // Typecheck both explicit and inferred specializations;
+                    // otherwise bool/String actuals would silently cross the
+                    // i64 ABI despite the language forbidding coercions.
+                    if (!signature.parameter_generic_types[slot].empty() &&
+                            actual != ScalarType::I64)
+                        throw std::runtime_error("native scalar generic argument '" +
+                            signature.parameters[slot] + "' requires int, got " +
+                            scalar_type_name(actual) + " at byte " +
+                            std::to_string(expr.arguments[i]->offset));
                     if (signature.parameter_is_scalar[slot] &&
                             actual != signature.parameter_scalar_types[slot])
                         throw std::runtime_error("argument '" + signature.parameters[slot] +
