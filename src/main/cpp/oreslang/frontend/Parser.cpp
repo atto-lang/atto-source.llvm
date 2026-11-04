@@ -1161,6 +1161,12 @@ private:
             // for BOTH emitted occurrences (no shared or reused Expr*).
             if (!argument || argument->kind != Expression::Kind::Integer)
                 fail("NATIVE_MACRO_EXPANDER_REQUIRED: repeated unquote requires a closed integer literal; no ownership/effect duplication or runtime fallback is permitted");
+            // LLVM's ordinary i64 add wraps unless separately checked. Do
+            // not introduce a silently wrapping expression when statically
+            // duplicating a proven constant: reject overflow before IR.
+            std::int64_t checked_sum = 0;
+            if (__builtin_add_overflow(argument->integer, argument->integer, &checked_sum))
+                fail("NATIVE_MACRO_CONST_OVERFLOW: repeated literal quote exceeds signed i64; runtime fallback is forbidden");
             auto result = make_expression(Expression::Kind::Add, offset);
             result->left = make_expression(Expression::Kind::Integer, argument->offset);
             result->right = make_expression(Expression::Kind::Integer, argument->offset);
