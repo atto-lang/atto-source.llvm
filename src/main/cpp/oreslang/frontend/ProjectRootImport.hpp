@@ -68,6 +68,11 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         R"ores(^[ \t]*\[{1,2}[ \t]*(?:project|"project"|'project')[ \t]*\.[ \t]*(?:root|"root"|'root')[ \t]*\]{1,2}[ \t]*(?:#.*)?$)ores");
     const std::regex project_array_table(
         R"ores(^[ \t]*\[\[[ \t]*(?:project|"project"|'project')[ \t]*\]\][ \t]*(?:#.*)?$)ores");
+    // Even non-root sub-tables of project are outside the supported TOML
+    // subset. In particular, [project.root.extra] must not evade the exact
+    // [project.root] check and turn an unsupported root into a silent no-op.
+    const std::regex project_dotted_table(
+        R"ores(^[ \t]*\[{1,2}[ \t]*(?:project|"project"|'project')[ \t]*\..*$)ores");
 
     std::size_t version_count = 0;
     std::size_t project_table_count = 0;
@@ -77,9 +82,24 @@ inline void validate_manifest(const std::string& manifest_bytes) {
     std::string line;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
+        // TOML basic quoted keys can encode 'project' and 'root' using
+        // Unicode escapes. Since this reader does not decode quoted keys,
+        // reject all escaped key spellings rather than trusting regexes on
+        // their undecoded bytes. Values after '=' remain unaffected.
+        const auto first_key = line.find_first_not_of(" \t");
+        if (first_key != std::string::npos && line[first_key] != '#') {
+            const auto key_end = line.find(
+                line[first_key] == '[' ? ']' : '=', first_key);
+            if (key_end != std::string::npos &&
+                    line.find('\\', first_key) < key_end)
+                throw std::runtime_error(
+                    "native package manifest escaped keys require full TOML parser");
+        }
         if (std::regex_match(line, project_root_table) ||
                 std::regex_match(line, project_array_table))
             throw std::runtime_error("native project.root requires full TOML parser");
+        if (std::regex_match(line, project_dotted_table))
+            throw std::runtime_error("native nested project table requires full TOML parser");
         if (std::regex_match(line, project_section) && ++project_table_count > 1)
             throw std::runtime_error("native package manifest duplicate project table");
         if (std::regex_match(line, project_assignment) ||
