@@ -54,7 +54,8 @@ struct CoreLibrarySource {
 };
 
 inline bool is_reserved_core_import(std::string_view raw) noexcept {
-    return raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
+    return raw == "atto.core" || raw.rfind("atto.core/", 0) == 0 ||
+        raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
 }
 
 inline bool is_reserved_std_import(std::string_view raw) noexcept {
@@ -78,8 +79,9 @@ inline bool compiler_library_dependency_allowed(
 }
 
 inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
-    // Keep aliases identity-stable: the optional .ores suffix selects the same
-    // compiler-owned unit and can never create a duplicate module instance.
+    // AttoLang's public .atto and atto.core names are canonical. Older
+    // ores.core / .ores imports are aliases of the SAME compiled unit. They
+    // must never create duplicate module identities or provider bypasses.
     static constexpr std::string_view kNumericSource =
 R"ORES_CORE(// Compiler-owned ores.core source.
 // This module has no OS, Java, filesystem, network, process, actor-scheduler,
@@ -118,9 +120,9 @@ end
 )ORES_CORE";
     static constexpr CoreLibrarySource kNumeric{
         CompilerLibraryTier::Core,
-        "ores.core/numeric",
+        "atto.core/numeric",
         "numeric",
-        "@ores.core/numeric.ores",
+        "@atto.core/numeric.atto",
         kNumericSource,
         0u
     };
@@ -145,7 +147,7 @@ end
         CompilerLibraryTier::Alloc,
         "alloc/int_buffer",
         "int_buffer",
-        "@alloc/int_buffer.ores",
+        "@alloc/int_buffer.atto",
         kIntBufferSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
@@ -169,16 +171,21 @@ end
         CompilerLibraryTier::Alloc,
         "alloc/int_buffer_bundle",
         "int_buffer_bundle",
-        "@alloc/int_buffer_bundle.ores",
+        "@alloc/int_buffer_bundle.atto",
         kIntBufferBundleSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
-    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
+    if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
+            raw == "atto.core/numeric.ores" ||
+            raw == "ores.core/numeric" || raw == "ores.core/numeric.atto" ||
+            raw == "ores.core/numeric.ores")
         return &kNumeric;
-    if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
+    if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.atto" ||
+            raw == "alloc/int_buffer.ores")
         return &kIntBuffer;
     if (raw == "alloc/int_buffer_bundle" ||
+            raw == "alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
     return nullptr;
