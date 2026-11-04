@@ -149,6 +149,8 @@ struct LocalBinding {
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.
     std::vector<std::unique_ptr<Expression>> constructor_arguments;
+    // Source lexical labels, one per actual, empty for a positional prefix.
+    std::vector<std::string> constructor_argument_names;
     // Restricted local stack-only explicit class move.
     bool move_class = false;
     std::string move_source;
@@ -208,6 +210,54 @@ inline const ClassField* constructor_field(const ClassDecl& cls, std::size_t par
     for (const auto& field : cls.fields)
         if (field.constructor_argument && field.name == cls.constructor_parameters[parameter]) return &field;
     return nullptr;
+}
+
+// Statically resolve local new-Class constructor call-site labels against
+// the declared constructor ABI slots, without evaluating source arguments.
+// Only true local class construction uses this binder (not arbitrary calls).
+inline std::vector<std::size_t> native_constructor_argument_slots(
+        const LocalBinding& binding, const ClassDecl& cls) {
+    if (!binding.new_class || binding.class_name != cls.name)
+        throw std::runtime_error("native constructor binding requires exact class");
+    const std::size_t arity = cls.constructor_parameters.size();
+    if (binding.constructor_arguments.size() != arity)
+        throw std::runtime_error("native class constructor argument arity mismatch");
+    if (!binding.constructor_argument_names.empty() &&
+        binding.constructor_argument_names.size() != arity)
+        throw std::runtime_error("invalid native constructor label layout");
+    std::vector<bool> assigned(arity, false);
+    std::vector<std::size_t> mapping;
+    mapping.reserve(arity);
+    std::size_t positional = 0;
+    bool saw_named = false;
+    for (std::size_t source = 0; source < arity; ++source) {
+        const std::string label = binding.constructor_argument_names.empty()
+            ? std::string{} : binding.constructor_argument_names[source];
+        std::size_t target = positional;
+        if (!label.empty()) {
+            saw_named = true;
+            target = 0;
+            while (target < arity &&
+                   cls.constructor_parameters[target] != label) ++target;
+            if (target == arity)
+                throw std::runtime_error(
+                    "unknown named native constructor argument '" + label + "'");
+        } else {
+            if (saw_named)
+                throw std::runtime_error(
+                    "positional constructor argument cannot follow named argument");
+            ++positional;
+        }
+        if (target >= arity || assigned[target])
+            throw std::runtime_error(
+                "duplicate native constructor argument binding");
+        assigned[target] = true;
+        mapping.push_back(target);
+    }
+    for (bool used : assigned)
+        if (!used)
+            throw std::runtime_error("incomplete native constructor argument binding");
+    return mapping;
 }
 
 // Native source value categories. Future<T> remains a no-IR boundary
