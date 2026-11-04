@@ -541,3 +541,33 @@ certification. A GitHub Actions job with `steps=[]` is a runner-admission
 failure, never compiler evidence. Preserve draft status and require a
 successful authorized exact-head native guest run plus independent review
 before promoting this bounded candidate.
+
+### Exact-head guest evidence contract — source org runner required
+
+The compiled-native-actor-owned-heaps job performs two separate native
+source-compiler executions, each with 2,009 actor-handler turns, in both
+optimized and ASan/UBSan configurations. A successful mode now uploads only
+`aot-guest-receipt-<mode>.json` under a run-ID/attempt-specific artifact name.
+It contains the source head/tree, Git blob identities, run/job/attempt,
+mode, LLVM IR and native object/executable SHA-256 digests, and the two exact
+one-line execution markers. It contains **no source code, executables, raw
+traces or secrets**.
+
+`tests/emit_sealed_actor_receipt.py` fails closed if the head is wrong,
+the tree has changed, a marker is absent/duplicated/polluted, a required
+LLVM function is only a declaration, a native ownership call is missing or
+commented out, or the legacy and sealed handler definitions are confused.
+`tests/test_emit_sealed_actor_receipt.py` runs on the actual GitHub source
+checkout before the compiled test and has offline mutation coverage. The
+receipt is created and uploaded **only after** the compiler-based positive
+runs and negative admission cases have succeeded; no empty-step Actions run
+may claim it. Separately, Cortex-M sealed critical state is now explicitly
+rejected in frontend admission and LLVM emission because the freestanding
+static actor bootstrap lacks the hosted actor-owned heap/turn ABI.
+
+A synthetically constructed local Git checkout may test the receipt
+validator's mechanics but is never a guest execution receipt. This
+experimental scalar implementation remains distinct from the normative
+runtime-owned `handle_state(callback)` state-loan intrinsic. Neither JSON
+metadata nor successful native heap unit tests alone prove full zero-GC
+coverage or backend parity.
