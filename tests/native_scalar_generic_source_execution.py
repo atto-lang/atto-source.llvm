@@ -111,8 +111,10 @@ pub fnc main(): int { return fixed(); }
     "duplicate-named-value-with-generics": ("""fnc add<T>(T first, T second): int { return first + second; }
 pub fnc main(): int { return add<T=int>(first: 19, first: 23); }
 """, "duplicate named argument"),
+    # The binder must reject the *late* label before recursing into the
+    # invalid first argument; otherwise diagnostics depend on source effects.
     "unknown-named-value-with-generics": ("""fnc add<T>(T first, T second): int { return first + second; }
-pub fnc main(): int { return add<T=int>(unknown: 19, second: 23); }
+pub fnc main(): int { return add<T=int>(first: doesNotExist(), unknown: 23); }
 """, "unknown named argument"),
     "positional-after-named-value-with-generics": ("""fnc add<T>(T first, T second): int { return first + second; }
 pub fnc main(): int { return add<T=int>(second: 23, 19); }
@@ -252,7 +254,7 @@ def verify(compiler, clang, clang_opt):
             path = tmp / (name + ".atto")
             path.write_text(source)
             result = run([str(compiler), str(path)])
-            if result.returncode or not result.stdout.startswith(b"; ModuleID"):
+            if result.returncode or result.stderr or not result.stdout.startswith(b"; ModuleID"):
                 raise AssertionError(f"{name}: compiler rc={result.returncode}, stderr={result.stderr!r}")
             ll = tmp / (name + ".ll")
             exe = tmp / name
