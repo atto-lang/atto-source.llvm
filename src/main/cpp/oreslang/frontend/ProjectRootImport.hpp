@@ -279,6 +279,11 @@ inline std::filesystem::path resolve_project_root_import(
     const auto target = fs::canonical(candidate, error);
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
+    // A directory occupying the canonical .atto basename is not a source.
+    // Never return it or retry the sibling legacy .ores path.
+    std::error_code type_error;
+    if (!fs::is_regular_file(target, type_error) || type_error)
+        throw std::runtime_error("native project-root import requires regular source file");
     reject_nested_package(physical_root, target);
     return target;
 }
