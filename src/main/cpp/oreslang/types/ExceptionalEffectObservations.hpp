@@ -117,7 +117,7 @@ inline ExceptionalEffectObservations observe_exceptional_effects(const Program& 
         // compiler-verified source of behavior or a proof of no effects.
         const bool unproved = direct.unsupported_runtime ||
             !direct.bounded_calls || !direct.bounded_cleanup ||
-            !fn.method_owner.empty() ||
+            !fn.method_owner.empty() || !fn.generic_parameters.empty() ||
             (fn.has_declared_effects &&
              (fn.declared_effects.bits & exception_bits) != 0);
         FunctionEffects initial = direct.effects;
