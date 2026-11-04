@@ -110,12 +110,12 @@ def main(compiler):
     # neither is permission to return a known clean-effects receipt.
     named = run(
         compiler,
-        "fnc identity(int value): int { return value; }\\n"
-        "pub fnc main(): int { return identity(value=42); }\\n",
+        "fnc identity(int value): int { return value; }\n"
+        "pub fnc main(): int { return identity(value=42); }\n",
         flags=("--analyze",),
     )
     assert named.returncode != 0, (named.returncode, named.stdout, named.stderr)
-    assert "main/0\\tstatus=known" not in named.stdout
+    assert "main/0\tstatus=known" not in named.stdout
 
     # A long acyclic graph must not overflow recursive closure traversal or
     # produce a misleading successful purity receipt (depth budget: 64).
