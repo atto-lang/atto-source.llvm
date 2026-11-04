@@ -4224,9 +4224,12 @@ private:
                         throw std::runtime_error("duplicate binding of parameter '"
                                                  + formals[slot] + "'");
                     bound[slot] = true;
-                    // Check nested calls in lexical order, not formal-slot order.
-                    validate_expression(*expr.arguments[i], parameters, functions, depth + 1);
                 }
+                // Prove the complete named binding before descending into any
+                // actual. A late unknown/duplicate label must take precedence
+                // over an invalid nested expression in an earlier argument.
+                for (const auto& argument : expr.arguments)
+                    validate_expression(*argument, parameters, functions, depth + 1);
                 return;
             }
             case Expression::Kind::Negate:
@@ -4370,6 +4373,8 @@ private:
                         "async source call requires checked Future<int> pipeline lowering at byte " +
                         std::to_string(expr.offset));
                 std::vector<bool> bound(signature.parameters.size(), false);
+                std::vector<std::size_t> source_to_formal;
+                source_to_formal.reserve(expr.arguments.size());
                 std::size_t positional = 0;
                 bool named_seen = false;
                 for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
@@ -4391,6 +4396,12 @@ private:
                     if (slot >= signature.parameters.size() || bound[slot])
                         throw std::runtime_error("duplicate native scalar argument binding");
                     bound[slot] = true;
+                    source_to_formal.push_back(slot);
+                }
+                // Scalar validation independently preflights all labels, then
+                // checks actuals once in lexical order against their formal slots.
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const std::size_t slot = source_to_formal[i];
                     const ScalarType actual = validate_scalar_expression(
                         *expr.arguments[i], variables, functions, depth + 1);
                     if (signature.parameter_is_scalar[slot] &&
