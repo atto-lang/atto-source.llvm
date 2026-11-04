@@ -1024,6 +1024,12 @@ private:
     static constexpr std::size_t kMaxNativeMacroDefinitions = 8;
     static constexpr std::size_t kMaxNativeMacroExpansions = 128;
 
+    void require_macro(std::string_view token) {
+        if (!accept(token))
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: unsupported macro signature/body or invocation; expected '" +
+                 std::string(token) + "'; runtime fallback is forbidden");
+    }
+
     // Only two syntactically closed typed AST forms may cross this boundary.
     // Macro bodies are checked at declaration even when never invoked.
     void macro_declaration() {
@@ -1033,13 +1039,13 @@ private:
         if (name == "quote" || name == "unquote" || name == "eval" ||
                 !macros_.emplace(name, MacroKind::ConstIntQuote).second)
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved or duplicate macro declaration; runtime fallback is forbidden");
-        require("(");
+        require_macro("(");
         MacroKind kind;
         if (accept("Const")) {
-            require("<"); require("int"); require(">");
+            require_macro("<"); require_macro("int"); require_macro(">");
             kind = MacroKind::ConstIntQuote;
         } else if (accept("Syntax")) {
-            require("<"); require("Expr"); require(">");
+            require_macro("<"); require_macro("Expr"); require_macro(">");
             kind = MacroKind::SyntaxExprIdentity;
         } else {
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: only Const<int> or Syntax<Expr> accepted before LLVM IR; runtime fallback is forbidden");
@@ -1047,18 +1053,18 @@ private:
         const std::string parameter = identifier();
         if (parameter == "quote" || parameter == "unquote" || parameter == "eval")
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved macro parameter; runtime fallback is forbidden");
-        require(")"); require("->");
-        require("Syntax"); require("<"); require("Expr"); require(">");
-        require("{"); require("return");
+        require_macro(")"); require_macro("->");
+        require_macro("Syntax"); require_macro("<"); require_macro("Expr"); require_macro(">");
+        require_macro("{"); require_macro("return");
         if (kind == MacroKind::ConstIntQuote) {
-            require("quote"); require("(");
+            require_macro("quote"); require_macro("(");
             if (identifier() != parameter)
                 fail("NATIVE_MACRO_EXPANDER_REQUIRED: Const<int> quote must use exact parameter; runtime fallback is forbidden");
-            require(")");
+            require_macro(")");
         } else if (identifier() != parameter) {
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: Syntax<Expr> identity must use exact parameter; runtime fallback is forbidden");
         }
-        require(";"); require("}");
+        require_macro(";"); require_macro("}");
         macros_.at(name) = kind;
     }
 
@@ -1104,21 +1110,21 @@ private:
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: undeclared macro invocation before LLVM IR; runtime fallback is forbidden");
         if (++macro_expansions_ > kMaxNativeMacroExpansions)
             fail("NATIVE_MACRO_BUDGET: expansion count exceeded; runtime fallback is forbidden");
-        require("!");
-        require("(");
+        require_macro("!");
+        require_macro("(");
         const MacroKind kind = it->second;
         if (kind == MacroKind::ConstIntQuote) {
-            require("const");
+            require_macro("const");
             auto argument = expression();
-            require(")");
+            require_macro(")");
             const std::int64_t constant = macro_const_int(*argument);
             auto result = make_expression(Expression::Kind::Integer, offset);
             result->integer = constant;
             return result;
         }
-        require("syntax"); require("expr");
+        require_macro("syntax"); require_macro("expr");
         auto argument = expression();
-        require(")");
+        require_macro(")");
         // Single-use forwarding preserves the caller's AST and ownership
         // semantics; no new identifier, duplicate, capture, or runtime JIT.
         return argument;
