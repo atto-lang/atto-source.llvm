@@ -64,6 +64,63 @@ pub fnc main(): int {
   return identity!(syntax expr literal!(const 6 * 7));
 }
 )");
+    // Java/Graal identifier-free quote/unquote parity, deliberately limited
+    // to repeated CLOSED literals: the two emitted nodes must have distinct
+    // AST identities, not two shared pointers to caller-origin syntax.
+    const std::string twice_def =
+        "define macro twice(Syntax<Expr> value) -> Syntax<Expr> {"
+        "return quote(unquote(value) + unquote(value)); }";
+    {
+        auto program = parse_program(twice_def
+            + "pub fnc main(): int { return twice!(syntax expr 21); }");
+        check(program.functions.size() == 1);
+        const auto& result = program.functions.front().result;
+        check(result && result->kind == Expression::Kind::Add);
+        check(result->left && result->right);
+        check(result->left.get() != result->right.get());
+        check(result->left->kind == Expression::Kind::Integer);
+        check(result->right->kind == Expression::Kind::Integer);
+        check(result->left->integer == 21 && result->right->integer == 21);
+    }
+    {
+        // A nested Const quote becomes a new closed literal before the
+        // template repeats it; no recursive source-text expansion is used.
+        const std::string literal_def =
+            "define macro literal(Const<int> value) -> Syntax<Expr> {"
+            "return quote(value); }";
+        auto program = parse_program(twice_def + literal_def
+            + "pub fnc main(): int { return twice!(syntax expr literal!(const 20 + 1)); }");
+        const auto& result = program.functions.front().result;
+        check(result && result->kind == Expression::Kind::Add);
+        check(result->left && result->right &&
+              result->left->integer == 21 && result->right->integer == 21);
+    }
+    denied(twice_def
+        + "pub fnc main(int value): int { return twice!(syntax expr value); }");
+    denied(twice_def
+        + "pub fnc main(): int { return twice!(syntax expr 20 + 1); }");
+    denied(twice_def
+        + "fnc helper(): int { return 21; }"
+          "pub fnc main(): int { return twice!(syntax expr helper()); }");
+    denied(R"(
+define macro twice(Syntax<Expr> value) -> Syntax<Expr> {
+    return quote(unquote(value) + unquote(other));
+}
+pub fnc main(): int { return twice!(syntax expr 21); }
+)");
+    denied(R"(
+define macro twice(Syntax<Expr> value) -> Syntax<Expr> {
+    return quote(unquote(value) + value);
+}
+pub fnc main(): int { return twice!(syntax expr 21); }
+)");
+    denied(R"(
+define macro twice(Syntax<Expr> value) -> Syntax<Expr> {
+    return quote(unquote(value) + unquote(value) + unquote(value));
+}
+pub fnc main(): int { return twice!(syntax expr 21); }
+)");
+
     // Compiler admission rejects unsafe and unsupported macro forms before
     // any LLVM IR can be emitted. No source-string substitution or JIT.
     denied(R"(
