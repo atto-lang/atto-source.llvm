@@ -46,6 +46,44 @@ static int64_t tasklocal_producer(void) {
         ORES_SOURCE_TASK_LOCAL_I64_SLOTS));
     assert(oreslang_source_task_local_i64_get_slot_checked(7u, &keyed));
     assert(keyed == 99);
+
+    // Compiler-issued i64 descriptors are separate from raw host slots.
+    // Once a slot binds to a key, the type/key tag cannot be changed even
+    // after a clear; missing, wrong-kind and foreign key reads fail closed.
+    const uint64_t key_a =
+        ORES_SOURCE_TASK_LOCAL_I64_TAG_PREFIX | UINT64_C(0x1234);
+    const uint64_t key_b =
+        ORES_SOURCE_TASK_LOCAL_I64_TAG_PREFIX | UINT64_C(0x5678);
+    assert(!oreslang_source_task_local_i64_get_keyed_checked(
+        2u, key_a, &keyed));
+    assert(!oreslang_source_task_local_i64_set_keyed_checked(
+        2u, UINT64_C(0x1234), 44));
+    assert(!oreslang_source_task_local_i64_set_keyed_checked(
+        2u, ORES_SOURCE_TASK_LOCAL_I64_TAG_PREFIX, 44));
+    assert(!oreslang_source_task_local_i64_set_keyed_checked(
+        ORES_SOURCE_TASK_LOCAL_I64_SLOTS, key_a, 44));
+    assert(oreslang_source_task_local_i64_set_keyed_checked(2u, key_a, -44));
+    assert(oreslang_source_task_local_i64_set_keyed_checked(3u, key_b, 123));
+    assert(!oreslang_source_task_local_i64_set_slot_checked(2u, 11));
+    assert(!oreslang_source_task_local_i64_get_slot_checked(2u, &keyed));
+    assert(!oreslang_source_task_local_i64_clear_slot_checked(2u));
+    assert(!oreslang_source_task_local_i64_set_keyed_checked(2u, key_b, 44));
+    assert(!oreslang_source_task_local_i64_get_keyed_checked(
+        2u, key_b, &keyed));
+    assert(oreslang_source_task_local_i64_get_keyed_checked(
+        2u, key_a, &keyed));
+    assert(keyed == -44);
+    assert(oreslang_source_task_local_i64_get_keyed_checked(
+        3u, key_b, &keyed));
+    assert(keyed == 123);
+    assert(!oreslang_source_task_local_i64_clear_keyed_checked(2u, key_b));
+    assert(oreslang_source_task_local_i64_clear_keyed_checked(2u, key_a));
+    assert(!oreslang_source_task_local_i64_clear_keyed_checked(2u, key_a));
+    assert(!oreslang_source_task_local_i64_set_keyed_checked(2u, key_b, 12));
+    assert(oreslang_source_task_local_i64_set_keyed_checked(2u, key_a, 12));
+    assert(oreslang_source_task_local_i64_get_keyed_checked(
+        2u, key_a, &keyed));
+    assert(keyed == 12);
     // Keep a real scheduler turn active while a foreign pthread attempts to
     // spoof the TaskLocal accessor with an otherwise valid native symbol.
     atomic_store_explicit(
@@ -126,6 +164,14 @@ int main(void) {
     assert(!oreslang_source_task_local_i64_set_slot_checked(7u, 100));
     assert(!oreslang_source_task_local_i64_get_slot_checked(7u, &forbidden));
     assert(!oreslang_source_task_local_i64_clear_slot_checked(7u));
+    const uint64_t foreign_key =
+        ORES_SOURCE_TASK_LOCAL_I64_TAG_PREFIX | UINT64_C(0x1234);
+    assert(!oreslang_source_task_local_i64_set_keyed_checked(
+        2u, foreign_key, 7));
+    assert(!oreslang_source_task_local_i64_get_keyed_checked(
+        2u, foreign_key, &forbidden));
+    assert(!oreslang_source_task_local_i64_clear_keyed_checked(
+        2u, foreign_key));
     atomic_store_explicit(
         &tasklocal_producer_release, 1, memory_order_release);
     int64_t owned_result = 0;
