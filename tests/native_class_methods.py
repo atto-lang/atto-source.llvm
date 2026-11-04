@@ -66,7 +66,38 @@ def main():
     positives.append(('ordinary-send-is-not-actor-send', {
         'main.ores':'define class Sender as let int value=40;pub send(int n):int{return self.value+n;}end pub fnc main():int{let Sender s=new Sender();return s.send(2);}',
     }))
-    java_unsupported={'imported-public-class','imported-nominal-identities','imported-data-only-class'}
+    # Same production instance-method resolver exercised through real LLVM
+    # guest execution and sanitizer-linked native binaries, not a mock binder.
+    positives.append(('named-generic-instance-value', {
+        'main.atto': '''define class Box as
+          pub let int value=40;
+          pub add<T=int>(T n):int{return self.value+n;} end
+          pub fnc main():int{
+            let Box b=new Box();
+            return b.add<T=int>(n: 2);
+          }''',
+    }))
+    positives.append(('named-generic-instance-reordered', {
+        'main.atto': '''define class Box as
+          pub let int value=40;
+          pub combine<A=int,B=A>(A first,B second):int{return first*10+second;} end
+          pub fnc main():int{
+            let Box b=new Box();
+            return b.combine<B=int,A=int>(second: 2, first: 4);
+          }''',
+    }))
+    positives.append(('named-generic-mut-self', {
+        'main.atto': '''define class Box as
+          pub let int value=40;
+          pub add<T=int>(mut self)(T n):void{self.value=self.value+n;return;} end
+          pub fnc main():int{
+            let mut Box b=new Box();
+            b.add<T=int>(n: 2);
+            return b.value;
+          }''',
+    }))
+    java_unsupported={'imported-public-class','imported-nominal-identities','imported-data-only-class',
+        'named-generic-instance-value','named-generic-instance-reordered','named-generic-mut-self'}
     negatives=[
         ('public-constructor-private-class', 'define class Box as let int value=42;pub constructor(){return;}end pub fnc main():int{return 0;}',{},'public constructor requires a public class'),
         ('field-method-collision', 'define class Box as let int read=42;pub read():int{return 42;}end pub fnc main():int{return 0;}',{},'field/method name collision'),
@@ -108,13 +139,37 @@ def main():
           pub static fnc read():int{return 1;}end pub fnc main():int{return 0;}''',{},'expected'),
         ('escaped-bound-method', COUNTER+'pub fnc main():int{let Counter c=new Counter();return c.read;}',{},'unknown class field'),
     ]
+    negatives.extend([
+        ('named-generic-type-on-nongeneric', '''define class Box as
+          pub let int value=40;
+          pub get(int n):int{return self.value+n;} end
+          pub fnc main():int{
+            let Box b=new Box();
+            return b.get<T=int>(2);
+          }''', {}, 'call-site type arguments require generic function'),
+        ('named-generic-private-method', '''define class Box as
+          let int value=40;
+          secret<T=int>(T n):int{return n;} end
+          pub fnc main():int{
+            let Box b=new Box();
+            return b.secret<T=int>(42);
+          }''', {}, 'private instance method'),
+        ('named-generic-mut-immutable', '''define class Box as
+          pub let int value=40;
+          pub add<T=int>(mut self)(T n):void{self.value=self.value+n;return;} end
+          pub fnc main():int{
+            let Box b=new Box();
+            b.add<T=int>(2);
+            return 42;
+          }''', {}, 'immut'),
+    ])
     passed=compared=0
     with tempfile.TemporaryDirectory(prefix='ores-native-method-') as temporary:
         root=Path(temporary)
         for name,files in positives:
             directory=root/name;directory.mkdir()
             for path,source in files.items():(directory/path).write_text(source)
-            source=directory/'main.ores'
+            source=directory/('main.atto' if 'main.atto' in files else 'main.ores')
             result=run([a.compiler,str(source)])
             if result.returncode:raise AssertionError((name,result.stderr))
             (directory/'main.ll').write_text(result.stdout)
@@ -131,9 +186,10 @@ def main():
             passed+=1
         for name,source,dependencies,diagnostic in negatives:
             directory=root/name;directory.mkdir()
-            (directory/'main.ores').write_text(source)
+            filename='main.atto' if name.startswith('named-generic-') else 'main.ores'
+            (directory/filename).write_text(source)
             for path,text in dependencies.items():(directory/path).write_text(text)
-            result=run([a.compiler,str(directory/'main.ores')])
+            result=run([a.compiler,str(directory/filename)])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name,diagnostic,result.returncode,result.stdout[:80],result.stderr))
             passed+=1
