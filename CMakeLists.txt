@@ -3605,9 +3605,10 @@ if(BUILD_TESTING)
         if(macro_case STREQUAL "overflow-reject")
             set(macro_diagnostic "NATIVE_MACRO_CONST_OVERFLOW")
         elseif(macro_case STREQUAL "dynamic-const-reject")
-            # A runtime identifier can fail during binding before comptime AST
-            # evaluation. Both paths must deny and publish no executable IR.
-            set(macro_diagnostic "ANY")
+            # Const<int> cannot read an unresolved runtime variable. Demand
+            # a dedicated compiler-only diagnostic, not an unrelated parse
+            # failure that might accidentally make a negative test pass.
+            set(macro_diagnostic "NATIVE_MACRO_CONST_UNCLOSED")
         else()
             set(macro_diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
         endif()
