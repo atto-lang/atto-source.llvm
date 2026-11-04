@@ -208,18 +208,34 @@ int ores_native_vm_has_hard_security_boundary(
 static void control_lock(OresNativeVM* vm);
 static void control_unlock(OresNativeVM* vm);
 
-OresNativeActorRef ores_native_vm_spawn(
-    OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot) {
+/* Control-plane lock makes VM retirement, native pthread admission and
+ * ActorRef publication one ordered transition. A failed first worker leaves
+ * the slot unused; no phantom actor is published. */
+static OresNativeActorRef vm_spawn_common(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    size_t actor_slot, int with_ready_carrier) {
     OresNativeActorRef invalid = {0, 0, 0};
     if (!vm || !valid_domain(domain)) return invalid;
     control_lock(vm);
     OresNativeActorRef admitted = invalid;
     if (!vm->control_retired && !vm->nio_bootstrap_in_progress) {
-        admitted = ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot);
+        admitted = with_ready_carrier
+            ? ores_native_actor_scheduler_spawn_ready(vm->schedulers[domain], actor_slot)
+            : ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot);
         if (admitted.scheduler_domain) vm->guest_actor_admitted = 1;
     }
     control_unlock(vm);
     return admitted;
+}
+
+OresNativeActorRef ores_native_vm_spawn(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot) {
+    return vm_spawn_common(vm, domain, actor_slot, 0);
+}
+
+OresNativeActorRef ores_native_vm_spawn_ready(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot) {
+    return vm_spawn_common(vm, domain, actor_slot, 1);
 }
 
 
