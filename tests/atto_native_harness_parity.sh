@@ -33,7 +33,7 @@ while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
     die "missing or symlinked .atto source: $id"
   positive_ids+=("$id"); positive_paths+=("$path"); expected_exits+=("$expected")
 done < "$manifest"
-[[ "${#positive_ids[@]}" -eq 24 ]] || die "expected 24 admitted native scalar cases"
+[[ "${#positive_ids[@]}" -eq 30 ]] || die "expected 30 admitted native scalar cases"
 
 while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
   [[ "$id" == \#* || -z "$id" ]] && continue
@@ -46,7 +46,7 @@ while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
     die "missing or symlinked negative .atto source: $id"
   negative_ids+=("$id"); negative_paths+=("$path"); diagnostic_needles+=("$needle")
 done < "$negative_manifest"
-[[ "${#negative_ids[@]}" -eq 3 ]] || die 'expected exactly three negative fixtures'
+[[ "${#negative_ids[@]}" -eq 5 ]] || die 'expected exactly five negative fixtures'
 [[ -f "$corpus/positive/.atto.pkg.toml" && ! -L "$corpus/positive/.atto.pkg.toml" ]] ||
   die 'canonical package manifest is absent or symlinked'
 [[ -f "$corpus/positive/scalar-assert-lib.atto" && ! -L "$corpus/positive/scalar-assert-lib.atto" ]] ||
@@ -62,7 +62,7 @@ for path in "$manifest" "$negative_manifest" \
 done
 
 if [[ "$mode" == --inventory-only ]]; then
-  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=24 negative=3 (NO_COMPILER_EXECUTION)'
+  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=30 negative=5 (NO_COMPILER_EXECUTION)'
   exit 0
 fi
 [[ -x "$compiler" && ! -L "$compiler" ]] || die "missing non-symlink executable compiler: $compiler"
@@ -185,4 +185,4 @@ for path in "${!original_hash[@]}"; do
     die "guest source/manifest mutated during compiler execution: $path"
 done
 
-printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=24|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED\n'
+printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=30|optimizations=2|negative=8|guest_receipt_protocol=UNSUPPORTED\n'
