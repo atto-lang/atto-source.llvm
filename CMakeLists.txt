@@ -773,6 +773,18 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_source_module_graph_execution PROPERTIES TIMEOUT 120)
 
+    # Real compiler -> LLVM IR -> Clang O0/O2 -> native guest and
+    # compiler-negative .atto logical-ID admission. Never a mock pass.
+    if(UNIX)
+        add_test(NAME native_atto_logical_unit_linked_guest_gate
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_atto_logical_identity_guest.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_RT_AOT_CLANG}")
+        set_tests_properties(native_atto_logical_unit_linked_guest_gate
+            PROPERTIES TIMEOUT 180)
+    endif()
+
     # Pure host resolver security test for canonical +/ project-root imports.
     # This does not claim pkg:/bare-path resolution or full TOML semantics.
     add_executable(oreslang-native-project-root-import-test
