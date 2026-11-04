@@ -196,14 +196,27 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         write_text(dir/"lib.ores", "");
-        must_fail("ambiguous .atto/.ores siblings", "ambiguous native source import",
-                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("canonical .atto must win source-name collision");
         if (resolve(dir/"main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto")
                 || resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("explicit .atto/.ores suffix must disambiguate");
         write_text(dir/"upper.ATTO", "");
         if (resolve(dir/"main.atto", "+/upper.ATTO") != fs::canonical(dir/"upper.ATTO"))
             throw std::runtime_error("explicit case-insensitive .ATTO suffix must be admitted");
+    }
+    {
+        const auto dir = temp / "canonical-requires-explicit-legacy";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"main.ores", "");
+        write_text(dir/"lib.ores", "");
+        must_fail("AttoLang implicit .ores downgrade", "cannot resolve native project-root import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("explicit legacy import must remain available");
+        if (resolve(dir/"main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("legacy importer compatibility was lost");
     }
     {
         const auto dir = temp / "modern-nested-boundary";
@@ -221,7 +234,8 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.ores", "");
         fs::create_symlink(dir/"absent.atto", dir/"lib.atto");
-        must_fail("dangling .atto conflicts with legacy sibling", "ambiguous native source import",
+        must_fail("dangling canonical .atto blocks legacy fallback",
+                  "cannot resolve native project-root import",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
@@ -230,8 +244,8 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         fs::create_hard_link(dir/"lib.atto", dir/"lib.ores");
-        must_fail("hardlink .atto/.ores twins", "ambiguous native source import",
-                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("hardlink twin must prefer canonical .atto spelling");
     }
     {
         const auto dir = temp / "same-inode-symlink-twins";
@@ -239,8 +253,8 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         fs::create_symlink(dir/"lib.atto", dir/"lib.ores");
-        must_fail("symlink .atto/.ores twins", "ambiguous native source import",
-                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("legacy symlink twin must not override .atto");
     }
     {
         const auto dir = temp / "modern-symlink-escape";
