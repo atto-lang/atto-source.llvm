@@ -193,13 +193,22 @@ inline void resolve_native_sums(Program& program) {
         Hint left;
         if (e.left) left = expression(*e.left, env, {});
         if (e.right) expression(*e.right, env, {});
-        for (auto& arg : e.arguments) expression(*arg, env, {});
+        for (auto& arg : e.arguments) {
+            if (!arg)
+                throw std::runtime_error("native sum expression has null argument");
+            expression(*arg, env, {});
+        }
         if (e.kind == E::LogicalNot || e.kind == E::Equal || e.kind == E::NotEqual || e.kind == E::Less || e.kind == E::LessEqual ||
                 e.kind == E::Greater || e.kind == E::GreaterEqual || e.kind == E::LogicalAnd || e.kind == E::LogicalOr || e.kind == E::LogicalXor)
             return {ScalarType::Bool};
         return left;
     };
     for (auto& cls : program.classes) {
+        // An incomplete internal type vector must not be indexed as a full
+        // constructor ABI. An empty vector still means legacy all-int slots.
+        if (!cls.constructor_parameter_types.empty() &&
+                cls.constructor_parameter_types.size() != cls.constructor_parameters.size())
+            throw std::runtime_error("native sum class constructor parameter type count mismatch");
         Env env;
         for (std::size_t i = 0; i < cls.constructor_parameters.size(); ++i) {
             const auto* field = constructor_field(cls, i);
@@ -213,6 +222,8 @@ inline void resolve_native_sums(Program& program) {
         for (auto& binding : fn.locals) {
             if (binding.initializer) expression(*binding.initializer, env, binding.sum_type);
             for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                if (!binding.constructor_arguments[i])
+                    throw std::runtime_error("native sum local constructor has null argument");
                 const auto* field = classes.count(binding.class_name) ? constructor_field(*classes.at(binding.class_name), i) : nullptr;
                 expression(*binding.constructor_arguments[i], env, field ? field->sum_type : std::string{});
             }
@@ -221,6 +232,13 @@ inline void resolve_native_sums(Program& program) {
         std::function<void(std::vector<Statement>&, Env&)> statements;
         statements = [&](std::vector<Statement>& items, Env& scope) {
             for (auto& item : items) {
+                // For and scoped-local lowering unconditionally uses the
+                // branch binding; reject malformed internal ASTs first.
+                if ((item.kind == Statement::Kind::ForEach ||
+                     item.kind == Statement::Kind::ForIndex ||
+                     item.kind == Statement::Kind::ScopedLocal) &&
+                        !item.branch_local)
+                    throw std::runtime_error("native sum structured statement missing branch local");
                 if (item.branch_local && item.branch_local->initializer) expression(*item.branch_local->initializer, scope, item.branch_local->sum_type);
                 if (item.kind == Statement::Kind::ForEach || item.kind == Statement::Kind::ForIndex) {
                     if (item.expression) expression(*item.expression, scope, {});
@@ -239,7 +257,11 @@ inline void resolve_native_sums(Program& program) {
                     for (const auto& field : classes.at(scope.at(item.receiver).cls)->fields) if (field.name == item.field) context = field.sum_type;
                 if (item.expression) expression(*item.expression, scope, context);
                 if (item.array_commit_length) expression(*item.array_commit_length, scope, {});
-                for (auto& value : item.array_commit_values) expression(*value, scope, {});
+                for (auto& value : item.array_commit_values) {
+                    if (!value)
+                        throw std::runtime_error("native sum array commit has null value");
+                    expression(*value, scope, {});
+                }
                 Env yes = scope, no = scope;
                 statements(item.then_statements, yes); statements(item.else_statements, no);
                 if (item.kind == Statement::Kind::ScopedLocal) scope.emplace(item.branch_local->name, local_hint(*item.branch_local));
@@ -250,6 +272,8 @@ inline void resolve_native_sums(Program& program) {
             if (guard.condition) expression(*guard.condition, env, {});
             if (guard.lhs) expression(*guard.lhs, env, {});
             if (guard.rhs) expression(*guard.rhs, env, {});
+            if (!guard.result)
+                throw std::runtime_error("native sum guarded return missing result");
             expression(*guard.result, env, fn.return_sum);
         }
         if (fn.result) expression(*fn.result, env, fn.return_sum);

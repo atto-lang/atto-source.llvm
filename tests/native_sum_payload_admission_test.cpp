@@ -187,6 +187,53 @@ Program malformed_record_payload() {
         constructor("Some", std::move(record));
     return program;
 }
+// Internal AST mutation regressions: missing children must fail admission
+// with deterministic diagnostics, never crash or silently default to i64.
+Program malformed_local_constructor_argument() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    p.functions.front().locals.front().constructor_arguments.push_back(nullptr);
+    return p;
+}
+Program malformed_generic_expression_argument() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto expr = scalar(Kind::Add);
+    expr->arguments.push_back(nullptr);
+    p.functions.front().locals.front().initializer =
+        constructor("Some", std::move(expr));
+    return p;
+}
+Program malformed_array_commit_value() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    Statement stmt;
+    stmt.kind = Statement::Kind::ArrayCommitFilled;
+    stmt.array_commit_values.push_back(nullptr);
+    p.functions.front().statements.push_back(std::move(stmt));
+    return p;
+}
+Program malformed_structured_branch_local(Statement::Kind kind) {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    Statement stmt;
+    stmt.kind = kind;
+    // Intentionally no branch_local, even though lowering consumes it.
+    p.functions.front().statements.push_back(std::move(stmt));
+    return p;
+}
+Program malformed_guarded_return() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    GuardedReturn guard;
+    guard.condition = scalar(Kind::Boolean);
+    p.functions.front().early_returns.push_back(std::move(guard));
+    return p;
+}
+Program malformed_class_ctor_type_count() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    ClassDecl cls;
+    cls.name = "BrokenCtor";
+    cls.constructor_parameters = {"first", "second"};
+    cls.constructor_parameter_types = {ScalarType::I64};
+    p.classes.push_back(std::move(cls));
+    return p;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -221,6 +268,30 @@ void require_rejection(Program p, const std::string& diagnostic,
 
 int main() {
     try {
+        require_rejection(malformed_local_constructor_argument(),
+            "native sum local constructor has null argument",
+            "local class constructor null argument");
+        require_rejection(malformed_generic_expression_argument(),
+            "native sum expression has null argument",
+            "unknown expression child null argument");
+        require_rejection(malformed_array_commit_value(),
+            "native sum array commit has null value",
+            "array commit null value");
+        require_rejection(malformed_structured_branch_local(Statement::Kind::ForEach),
+            "native sum structured statement missing branch local",
+            "foreach missing branch binding");
+        require_rejection(malformed_structured_branch_local(Statement::Kind::ForIndex),
+            "native sum structured statement missing branch local",
+            "for-index missing branch binding");
+        require_rejection(malformed_structured_branch_local(Statement::Kind::ScopedLocal),
+            "native sum structured statement missing branch local",
+            "scoped local missing branch binding");
+        require_rejection(malformed_guarded_return(),
+            "native sum guarded return missing result",
+            "guard missing return expression");
+        require_rejection(malformed_class_ctor_type_count(),
+            "native sum class constructor parameter type count mismatch",
+            "incomplete class constructor type ABI");
         require_rejection(malformed_constructor_payload(true),
             "constructor has null payload", "typed Some with missing AST child");
         require_rejection(malformed_constructor_payload(false),
@@ -320,7 +391,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 52 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 60 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
