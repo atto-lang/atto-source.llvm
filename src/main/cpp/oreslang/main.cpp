@@ -232,6 +232,12 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
                 case oreslang::Expression::Kind::Call:
                     if (next->type_arguments_present || !next->type_arguments.empty())
                         return false;
+                    // Name/arity alone does not prove reordered/named binding.
+                    // Wait for the shared resolved-call identity contract.
+                    if (std::any_of(next->argument_names.begin(),
+                            next->argument_names.end(),
+                            [](const std::string& name) { return !name.empty(); }))
+                        return false;
                     for (const auto& argument : next->arguments) {
                         if (!argument) return false;
                         pending.push_back(argument.get());
@@ -271,6 +277,7 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
     };
     std::map<std::string, Row> rows;
     const bool unknown_source_surface =
+        !ast.module.empty() || !ast.namespace_name.empty() ||
         !ast.sum_types.empty() || !ast.type_only_declarations.empty() ||
         !ast.imports.empty() || !ast.actors.empty() || !ast.classes.empty() ||
         !ast.cooperative_loops.empty() || !ast.generators.empty() ||
