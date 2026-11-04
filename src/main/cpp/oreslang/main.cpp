@@ -205,6 +205,7 @@ int main(int argc, char** argv) {
     bool allocator_provider_seen = false;
     bool bounded_allocator_provider = false;
     bool rt_check_only = false;
+    bool analyze_only = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
@@ -255,6 +256,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             native_hard_rt_profile = true;
+        } else if (arg == "--analyze") {
+            if (analyze_only) { std::cerr << "duplicate analyze option\n"; return 2; }
+            analyze_only = true;
         } else if (arg == "--rt-check") {
             if (rt_check_only) { std::cerr << "duplicate rt-check option\n"; return 2; }
             rt_check_only = true;
@@ -363,6 +367,17 @@ int main(int argc, char** argv) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
     }
+    // --analyze is a dedicated non-mutating admission probe, not a shortcut
+    // into native codegen or the hard-real-time effect report. Keep the
+    // proposed exceptional may-effect contract unadmitted.
+    if (analyze_only &&
+            (constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
+             native_hard_rt_profile || rt_check_only || rt_entry_seen ||
+             rt_report_seen || experimental_owned_int || experimental_rt_scalar_loop ||
+             target_seen || allocator_provider_seen || library_profile_seen)) {
+        std::cerr << "--analyze cannot be combined with codegen, target or rt options\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -382,7 +397,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--analyze] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -422,6 +437,20 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        if (analyze_only) {
+            // Validate the real native parser and admitted LLVM source subset,
+            // but do not print or execute IR. This is NOT callable may-effect
+            // inference: the native AST cannot yet prove typed transitive
+            // throws/raises/panics, recovery or unresolved dynamic dispatch.
+            // An otherwise valid source must therefore remain INCONCLUSIVE,
+            // never an effect-clean PASS. The formatter maps this exit 2 to 2.
+            (void)oreslang::emit_verified_llvm_ir(
+                ast, false, false, false);
+            std::cerr << "oreslang-llvmc: exception-effect analysis unsupported "
+                         "(native source validation only; effects inconclusive)\n";
+            return 2;
+        }
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
