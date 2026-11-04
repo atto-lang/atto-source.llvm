@@ -48,6 +48,8 @@ jobs:
       - name: Validate both corpora and execute 100 native checked-i64 and scalar guests
         run: |
           set -euo pipefail
+          rm -f build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json
+          rm -f build/atto-checked-i64-native/llvm-checked-i64-native-receipt.json
           ctest --test-dir build --output-on-failure -R '^atto_(shared_scalar50|checked_i64)_'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -112,11 +114,12 @@ jobs:
             console.log("LLVM full-width i64 equality: 37/37; checked traps: 13/13",r.source_head);
           '
       - name: Preserve native guest receipt
-        if: always()
+        # Never upload stale or partial 'success' receipts from a failed test.
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: atto-llvm-native-scalar50
           path: |
             build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json
             build/atto-checked-i64-native/llvm-checked-i64-native-receipt.json
-          if-no-files-found: ignore
+          if-no-files-found: error
