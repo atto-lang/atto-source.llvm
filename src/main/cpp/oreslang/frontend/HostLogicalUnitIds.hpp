@@ -1,6 +1,7 @@
 #pragma once
 // Compiler-owned host path -> logical unit identity admission (M0).
 // This does not authorize imported macros or replace descriptor-pinned reads.
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <stdexcept>
@@ -11,7 +12,7 @@ namespace oreslang::frontend {
 namespace fs = std::filesystem;
 
 inline void validate_logical_unit_id(const std::string& id) {
-    if (id.empty() || id.size() > 4096 || id.front() == '/' || id.find(':') != std::string::npos)
+    if (id.empty() || id.size() > 4096 || id.front() == '/' || id.back() == '/' || id.find(':') != std::string::npos)
         throw std::runtime_error("ATTO_UNIT_ID_INVALID: empty, absolute, drive or oversized identity");
     for (std::size_t p = 0; p < id.size();) {
         const auto c = static_cast<unsigned char>(id[p]);
