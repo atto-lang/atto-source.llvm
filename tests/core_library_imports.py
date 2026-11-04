@@ -121,13 +121,13 @@ def main():
         # share the same source unit and its provider/effect closure.
         (shadow / "numeric.atto").write_text(
             "define module numeric as "
-            "pub fnc max_int(int x,int y):int{return 7;} end\\n",
+            "pub fnc max_int(int x,int y):int{return 7;} end\n",
             encoding="utf-8",
         )
         (root / "atto.core").mkdir()
         (root / "atto.core" / "numeric.atto").write_text(
             "define module numeric as "
-            "pub fnc max_int(int x,int y):int{return 7;} end\\n",
+            "pub fnc max_int(int x,int y):int{return 7;} end\n",
             encoding="utf-8",
         )
         modern_source = root / "modern-main.atto"
@@ -136,7 +136,7 @@ def main():
             'import module numeric as Old from "ores.core/numeric.ores"; '
             'import module numeric as Unsuffixed from "atto.core/numeric"; '
             "pub fnc main():int{return New.max_int(20,22)"
-            "+Old.min_int(20,21)+Unsuffixed.min_int(0,0); }\\n",
+            "+Old.min_int(20,21)+Unsuffixed.min_int(0,0); }\n",
             encoding="utf-8",
         )
         modern = run([args.compiler, str(modern_source)])
@@ -163,7 +163,7 @@ def main():
         atto_unknown = root / "atto-unknown.atto"
         atto_unknown.write_text(
             'import module missing from "atto.core/missing.atto"; '
-            "pub fnc main():int{return 0;}\\n", encoding="utf-8")
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
         require_rejected(
             run([args.compiler, str(atto_unknown)]),
             "unknown compiler-owned atto.core module",
@@ -171,7 +171,7 @@ def main():
         atto_traversal = root / "atto-traversal.atto"
         atto_traversal.write_text(
             'import module numeric from "atto.core/../numeric.atto"; '
-            "pub fnc main():int{return 0;}\\n", encoding="utf-8")
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
         require_rejected(
             run([args.compiler, str(atto_traversal)]),
             "unknown compiler-owned atto.core module",
@@ -179,7 +179,7 @@ def main():
         atto_unknown_suffix = root / "atto-invalid-suffix.atto"
         atto_unknown_suffix.write_text(
             'import module numeric from "atto.core/numeric.txt"; '
-            "pub fnc main():int{return 0;}\\n", encoding="utf-8")
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
         require_rejected(
             run([args.compiler, str(atto_unknown_suffix)]),
             "unknown compiler-owned atto.core module",
@@ -241,7 +241,7 @@ def main():
 
         cortex_source = root / "cortex.atto"
         cortex_source.write_text(
-            'import module numeric from "ores.core/numeric"; '
+            'import module numeric from "atto.core/numeric.atto"; '
             "pub fnc ores_embedded_probe(int x):int{"
             "return numeric.clamp_int(x,0,42);}\n",
             encoding="utf-8",
