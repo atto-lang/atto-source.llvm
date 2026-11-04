@@ -28,7 +28,15 @@ inline bool actor_local_current_turn_v1(
     if (!ores_native_actor_scheduler_current_execution_context(
             scheduler, &execution))
         return false;
+    // A scheduler turn ID alone cannot certify actor-owned storage: require
+    // the independently recorded allocation domain, slot AND generation.
+    // In particular, a same-scheduler turn for another actor is not access.
     return execution.id.runtime_domain == actor.scheduler_domain &&
+        execution.id.execution != 0 &&
+        execution.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR &&
+        execution.allocation.domain == actor.scheduler_domain &&
+        execution.allocation.owner == actor.actor_slot &&
+        execution.allocation.generation == actor.generation &&
         ores_native_actor_scheduler_is_current_actor(scheduler, actor);
 }
 
