@@ -218,12 +218,17 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
     // not exhaust the host stack while a source file is being analyzed.
     const auto scalar_proven = [](const oreslang::Expression* expr) -> bool {
         if (!expr) return true;
-        std::vector<const oreslang::Expression*> pending{expr};
+        using ExprNode = std::pair<const oreslang::Expression*, std::size_t>;
+        std::vector<ExprNode> pending{{expr, 1}};
         std::size_t visited = 0;
         while (!pending.empty()) {
             if (++visited > 4096 || pending.size() > 4096) return false;
-            const auto* next = pending.back();
+            const auto [next, depth] = pending.back();
             pending.pop_back();
+            // The subsequent real-time fact walker is recursive. Budget the
+            // actual expression depth, not just the total number of nodes.
+            if (depth > oreslang::realtime_detail::kMaxRealtimeCallDepth)
+                return false;
             switch (next->kind) {
                 case oreslang::Expression::Kind::Integer:
                 case oreslang::Expression::Kind::Boolean:
@@ -240,7 +245,7 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
                         return false;
                     for (const auto& argument : next->arguments) {
                         if (!argument) return false;
-                        pending.push_back(argument.get());
+                        pending.emplace_back(argument.get(), depth + 1);
                     }
                     break;
                 default:
