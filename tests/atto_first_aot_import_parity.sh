@@ -25,7 +25,9 @@ new_case() {
   cp -- "$fixtures/math.atto" "$work/$label/math.atto"
 }
 compile_positive() {
-  local label="$1" case_dir="$work/$label" ir="$work/$label/main.ll"
+  local label="$1"
+  local case_dir="$work/$label"
+  local ir="$case_dir/main.ll"
   "$compiler" --target=host "$case_dir/main.atto" > "$ir" 2> "$case_dir/compiler.err" ||
     fail "$label: compiler rejected canonical .atto source"
   [[ -s "$ir" ]] || fail "$label: compiler returned success without LLVM IR"
@@ -42,7 +44,9 @@ compile_positive() {
   done
 }
 compile_negative() {
-  local label="$1" case_dir="$work/$label" ir="$work/$label/main.ll"
+  local label="$1"
+  local case_dir="$work/$label"
+  local ir="$case_dir/main.ll"
   if "$compiler" --target=host "$case_dir/main.atto" > "$ir" 2> "$case_dir/compiler.err"; then
     fail "$label: invalid imported .atto source compiled successfully"
   fi
