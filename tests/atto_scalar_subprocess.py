@@ -30,10 +30,14 @@ def run_bounded(argv, cwd, timeout=25, limit=4 * 1024 * 1024):
             out.seek(0)
             err.seek(0)
             return code, out.read(), err.read()
-        except BaseException:
+        finally:
+            # Each child starts a fresh POSIX session. Reap the process-group
+            # descendants even when the leader exits cleanly: a compiler
+            # wrapper or guest may otherwise leave a subprocess alive after
+            # the test records a pass. A separate session is not a security
+            # sandbox; intentionally escaped sessions require OS isolation.
             try:
                 os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             child.wait(timeout=5)
-            raise
