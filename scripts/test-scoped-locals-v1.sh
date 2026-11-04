@@ -68,8 +68,31 @@ for CC in gcc clang; do
   "$OUT/execution-authority-$CC"
 done
 
+# Real native scheduler C11 integration. This is not a synthetic model:
+# both the original-mail API and the DATA dispatcher are compiled/linked.
+for CC in gcc clang; do
+  if ! command -v "$CC" >/dev/null 2>&1; then continue; fi
+  "$CC" -std=c11 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+    -I"$ROOT/src/main/cpp" \
+    "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
+    "$ROOT/tests/native_original_data_mail_sequence_v1_test.c" \
+    -o "$OUT/native-original-data-mail-$CC"
+  "$OUT/native-original-data-mail-$CC"
+done
+
 # Optional exact-source sanitizer matrix, enabled by the source-local workflow.
 if [ "${ORES_SCOPED_LOCAL_RUN_SANITIZERS:-0}" = "1" ]; then
+  for CC in gcc clang; do
+    if ! command -v "$CC" >/dev/null 2>&1; then continue; fi
+    "$CC" -std=c11 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+      -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -I"$ROOT/src/main/cpp" \
+      "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
+      "$ROOT/tests/native_original_data_mail_sequence_v1_test.c" \
+      -o "$OUT/asan-native-original-data-mail-$CC"
+    ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
+      "$OUT/asan-native-original-data-mail-$CC"
+  done
   for CXX in g++ clang++; do
     if ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
     for testfile in native_scoped_local_storage_v1_test native_actor_local_gate_v1_test native_scoped_request_parity_v1_test native_request_mail_gate_v1_test; do
