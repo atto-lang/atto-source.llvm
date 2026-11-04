@@ -201,7 +201,7 @@ pub fnc main(): int { return combine<T=int>(First: 4, second: 2); }
   return value.get(index: 0);
 }
 pub fnc main(): int { return bad(42); }
-""", "named native array/member arguments require checked receiver"),
+""", "native Array<int> operation requires a live array owner"),
 }
 
 _CASE_ID = re.compile(r"generics\.scalar\.[a-z0-9]+(?:-[a-z0-9]+)*\Z")
