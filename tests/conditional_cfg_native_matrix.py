@@ -136,6 +136,58 @@ pub fnc main(): int {
 POSITIVE["side-effect-condition"] = '\nfnc one(): int { return 1; }\npub fnc main(): int {\n  if (one() eq 1) { one(); } else { one(); } fi\n  return 42;\n}\n'
 
 
+
+# Canonical .atto guard is an inverted, guaranteed-terminal conditional.
+# These must be compiler-backed guest executions, not host parser simulations.
+POSITIVE["guard-success-fallthrough"] = """
+fnc bounded(int x): int {
+  guard x > 0 { return 1; }
+  guard x < 10, x != 5 { return 2; }
+  return 42;
+}
+pub fnc main(): int {
+  return bounded(3);
+}
+"""
+
+POSITIVE["guard-nested-in-conditional"] = """
+fnc bounded(int x): int {
+  if (x > 0) {
+    guard x < 10 { return 2; }
+  } else { return 1; } fi
+  return 42;
+}
+pub fnc main(): int { return bounded(3); }
+"""
+
+NEGATIVE["guard-missing-exit"] = ("""
+pub fnc main(): int {
+  guard 1 > 0 { }
+  return 42;
+}
+""", "expected 'return'")
+
+NEGATIVE["guard-no-else"] = ("""
+pub fnc main(): int {
+  guard 1 > 0 { return 1; } else { return 2; }
+  return 42;
+}
+""", "AttoLang guard has no else or fi")
+
+NEGATIVE["guard-no-fi"] = ("""
+pub fnc main(): int {
+  guard 1 > 0 { return 1; } fi
+  return 42;
+}
+""", "AttoLang guard has no else or fi")
+
+NEGATIVE["guard-no-return-followthrough"] = ("""
+pub fnc main(): int {
+  guard 1 > 0 { return 1; return 2; }
+  return 42;
+}
+""", "expected '}'")
+
 def execute(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=75)
 
@@ -149,7 +201,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ores-conditional-cfg-") as temp:
         root = Path(temp)
         for name, source in POSITIVE.items():
-            src = root / (name + ".ores")
+            src = root / (name + (".atto" if name.startswith("guard-") else ".ores"))
             src.write_text(source)
             produced = execute([a.compiler, str(src)])
             assert produced.returncode == 0 and produced.stdout, (name, produced.stderr)
