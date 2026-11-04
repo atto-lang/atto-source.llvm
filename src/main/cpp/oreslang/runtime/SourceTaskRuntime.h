@@ -51,6 +51,26 @@ int64_t oreslang_source_task_await_i64(void* task);
  * ownership/type-checked AOT plan before calling this host-only API.
  */
 #define ORES_SOURCE_TASK_LOCAL_I64_SLOTS 8u
+
+/*
+ * Compiler-generated typed key tag: high byte 0x49 ('I', i64), low 56 bits
+ * deterministic hash of the static source key. This is a type/identity
+ * integrity check, NOT an unforgeable bearer capability or arbitrary T ABI.
+ * The guest compiler supplies slot and tag constants; source cannot choose
+ * numeric slots or call these reserved ABI functions.
+ */
+#define ORES_SOURCE_TASK_LOCAL_I64_TAG_PREFIX UINT64_C(0x4900000000000000)
+#define ORES_SOURCE_TASK_LOCAL_I64_TAG_MASK UINT64_C(0xff00000000000000)
+int oreslang_source_task_local_i64_set_keyed_checked(
+    uint32_t slot, uint64_t tag, int64_t value);
+int oreslang_source_task_local_i64_get_keyed_checked(
+    uint32_t slot, uint64_t tag, int64_t* out_value);
+int oreslang_source_task_local_i64_clear_keyed_checked(
+    uint32_t slot, uint64_t tag);
+void oreslang_source_task_local_i64_set_keyed(
+    uint32_t slot, uint64_t tag, int64_t value);
+int64_t oreslang_source_task_local_i64_get_keyed(
+    uint32_t slot, uint64_t tag);
 int oreslang_source_task_local_i64_set_slot_checked(
     uint32_t slot, int64_t value);
 int oreslang_source_task_local_i64_get_slot_checked(
