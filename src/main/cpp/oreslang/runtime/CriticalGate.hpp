@@ -46,9 +46,17 @@ public:
     };
     static constexpr std::size_t max_waiters = 8192;
 
-    CriticalGate() : scope_(next_scope_.fetch_add(1, std::memory_order_relaxed) + 1) {
-        if (scope_ == 0) throw std::overflow_error("critical scope ids exhausted");
-    }
+    /** Exact FIFO cancellation receipts for the authenticated scheduler.
+     * Never call scheduler/guest callbacks while holding the metadata lock.
+     * The owner may still be executing physically; retirement alone cannot
+     * interrupt or roll back an in-flight critical body.
+     */
+    struct Retirement final {
+        std::deque<Token> cancelled_waiters;
+        Token revoked_owner;
+    };
+
+    CriticalGate() : scope_(issue_scope()) {}
     CriticalGate(const CriticalGate&) = delete;
     CriticalGate& operator=(const CriticalGate&) = delete;
 
@@ -128,11 +136,15 @@ public:
      * admission but cannot interrupt a guest critical mutation mid-instruction.
      * No callbacks run under the bookkeeping mutex.
      */
-    void retire() {
+    [[nodiscard]] Retirement retire() {
         std::lock_guard<std::mutex> lock(mu_);
+        Retirement receipt;
+        if (closed_) return receipt; // exactly-once generation fence
         closed_ = true;
+        receipt.revoked_owner = owner_;
         owner_ = {};
-        waiting_.clear();
+        receipt.cancelled_waiters.swap(waiting_);
+        return receipt;
     }
 
     [[nodiscard]] bool retired() const {
@@ -141,6 +153,17 @@ public:
     }
 
 private:
+    [[nodiscard]] static std::uint64_t issue_scope() {
+        auto current = next_scope_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (current == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("critical scope ids exhausted");
+            if (next_scope_.compare_exchange_weak(current, current + 1,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                return current + 1;
+        }
+    }
+
     void validate(Token token) const {
         if (!token || token.scope_ != scope_ || token.sequence_ > issued_) {
             throw std::invalid_argument("foreign or invalid critical ticket");
