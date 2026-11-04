@@ -1,0 +1,14 @@
+// LLVM AOT bounded sealed scalar-state admission.
+// Critical handle_state is non-suspending and executes under the actor's
+// existing single-owner native heap turn. No arbitrary state object or loan
+// may escape, and this fixture is not Wasm/.NET/Java semantic certification.
+define actor Worker as {
+  state {
+    let total: int = 0;
+  }
+  pub critical handle_state(int n): int {
+    const next: owned int = total + n;
+    total = next;
+    return total;
+  }
+}
