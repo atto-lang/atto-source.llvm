@@ -462,7 +462,8 @@ int main(int argc, char** argv) {
                       << " throw_observed=" << seen(oreslang::FunctionEffect::Throw)
                       << " raise_observed=" << seen(oreslang::FunctionEffect::Raise)
                       << " panic_observed=" << seen(oreslang::FunctionEffect::Panic)
-                      << " unknown=" << observations.has_unknown()
+                      << " graph_unknown=" << observations.has_unknown()
+                      << " semantic_proof=0"
                       << "\n";
             std::cerr << "oreslang-llvmc: exception-effect analysis unsupported "
                          "(native source validation only; effects inconclusive)\n";
