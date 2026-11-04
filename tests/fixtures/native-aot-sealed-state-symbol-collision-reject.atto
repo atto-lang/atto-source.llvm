@@ -1,0 +1,9 @@
+// A guest may not impersonate the compiler's sealed-state export.
+pub fnc oreslang_actor_Worker_handle_state(): int { return 7; }
+define actor Worker as {
+  state { let total: int = 0; }
+  pub critical handle_state(int n): int {
+    total = total + n;
+    return total;
+  }
+}
