@@ -25,6 +25,8 @@ def invoke(*args: str) -> int:
 
 
 def main() -> None:
+    if not __debug__:
+        raise RuntimeError("receipt CLI test assertions disabled by Python -O")
     accepted = 0
     rejected = 0
     with tempfile.TemporaryDirectory(prefix="atto-llvm-receipts-cli-") as folder:
