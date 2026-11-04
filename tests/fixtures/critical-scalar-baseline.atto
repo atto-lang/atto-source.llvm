@@ -1,0 +1,2 @@
+// Canonical AttoLang native scalar baseline. Not critical guest parity.
+pub fnc main(): int { return 7; }
