@@ -1,0 +1,104 @@
+name: Atto TaskLocal<int> compiler + scheduler guest gate
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/frontend/Parser.cpp"
+      - "src/main/cpp/oreslang/frontend/Parser.hpp"
+      - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
+      - "src/main/cpp/oreslang/runtime/SourceTaskRuntime.c"
+      - "src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
+      - "tests/tasklocal_i64_e2e.rs"
+      - "tests/fixtures/tasklocal-i64-source.atto"
+      - "tests/source_task_i64_runtime_test.c"
+      - "CMakeLists.txt"
+      - ".github/workflows/native-tasklocal-i64-guest.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {cc: gcc, mode: optimized}
+          - {cc: clang, mode: optimized}
+          - {cc: gcc, mode: asan-ubsan}
+          - {cc: clang, mode: asan-ubsan}
+          - {cc: gcc, mode: tsan}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source PR head and no skips
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git diff --name-only HEAD --)"
+          echo "source_head=$HEAD_SHA"
+          git rev-parse 'HEAD^{tree}'
+      - name: Build and execute actual SourceTask scheduler with TaskLocal
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          flags=(-std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread)
+          if [[ "$MODE" == asan-ubsan ]]; then
+            flags=(-std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread -fno-omit-frame-pointer -fsanitize=address,undefined)
+            export ASAN_OPTIONS='detect_leaks=1:halt_on_error=1'
+            export UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1'
+          elif [[ "$MODE" == tsan ]]; then
+            flags=(-std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread -fno-omit-frame-pointer -fsanitize=thread)
+            export TSAN_OPTIONS='halt_on_error=1'
+          fi
+          "$CC" "${flags[@]}" -Isrc/main/cpp -DORESLANG_SOURCE_TASK_TESTING=1 \
+            tests/source_task_i64_runtime_test.c \
+            src/main/cpp/oreslang/runtime/SourceTaskRuntime.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o "$tmp/native-tasklocal"
+          "$tmp/native-tasklocal"
+          echo "TASKLOCAL_I64_HOST_EXECUTED compiler=$CC mode=$MODE"
+  compiled-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify original compiler source
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          echo "source_head=$HEAD_SHA"
+          git rev-parse 'HEAD^{tree}'
+      - name: Install native compiler and harness dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev clang rustc cargo cmake libssl-dev
+      - name: Build actual LLVM compiler and negative fixture harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build --target oreslang-llvmc oreslang-source-task-i64-runtime-test oreslang-tasklocal-i64-e2e-build --parallel 2
+      - name: Run compiled .atto guest, negative compiler fixtures and native scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            -R '^native_(tasklocal_i64_compiled_guest|source_task_i64_shared_scheduler_runtime)$'
+          echo 'TASKLOCAL_I64_GUEST_STEPFUL_PASS'
