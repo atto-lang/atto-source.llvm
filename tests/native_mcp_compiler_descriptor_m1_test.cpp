@@ -5,12 +5,25 @@
 
 using namespace oreslang::runtime::mcp_m1;
 namespace {
+struct Parameter {
+    enum class Mode { Value, Borrow, BorrowMut };
+    std::string class_name, generic_type, sum_type, pending_type_alias;
+    Mode mode = Mode::Value;
+};
 struct Function {
     std::string name;
     bool exported = false, native_internal = false;
     std::string method_owner;
-    std::vector<int> parameters;
+    std::vector<Parameter> parameters;
     std::vector<int> generic_parameters;
+    bool scalar_while = false, async_source_i64 = false;
+    std::vector<int> source_tasks, future_pipelines, actor_spawns,
+        actor_sends, actor_stops, actor_actions, actor_field_writes,
+        caught_throw_defers;
+    std::string ready_await_actor, done_await_actor, ready_future_name,
+        return_class, return_sum, pending_return_type_alias;
+    bool has_declared_effects = false, caught_throw_value = false,
+        returns_void = false;
 };
 struct Program {
     std::string module, namespace_name;
@@ -83,6 +96,46 @@ int main() {
     p.functions.push_back(fn("internal",0,true));
     p.functions.back().native_internal=true;
     check(rejects(p));
+    p.functions.pop_back();
+    p.functions.push_back(fn("runtime",1,true));
+    auto& advanced = p.functions.back();
+    advanced.async_source_i64=true;
+    check(rejects(p));
+    advanced.async_source_i64=false;
+    advanced.source_tasks.push_back(1);
+    check(rejects(p));
+    advanced.source_tasks.clear();
+    advanced.actor_spawns.push_back(1);
+    check(rejects(p));
+    advanced.actor_spawns.clear();
+    advanced.has_declared_effects=true;
+    check(rejects(p));
+    advanced.has_declared_effects=false;
+    advanced.returns_void=true;
+    check(rejects(p));
+    advanced.returns_void=false;
+    advanced.return_class="Secret";
+    check(rejects(p));
+    advanced.return_class.clear();
+    advanced.parameters.front().class_name="Secret";
+    check(rejects(p));
+    advanced.parameters.front().class_name.clear();
+    advanced.parameters.front().mode=Parameter::Mode::Borrow;
+    check(rejects(p));
+    advanced.parameters.front().mode=Parameter::Mode::Value;
+    advanced.parameters.front().generic_type="T";
+    check(rejects(p));
+    advanced.parameters.front().generic_type.clear();
+    advanced.scalar_while=true;
+    check(rejects(p));
+    advanced.scalar_while=false;
+    advanced.ready_await_actor="actor";
+    check(rejects(p));
+    advanced.ready_await_actor.clear();
+    advanced.caught_throw_value=true;
+    check(rejects(p));
+    advanced.caught_throw_value=false;
+    check(!rejects(p));
     p.functions.pop_back();
     p.module="bad/name";
     check(rejects(p));

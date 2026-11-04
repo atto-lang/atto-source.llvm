@@ -55,9 +55,27 @@ inline std::string emit_json(const ValidatedProgram& program) {
     std::vector<Entry> entries;
     for (const auto& f : program.functions) {
         if (!f.exported) continue;
+        // M1 descriptors describe only plain, synchronous, value-parameter
+        // scalar functions. A valid compiled Task/actor/effect is NOT an
+        // authority to expose its runtime state through MCP metadata.
         if (f.native_internal || !f.method_owner.empty() || !name_ok(f.name) ||
-            f.parameters.size() > 32 || !f.generic_parameters.empty())
+            f.parameters.size() > 32 || !f.generic_parameters.empty() ||
+            f.scalar_while || f.async_source_i64 || !f.source_tasks.empty() ||
+            !f.future_pipelines.empty() || !f.actor_spawns.empty() ||
+            !f.actor_sends.empty() || !f.actor_stops.empty() ||
+            !f.actor_actions.empty() || !f.actor_field_writes.empty() ||
+            !f.ready_await_actor.empty() || !f.done_await_actor.empty() ||
+            !f.ready_future_name.empty() || f.has_declared_effects ||
+            f.caught_throw_value || !f.caught_throw_defers.empty() ||
+            f.returns_void || !f.return_class.empty() ||
+            !f.return_sum.empty() || !f.pending_return_type_alias.empty())
             throw std::runtime_error("unsupported public function in mcp descriptor mode");
+        for (const auto& parameter : f.parameters) {
+            if (!parameter.class_name.empty() || !parameter.generic_type.empty() ||
+                !parameter.sum_type.empty() || !parameter.pending_type_alias.empty() ||
+                parameter.mode != decltype(parameter.mode)::Value)
+                throw std::runtime_error("non-scalar or borrowed MCP public parameter");
+        }
         if (entries.size() >= 32)
             throw std::runtime_error("mcp public descriptor count exceeds 32");
         const std::string key = std::string("atto.mcp.aot-descriptors.m1.v1/") +
