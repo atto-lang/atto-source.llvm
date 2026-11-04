@@ -124,12 +124,12 @@ pin a compiler revision carrying the same checked arithmetic semantics.
 The LLVM backend now carries a bounded Rust source-mutation regression
 for canonical `.atto` compilation and native execution, an equivalent legacy
 `.ores` guest, and independent negative parser/oracle checks. This is **source
-fuzzing of compiled scalar programs**, not `atto test --fuzz` stdin/corpus parity.
+fuzzing of compiled scalar programs**. Separately, the new real `.atto` `fuzz_byte` function can be called from a bounded native C stdin adapter and used as a `[fuzz].command` target for the merged Rust `atto test --fuzz` runner. This adapter is not general AttoLang stdin I/O.
 Separate ASan+UBSan and TSan host-native actor lanes require positive and
 negative detector controls. Live `atto test --race` is still inconclusive
 until an authenticated, complete compiler/runtime race recorder is integrated.
 
-See [LLVM test parity and evidence matrix](docs/ATTO_TEST_LLVM_PARITY.md)
+See [LLVM test parity and evidence matrix](docs/ATTO_TEST_LLVM_PARITY.md) and the [runnable native fuzz example](examples/atto-native-fuzz-project/README.md)
 for exact commands and explicit unverified boundaries.
 
 ## Build and test
