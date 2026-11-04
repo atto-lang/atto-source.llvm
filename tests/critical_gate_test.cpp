@@ -132,7 +132,12 @@ int main() {
         const auto held = old_generation.request();
         const auto queued = old_generation.request();
         check(old_generation.waiting() == 1, "retirement setup failed");
-        old_generation.retire();
+        const auto retirement = old_generation.retire();
+        check(retirement.revoked_owner == held.token,
+              "retirement lost exact owning actor ticket");
+        check(retirement.cancelled_waiters.size() == 1
+                      && retirement.cancelled_waiters.front() == queued.token,
+              "retirement lost FIFO queued cancellation receipt");
         check(old_generation.retired(), "critical gate did not retire");
         check(old_generation.waiting() == 0, "retirement leaked queued ticket");
         check(!old_generation.holds(held.token), "retired actor still owns gate");
@@ -144,13 +149,44 @@ int main() {
         try { (void)old_generation.request(); }
         catch (const std::logic_error&) { rejected = true; }
         check(rejected, "retired gate accepted new invocation");
-        old_generation.retire();
+        const auto repeated = old_generation.retire();
+        check(!repeated.revoked_owner && repeated.cancelled_waiters.empty(),
+              "repeated retirement delivered duplicate cancellation receipts");
         CriticalGate replacement;
         const auto fresh_generation = replacement.request();
         check(fresh_generation.admission == Admission::acquired,
               "fresh generation cannot acquire a distinct critical gate");
         check(!replacement.holds(held.token), "stale generation held replacement gate");
         (void)replacement.release(fresh_generation.token);
+    }
+
+    // Multiple outstanding waiters must be returned in original FIFO order,
+    // not discarded or reordered during retirement. This is a host contract;
+    // delivering the receipts on a scheduler control lane remains separate.
+    {
+        CriticalGate gate;
+        const auto owner = gate.request();
+        const auto firstWaiter = gate.request();
+        const auto secondWaiter = gate.request();
+        const auto thirdWaiter = gate.request();
+        (void)gate.release(secondWaiter.token); // cancelled before STOP
+        const auto receipt = gate.retire();
+        check(receipt.revoked_owner == owner.token,
+              "retirement did not identify active owner");
+        check(receipt.cancelled_waiters.size() == 2,
+              "retirement duplicated or omitted queued tickets");
+        check(receipt.cancelled_waiters[0] == firstWaiter.token
+                  && receipt.cancelled_waiters[1] == thirdWaiter.token,
+              "retirement cancellation order differs from FIFO");
+        check(!gate.holds(owner.token) && gate.waiting() == 0,
+              "retired gate retained executable ticket authority");
+        check(!gate.release(firstWaiter.token),
+              "cancelled waiter re-entered retired generation");
+        check(!gate.release(owner.token),
+              "revoked owner handed off after retirement");
+        const auto duplicate = gate.retire();
+        check(!duplicate.revoked_owner && duplicate.cancelled_waiters.empty(),
+              "stale retirement duplicated tickets");
     }
 
     (void)first.release(fresh.token);
