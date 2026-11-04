@@ -101,7 +101,11 @@ static inline int ores_execution_enter(OresNativeExecutionAuthority* a,
         a->owner_thread = pthread_self();
         ++a->sequence;
         if (a->phase != ORES_EXEC_STOPPING) a->phase = ORES_EXEC_RUNNING;
+#ifdef __cplusplus
+        *out = OresExecutionClaim{generation, a->sequence, carrier};
+#else
         *out = (OresExecutionClaim){generation, a->sequence, carrier};
+#endif
     }
     ores_execution_unlock(a);
     return ok;
