@@ -808,7 +808,7 @@ if(BUILD_TESTING)
     # Genuine AttoLang Option/Result parity: actual source compiler, native
     # Clang O0/O2 binaries and diagnostic-specific fail-closed negatives.
     # The host-only NativeSumTypes resolver above does not satisfy this gate.
-    if(ORE_CLANG)
+    if(ORE_CLANG AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin"))
         add_test(NAME native_atto_sum_o0_o2_compiler_guest
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_sum_atto_o0_o2.py"

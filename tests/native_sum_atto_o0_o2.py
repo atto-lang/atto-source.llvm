@@ -80,9 +80,14 @@ def main():
                 require(linked.returncode == 0 and executable.is_file(),
                         "real Clang link failed for " + filename +
                         " O" + str(level))
-                require(executable.read_bytes()[:4] == b"\x7fELF" or
-                        sys.platform == "darwin",
-                        "native binary is not ELF on Linux")
+                header = executable.read_bytes()[:4]
+                if sys.platform == "darwin":
+                    require(header in (b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+                                       b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe"),
+                            "native binary is not Mach-O on macOS")
+                else:
+                    require(header == b"\x7fELF",
+                            "native binary is not ELF on Linux")
                 native = run([str(executable)], timeout=10)
                 require(native.returncode == expected,
                         "native guest returned wrong exit code: " + filename +
