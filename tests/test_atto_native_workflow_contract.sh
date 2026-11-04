@@ -73,7 +73,7 @@ unique 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
 unique 'tests/core_library_sources_test.cpp'
 unique 'oreslang-no-gc-ir-audit-tests-build'
 unique "ctest --test-dir build --output-on-failure --no-tests=error -R '^(native_no_gc_ir_audit_unit|native_core_library_registry_provider_policy)$'"
-unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=10|guest_receipt_protocol=UNSUPPORTED"
+unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=11|guest_receipt_protocol=UNSUPPORTED"
 unique 'atto_native_harness_compiler_guest_o0_o2'
 unique 'atto_native_harness_inventory_source_only'
 [[ "$(count 'native_project_root_import_security')" -eq 2 ]] || die 'expected one CTest inventory and one execution'
