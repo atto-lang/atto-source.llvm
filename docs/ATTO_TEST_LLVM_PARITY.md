@@ -92,6 +92,14 @@ support is **inconclusive/fail-closed**, not permission to run unbounded.
 A failed or timed-out step cannot replace the previously published
 executable.
 
+LLVM IR stdout is capped **while streaming** at 2,000,001 bytes, before
+further output can consume unbounded local disk. The builder captures
+Bash `PIPESTATUS` for both the compiler and stream limiter; a compiler
+SIGPIPE/timeout/nonzero exit is never treated as success, and a payload
+above the 2,000,000-byte accepted ceiling fails with an explicit size
+diagnostic. The source-free canary checks that this overflow cannot
+replace the previously published binary.
+
 The workflow's separate **source-free** builder canary,
 `scripts/test-native-atto-fuzz-build-gates-source-free.sh`,
 uses *synthetic C-generated LLVM IR* to prove these admission paths,
@@ -99,17 +107,17 @@ without claiming any AttoLang parser/compiler execution:
 
 - positive IR/native scalar oracle; two valid-IR but wrong host ABI
   (wrong-arity/void-return) negatives;
-- an IR verifier failure, mandatory auditor denial (exit 7), and
-  **11 timeout mutations** (eight invalid budget strings and stalled
-  compiler/auditor/linker);
+- an IR verifier failure, mandatory auditor denial (exit 7), IR stream
+  overrun, and **11 timeout mutations** (eight invalid budget strings
+  and stalled compiler/auditor/linker);
 - identity-preserving binary publication across every negative, with an
   independent outer watchdog and a marker proving bad timeout strings
   did not even launch the synthetic compiler.
 
 The exact committed builder blob
-`964b3decc9e76232b20ed4663043d64cef6d7cf5` and source-free
+`ab3eb47b80469780eea5774c545dca68fd2949e3` and source-free
 builder-canary blob
-`b41035ea2beecd6ce9498e69bd18530cb91aa24a`
+`b16e3c648a62f926dc06bf134e8c14a377724be7`
 were reconstructed and hash-matched against the GitHub copies; the
 canary **passed locally with Clang 17**. This is a local source-free
 build-gate result, **not** hosted Actions or compiler-backed guest
