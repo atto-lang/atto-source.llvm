@@ -2594,7 +2594,7 @@ private:
                     require("}");
                     if (!guard_failure_exits(failure))
                         fail("AttoLang guard failure block must terminate on every path");
-                    if (token_.text == "else" || token_.text == "fi")
+                    if (!then_scope && (token_.text == "else" || token_.text == "fi"))
                         fail("AttoLang guard has no else or fi");
                     Statement inverted;
                     inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
