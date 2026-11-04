@@ -891,6 +891,19 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Canonical .atto parser-to-IR/link/execution evidence, not host-model only.
+    if(ORE_CLANG)
+        oreslang_contract_test(atto_native_aot_guest_exit_42
+            atto-test-scalar-native.atto --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(atto_native_aot_guest_exit_42
+            PROPERTIES TIMEOUT 45 LABELS "atto;llvm;compiler-backed")
+    endif()
+    oreslang_contract_test(atto_native_unsupported_call_rejected
+        atto-test-unsupported-call.atto
+        --diagnostic "unknown function or wrong call arity")
+    set_tests_properties(atto_native_unsupported_call_rejected
+        PROPERTIES TIMEOUT 30 LABELS "atto;llvm;negative-admission")
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
