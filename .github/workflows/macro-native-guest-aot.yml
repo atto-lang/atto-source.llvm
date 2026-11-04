@@ -1,0 +1,104 @@
+name: Macro native guest exact-head AOT (LLVM)
+
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'tests/native_macro_aot_admission_test.cpp'
+      - 'tests/native_macro_guest_aot.cmake'
+      - 'tests/native_macro_reject.cmake'
+      - 'tests/fixtures/native-macro-*'
+      - 'tests/fixtures/native-macro-scalar-v1/**'
+      - '.github/workflows/macro-native-guest-aot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-parser-and-native-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [release, asan-ubsan]
+    steps:
+      - name: Checkout exact source head without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact committed checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_SHA"
+          printf 'MACRO_LLVM_SOURCE_HEAD=%s\n' "$actual"
+          printf 'MACRO_LLVM_SOURCE_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Install native LLVM compiler and sanitizer toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm-dev libclang-rt-dev cmake ninja-build
+
+      - name: Configure compiler with required native guests
+        shell: bash
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          set -Eeuo pipefail
+          args=(
+            -S . -B "build/macro-${LANE}" -G Ninja
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+            -DBUILD_TESTING=ON
+            -DORE_REQUIRE_NATIVE_MACRO_GUEST_AOT=ON
+          )
+          if [[ "$LANE" == "asan-ubsan" ]]; then
+            args+=(
+              "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+              "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+            )
+          fi
+          cmake "${args[@]}"
+
+      - name: Build production LLVM compiler and native macro parser test
+        shell: bash
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          set -Eeuo pipefail
+          cmake --build "build/macro-${LANE}" --parallel 2 \
+            --target oreslang-llvmc oreslang-native-macro-aot-admission-test
+
+      - name: Run strict production parser, negative admission and linked native guests
+        shell: bash
+        env:
+          LANE: ${{ matrix.lane }}
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -Eeuo pipefail
+          build="build/macro-${LANE}"
+          ctest --test-dir "$build" -N -R '^native_macro' | tee "$build/macro-selected-tests.txt"
+          grep -Fq 'native_macro_shared_template-twice-nested-42_linked_guest_aot_42' \
+            "$build/macro-selected-tests.txt"
+          grep -Fq 'native_macro_shared_template-twice-overflow-reject_no_ir' \
+            "$build/macro-selected-tests.txt"
+          ctest --test-dir "$build" -V -R '^native_macro' --output-on-failure \
+            --parallel 1 | tee "$build/macro-executed-tests.txt"
+          # 2 legacy .ores guests, 3 shared stage-0 .atto guests, 2 typed
+          # template .atto guests: no missing/hidden native execution slots.
+          receipts="$(grep -c 'MACRO_LLVM_LINKED_GUEST_AOT_PASS value=42 exit=42' \
+            "$build/macro-executed-tests.txt" || true)"
+          if [[ "$receipts" -ne 7 ]]; then
+            echo "MACRO_LLVM_NOT_EXECUTED expected 7 linked guest receipts, got $receipts" >&2
+            exit 1
+          fi
+          sha256sum "$build/oreslang-llvmc"
+          echo "MACRO_LLVM_EXACT_HEAD_NATIVE_GUEST_GATE_PASS lane=$LANE receipts=$receipts"
