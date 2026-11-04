@@ -12,3 +12,12 @@ LLVM import of `ores.std/testing` must remain rejected until the runtime
 owns correct generic counting, names, skip/filter/fail-fast, and nested suites.
 A source-only verifier self-test proves formatting rejection, not guest
 execution. Zero-step GitHub Actions jobs remain `NOT_EXECUTED`.
+
+
+## Two-case probes
+
+`multi-pass.atto` and `multi-fail.atto` each emit two per-case status records
+and one final summary. Together with one-case pass/fail, these require eight
+native LLVM/Clang processes at O0/O2. The verifier binds actual native exit,
+ordered bytes, and a no-follow bounded read; this does not mean full TestSuite
+or Actor TestKit parity.
