@@ -1,0 +1,7 @@
+// IR must evaluate read_second before read_first even with named generic args.
+fnc read_first(): int { return 1; }
+fnc read_second(): int { return 2; }
+fnc combine<A, B=A>(A first, B second): int { return first * 10 + second; }
+pub fnc main(): int {
+  return combine<B=int, A=int>(second: read_second(), first: read_first());
+}
