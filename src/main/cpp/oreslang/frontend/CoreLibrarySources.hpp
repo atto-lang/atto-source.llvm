@@ -367,12 +367,12 @@ define module testing_m2 as
       return -1;
     fi
 
-    let mut TestCase record = new TestCase();
-    record.id = candidate.id;
-    record.selected = candidate.selected;
-    record.skipped = candidate.skipped;
+    let mut TestCase snapshot = new TestCase();
+    snapshot.id = candidate.id;
+    snapshot.selected = candidate.selected;
+    snapshot.skipped = candidate.skipped;
     if !candidate.selected || candidate.skipped; then
-      val int ignored = Ledger.record(rt mut borrow suite, rt borrow record);
+      val int ignored = Ledger.record(rt mut borrow suite, rt borrow snapshot);
       if ignored == 2 || ignored == 3; then
         candidate.visited = 1;
       fi
@@ -387,8 +387,8 @@ define module testing_m2 as
     if outcome != 0 && outcome != 1; then
       return -3;
     fi
-    record.outcome = outcome;
-    val int status = Ledger.record(rt mut borrow suite, rt borrow record);
+    snapshot.outcome = outcome;
+    val int status = Ledger.record(rt mut borrow suite, rt borrow snapshot);
     if status == 0 || status == 1; then
       candidate.outcome = outcome;
       candidate.invocations = 1;
