@@ -4767,3 +4767,21 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_request_context_local_host_only
         PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Host-level logical ActorLocal/TaskLocal and OS ThreadLocal contract;
+# RequestLocal remains in RequestContextLocalV1.hpp. No guest compiler parity.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-local-context-domains-v1-test
+        tests/native_context_domains_v1_test.cpp)
+    target_include_directories(oreslang-local-context-domains-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-local-context-domains-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-local-context-domains-v1-test PRIVATE
+        "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-local-context-domains-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_local_context_domains_host_only
+        COMMAND oreslang-local-context-domains-v1-test)
+    set_tests_properties(native_local_context_domains_host_only PROPERTIES TIMEOUT 35)
+endif()
