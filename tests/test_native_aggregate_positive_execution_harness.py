@@ -23,9 +23,17 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
         self.check_result()
 
     def test_registered_fixture_exits_are_distinct(self):
-        self.assertEqual(len(POSITIVE), 4)
-        self.assertEqual(len(NEGATIVE), 4)
-        self.assertEqual(set(status for _, _, _, status in POSITIVE), {7, 19, 42, 73})
+        self.assertEqual(len(POSITIVE), 7)
+        self.assertEqual(len(NEGATIVE), 7)
+        self.assertEqual(set(status for _, _, _, status in POSITIVE),
+                         {7, 19, 42, 44, 46, 53, 73})
+        self.assertTrue({"typed-record-value", "typed-inferred-record-value",
+                         "typed-inferred-struct-value"}.issubset(
+                             {name for name, _, _, _ in POSITIVE}))
+        self.assertTrue({"typed-record-rejects-struct",
+                         "typed-record-rejects-field-name",
+                         "typed-record-rejects-field-type"}.issubset(
+                             {name for name, _, _ in NEGATIVE}))
 
     def test_native_main_calls_guest_and_uses_result(self):
         ir = (b"; ModuleID = 'fixture'\n"
