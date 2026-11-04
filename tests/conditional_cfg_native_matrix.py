@@ -269,6 +269,20 @@ pub fnc main(): int {
 }
 """, "structured class return requires ownership-aware exit lowering")
 
+
+# Execute the same Git-blob-identical canonical .atto files registered in all
+# five AttoLang compiler repositories; this runs the actual native frontend.
+GUARD_CORPUS = Path(__file__).resolve().parents[1] / "contracts" / "guard-v1"
+POSITIVE["guard-canonical-scalar"] = (GUARD_CORPUS / "canonical-scalar.atto").read_text(encoding="utf-8")
+NEGATIVE["guard-canonical-fallthrough"] = (
+    (GUARD_CORPUS / "reject-fallthrough.atto").read_text(encoding="utf-8"),
+    "AttoLang guard failure block must terminate on every path",
+)
+NEGATIVE["guard-canonical-else"] = (
+    (GUARD_CORPUS / "reject-else.atto").read_text(encoding="utf-8"),
+    "AttoLang guard has no else or fi",
+)
+
 def execute(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=75)
 
