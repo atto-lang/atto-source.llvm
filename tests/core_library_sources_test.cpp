@@ -83,6 +83,9 @@ int main() {
     assert(m1->source.find("fnc should_run") != std::string_view::npos);
     assert(m1->source.find("fnc record") != std::string_view::npos);
     assert(m1->source.find("fnc finish") != std::string_view::npos);
+    assert(m1->source.find("pub let int last_id = 0;") != std::string_view::npos);
+    assert(m1->source.find("candidate.id <= suite.last_id") != std::string_view::npos);
+    assert(m1->source.find("suite.last_id = candidate.id;") != std::string_view::npos);
     assert(m1->source.find("stdio.") == std::string_view::npos);
     assert(find_std_library_source("ores.std/testing/m1/../m1") == nullptr);
     assert(find_std_library_source("std/testing/m1") == nullptr);
@@ -105,6 +108,9 @@ int main() {
     assert(m2->source.find("fnc invoke_scalar_body") != std::string_view::npos);
     assert(m2->source.find("fnc run_one") != std::string_view::npos);
     assert(m2->source.find("fnc run_pair") != std::string_view::npos);
+    assert(m2->source.find("candidate.id <= suite.last_id") != std::string_view::npos);
+    assert(m2->source.find("first.id >= second.id") != std::string_view::npos);
+    assert(m2->source.find("second.visited != 0") != std::string_view::npos);
     assert(m2->source.find("stdio.") == std::string_view::npos);
     assert(m2->source.find("import module Ledger from \"ores.std/testing/m1\";") != std::string_view::npos);
     assert(is_reserved_compiler_library_import("ores.std/testing/m2"));
