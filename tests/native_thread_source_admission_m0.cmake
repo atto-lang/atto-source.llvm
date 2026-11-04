@@ -40,6 +40,20 @@ set(source_bare-thread-spawn-value
 set(source_bare-qualified-spawn-value
     "fnc main(): int { return std.thread.spawn; }\n")
 
+# Shared conformance PR #346 carries the exact same canonical .atto files.
+# Pin their raw SHA256 so guest admission cannot silently drift in a backend.
+# These hashes are not proof that a compiler job executed.
+set(expected_fixture_sha256_unqualified-spawn "e4c8aa98773d50cca989e4d8f77fe1401d6712b05f40f73c9f244aaf11690ee1")
+set(expected_fixture_sha256_qualified-spawn "156ceb3fc9ee54d1b79355193001425a5a91e49d626ffb8de54add3fa5e207c3")
+set(expected_fixture_sha256_lexical-whitespace "191d75ec32646d330443a5fb81d35eddabd3363a2b5bc31bc0f4fc596525066f")
+set(expected_fixture_sha256_initializer-spawn "e9efa82f607fddd30d63867a3477245e8a91085e30d5cf09e581c7582f709bcd")
+set(expected_fixture_sha256_generic-spawn "a71d5c4be754a8c1e2066bfc8104955b31de2a3946545f21d2d7c74251aee94f")
+set(expected_fixture_sha256_generic-qualified-spawn "6b1479d2b0939051b4a9f3dbcd5c10caf0f15a41bd123fbc1bcd3843fce375f1")
+set(expected_fixture_sha256_qualified-spawn-whitespace "65e28686f797d7d03a1281787c871ef79259f11195105732699ff18d1e1ccb72")
+set(expected_fixture_sha256_spawn-with-comment "318400109296abc0974192f4c64a9219d226f23eed2b878dc510ac91857513ef")
+set(expected_fixture_sha256_bare-thread-spawn-value "139fa88eb8529bbfd67c4a716343de3e8a4d8f27650b802be730c97cb667b449")
+set(expected_fixture_sha256_bare-qualified-spawn-value "138727bd53e98d2907eeb99c984bb63dfd9e9c6930ce931637e101547a8ffe66")
+
 foreach(case_name IN LISTS cases)
   # Isolate each attempt in a clean, case-specific directory. Otherwise
   # an earlier compiler artifact of the same name could survive a rerun and
@@ -50,6 +64,9 @@ foreach(case_name IN LISTS cases)
   set(path "${case_dir}/${case_name}.atto")
   file(WRITE "${path}" "${source_${case_name}}")
   file(SHA256 "${path}" expected_source_hash)
+  if(NOT expected_source_hash STREQUAL "${expected_fixture_sha256_${case_name}}")
+    message(FATAL_ERROR "${case_name} differs from canonical shared .atto conformance fixture")
+  endif()
   execute_process(
     COMMAND "${COMPILER}" "${path}"
     WORKING_DIRECTORY "${case_dir}"
@@ -86,6 +103,9 @@ set(ordinary_source "${positive_dir}/ordinary-thread-identifier.atto")
 file(WRITE "${ordinary_source}"
     "fnc thread(int value): int { return value; }\nfnc main(): int { return thread(7); }\n")
 file(SHA256 "${ordinary_source}" expected_positive_hash)
+if(NOT expected_positive_hash STREQUAL "462615576a254098159747b2b7b15fe89f0edb5c93f168e0ae67ef59f66a7c2e")
+  message(FATAL_ERROR "positive .atto source differs from canonical conformance fixture")
+endif()
 execute_process(
   COMMAND "${COMPILER}" "${ordinary_source}"
   WORKING_DIRECTORY "${positive_dir}"
