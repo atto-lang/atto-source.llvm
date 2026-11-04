@@ -9,6 +9,7 @@ on:
       - "src/main/cpp/oreslang/types/**"
       - "src/main/cpp/oreslang/backend/**"
       - "tests/native_f64_lexical_gate.sh"
+      - "tests/native_f64_gate_security_selftest.sh"
   workflow_dispatch:
 
 permissions:
@@ -68,6 +69,9 @@ jobs:
         run: |
           set -euo pipefail
           bash -n tests/native_f64_lexical_gate.sh
+          bash -n tests/native_f64_gate_security_selftest.sh
+          bash tests/native_f64_gate_security_selftest.sh tests/native_f64_lexical_gate.sh
+          echo "HOST_ONLY_MUTATION_MATRIX_PASS=4 — no compiler or guest executed"
           test "$(grep -c '^positive ' tests/native_f64_lexical_gate.sh)" -eq 25
           test "$(grep -c '^negative ' tests/native_f64_lexical_gate.sh)" -eq 16
           echo "F64_SOURCE_CASES=25 POSITIVE; 16 NEGATIVE; TWO OPTIMIZATION EXECUTIONS EACH"
