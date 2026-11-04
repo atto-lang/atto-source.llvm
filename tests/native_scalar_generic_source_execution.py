@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Historical native LLVM scalar compiler regressions (non-normative).
 
-Stage 1 intentionally admits only generics whose concrete representation is
-int64. This test never treats unsupported classes/actors as generic support.
+Stage 1 admits only generic TYPE parameters whose concrete representation
+is int64. A statically owned class may be the hidden instance-method receiver,
+but generic class specialization, actor generics and collection generics remain
+unsupported. Neither a receiver loan nor an i64 ABI slot is type erasure.
 """
 import argparse
 import json
