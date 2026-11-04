@@ -25,6 +25,10 @@ printf '\x00\x01\x7f\xff' | "$good" >"$output" 2>"$errors"
 "$good" </dev/null >"$output" 2>"$errors"
 [[ ! -s "$output" && ! -s "$errors" ]] ||
   { echo 'empty input should be a clean no-op' >&2; exit 1; }
+# The exact maximum input must be admitted without writing diagnostics.
+head -c 65536 /dev/zero | "$good" >"$output" 2>"$errors"
+[[ ! -s "$output" && ! -s "$errors" ]] ||
+  { echo 'maximally bounded LLVM fuzz input did not pass' >&2; exit 1; }
 bash "$builder" "$root/tests/fixtures/atto-fuzz-byte-mutant.atto" "$mutant"
 set +e
 printf '\x00' | "$mutant" >"$output" 2>"$errors"
@@ -61,11 +65,36 @@ for wrong in atto-fuzz-wrong-arity.atto atto-fuzz-wrong-return.atto; do
   set -e
   [[ "$status" != 0 ]] ||
     { echo "native fuzz target accepted incompatible guest ABI: $wrong" >&2; exit 1; }
+  grep -Fq 'LLVM guest must define exactly one external fuzz_byte(i64) -> i64' "$errors" ||
+    { echo "compiler rejected source before the ABI admission test: $wrong" >&2; exit 1; }
   cmp -s "$good" "$work/preserved" ||
     { echo "failed ABI gate overwrote the previous native executable: $wrong" >&2; exit 1; }
 done
+# The compiler must run, but the mandatory Rust no-GC IR audit MUST reject
+# publication when the auditor fails. This is a deliberate negative mutation
+# of the build gate, not proof of guest runtime safety.
+export ORES_NO_GC_IR_AUDIT=false
+set +e
+bash "$builder" "$root/tests/fixtures/atto-fuzz-byte.atto" "$good" >"$output" 2>"$errors"
+status=$?
+set -e
+[[ "$status" != 0 ]] ||
+  { echo 'native LLVM fuzz builder ignored a failing IR auditor' >&2; exit 1; }
+cmp -s "$good" "$work/preserved" ||
+  { echo 'failing IR audit overwrote previously published fuzz executable' >&2; exit 1; }
+export ORES_NO_GC_IR_AUDIT="$auditor"
+
+# Instrumented compiler-generated IR + native stdin harness execution.
+# A clean exit alone does NOT prove ASan/UBSan were active: the separate
+# deliberate known-bad sanitizer controls remain mandatory release gates.
+ATTO_FUZZ_SANITIZERS=address,undefined bash "$builder" \
+  "$root/tests/fixtures/atto-fuzz-byte.atto" "$work/native-fuzz-asan-ubsan"
+printf '\x00\xff' | "$work/native-fuzz-asan-ubsan" >"$output" 2>"$errors"
+[[ ! -s "$output" && ! -s "$errors" ]] ||
+  { echo 'instrumented LLVM guest emitted unexpected sanitizer diagnostics' >&2; exit 1; }
+
 if find "$work" -maxdepth 1 -name '.atto-fuzz-build.*' | grep -q .; then
   echo 'native fuzz builder leaked temporary IR or executable artifacts' >&2
   exit 1
 fi
-printf 'ATTO_LLVM_NATIVE_STDIN_FUZZ_PASS compiled_good=1 compiled_mutant=1 negative=5 limit=65536\n'
+printf 'ATTO_LLVM_NATIVE_STDIN_FUZZ_PASS compiled_good=1 compiled_mutant=1 negative=6 asan_ubsan_guest=1 limit=65536\n'
