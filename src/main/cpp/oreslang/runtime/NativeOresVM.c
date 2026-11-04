@@ -246,9 +246,9 @@ static int same_actor(OresNativeActorRef a, OresNativeActorRef b) {
         && a.scheduler_domain == b.scheduler_domain
         && a.actor_slot == b.actor_slot && a.generation == b.generation;
 }
-OresNativeActorRef ores_native_vm_spawn_supervised(
+static OresNativeActorRef vm_spawn_supervised_common(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
-    size_t actor_slot, OresNativeActorRef supervisor) {
+    size_t actor_slot, OresNativeActorRef supervisor, int with_ready_carrier) {
     OresNativeActorRef invalid = {0, 0, 0};
     if (!vm || !valid_domain(domain)) return invalid;
     control_lock(vm);
@@ -258,9 +258,11 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
         && actor_slot < vm->actor_slots[domain]
         && supervisor.actor_slot != (uint64_t)actor_slot
         && ores_native_actor_scheduler_poll_ready(vm->schedulers[domain], supervisor)) {
-        /* Serializes with VM stop/retire. The scheduler atomically rejects a
-         * reused slot; only a successful spawn can install parentage. */
-        child = ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot);
+        /* Parentage is installed ONLY after exact-incarnation actor admission.
+         * Failed pthread startup leaves child identity and registration empty. */
+        child = with_ready_carrier
+            ? ores_native_actor_scheduler_spawn_ready(vm->schedulers[domain], actor_slot)
+            : ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot);
         if (child.scheduler_domain) {
             OresVMSupervisorRegistration* entry =
                 &vm->supervisors[domain][actor_slot];
@@ -271,6 +273,18 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
     }
     control_unlock(vm);
     return child;
+}
+
+OresNativeActorRef ores_native_vm_spawn_supervised(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    size_t actor_slot, OresNativeActorRef supervisor) {
+    return vm_spawn_supervised_common(vm, domain, actor_slot, supervisor, 0);
+}
+
+OresNativeActorRef ores_native_vm_spawn_supervised_ready(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    size_t actor_slot, OresNativeActorRef supervisor) {
+    return vm_spawn_supervised_common(vm, domain, actor_slot, supervisor, 1);
 }
 
 OresNativeActorRef ores_native_vm_supervisor_of(
