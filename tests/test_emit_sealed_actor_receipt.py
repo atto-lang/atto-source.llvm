@@ -1,5 +1,7 @@
 """Runner-independent regression checks for the exact-head LLVM AOT evidence gate."""
 import importlib.util
+import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -63,6 +65,58 @@ class ReceiptTests(unittest.TestCase):
                 p.write_text(bad)
                 with self.assertRaises(ValueError):
                     module.check_ir(p, 'oreslang_actor_Worker_handle_state')
+
+    def test_full_receipt_binds_clean_git_head_and_both_artifacts(self):
+        # Uses a synthetic *local test repository*, not an AttoLang compiler
+        # output or a certification receipt. Exercises the complete issuer.
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            checkout = workspace / 'checkout'
+            runner = workspace / 'runner'
+            checkout.mkdir()
+            runner.mkdir()
+            subprocess.run(['git', 'init', '-q', str(checkout)], check=True)
+            for name in module.SOURCES:
+                p = checkout / name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text('fixture: ' + name + '\n')
+            subprocess.run(['git', '-C', str(checkout), 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(checkout), '-c', 'user.name=Test',
+                            '-c', 'user.email=test@example.invalid', 'commit',
+                            '-qm', 'isolated evidence fixture'], check=True)
+            head = subprocess.check_output(['git', '-C', str(checkout),
+                                            'rev-parse', 'HEAD'], text=True).strip()
+            files = {
+                'compiled-two-actor-owned-counter.ll': GOOD.replace('HANDLER',
+                    'oreslang_actor_Worker_on_message'),
+                'compiled-sealed-actor-counter.ll': GOOD.replace('HANDLER',
+                    'oreslang_actor_Worker_handle_state'),
+                'aot-two-actor-receipt': module.LEGACY + '\n',
+                'aot-sealed-two-actor-receipt': module.SEALED + '\n',
+            }
+            for filename, content in files.items():
+                (runner / filename).write_text(content)
+            for name in ('guest.o', 'guest-sealed.o', 'aot-two-actor-test',
+                         'aot-sealed-two-actor-test'):
+                (runner / name).write_bytes(b'fixture not actual LLVM binary')
+            env = {'GITHUB_RUN_ID': '123456', 'GITHUB_RUN_ATTEMPT': '2',
+                   'GITHUB_REPOSITORY': 'private/source-test',
+                   'GITHUB_JOB': 'compiled-native-actor-owned-heaps'}
+            prior = Path.cwd()
+            try:
+                os.chdir(checkout)
+                receipt = module.build_receipt(runner, 'asan-ubsan', head, env)
+                self.assertEqual(receipt['head_sha'], head)
+                self.assertTrue(receipt['compiled_guest_execution_verified'])
+                self.assertTrue(receipt['asan_ubsan_mode'])
+                self.assertEqual(set(receipt['executions']), {'legacy', 'sealed'})
+                self.assertEqual(len(receipt['source_blobs']), len(module.SOURCES))
+                self.assertFalse(receipt['full_state_intrinsic_parity_verified'])
+                (checkout / module.SOURCES[0]).write_text('mutated source')
+                with self.assertRaises(ValueError):
+                    module.build_receipt(runner, 'optimized', head, env)
+            finally:
+                os.chdir(prior)
 
     def test_bad_head_and_mode_refused_before_git(self):
         with tempfile.TemporaryDirectory() as td:
