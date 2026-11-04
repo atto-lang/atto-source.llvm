@@ -1,0 +1,8 @@
+// Generic type labels and runtime value labels are distinct namespaces.
+// A and B exist in both maps, but map to opposite formal value slots.
+fnc combine<A=int,B=A>(A B,B A):int {
+  return B*10+A;
+}
+pub fnc main():int {
+  return combine<B=int,A=int>(A:2,B:4);
+}
