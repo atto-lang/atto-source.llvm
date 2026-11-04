@@ -73,9 +73,15 @@ pub fnc main(): int { return fixed<Array<int>>(); }
     "unknown-type": ("""fnc fixed<T=int>(): int { return 42; }
 pub fnc main(): int { return fixed<bool>(); }
 """, "native scalar generic type requires int"),
-    "duplicate-named": ("""fnc fixed<T=int>(): int { return 42; }
-pub fnc main(): int { return fixed<T=int, T=int>(); }
-""", "too many generic type arguments"),
+    "duplicate-named": ("""fnc fixed<A=int, B=int>(): int { return 42; }
+pub fnc main(): int { return fixed<A=int, A=int>(); }
+""", "duplicate generic argument 'A'"),
+    "positional-and-named-same-generic-slot": ("""fnc fixed<A=int, B=int>(): int { return 42; }
+pub fnc main(): int { return fixed<int, A=int>(); }
+""", "duplicate generic argument 'A'"),
+    "case-sensitive-generic-name": ("""fnc fixed<A=int, B=int>(): int { return 42; }
+pub fnc main(): int { return fixed<a=int, B=int>(); }
+""", "unknown named generic argument 'a'"),
     "unknown-named": ("""fnc fixed<T=int>(): int { return 42; }
 pub fnc main(): int { return fixed<Other=int>(); }
 """, "unknown named generic argument"),
