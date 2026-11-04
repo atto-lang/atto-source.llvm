@@ -23,3 +23,9 @@ arith-nested-subtraction|positive/arith-nested-subtraction.atto|42
 call-double|positive/call-double.atto|42
 conditional-nested|positive/conditional-nested.atto|42
 scalar-assert-nested|positive/scalar-assert-nested.atto|0
+std-scalar-equal-pass|positive/std-scalar-equal-pass.atto|0
+std-scalar-equal-fail|positive/std-scalar-equal-fail.atto|1
+std-scalar-not-equal-pass|positive/std-scalar-not-equal-pass.atto|0
+std-scalar-combined-fail|positive/std-scalar-combined-fail.atto|1
+std-scalar-combined-success|positive/std-scalar-combined-success.atto|0
+std-scalar-alias-pass|positive/std-scalar-alias-pass.atto|0
