@@ -71,7 +71,7 @@ printf 'SG_LLVM_GENERIC_NATIVE_GUEST_PASS blob=%s result=42\n' "$(git rev-parse 
 # Canonical scalar-superstep semantics: the IDENTICAL Oreslang bytes are in
 # StateGraph, Java/Graal and LLVM. Does not assert generic graph lowering.
 superstep=contracts/stategraph-portability/shared-superstep-scalar.ores
-expected_superstep_blob=0c1213cbedaf439e8f554627cf2174f4f2684d94
+expected_superstep_blob=054d4e9fe297c520513686feae076dc921f581ac
 [[ -f "$superstep" && ! -L "$superstep" ]]
 git ls-files --error-unmatch -- "$superstep" >/dev/null
 [[ "$(git hash-object "$superstep")" = "$expected_superstep_blob" ]] ||
