@@ -1,0 +1,105 @@
+name: Canonical AttoLang import admission (native compiler)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'tests/project_root_import_test.cpp'
+      - 'tests/native_module_imports.py'
+      - 'tests/contract.py'
+      - 'tests/fixtures/numerics-atto-main.atto'
+      - 'contracts/atto-parity-v1/add.atto'
+      - 'CMakeLists.txt'
+      - '.github/workflows/atto-import-resolution.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  root-import-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact clean source tree
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "EXACT_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          clang++ --version
+          cmake --version
+      - name: Compile and execute resolver unit with GCC and Clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            "${compiler}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+              -Isrc/main/cpp tests/project_root_import_test.cpp \
+              -o "/tmp/atto-root-import-${compiler}"
+            "/tmp/atto-root-import-${compiler}"
+          done
+      - name: Resolver ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fno-omit-frame-pointer -fsanitize=address,undefined \
+            -Isrc/main/cpp tests/project_root_import_test.cpp \
+            -o /tmp/atto-root-import-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            /tmp/atto-root-import-sanitized
+      - name: Build real LLVM compiler and import tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test
+      - name: Require exact import and canonical .atto CTest inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/ctest-inventory.txt
+          cat /tmp/ctest-inventory.txt
+          for name in \
+            native_source_module_graph_execution \
+            native_project_root_import_security \
+            numerics_atto_integer_guest \
+            atto_shared_scalar_guest
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/ctest-inventory.txt
+          done
+      - name: Compile, link and execute real canonical import guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(native_source_module_graph_execution|native_project_root_import_security|numerics_atto_integer_guest|atto_shared_scalar_guest)$' \
+            --output-on-failure --timeout 180
+      - name: Reverify source identity after tests
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "FINAL_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "FINAL_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"

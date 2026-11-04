@@ -28,8 +28,8 @@ fnc update(borrow mut Pair p, int flag): void {
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  update(rt borrow mut p, 0);
-  update(rt borrow mut p, 1);
+  update(rt mut borrow p, 0);
+  update(rt mut borrow p, 1);
   return p.first + p.second;
 }
 """,
@@ -43,14 +43,14 @@ fnc update_second(borrow mut Pair p): void {
   return;
 }
 fnc dispatch(borrow mut Pair p, int n): void {
-  if (n eq 0) { update_first(rt borrow mut p); }
-  else { update_second(rt borrow mut p); } fi
+  if (n eq 0) { update_first(rt mut borrow p); }
+  else { update_second(rt mut borrow p); } fi
   return;
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  dispatch(rt borrow mut p, 0);
-  dispatch(rt borrow mut p, 1);
+  dispatch(rt mut borrow p, 0);
+  dispatch(rt mut borrow p, 1);
   return p.first + p.second;
 }
 """,
@@ -60,13 +60,13 @@ fnc add_one(borrow mut Pair p): void {
   return;
 }
 fnc branch(borrow mut Pair p, int n): void {
-  defer add_one(rt borrow mut p);
+  defer add_one(rt mut borrow p);
   if (n eq 0) { p.first = 10; } else { p.first = 40; } fi
   return;
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  branch(rt borrow mut p, 0);
+  branch(rt mut borrow p, 0);
   return p.first + 31;
 }
 """,
@@ -90,13 +90,6 @@ pub fnc main(): int {
   return n;
 }
 """, "ownership violation: conditional CFG predecessor ownership mismatch"),
-    "side-effect-condition": ("""
-fnc one(): int { return 1; }
-pub fnc main(): int {
-  if (one() eq 1) { one(); } else { one(); } fi
-  return 42;
-}
-""", "native guarded condition must be pure"),
     "missing-else": (PAIR + """
 pub fnc main(): int {
   let mut Pair p = new Pair();
@@ -117,6 +110,17 @@ pub fnc main(): int {
   return 42;
 }
 """, "expected int expression"),
+    "if-as-binding-value": ("""
+pub fnc main(): int {
+  val y: int = if (1 eq 1) { return 1; } else { return 2; } fi
+  return y;
+}
+""", "expected int expression"),
+    "if-as-return-value": ("""
+pub fnc main(): int {
+  return if (1 eq 1) { return 1; } else { return 2; } fi;
+}
+""", "expected int expression"),
     "branch-after-return-guard": (PAIR + """
 pub fnc main(): int {
   let mut Pair p = new Pair();
@@ -126,6 +130,10 @@ pub fnc main(): int {
 }
 """, "native conditional statements cannot follow return guards"),
 }
+
+
+# Conditions execute once before splitting the affine ownership state.
+POSITIVE["side-effect-condition"] = '\nfnc one(): int { return 1; }\npub fnc main(): int {\n  if (one() eq 1) { one(); } else { one(); } fi\n  return 42;\n}\n'
 
 
 def execute(cmd):
