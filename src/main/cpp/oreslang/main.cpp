@@ -18,6 +18,8 @@
 #include <functional>
 #include <iostream>
 #include <unordered_map>
+#include <map>
+#include <set>
 #include <unordered_set>
 #include <vector>
 #include <iterator>
@@ -192,6 +194,114 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 
 
 
+
+// Compiler-owned, source-admitted effect hints, v0. This intentionally reuses
+// the native AST and the existing complete direct-facts walker; it never
+// invokes LLVM code generation, guest execution or the hard-RT admission mode.
+// Only a closed, nonrecursive, statically resolved subset can be "known".
+// Unknown/partial source surfaces return INCONCLUSIVE (2), never a false PASS.
+static int print_native_analysis_v0(const oreslang::Program& ast) {
+    using oreslang::FunctionEffects;
+    using oreslang::FunctionEffect;
+    using oreslang::realtime_detail::function_key;
+    struct Row {
+        FunctionEffects direct{};
+        std::vector<std::string> calls;
+        bool unknown = false;
+    };
+    std::map<std::string, Row> rows;
+    const bool unknown_source_surface =
+        !ast.imports.empty() || !ast.actors.empty() || !ast.classes.empty() ||
+        !ast.cooperative_loops.empty() || !ast.generators.empty() ||
+        !ast.contracts.empty() || !ast.conforms.empty();
+    if (ast.functions.size() > 4096)
+        throw std::runtime_error("analysis v0 function budget exceeded");
+    std::size_t edges = 0;
+    for (const auto& fn : ast.functions) {
+        const auto key = function_key(fn.name, fn.parameters.size());
+        if (rows.count(key))
+            throw std::runtime_error("analysis v0 ambiguous callable identity");
+        const auto remaining = std::size_t{30000} - edges;
+        const auto facts = oreslang::realtime_detail::direct_facts(fn, remaining, &ast);
+        if (facts.call_budget_exceeded)
+            throw std::runtime_error("analysis v0 call graph budget exceeded");
+        edges += facts.calls.size();
+        Row row;
+        row.direct = facts.effects;
+        row.calls = facts.calls;
+        row.unknown = unknown_source_surface || fn.native_internal ||
+            !facts.effects.valid() || !facts.bounded_calls ||
+            !facts.bounded_cleanup || facts.unsupported_runtime ||
+            (fn.has_declared_effects && !fn.declared_effects.valid());
+        rows.emplace(key, std::move(row));
+    }
+    struct Result { FunctionEffects effects{}; bool unknown = false; };
+    std::map<std::string, Result> resolved;
+    std::set<std::string> active;
+    std::function<Result(const std::string&)> visit =
+        [&](const std::string& key) -> Result {
+            if (const auto found = resolved.find(key); found != resolved.end())
+                return found->second;
+            if (!active.insert(key).second)
+                return {{}, true}; // cycle: never infer pure from recursion
+            const auto row = rows.find(key);
+            if (row == rows.end()) {
+                active.erase(key);
+                return {{}, true}; // unresolved/external call
+            }
+            Result result{row->second.direct, row->second.unknown};
+            for (const auto& callee : row->second.calls) {
+                const auto child = visit(callee);
+                result.effects = result.effects.united(child.effects);
+                result.unknown |= child.unknown;
+            }
+            active.erase(key);
+            if (!result.effects.valid()) result.unknown = true;
+            resolved.emplace(key, result);
+            return result;
+        };
+    const std::pair<std::string_view, FunctionEffect> effect_names[] = {
+        {"state.read", FunctionEffect::StateRead},
+        {"state.write", FunctionEffect::StateWrite},
+        {"suspend", FunctionEffect::Suspend},
+        {"io", FunctionEffect::Io},
+        {"alloc", FunctionEffect::Alloc},
+        {"block", FunctionEffect::Block},
+        {"ffi", FunctionEffect::Ffi},
+        {"throw", FunctionEffect::Throw},
+        {"raise", FunctionEffect::Raise},
+        {"panic", FunctionEffect::Panic}
+    };
+    bool any_unknown = false;
+    for (const auto& [key, row] : rows) {
+        (void)row;
+        const auto result = visit(key);
+        any_unknown |= result.unknown;
+        std::cout << "ORES-ANALYZE-V0\t";
+        print_safe_diagnostic(std::cout, key, 256);
+        std::cout << "\tstatus=" << (result.unknown ? "inconclusive" : "known")
+                  << "\tknown_effects=";
+        bool first = true;
+        for (const auto& entry : effect_names) {
+            if (!result.effects.has(entry.second)) continue;
+            if (!first) std::cout << ',';
+            std::cout << entry.first;
+            first = false;
+        }
+        if (first) std::cout << "none";
+        std::cout << '\n';
+    }
+    if (rows.empty()) {
+        std::cout << "ORES-ANALYZE-V0\tstatus=inconclusive\treason=no-callables\n";
+        any_unknown = true;
+    }
+    if (any_unknown)
+        std::cerr << "oreslang-llvmc: analysis v0 inconclusive; unsupported or unresolved effect closure\n";
+    std::cout.flush();
+    return any_unknown ? 2 : 0;
+}
+
+
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
@@ -205,6 +315,7 @@ int main(int argc, char** argv) {
     bool allocator_provider_seen = false;
     bool bounded_allocator_provider = false;
     bool rt_check_only = false;
+    bool analyze_only = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
@@ -255,6 +366,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             native_hard_rt_profile = true;
+        } else if (arg == "--analyze") {
+            if (analyze_only) { std::cerr << "duplicate analyze option\n"; return 2; }
+            analyze_only = true;
         } else if (arg == "--rt-check") {
             if (rt_check_only) { std::cerr << "duplicate rt-check option\n"; return 2; }
             rt_check_only = true;
@@ -355,6 +469,14 @@ int main(int argc, char** argv) {
                 oreslang::frontend::CoreProviderRequirement::Allocator)
             : 0u;
 
+    if (analyze_only &&
+            (constraint_descriptors_only || rt_check_only || rt_entry_seen ||
+             rt_report_seen || native_hard_rt_profile || experimental_owned_int ||
+             experimental_rt_scalar_loop || tree_shake || !tree_shake_roots.empty() ||
+             target_seen || bounded_allocator_provider || allocator_provider_seen)) {
+        std::cerr << "--analyze is a host no-codegen source-admission mode; cannot combine with codegen, RT or target flags\n";
+        return 2;
+    }
     if (constraint_descriptors_only &&
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
@@ -382,7 +504,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--analyze] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -422,6 +544,12 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        if (analyze_only) {
+            // This is after the real parser, linker and type/ownership gates.
+            // Never emit IR or execute guest code in the analysis path.
+            return print_native_analysis_v0(ast);
+        }
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
