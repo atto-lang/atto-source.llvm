@@ -96,8 +96,10 @@ key spellings are also rejected, so escaping cannot disguise a project-root
 setting. Dotted `project.root.path =`, `project . root . path =`, and
 `[project]` followed by `root . path =` are rejected too: TOML permits
 both arbitrary whitespace around dots and nested key assignments.
-Duplicate `[project]` tables are rejected; unrelated `[build.*]` and
-`[build] root . config=...` metadata remain allowed.
+Duplicate `[project]` tables are rejected; unrelated `[build.*]`,
+`[build] root . config=...`, and nested `[build] project.root.path=...`
+metadata remain allowed because their TOML ownership is not the
+root-level `project` table.
 
 Added **22 negative compiler scenarios** to `native_source_module_graph_execution`
 requiring no LLVM IR plus one positive `.atto` native compile/link/guest
