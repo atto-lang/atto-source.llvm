@@ -34,6 +34,21 @@ int oreslang_source_task_await_i64_checked(void* task, int64_t* out_result);
 int64_t oreslang_source_task_await_i64(void* task);
 
 /*
+ * First compiler-backed TaskLocal<int> specialization, one inline i64 slot
+ * per admitted SourceTaskI64. Checked APIs return zero outside that Task's
+ * current authenticated actor-scheduler callback, including on foreign
+ * pthreads and after retirement. The compiler uses aborting variants only
+ * after verifying the closed-world TaskLocal<int>.set/get source pattern.
+ *
+ * NOT the full generic TaskLocal<T> ABI: no arbitrary key, propagation,
+ * suspend/resume or actor/request-context privilege is provided here.
+ */
+int oreslang_source_task_local_i64_set_checked(int64_t value);
+int oreslang_source_task_local_i64_get_checked(int64_t* out_value);
+void oreslang_source_task_local_i64_set(int64_t value);
+int64_t oreslang_source_task_local_i64_get(void);
+
+/*
  * Called by the compiler-owned native main wrapper after the guest main has
  * consumed its Task. Physically drains/stops the scheduler before releasing
  * the Task object. Returns 1 on clean retirement, 0 on contract violation.
