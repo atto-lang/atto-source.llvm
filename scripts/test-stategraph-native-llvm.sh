@@ -27,6 +27,25 @@ if [[ "$common_status" -ne 42 || -s "$tmp/out" ]]; then
 fi
 printf 'SG_LLVM_COMMON_SCALAR_NATIVE_PASS blob=%s guest_exit=42\n' "$(git rev-parse "HEAD:$shared")"
 
+
+# Safety boundary until backend generic object arrays + first-class callbacks
+# have real lowering. Rejection (no partial IR) is NOT feature parity.
+negative=tests/fixtures/stategraph-parity-generic-frontier-unsupported.ores
+[[ -f "$negative" && ! -L "$negative" ]]
+git ls-files --error-unmatch -- "$negative" >/dev/null
+[[ "$(git hash-object "$negative")" = "$(git rev-parse "HEAD:$negative")" ]] ||
+  { echo 'SG_LLVM_UNSUPPORTED_FRONTIER_SOURCE_DRIFT' >&2; exit 1; }
+set +e
+timeout --kill-after=3s 30s build/oreslang-llvmc --target=host "$negative" > "$tmp/negative.ll" 2> "$tmp/negative.err"
+negative_status=$?
+set -e
+if [[ "$negative_status" -eq 0 || -s "$tmp/negative.ll" ]]; then
+  echo "SG_LLVM_UNSUPPORTED_FRONTIER_NOT_FAIL_CLOSED status=$negative_status" >&2
+  exit 1
+fi
+printf 'SG_LLVM_UNSUPPORTED_FRONTIER_REJECTED blob=%s (NOT parity)\n' \
+  "$(git rev-parse "HEAD:$negative")"
+
 # First byte-identical generic userland StateGraph source.
 generic=contracts/stategraph-portability/shared-generic-state.ores
 [[ -f "$generic" && ! -L "$generic" ]]
