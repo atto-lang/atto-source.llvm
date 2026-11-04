@@ -1,0 +1,2 @@
+import * as lib from "./import-producer.atto";
+pub fnc main() -> int { return lib.literal!(const 9223372036854775807 + 1); }

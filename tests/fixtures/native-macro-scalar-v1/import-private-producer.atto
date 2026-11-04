@@ -1,0 +1,3 @@
+define macro literal(Const<int> value) -> Syntax<Expr> {
+    return quote(value);
+}
