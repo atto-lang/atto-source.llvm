@@ -735,7 +735,10 @@ int main(int argc, char** argv) {
         // On shared native actor carriers, running out of the OS stack can
         // terminate the process. Until checked compiler-managed frames exist,
         // reject unbounded recursion rather than emitting a crashable call.
-        oreslang::require_native_guest_call_graph_bounded(ast);
+        // The backend itself revalidates and emits TLS-frame instrumentation
+        // before allowing the narrow pure scalar recursive source subset.
+        // All actors/owned/FFI/effectful recursive graphs still fail closed.
+        (void)oreslang::require_native_guest_call_graph_bounded(ast, true);
 
         if (tree_shake) {
             // Tree shaking is an optimization, not conditional compilation.
