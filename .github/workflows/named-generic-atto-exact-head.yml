@@ -8,6 +8,7 @@ on:
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'tests/native_scalar_generic_source_execution.py'
+      - 'tests/native_class_methods.py'
       - 'tests/native_int_array_source_execution.py'
       - 'tests/native_named_array_slot_binding_test.cpp'
       - 'tests/native_named_constructor_source_execution.py'
@@ -70,6 +71,8 @@ jobs:
             native_named_call_mixed_guest
             native_named_call_mut_borrow_binding
             native_named_call_overload_arity_guest
+            native_source_class_methods_release
+            native_source_class_methods_sanitizer
           )
           for name in "${required[@]}"; do
             if ! grep -Fxq -- "$name" build/atto-named-test-names.txt; then
@@ -83,7 +86,32 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build \
-            -R '^(native_atto_named_generic_value_source_execution(_O2)?|native_atto_named_constructor_source_execution(_O2)?|native_scalar_generic_contract_harness_selftest|native_int_array_source_(execution|asan_ubsan)|native_named_array_slot_binder_host_only|native_named_constructor_slot_binder_host_only|native_named_call_(lexical_ir_order|reordered_guest|mixed_guest|mut_borrow_binding|overload_arity_guest))$' \
+            -R '^(native_atto_named_generic_value_source_execution(_O2)?|native_atto_named_constructor_source_execution(_O2)?|native_scalar_generic_contract_harness_selftest|native_int_array_source_(execution|asan_ubsan)|native_named_array_slot_binder_host_only|native_named_constructor_slot_binder_host_only|native_named_call_(lexical_ir_order|reordered_guest|mixed_guest|mut_borrow_binding|overload_arity_guest)|native_source_class_methods_(release|sanitizer)) \
+            --output-on-failure --no-tests=error --timeout 240 --parallel 2
+
+      - name: Build ASan and UBSan instrumented LLVM frontend and named slot binders
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-sanitized \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined'
+          cmake --build build-sanitized --parallel 2 \
+            --target oreslang-llvmc oreslang-native-named-array-slot-test oreslang-native-named-constructor-slot-test
+      - name: Execute named compiler and binder cases under ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-sanitized \
+            -R '^(native_atto_named_generic_value_source_execution|native_atto_named_constructor_source_execution|native_named_array_slot_binder_host_only|native_named_constructor_slot_binder_host_only)$' \
+            --output-on-failure --no-tests=error --timeout 240 --parallel 2
+ \
             --output-on-failure --no-tests=error --timeout 240 --parallel 2
 
       - name: Build ASan and UBSan instrumented LLVM frontend and named slot binders
