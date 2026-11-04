@@ -86,8 +86,11 @@ requires the existing `native_source_module_graph_execution` and
 `native_project_root_import_security` CTests, which now cover `.atto`
 relative imports, project-root imports, mixed explicit extension migration,
 negative no-fallback cases, nested package fences and symlink escape.
-The workflow gates **30 CTest names** in total (8 original, 20 new,
-2 import/security suites). All are pending real execution. A test listing, authored test source, zero-step job, or
+The workflow gates **35 CTest names** in total (13 existing named-call/
+member tests, including reordered guest ABI, mixed named calls, overload
+selection by arity, and mutable-borrow conflict/binding; 20 new scalar
+generic/value cases; and 2 import/security suites). All are pending real
+execution. A test listing, authored test source, zero-step job, or
 host binder oracle does not establish execution. For promotion require
 exact-head source/tree attestation, nonzero executed job steps,
 `ctest --output-on-failure` pass counts, LLVM IR emission and Clang
