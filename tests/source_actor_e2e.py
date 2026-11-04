@@ -79,6 +79,7 @@ def main():
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
+        ("source-actor-lazy-first-carrier.atto", 1, 2, 3),
         # Verify real compiled guest execution, not just IR text admission,
         # for all three source spellings of native instance on_message.
         ("source-actor-method-keyword.ores", 1, 2, 3),
@@ -242,6 +243,11 @@ def main():
             assert len(vm_lines) == 1 and (
                 "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
                 name, vm_lines)
+            first_carrier = [line for line in executed.stderr.splitlines()
+                             if line.startswith("SOURCE_ACTOR_FIRST_CARRIER_READY ")]
+            assert first_carrier == [
+                "SOURCE_ACTOR_FIRST_CARRIER_READY main=1 shared=0 private=0 untrusted=0"
+            ], (name, "source actor carrier not ready at publication", first_carrier)
             if name in {"source-actor-await-ready.ores",
                         "source-actor-await-worker.ores",
                         "source-actor-future-void-ready.ores"}:
