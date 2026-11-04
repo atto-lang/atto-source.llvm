@@ -37,6 +37,53 @@ static void scalar_42(std::string_view source) {
     scalar_value(source, 42);
 }
 int main() {
+    // Parser-level typed AST contract: this is NOT source admission evidence.
+    // The production ModuleLoader must independently derive this binding from
+    // a descriptor-verified producer and cryptographically hash its bytes.
+    const auto producer_exports = oreslang::parse_native_public_macro_exports(R"(
+define pub macro literal(Const<int> value) -> Syntax<Expr> {
+    return quote(value);
+}
+)");
+    check(producer_exports.size() == 1);
+    check(producer_exports.front().name == "literal");
+    check(producer_exports.front().kind == oreslang::NativeMacroKind::ConstIntQuote);
+    const auto macro_consumer = R"(
+import * as lib from "./producer.atto";
+pub fnc main() -> int { return lib.literal!(const 40+2); }
+)";
+    const auto declared_imports =
+        oreslang::scan_native_macro_import_headers(macro_consumer);
+    check(declared_imports.size() == 1);
+    check(declared_imports.front().alias == "lib");
+    check(declared_imports.front().path == "./producer.atto");
+    const std::vector<oreslang::NativeMacroBinding> verified_test_bindings{{
+        "lib", "./producer.atto", "project/producer.atto",
+        std::string(64, 'a'), producer_exports
+    }};
+    auto imported = oreslang::parse_unresolved_program(
+        macro_consumer, false, false, verified_test_bindings);
+    check(imported.imports.empty());
+    check(imported.functions.size() == 1);
+    check(imported.functions.front().result != nullptr);
+    check(imported.functions.front().result->kind == Expression::Kind::Integer);
+    check(imported.functions.front().result->integer == 42);
+    check(imported.compile_time_macro_imports.size() == 1);
+    check(imported.compile_time_macro_imports.front().logical_owner ==
+          "project/producer.atto");
+    check(imported.compile_time_macro_imports.front().source_sha256 ==
+          std::string(64, 'a'));
+    {
+        bool denied_without_owner = false;
+        try {
+            (void)oreslang::parse_unresolved_program(macro_consumer);
+        } catch (const std::exception& ex) {
+            denied_without_owner = std::string(ex.what()).find(
+                "NATIVE_IMPORTED_MACRO_LINKER_REQUIRED") != std::string::npos;
+        }
+        check(denied_without_owner);
+    }
+
     scalar_42(R"(
 define macro literal(Const<int> value) -> Syntax<Expr> {
   return quote(value);
