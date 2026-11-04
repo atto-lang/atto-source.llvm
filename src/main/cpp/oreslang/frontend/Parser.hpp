@@ -78,6 +78,9 @@ struct Expression {
 inline std::vector<std::size_t> native_array_argument_slots(const Expression& expr) {
     if (expr.kind != Expression::Kind::ArrayCall)
         throw std::runtime_error("native array binder requires a member call");
+    if (expr.type_arguments_present || !expr.type_arguments.empty())
+        throw std::runtime_error(
+            "native Array methods do not accept generic type arguments");
     const bool get = expr.name == "get";
     const bool add = expr.name == "add";
     const bool set = expr.name == "set";
