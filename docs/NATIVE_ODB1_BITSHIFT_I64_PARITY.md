@@ -18,8 +18,8 @@ The reference `oreslang-source.java` parser uses `parseShift()` after additive a
 `tests/native_odb1_bitshift_source_execution.sh` requires an actual built `oreslang-llvmc`, emits real `--target=host` LLVM IR from newly created `.atto` guests, links with Clang and executes:
 
 1. **13 positive guest assertions**: little-endian 65535 byte pack, additive-vs-shift and comparison precedence, signed/unsigned right shift, left wrap, sign extension, 0/63 count endpoints and a dynamic count; exact exit code zero.
-2. **Two negative compiler fixtures**: bool operand and nonadjacent `> >`; fail to emit any LLVM IR.
-3. **Three negative runtime fixtures**: counts -1, 64 and INT64_MAX must compile but terminate via the guarded `llvm.trap`, not succeed or time out.
+2. **Three negative compiler fixtures**: bool value operand, bool distance operand and nonadjacent `> >`; all fail before emitting any LLVM IR.
+3. **Four negative runtime fixtures**: counts -1, literal 64, computed 32+32 and INT64_MAX must compile but terminate via the guarded `llvm.trap`, not succeed or time out. The computed case prevents a literal-only check from masquerading as a runtime guard.
 4. Inspect the real emitted IR for `shl i64`, `ashr i64`, `lshr i64`, `icmp ult i64` and `llvm.trap`.
 
 The exact-head workflow `.github/workflows/native-odb1-bitshift-guest-parity.yml` builds `oreslang-llvmc` from its own private repository checkout with `BUILD_TESTING=OFF`, then performs these real guest checks. Hosted proof requires a runner and executed steps. A zero-step GitHub Actions failure is runner admission, not compiler failure.
