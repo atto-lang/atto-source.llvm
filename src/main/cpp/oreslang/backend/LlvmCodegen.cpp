@@ -3,6 +3,7 @@
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/SourceTaskRuntime.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -34,6 +35,21 @@ namespace oreslang {
 
 // Guest identifiers exclude $, so native selector suffixes cannot alias source names.
 namespace {
+
+// Deterministic AOT i64 key descriptor. Numeric slots and typed tags are
+// synthesized by the compiler, never parsed as source-level integer keys.
+std::uint64_t tasklocal_i64_key_tag(const std::string& name) {
+    const std::string qualified = "TaskLocal<int>:" + name;
+    std::uint64_t hash = UINT64_C(14695981039346656037);
+    for (unsigned char c : qualified) {
+        hash ^= static_cast<std::uint64_t>(c);
+        hash *= UINT64_C(1099511628211);
+    }
+    // The high byte is a stable i64 wire-type discriminator. The remaining
+    // 56 bits identify the static key. A collision fails at compiler lowering.
+    return ORES_SOURCE_TASK_LOCAL_I64_TAG_PREFIX |
+        (hash & ~ORES_SOURCE_TASK_LOCAL_I64_TAG_MASK);
+}
 
 std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
@@ -859,17 +875,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             return std::any_of(
                 fn.source_tasks.begin(), fn.source_tasks.end(),
                 [](const SourceTaskI64Binding& task) {
-                    return task.task_local_i64_initial != nullptr;
+                    return !task.task_local_i64_keys.empty();
                 });
         });
     if (has_task_local_i64) {
         taskLocalSet = module.getOrInsertFunction(
-            "oreslang_source_task_local_i64_set",
+            "oreslang_source_task_local_i64_set_keyed",
             llvm::FunctionType::get(
-                llvm::Type::getVoidTy(context), {i64}, false));
+                llvm::Type::getVoidTy(context), {i32, i64, i64}, false));
         taskLocalGet = module.getOrInsertFunction(
-            "oreslang_source_task_local_i64_get",
-            llvm::FunctionType::get(i64, {}, false));
+            "oreslang_source_task_local_i64_get_keyed",
+            llvm::FunctionType::get(i64, {i32, i64}, false));
     }
     if (has_source_tasks) {
         taskStart = module.getOrInsertFunction(
@@ -1327,7 +1343,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (!has_source_tasks ||
                 (!task.result && !task.task_local_i64_return) ||
                 (task.task_local_i64_return &&
-                 (!task.task_local_i64_initial || !has_task_local_i64)))
+                 (task.task_local_i64_keys.empty() || !has_task_local_i64 ||
+                  task.task_local_i64_return_slot >=
+                      task.task_local_i64_keys.size())))
                 throw std::runtime_error(
                     "source Task<int> lacks authorized runtime/result lowering");
             auto* producer = llvm::Function::Create(
@@ -1340,17 +1358,36 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     context, "entry", producer));
             const std::unordered_map<std::string, llvm::Value*> no_storage;
             const std::unordered_map<std::string, llvm::Value*> no_fields;
-            if (task.task_local_i64_initial) {
+            std::unordered_set<std::uint64_t> emitted_key_tags;
+            for (const auto& entry : task.task_local_i64_keys) {
+                if (!entry.initializer ||
+                    entry.slot >= ORES_SOURCE_TASK_LOCAL_I64_SLOTS ||
+                    !emitted_key_tags.insert(
+                        tasklocal_i64_key_tag(entry.key_name)).second)
+                    throw std::runtime_error(
+                        "TaskLocal<int> static key collision or invalid slot");
                 auto* initialized = lower(
-                    *task.task_local_i64_initial, producer_builder, i64,
+                    *entry.initializer, producer_builder, i64,
                     no_storage, no_fields, declarations);
-                producer_builder.CreateCall(taskLocalSet, {initialized});
+                producer_builder.CreateCall(taskLocalSet, {
+                    llvm::ConstantInt::get(i32, entry.slot),
+                    llvm::ConstantInt::get(
+                        i64, tasklocal_i64_key_tag(entry.key_name)),
+                    initialized});
             }
-            auto* produced = task.task_local_i64_return
-                ? producer_builder.CreateCall(
-                    taskLocalGet, {}, task.name + ".tasklocal.i64")
-                : lower(*task.result, producer_builder, i64,
-                        no_storage, no_fields, declarations);
+            llvm::Value* produced;
+            if (task.task_local_i64_return) {
+                const auto& entry = task.task_local_i64_keys.at(
+                    task.task_local_i64_return_slot);
+                produced = producer_builder.CreateCall(taskLocalGet, {
+                    llvm::ConstantInt::get(i32, entry.slot),
+                    llvm::ConstantInt::get(
+                        i64, tasklocal_i64_key_tag(entry.key_name))},
+                    task.name + ".tasklocal.i64");
+            } else {
+                produced = lower(*task.result, producer_builder, i64,
+                    no_storage, no_fields, declarations);
+            }
             producer_builder.CreateRet(produced);
             source_task_handles.emplace(
                 task.name,
