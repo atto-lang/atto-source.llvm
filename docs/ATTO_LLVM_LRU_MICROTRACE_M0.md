@@ -54,3 +54,16 @@ receipt. A source-free private carrier can test runner availability but
 cannot validate LLVM guest compilation without separately approved source
 transfer. The private publisher governance issue remains
 https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/962.
+
+## Additional native AoS / AoSoA microtraces
+
+Four independently authored `.atto` compiler-to-LLVM-IR-to-Clang CTest candidates:
+`aos-triple-reuse.atto` (expected exit 43), `aos-pair-occupancy.atto` (44),
+`aos-padded-zero.atto` (45), and `aosoa-tail-reset.atto` (46).
+The last poisons a non-logical tail lane, resets all physical cells, and reuses a slot.
+All link the existing native integer-array runtime.
+
+These are scalar/array source microtraces, **not** execution of the complete
+`IntLruCache` class or proof of a compiler-inferred AoS, SIMD, ABI, zero-GC,
+or native memory-lifetime guarantee. They require stepful exact-head compiler,
+IR verifier, native link, and guest execution before becoming parity receipts.

@@ -1,0 +1,37 @@
+// Native compiler guest: AoSoA W=4, capacity=5, eight physical lanes.
+pub routine main(): int {
+  val Array<int> cells = new Array<int>();
+  for (let int i = 0; i < 24; i = i + 1) {
+    cells.add(0);
+  }
+  cells.set(0, 7);
+  cells.set(4, 70);
+  cells.set(8, 1);
+  cells.set(12, 21);
+  cells.set(16, 210);
+  cells.set(20, 1);
+  if cells.get(12) != 21 || cells.get(16) != 210
+      || cells.get(20) != 1; then return 11; fi
+  // Lane seven is padding: physical cells 15,19,23.
+  cells.set(15, 91);
+  cells.set(19, 92);
+  cells.set(23, 1);
+  if cells.get(15) == 0 || cells.get(19) == 0
+      || cells.get(23) == 0; then return 12; fi
+  // The reset must wipe all 24 cells, not only the five logical lanes.
+  for (let int i = 0; i < 24; i = i + 1) {
+    cells.set(i, 0);
+  }
+  for (let int i = 0; i < 24; i = i + 1) {
+    if cells.get(i) != 0; then return 13; fi
+  }
+  cells.set(12, 49);
+  cells.set(16, 490);
+  cells.set(20, 1);
+  if cells.get(12) == 49 && cells.get(16) == 490
+      && cells.get(20) == 1 && cells.get(15) == 0
+      && cells.get(19) == 0 && cells.get(23) == 0
+      && cells.get(0) == 0 && cells.get(4) == 0
+      && cells.get(8) == 0; then return 46; fi
+  return 14;
+}

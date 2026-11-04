@@ -1,0 +1,34 @@
+// Native compiler guest: padded AoS4 [key,value,live,reserved-zero].
+pub routine main(): int {
+  val Array<int> rows = new Array<int>();
+  for (let int i = 0; i < 12; i = i + 1) {
+    rows.add(0);
+  }
+  rows.set(0, 7);
+  rows.set(1, 70);
+  rows.set(2, 1);
+  rows.set(4, 21);
+  rows.set(5, 210);
+  rows.set(6, 1);
+  rows.set(8, 35);
+  rows.set(9, 350);
+  rows.set(10, 1);
+  if rows.get(3) != 0 || rows.get(7) != 0
+      || rows.get(11) != 0; then return 8; fi
+  rows.set(7, 9);
+  if rows.get(7) == 0; then return 9; fi
+  rows.set(7, 0);
+  for (let int i = 4; i < 8; i = i + 1) {
+    rows.set(i, 0);
+  }
+  rows.set(4, 49);
+  rows.set(5, 490);
+  rows.set(6, 1);
+  if rows.get(0) == 7 && rows.get(1) == 70
+      && rows.get(2) == 1 && rows.get(3) == 0
+      && rows.get(4) == 49 && rows.get(5) == 490
+      && rows.get(6) == 1 && rows.get(7) == 0
+      && rows.get(8) == 35 && rows.get(9) == 350
+      && rows.get(10) == 1 && rows.get(11) == 0; then return 45; fi
+  return 10;
+}

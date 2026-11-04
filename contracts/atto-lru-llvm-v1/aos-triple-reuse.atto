@@ -1,0 +1,33 @@
+// Native compiler guest: AoS3 [key,value,live] row reuse, not a full LRU.
+pub routine main(): int {
+  val Array<int> rows = new Array<int>();
+  for (let int i = 0; i < 9; i = i + 1) {
+    rows.add(0);
+  }
+  rows.set(0, 7);
+  rows.set(1, 70);
+  rows.set(2, 1);
+  rows.set(3, 21);
+  rows.set(4, 210);
+  rows.set(5, 1);
+  rows.set(6, 35);
+  rows.set(7, 350);
+  rows.set(8, 1);
+  if rows.get(0) != 7 || rows.get(4) != 210
+      || rows.get(8) != 1; then return 4; fi
+  rows.set(0, 0);
+  rows.set(1, 0);
+  rows.set(2, 0);
+  rows.set(0, 49);
+  rows.set(1, 490);
+  rows.set(2, 1);
+  rows.set(6, 0);
+  rows.set(7, 0);
+  rows.set(8, 0);
+  if rows.get(0) == 49 && rows.get(1) == 490
+      && rows.get(2) == 1 && rows.get(3) == 21
+      && rows.get(4) == 210 && rows.get(5) == 1
+      && rows.get(6) == 0 && rows.get(7) == 0
+      && rows.get(8) == 0; then return 43; fi
+  return 5;
+}
