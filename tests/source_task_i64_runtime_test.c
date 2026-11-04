@@ -21,6 +21,8 @@ static int64_t simple_producer(void) {
     int64_t missing = -1;
     assert(!oreslang_source_task_local_i64_get_checked(&missing));
     assert(missing == -1);
+    assert(!oreslang_source_task_local_i64_get_slot_checked(7u, &missing));
+    assert(missing == -1);
     return 7;
 }
 
@@ -28,6 +30,22 @@ static int64_t tasklocal_producer(void) {
     int64_t missing = -1;
     assert(!oreslang_source_task_local_i64_get_checked(&missing));
     assert(oreslang_source_task_local_i64_set_checked(41));
+    assert(oreslang_source_task_local_i64_set_slot_checked(1u, -9));
+    assert(oreslang_source_task_local_i64_set_slot_checked(7u, 99));
+    assert(!oreslang_source_task_local_i64_set_slot_checked(
+        ORES_SOURCE_TASK_LOCAL_I64_SLOTS, 123));
+    int64_t keyed = 0;
+    assert(oreslang_source_task_local_i64_get_slot_checked(1u, &keyed));
+    assert(keyed == -9);
+    assert(oreslang_source_task_local_i64_clear_slot_checked(1u));
+    assert(!oreslang_source_task_local_i64_clear_slot_checked(1u));
+    assert(!oreslang_source_task_local_i64_get_slot_checked(1u, &keyed));
+    assert(!oreslang_source_task_local_i64_get_slot_checked(
+        ORES_SOURCE_TASK_LOCAL_I64_SLOTS, &keyed));
+    assert(!oreslang_source_task_local_i64_clear_slot_checked(
+        ORES_SOURCE_TASK_LOCAL_I64_SLOTS));
+    assert(oreslang_source_task_local_i64_get_slot_checked(7u, &keyed));
+    assert(keyed == 99);
     // Keep a real scheduler turn active while a foreign pthread attempts to
     // spoof the TaskLocal accessor with an otherwise valid native symbol.
     atomic_store_explicit(
@@ -105,6 +123,9 @@ int main(void) {
     // Reject foreign access WHILE the right Task is actively running.
     assert(!oreslang_source_task_local_i64_set_checked(99));
     assert(!oreslang_source_task_local_i64_get_checked(&forbidden));
+    assert(!oreslang_source_task_local_i64_set_slot_checked(7u, 100));
+    assert(!oreslang_source_task_local_i64_get_slot_checked(7u, &forbidden));
+    assert(!oreslang_source_task_local_i64_clear_slot_checked(7u));
     atomic_store_explicit(
         &tasklocal_producer_release, 1, memory_order_release);
     int64_t owned_result = 0;
