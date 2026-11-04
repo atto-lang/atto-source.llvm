@@ -445,6 +445,25 @@ any claims of compiled actor parity or zero guest tracing GC.
 
 ## Sealed critical scalar actor AOT v0 — LLVM candidate (2026-11-03)
 
+**Default is closed.** This experimental source syntax is admitted only when
+`oreslang-llvmc --experimental-sealed-scalar-state` is explicitly provided.
+The flag is propagated through the root unit and linked source units, and
+the default parser API continues to reject the feature. The flag is rejected
+in metadata-only and native hard-real-time compiler modes. Compiled AOT
+acceptance runs now require both the positive flag and a negative unflagged
+rejection with **no LLVM IR output**.
+
+**Language compatibility caveat:** The normative actor-family design in
+`docs/ACTOR_FAMILIES_SEALED_STATE_V1.md` treats `handle_state` as a
+runtime-owned, non-overridable state-loan intrinsic rather than a
+guest-declared handler method. This **experimental scalar-only ABI** is a
+temporary codegen/ownership proof and is **not** canonical source-level
+`handle_state(callback)` / lexical `using state.write` implementation.
+Promoting the syntax or semantics would require a separate design/spec
+reconciliation, compiler-checked capabilities and borrow/loan lowering.
+Do not claim language or cross-backend parity from this compatibility slice.
+
+
 A bounded **candidate**, not the complete cross-backend state-container
 contract, is now parsed into `ActorDecl.sealed_scalar_state`:
 
