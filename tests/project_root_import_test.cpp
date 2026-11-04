@@ -231,7 +231,7 @@ int main() {
 #if !defined(_WIN32)
     {
         const auto dir = temp / "atto-cross-suffix-importing-source";
-        write_text(dir/".ores.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"real.ores", "");
         write_text(dir/"lib.atto", "");
         fs::create_symlink("real.ores", dir/"main.atto");
@@ -241,7 +241,7 @@ int main() {
     }
     {
         const auto dir = temp / "legacy-cross-suffix-importing-source";
-        write_text(dir/".ores.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"real.atto", "");
         write_text(dir/"lib.ores", "");
         fs::create_symlink("real.atto", dir/"main.ores");
@@ -251,7 +251,7 @@ int main() {
     }
     {
         const auto dir = temp / "atto-cross-suffix-import-target";
-        write_text(dir/".ores.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"real.ores", "");
         fs::create_symlink("real.ores", dir/"lib.atto");
@@ -261,7 +261,7 @@ int main() {
     }
     {
         const auto dir = temp / "legacy-cross-suffix-import-target";
-        write_text(dir/".ores.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
         write_text(dir/"real.atto", "");
         fs::create_symlink("real.atto", dir/"lib.ores");
@@ -271,7 +271,7 @@ int main() {
     }
     {
         const auto dir = temp / "atto-same-suffix-import-symlink";
-        write_text(dir/".ores.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"real-main.atto", "");
         write_text(dir/"real-lib.atto", "");
         fs::create_symlink("real-main.atto", dir/"main.atto");
