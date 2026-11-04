@@ -5,10 +5,12 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace oreslang::runtime;
@@ -179,6 +181,87 @@ void test_capacity_and_replay_fail_closed() {
     authority->retire();
 }
 
+// A copy of an already admitted value is user-defined code. Copying under
+// the request lock previously deadlocked if it closed/cancelled this scope.
+struct ReentrantRequestCopy {
+    std::function<void()> on_copy;
+    explicit ReentrantRequestCopy(std::function<void()> callback)
+        : on_copy(std::move(callback)) {}
+    ReentrantRequestCopy(ReentrantRequestCopy&&) noexcept = default;
+    ReentrantRequestCopy(const ReentrantRequestCopy& other)
+        : on_copy(other.on_copy) {
+        if (on_copy) on_copy();
+    }
+};
+
+void test_request_copy_reentrancy_and_pin_lifetime() {
+    for (int iteration = 0; iteration < 48; ++iteration) {
+        auto cancellation = TaskCancellation::root();
+        auto scope = Context::open(
+            {42, 5, static_cast<std::uint64_t>(iteration + 1), 1,
+             {84, 1, 1}}, cancellation);
+        assert(scope);
+        RequestLocalKeyV1<ReentrantRequestCopy> key;
+        std::atomic<int> callback_count{0};
+        std::weak_ptr<Context> weak = scope;
+
+        // Alternate synchronous closure and cancellation from T's copy.
+        // The source cell must remain pinned after the store is emptied.
+        assert(scope->set(key, ReentrantRequestCopy([weak, cancellation,
+                                                      &callback_count,
+                                                      iteration] {
+            ++callback_count;
+            if ((iteration & 1) == 0) {
+                auto live = weak.lock();
+                assert(live);
+                assert(live->close());
+            } else {
+                assert(cancellation->cancel("reentrant-copy"));
+            }
+        })));
+        auto snapshot = scope->get_copy(key);
+        assert(snapshot);
+        assert(callback_count.load() == 1);
+        assert(!scope->active());
+        assert(!scope->get_copy(key));
+        assert(!scope->set(key, ReentrantRequestCopy([] {})));
+        snapshot.reset();
+        scope.reset();
+        cancellation->retire();
+    }
+}
+
+// Replacing a cell invokes its destructor after dropping the request lock.
+// Reentrant cleanup must see a fully published replacement.
+struct ReentrantRequestDrop {
+    std::function<void()> on_drop;
+    explicit ReentrantRequestDrop(std::function<void()> callback)
+        : on_drop(std::move(callback)) {}
+    ReentrantRequestDrop(ReentrantRequestDrop&&) noexcept = default;
+    ReentrantRequestDrop(const ReentrantRequestDrop&) = default;
+    ~ReentrantRequestDrop() { if (on_drop) on_drop(); }
+};
+
+void test_request_reentrant_drop_after_replacement() {
+    auto cancellation = TaskCancellation::root();
+    auto scope = Context::open({11, 12, 13, 1, {14, 0, 1}},
+                               cancellation);
+    assert(scope);
+    RequestLocalKeyV1<ReentrantRequestDrop> key;
+    std::atomic<int> callbacks{0};
+    std::weak_ptr<Context> weak = scope;
+    assert(scope->set(key, ReentrantRequestDrop([weak, &callbacks] {
+        ++callbacks;
+        auto live = weak.lock();
+        assert(live && live->active());
+    })));
+    assert(scope->set(key, ReentrantRequestDrop([] {})));
+    assert(callbacks.load() == 1);
+    assert(scope->close());
+    scope.reset();
+    cancellation->retire();
+}
+
 void test_cancel_and_set_race() {
     for (int iteration = 0; iteration < 100; ++iteration) {
         auto authority = TaskCancellation::root();
@@ -211,6 +294,8 @@ int main() {
     test_same_actor_two_simultaneous_requests();
     test_context_moves_between_physical_threads();
     test_capacity_and_replay_fail_closed();
+    test_request_copy_reentrancy_and_pin_lifetime();
+    test_request_reentrant_drop_after_replacement();
     test_cancel_and_set_race();
     std::puts("REQUEST_CONTEXT_LOCAL_HOST_ONLY_PASS");
 }
