@@ -3596,6 +3596,32 @@ if(BUILD_TESTING)
     endforeach()
 endif()
 
+# Canonical shared stage-0 .atto negative vectors from common-source #218.
+# These are compiled by the actual production LLVM binary. No source text
+# interpreter, stub, or synthetic return-42 IR may substitute for compiler output.
+if(BUILD_TESTING)
+    foreach(macro_case IN ITEMS
+            overflow-reject wrong-kind-reject dynamic-const-reject unresolved-reject)
+        if(macro_case STREQUAL "overflow-reject")
+            set(macro_diagnostic "NATIVE_MACRO_CONST_OVERFLOW")
+        elseif(macro_case STREQUAL "dynamic-const-reject")
+            # A runtime identifier can fail during binding before comptime AST
+            # evaluation. Both paths must deny and publish no executable IR.
+            set(macro_diagnostic "ANY")
+        else()
+            set(macro_diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
+        endif()
+        add_test(NAME "native_macro_shared_${macro_case}_no_ir"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_case}.atto"
+                "-DDIAGNOSTIC=${macro_diagnostic}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+        set_tests_properties("native_macro_shared_${macro_case}_no_ir"
+            PROPERTIES TIMEOUT 25)
+    endforeach()
+endif()
+
 # Real guest-native LLVM proof for the two bounded typed macro AST cases.
 # This invokes the production compiler, then links emitted IR into a host
 # executable using clang; an IR printout alone is not guest execution.
@@ -3613,6 +3639,22 @@ if(BUILD_TESTING)
                     "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/macro-aot-${macro_case}"
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
             set_tests_properties("native_macro_${macro_case}_linked_guest_aot_42"
+                PROPERTIES TIMEOUT 90)
+        endforeach()
+
+        # In addition to legacy .ores, run the three exact shared .atto
+        # compiler-plus-Clang guest vectors. All must return native i64 42.
+        foreach(macro_case IN ITEMS literal-42 identity-42 nested-42)
+            set(macro_fixture
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_case}.atto")
+            add_test(NAME "native_macro_shared_${macro_case}_linked_guest_aot_42"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DFIXTURE=${macro_fixture}"
+                    "-DCLANG=${ORE_NATIVE_MACRO_CLANG_EXECUTABLE}"
+                    "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/macro-aot-shared-${macro_case}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+            set_tests_properties("native_macro_shared_${macro_case}_linked_guest_aot_42"
                 PROPERTIES TIMEOUT 90)
         endforeach()
     endif()
