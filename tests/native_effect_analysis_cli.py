@@ -104,6 +104,22 @@ def main(compiler):
     assert "main/0\tstatus=inconclusive" in transitive_unknown.stdout
     assert "arithmetic/0\tstatus=inconclusive" in transitive_unknown.stdout
 
+    # A long acyclic graph must not overflow recursive closure traversal or
+    # produce a misleading successful purity receipt (depth budget: 64).
+    functions = [
+        f"fnc step_{i}(): int {{ return step_{i + 1}(); }}"
+        for i in range(70)
+    ]
+    functions.append("fnc step_70(): int { return 42; }")
+    functions.append("pub fnc main(): int { return step_0(); }")
+    deep_graph = run(
+        compiler, "\\n".join(functions) + "\\n", flags=("--analyze",)
+    )
+    assert deep_graph.returncode != 0, (
+        deep_graph.returncode, deep_graph.stdout, deep_graph.stderr
+    )
+    assert "status=known" not in deep_graph.stdout
+
     # Duplicate and incompatible selectors are invocation errors (exit 2),
     # never an advisory PASS, and must not emit even partial analysis records.
     for options in [
