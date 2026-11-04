@@ -302,15 +302,20 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateLoad(i64, field_storage.at(native_place_key(expr)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::ArrayCall: {
+            // No LLVM IR is emitted for arguments until the complete static
+            // native method name/arity/slot plan has been verified. Evaluate
+            // in source order, then pass values in declaration/ABI order.
+            const auto slots = native_array_argument_slots(expr);
             if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
             llvm::Value* handle = builder.CreateLoad(i64,
                 array_handle_address(*expr.left, storage, field_storage, moves),
                 "owned.array.call.handle");
             llvm::Value* selected_region = receiver_array_region(*expr.left, moves);
-            std::vector<llvm::Value*> args;
-            for (const auto& arg : expr.arguments)
-                args.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
+            std::vector<llvm::Value*> args(slots.size(), nullptr);
+            for (std::size_t i = 0; i < expr.arguments.size(); ++i)
+                args[slots[i]] = lower(*expr.arguments[i], builder, i64,
+                    storage, field_storage, functions, moves);
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {selected_region, handle, args[0]}, "array.get");
