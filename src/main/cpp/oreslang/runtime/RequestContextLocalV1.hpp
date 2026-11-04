@@ -91,6 +91,7 @@ class RequestContextLocalV1 final
 public:
     using Ptr = std::shared_ptr<RequestContextLocalV1>;
     static constexpr std::size_t max_slots = 32;
+    static constexpr std::size_t max_value_bytes = 1024;
     static constexpr std::size_t max_bytes = 8192;
 
     static Ptr open(RequestIdentityV1 identity,
@@ -135,7 +136,9 @@ public:
         // TaskLocal. A trivially-copyable host struct may still carry a native
         // pointer, so reject all structs until typed AOT descriptors exist.
         const auto bytes = scoped_local_detail_v1::value_bytes(value);
-        if (bytes > max_bytes) return false;
+        // Match Java HttpRequestLocals: 1 KiB per string/scalar value and
+        // 8 KiB for the aggregate, counting UTF-8 bytes, not characters.
+        if (bytes > max_value_bytes) return false;
 
         // Fail wrong/retired request identity and quota BEFORE allocating a
         // Cell. Recheck under mutex after allocation: STOP/cancel/replacement
