@@ -10,6 +10,7 @@ on:
       - 'scripts/build-native-atto-fuzz-target.sh'
       - 'scripts/test-native-atto-fuzz-target.sh'
       - 'scripts/test-native-atto-fuzz-adapter-source-free.sh'
+      - 'scripts/test-native-atto-fuzz-build-gates-source-free.sh'
       - 'tests/native_atto_fuzz_stdin_adapter.c'
       - 'examples/atto-native-fuzz-project/**'
   workflow_dispatch:
@@ -43,6 +44,13 @@ jobs:
           set -euo pipefail
           clang_bin="$(command -v clang)"
           bash scripts/test-native-atto-fuzz-adapter-source-free.sh "$clang_bin"
+      - name: Verify bounded native fuzz builder gate with synthetic LLVM IR only
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          clang_bin="$(command -v clang)"
+          bash scripts/test-native-atto-fuzz-build-gates-source-free.sh "$clang_bin"
       - name: Install LLVM and Rust host toolchains
         shell: bash
         run: |
