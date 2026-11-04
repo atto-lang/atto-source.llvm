@@ -13,6 +13,7 @@ using oreslang::ClassDecl;
 using oreslang::GenericParameter;
 using oreslang::GenericTypeArgument;
 using oreslang::LocalBinding;
+using oreslang::native_bind_scalar_class_generics;
 using oreslang::native_scalar_class_generic_slots;
 using oreslang::native_verify_local_class_specialization;
 
@@ -42,6 +43,20 @@ void accepted(const ClassDecl& c, std::initializer_list<GenericTypeArgument> arg
         throw std::runtime_error("incorrect nominal generic declaration-slot binding");
     ++checks;
 }
+// Unlike type-value equality, these assertions observe the actual mapping
+// from lexical named arguments to distinct declaration generic identities.
+void mapped(const ClassDecl& c, std::initializer_list<GenericTypeArgument> args,
+            std::initializer_list<std::size_t> expected) {
+    const std::vector<GenericTypeArgument> provided(args.begin(), args.end());
+    const auto binding = native_bind_scalar_class_generics(c, provided);
+    const std::vector<std::size_t> wanted(expected.begin(), expected.end());
+    if (binding.source_to_formal != wanted)
+        throw std::runtime_error("named class generic source-to-formal order mismatch");
+    if (binding.formal_types.size() != c.generic_parameters.size())
+        throw std::runtime_error("named class generic canonical arity mismatch");
+    ++checks;
+}
+
 void rejected(const ClassDecl& c, std::initializer_list<GenericTypeArgument> args,
               const std::string& error) {
     try {
@@ -74,6 +89,15 @@ int main() {
         accepted(defaults, {named("A")}, {"int", "int"});
         accepted(defaults, {named("B")}, {"int", "int"});
         accepted(noGenerics, {}, {});
+
+        const auto triple = cls({{"A", ""}, {"B", ""}, {"C", ""}});
+        mapped(pair, {positional(), positional()}, {0, 1});
+        mapped(pair, {named("B"), named("A")}, {1, 0});
+        mapped(pair, {positional(), named("B")}, {0, 1});
+        mapped(triple, {named("C"), named("A"), named("B")}, {2, 0, 1});
+        mapped(triple, {positional(), named("C"), named("B")}, {0, 2, 1});
+        mapped(defaults, {named("B")}, {1});
+        mapped(defaults, {}, {});
 
         rejected(pair, {named("X"), named("B")}, "unknown named native class generic");
         rejected(pair, {named("a"), named("B")}, "unknown named native class generic");
@@ -118,10 +142,10 @@ int main() {
         std::cerr << "native scalar class generic binder FAILED: " << e.what() << '\n';
         return 1;
     }
-    if (checks != 25) {
+    if (checks != 32) {
         std::cerr << "native scalar class generic binder count mismatch: " << checks << '\n';
         return 1;
     }
-    std::cout << "native scalar class generic binder: 25 host-only cases passed\n";
+    std::cout << "native scalar class generic binder: 32 host-only cases passed\n";
     return 0;
 }

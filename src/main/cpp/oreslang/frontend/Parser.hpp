@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
 #include "oreslang/types/FuturePipelineContract.hpp"
@@ -219,17 +220,27 @@ struct ClassDecl {
 // Resolve a nominal generic specialization to declaration order, before any
 // ownership mutation or LLVM codegen. All representations are int in v1.
 // Never treat the textual order of named arguments as nominal ABI identity.
-inline std::vector<std::string> native_scalar_class_generic_slots(
+struct NativeScalarClassGenericBinding {
+    // Canonical declaration-order type specialization.
+    std::vector<std::string> formal_types;
+    // Lexical source index -> declaration formal index. Do not infer the
+    // permutation from formal_types: every admitted v1 type is int.
+    std::vector<std::size_t> source_to_formal;
+};
+
+inline NativeScalarClassGenericBinding native_bind_scalar_class_generics(
         const ClassDecl& cls, const std::vector<GenericTypeArgument>& args) {
     const std::size_t count = cls.generic_parameters.size();
     if (count == 0) {
         if (!args.empty())
             throw std::runtime_error("non-generic native class cannot accept type arguments");
-        return {};
+        return {{}, {}};
     }
     if (args.size() > count)
         throw std::runtime_error("too many native class generic arguments");
     std::vector<std::string> slots(count);
+    std::vector<std::size_t> source_to_formal;
+    source_to_formal.reserve(args.size());
     std::vector<bool> assigned(count, false);
     std::size_t positional = 0;
     bool saw_named = false;
@@ -250,6 +261,7 @@ inline std::vector<std::string> native_scalar_class_generic_slots(
         if (target >= count || assigned[target])
             throw std::runtime_error("duplicate native class generic argument");
         assigned[target] = true;
+        source_to_formal.push_back(target);
         if (arg.infer)
             throw std::runtime_error("native class generic inference holes require typed constructor inference");
         if (arg.type != "int")
@@ -272,7 +284,12 @@ inline std::vector<std::string> native_scalar_class_generic_slots(
             slots[i] = "int";
         }
     }
-    return slots;
+    return {std::move(slots), std::move(source_to_formal)};
+}
+
+inline std::vector<std::string> native_scalar_class_generic_slots(
+        const ClassDecl& cls, const std::vector<GenericTypeArgument>& args) {
+    return native_bind_scalar_class_generics(cls, args).formal_types;
 }
 
 inline void native_verify_local_class_specialization(
