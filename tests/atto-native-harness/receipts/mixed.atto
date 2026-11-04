@@ -1,0 +1,20 @@
+// Two ordered guest-owned case events and truthful mixed summary.
+// This is not std/testing TestSuite or a substitute for Java TestKit parity.
+pub routine main(): int {
+  val int actual_add = 20 + 22;
+  if actual_add != 42; then
+    stdio.println("ORES_TEST|FAIL|llvm-native/mixed-add|expected=42");
+    stdio.println("ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0");
+    return 1;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-native/mixed-add|");
+  val int actual_boundary = 7;
+  if actual_boundary != 8; then
+    stdio.println("ORES_TEST|FAIL|llvm-native/mixed-boundary|expected=8");
+    stdio.println("ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0");
+    return 1;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-native/mixed-boundary|");
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+  return 0;
+}
