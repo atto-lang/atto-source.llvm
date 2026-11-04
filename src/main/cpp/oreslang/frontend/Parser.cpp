@@ -5398,6 +5398,13 @@ private:
         const auto receiver_binding = aliases.find(expr.left->name);
         const bool receiver_is_named_alias =
                 receiver_binding != aliases.end() && receiver_binding->second != "$raw$";
+        // Generic member syntax is admitted only after class receiver
+        // resolution rewrites the method to a checked direct Call. The
+        // extension lowering below has no monomorphization contract and must
+        // never discard explicit generic argument metadata.
+        if (expr.type_arguments_present || !expr.type_arguments.empty())
+            throw std::runtime_error(
+                "native generic extension member calls require checked specialization");
         if (receiver_is_named_alias &&
                 extension_slot_exists(receiver_binding->second, expr.name,
                                       explicit_arity)) {
