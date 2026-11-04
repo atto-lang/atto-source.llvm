@@ -202,6 +202,14 @@ fn bounded_run(command: &mut Command, work: &Path, seconds: u64,
         }
         thread::sleep(Duration::from_millis(10));
     };
+    // A child can exit before the polling loop measures its final output.
+    // Check the on-disk capture length again before allocating Vec buffers.
+    let final_stdout = fs::metadata(&stdout_path)
+        .map_err(|e| format!("{label}: stat final stdout: {e}"))?.len();
+    let final_stderr = fs::metadata(&stderr_path)
+        .map_err(|e| format!("{label}: stat final stderr: {e}"))?.len();
+    require(final_stdout <= MAX_OUTPUT && final_stderr <= MAX_OUTPUT,
+            format!("{label}: exited with oversized output"))?;
     let stdout = fs::read(&stdout_path)
         .map_err(|e| format!("{label}: read stdout: {e}"))?;
     let stderr = fs::read(&stderr_path)
