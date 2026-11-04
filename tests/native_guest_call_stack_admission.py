@@ -127,25 +127,33 @@ def main():
                     raise RuntimeError(label + ": generated native checked frame ABI missing")
             ir = root / (label + ".ll")
             ir.write_bytes(compiled.stdout)
-            exe = root / label
-            linked = run([clang, "-O0", "-x", "ir", str(ir), "-o", str(exe)])
-            if linked.returncode or not exe.is_file():
-                raise RuntimeError(label + ": Clang LLVM IR linking failed: " + repr(linked.stderr[:400]))
-            observed = run([str(exe.resolve())])
-            if observed.returncode != expected_exit or observed.stdout or observed.stderr:
-                raise RuntimeError(label + ": unexpected native status/stdout/stderr: "
-                                   + repr((observed.returncode, observed.stdout, observed.stderr)))
-            # On Linux repeat the deep recursion with an actual reduced
-            # native process stack. No SIGSEGV/SIGBUS may masquerade as 75.
-            if expected_exit == 75 and sys.platform.startswith("linux"):
-                small = run([str(exe.resolve())], low_stack=True)
-                if small.returncode != 75 or small.stdout or small.stderr:
-                    raise RuntimeError(label + ": 1MiB native stack process did not preserve controlled failure")
-                print("PASS Linux native low-stack execution (1 MiB)", label)
-            print("PASS real AttoLang -> LLVM -> native", label,
-                  "exit", observed.returncode,
-                  "ir_sha256", hashlib.sha256(compiled.stdout).hexdigest(),
-                  "executable_sha256", hashlib.sha256(exe.read_bytes()).hexdigest())
+            for optimization in ("-O0", "-O2"):
+                exe = root / (label + "." + optimization[1:])
+                linked = run([clang, optimization, "-x", "ir",
+                              str(ir), "-o", str(exe)])
+                if linked.returncode or not exe.is_file():
+                    raise RuntimeError(label + " " + optimization +
+                                       ": Clang LLVM IR linking failed: " +
+                                       repr(linked.stderr[:400]))
+                observed = run([str(exe.resolve())])
+                if (observed.returncode != expected_exit or
+                        observed.stdout or observed.stderr):
+                    raise RuntimeError(
+                        label + " " + optimization +
+                        ": native exit/stdout/stderr mismatch: " +
+                        repr((observed.returncode, observed.stdout, observed.stderr)))
+                # On Linux, validate a real reduced native stack at BOTH
+                # optimization levels. An optimizer may not erase the
+                # compiler-managed call budget.
+                if expected_exit == 75 and sys.platform.startswith("linux"):
+                    small = run([str(exe.resolve())], low_stack=True)
+                    if small.returncode != 75 or small.stdout or small.stderr:
+                        raise RuntimeError(label + " " + optimization +
+                                           ": 1MiB stack failed to preserve typed exit")
+                print("PASS real .atto -> LLVM -> native", label, optimization,
+                      "exit", observed.returncode,
+                      "ir_sha256", hashlib.sha256(compiled.stdout).hexdigest(),
+                      "executable_sha256", hashlib.sha256(exe.read_bytes()).hexdigest())
             observations += 1
         if observations != len(CASES):
             raise RuntimeError("missing executed case count")
