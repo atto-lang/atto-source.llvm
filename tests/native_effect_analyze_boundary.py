@@ -30,7 +30,20 @@ def main() -> int:
         atto.write_text(valid, encoding="utf-8")
         ores.write_text(valid, encoding="utf-8")
         bad.write_text("pub routine main(): int {\n    return ;\n}\n", encoding="utf-8")
-        hashes = {path.name: digest(path) for path in [atto, ores, bad]}
+        # Shared RFC #35 effect spellings are not admitted by the native
+        # compiler's typed exceptional-effect pipeline yet. They may be
+        # rejected (1) or remain inconclusive (2), but may never claim PASS.
+        annotated = []
+        for effect in ("throws", "raises", "panics"):
+            source = root / f"annotated_{effect}.atto"
+            source.write_text(
+                f"pub routine main(): int {effect}(Error) {{\\n"
+                "    return 0;\\n}\\n",
+                encoding="utf-8",
+            )
+            annotated.append(source)
+        files = [atto, ores, bad, *annotated]
+        hashes = {path.name: digest(path) for path in files}
         original_names = sorted(path.name for path in root.iterdir())
 
         def run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -56,6 +69,13 @@ def main() -> int:
         assert invalid.returncode == 1, (invalid.returncode, invalid.stderr)
         assert invalid.stdout == "", "invalid input must not emit LLVM IR"
 
+        for source in annotated:
+            result = run("--analyze", str(source))
+            assert result.returncode in (1, 2), (
+                source.name, result.returncode, result.stderr
+            )
+            assert result.stdout == "", "unadmitted effect grammar emitted LLVM IR"
+
         for args in [("--analyze", "--rt-check", str(atto)),
                      ("--analyze", "--analyze", str(atto))]:
             result = run(*args)
@@ -63,7 +83,7 @@ def main() -> int:
             assert result.stdout == "", "rejected flags must not emit LLVM IR"
 
         assert sorted(path.name for path in root.iterdir()) == original_names
-        for path in [atto, ores, bad]:
+        for path in files:
             assert digest(path) == hashes[path.name], f"compiler modified {path.name}"
     print("LLVM --analyze boundary: native source validated, effects remain inconclusive")
     return 0
