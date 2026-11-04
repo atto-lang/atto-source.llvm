@@ -196,3 +196,21 @@ from six to **ten** (six manifest fixtures + four dynamic). The scalar
 corpus requires 80 native O0/O2 executions; the concurrently added
 four receipt suites require eight more, so the combined target is **88
 native executions**. Zero-step CI is never execution evidence.
+
+
+## Latest LLVM parity-gate source hardening (draft)
+
+The current parent authors **40 scalar .atto programs × Clang O0/O2 = 80**
+required native runs, **four guest-owned receipt suites × O0/O2 = eight**
+additional native runs, and **ten compiler-negative scenarios** (six checked-in
+and four generated). These are target counts, **not observed CI passes**.
+
+The focused workflow must trigger on changes to the real compiler source,
+CMake/build files, stdlib and test fixtures; an earlier narrow path filter
+could skip compiler-only regressions. Reviewed positive and negative manifest
+mappings are pinned by exact Git blob identity, preventing valid-shaped path,
+exit and diagnostic substitutions without an explicit contract update.
+Guest-owned host-observed receipt markers are now printed only after both
+O0/O2 executions, bounded transcript checks and matching LLVM IR succeed.
+The source-only gates and file readbacks do not replace source-local CI runner
+admission or true LLVM guest execution; full Java TestKit parity is outstanding.
