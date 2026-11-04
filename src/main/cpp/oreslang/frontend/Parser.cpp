@@ -548,10 +548,11 @@ bool entry_builtin_name(std::string_view name) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
-                    bool experimental_rt_scalar_loop)
+                    bool experimental_rt_scalar_loop, bool canonical_atto)
         : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
-          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
+          canonical_atto_(canonical_atto) {}
 
     Program parse() {
         Program program;
@@ -3967,7 +3968,7 @@ private:
 
     std::unique_ptr<Expression> template_expression(std::string_view source,
                                                     std::size_t base_offset) {
-        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_);
+        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_, canonical_atto_);
         auto expr = nested.expression();
         if (nested.token_.kind != Kind::End)
             nested.fail("expected end of template interpolation expression");
@@ -5619,6 +5620,9 @@ private:
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // Source-unit scoped migration: .atto removes retired operators while
+    // .ores keeps compatibility syntax until a separate versioned rollout.
+    bool canonical_atto_;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
@@ -5785,9 +5789,9 @@ void resolve_future_pipeline_contracts(Program& program) {
 } // namespace
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
+                      bool experimental_rt_scalar_loop, bool canonical_atto) {
     Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop).parse();
+                             experimental_rt_scalar_loop, canonical_atto).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
@@ -5818,8 +5822,9 @@ void resolve_and_validate_program(Program& program) {
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
-    auto program = parse_unresolved_program(source, experimental_owned_int, experimental_rt_scalar_loop);
+                      bool experimental_rt_scalar_loop, bool canonical_atto) {
+    auto program = parse_unresolved_program(source, experimental_owned_int,
+                                            experimental_rt_scalar_loop, canonical_atto);
     resolve_and_validate_program(program);
     return program;
 }

@@ -481,12 +481,14 @@ struct Program {
 // is one zero-local actor lifecycle await in trusted zero-argument main:
 // direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
-                      bool experimental_rt_scalar_loop = false);
+                      bool experimental_rt_scalar_loop = false,
+                      bool canonical_atto = false);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
-                                 bool experimental_rt_scalar_loop = false);
+                                 bool experimental_rt_scalar_loop = false,
+                                 bool canonical_atto = false);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang

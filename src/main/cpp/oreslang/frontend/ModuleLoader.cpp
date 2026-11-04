@@ -133,7 +133,10 @@ private:
         unit->compiler_owned_library = compiler_owned_library;
         unit->compiler_library_tier = compiler_library_tier;
         unit->admitted_core_provider_bits = admitted_core_provider_bits;
-        try { unit->program = parse_unresolved_program(text, owned, scalar_loop); }
+        // The resolved source-unit extension, not the importing root, chooses
+        // canonical operators; imports cannot launder unsupported .atto tokens.
+        try { unit->program = parse_unresolved_program(text, owned, scalar_loop,
+                   unit->path.extension() == ".atto"); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
