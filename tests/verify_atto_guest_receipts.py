@@ -16,6 +16,10 @@ def expected(kind: str) -> bytes:
     if kind == "fail":
         return (b"ORES_TEST|FAIL|llvm-native/arith-failure|expected=42\n"
                 b"ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0\n")
+    if kind == "mixed":
+        return (b"ORES_TEST|PASS|llvm-native/mixed-add|\n"
+                b"ORES_TEST|FAIL|llvm-native/mixed-boundary|expected=8\n"
+                b"ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0\n")
     raise ValueError("unknown native receipt suite")
 
 
@@ -26,7 +30,7 @@ def verify(payload: bytes, kind: str, exit_code: int) -> bool:
 
 
 def self_test() -> None:
-    for kind, code in (("pass", 0), ("fail", 1)):
+    for kind, code in (("pass", 0), ("fail", 1), ("mixed", 1)):
         valid = expected(kind)
         assert verify(valid, kind, code)
         mutations = [
@@ -45,6 +49,17 @@ def self_test() -> None:
             if sample == valid:
                 continue
             assert not verify(sample, kind, code), "forged/malformed receipt admitted"
+        if kind == "mixed":
+            for sample in (
+                valid.replace(b"ORES_TEST|PASS|llvm-native/mixed-add|\n", b""),
+                valid.replace(b"ORES_TEST|FAIL|llvm-native/mixed-boundary|expected=8\n", b""),
+                valid.replace(b"|passed=1|failed=1|", b"|passed=2|failed=0|"),
+                valid.replace(b"ORES_TEST|PASS|llvm-native/mixed-add|\n"
+                              b"ORES_TEST|FAIL|llvm-native/mixed-boundary|expected=8\n",
+                              b"ORES_TEST|FAIL|llvm-native/mixed-boundary|expected=8\n"
+                              b"ORES_TEST|PASS|llvm-native/mixed-add|\n"),
+            ):
+                assert not verify(sample, kind, code), "wrong multi-case order/accounting accepted"
         for wrong in (-1, 2, 124, 137, (1 if code == 0 else 0)):
             assert not verify(valid, kind, wrong), "wrong execution status admitted"
     print("PASS LLVM guest receipt source-only verifier mutations (NO_GUEST_EXECUTION)")
@@ -54,8 +69,8 @@ def main(argv: list[str]) -> int:
     if argv == ["--self-test"]:
         self_test()
         return 0
-    if len(argv) != 3 or argv[2] not in ("pass", "fail"):
-        print("usage: verify_atto_guest_receipts.py OUTPUT_FILE pass|fail", file=sys.stderr)
+    if len(argv) != 3 or argv[2] not in ("pass", "fail", "mixed"):
+        print("usage: verify_atto_guest_receipts.py OUTPUT_FILE pass|fail|mixed", file=sys.stderr)
         return 2
     path = pathlib.Path(argv[1])
     try:
