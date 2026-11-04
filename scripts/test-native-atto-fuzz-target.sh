@@ -73,7 +73,7 @@ done
 # The compiler must run, but the mandatory Rust no-GC IR audit MUST reject
 # publication when the auditor fails. This is a deliberate negative mutation
 # of the build gate, not proof of guest runtime safety.
-export ORES_NO_GC_IR_AUDIT=false
+export ORES_NO_GC_IR_AUDIT="$(command -v false)"
 set +e
 bash "$builder" "$root/tests/fixtures/atto-fuzz-byte.atto" "$good" >"$output" 2>"$errors"
 status=$?
