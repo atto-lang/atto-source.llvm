@@ -58,6 +58,13 @@ public:
         linked.namespace_name = units.front()->program.namespace_name;
         for (std::size_t index = 0; index < units.size(); ++index) {
             auto& unit = *units[index];
+            // The cross-unit linker only transports ordinary functions,
+            // classes and actors. Never discard a parsed inverted owner or
+            // nominal schema while assembling linked Program: that would
+            // hide an unsupported source declaration from final validation.
+            if (!unit.program.inverted_structs.empty() ||
+                    unit.program.inverted_main)
+                fail(unit, "native linked inverted source requires verified cross-unit owner and schema identity");
             if (!unit.program.type_only_declarations.empty() ||
                     !unit.program.type_constraint_descriptors.empty() ||
                     !unit.program.namespace_name.empty()) {
