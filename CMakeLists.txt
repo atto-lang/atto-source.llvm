@@ -2893,6 +2893,16 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:oreslang-llvmc>" "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(atto_scalar_v1_removed_operators_denied PROPERTIES TIMEOUT 50)
 
+        # Four real AttoLang LRU LLVM/Clang guest microtraces, plus
+        # independent exact-source admission. Not full LRU parity.
+        oreslang_contract_test(atto_lru_hash_quotient ../../contracts/atto-lru-llvm-v1/hash-quotient.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_lru_probe_wrap ../../contracts/atto-lru-llvm-v1/probe-wrap.atto --run 17 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
+        oreslang_contract_test(atto_lru_slot_recycle ../../contracts/atto-lru-llvm-v1/slot-recycle.atto --run 29 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
+        oreslang_contract_test(atto_lru_recency_touch ../../contracts/atto-lru-llvm-v1/recency-touch.atto --run 61 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
+        add_test(NAME atto_lru_micro_source_inventory
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_lru_llvm_source.py")
+        set_tests_properties(atto_lru_micro_source_inventory PROPERTIES TIMEOUT 20)
+
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")

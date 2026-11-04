@@ -1,0 +1,15 @@
+// LLVM LRU prerequisite: SoA primitive columns, scrub and logical-slot reuse.
+pub routine main(): int {
+  val Array<int> keys = new Array<int>();
+  val Array<int> values = new Array<int>();
+  keys.add(7);
+  keys.add(21);
+  values.add(70);
+  values.add(210);
+  keys.set(0, 0);
+  values.set(0, 0);
+  keys.set(0, 35);
+  values.set(0, 350);
+  return keys.get(0) == 35 && values.get(0) == 350
+      && keys.get(1) == 21 && values.get(1) == 210 ? 29 : 5;
+}

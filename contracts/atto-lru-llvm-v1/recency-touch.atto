@@ -1,0 +1,24 @@
+// LLVM LRU prerequisite: exact recency links after promoting the tail.
+pub routine main(): int {
+  val Array<int> previous = new Array<int>();
+  val Array<int> following = new Array<int>();
+  previous.add(1);
+  previous.add(2);
+  previous.add(-1);
+  following.add(-1);
+  following.add(0);
+  following.add(1);
+  let int head = 2;
+  let int tail = 0;
+  // Starting chain: 2 -> 1 -> 0. Promote old LRU slot 0.
+  following.set(1, -1);
+  tail = 1;
+  previous.set(0, -1);
+  following.set(0, head);
+  previous.set(head, 0);
+  head = 0;
+  return head == 0 && tail == 1
+      && previous.get(0) == -1 && following.get(0) == 2
+      && previous.get(2) == 0 && following.get(2) == 1
+      && previous.get(1) == 2 && following.get(1) == -1 ? 61 : 3;
+}

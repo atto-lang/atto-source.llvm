@@ -1,0 +1,7 @@
+// LLVM LRU prerequisite: bounded bucket identity without retired operators.
+fnc bucket(int key, int width): int {
+  return key - (key / width) * width;
+}
+pub fnc main(): int {
+  return bucket(2147483647, 13) + bucket(26, 13) + 32;
+}
