@@ -109,6 +109,26 @@ python3 contracts/v1/verify_scoped_permissions.py --backend llvm --report /tmp/l
 
 The first command proves only corpus integrity. The second is a **report shape/completeness cross-check**, not cryptographic attestation of the runtime; retain checked-in adapters, CI job logs, and actual guest I/O fixtures to establish behavioral parity.
 
+## Scoped native file boundary (host-only candidate)
+
+The LLVM draft now also proposes a Linux-only, descriptor-relative host
+adapter for existing regular-file reads and appends. It takes a single
+owned absolute path through the immutable ScopedPolicy; Linux openat2
+resolves beneath a trusted root descriptor with RESOLVE_BENEATH,
+RESOLVE_NO_SYMLINKS and RESOLVE_NO_XDEV. The opened descriptor is checked
+with fstat, never exported to guest code and closed after bounded I/O.
+File creation, truncation, raw descriptor access and unsupported kernels
+fail closed rather than using an insecure pathname-open fallback.
+
+The dedicated native CTest exercises real file operations, deny precedence,
+read/write independence, path segment traversal, parent and final symlinks,
+bounded reads and deterministic file/symlink substitutions. This is
+host-runtime behavior, NOT compiled AttoLang guest permission parity.
+Hardlinks, mount/rename races, malicious native syscalls, host-owned descriptor
+escape and every unmediated host-I/O path remain outside this adapter's
+security claim. A genuine compiler/runtime guest adapter must be wired
+and executed before a 52-case guest report can be certified.
+
 ## Required negative gates before release
 
 - Guest without explicit grant cannot read/write host files, connect to network, read environment, spawn child processes, access system information, load native libraries, or load external code, including via alternative host APIs.

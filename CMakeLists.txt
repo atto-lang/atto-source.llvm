@@ -48,6 +48,15 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
     add_test(NAME native_pinned_tcp_host_boundary COMMAND oreslang-native-pinned-tcp-test)
     set_tests_properties(native_pinned_tcp_host_boundary PROPERTIES TIMEOUT 15)
+    # Host-only: Linux descriptor-relative scoped openat2, not guest lowering.
+    add_executable(oreslang-native-scoped-file-test
+        contracts/v1/scoped_file_boundary_test.cpp)
+    target_include_directories(oreslang-native-scoped-file-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1")
+    target_compile_options(oreslang-native-scoped-file-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_scoped_file_host_boundary COMMAND oreslang-native-scoped-file-test)
+    set_tests_properties(native_scoped_file_host_boundary PROPERTIES TIMEOUT 15)
 
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.

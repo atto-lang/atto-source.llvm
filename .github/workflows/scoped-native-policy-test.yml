@@ -10,6 +10,8 @@ on:
       - "contracts/v1/verify_scoped_permissions.py"
       - "contracts/v1/scoped_tcp_boundary.hpp"
       - "contracts/v1/scoped_tcp_boundary_test.cpp"
+      - "contracts/v1/scoped_file_boundary.hpp"
+      - "contracts/v1/scoped_file_boundary_test.cpp"
       - ".github/workflows/scoped-native-policy-test.yml"
   workflow_dispatch:
 permissions:
@@ -41,6 +43,14 @@ jobs:
         run: |
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_tcp_boundary_test.cpp -o /tmp/ores-native-tcp-clang
           /tmp/ores-native-tcp-clang
+      - name: Execute Linux scoped file boundary with GCC (real file I/O)
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_file_boundary_test.cpp -o /tmp/ores-native-files-gcc
+          /tmp/ores-native-files-gcc
+      - name: Execute scoped file boundary with Clang ASan and UBSan
+        run: |
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -I contracts/v1 contracts/v1/scoped_file_boundary_test.cpp -o /tmp/ores-native-files-clang
+          ASAN_OPTIONS=detect_leaks=1 /tmp/ores-native-files-clang
       - name: Write source-free exact-head native test receipt
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -61,7 +71,8 @@ jobs:
               "deserialization_cases_in_corpus": 7,
               "native_commands_completed": [
                   "gcc-scoped-policy", "clang-scoped-policy",
-                  "gcc-pinned-tcp", "clang-pinned-tcp"
+                  "gcc-pinned-tcp", "clang-pinned-tcp",
+                  "gcc-scoped-file", "clang-scoped-file-sanitized"
               ],
               "scope": "host-policy-only",
               "compiler_executed": False,
