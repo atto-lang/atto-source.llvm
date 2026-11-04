@@ -131,6 +131,22 @@ def main(compiler):
     assert named.returncode != 0, (named.returncode, named.stdout, named.stderr)
     assert "main/0\tstatus=known" not in named.stdout
 
+    # The native facts collector is recursive. Deep argument nesting must
+    # be rejected or reported inconclusive before it can exhaust host stack.
+    deeply_nested = "42"
+    for _ in range(80):
+        deeply_nested = f"identity({deeply_nested})"
+    deep_arguments = run(
+        compiler,
+        "fnc identity(int value): int { return value; }\n"
+        f"pub fnc main(): int {{ return {deeply_nested}; }}\n",
+        flags=("--analyze",),
+    )
+    assert deep_arguments.returncode in (1, 2), (
+        deep_arguments.returncode, deep_arguments.stdout, deep_arguments.stderr
+    )
+    assert "main/0\tstatus=known" not in deep_arguments.stdout
+
     # A long acyclic graph must not overflow recursive closure traversal or
     # produce a misleading successful purity receipt (depth budget: 64).
     functions = [
