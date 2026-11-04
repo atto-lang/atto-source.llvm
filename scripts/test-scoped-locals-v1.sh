@@ -147,4 +147,26 @@ if [ "${ORES_SCOPED_LOCAL_RUN_SANITIZERS:-0}" = "1" ]; then
   done
 fi
 
+# GCC ThreadSanitizer runs only on native scheduler-backed request
+# provenance tests. The producer/actor WAKE race is not covered by ASan/UBSan.
+if [ "${ORES_SCOPED_LOCAL_RUN_TSAN:-0}" = "1" ]; then
+  if ! command -v gcc >/dev/null 2>&1 || \
+     ! command -v g++ >/dev/null 2>&1; then
+    echo "GCC/G++ required for native request TSan" >&2; exit 1
+  fi
+  gcc -std=c11 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+    -fsanitize=thread -fno-omit-frame-pointer \
+    -I"$ROOT/src/main/cpp" \
+    -c "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
+    -o "$OUT/tsan-native-scheduler.o"
+  for testfile in native_request_data_mail_gate_v1_test native_request_wake_origin_v1_test; do
+    g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+      -fsanitize=thread -fno-omit-frame-pointer \
+      -I"$ROOT/src/main/cpp" \
+      "$ROOT/tests/$testfile.cpp" "$OUT/tsan-native-scheduler.o" \
+      -o "$OUT/tsan-$testfile"
+    TSAN_OPTIONS="halt_on_error=1" "$OUT/tsan-$testfile"
+  done
+fi
+
 printf '%s\n' 'SCOPED_LOCAL_HOST_ONLY_COMPILER_AND_NEGATIVE_PASS'
