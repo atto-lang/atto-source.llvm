@@ -4307,12 +4307,12 @@ private:
                 // Non-scalar class/array/actor names are rejected by ownership
                 // if used as scalar values; treat their placeholder as i64 here
                 // only so field/borrow syntax can reach that stricter pass.
-                return found == variables.end() ? ScalarType::I64 : found->second;
+                return expr.resolved_type = found == variables.end() ? ScalarType::I64 : found->second;
             }
             case Expression::Kind::Field: {
                 if (expr.left) {
                     auto found = variables.find(native_place_key(expr));
-                    if (found != variables.end()) return found->second;
+                    if (found != variables.end()) return expr.resolved_type = found->second;
                 }
                 return ScalarType::I64;
             }
