@@ -64,6 +64,23 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "seven distinct positives"):
             verify_fixture_registry(POSITIVE[:-1] + (invalid,), NEGATIVE)
 
+    def test_executable_preflight_rejects_swapped_case_name(self):
+        renamed = ("unrelated-int-only-case", POSITIVE[-1][1],
+                   POSITIVE[-1][2], POSITIVE[-1][3])
+        with self.assertRaisesRegex(RuntimeError, "fixture coverage"):
+            verify_fixture_registry(POSITIVE[:-1] + (renamed,), NEGATIVE)
+
+    def test_executable_preflight_rejects_swapped_unique_expected_exit(self):
+        changed = (POSITIVE[-1][0], POSITIVE[-1][1], POSITIVE[-1][2], 54)
+        with self.assertRaisesRegex(RuntimeError, "fixture coverage"):
+            verify_fixture_registry(POSITIVE[:-1] + (changed,), NEGATIVE)
+
+    def test_executable_preflight_rejects_diagnostic_relabel(self):
+        altered = (NEGATIVE[-1][0], NEGATIVE[-1][1],
+                   "AGGREGATE_LOCAL_INITIALIZER_KIND_MISMATCH")
+        with self.assertRaisesRegex(RuntimeError, "fixture coverage"):
+            verify_fixture_registry(POSITIVE, NEGATIVE[:-1] + (altered,))
+
     def test_native_main_calls_guest_and_uses_result(self):
         ir = (b"; ModuleID = 'fixture'\n"
               b"define i64 @__oreslang_guest_main() {\n ret i64 19\n}\n"
