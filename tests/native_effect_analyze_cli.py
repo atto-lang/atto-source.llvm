@@ -36,6 +36,29 @@ def verify():
         assert thrown.read_bytes() == original, "effect analysis modified its input"
         assert "define i64" not in effect.stdout, "LLVM IR leaked on analysis"
 
+        # Transitive exceptional effects must reach callers through the AST.
+        transitive = root / "transitive.atto"
+        transitive.write_text(
+            "fnc caught(): int { try { throw 7; } catch (err) "
+            "{ return err; } finally {} }\n"
+            "pub fnc main(): int { return caught(); }\n"
+        )
+        transitive_run = run(args.compiler, "--analyze", transitive)
+        assert transitive_run.returncode == 0, (
+            transitive_run.returncode, transitive_run.stdout, transitive_run.stderr)
+        assert "EFFECT WARNING caught: may throw" in transitive_run.stdout
+        assert "EFFECT WARNING main: may throw" in transitive_run.stdout
+
+        recursive = root / "recursive.atto"
+        recursive.write_text(
+            "fnc recurse(int n): int { return recurse(n); }\n"
+            "pub fnc main(): int { return recurse(1); }\n"
+        )
+        recursive_result = run(args.compiler, "--analyze", recursive)
+        assert recursive_result.returncode != 0, (
+            recursive_result.returncode, recursive_result.stdout)
+        assert "ANALYZE ADVISORY" not in recursive_result.stdout
+
         malformed = root / "malformed.atto"
         malformed.write_text("pub fnc main(): int { return ; }\n")
         failure = run(args.compiler, "--analyze", malformed)

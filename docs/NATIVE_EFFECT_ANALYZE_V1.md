@@ -29,5 +29,6 @@ that is not a substitute for compiler-owned semantic analysis.
 The CTest `native_effect_analyze_compiler_cli` exercises the actual
 `oreslang-llvmc` process on a valid scalar `.atto`, a compiler-admitted
 caught-`throw` `.atto`, invalid syntax, duplicate mode, incompatible mode,
-and source immutability. No full sanitizer, Linux/x86, Java or runtime evidence
+transitive call effects, recursion rejection, and source immutability. No full
+sanitizer, Linux/x86, Java or runtime evidence
 is supplied by the source PR alone.
