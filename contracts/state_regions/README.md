@@ -442,3 +442,71 @@ the local environment. A check that a test harness parses is not a guest
 execution receipt. The actual LLVM compiler and native binary must execute
 with an independently reviewable exact-source/tree/artifact identity before
 any claims of compiled actor parity or zero guest tracing GC.
+
+## Sealed critical scalar actor AOT v0 — LLVM candidate (2026-11-03)
+
+A bounded **candidate**, not the complete cross-backend state-container
+contract, is now parsed into `ActorDecl.sealed_scalar_state`:
+
+```atto
+define actor Worker as {
+  state {
+    let total: int = 0;
+  }
+  pub critical handle_state(int n): int {
+    const next: owned int = total + n;
+    total = next;
+    return total;
+  }
+}
+```
+
+The LLVM frontend accepts only 1..16 initialized scalar `int` fields,
+a public non-suspending critical `handle_state(int): int`, at most eight
+immutable compiler-owned scalar temporaries when
+`--experimental-owned-int` is supplied, and the existing one-turn/one-owner
+native heap admission. No object-valued fields, general state containers,
+closures, task suspension, async I/O, exception frames, borrow transport,
+recursive critical sections, actor concurrency above LOW, or source-level
+FFI loans are accepted in this initial slice.
+
+The compiler emits `oreslang_actor_<Actor>_handle_state` for sealed actors
+instead of `oreslang_actor_<Actor>_on_message`. Both use the existing
+generation-fenced native actor heap ABI and ordered scoped drop epilogue.
+Parser validation requires pure scalar initializers, writes and returns
+for all sealed handlers, **even without owned locals**, so an effectful call
+cannot escape through a critical turn. Top-level guest functions cannot
+impersonate generated actor exports. Wasm32 sealed critical lowering remains
+a deliberate compile-time rejection until real Wasm guest turn/heap isolation
+is implemented.
+
+The exact-head `compiled-native-actor-owned-heaps` workflow is extended to
+compile/link/execute both legacy and sealed `.atto` fixtures and demand
+different exported LLVM **function definitions**, real native field
+read/write + scoped-new/drop calls, and separate 2,009-turn receipts from
+the same native actor heap acceptance harness. Negative fixtures require
+fail-closed rejection of critical suspension, missing `critical`, legacy
+critical claims, effectful state writes/returns, reserved ABI symbol
+impersonation, and unlowered Wasm sealed state.
+
+**Executed local native ABI evidence:** source bytes were independently
+reconstructed with matching Git blob hashes for the native heap C
+(`4f3139bdf65b1a1fab1a37d1515f17d0c032cbfb`), header
+(`3a39c6a035f5dbb5955c152ee15ea84658e3bcb2`), and dual-mode
+C acceptance harness (`4c97d8a8f762ddab914e9366c6f99c8209613c3d`).
+A **test-only C stand-in** for the compiled actor functions linked against
+the real production heap and exact harness. GCC and Clang, optimized and
+ASan/UBSan, each ran both legacy and sealed ABI spellings successfully:
+**8/8 native harness executions passed**, each with 2,009 turns and
+4,002/4,037 complete native access events. This demonstrates the native ABI
+oracle; it is **NOT an LLVM guest execution receipt** because the handler
+was not compiler generated.
+
+**Still NOT_EXECUTED:** building `oreslang-llvmc` from this branch (local
+LLVM dev libraries / `llvm-config` are unavailable), actual `.atto`
+parser/typechecker/codegen tests, LLVM-emitted native object/link/guest,
+the hosted ASan/UBSan guest, multi-backend conformance and general zero-GC
+certification. A GitHub Actions job with `steps=[]` is a runner-admission
+failure, never compiler evidence. Preserve draft status and require a
+successful authorized exact-head native guest run plus independent review
+before promoting this bounded candidate.
