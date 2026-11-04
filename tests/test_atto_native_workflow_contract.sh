@@ -20,6 +20,12 @@ receipt_line="$(gate_line "printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|")"
   die 'unsafe native guest audit or receipt ordering'
 
 unique() { [[ "$(count "$1")" -eq 1 ]] || die "expected exactly one: $1"; }
+# The workflow checker must itself remain one complete shell program.
+# The former duplicated tail corrupted a quoted grep assertion before CI ran.
+[[ "$(grep -c "^echo 'PASS LLVM canonical" "$0")" -eq 1 ]] ||
+  die 'workflow source checker contains duplicated completion sections'
+[[ "$(grep -c '^unique "tests/atto_native_guest_receipts.sh"' "$0")" -eq 1 ]] ||
+  die 'workflow source checker contains duplicated guest-gate assertions'
 unique 'name: AttoLang LLVM native harness executable parity (O0 O2)'
 unique '  atto-native-executable:'
 unique "      - 'CMakeLists.txt'"
