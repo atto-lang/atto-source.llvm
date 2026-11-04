@@ -28,6 +28,26 @@ adapter="$root/tests/native_atto_fuzz_stdin_adapter.c"
   { echo 'invalid source or output path' >&2; exit 64; }
 [[ -x "$compiler" && -x "$auditor" && -f "$adapter" ]] ||
   { echo 'missing executable LLVM compiler or Rust IR auditor or stdin adapter' >&2; exit 69; }
+# Bound compiler, IR auditor and Clang independently so a malformed guest
+# cannot hang the fuzz build indefinitely. GNU coreutils is required here
+# (the compiler-backed CTest is Linux-only); macOS may use gtimeout.
+limit="${ATTO_FUZZ_BUILD_TIMEOUT_SECONDS:-60}"
+[[ "$limit" =~ ^[1-9][0-9]?$ || "$limit" == 100 || "$limit" == 110 || "$limit" == 120 ]] ||
+  { echo 'ATTO_FUZZ_BUILD_TIMEOUT_SECONDS must be an integer 1..120' >&2; exit 64; }
+limit_numeric=$((10#$limit))
+(( limit_numeric <= 120 )) ||
+  { echo 'ATTO_FUZZ_BUILD_TIMEOUT_SECONDS exceeds 120' >&2; exit 64; }
+if command -v timeout >/dev/null 2>&1; then
+  timeout_cmd="$(command -v timeout)"
+elif command -v gtimeout >/dev/null 2>&1; then
+  timeout_cmd="$(command -v gtimeout)"
+else
+  echo 'GNU timeout (or gtimeout) is required for bounded native fuzz builds' >&2
+  exit 69
+fi
+bounded() {
+  "$timeout_cmd" --kill-after=5s "${limit_numeric}s" "$@"
+}
 clang_path="$(command -v "$clang")" ||
   { echo 'Clang not found' >&2; exit 69; }
 for protected in "$source_file" "$compiler" "$auditor" "$clang_path" "$adapter"; do
@@ -38,13 +58,13 @@ for protected in "$source_file" "$compiler" "$auditor" "$clang_path" "$adapter";
 done
 work="$(mktemp -d "$output_dir/.atto-fuzz-build.XXXXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
-"$compiler" --target=host "$source_file" > "$work/guest.ll"
+bounded "$compiler" --target=host "$source_file" > "$work/guest.ll"
 [[ -s "$work/guest.ll" ]] ||
   { echo 'LLVM compiler emitted empty IR' >&2; exit 1; }
 bytes="$(wc -c < "$work/guest.ll")"
 (( bytes <= 2000000 )) ||
   { echo 'LLVM guest IR exceeds bounded size' >&2; exit 1; }
-"$auditor" "$work/guest.ll" >/dev/null
+bounded "$auditor" "$work/guest.ll" >/dev/null
 count="$(grep -Ec '^define (dso_local )?i64 @fuzz_byte\(i64[[:space:]][^,)]*\)[[:space:]]' "$work/guest.ll" || true)"
 [[ "$count" == 1 ]] ||
   { echo 'LLVM guest must define exactly one external fuzz_byte(i64) -> i64' >&2; exit 1; }
@@ -56,7 +76,7 @@ flags=(-O1 -g -fno-omit-frame-pointer -Wno-override-module)
 if [[ "$sanitizers" == address,undefined ]]; then
   flags+=(-fsanitize=address,undefined -fno-sanitize-recover=all)
 fi
-"$clang" "${flags[@]}" -x ir "$work/guest.ll" -x c -std=c11 \
+bounded "$clang" "${flags[@]}" -x ir "$work/guest.ll" -x c -std=c11 \
   -Wall -Wextra -Wpedantic -Werror "$adapter" -o "$work/target"
 [[ -f "$work/target" && -x "$work/target" ]] ||
   { echo 'native fuzz target did not link to an executable' >&2; exit 1; }
