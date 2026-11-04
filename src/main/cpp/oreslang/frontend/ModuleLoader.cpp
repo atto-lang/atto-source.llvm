@@ -37,12 +37,13 @@ class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
-    bool owned, scalar_loop, host;
+    bool owned, scalar_loop, host, sealed_scalar_state;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
-           std::uint32_t admitted_provider_bits)
+           std::uint32_t admitted_provider_bits, bool sealed)
         : owned(owned), scalar_loop(scalar_loop), host(host),
+          sealed_scalar_state(sealed),
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
@@ -133,7 +134,8 @@ private:
         unit->compiler_owned_library = compiler_owned_library;
         unit->compiler_library_tier = compiler_library_tier;
         unit->admitted_core_provider_bits = admitted_core_provider_bits;
-        try { unit->program = parse_unresolved_program(text, owned, scalar_loop); }
+        try { unit->program = parse_unresolved_program(
+            text, owned, scalar_loop, sealed_scalar_state); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
@@ -421,8 +423,8 @@ private:
 } // namespace
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
                             bool owned, bool scalar_loop, bool host,
-                            std::uint32_t admitted_provider_bits) {
-    return Loader(owned, scalar_loop, host, admitted_provider_bits)
+                            std::uint32_t admitted_provider_bits, bool sealed_scalar_state) {
+    return Loader(owned, scalar_loop, host, admitted_provider_bits, sealed_scalar_state)
         .run(path, std::move(source), identity);
 }
 } // namespace oreslang
