@@ -230,6 +230,56 @@ def main():
             if not result.returncode or result.stdout or 'cannot import itself' not in result.stderr:
                 raise AssertionError((alias,result.stderr))
             passed+=1
+        # A symlink may preserve source identity but must not switch the
+        # importing dialect between the canonical .atto and legacy .ores.
+        # The same-suffix symlink remains permitted.
+        for logical, physical in (('.atto', '.ores'), ('.ores', '.atto')):
+            name=f'root-cross-suffix-{logical[1:]}'
+            directory=root/name; directory.mkdir()
+            (directory/('real'+physical)).write_text('pub fnc main():int{return 42;}')
+            entry=directory/('main'+logical)
+            entry.symlink_to('real'+physical)
+            result=run([a.compiler,str(entry)])
+            if not result.returncode or result.stdout or 'native source suffix changes across symlink' not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
+        for mode in ('relative', 'project-root'):
+            for logical, physical in (('.atto', '.ores'), ('.ores', '.atto')):
+                name=f'{mode}-cross-suffix-{logical[1:]}'
+                directory=root/name; directory.mkdir()
+                (directory/('real'+physical)).write_text(
+                    'define module Lib as pub fnc answer():int{return 42;} end')
+                (directory/('lib'+logical)).symlink_to('real'+physical)
+                if mode == 'project-root':
+                    (directory/'.ores.pkg.toml').write_text('schema_version = "1"\\n')
+                reference = '+/lib' if mode == 'project-root' else './lib'
+                entry=directory/('main'+logical)
+                entry.write_text(
+                    f'import module Lib from "{reference}"; pub fnc main():int{{return Lib.answer();}}')
+                result=run([a.compiler,str(entry)])
+                diagnostic=('native project-root import source suffix changes across symlink'
+                            if mode=='project-root' else
+                            'native import source suffix changes across symlink')
+                if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                    raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+                passed+=1
+        directory=root/'atto-same-suffix-symlink'; directory.mkdir()
+        (directory/'real.atto').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        (directory/'lib.atto').symlink_to('real.atto')
+        (directory/'main.atto').write_text(
+            'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}')
+        result=run([a.compiler,str(directory/'main.atto')])
+        if result.returncode:
+            raise AssertionError(('atto same suffix import symlink', result.stderr))
+        (directory/'guest.ll').write_text(result.stdout)
+        linked=run([a.clang,str(directory/'guest.ll'),'-O0','-o',str(directory/'guest')])
+        if linked.returncode:
+            raise AssertionError(('atto same suffix import symlink link', linked.stderr))
+        guest=run([str(directory/'guest')])
+        if guest.returncode != 42:
+            raise AssertionError(('atto same suffix import symlink guest', guest.returncode, guest.stderr))
+        passed+=1
         directory=root/'fifo'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "./lib"; pub fnc main():int{return 0;}')
         if hasattr(os, 'mkfifo'):
