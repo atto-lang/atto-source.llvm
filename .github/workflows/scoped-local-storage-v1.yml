@@ -14,6 +14,7 @@ on:
       - "tests/native_scoped_request_parity_v1_test.cpp"
       - "tests/native_request_mail_gate_v1_test.cpp"
       - "tests/native_original_data_mail_sequence_v1_test.c"
+      - "tests/native_data_mail_stop_v1_test.c"
       - "tests/native_request_data_mail_gate_v1_test.cpp"
       - "tests/native_request_wake_origin_v1_test.cpp"
       - "src/main/cpp/oreslang/runtime/NativeActorLocalGateV1.hpp"
