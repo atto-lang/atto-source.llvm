@@ -15,3 +15,4 @@ module-extensionless|positive/module-extensionless.atto|42
 exit-zero|positive/exit-zero.atto|0
 exit-seven|positive/exit-seven.atto|7
 exit-fortythree|positive/exit-fortythree.atto|43
+package-root|positive/package-root.atto|42
