@@ -209,6 +209,8 @@ def main():
             for path in files: (directory/path).rename(directory/(path+'.hidden'))
             executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
             if executed.returncode != expected: raise AssertionError((name, executed.returncode, executed.stderr))
+            if name.startswith('atto-linked-public-') and (executed.stdout or executed.stderr):
+                raise AssertionError((name, 'unexpected native guest output', executed.stdout, executed.stderr))
             for path in files: (directory/(path+'.hidden')).rename(directory/path)
             if a.java_command and entry == 'main.ores' and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
                 reference = run([*a.java_command, str(directory/entry)])
@@ -550,10 +552,17 @@ def main():
             (directory/'producer.atto').write_text(producer)
             (directory/'main.atto').write_text(
                 'import * as lib from "./producer.atto"; ' + consumer)
-            result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+            # Run in an isolated cwd so a rejected compiler cannot leave a
+            # hidden .ll/.o/native executable and still claim zero-IR denial.
+            compiler = os.path.abspath(a.compiler) if os.sep in a.compiler else (
+                __import__('shutil').which(a.compiler) or a.compiler)
+            before = {p.name for p in directory.iterdir()}
+            result = run([compiler, str(directory/'main.atto')], cwd=directory)
+            artifacts = {p.name for p in directory.iterdir()} - before
+            if not result.returncode or result.stdout or diagnostic not in result.stderr or artifacts:
                 raise AssertionError((name, result.returncode,
-                                      result.stdout[:150], result.stderr))
+                                      result.stdout[:150], result.stderr,
+                                      'unexpected compiler artifacts', sorted(artifacts)))
             passed += 1
 
         # A normal module import cannot forge compile-time macro provenance.
