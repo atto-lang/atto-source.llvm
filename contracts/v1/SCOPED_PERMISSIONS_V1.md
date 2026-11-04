@@ -28,6 +28,17 @@ enforce port bounds before constructing an OS socket address. A backend
 without scoped network guest I/O (currently WASM) must continue to deny
 unsupported network authority; host-only tests are not runtime parity proof.
 
+## Nonblocking native TCP host sockets
+
+The Linux-only scoped TCP adapter creates sockets atomically with
+`SOCK_NONBLOCK | SOCK_CLOEXEC`, checks both descriptor flags before
+returning an authorized connection, and never restores blocking mode.
+Other platforms fail closed until equivalent atomic descriptor creation
+and native tests are implemented. Its connection-time `poll` may park:
+it must run on a trusted I/O worker, never directly on an actor carrier.
+This does NOT wire compiled AttoLang guest network operations, prevent
+arbitrary native syscall bypass, or establish LLVM guest parity.
+
 ## Selected TCP peer identity
 
 An unspecified IPv4 address (`0.0.0.0`) is a **bind** sentinel, not a safe

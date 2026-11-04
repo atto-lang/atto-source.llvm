@@ -17,9 +17,11 @@
 #endif
 
 namespace oreslang::permissions {
-// Trusted HOST-ONLY numeric TCP socket adapter. Not exposed to guest code and
-// not wired to compiler lowering. Callers must supply the exact DNS-selected
-// address, which is pinned in sockaddr and never resolved again.
+// Trusted HOST-ONLY Linux numeric TCP socket adapter. Not exposed to guest
+// code and not wired to compiler lowering. Callers must supply the exact
+// DNS-selected address, pinned in sockaddr and never resolved again.
+// Connect-time poll may park: call ONLY on a trusted I/O worker, NEVER an
+// actor carrier. Return descriptors remain nonblocking and close-on-exec.
 class ScopedTcpBoundary final {
 public:
     static int connect_selected_ipv4(const ScopedPolicy& policy,
@@ -31,7 +33,7 @@ public:
         // Check BEFORE allocating a socket or touching the network.
         if (!policy.allows_network_connection(requested, selected))
             throw std::domain_error("selected network endpoint denied");
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(__linux__)
         const auto colon = selected.rfind(':');
         if (colon == selected.npos || colon == 0 || colon + 1 == selected.size() ||
             selected.size() - (colon + 1) > 5)
@@ -62,12 +64,11 @@ public:
             int fd;
             ~Descriptor() { if (fd >= 0) ::close(fd); }
             int release() { const int old = fd; fd = -1; return old; }
-        } socket{::socket(AF_INET, SOCK_STREAM, 0)};
+        } socket{::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0)};
         if (socket.fd < 0)
             throw std::system_error(errno, std::generic_category(), "socket");
-        int flags = ::fcntl(socket.fd, F_GETFL, 0);
-        if (flags < 0 || ::fcntl(socket.fd, F_SETFL, flags | O_NONBLOCK) < 0)
-            throw std::system_error(errno, std::generic_category(), "nonblocking socket");
+        // SOCK_NONBLOCK and SOCK_CLOEXEC are atomic at socket creation;
+        // never briefly expose a blocking or exec-inheritable socket.
 
         const int connected = ::connect(socket.fd,
             reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
@@ -97,8 +98,12 @@ public:
                 break;
             }
         }
-        if (::fcntl(socket.fd, F_SETFL, flags) < 0)
-            throw std::system_error(errno, std::generic_category(), "TCP connect restore flags");
+        // A connected socket must never become blocking or exec-inheritable.
+        const int status = ::fcntl(socket.fd, F_GETFL, 0);
+        const int descriptor = ::fcntl(socket.fd, F_GETFD, 0);
+        if (status < 0 || descriptor < 0 || !(status & O_NONBLOCK) ||
+            !(descriptor & FD_CLOEXEC))
+            throw std::runtime_error("nonblocking close-on-exec TCP invariant failed");
         return socket.release();  // Trusted host owns returned fd and MUST close.
 #else
         throw std::runtime_error("native pinned TCP is unsupported on this platform");

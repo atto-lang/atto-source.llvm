@@ -1,5 +1,6 @@
 #include "scoped_tcp_boundary.hpp"
 #include <iostream>
+#include <fcntl.h>
 #include <stdexcept>
 #include <string>
 
@@ -11,7 +12,7 @@
 
 using namespace oreslang::permissions;
 
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(__linux__)
 int main() {
     const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listener < 0) throw std::runtime_error("loopback listener socket failed");
@@ -66,6 +67,11 @@ int main() {
 
     Guard client{ScopedTcpBoundary::connect_selected_ipv4(grant, endpoint, endpoint, 2000)};
     if (client.fd < 0) throw std::runtime_error("allowed TCP connect failed");
+    const int socket_flags = ::fcntl(client.fd, F_GETFL, 0);
+    const int fd_flags = ::fcntl(client.fd, F_GETFD, 0);
+    if (socket_flags < 0 || fd_flags < 0 || !(socket_flags & O_NONBLOCK) ||
+        !(fd_flags & FD_CLOEXEC))
+        throw std::runtime_error("authorized TCP descriptor lost NONBLOCK or CLOEXEC");
     Guard accepted{::accept(listener, nullptr, nullptr)};
     if (accepted.fd < 0) throw std::runtime_error("loopback accept failed");
     sockaddr_in peer{};
