@@ -46,6 +46,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Compiler-linked API regression: genuine LLVM 19/20+ intrinsic declaration
+    # selection, including overloaded checked-i64 arithmetic and trap.
+    # It is host LLVM API evidence; NOT AttoLang guest-execution parity.
+    add_executable(atto-llvm-intrinsic-compat-test
+        tests/llvm_intrinsic_compat_api_test.cpp)
+    target_include_directories(atto-llvm-intrinsic-compat-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(atto-llvm-intrinsic-compat-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(atto-llvm-intrinsic-compat-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_llvm_intrinsic_api_compat
+        COMMAND atto-llvm-intrinsic-compat-test)
+    set_tests_properties(native_llvm_intrinsic_api_compat PROPERTIES TIMEOUT 15)
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.

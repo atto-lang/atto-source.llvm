@@ -130,7 +130,7 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     // trap is the current failure ABI; typed actor errors remain separate.
     auto* module = builder.GetInsertBlock()->getModule();
     auto* parent = builder.GetInsertBlock()->getParent();
-    auto* intrinsic = llvm::Intrinsic::getDeclaration(module, operation, {left->getType()});
+    auto* intrinsic = native_intrinsic(*module, operation, {left->getType()});
     auto* pair = builder.CreateCall(intrinsic, {left, right}, name + ".checked");
     auto* value = builder.CreateExtractValue(pair, {0}, name + ".value");
     auto* overflow = builder.CreateExtractValue(pair, {1}, name + ".overflow");
@@ -138,7 +138,7 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     auto* proceed = llvm::BasicBlock::Create(builder.getContext(), name + ".ok", parent);
     builder.CreateCondBr(overflow, failed, proceed);
     builder.SetInsertPoint(failed);
-    builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+    builder.CreateCall(native_trap(*module));
     builder.CreateUnreachable();
     builder.SetInsertPoint(proceed);
     return value;
