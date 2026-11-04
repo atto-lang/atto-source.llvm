@@ -189,6 +189,51 @@ int main() {
         assert(different.find("store i64 73, ptr") != std::string::npos);
         assert(emitter.build(compiled.mir, compiled.operands) == first);
     }
+    // A verified linear MIR is not automatically a valid executable main.
+    // No read (or a read followed by mutation) must not silently return 0
+    // or reuse a stale SSA value after a column change or swap-delete.
+    {
+        using oreslang::dop::hir::LinearPlan;
+        const auto layout = compiled.mir.layout();
+        const auto check_denied = [&](LinearPlan& plan, I64PairIrOperands inputs) {
+            const auto verified = Module::lower(plan);
+            I64PairLlvmEmitter emitter(verified.capacity());
+            reject([&] { (void)emitter.build(verified, inputs); },
+                   "MIR LLVM requires terminal field read before close");
+            // A failed verification must not poison reuse of the compiler
+            // emitter on a previously valid verified source.
+            assert(emitter.build(compiled.mir, compiled.operands) == ir);
+        };
+
+        LinearPlan no_read(layout, 3);
+        no_read.push(2);
+        no_read.close();
+        check_denied(no_read, I64PairIrOperands{{{{42, 100}}}, {}});
+
+        LinearPlan stale_push(layout, 3);
+        stale_push.push(2);
+        stale_push.read_runtime_checked(0, "x");
+        stale_push.push(2);
+        stale_push.close();
+        check_denied(stale_push,
+                     I64PairIrOperands{{{{11, 100}}, {{42, 101}}}, {}});
+
+        LinearPlan stale_write(layout, 3);
+        stale_write.push(2);
+        stale_write.read_runtime_checked(0, "x");
+        stale_write.write_runtime_checked(0, "x");
+        stale_write.close();
+        check_denied(stale_write, I64PairIrOperands{{{{11, 100}}}, {42}});
+
+        LinearPlan stale_erase(layout, 3);
+        stale_erase.push(2);
+        stale_erase.push(2);
+        stale_erase.read_runtime_checked(0, "x");
+        stale_erase.erase_swap(0);
+        stale_erase.close();
+        check_denied(stale_erase,
+                     I64PairIrOperands{{{{11, 100}}, {{42, 101}}}, {}});
+    }
     // Metadata may be supplied by a forged/deserialized Program rather than
     // the production parser. Reject before any LLVM IR is emitted.
     {

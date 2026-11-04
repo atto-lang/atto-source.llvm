@@ -98,6 +98,15 @@ public:
             if (op.kind == OpKind::Snapshot)
                 throw std::logic_error("MIR LLVM snapshot value lowering not implemented");
         }
+        // A standalone native main must return an actually observed field.
+        // Closing the owner alone must never publish an implicit return-zero.
+        // Likewise, a read preceding later writes, pushes or swap-erases is
+        // stale: the final source operation before cleanup must be a read.
+        // Perform this check *before* any LLVM IR bytes are emitted.
+        const auto& actions = module.instructions();
+        if (actions.size() < 3 ||
+                actions[actions.size() - 2].kind != OpKind::ReadField)
+            throw std::logic_error("MIR LLVM requires terminal field read before close");
         code_ = "; typed MIR, experimental local i64 pair LLVM IR; no external row handles\n";
         code_ += "declare void @llvm.trap()\n";
         code_ += "define i32 @main() {\nentry:\n";
