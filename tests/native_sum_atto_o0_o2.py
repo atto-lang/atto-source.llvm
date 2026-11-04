@@ -6,6 +6,7 @@ This is not synthetic IR, a parser-only canary, or a host-only resolver test.
 """
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -40,22 +41,77 @@ def require(condition, message):
     if not condition:
         raise RuntimeError(message)
 
-def run(command, *, stdin=None, timeout=60):
+def run(command, *, stdin=None, timeout=60, env=None):
     return subprocess.run(command, input=stdin, capture_output=True,
-                          check=False, timeout=timeout)
+                          check=False, timeout=timeout, env=env)
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
+def check_no_gc(auditor, ir_path, original):
+    require(auditor.name == "oreslang-no-gc-ir-audit" and
+            auditor.is_file() and not auditor.is_symlink() and
+            os.access(auditor, os.X_OK), "no-GC auditor missing or unsafe")
+    ir_path.write_bytes(original)
+    screened = run([str(auditor), str(ir_path)], timeout=10)
+    require(screened.returncode == 0 and
+            b"STRICT_NO_GC_IR_SCREENED_ONLY" in screened.stdout and
+            not screened.stderr, "mandatory source-built no-GC audit failed")
+    require(ir_path.read_bytes() == original, "no-GC audit modified compiler IR")
+
+
+def self_test():
+    # Synthetic, source-only invocation checks; never guest/compiler proof.
+    with tempfile.TemporaryDirectory(prefix="atto-auditor-selftest-") as td:
+        root = Path(td)
+        ir_file = root / "sample.ll"
+        sample = b"; ModuleID = 'synthetic'\n"
+        cases = (
+            ("missing", None),
+            ("denied", "#!/bin/sh\nexit 17\n"),
+            ("tamper", "#!/bin/sh\nprintf changed >> \"$1\"\necho STRICT_NO_GC_IR_SCREENED_ONLY\n"),
+        )
+        for name, body in cases:
+            auditor = root / name / "oreslang-no-gc-ir-audit"
+            if body is not None:
+                auditor.parent.mkdir()
+                auditor.write_text(body)
+                auditor.chmod(0o700)
+            try:
+                check_no_gc(auditor, ir_file, sample)
+            except (OSError, RuntimeError):
+                pass
+            else:
+                raise RuntimeError("unsafe " + name + " auditor was accepted")
+        passing = root / "pass" / "oreslang-no-gc-ir-audit"
+        passing.parent.mkdir()
+        passing.write_text("#!/bin/sh\necho STRICT_NO_GC_IR_SCREENED_ONLY\n")
+        passing.chmod(0o700)
+        check_no_gc(passing, ir_file, sample)
+    print("NATIVE_SUM_AUDITOR_SOURCE_ONLY_PASS|negatives=3|guest=NOT_EXECUTED")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--compiler", required=True)
-    parser.add_argument("--clang", required=True)
-    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--compiler")
+    parser.add_argument("--clang")
+    parser.add_argument("--root", type=Path)
+    parser.add_argument("--auditor")
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+    if args.self_test:
+        require(not (args.compiler or args.clang or args.root or args.auditor),
+                "self-test must not accept compiler-backed inputs")
+        self_test()
+        return
+    require(all((args.compiler, args.clang, args.root, args.auditor)),
+            "real compiler, Clang, root and source-built no-GC auditor required")
     root = args.root.resolve(strict=True)
     compiler = Path(args.compiler).resolve(strict=True)
     clang = Path(args.clang).resolve(strict=True)
+    auditor_path = Path(args.auditor)
+    require(not auditor_path.is_symlink(), "no-GC auditor symlink forbidden")
+    auditor = auditor_path.resolve(strict=True)
     require(compiler.is_file() and compiler.name == "oreslang-llvmc",
             "native guest parity requires real oreslang-llvmc")
     require(clang.is_file(), "native guest parity requires real clang")
@@ -66,8 +122,16 @@ def main():
         require(region.is_file() and not region.is_symlink(),
                 "native region source missing or symlinked")
     count = 0
+    production_count = 0
     with tempfile.TemporaryDirectory(prefix="atto-native-sum-") as temp:
         temporary = Path(temp)
+        # Real, source-built Rust auditor must reject known tracing collector IR.
+        gc_ir = temporary / "forbidden-gc.ll"
+        gc_ir.write_text("declare ptr @GC_malloc(i64)\n")
+        gc_result = run([str(auditor), str(gc_ir)], timeout=10)
+        require(gc_result.returncode != 0 and
+                b"STRICT_NO_GC_IR_REJECTED" in gc_result.stderr,
+                "auditor admitted known tracing-GC LLVM IR")
         for filename, expected in POSITIVES:
             source = fixtures / filename
             require(source.is_file() and not source.is_symlink() and
@@ -82,6 +146,8 @@ def main():
                         not generated.stderr,
                         "real frontend rejected positive " + filename)
                 ir_hashes.append(sha(generated.stdout))
+                ir_file = temporary / (filename + ".O" + str(level) + ".ll")
+                check_no_gc(auditor, ir_file, generated.stdout)
                 executable = temporary / (filename + ".O" + str(level))
                 linked = run([str(clang), "-O" + str(level), "-x", "ir", "-",
                               "-x", "c", "-std=c11", "-pthread",
@@ -113,9 +179,56 @@ def main():
                                 sha(executable.read_bytes()))
             require(ir_hashes[0] == ir_hashes[1],
                     "same source generated different frontend IR for O0/O2")
+            # Run the current production AOT wrapper as an independent gate:
+            # direct Clang comparisons alone do not qualify AOT publication.
+            wrapper = root / "scripts" / "compile-aot.sh"
+            require(wrapper.is_file() and not wrapper.is_symlink(),
+                    "source-owned AOT publication wrapper missing")
+            published = temporary / (filename + ".production")
+            env = os.environ.copy()
+            env.update({"ORESLANG_LLVMC": str(compiler),
+                        "ORES_NO_GC_IR_AUDIT": str(auditor),
+                        "CLANG": str(clang)})
+            process = run(["bash", str(wrapper), str(source), str(published)],
+                          timeout=60, env=env)
+            require(process.returncode == 0 and published.is_file(),
+                    "production AOT publisher failed for " + filename)
+            actual = run([str(published)], timeout=10)
+            require(actual.returncode == expected and
+                    source.read_bytes() == original,
+                    "production AOT guest failed or source mutated")
             for receipt in receipts:
                 print(receipt)
                 count += 1
+            production_count += 1
+            print("NATIVE_ATTO_SUM_PRODUCTION_AOT_PASS|source=" + filename +
+                  "|exit=" + str(expected) +
+                  "|auditor_sha256=" + sha(auditor.read_bytes()) +
+                  "|binary_sha256=" + sha(published.read_bytes()))
+        # Negative AOT publisher: a missing/failing auditor must leave an
+        # existing output untouched; a compiler failure alone is not evidence.
+        sentinel = temporary / "preexisting-aot"
+        original_output = b"preexisting-binary-kept-on-audit-failure"
+        failed_auditor = temporary / "failing-auditor"
+        failed_auditor.write_text(
+            "#!/bin/sh\necho AUDIT_DENIED_PROBE >&2\nexit 17\n")
+        failed_auditor.chmod(0o700)
+        for label, candidate in (("missing", temporary / "absent-auditor"),
+                                 ("denied", failed_auditor)):
+            sentinel.write_bytes(original_output)
+            env = os.environ.copy()
+            env.update({"ORESLANG_LLVMC": str(compiler),
+                        "ORES_NO_GC_IR_AUDIT": str(candidate),
+                        "CLANG": str(clang)})
+            rejected = run(["bash", str(root / "scripts" / "compile-aot.sh"),
+                            str(fixtures / POSITIVES[0][0]), str(sentinel)],
+                           timeout=60, env=env)
+            expected_marker = (b"Build oreslang-no-gc-ir-audit" if
+                               label == "missing" else b"AUDIT_DENIED_PROBE")
+            require(rejected.returncode != 0 and
+                    expected_marker in rejected.stderr and
+                    sentinel.read_bytes() == original_output,
+                    "production AOT auditor " + label + " negative escaped")
         negatives = 0
         for filename, diagnostic in NEGATIVES:
             source = fixtures / filename
@@ -131,11 +244,13 @@ def main():
                     "wrong rejection diagnostic for " + filename)
             require(source.read_bytes() == original, "negative source mutated")
             negatives += 1
-    require(count == 2 * len(POSITIVES) and negatives == len(NEGATIVES),
-            "native parity matrix incomplete")
+    require(count == 2 * len(POSITIVES) and
+            production_count == len(POSITIVES) and
+            negatives == len(NEGATIVES), "native parity matrix incomplete")
     print("NATIVE_ATTO_SUM_MATRIX_PASS|executed=" + str(count) +
+          "|production_aot=" + str(production_count) +
           "|compiler_rejections=" + str(negatives) +
-          "|clang_levels=O0,O2|synthetic_ir=NO")
+          "|no_gc_audited=YES|clang_levels=O0,O2|synthetic_ir=NO")
 
 if __name__ == "__main__":
     try:
