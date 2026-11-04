@@ -177,18 +177,56 @@ static int64_t instance(const OresVmHostApi* h, void* inst, uint8_t* cage, uint6
     return 8;
 }
 
+/* KIND_RESTARTABLE: as a lowering that proves confinement would behave. Keeps a counter in the cage, which
+ * a restart clears, and commits it to stored state, which a restart keeps. Input: op, a. */
+static int64_t restartable(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64_t self, uint32_t state, uint32_t in,
+                           uint32_t in_len, uint32_t out, uint32_t cap) {
+    (void)self; (void)cap; (void)in_len;
+    int64_t* stored = (int64_t*)((char*)inst + 16);
+    int64_t* ready = (int64_t*)inst;
+    if (!*ready) { /* a fresh or restarted actor: load what was committed */
+        WRITE_I64(cage, state, *stored);
+        *ready = 1;
+    }
+    const int64_t op = READ_I64(cage, in), a = READ_I64(cage, in + 8);
+    switch (op) {
+        case RESTART_ADD:
+            WRITE_I64(cage, state, READ_I64(cage, state) + a);
+            *stored = READ_I64(cage, state);
+            break;
+        case RESTART_ADD_THEN_TRAP: /* not committed, so a restart must not keep it */
+            WRITE_I64(cage, state, READ_I64(cage, state) + a);
+            h->trap();
+            break;
+        case RESTART_SPIN: for (;;) {}
+        case RESTART_SPIN_IN_HOST_CALLS: for (;;) (void)h->alloc(1, 1);
+        case RESTART_STACK: return recurse(0);
+        case RESTART_BAD_READ: return READ_I64(cage, 0); /* what bounds checks should have prevented */
+        case RESTART_READ_HEAP_OK: { /* a restart must give back the heap */
+            const uint32_t block = h->alloc(4096, 16);
+            WRITE_I64(cage, out, block != 0);
+            return 8;
+        }
+        default: break;
+    }
+    WRITE_I64(cage, out, READ_I64(cage, state));
+    return 8;
+}
+
 static const OresVmGuestKind kinds[] = {
-    [KIND_COUNTER] = {counter, 16, 0, 64, 0},
-    [KIND_MEMORY] = {memory, 64, 4096, 256, 0},
-    [KIND_FAULT] = {fault, 16, 0, 64, 0},
-    [KIND_RELAY] = {relay, 16, 0, 64, 0},
-    [KIND_SPAWNER] = {spawner, 16, 0, 64, 0},
-    [KIND_LARGE] = {counter, 1u << 20, 0, 64, 0},
-    [KIND_HOSTILE] = {hostile, 64, 1u << 16, 4096, 0},
-    [KIND_HOSTILE_LARGE_MAIL] = {hostile, 16, 0, 131072, 0},
+    [KIND_COUNTER] = {counter, 16, 0, 64, 0, 0, 0},
+    [KIND_MEMORY] = {memory, 64, 4096, 256, 0, 0, 0},
+    [KIND_FAULT] = {fault, 16, 0, 64, 0, 0, 0},
+    [KIND_RELAY] = {relay, 16, 0, 64, 0, 0, 0},
+    [KIND_SPAWNER] = {spawner, 16, 0, 64, 0, 0, 0},
+    [KIND_LARGE] = {counter, 1u << 20, 0, 64, 0, 0, 0},
+    [KIND_HOSTILE] = {hostile, 64, 1u << 16, 4096, 0, 0, 0},
+    [KIND_HOSTILE_LARGE_MAIL] = {hostile, 16, 0, 131072, 0, 0, 0},
     /* Ends exactly at a commit boundary with too little scratch for an aligned output. */
-    [KIND_TINY_SCRATCH] = {tiny, (2u << 20) - 12, 0, 8, 0},
-    [KIND_BURN] = {burn, 16, 0, 64, 0},
-    [KIND_INSTANCE] = {instance, 16, 0, 64, 64},
+    [KIND_TINY_SCRATCH] = {tiny, (2u << 20) - 12, 0, 8, 0, 0, 0},
+    [KIND_BURN] = {burn, 16, 0, 64, 0, 0, 0},
+    [KIND_INSTANCE] = {instance, 16, 0, 64, 64, 0, 0},
+    [KIND_RESTARTABLE] = {restartable, 16, 8192, 64, 16, 8, ORES_VM_KIND_RESTARTABLE},
+    [KIND_RESTART_UNFLAGGED] = {restartable, 16, 8192, 64, 16, 8, 0},
 };
 const OresVmGuestModule ores_vm_test_module = {ORES_VM_GUEST_ABI_VERSION, sizeof kinds / sizeof kinds[0], kinds};

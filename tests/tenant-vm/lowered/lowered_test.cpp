@@ -225,9 +225,7 @@ void overflow_in_a_host_call_costs_one_vm() {
         auto a = host.spawn_actor(v.handle, 0);
         REQUIRE_OK(a);
         CHECK_STATUS(host.call(a.actor, msg(OP_RECURSE_IN_HOST_CALLS, 0)).get().status, Status::TenantFailed);
-        const VmTerminal terminal = host.wait_closed(v.handle);
-        if (round == 0) std::printf("  %s\n", to_string(terminal.reason));
-        CHECK_REASON(terminal.reason, FailReason::StackOverflow);
+        CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::StackOverflow);
         CHECK(word(host.call(witness_actor.actor, msg(OP_ADD, 1)).get().payload) == round + 1);
     }
 }
@@ -369,25 +367,50 @@ void atto_actor_state_is_private_and_durable() {
     std::printf("  1000 durable turns; state private per actor, tenant and program\n");
 }
 
-void atto_checked_arithmetic_ends_only_its_vm() {
+// A trap in source restarts that actor from its last finished turn. Everything else carries on.
+void atto_failed_actor_restarts_from_stored_state() {
     const LoadedGuest counter = load("atto_counter");
     if (!counter.module) return;
+    CHECK(counter.module->kinds[0].flags == ORES_VM_KIND_RESTARTABLE);
     TenantVmHost host;
-    auto bystander = host.open(spec("bystander", counter));
-    REQUIRE_OK(bystander);
-    auto b = host.spawn_actor(bystander.handle, 0);
-    auto v = host.open(spec("overflows", counter));
+    VmSpec s = spec("t", counter);
+    s.limits.max_parallel_turns = 1;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, 0);
+    auto sibling = host.spawn_actor(v.handle, 0);
+    REQUIRE_OK(a);
+    REQUIRE_OK(sibling);
+    const auto max = std::numeric_limits<std::int64_t>::max();
+    CHECK(word(host.call(sibling.actor, one(3)).get().payload) == 3);
+    CHECK(word(host.call(a.actor, one(max)).get().payload) == max);
+    auto overflow = host.call(a.actor, one(1));        // checked add traps
+    auto queued = host.call(a.actor, one(-max));       // waiting behind it, on the same actor
+    const auto failed = overflow.get();
+    CHECK_STATUS(failed.status, Status::ActorRestarted);
+    CHECK_REASON(failed.failure, FailReason::Trap);
+    CHECK(word(queued.get().payload) == 0);            // mail carried over, against the restored total
+    CHECK(word(host.call(a.actor, one(5)).get().payload) == 5);
+    CHECK(word(host.call(sibling.actor, one(1)).get().payload) == 4);
+    CHECK(host.snapshot(v.handle).actor_restarts == 1);
+    CHECK(host.stats().wild_accesses == 0);
+}
+
+// The guard build has no bounds checks, so nothing shows a fault was confined: it ends the VM.
+void atto_without_bounds_checks_no_restart() {
+    TenantVmHost host;
+    const LoadedGuest guard = load("hostile_guard");
+    if (!guard.module) return;
+    CHECK(guard.module->kinds[0].flags == 0);
+    auto v = host.open(spec("t", guard));
     REQUIRE_OK(v);
     auto a = host.spawn_actor(v.handle, 0);
     REQUIRE_OK(a);
-    const auto max = std::numeric_limits<std::int64_t>::max();
-    CHECK(word(host.call(a.actor, one(max)).get().payload) == max);
-    CHECK_STATUS(host.call(a.actor, one(1)).get().status, Status::TenantFailed); // checked add traps
+    CHECK_STATUS(host.call(a.actor, msg(OP_TRAP)).get().status, Status::TenantFailed);
     CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::Trap);
-    CHECK(word(host.call(b.actor, one(3)).get().payload) == 3);
 }
 
-void atto_runaway_source_ends_only_its_vm() {
+void atto_runaway_source_ends_only_its_turn() {
     const LoadedGuest spin = load("atto_spin");
     const LoadedGuest recurse = load("atto_recurse");
     const LoadedGuest counter = load("atto_counter");
@@ -396,26 +419,90 @@ void atto_runaway_source_ends_only_its_vm() {
     auto bystander = host.open(spec("bystander", counter));
     REQUIRE_OK(bystander);
     auto b = host.spawn_actor(bystander.handle, 0);
+    auto s = host.open(spec("spinner", spin, 100));
+    auto r = host.open(spec("recursive", recurse, 500));
+    REQUIRE_OK(s);
+    REQUIRE_OK(r);
+    auto sa = host.spawn_actor(s.handle, 0);
+    auto ra = host.spawn_actor(r.handle, 0);
     std::int64_t expected = 0;
-    for (int round = 0; round < 5; ++round) {
-        auto s = host.open(spec("spinner", spin, 100));
-        REQUIRE_OK(s);
-        auto sa = host.spawn_actor(s.handle, 0);
-        CHECK_STATUS(host.call(sa.actor, one(1)).get().status, Status::TenantFailed);
-        const FailReason spun = host.wait_closed(s.handle).reason;
-        CHECK(spun == FailReason::TurnDeadline || spun == FailReason::Trap); // the optimizer's choice
-
-        auto r = host.open(spec("recursive", recurse, 500));
-        REQUIRE_OK(r);
-        auto ra = host.spawn_actor(r.handle, 0);
-        CHECK_STATUS(host.call(ra.actor, one(1)).get().status, Status::TenantFailed);
-        const FailReason recursed = host.wait_closed(r.handle).reason;
-        CHECK(recursed == FailReason::StackOverflow || recursed == FailReason::TurnDeadline || recursed == FailReason::Trap);
-        if (round == 0) std::printf("  source spin: %s, source recursion: %s\n", to_string(spun), to_string(recursed));
+    for (int round = 0; round < 8; ++round) { // the limit on restarts in a row is 8
+        const auto spun = host.call(sa.actor, one(1)).get();
+        CHECK_STATUS(spun.status, Status::ActorRestarted);
+        const auto recursed = host.call(ra.actor, one(1)).get();
+        CHECK_STATUS(recursed.status, Status::ActorRestarted);
+        if (round == 0) std::printf("  source spin: %s, source recursion: %s\n", to_string(spun.failure), to_string(recursed.failure));
         expected += 1;
         CHECK(word(host.call(b.actor, one(1)).get().payload) == expected);
     }
+    // That was the last one allowed in a row. The next ends the VM, and only that one.
+    CHECK_STATUS(host.call(sa.actor, one(1)).get().status, Status::TenantFailed);
+    const VmTerminal terminal = host.wait_closed(s.handle);
+    CHECK(terminal.phase == Phase::Failed);
+    CHECK(terminal.actor_restarts == 8);
+    CHECK(host.snapshot(r.handle).phase == Phase::Running);
+    CHECK(word(host.call(b.actor, one(1)).get().payload) == expected + 1);
     CHECK(host.stats().wild_accesses == 0);
+}
+
+// A fault exactly in the middle of a commit, after one of two fields is written. Then the same thing in a
+// build without the flip that makes a commit atomic, which must tear, or this test cannot tell.
+void atto_a_fault_in_a_commit_cannot_tear_state() {
+    const auto run = [](const char* library) {
+        const LoadedGuest pair = load(library);
+        TenantVmHost host;
+        auto v = host.open(spec("pair", pair));
+        auto a = host.spawn_actor(v.handle, 0);
+        CHECK(word(host.call(a.actor, one(10)).get().payload) == 0);
+        CHECK(word(host.call(a.actor, one(10)).get().payload) == 0);
+        CHECK_STATUS(host.call(a.actor, one(77)).get().status, Status::ActorRestarted); // faults in its commit
+        return word(host.call(a.actor, one(1)).get().payload);
+    };
+    CHECK(run("atto_pair_fault") == 0);
+    const std::int64_t torn = run("atto_pair_unsafe");
+    CHECK(torn != 0);
+    std::printf("  a fault mid-commit leaves the fields consistent; without the flip they differ by %lld\n", static_cast<long long>(torn));
+}
+
+// Kills land at random points in many turns. Two fields that must always move together show whether a
+// restart ever gets half of a commit. The window is narrow, so the case above is the one with teeth.
+void atto_kills_never_tear_stored_state() {
+    const LoadedGuest pair = load("atto_pair");
+    if (!pair.module) return;
+    TenantVmHost host;
+    VmSpec s = spec("pair", pair, 1);
+    s.limits.max_consecutive_restarts = 1000000;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, 0);
+    REQUIRE_OK(a);
+    std::uint64_t seed = 0xFEED;
+    const auto next = [&seed] {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        return seed;
+    };
+    int completed = 0, killed = 0;
+    // Find turn lengths around the deadline, so that a turn is about as likely to end as to be killed.
+    std::int64_t length = 1000;
+    for (int i = 0; i < 4000 && (killed < 300 || completed < 300); ++i) {
+        const auto r = host.call(a.actor, one(static_cast<std::int64_t>(static_cast<double>(length) * (0.5 + static_cast<double>(next() % 100) / 100.0)))).get();
+        if (r.status == Status::Ok) {
+            CHECK(word(r.payload) == 0); // first minus second, after whatever was restored
+            ++completed;
+            if (i % 8 == 0) length += length / 4;
+        } else {
+            CHECK_STATUS(r.status, Status::ActorRestarted);
+            CHECK_REASON(r.failure, FailReason::TurnDeadline);
+            ++killed;
+            if (i % 8 == 0 && length > 100) length -= length / 8;
+        }
+    }
+    std::printf("  %d turns completed and %d killed part way, with state never torn\n", completed, killed);
+    CHECK(completed > 0);
+    CHECK(killed > 0);
+    CHECK(host.snapshot(v.handle).phase == Phase::Running);
 }
 
 void atto_helper_functions_run_in_a_turn() {
@@ -454,6 +541,7 @@ void atto_main_spawns_sends_and_stops() {
         const VmTerminal terminal = host.wait_closed(v.handle); // drains every worker first
         CHECK(terminal.phase == Phase::Stopped);
         CHECK_REASON(terminal.reason, FailReason::None);
+        CHECK(terminal.actor_restarts == 0); // no worker saw mail out of order
     }
     // Everything ran: 1 main + 10 + 10 + 3 worker turns. All three workers ended and were released.
     auto v = host.open(spec("counted", fleet));
@@ -471,7 +559,8 @@ void atto_main_spawns_sends_and_stops() {
     std::printf("  main spawned 3 workers of 2 types, 23 sends in order, all stopped and released\n");
 }
 
-// Proves the check above has teeth: the same worker, sent 2 first, ends the VM.
+// Proves the check above has teeth: the same worker, sent 2 first, fails. The worker restarts, the
+// program finishes, and the VM's final report still says that a message was lost.
 void atto_misordered_mail_is_detected() {
     const LoadedGuest misordered = load("atto_misordered");
     if (!misordered.module) return;
@@ -480,9 +569,12 @@ void atto_misordered_mail_is_detected() {
     REQUIRE_OK(v);
     auto entry = host.spawn_actor(v.handle, 1);
     REQUIRE_OK(entry);
-    (void)host.call(entry.actor, {}).get(); // may see Ok, or TenantFailed if the worker got there first
+    CHECK(word(host.call(entry.actor, {}).get().payload) == 43);
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
     const VmTerminal terminal = host.wait_closed(v.handle);
-    CHECK_REASON(terminal.reason, FailReason::Trap);
+    CHECK(terminal.phase == Phase::Stopped);
+    CHECK(terminal.actor_restarts == 1);
+    CHECK(terminal.mail_lost == 1);
 }
 
 // A full mailbox cannot lose a message quietly: the VM ends and says so.
@@ -623,8 +715,11 @@ const Case cases[] = {
     {"loader_admits_only_exact_bytes", loader_admits_only_exact_bytes},
 #if defined(TENANT_VM_HAVE_ATTO)
     {"atto_actor_state_is_private_and_durable", atto_actor_state_is_private_and_durable},
-    {"atto_checked_arithmetic_ends_only_its_vm", atto_checked_arithmetic_ends_only_its_vm},
-    {"atto_runaway_source_ends_only_its_vm", atto_runaway_source_ends_only_its_vm},
+    {"atto_failed_actor_restarts_from_stored_state", atto_failed_actor_restarts_from_stored_state},
+    {"atto_without_bounds_checks_no_restart", atto_without_bounds_checks_no_restart},
+    {"atto_runaway_source_ends_only_its_turn", atto_runaway_source_ends_only_its_turn},
+    {"atto_a_fault_in_a_commit_cannot_tear_state", atto_a_fault_in_a_commit_cannot_tear_state},
+    {"atto_kills_never_tear_stored_state", atto_kills_never_tear_stored_state},
     {"atto_helper_functions_run_in_a_turn", atto_helper_functions_run_in_a_turn},
     {"atto_thousand_tenants_in_one_process", atto_thousand_tenants_in_one_process},
     {"atto_main_spawns_sends_and_stops", atto_main_spawns_sends_and_stops},

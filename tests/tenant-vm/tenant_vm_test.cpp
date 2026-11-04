@@ -4,6 +4,7 @@
 #include "oreslang/runtime/TenantVm.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -1087,6 +1088,217 @@ void hostile_host_calls_fuzz() {
                 static_cast<unsigned long long>(turns), rounds);
 }
 
+// ------------------------------------------------------------------- restart
+
+#if defined(TENANT_VM_TSAN_BUILD)
+#define RESTART_SPIN_OP RESTART_SPIN_IN_HOST_CALLS
+#else
+#define RESTART_SPIN_OP RESTART_SPIN
+#endif
+
+// A confined fault ends one turn. That actor goes on from what it committed, with its mail, and
+// its siblings never notice.
+void a_confined_fault_restarts_only_that_actor() {
+    TenantVmHost host;
+    VmSpec s = spec("t");
+    s.limits.max_parallel_turns = 1; // so mail queues up behind the failing turn
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    auto sibling = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(sibling);
+    CHECK_EQ(word(host.call(sibling.actor, words({RESTART_ADD, 7})).get().payload), 7);
+    CHECK_EQ(word(host.call(a.actor, words({RESTART_ADD, 10})).get().payload), 10);
+
+    auto failed = host.call(a.actor, words({RESTART_ADD_THEN_TRAP, 1000}));
+    auto after1 = host.call(a.actor, words({RESTART_ADD, 1})); // queued behind it
+    auto after2 = host.call(a.actor, words({RESTART_ADD, 2}));
+    const auto f = failed.get();
+    CHECK_STATUS(f.status, Status::ActorRestarted);
+    CHECK_REASON(f.failure, FailReason::Trap);
+    CHECK_EQ(word(after1.get().payload), 11); // not 1011: the failed turn did not commit. Mail carried over, in order.
+    CHECK_EQ(word(after2.get().payload), 13);
+    CHECK_EQ(word(host.call(sibling.actor, words({RESTART_ADD, 0})).get().payload), 7);
+
+    const auto snapshot = host.snapshot(v.handle);
+    CHECK(snapshot.phase == Phase::Running);
+    CHECK_EQ(snapshot.actor_restarts, std::uint64_t{1});
+    CHECK_EQ(snapshot.mail_lost, std::uint64_t{0}); // that turn had a caller, who was told
+    CHECK_EQ(host.stats().actor_restarts, std::uint64_t{1});
+
+    // Running out of stack and running out of CPU are confined too.
+    VmSpec t = spec("t2");
+    t.limits.turn_deadline_ms = 50;
+    auto w = host.open(t);
+    REQUIRE_OK(w);
+    auto b = host.spawn_actor(w.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(b);
+    CHECK_EQ(word(host.call(b.actor, words({RESTART_ADD, 5})).get().payload), 5);
+    auto overflow = host.call(b.actor, words({RESTART_STACK})).get();
+    CHECK_STATUS(overflow.status, Status::ActorRestarted);
+    CHECK_REASON(overflow.failure, FailReason::StackOverflow);
+    auto spun = host.call(b.actor, words({RESTART_SPIN_OP})).get();
+    CHECK_STATUS(spun.status, Status::ActorRestarted);
+    CHECK_REASON(spun.failure, FailReason::TurnDeadline);
+    CHECK_EQ(word(host.call(b.actor, words({RESTART_ADD, 1})).get().payload), 6);
+
+    // A restart gives the heap back, or a crash loop could use it all up.
+    auto heap = host.spawn_actor(w.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(heap);
+    int blocks = 0;
+    while (blocks < 8 && word(host.call(heap.actor, words({RESTART_READ_HEAP_OK})).get().payload) == 1) ++blocks;
+    CHECK(blocks >= 1 && blocks < 8); // it does run out
+    CHECK_STATUS(host.call(heap.actor, words({RESTART_ADD_THEN_TRAP, 0})).get().status, Status::ActorRestarted);
+    CHECK_EQ(word(host.call(heap.actor, words({RESTART_READ_HEAP_OK})).get().payload), 1);
+}
+
+// Spinning in one actor costs its turn. Before this it cost every actor in the VM.
+void a_deadline_stops_one_turn_not_its_siblings() {
+    TenantVmHost host;
+    VmSpec s = spec("t");
+    s.limits.turn_deadline_ms = 50;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto spinner = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    auto worker = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(spinner);
+    REQUIRE_OK(worker);
+    auto spin = host.call(spinner.actor, words({RESTART_SPIN_OP}));
+    std::int64_t total = 0;
+    for (int i = 0; i < 2000; ++i) {
+        const auto r = host.call(worker.actor, words({RESTART_ADD, 1})).get(); // runs alongside it
+        CHECK_STATUS(r.status, Status::Ok);
+        total += 1;
+    }
+    CHECK_STATUS(spin.get().status, Status::ActorRestarted);
+    CHECK_EQ(word(host.call(worker.actor, words({RESTART_ADD, 0})).get().payload), total);
+    CHECK(host.snapshot(v.handle).phase == Phase::Running);
+}
+
+// A crash loop has to end somewhere, and a turn that works resets the count.
+void repeated_failures_fail_the_vm() {
+    TenantVmHost host;
+    VmSpec s = spec("loop");
+    s.limits.max_consecutive_restarts = 3;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    auto sibling = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    // Failures with successes between them can go on for as long as they like.
+    for (int i = 0; i < 20; ++i) {
+        CHECK_STATUS(host.call(a.actor, words({RESTART_ADD_THEN_TRAP, 1})).get().status, Status::ActorRestarted);
+        CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+    }
+    for (int i = 0; i < 3; ++i)
+        CHECK_STATUS(host.call(a.actor, words({RESTART_ADD_THEN_TRAP, 1})).get().status, Status::ActorRestarted);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_ADD_THEN_TRAP, 1})).get().status, Status::TenantFailed);
+    const VmTerminal terminal = host.wait_closed(v.handle);
+    CHECK(terminal.phase == Phase::Failed);
+    CHECK_REASON(terminal.reason, FailReason::Trap);
+    CHECK_EQ(terminal.actor_restarts, std::uint64_t{23}); // it says what happened on the way
+    CHECK_STATUS(host.call(sibling.actor, words({RESTART_ADD, 1})).get().status, Status::StaleHandle);
+}
+
+// Restart is for faults shown to be confined. Everything else still ends the VM.
+void an_unconfined_fault_still_fails_the_vm() {
+    TenantVmHost host;
+    // A memory fault in a guest that bounds-checks should be impossible, so it says the checks failed.
+    auto v = host.open(spec("bad-read"));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_BAD_READ})).get().status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::MemoryFault);
+    // A kind that does not claim confinement is not given it, even for a checked trap.
+    auto w = host.open(spec("unflagged"));
+    REQUIRE_OK(w);
+    auto b = host.spawn_actor(w.handle, KIND_RESTART_UNFLAGGED);
+    REQUIRE_OK(b);
+    CHECK_STATUS(host.call(b.actor, words({RESTART_ADD_THEN_TRAP, 1})).get().status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(w.handle).reason, FailReason::Trap);
+    // A kill is a kill, however restartable the actor is.
+    VmSpec s = spec("killed");
+    s.limits.turn_deadline_ms = 60000;
+    auto x = host.open(s);
+    REQUIRE_OK(x);
+    auto c = host.spawn_actor(x.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(c);
+    auto spin = host.call(c.actor, words({RESTART_SPIN_OP}));
+    std::this_thread::sleep_for(Ms(20));
+    CHECK_STATUS(host.kill(x.handle), Status::Ok);
+    CHECK_STATUS(spin.get().status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(x.handle).reason, FailReason::HostKill);
+}
+
+// A fire-and-forget message that fails has no caller to tell, so the VM keeps count, and a clean stop
+// still says so. A failed run must not look like a clean finish.
+void a_clean_stop_still_reports_failures() {
+    TenantVmHost host;
+    auto v = host.open(spec("t"));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_ADD_THEN_TRAP, 1})).get().status, Status::ActorRestarted);
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
+    const VmTerminal terminal = host.wait_closed(v.handle);
+    CHECK(terminal.phase == Phase::Stopped);
+    CHECK_EQ(terminal.actor_restarts, std::uint64_t{1});
+    // A stopping actor that fails on its last message is released all the same.
+    auto w = host.open(spec("stopping"));
+    REQUIRE_OK(w);
+    auto b = host.spawn_actor(w.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(b);
+    auto last = host.call(b.actor, words({RESTART_ADD_THEN_TRAP, 1}));
+    CHECK_STATUS(host.stop_actor(b.actor), Status::Ok);
+    CHECK_STATUS(last.get().status, Status::ActorRestarted);
+    CHECK_EQ(host.snapshot(w.handle).live_actors, std::size_t{0});
+}
+
+// Many actors failing, stopping and being killed at once, for the sanitizers to look at.
+void restart_stress() {
+    TenantVmHost host;
+    std::vector<std::thread> threads;
+    std::atomic<std::uint64_t> restarted{0};
+    for (int t = 0; t < 6; ++t) {
+        threads.emplace_back([&, t] {
+            std::uint64_t seed = 0xABC + t;
+            const auto next = [&seed] {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                return seed;
+            };
+            for (int round = 0; round < 40; ++round) {
+                VmSpec s = spec("stress-" + std::to_string(t) + "-" + std::to_string(round));
+                s.limits.turn_deadline_ms = 5;
+                s.limits.max_consecutive_restarts = 4;
+                auto v = host.open(s);
+                if (v.status != Status::Ok) continue;
+                std::vector<VmActor> actors;
+                for (int i = 0; i < 6; ++i) actors.push_back(host.spawn_actor(v.handle, KIND_RESTARTABLE).actor);
+                std::vector<std::future<TurnResult>> pending;
+                for (int i = 0; i < 60; ++i) {
+                    const auto op = std::array<std::int64_t, 5>{RESTART_ADD, RESTART_ADD, RESTART_ADD_THEN_TRAP, RESTART_SPIN_OP, RESTART_STACK}[next() % 5];
+                    pending.push_back(host.call(actors[next() % actors.size()], words({op, 1})));
+                    if (next() % 16 == 0) host.stop_actor(actors[next() % actors.size()]);
+                }
+                if (next() & 1) host.kill(v.handle);
+                else host.begin_shutdown(v.handle);
+                for (auto& f : pending) {
+                    if (f.get().status == Status::ActorRestarted) restarted.fetch_add(1);
+                }
+                host.wait_closed(v.handle);
+            }
+        });
+    }
+    for (auto& thread : threads) thread.join();
+    CHECK(restarted.load() > 0);
+    CHECK_EQ(host.stats().queued_bytes, std::uint64_t{0});
+    std::printf("  %llu turns failed and restarted, across 240 VMs ended in every way\n", static_cast<unsigned long long>(restarted.load()));
+}
+
 struct Case { const char* name; void (*run)(); };
 const Case cases[] = {
     {"equal_offsets_are_different_memory", equal_offsets_are_different_memory},
@@ -1119,6 +1331,12 @@ const Case cases[] = {
     {"instance_memory_is_per_actor_and_outside_the_cage", instance_memory_is_per_actor_and_outside_the_cage},
     {"heap_free_reuses_blocks_and_tolerates_abuse", heap_free_reuses_blocks_and_tolerates_abuse},
     {"hostile_host_calls_fuzz", hostile_host_calls_fuzz},
+    {"a_confined_fault_restarts_only_that_actor", a_confined_fault_restarts_only_that_actor},
+    {"a_deadline_stops_one_turn_not_its_siblings", a_deadline_stops_one_turn_not_its_siblings},
+    {"repeated_failures_fail_the_vm", repeated_failures_fail_the_vm},
+    {"an_unconfined_fault_still_fails_the_vm", an_unconfined_fault_still_fails_the_vm},
+    {"a_clean_stop_still_reports_failures", a_clean_stop_still_reports_failures},
+    {"restart_stress", restart_stress},
     {"thousand_vms_in_one_process", thousand_vms_in_one_process},
 };
 } // namespace

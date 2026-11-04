@@ -107,14 +107,53 @@ static Blob* enter(const OresVmHostApi* host, void* raw, uint8_t* cage, uint32_t
 }
 
 #if defined(ORES_VM_SOURCE_ACTOR)
+/* What a restarted actor gets back: its fields as of its last turn that finished. A kill can land
+ * anywhere, so a turn writes the slot not in use, then flips `version` with one store. Whatever
+ * happens, the slot it names is complete. Version 0 means nothing is committed yet. */
+enum { STORED_FIELDS = 16 };
+typedef struct {
+    uint32_t version;
+    uint32_t reserved;
+    int64_t slots[2][STORED_FIELDS];
+} Stored;
+
+/* Only bounds checks show that a fault in this actor touched nothing outside it. */
+#if defined(WASM_RT_MEMCHECK_BOUNDS_CHECK) && WASM_RT_MEMCHECK_BOUNDS_CHECK
+#define ORES_VM_ACTOR_FLAGS ORES_VM_KIND_RESTARTABLE
+#else
+#define ORES_VM_ACTOR_FLAGS 0
+#endif
+
+/* Only in test builds, to land a fault exactly in a commit, and to show the test can tell: the unsafe
+ * variant writes over the slot in use, which is the bug the flip exists to prevent. */
+#if defined(ORES_VM_TEST_COMMIT_FAULT_ON)
+#define ORES_VM_COMMIT_FAULT_POINT(message, i) \
+    do { if ((message) == ORES_VM_TEST_COMMIT_FAULT_ON && (i) == 0) wasm_rt_trap(WASM_RT_TRAP_OOB); } while (0)
+#else
+#define ORES_VM_COMMIT_FAULT_POINT(message, i) do {} while (0)
+#endif
+#if defined(ORES_VM_TEST_UNSAFE_COMMIT)
+#define ORES_VM_COMMIT_SLOT(version) 1u
+#else
+#define ORES_VM_COMMIT_SLOT(version) (version)
+#endif
+
 /* Compiled actors take and return one i64 today. kinds.inc lists one line per actor type. */
-#define ORES_VM_ACTOR(index, init, on_message)                                                                        \
+#define ORES_VM_ACTOR(index, init, on_message, fields, field_get, field_set)                                          \
     static int64_t actor_turn_##index(const OresVmHostApi* host, void* raw, uint8_t* cage, uint64_t self, uint32_t state, \
                                       uint32_t input, uint32_t input_length, uint32_t output, uint32_t capacity) {      \
         (void)self;                                                                                                   \
         Blob* blob = enter(host, raw, cage, state);                                                                   \
+        Stored* stored = (Stored*)((char*)raw + sizeof(Blob));                                                        \
+        const uint32_t count = fields(&blob->instance);                                                               \
+        if (count > STORED_FIELDS) wasm_rt_trap(WASM_RT_TRAP_OOB);                                                    \
         if (!blob->ready) {                                                                                           \
             init(&blob->instance);                                                                                    \
+            const uint32_t version = __atomic_load_n(&stored->version, __ATOMIC_ACQUIRE);                             \
+            if (version) {                                                                                            \
+                for (uint32_t i = 0; i < count; ++i)                                                                  \
+                    field_set(&blob->instance, i, (uint64_t)stored->slots[version & 1][i]);                           \
+            }                                                                                                         \
             blob->ready = 1;                                                                                          \
         }                                                                                                             \
         int64_t message;                                                                                              \
@@ -122,10 +161,18 @@ static Blob* enter(const OresVmHostApi* host, void* raw, uint8_t* cage, uint32_t
         if (capacity < sizeof message) return -3;                                                                     \
         memcpy(&message, cage + input, sizeof message);                                                               \
         const int64_t reply = (int64_t)on_message(&blob->instance, (uint64_t)message);                                \
+        const uint32_t next = __atomic_load_n(&stored->version, __ATOMIC_RELAXED) + 1;                                \
+        const uint32_t committed = ORES_VM_COMMIT_SLOT(next ? next : 2);                                              \
+        for (uint32_t i = 0; i < count; ++i) {                                                                        \
+            stored->slots[committed & 1][i] = (int64_t)field_get(&blob->instance, i);                                 \
+            ORES_VM_COMMIT_FAULT_POINT(message, i);                                                                   \
+        }                                                                                                             \
+        __atomic_store_n(&stored->version, committed, __ATOMIC_RELEASE);                                              \
         memcpy(cage + output, &reply, sizeof reply);                                                                  \
         return sizeof reply;                                                                                          \
     }
-/* The program's main: runs once, in a turn of its own kind, and replies with its result. */
+/* The program's main: runs once, in a turn of its own kind, and replies with its result. It is not
+ * restartable: it may already have spawned and sent, and running it again would do so twice. */
 #define ORES_VM_MAIN(index, entry)                                                                                    \
     static int64_t main_turn(const OresVmHostApi* host, void* raw, uint8_t* cage, uint64_t self, uint32_t state,       \
                              uint32_t input, uint32_t input_length, uint32_t output, uint32_t capacity) {               \
@@ -142,8 +189,9 @@ static Blob* enter(const OresVmHostApi* host, void* raw, uint8_t* cage, uint32_t
 #include "kinds.inc"
 #undef ORES_VM_ACTOR
 #undef ORES_VM_MAIN
-#define ORES_VM_ACTOR(index, init, on_message) {actor_turn_##index, ORES_VM_MEMORY_BYTES, 0, ORES_VM_SCRATCH_BYTES, sizeof(Blob)},
-#define ORES_VM_MAIN(index, entry) {main_turn, ORES_VM_MEMORY_BYTES, 0, ORES_VM_SCRATCH_BYTES, sizeof(Blob)},
+#define ORES_VM_ACTOR(index, init, on_message, fields, field_get, field_set) \
+    {actor_turn_##index, ORES_VM_MEMORY_BYTES, 0, ORES_VM_SCRATCH_BYTES, sizeof(Blob), sizeof(Stored), ORES_VM_ACTOR_FLAGS},
+#define ORES_VM_MAIN(index, entry) {main_turn, ORES_VM_MEMORY_BYTES, 0, ORES_VM_SCRATCH_BYTES, sizeof(Blob), 0, 0},
 static const OresVmGuestKind kinds[] = {
 #include "kinds.inc"
 };
@@ -155,7 +203,7 @@ static int64_t turn(const OresVmHostApi* host, void* raw, uint8_t* cage, uint64_
     blob->ready = 1;
     return (int64_t)w2c_guest_turn(&blob->instance, self, 0, input - state, input_length, output - state, capacity);
 }
-static const OresVmGuestKind kinds[] = {{turn, ORES_VM_MEMORY_BYTES, 0, ORES_VM_SCRATCH_BYTES, sizeof(Blob)}};
+static const OresVmGuestKind kinds[] = {{turn, ORES_VM_MEMORY_BYTES, 0, ORES_VM_SCRATCH_BYTES, sizeof(Blob), 0, 0}};
 #endif
 
 __attribute__((visibility("default"))) const OresVmGuestModule ores_vm_guest_module = {

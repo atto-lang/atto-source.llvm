@@ -1,0 +1,18 @@
+// Two fields that must always move together, each behind work that takes as long as the message says.
+// The reply is first minus second. Anything but zero means a restart brought back half of a commit.
+fnc one_after_work(int n, int total): int {
+  if (n eq 0) { return 1; } fi
+  return one_after_work(n - 1, total + n);
+}
+define actor Pair as {
+  let first: int = 0;
+  let second: int = 0;
+  pub fnc on_message(int n): int {
+    first = first + one_after_work(n, 0);
+    second = second + one_after_work(n, 0);
+    return first - second;
+  }
+}
+pub fnc main(): int {
+  return 0;
+}

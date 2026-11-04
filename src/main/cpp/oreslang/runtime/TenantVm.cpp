@@ -50,6 +50,7 @@ const char* to_string(Status s) noexcept {
         case Status::TenantFailed: return "TenantFailed";
         case Status::HostClosed: return "HostClosed";
         case Status::SignalHandlerLost: return "SignalHandlerLost";
+        case Status::ActorRestarted: return "ActorRestarted";
     }
     return "Unknown";
 }
@@ -123,7 +124,8 @@ bool valid_module(const OresVmGuestModule* m) {
     for (std::uint32_t i = 0; i < m->kind_count; ++i) {
         const OresVmGuestKind& k = m->kinds[i];
         const std::uint64_t total = std::uint64_t{k.state_bytes} + k.heap_bytes + k.scratch_bytes;
-        if (!k.turn || k.scratch_bytes == 0 || total > kMaxActorBytes || k.instance_bytes > kMaxInstanceBytes) return false;
+        if (!k.turn || k.scratch_bytes == 0 || total > kMaxActorBytes || k.instance_bytes > kMaxInstanceBytes ||
+            k.stored_bytes > kMaxInstanceBytes || (k.flags & ~std::uint32_t{ORES_VM_KIND_RESTARTABLE}) != 0) return false;
     }
     return true;
 }
@@ -141,7 +143,8 @@ struct Actor {
     std::uint32_t region_bytes = 0;
     std::uint32_t heap_used = 0;
     std::unique_ptr<std::uint32_t[]> heap_free; // per size class, allocated on the first free
-    std::unique_ptr<std::uint8_t[]> instance;   // outside the cage
+    std::unique_ptr<std::uint8_t[]> instance;   // outside the cage: instance_bytes, then stored_bytes
+    std::uint32_t consecutive_restarts = 0;
     std::deque<Mail> mailbox;
     bool live = false;
     bool running = false;
@@ -167,6 +170,8 @@ struct Vm {
     std::uint64_t queued_bytes = 0;
     std::uint64_t instance_bytes = 0;
     std::atomic<std::uint64_t> vtime_ns{0}; // the CPU this VM has been charged, for fair scheduling
+    std::uint64_t actor_restarts = 0;
+    std::uint64_t mail_lost = 0;
     std::uint32_t running = 0;
     bool enqueued = false;
     bool retired = false;
@@ -195,6 +200,9 @@ struct Carrier {
     std::atomic<std::uint64_t> vm_generation{0};
     std::atomic<std::uint64_t> deadline_ms{0};
     std::atomic<std::uint64_t> started_ns{0};
+    std::atomic<bool> restartable_turn{false};
+    // Which turn the watchdog stopped for its deadline, as opposed to its VM having failed.
+    std::atomic<std::uint64_t> deadline_abort_seq{0};
 
     // Written only by the watchdog.
     std::uint64_t watched_seq = 0;
@@ -204,6 +212,8 @@ struct Carrier {
     sigjmp_buf resume;
     FailReason trap_reason = FailReason::None;
     std::uintptr_t fault_address = 0;
+    bool trap_was_checked = false; // lowered code stopped itself, as opposed to a signal stopping it
+    std::uint64_t current_seq = 0; // only this thread reads this
 
     // Host-call context for the current turn; only this thread reads these.
     void* core = nullptr; // TenantVmHost::Core
@@ -287,6 +297,7 @@ void trap_from_guest() {
     c->in_guest = 0;
     c->fault_address = 0;
     c->trap_reason = FailReason::Trap;
+    c->trap_was_checked = true;
     siglongjmp(c->resume, 1);
 }
 
@@ -373,6 +384,7 @@ struct TenantVmHost::Core {
     bool stopping = false;
 
     std::atomic<std::uint64_t> queued_bytes{0};
+    std::atomic<std::uint64_t> actor_restarts{0};
     mutable std::atomic<std::uint64_t> wild_accesses{0}; // counted while classifying a fault
 
     std::vector<std::unique_ptr<Carrier>> carriers;
@@ -475,34 +487,86 @@ struct TenantVmHost::Core {
         TurnResult result = execute(c, vm, *actor, slot, mail);
 
         bool trapped = false;
+        bool checked = false;
         FailReason reason = FailReason::None;
         std::uint64_t fault_offset = 0;
         if (c->trap_reason != FailReason::None) {
             trapped = true;
+            checked = c->trap_was_checked;
             reason = classify(*vm, c, fault_offset);
             c->trap_reason = FailReason::None;
+            if (reason == FailReason::HostKill && c->deadline_abort_seq.load(std::memory_order_seq_cst) == c->current_seq)
+                reason = FailReason::TurnDeadline;
             if (reason != FailReason::HostKill) traps_contained.fetch_add(1, std::memory_order_relaxed);
         }
-        if (trapped && reason != FailReason::HostKill) fail(vm, reason, fault_offset);
 
+        bool restarted = false;
         bool over_budget = false;
+        bool escalate = trapped && reason != FailReason::HostKill;
         {
             std::lock_guard<std::mutex> lock(vm->mutex);
-            actor->running = false;
-            --vm->running;
-            const std::uint64_t budget = vm->spec.limits.cpu_budget_ms;
-            over_budget = budget && vm->cpu_ns.load(std::memory_order_relaxed) / 1000000 > budget;
             const Phase phase = vm->current_phase();
-            if (phase == Phase::Running || phase == Phase::Quiescing) {
-                if (actor->stopping && actor->mailbox.empty()) release_actor_locked(*vm, *actor, slot);
-                else make_ready_locked(vm, slot);
-                schedule_locked(vm);
+            const bool alive = phase == Phase::Running || phase == Phase::Quiescing;
+            if (!trapped) {
+                actor->consecutive_restarts = 0;
+            } else if (alive && confined_to_actor(*actor, reason, checked) &&
+                       actor->consecutive_restarts < vm->spec.limits.max_consecutive_restarts) {
+                ++actor->consecutive_restarts;
+                reset_actor_locked(*vm, *actor);
+                ++vm->actor_restarts;
+                if (!mail.has_promise) ++vm->mail_lost;
+                actor_restarts.fetch_add(1, std::memory_order_relaxed);
+                restarted = true;
+                escalate = false;
             }
+            if (!escalate) finish_turn_locked(vm, *actor, slot, over_budget);
+        }
+        if (restarted) {
+            result = TurnResult{};
+            result.status = Status::ActorRestarted;
+            result.failure = reason;
+        }
+        if (escalate) {
+            // Fails the VM first, so that nothing else can run in this actor once it is idle.
+            fail(vm, reason, fault_offset);
+            std::lock_guard<std::mutex> lock(vm->mutex);
+            finish_turn_locked(vm, *actor, slot, over_budget);
         }
         // After the bookkeeping, so that a caller acting on this result sees the actor idle.
         if (mail.has_promise) mail.promise.set_value(std::move(result));
         if (over_budget) fail(vm, FailReason::CpuBudget, 0);
         maybe_retire(vm);
+    }
+
+    void finish_turn_locked(const std::shared_ptr<Vm>& vm, Actor& actor, std::uint32_t slot, bool& over_budget) {
+        actor.running = false;
+        --vm->running;
+        const std::uint64_t budget = vm->spec.limits.cpu_budget_ms;
+        over_budget = budget && vm->cpu_ns.load(std::memory_order_relaxed) / 1000000 > budget;
+        const Phase phase = vm->current_phase();
+        if (phase == Phase::Running || phase == Phase::Quiescing) {
+            if (actor.stopping && actor.mailbox.empty()) release_actor_locked(*vm, actor, slot);
+            else make_ready_locked(vm, slot);
+            schedule_locked(vm);
+        }
+    }
+
+    // Only where the fault itself shows that memory outside this actor is untouched. A bounds-checked
+    // guest stopping itself did so before the access. Running out of stack or CPU touches nothing.
+    // A memory fault in such a guest should be impossible, so it says the checks failed, and is not
+    // something to carry on from in this VM.
+    static bool confined_to_actor(const Actor& actor, FailReason reason, bool checked) {
+        if (!(actor.kind->flags & ORES_VM_KIND_RESTARTABLE)) return false;
+        return (reason == FailReason::Trap && checked) || reason == FailReason::StackOverflow ||
+               reason == FailReason::TurnDeadline;
+    }
+
+    // As it was when spawned, except for what the guest committed to its stored state, and its mail.
+    void reset_actor_locked(Vm& vm, Actor& actor) {
+        std::memset(vm.cage + actor.region, 0, actor.region_bytes);
+        if (actor.kind->instance_bytes) std::memset(actor.instance.get(), 0, actor.kind->instance_bytes);
+        actor.heap_used = 0;
+        actor.heap_free.reset();
     }
 
     FailReason classify(const Vm& vm, Carrier* c, std::uint64_t& fault_offset) const {
@@ -562,11 +626,13 @@ struct TenantVmHost::Core {
         c->vm = &shared;
         c->actor = &actor;
         c->trap_reason = FailReason::None;
+        c->trap_was_checked = false;
         const std::uint64_t started = now_ns();
         c->started_ns.store(started, std::memory_order_relaxed);
         c->deadline_ms.store(vm.spec.limits.turn_deadline_ms, std::memory_order_relaxed);
+        c->restartable_turn.store((kind->flags & ORES_VM_KIND_RESTARTABLE) != 0, std::memory_order_relaxed);
         c->vm_generation.store(vm.generation, std::memory_order_seq_cst);
-        c->turn_seq.fetch_add(1, std::memory_order_seq_cst); // now odd
+        c->current_seq = c->turn_seq.fetch_add(1, std::memory_order_seq_cst) + 1; // now odd
         std::int64_t value = 0;
         bool completed = false;
         // Pairs with fail(): it publishes the phase and then scans carriers, this announces
@@ -665,10 +731,11 @@ struct TenantVmHost::Core {
         if (v.live_actors >= v.spec.limits.max_actors) return Status::ActorQuota;
         const auto bytes = static_cast<std::uint32_t>(align_up(
             std::uint64_t{kind->state_bytes} + kind->heap_bytes + kind->scratch_bytes, kAlignment));
-        if (kind->instance_bytes > v.spec.limits.heap_bytes - std::min(v.spec.limits.heap_bytes, v.instance_bytes))
+        if (std::uint64_t{kind->instance_bytes} + kind->stored_bytes > v.spec.limits.heap_bytes - std::min(v.spec.limits.heap_bytes, v.instance_bytes))
             return Status::HeapBudget;
         std::unique_ptr<std::uint8_t[]> instance;
-        if (kind->instance_bytes) instance.reset(new std::uint8_t[kind->instance_bytes]());
+        const std::uint64_t instance_total = std::uint64_t{kind->instance_bytes} + kind->stored_bytes;
+        if (instance_total) instance.reset(new std::uint8_t[instance_total]());
         std::uint32_t region = 0;
         if (!allocate_region_locked(v, bytes, region)) return Status::HeapBudget;
         std::uint32_t slot;
@@ -686,7 +753,8 @@ struct TenantVmHost::Core {
         actor.heap_used = 0;
         actor.heap_free.reset();
         actor.instance = std::move(instance);
-        v.instance_bytes += kind->instance_bytes;
+        v.instance_bytes += std::uint64_t{kind->instance_bytes} + kind->stored_bytes;
+        actor.consecutive_restarts = 0;
         actor.live = true;
         actor.stopping = false;
         ++v.live_actors;
@@ -699,7 +767,7 @@ struct TenantVmHost::Core {
         std::memset(vm.cage + actor.region, 0, actor.region_bytes);
         vm.free_regions[actor.region_bytes].push_back(actor.region);
         vm.used -= actor.region_bytes;
-        vm.instance_bytes -= actor.kind->instance_bytes;
+        vm.instance_bytes -= std::uint64_t{actor.kind->instance_bytes} + actor.kind->stored_bytes;
         actor.instance.reset();
         actor.heap_free.reset();
         actor.live = false;
@@ -953,6 +1021,11 @@ struct TenantVmHost::Core {
         terminal.phase = vm->current_phase();
         terminal.generation = vm->generation;
         {
+            std::lock_guard<std::mutex> lock(vm->mutex);
+            terminal.actor_restarts = vm->actor_restarts;
+            terminal.mail_lost = vm->mail_lost;
+        }
+        {
             std::lock_guard<std::mutex> lock(registry_mutex);
             admitted_heap -= vm->spec.limits.heap_bytes;
             by_generation.erase(vm->generation);
@@ -992,6 +1065,15 @@ struct TenantVmHost::Core {
                 if (have_cpu && !cpu_spent && wall < deadline_ns * kWallBackstopFactor) continue;
                 const std::uint64_t generation = c.vm_generation.load(std::memory_order_seq_cst);
                 if (c.turn_seq.load(std::memory_order_seq_cst) != seq) continue;
+                if (c.restartable_turn.load(std::memory_order_relaxed)) {
+                    // Stop this turn alone. If it was the last restart allowed, the carrier fails the
+                    // VM on the way out. The sequence means a late signal cannot hit the next turn.
+                    c.deadline_abort_seq.store(seq, std::memory_order_seq_cst);
+                    c.abort_seq.store(seq, std::memory_order_seq_cst);
+                    pthread_kill(c.thread, kInterruptSignal);
+                    kills_delivered.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
                 std::shared_ptr<Vm> vm;
                 {
                     std::lock_guard<std::mutex> lock(registry_mutex);
@@ -1256,6 +1338,8 @@ VmSnapshot TenantVmHost::snapshot(const VmHandle& handle) const {
     out.cpu_ns = vm->cpu_ns.load(std::memory_order_relaxed);
     out.live_actors = vm->live_actors;
     out.inflight = vm->inflight;
+    out.actor_restarts = vm->actor_restarts;
+    out.mail_lost = vm->mail_lost;
     return out;
 }
 
@@ -1268,6 +1352,7 @@ HostStats TenantVmHost::stats() const {
     out.kills_delivered = core_->kills_delivered.load();
     out.wild_accesses = core_->wild_accesses.load();
     out.queued_bytes = core_->queued_bytes.load();
+    out.actor_restarts = core_->actor_restarts.load();
     return out;
 }
 

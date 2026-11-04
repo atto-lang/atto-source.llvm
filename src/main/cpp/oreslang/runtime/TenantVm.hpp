@@ -9,7 +9,8 @@
 //
 // What a VM gives a tenant:
 //  - Heap: a private address-space cage. Guest code addresses it by offset (see the ABI).
-//  - Faults: a trap unwinds that VM's turns. The carrier thread and every other VM go on.
+//  - Faults: a fault proven confined to one actor restarts that actor from its stored state, with its
+//    queued mail kept. Any other fault ends that VM. The carrier thread and every other VM go on.
 //  - Termination: a VM can be killed while spinning, with no cooperation from guest code,
 //    by interrupting its carriers. All its memory is discarded, so nothing needs unwinding.
 //  - Quotas: memory, actors, mailboxes, queued mail bytes, per-turn deadline, cumulative CPU.
@@ -50,7 +51,8 @@ enum class Status {
     ReplyTooLarge,
     TenantFailed,
     HostClosed,
-    SignalHandlerLost // another component replaced our fault handler, so a guest fault would be fatal
+    SignalHandlerLost, // another component replaced our fault handler, so a guest fault would be fatal
+    ActorRestarted     // this turn failed. The actor restarted from its stored state and goes on
 };
 const char* to_string(Status status) noexcept;
 
@@ -80,6 +82,9 @@ struct VmLimits {
     std::uint32_t max_reply_bytes = 64 * 1024;
     std::uint32_t turn_deadline_ms = 1000; // CPU time of one turn, with a wall-clock backstop
     std::uint64_t cpu_budget_ms = 0;       // cumulative turn time, 0 = unlimited
+    // Restarts of one actor in a row before its VM fails. A crash loop has to end somewhere, and a
+    // turn that succeeds resets the count.
+    std::uint32_t max_consecutive_restarts = 8;
 };
 
 struct VmSpec {
@@ -106,6 +111,9 @@ struct VmTerminal {
     FailReason reason = FailReason::None;
     std::uint64_t generation = 0;
     std::uint64_t fault_offset = 0; // within the cage, when reason == MemoryFault
+    // A VM can stop cleanly after some of its turns failed. These keep that from looking like a clean run.
+    std::uint64_t actor_restarts = 0;
+    std::uint64_t mail_lost = 0; // restarts whose failed turn had no caller to tell
     std::string detail;
 };
 
@@ -119,11 +127,14 @@ struct VmSnapshot {
     std::uint64_t cpu_ns = 0;
     std::size_t live_actors = 0;
     std::size_t inflight = 0;
+    std::uint64_t actor_restarts = 0;
+    std::uint64_t mail_lost = 0;
 };
 
 struct TurnResult {
     Status status = Status::HostClosed;
     std::int64_t guest_code = 0;
+    FailReason failure = FailReason::None; // what ended the turn, when status is ActorRestarted
     std::vector<std::uint8_t> payload;
 };
 
@@ -160,6 +171,7 @@ struct HostStats {
     std::uint64_t kills_delivered = 0;
     std::uint64_t wild_accesses = 0;  // nonzero means a compiler-path bug, see HostLimits
     std::uint64_t queued_bytes = 0;
+    std::uint64_t actor_restarts = 0;
 };
 
 class TenantVmHost final {
