@@ -230,6 +230,35 @@ def main():
             if not result.returncode or result.stdout or 'cannot import itself' not in result.stderr:
                 raise AssertionError((alias,result.stderr))
             passed+=1
+        # Hard links share file identity without a symlink path.
+        # Cross-dialect deduplication would depend on import visitation order.
+        for first, second in (('.atto', '.ores'), ('.ores', '.atto')):
+            name=f'hardlink-cross-dialect-{first[1:]}-first'
+            directory=root/name; directory.mkdir()
+            (directory/('lib'+first)).write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            os.link(directory/('lib'+first), directory/('lib'+second))
+            (directory/'main.atto').write_text(
+                f'import module Lib as A from "./lib{first}"; '
+                f'import module Lib as B from "./lib{second}"; '
+                'pub fnc main():int{return A.answer()+B.answer();}')
+            result=run([a.compiler, str(directory/'main.atto')])
+            diagnostic='native source hard-link aliases disagree on .atto/.ores dialect'
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
+        for source_dialect, alias_dialect in (('.atto', '.ores'), ('.ores', '.atto')):
+            name=f'hardlink-self-cross-dialect-{source_dialect[1:]}'
+            directory=root/name; directory.mkdir()
+            (directory/('main'+source_dialect)).write_text(
+                f'import module Self from "./alias{alias_dialect}"; '
+                'define module Self as pub fnc main():int{return 0;} end')
+            os.link(directory/('main'+source_dialect), directory/('alias'+alias_dialect))
+            result=run([a.compiler, str(directory/('main'+source_dialect))])
+            diagnostic='native source hard-link aliases disagree on .atto/.ores dialect'
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
         # A symlink may preserve source identity but must not switch the
         # importing dialect between the canonical .atto and legacy .ores.
         # The same-suffix symlink remains permitted.
