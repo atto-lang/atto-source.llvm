@@ -45,6 +45,13 @@ llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
+
+option(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT
+    "Fail configure unless production LLVM macro CTests and Clang guests are available" OFF)
+if(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT AND NOT BUILD_TESTING)
+    message(FATAL_ERROR
+        "MACRO_LLVM_NOT_EXECUTED: strict native guest AOT gate requires BUILD_TESTING=ON")
+endif()
 if(BUILD_TESTING)
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
@@ -3629,8 +3636,6 @@ endif()
 if(BUILD_TESTING)
     # General host configurations may omit Clang, but the dedicated
     # executable-macro certification job MUST NOT silently skip native guests.
-    option(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT
-        "Fail configure when Clang is unavailable for compiled macro guests" OFF)
     find_program(ORE_NATIVE_MACRO_CLANG_EXECUTABLE NAMES clang)
     if(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT AND NOT ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
         message(FATAL_ERROR
