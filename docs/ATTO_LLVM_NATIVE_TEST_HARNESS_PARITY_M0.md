@@ -170,3 +170,15 @@ No parity claim is valid until an exact-head workflow records real steps.
 - Run source-only verifier/mutation scripts and **real compiler/Clang/no-GC
   audit/native O0/O2 guests** on an admitted original-organization runner
   before claiming any LLVM guest parity; zero-step failures are NOT_EXECUTED.
+
+### 2026-11-04: source-only verifier CLI integration bug fixed
+
+The existing verifier `--self-test` bypassed `main(argv)`; the shell harness
+calls `python3 verify_atto_guest_receipts.py OUTPUT_FILE KIND`, passing *two*
+arguments, but `main` incorrectly required three and indexed `argv[2]`.
+All real guest receipt runs would have been rejected even if the LLVM compiler
+and native outputs worked. This PR fixes the two-argument contract and adds a
+separate subprocess-based CLI regression test for all four receipt suites,
+wrong identities, forged output, oversized/symlinked files, and invalid modes.
+The old `--self-test` could not detect this integration defect. These checks
+are source-only and **do not** establish compiler execution or guest parity.
