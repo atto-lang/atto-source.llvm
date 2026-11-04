@@ -163,6 +163,24 @@ int main() {
             must_fail("unsupported project subtable " + std::to_string(i), "nested project table",
                       [&] { (void)resolve(dir/"main.atto", "+/lib"); });
         }
+        // A dotted key may contain whitespace and arbitrarily deep parts.
+        // Narrow TOML parsing must never accept unsupported project.* or
+        // [project] root.* assignments as harmless metadata.
+        const std::string dotted_keys[] = {
+            "project.root.path = \"elsewhere\"\n",
+            "project . root . path = \"elsewhere\"\n",
+            "project.logging = \"debug\"\n",
+            "\"project\" . \"root\" . \"extra\" = \"x\"\n",
+            "[project]\nroot.path = \"elsewhere\"\n",
+            "[project]\nroot . config = \"elsewhere\"\n",
+            "[project]\n\"root\" . \"config\" = \"elsewhere\"\n",
+            "[project]\n'root' . 'path' = 'elsewhere'\n",
+        };
+        for (std::size_t i = 0; i < sizeof(dotted_keys)/sizeof(dotted_keys[0]); ++i) {
+            write_text(dir/".ores.pkg.toml", schema + dotted_keys[i]);
+            must_fail("nested dotted project key " + std::to_string(i), "project.root",
+                      [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        }
         // A duplicated TOML table declaration is invalid even when no
         // root key is present. Accepting it can hide conflicting policy.
         write_text(dir/".ores.pkg.toml",
@@ -173,7 +191,7 @@ int main() {
     {
         const auto dir = temp / "unrelated-root-table-allowed";
         write_text(dir/".ores.pkg.toml",
-                   "schema_version = \"1\"\n[build.logging]\nname=\"safe\"\n[build]\nroot=\"src\"\n[project]\nname=\"demo\"\n");
+                   "schema_version = \"1\"\n[build.logging]\nname=\"safe\"\n[build]\nroot . config = \"src\"\n[project]\nname=\"demo\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
