@@ -4359,6 +4359,12 @@ private:
                     throw std::runtime_error("unknown function or wrong call arity '" +
                         expr.name + "' at byte " + std::to_string(expr.offset));
                 const auto& signature = family->second.at(expr.arguments.size());
+                // A synthetically rewritten Call must retain one origin label
+                // per argument; checking only the name binder is insufficient
+                // when scalar analysis runs independently.
+                if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size())
+                    throw std::runtime_error("invalid named call argument layout");
                 if (signature.async_source_i64)
                     throw std::runtime_error(
                         "async source call requires checked Future<int> pipeline lowering at byte " +
