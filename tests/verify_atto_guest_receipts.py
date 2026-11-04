@@ -1,71 +1,138 @@
 #!/usr/bin/env python3
-"""Fail-closed verifier for the two independent LLVM native guest smoke suites.
+"""Fail-closed, source-only verifier for independently authored LLVM guest smokes.
 
-This authenticates *shape*, not provenance. The caller must compile and execute
-the pinned .atto guest. Do not use this to forge/pass off host receipts.
+This checks exact ordered bytes and an independently observed native exit status,
+not process provenance. Only the pinned real-compiler guest runner provides
+compiler-backed evidence; this script's self-tests are never guest evidence.
 """
+import os
 import pathlib
+import re
 import stat
 import sys
+import tempfile
+
+MAX_RECEIPT_BYTES = 4096
+SUITES = {
+    "pass": (
+        b"ORES_TEST|PASS|llvm-native/arith-add|\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
+    "fail": (
+        b"ORES_TEST|FAIL|llvm-native/arith-failure|expected=42\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0\n", 1),
+    "multi-pass": (
+        b"ORES_TEST|PASS|llvm-native/multi/add|\n"
+        b"ORES_TEST|PASS|llvm-native/multi/subtract|\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0\n", 0),
+    "multi-fail": (
+        b"ORES_TEST|PASS|llvm-native/multi/add|\n"
+        b"ORES_TEST|FAIL|llvm-native/multi/subtract|expected=42\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0\n", 1),
+}
 
 
 def expected(kind: str) -> bytes:
-    if kind == "pass":
-        return (b"ORES_TEST|PASS|llvm-native/arith-add|\n"
-                b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n")
-    if kind == "fail":
-        return (b"ORES_TEST|FAIL|llvm-native/arith-failure|expected=42\n"
-                b"ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0\n")
-    raise ValueError("unknown native receipt suite")
+    if kind not in SUITES:
+        raise ValueError("unknown LLVM native guest suite")
+    return SUITES[kind][0]
 
 
 def verify(payload: bytes, kind: str, exit_code: int) -> bool:
-    # Exact ASCII, order, count, delimiter, end-of-file and summary contract.
-    # An empty/filtered/skipped-only/timeout/compiler failure cannot pass.
-    return exit_code == (0 if kind == "pass" else 1) and payload == expected(kind)
+    # Exact ASCII, case identity, order, count, delimiter, final newline, EOF
+    # and *observed* native exit status; no partial, skipped or filtered claims.
+    return kind in SUITES and exit_code == SUITES[kind][1] and payload == expected(kind)
+
+
+def read_bounded_regular(path: pathlib.Path) -> bytes:
+    # O_NONBLOCK prevents FIFO/special-file hangs; O_NOFOLLOW rejects a leaf
+    # symlink. fstat/read use the SAME descriptor to defeat leaf path swaps.
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb", buffering=0) as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_RECEIPT_BYTES:
+            raise ValueError("not a nonempty bounded regular receipt file")
+        payload = stream.read(MAX_RECEIPT_BYTES + 1)
+        after = os.fstat(stream.fileno())
+        if (len(payload) != before.st_size or before.st_size != after.st_size
+                or before.st_dev != after.st_dev or before.st_ino != after.st_ino):
+            raise ValueError("receipt changed or exceeded byte bound during read")
+        return payload
+
+
+def require_rejection(condition: bool, label: str) -> None:
+    # Never use Python 'assert': PYTHONOPTIMIZE=1 or =2 disables assertions.
+    if condition:
+        raise RuntimeError("accepted forged/malformed receipt: " + label)
 
 
 def self_test() -> None:
-    for kind, code in (("pass", 0), ("fail", 1)):
-        valid = expected(kind)
-        assert verify(valid, kind, code)
-        mutations = [
+    for kind, (valid, code) in SUITES.items():
+        if not verify(valid, kind, code):
+            raise RuntimeError("valid LLVM guest receipt rejected: " + kind)
+        variants = [
             b"", valid[:-1], valid + b"ORES_TEST|PASS|forged/x|\n",
             valid.replace(b"ORES_TEST|", b"LOG ORES_TEST|", 1),
             valid.replace(b"ORES_TEST|", b"\x1b[31mORES_TEST|", 1),
             valid.replace(b"|SUMMARY|", b"|PASS|", 1),
-            valid.replace(b"|total=1|", b"|total=2|", 1),
-            valid.replace(b"|passed=1|", b"|passed=2|", 1),
-            valid.replace(b"|failed=1|", b"|failed=0|", 1),
+            valid.replace(b"|total=", b"|total=999", 1),
+            valid.replace(b"|passed=", b"|passed=9", 1),
+            valid.replace(b"|failed=", b"|failed=9", 1),
             b"\n" + valid, valid.replace(b"\n", b"\r\n"),
-            valid.replace(b"llvm-native/", b"llvm-wrong/", 1),
+            valid.replace(b"llvm-native/", b"llvm-forged/", 1),
             valid.replace(b"|", b"\\u007c", 1),
         ]
-        for sample in mutations:
-            if sample == valid:
-                continue
-            assert not verify(sample, kind, code), "forged/malformed receipt admitted"
-        for wrong in (-1, 2, 124, 137, (1 if code == 0 else 0)):
-            assert not verify(valid, kind, wrong), "wrong execution status admitted"
-    print("PASS LLVM guest receipt source-only verifier mutations (NO_GUEST_EXECUTION)")
+        if kind.startswith("multi-"):
+            variants += [
+                valid.replace(b"ORES_TEST|PASS|llvm-native/multi/add|\n", b"", 1),
+                valid.replace(b"llvm-native/multi/add", b"llvm-native/multi/subtract", 1),
+                valid.replace(b"total=2", b"total=1", 1),
+            ]
+        for index, sample in enumerate(variants):
+            require_rejection(verify(sample, kind, code), f"{kind}/mutation-{index}")
+        for wrong in (-1, 2, 124, 137, 255, 1 if code == 0 else 0):
+            require_rejection(verify(valid, kind, wrong), f"{kind}/exit-{wrong}")
+    with tempfile.TemporaryDirectory(prefix="atto-receipt-verify-") as work:
+        parent = pathlib.Path(work)
+        regular = parent / "out"
+        regular.write_bytes(expected("pass"))
+        if read_bounded_regular(regular) != expected("pass"):
+            raise RuntimeError("valid bounded receipt rejected")
+        for label, data in (("empty", b""), ("oversize", b"X" * (MAX_RECEIPT_BYTES + 1))):
+            regular.write_bytes(data)
+            try:
+                read_bounded_regular(regular)
+            except (OSError, ValueError):
+                pass
+            else:
+                raise RuntimeError("accepted " + label + " receipt")
+        link = parent / "link"
+        link.symlink_to(regular)
+        fifo = parent / "fifo"
+        os.mkfifo(fifo)
+        for label, path in (("symlink", link), ("fifo", fifo), ("directory", parent)):
+            try:
+                read_bounded_regular(path)
+            except (OSError, ValueError):
+                pass
+            else:
+                raise RuntimeError("accepted " + label + " receipt")
+    print("PASS LLVM receipt verifier mutations (SOURCE_ONLY; NO_GUEST_EXECUTION)")
 
 
 def main(argv: list[str]) -> int:
     if argv == ["--self-test"]:
         self_test()
         return 0
-    if len(argv) != 3 or argv[2] not in ("pass", "fail"):
-        print("usage: verify_atto_guest_receipts.py OUTPUT_FILE pass|fail", file=sys.stderr)
+    if (len(argv) != 3 or argv[1] not in SUITES
+            or re.fullmatch(r"(0|[1-9][0-9]{0,2})", argv[2]) is None
+            or int(argv[2]) > 255):
+        print("usage: verify_atto_guest_receipts.py OUTPUT_FILE SUITE OBSERVED_EXIT", file=sys.stderr)
         return 2
-    path = pathlib.Path(argv[1])
     try:
-        mode = path.lstat().st_mode
-        if not stat.S_ISREG(mode) or path.is_symlink() or path.stat().st_size > 4096:
-            raise ValueError("not a bounded regular output file")
-        payload = path.read_bytes()
-        # The *actual* exit status must be checked by the shell runner too.
-        if not verify(payload, argv[2], 0 if argv[2] == "pass" else 1):
-            raise ValueError("wrong native guest receipt stream")
+        payload = read_bounded_regular(pathlib.Path(argv[0]))
+        if not verify(payload, argv[1], int(argv[2])):
+            raise ValueError("wrong guest receipt stream or observed native exit")
     except (OSError, ValueError) as exc:
         print("invalid LLVM native guest receipts: " + str(exc), file=sys.stderr)
         return 1
