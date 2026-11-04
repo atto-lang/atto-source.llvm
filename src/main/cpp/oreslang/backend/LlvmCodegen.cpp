@@ -371,8 +371,11 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            if (expr.resolved_type == ScalarType::F64)
+            if (expr.resolved_type == ScalarType::F64) {
+                if (!value->getType()->isDoubleTy())
+                    throw std::runtime_error("native f64 negate received non-double LLVM operand");
                 return builder.CreateFNeg(value, "f64.neg");
+            }
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
                 llvm::ConstantInt::get(i64, 0), value, "neg");
         }
@@ -408,8 +411,11 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Add: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-            if (expr.resolved_type == ScalarType::F64)
+            if (expr.resolved_type == ScalarType::F64) {
+                if (!left->getType()->isDoubleTy() || !right->getType()->isDoubleTy())
+                    throw std::runtime_error("native f64 addition received non-double LLVM operands");
                 return builder.CreateFAdd(left, right, "f64.add");
+            }
             if (expr.resolved_type == ScalarType::String) {
                 auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_concat",
                     llvm::FunctionType::get(i64, {i64, i64}, false));
@@ -421,16 +427,22 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-            if (expr.resolved_type == ScalarType::F64)
+            if (expr.resolved_type == ScalarType::F64) {
+                if (!left->getType()->isDoubleTy() || !right->getType()->isDoubleTy())
+                    throw std::runtime_error("native f64 subtraction received non-double LLVM operands");
                 return builder.CreateFSub(left, right, "f64.sub");
+            }
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
                 left, right, "sub");
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-            if (expr.resolved_type == ScalarType::F64)
+            if (expr.resolved_type == ScalarType::F64) {
+                if (!left->getType()->isDoubleTy() || !right->getType()->isDoubleTy())
+                    throw std::runtime_error("native f64 multiplication received non-double LLVM operands");
                 return builder.CreateFMul(left, right, "f64.mul");
+            }
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
         }
@@ -442,6 +454,8 @@ llvm::Value* lower(const Expression& expr,
                 throw std::runtime_error("native f64 division lacks checked f64/f64 typing");
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (!left->getType()->isDoubleTy() || !right->getType()->isDoubleTy())
+                throw std::runtime_error("native f64 division received non-double LLVM operands");
             return builder.CreateFDiv(left, right, "f64.div");
         }
         case Expression::Kind::Remainder: {
@@ -476,6 +490,8 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             if (expr.left->resolved_type == ScalarType::F64) {
+                if (!left->getType()->isDoubleTy() || !right->getType()->isDoubleTy())
+                    throw std::runtime_error("native f64 comparison received non-double LLVM operands");
                 llvm::Value* compared = nullptr;
                 switch (expr.kind) {
                     case Expression::Kind::Equal: compared = builder.CreateFCmpOEQ(left, right, "f64.eq"); break;
