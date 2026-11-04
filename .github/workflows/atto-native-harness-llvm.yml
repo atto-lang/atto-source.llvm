@@ -1,5 +1,5 @@
-# Source-local private GitHub Actions only. No cross-organization source mirroring.
-# A completed job with steps=[] is NOT_EXECUTED, never native compiler parity.
+# Private source-owning workflow; never export source or tokens to a carrier.
+# Zero-step failures are runner admission, NOT compiler-backed parity.
 name: AttoLang LLVM native harness executable parity (O0 O2)
 on:
   pull_request:
@@ -10,21 +10,24 @@ on:
       - 'tests/atto-native-harness/**'
       - 'tests/atto_native_harness_parity.sh'
       - 'tests/test_atto_native_parity_manifest.sh'
+      - 'tests/cmake/AttoNativeHarnessParity.cmake'
       - '.github/workflows/atto-native-harness-llvm.yml'
+  push:
+    branches: ['test/attolang-native-harness-llvm-parity-20261103']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   atto-native-executable:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
-      - name: Checkout exact private source HEAD without credential persistence
+      - name: Checkout exact source head without persistent credentials
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Bind exact Git SHA and root tree before execution
+      - name: Bind exact commit and tree
         shell: bash
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -37,13 +40,13 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard)"
           echo "ATTO_LLVM_GUEST_HEAD=$EXPECTED_HEAD"
           echo "ATTO_LLVM_GUEST_TREE=$(git rev-parse 'HEAD^{tree}')"
-      - name: Check native .atto corpus and eight negative inventory mutations (source-free)
+      - name: Verify source-free inventory and adversarial fixture mutations
         shell: bash
         run: |
           set -euo pipefail
           bash tests/atto_native_harness_parity.sh --inventory-only
           bash tests/test_atto_native_parity_manifest.sh
-      - name: Install real LLVM, Clang and CMake tools
+      - name: Install native compiler toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -51,25 +54,27 @@ jobs:
           sudo apt-get install -y build-essential cmake clang llvm-dev
           clang --version | head -n 1
           cmake --version | head -n 1
-      - name: Build production LLVM AttoLang compiler and native import security tests
+      - name: Build production LLVM AttoLang compiler and native security tests
         shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test
           test -x build/oreslang-llvmc
-      - name: Require separate source-free and compiler-backed CTest inventory
+      - name: Verify CTest source and compiler-backed registrations are separate
         shell: bash
         run: |
           set -euo pipefail
           ctest --test-dir build -N > "$RUNNER_TEMP/atto-ctest-inventory.txt"
-          grep -Eq 'Test +#[0-9]+: atto_native_harness_inventory_source_only
+          grep -Eq 'Test +#[0-9]+: atto_native_harness_inventory_source_only$' "$RUNNER_TEMP/atto-ctest-inventory.txt"
+          grep -Eq 'Test +#[0-9]+: atto_native_harness_compiler_guest_o0_o2$' "$RUNNER_TEMP/atto-ctest-inventory.txt"
+          grep -Eq 'Test +#[0-9]+: native_project_root_import_security$' "$RUNNER_TEMP/atto-ctest-inventory.txt"
+      - name: Execute native C++ import security tests
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build --output-on-failure --timeout 120 \
-            -R '^native_project_root_import_security$'
-      - name: Execute 19 canonical .atto programs at Clang O0 and O2
+          ctest --test-dir build --output-on-failure --timeout 120 -R '^native_project_root_import_security$'
+      - name: Execute 19 actual .atto guests at Clang O0 and O2
         shell: bash
         run: |
           set -euo pipefail
@@ -80,7 +85,7 @@ jobs:
           test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 3
           grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=19|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-      - name: Verify source checkout unchanged after actual native guest execution
+      - name: Assert unchanged source and exact head after execution
         shell: bash
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -95,110 +100,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: atto-llvm-native-harness-o0-o2
-          path: ${{ runner.temp }}/atto-llvm-native-parity.txt
-          if-no-files-found: warn
- "$RUNNER_TEMP/atto-ctest-inventory.txt"
-          grep -Eq 'Test +#[0-9]+: atto_native_harness_compiler_guest_o0_o2
-        shell: bash
-        run: |
-          set -euo pipefail
-          ctest --test-dir build --output-on-failure --timeout 120 \
-            -R '^native_project_root_import_security$'
-      - name: Execute 19 canonical .atto programs at Clang O0 and O2
-        shell: bash
-        run: |
-          set -euo pipefail
-          ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG="$(command -v clang)" \
-            bash tests/atto_native_harness_parity.sh --run \
-            | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-          test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 38
-          test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 3
-          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=19|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED' \
-            "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-      - name: Verify source checkout unchanged after actual native guest execution
-        shell: bash
-        env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git diff --quiet --exit-code
-          git diff --cached --quiet --exit-code
-          echo "ATTO_LLVM_VERIFIED_TREE=$(git rev-parse 'HEAD^{tree}')"
-      - name: Preserve host-observed native evidence (not ORES_TEST guest receipts)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: atto-llvm-native-harness-o0-o2
-          path: ${{ runner.temp }}/atto-llvm-native-parity.txt
-          if-no-files-found: warn
- "$RUNNER_TEMP/atto-ctest-inventory.txt"
-          grep -Eq 'Test +#[0-9]+: native_project_root_import_security
-        shell: bash
-        run: |
-          set -euo pipefail
-          ctest --test-dir build --output-on-failure --timeout 120 \
-            -R '^native_project_root_import_security$'
-      - name: Execute 19 canonical .atto programs at Clang O0 and O2
-        shell: bash
-        run: |
-          set -euo pipefail
-          ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG="$(command -v clang)" \
-            bash tests/atto_native_harness_parity.sh --run \
-            | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-          test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 38
-          test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 3
-          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=19|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED' \
-            "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-      - name: Verify source checkout unchanged after actual native guest execution
-        shell: bash
-        env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git diff --quiet --exit-code
-          git diff --cached --quiet --exit-code
-          echo "ATTO_LLVM_VERIFIED_TREE=$(git rev-parse 'HEAD^{tree}')"
-      - name: Preserve host-observed native evidence (not ORES_TEST guest receipts)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: atto-llvm-native-harness-o0-o2
-          path: ${{ runner.temp }}/atto-llvm-native-parity.txt
-          if-no-files-found: warn
- "$RUNNER_TEMP/atto-ctest-inventory.txt"
-      - name: Execute real C++ import security regression
-        shell: bash
-        run: |
-          set -euo pipefail
-          ctest --test-dir build --output-on-failure --timeout 120 \
-            -R '^native_project_root_import_security$'
-      - name: Execute 19 canonical .atto programs at Clang O0 and O2
-        shell: bash
-        run: |
-          set -euo pipefail
-          ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG="$(command -v clang)" \
-            bash tests/atto_native_harness_parity.sh --run \
-            | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-          test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 38
-          test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 3
-          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=19|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED' \
-            "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-      - name: Verify source checkout unchanged after actual native guest execution
-        shell: bash
-        env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git diff --quiet --exit-code
-          git diff --cached --quiet --exit-code
-          echo "ATTO_LLVM_VERIFIED_TREE=$(git rev-parse 'HEAD^{tree}')"
-      - name: Preserve host-observed native evidence (not ORES_TEST guest receipts)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: atto-llvm-native-harness-o0-o2
-          path: ${{ runner.temp }}/atto-llvm-native-parity.txt
+          path: |
+            ${{ runner.temp }}/atto-llvm-native-parity.txt
+            ${{ runner.temp }}/atto-ctest-inventory.txt
           if-no-files-found: warn
