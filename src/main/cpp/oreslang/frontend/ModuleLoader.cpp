@@ -121,7 +121,8 @@ private:
         throw std::runtime_error(unit.path.string() + ": " + reason);
     }
     static bool same_file(SourceIdentity left, SourceIdentity right) {
-        return left.valid && right.valid && left.device == right.device && left.inode == right.inode;
+        return left.valid && right.valid && (left.device != 0 || left.inode != 0) &&
+               left.device == right.device && left.inode == right.inode;
     }
     std::size_t visit(fs::path path, std::string text, SourceIdentity identity,
                       std::size_t depth, bool compiler_owned_library,
