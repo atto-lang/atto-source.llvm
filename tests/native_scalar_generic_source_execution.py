@@ -49,6 +49,17 @@ pub fnc main(): int { return add<int>(19, second: 23); }
     "inferred-generic-and-reordered-value": ("""fnc add<T>(T first, T second): int { return first + second; }
 pub fnc main(): int { return add(second: 23, first: 19); }
 """, 42),
+    "named-reordered-nested-calls": ("""fnc four(): int { return 4; }
+fnc two(): int { return 2; }
+fnc combine<A=int, B=A>(A first, B second): int { return first * 10 + second; }
+pub fnc main(): int { return combine<B=int, A=int>(second: two(), first: four()); }
+""", 42),
+    "member-positional-array-control": ("""pub fnc main(): int {
+    val Array<int> values = new Array<int>();
+    values.add(42);
+    return values.get(0);
+}
+""", 42),
 }
 INVALID = {
     "missing-required": ("""fnc fixed<T>(): int { return 42; }
@@ -110,6 +121,33 @@ pub fnc main(): int { return fixed<T=ArrayList<int>>(); }
     "overfull-named-value-call": ("""fnc add(int first, int second): int { return first + second; }
 pub fnc main(): int { return add(first: 19, second: 23, extra: 1); }
 """, "unknown function or wrong call arity"),
+    "unproven-named-array-get": ("""pub fnc main(): int {
+    val Array<int> values = new Array<int>();
+    values.add(42);
+    return values.get(index: 0);
+}
+""", "named native array/member arguments require checked lowering"),
+    "unproven-named-array-add": ("""pub fnc main(): int {
+    val Array<int> values = new Array<int>();
+    values.add(value: 42);
+    return values.get(0);
+}
+""", "named native array/member arguments require checked lowering"),
+    "duplicate-named-array-set": ("""pub fnc main(): int {
+    val Array<int> values = new Array<int>();
+    values.set(index: 0, index: 1);
+    return 42;
+}
+""", "duplicate named member argument"),
+    "positional-after-named-array-set": ("""pub fnc main(): int {
+    val Array<int> values = new Array<int>();
+    values.set(index: 0, 42);
+    return 42;
+}
+""", "positional member argument cannot follow named argument"),
+    "case-sensitive-value-label": ("""fnc combine<T=int>(T first, T second): int { return first * 10 + second; }
+pub fnc main(): int { return combine<T=int>(First: 4, second: 2); }
+""", "unknown named argument"),
 }
 
 _CASE_ID = re.compile(r"generics\.scalar\.[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -206,7 +244,7 @@ def verify(compiler, clang):
     with tempfile.TemporaryDirectory(prefix="oreslang-native-generics-") as tmp:
         tmp = Path(tmp)
         for name, (source, exit_code) in VALID.items():
-            path = tmp / (name + ".ores")
+            path = tmp / (name + ".atto")
             path.write_text(source)
             result = run([str(compiler), str(path)])
             if result.returncode or not result.stdout.startswith(b"; ModuleID"):
@@ -222,7 +260,7 @@ def verify(compiler, clang):
                 raise AssertionError(f"{name}: guest exit {executed.returncode}, expected {exit_code}, stderr={executed.stderr!r}")
             print(f"PASS guest {name}: {exit_code}", flush=True)
         for name, (source, diagnostic) in INVALID.items():
-            path = tmp / (name + ".ores")
+            path = tmp / (name + ".atto")
             path.write_text(source)
             result = run([str(compiler), str(path)])
             if result.returncode == 0 or result.returncode < 0 or result.stdout:
