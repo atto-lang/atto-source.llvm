@@ -97,6 +97,21 @@ set -e
 cmp -s "$target" "$work/preserved" ||
   { echo 'Clang verifier failure overwrote preserved binary' >&2; exit 1; }
 
+# Source-free compiler producing >2,000,000 bytes of IR must be stopped
+# before its output exhausts disk. Validate the specific size-denial receipt
+# and the previous linked guest's immutable identity.
+head -c 2000002 /dev/zero > "$work/oversized.ll"
+export ATTO_SOURCE_FREE_IR="$work/oversized.ll"
+set +e
+bash "$builder" "$work/dummy.atto" "$target" >"$work/out" 2>"$work/err"
+rc=$?
+set -e
+[[ "$rc" != 0 ]] &&
+  grep -Fq 'LLVM guest IR exceeds bounded size' "$work/err" ||
+  { echo 'native fuzz builder failed to classify bounded IR streaming' >&2; exit 1; }
+cmp -s "$target" "$work/preserved" ||
+  { echo 'oversized LLVM IR overwrote preserved native target' >&2; exit 1; }
+
 # An actual auditor denial must return its exit 7 and cannot be bypassed by
 # a successful compiler, a valid ABI, or an already published executable.
 export ATTO_SOURCE_FREE_IR="$work/good.ll"
@@ -158,4 +173,4 @@ for component in compiler auditor clang; do
   cmp -s "$target" "$work/preserved" ||
     { echo "timed-out $component process overwrote executable" >&2; exit 1; }
 done
-printf 'ATTO_LLVM_SOURCE_FREE_FUZZ_BUILD_GATES_PASS timeout_mutations=11 abi_negatives=2 verifier_negative=1 audit_denial=1 original_preserved=1\n'
+printf 'ATTO_LLVM_SOURCE_FREE_FUZZ_BUILD_GATES_PASS timeout_mutations=11 abi_negatives=2 verifier_negative=1 oversized_ir=1 audit_denial=1 original_preserved=1\n'
