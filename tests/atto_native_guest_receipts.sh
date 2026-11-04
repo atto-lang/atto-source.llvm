@@ -22,15 +22,16 @@ verifier="$root/tests/verify_atto_guest_receipts.py"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 declare -A original_hash
-for source in "$corpus/pass.atto" "$corpus/fail.atto" "$runtime" "$verifier"; do
+for source in "$corpus/pass.atto" "$corpus/fail.atto" "$corpus/multi-pass.atto" "$corpus/multi-fail.atto" "$runtime" "$verifier"; do
   [[ -f "$source" && ! -L "$source" ]] || die "source absent or symlinked: $source"
   original_hash["$source"]="$(sha256sum "$source" | cut -d' ' -f1)"
 done
 python3 "$verifier" --self-test
-for kind in pass fail; do
+PYTHONOPTIMIZE=2 python3 "$verifier" --self-test
+for kind in pass fail multi-pass multi-fail; do
   source="$corpus/$kind.atto"
   expected=0
-  [[ "$kind" != fail ]] || expected=1
+  [[ "$kind" != fail && "$kind" != multi-fail ]] || expected=1
   for level in 0 2; do
     ir="$tmp/$kind-O$level.ll"
     exe="$tmp/$kind-O$level.exe"
@@ -62,7 +63,7 @@ for kind in pass fail; do
       die "native guest status mismatch: $kind O$level expected=$expected got=${statuses[*]}"
     [[ ! -s "$tmp/guest.stderr" ]] ||
       die "native guest unexpected stderr: $kind O$level"
-    python3 "$verifier" "$tmp/guest.stdout" "$kind" ||
+    python3 "$verifier" "$tmp/guest.stdout" "$kind" "${statuses[0]}" ||
       die "guest-owned receipt stream invalid $kind O$level"
     printf 'ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|%s|O%s|exit=%s|guest=executed|receipt=guest_stdout\n' \
       "$kind" "$level" "$expected"
@@ -74,4 +75,4 @@ for source in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$source" | cut -d' ' -f1)" == "${original_hash["$source"]}" ]] ||
     die "guest input mutated during compiler execution: $source"
 done
-echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=2|optimizations=2|native=4|testkit=NOT_IMPLEMENTED'
+echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=4|optimizations=2|native=8|testkit=NOT_IMPLEMENTED'
