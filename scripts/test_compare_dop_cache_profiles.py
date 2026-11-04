@@ -204,6 +204,20 @@ class ThreeLayoutComparisonTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "regular file"):
                 compare(self.paths)
 
+    def test_hardlinked_evidence_is_rejected_then_recovers(self):
+        # Both paths may be regular JSON files with byte-identical contents.
+        # A second hard link must still invalidate the evidence descriptor.
+        source = self.paths["soa"]
+        alias = Path(self.folder.name) / "hardlinked-evidence.json"
+        os.link(source, alias)
+        try:
+            with self.assertRaisesRegex(ValueError, "single-link regular file"):
+                compare(self.paths)
+        finally:
+            alias.unlink()
+        # Normal single-link evidence must remain usable after unlink.
+        self.assertIn("soa", compare(self.paths)["median_rates"])
+
     def test_zero_source_tree_and_missing_l2_event_not_accepted(self):
         self.reports["aosoa"]["source_tree"] = None
         self.flush()
