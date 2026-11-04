@@ -1,0 +1,17 @@
+// AttoLang LLVM M0: compiler-owned, scalar-only test assertions.
+// This is NOT the full std/testing.atto TestCase/TestSuite/receipt protocol.
+// Exit status 0 = assertions passed; nonzero = failed. The calling guest
+// must propagate the returned status to its main() result.
+define module testing_scalar as
+  pub fnc equal_int(int actual, int expected): int {
+    return actual == expected ? 0 : 1;
+  }
+
+  pub fnc not_equal_int(int actual, int expected): int {
+    return actual != expected ? 0 : 1;
+  }
+
+  pub fnc combine_status(int first, int second): int {
+    return first != 0 ? 1 : (second != 0 ? 1 : 0);
+  }
+end
