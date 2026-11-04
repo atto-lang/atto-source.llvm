@@ -588,9 +588,9 @@ public:
                     bool experimental_rt_scalar_loop,
                     const std::vector<NativeMacroBinding>& imported_macros = {})
         : source_(source), lexer_(source), token_(lexer_.next()),
+          imported_macros_(imported_macros),
           experimental_owned_int_(experimental_owned_int),
-          experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
-          imported_macros_(imported_macros) {}
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
     // Lexer-backed, header-only discovery. This never interprets arbitrary
     // guest text as a path or as a runtime macro body.
