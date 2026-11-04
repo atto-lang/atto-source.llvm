@@ -43,6 +43,20 @@ int64_t oreslang_source_task_await_i64(void* task);
  * NOT the full generic TaskLocal<T> ABI: no arbitrary key, propagation,
  * suspend/resume or actor/request-context privilege is provided here.
  */
+/*
+ * Trusted compiler/runtime-only fixed-key substrate: eight preallocated i64
+ * cells per admitted SourceTask, zero dynamic allocations and no read beyond
+ * the key bound. Raw numeric slot selection is NEVER exposed to .atto guests:
+ * a future compiler must resolve typed static keys to slots under an
+ * ownership/type-checked AOT plan before calling this host-only API.
+ */
+#define ORES_SOURCE_TASK_LOCAL_I64_SLOTS 8u
+int oreslang_source_task_local_i64_set_slot_checked(
+    uint32_t slot, int64_t value);
+int oreslang_source_task_local_i64_get_slot_checked(
+    uint32_t slot, int64_t* out_value);
+int oreslang_source_task_local_i64_clear_slot_checked(uint32_t slot);
+
 int oreslang_source_task_local_i64_set_checked(int64_t value);
 int oreslang_source_task_local_i64_get_checked(int64_t* out_value);
 void oreslang_source_task_local_i64_set(int64_t value);
