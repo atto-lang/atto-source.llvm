@@ -1,10 +1,12 @@
 #pragma once
 
 #include "oreslang/frontend/SourceInput.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
