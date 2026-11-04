@@ -1,0 +1,121 @@
+name: AttoLang scalar v1 LLVM exact-head native i64 conformance
+on:
+  pull_request:
+    paths:
+      - 'contracts/atto-scalar-v1/**'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'tests/atto_scalar_llvm_native.py'
+      - 'tests/atto_scalar_source_unit_migration.py'
+      - 'tests/rust-harness/src/main.rs'
+      - 'tests/rust-harness/src/atto_scalar_v1.rs'
+      - 'tests/test_atto_scalar_native_gate.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/atto-scalar-v1-native.yml'
+  push:
+    branches: ['test/atto-scalar-core-llvm-20261103']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  llvm-native-typed-i64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact source-owner commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Require committed HEAD before any build or execution
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "ATTO_SCALAR_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_SCALAR_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install host LLVM/Clang toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3 cargo
+          clang --version
+      - name: Verify exact 19 .atto sources and adversarial fixtures with Rust
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --manifest-path tests/rust-harness/Cargo.toml --target-dir build/rust-test-harness-target
+          build/rust-test-harness-target/release/oreslang-llvm-test-harness atto-scalar-source "$PWD"
+          build/rust-test-harness-target/release/oreslang-llvm-test-harness atto-scalar-selftest "$PWD"
+          python3 -m unittest discover -s tests -p 'test_atto_scalar_native_gate.py' -v
+          python3 -O -m unittest discover -s tests -p 'test_atto_scalar_native_gate.py' -v
+      - name: Build actual native LLVM compiler from exact source HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-rust-test-harness
+      - name: Check native typed-i64, legacy and negative CTest inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > build/atto-scalar-inventory.txt
+          cat build/atto-scalar-inventory.txt
+          for name in atto_scalar_v1_exact_source_only \
+                      atto_scalar_v1_source_integrity_negative_controls \
+                      atto_scalar_canonical_add \
+                      atto_scalar_v1_native_harness_adversarial \
+                      atto_scalar_v1_full_i64_native \
+                      atto_scalar_v1_source_unit_migration \
+                      atto_scalar_v1_removed_operators_denied \
+                      atto_scalar_precedence atto_scalar_grouping \
+                      atto_scalar_type_first_local \
+                      atto_scalar_typed_const \
+                      atto_scalar_inferred_const \
+                      atto_scalar_legacy_pure_call \
+                      atto_scalar_type_first_parameter
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" build/atto-scalar-inventory.txt
+          done
+      - name: Execute native LLVM IR/Clang guests and negative compiler gates
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure -V --timeout 360 \
+            -R '^atto_scalar_' | tee build/atto-scalar-v1-execution.log
+          grep -q 'LLVM_NATIVE_I64_EXECUTED_LOCALLY' build/atto-scalar-v1-execution.log
+          grep -q '"compiled_guest_positives": 10' build/atto-scalar-v1-execution.log
+          grep -q '"negative_sources_checked": 9' build/atto-scalar-v1-execution.log
+          echo 'ATTO_LLVM_SCALAR_NATIVE_STEPFUL_EXECUTION_OBSERVED'
+      - name: Confirm exact source tree not modified by tests
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "FINAL_ATTO_SCALAR_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Preserve test observations, not independent promotion
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-llvm-scalar-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/atto-scalar-inventory.txt
+            build/atto-scalar-v1-execution.log
+          if-no-files-found: warn
+          retention-days: 14

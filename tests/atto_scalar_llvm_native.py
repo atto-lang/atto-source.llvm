@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -151,8 +152,9 @@ def link_native(clang, compiled_ir, work):
 
 
 def check(compiler, clang):
-    require(compiler.is_file() and clang.is_file(),
-            "required LLVM native compiler/Clang unavailable")
+    require(compiler.is_file() and clang.is_file() and
+            0 < compiler.stat().st_size <= 256 * 1024 * 1024,
+            "required regular LLVM compiler (max 256MiB) and Clang unavailable")
     require(not compiler.is_symlink(),
             "refuse symlinked build compiler for exact-head proof")
     observations = []
@@ -193,8 +195,14 @@ def check(compiler, clang):
                             "overflow emitted malformed LLVM IR: " + case["id"])
                     native = link_native(clang, ir, work)
                     rc_guest, stdout, stderr = execute([str(native)], work, 10)
-                    require(rc_guest != 0 and stdout == b"",
-                            "checked i64 overflow returned a normal result: " + case["id"])
+                    # LLVM overflow lowering uses llvm.trap, not a normal
+                    # nonzero application return. Require a real native
+                    # termination signal; an arbitrary exit 1 is not proof.
+                    require(rc_guest in (-signal.SIGILL, -signal.SIGTRAP,
+                                         -signal.SIGABRT) and
+                            stdout == b"" and stderr == b"",
+                            "checked i64 overflow did not trap natively: " + case["id"] +
+                            " " + repr((rc_guest, stdout[:100], stderr[:100])))
                 else:
                     require(rc == 1 and ir == b"" and
                             b"overflow" in diagnostic.lower(),
