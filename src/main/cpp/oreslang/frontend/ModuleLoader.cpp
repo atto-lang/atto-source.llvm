@@ -182,6 +182,10 @@ private:
             fail(current, "experimental scalar-loop compilation does not admit module imports");
         for (const auto& imported : current.program.imports) {
             if (++edges > 4096) fail(current, "native import graph exceeds 4096 edges");
+            // Match Java's admission ordering: depth denial precedes import
+            // path resolution and any host filesystem identity I/O.
+            if (depth >= max_depth)
+                fail(current, "native import graph exceeds 32 edges of depth");
             const auto& raw = imported.path;
             std::size_t selected = units.size();
 
