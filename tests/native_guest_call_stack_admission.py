@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exact native compiler admission + shallow .atto process execution proof.
+"""Real .atto compiler -> LLVM IR -> Clang -> native executable stack M1 slice.
 
-This does NOT prove actor-local recoverable stack exhaustion: recursive
-programs are deliberately rejected before LLVM IR emission in M0.
+An early checked frame failure returns native status 75, WITHOUT OS stack
+overflow or process abort. This is still scalar-only; no actor/supervisor parity.
 """
 import argparse
 import hashlib
@@ -11,19 +11,25 @@ import subprocess
 import sys
 import tempfile
 
+# 75 = bounded guest frame exhaustion; 42 = ordinary process return.
 CASES = {
-    "shallow": ("pub fnc main(): int { return 42; }\n", True),
-    "self_non_tail": ("fnc descend(int n): int { return 1 + descend(n - 1); }\n"
-                       "pub fnc main(): int { return descend(100000); }\n", False),
-    "mutual_non_tail": ("fnc left(int n): int { return 1 + right(n - 1); }\n"
-                         "fnc right(int n): int { return 1 + left(n - 1); }\n"
-                         "pub fnc main(): int { return left(100000); }\n", False),
-    "self_tail_pending": ("fnc down(int n): int { return down(n - 1); }\n"
-                           "pub fnc main(): int { return down(100000); }\n", False),
+    "shallow": ("pub fnc main(): int { return 42; }\n", 42),
+    "self_non_tail": (
+        "fnc descend(int n): int { return 1 + descend(n - 1); }\n"
+        "pub fnc main(): int { return descend(100000); }\n", 75),
+    "mutual_non_tail": (
+        "fnc left(int n): int { return 1 + right(n - 1); }\n"
+        "fnc right(int n): int { return 1 + left(n - 1); }\n"
+        "pub fnc main(): int { return left(100000); }\n", 75),
+    "tail_not_yet_optimized": (
+        "fnc down(int n): int { return down(n - 1); }\n"
+        "pub fnc main(): int { return down(100000); }\n", 75),
+    "overflow_on_unwind_blocked": (
+        "fnc descend(int n): int { return 9223372036854775807 + descend(n - 1); }\n"
+        "pub fnc main(): int { return descend(100000); }\n", 75),
 }
 
-# Exercise actual source->IR admission at the exact static 64/65-frame
-# boundary, not just the standalone graph model.
+# Counts include OS guest main: 63 helpers + main = 64 legal frames.
 def chain(length):
     functions = []
     for i in range(length):
@@ -33,18 +39,21 @@ def chain(length):
     return "\n".join(functions) + "\n"
 
 CASES.update({
-    "acyclic_depth_64": (chain(63), True),
-    "acyclic_depth_65": (chain(64), False),
+    "acyclic_depth_64": (chain(63), 42),
+    "acyclic_depth_65": (chain(64), None),
     "conditional_hidden_self_cycle": (
         "fnc loop(int n): int { return n == 0 ? 0 : loop(n - 1); }\n"
-        "pub fnc main(): int { return 42; }\n", False),
+        "pub fnc main(): int { return 42; }\n", 42),
     "unreachable_self_cycle": (
         "fnc unused(int n): int { return unused(n - 1); }\n"
-        "pub fnc main(): int { return 42; }\n", False),
+        "pub fnc main(): int { return 42; }\n", 42),
     "arity_overloads_acyclic": (
         "fnc f(): int { return 41; }\n"
         "fnc f(int value): int { return value + 1; }\n"
-        "pub fnc main(): int { return f(f()); }\n", True),
+        "pub fnc main(): int { return f(f()); }\n", 42),
+    "unqualified_side_effect_recursive": (
+        "fnc descend(int n): int { return stdio.println(n) + descend(n - 1); }\n"
+        "pub fnc main(): int { return descend(100000); }\n", None),
 })
 
 def run(argv, timeout=20):
@@ -58,42 +67,56 @@ def main():
     args = ap.parse_args()
     for tool in (args.compiler, args.clang):
         if not tool.is_file():
-            raise RuntimeError("compiler/Clang required; not an optional skip")
-    with tempfile.TemporaryDirectory(prefix="atto-llvm-stack-m0-") as work:
+            raise RuntimeError("required compiler/Clang missing; not an optional skip")
+    binary = str(args.compiler.resolve())
+    clang = str(args.clang.resolve())
+    with tempfile.TemporaryDirectory(prefix="atto-native-stack-m1-") as work:
         root = Path(work)
-        for label, (source, should_compile) in CASES.items():
+        compiler_digest = hashlib.sha256(args.compiler.read_bytes()).hexdigest()
+        observations = 0
+        for label, (source, expected_exit) in CASES.items():
             src = root / (label + ".atto")
             src.write_text(source, encoding="utf-8")
-            compiled = run([str(args.compiler.resolve()), str(src)])
-            if should_compile:
-                if compiled.returncode != 0 or b"define i32 @main(" not in compiled.stdout:
-                    raise RuntimeError(label + ": actual native compiler did not emit OS entry")
-                ir = root / (label + ".ll")
-                ir.write_bytes(compiled.stdout)
-                exe = root / label
-                linked = run([str(args.clang.resolve()), "-O0", "-x", "ir",
-                              str(ir), "-o", str(exe)])
-                if linked.returncode or not exe.is_file():
-                    raise RuntimeError(label + ": actual Clang link failed")
-                observed = run([str(exe.resolve())])
-                if observed.returncode != 42 or observed.stdout or observed.stderr:
-                    raise RuntimeError(label + ": native guest did not return expected 42")
-                print("PASS compiler-backed shallow .atto native process",
-                      hashlib.sha256(compiled.stdout).hexdigest())
-            else:
+            compiled = run([binary, str(src)])
+            if expected_exit is None:
                 if compiled.returncode == 0 or compiled.stdout:
-                    raise RuntimeError(label + ": recursive source emitted native LLVM IR")
-                expected = (b"native guest call depth budget exceeded"
-                            if label == "acyclic_depth_65"
-                            else b"native recursive call graph requires bounded guest frames")
-                if expected not in compiled.stderr:
-                    raise RuntimeError(label + ": failure was not the expected stack admission")
-                print("PASS fail-closed recursive .atto admission", label)
+                    raise RuntimeError(label + ": unsafe source emitted native IR")
+                if b"native guest" not in compiled.stderr and b"native bounded" not in compiled.stderr:
+                    raise RuntimeError(label + ": expected stack admission diagnostic missing")
+                print("PASS native fail-closed admission", label)
+                observations += 1
+                continue
+
+            if compiled.returncode or b"define i32 @main(" not in compiled.stdout:
+                raise RuntimeError(label + ": LLVM compiler did not emit OS main: "
+                                   + repr(compiled.stderr[:400]))
+            if label != "shallow" and label not in ("acyclic_depth_64", "arity_overloads_acyclic"):
+                if b"__atto_guest_depth" not in compiled.stdout or b"__atto_guest_exhausted" not in compiled.stdout:
+                    raise RuntimeError(label + ": generated native checked frame ABI missing")
+            ir = root / (label + ".ll")
+            ir.write_bytes(compiled.stdout)
+            exe = root / label
+            linked = run([clang, "-O0", "-x", "ir", str(ir), "-o", str(exe)])
+            if linked.returncode or not exe.is_file():
+                raise RuntimeError(label + ": Clang LLVM IR linking failed: " + repr(linked.stderr[:400]))
+            observed = run([str(exe.resolve())])
+            if observed.returncode != expected_exit or observed.stdout or observed.stderr:
+                raise RuntimeError(label + ": unexpected native status/stdout/stderr: "
+                                   + repr((observed.returncode, observed.stdout, observed.stderr)))
+            print("PASS real AttoLang -> LLVM -> native", label,
+                  "exit", observed.returncode,
+                  "ir_sha256", hashlib.sha256(compiled.stdout).hexdigest(),
+                  "executable_sha256", hashlib.sha256(exe.read_bytes()).hexdigest())
+            observations += 1
+        if observations != len(CASES):
+            raise RuntimeError("missing executed case count")
+        print("AttoLang stack compiled_native_cases", observations,
+              "compiler_sha256", compiler_digest)
     return 0
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
-        print("AttoLang native stack admission NOT_VERIFIED:", error, file=sys.stderr)
+        print("AttoLang LLVM checked-frame parity NOT_VERIFIED:", error, file=sys.stderr)
         sys.exit(1)
