@@ -107,7 +107,11 @@ inline void validate_manifest(const std::string& manifest_bytes) {
             throw std::runtime_error("native nested project table requires full TOML parser");
         if (std::regex_match(line, project_section) && ++project_table_count > 1)
             throw std::runtime_error("native package manifest duplicate project table");
-        if (std::regex_match(line, project_assignment) ||
+        // Top-level project.* names control package semantics, but the
+        // identical key spelling under an unrelated [build] table describes
+        // build.project.*, not the root-level project table. Keep strict
+        // denial scoped to the TOML table that owns the actual key.
+        if ((in_root_section && std::regex_match(line, project_assignment)) ||
                 (in_project_section && std::regex_match(line, root_assignment)))
             throw std::runtime_error("native project.root requires full TOML parser");
 
