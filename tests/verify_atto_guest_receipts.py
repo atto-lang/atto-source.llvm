@@ -116,9 +116,14 @@ def self_test() -> None:
             valid.replace(b"|passed=", b"|passed=9", 1),
             valid.replace(b"|failed=", b"|failed=9", 1),
             b"\n" + valid, valid.replace(b"\n", b"\r\n"),
-            valid.replace(b"llvm-native/", b"llvm-forged/", 1),
             valid.replace(b"|", b"\\u007c", 1),
         ]
+        # Add an identity mutation only when a case identity exists. An empty or
+        # filtered-only summary has no guest case ID to mutate.
+        if b"llvm-native/" in valid:
+            variants.append(valid.replace(b"llvm-native/", b"llvm-forged/", 1))
+        elif b"llvm-m1/" in valid:
+            variants.append(valid.replace(b"llvm-m1/", b"llvm-forged/", 1))
         if kind.startswith("bounded-"):
             variants += [
                 valid.replace(b"llvm-native/bounded/first", b"llvm-native/bounded/second", 1),
