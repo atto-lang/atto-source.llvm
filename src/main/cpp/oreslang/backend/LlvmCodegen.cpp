@@ -1462,10 +1462,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 std::unordered_map<std::string, llvm::Value*> ctor_storage;
                 std::unordered_map<std::string, std::string> ctor_sources;
                 if (binding.new_class) {
-                    if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
-                        throw std::runtime_error("native class constructor argument arity mismatch");
+                    // Bind names before producing any LLVM IR, then lower
+                    // actuals once in lexical order into declared formals.
+                    const auto constructor_slots = native_constructor_argument_slots(
+                        binding, layouts.source(binding.class_name));
                     for (std::size_t ai = 0; ai < binding.constructor_arguments.size(); ++ai) {
-                        const auto* source_field = constructor_field(layouts.source(binding.class_name), ai);
+                        const std::size_t formal = constructor_slots[ai];
+                        const auto* source_field = constructor_field(
+                            layouts.source(binding.class_name), formal);
                         const auto& original_argument = *binding.constructor_arguments[ai];
                         const auto& source_argument = original_argument.kind == Expression::Kind::Take ? *original_argument.left : original_argument;
                         if (source_field && !source_field->class_name.empty()) {
@@ -1484,9 +1488,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         llvm::Value* value = lower(*binding.constructor_arguments[ai],
                             builder, i64, storage, field_storage, declarations, &region_moves);
                         llvm::Value* arg_slot = builder.CreateAlloca(i64, nullptr,
-                            binding.name + ".constructor." + cls->constructor_parameters[ai]);
+                            binding.name + ".constructor." + cls->constructor_parameters[formal]);
                         builder.CreateStore(value, arg_slot);
-                        ctor_storage.emplace(cls->constructor_parameters[ai], arg_slot);
+                        ctor_storage.emplace(cls->constructor_parameters[formal], arg_slot);
                     }
                 }
                 const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
