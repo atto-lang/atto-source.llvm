@@ -64,8 +64,29 @@ public:
             project_root_import_detail::reject_atto_symlink_components(entry_path);
             fs::path cursor = entry_path.parent_path();
             for (;;) {
-                if (project_root_import_detail::exists_marker(cursor / ".atto.pkg.toml") ||
-                        project_root_import_detail::exists_marker(cursor / ".ores.pkg.toml")) {
+                const fs::path canonical_manifest = cursor / ".atto.pkg.toml";
+                const fs::path legacy_manifest = cursor / ".ores.pkg.toml";
+                const bool has_canonical_manifest =
+                    project_root_import_detail::exists_marker(canonical_manifest);
+                if (has_canonical_manifest ||
+                        project_root_import_detail::exists_marker(legacy_manifest)) {
+                    // The package marker grants logical root ownership, so it
+                    // must be validated even when imports are only ./relative.
+                    // Prefer canonical; invalid canonical must never fall back
+                    // to an otherwise valid legacy sibling. Read the original
+                    // .atto marker through the no-follow descriptor opener.
+                    const fs::path marker = has_canonical_manifest
+                        ? canonical_manifest : legacy_manifest;
+                    const auto marker_path = marker.string();
+                    const auto marker_identity = capture_source_identity(
+                        marker_path.c_str(), 64u * 1024u,
+                        "native package manifest exceeds 64 KiB");
+                    const auto manifest = read_regular_source(
+                        marker_path.c_str(), 64u * 1024u,
+                        "native package manifest exceeds 64 KiB",
+                        nullptr, &marker_identity);
+                    require_valid_source_utf8(manifest);
+                    project_root_import_detail::validate_manifest(manifest);
                     logical_units = std::make_unique<frontend::HostLogicalUnitIds>(cursor);
                     const auto logical_entry_id = logical_units->admit(entry_path);
                     // Bind the selected project path to the descriptor already
