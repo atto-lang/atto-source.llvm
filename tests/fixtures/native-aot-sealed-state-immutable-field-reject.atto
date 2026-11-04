@@ -1,0 +1,8 @@
+// A readonly sealed field may not be modified by a critical handler.
+define actor Worker as {
+  state { const total: int = 0; }
+  pub critical handle_state(int n): int {
+    total = total + n;
+    return total;
+  }
+}
