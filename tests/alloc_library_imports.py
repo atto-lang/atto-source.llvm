@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--clang")
     args = parser.parse_args()
+    if args.clang is not None and not args.clang.strip():
+        raise ValueError("native guest-link evidence requires a nonempty Clang command")
 
     source_root = Path(__file__).resolve().parents[1]
     runtime_c = (
