@@ -45,7 +45,7 @@ positive() {
   # Do not treat a source-blind constant integer main() as floating-point
   # parity. Every f64 positive has at least one actual double-typed local.
   # The pure integer control is the sole intentional exception.
-  grep -Eq '^define[[:space:]].*i32[[:space:]]+@main\\(' "$scratch/$name.ll" ||
+  grep -Eq '^define[[:space:]].*i32[[:space:]]+@main\(' "$scratch/$name.ll" ||
     { echo "NATIVE_F64_MISSING_NATIVE_MAIN: $name" >&2; exit 1; }
   if [[ "$name" != integer_control ]]; then
     grep -Eq '(alloca|load|store|fadd|fsub|fmul|fdiv|fcmp)[[:space:]].*double' "$scratch/$name.ll" ||
