@@ -40,19 +40,24 @@ unique 'Preserve host-observed native evidence (not ORES_TEST guest receipts)'
 unique 'bash tests/atto_native_harness_parity.sh --run'
 unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=4|optimizations=2|native=8|testkit=NOT_IMPLEMENTED'
 unique "grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|'"
-unique "tests/atto_native_guest_receipts.sh"
-unique "tests/verify_atto_guest_receipts.py"
 unique 'ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"'
 unique 'oreslang-no-gc-ir-audit-build'
 unique 'oreslang-core-library-sources-test'
 unique 'native_core_library_registry_provider_policy'
-unique 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
-unique 'tests/core_library_sources_test.cpp'
 unique 'oreslang-no-gc-ir-audit-tests-build'
 unique "ctest --test-dir build --output-on-failure --no-tests=error -R '^(native_no_gc_ir_audit_unit|native_core_library_registry_provider_policy)$'"
 unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED"
 unique 'atto_native_harness_compiler_guest_o0_o2'
 unique 'atto_native_harness_inventory_source_only'
+# Broad source/test globs supersede individual path filters. Check the actual
+# dependent source scripts rather than requiring removed narrow YAML paths.
+[[ -f "$root/tests/atto_native_guest_receipts.sh" &&
+   ! -L "$root/tests/atto_native_guest_receipts.sh" &&
+   -f "$root/tests/verify_atto_guest_receipts.py" &&
+   ! -L "$root/tests/verify_atto_guest_receipts.py" ]] ||
+  die 'guest receipt source inputs missing or symlinked'
+grep -Fq 'tests/atto_native_guest_receipts.sh' "$runner" ||
+  die 'native harness skipped guest-owned receipt execution'
 [[ "$(count 'native_project_root_import_security')" -eq 2 ]] || die 'expected one CTest inventory and one execution'
 [[ "$(count 'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"')" -eq 2 ]] || die 'expected two exact-head checks'
 unique 'persist-credentials: false'
