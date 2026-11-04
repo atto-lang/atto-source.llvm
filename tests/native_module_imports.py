@@ -120,6 +120,31 @@ def main():
             'base.atto': 'define module Base as pub fnc answer():int{return 21;} end',
         }, 42),
     ])
+    # Proxy parity candidates: guest LLVM compiler + Clang must evaluate
+    # *pure* generation/middleware guards. These are independent, synthetic
+    # .atto fixtures, NOT network egress authorization or actor/wire execution.
+    positives.extend([
+        ('atto-proxy-stale-plan-rejected', {
+            'main.atto': 'import module Epoch from "./epoch"; pub fnc main():int{return Epoch.current(1,2) ? 7 : 42;}',
+            'epoch.atto': 'define module Epoch as pub fnc current(int plan_epoch,int live_epoch):bool{return plan_epoch==live_epoch;} end',
+        }, 42),
+        ('atto-proxy-current-plan-admitted', {
+            'main.atto': 'import module Epoch from "./epoch"; pub fnc main():int{return Epoch.current(2,2) ? 42 : 7;}',
+            'epoch.atto': 'define module Epoch as pub fnc current(int plan_epoch,int live_epoch):bool{return plan_epoch==live_epoch;} end',
+        }, 42),
+        ('atto-proxy-require-header-denied', {
+            'main.atto': 'import module Gate from "./gate"; pub fnc main():int{return Gate.route_ready(false,false) ? 7 : 42;}',
+            'gate.atto': 'define module Gate as pub fnc route_ready(bool header_present,bool deny):bool{return header_present ? (deny ? false : true) : false;} end',
+        }, 42),
+        ('atto-proxy-deny-overrides-header', {
+            'main.atto': 'import module Gate from "./gate"; pub fnc main():int{return Gate.route_ready(true,true) ? 7 : 42;}',
+            'gate.atto': 'define module Gate as pub fnc route_ready(bool header_present,bool deny):bool{return header_present ? (deny ? false : true) : false;} end',
+        }, 42),
+        ('atto-proxy-permitted-pure-plan', {
+            'main.atto': 'import module Gate from "./gate"; pub fnc main():int{return Gate.route_ready(true,false) ? 42 : 7;}',
+            'gate.atto': 'define module Gate as pub fnc route_ready(bool header_present,bool deny):bool{return header_present ? (deny ? false : true) : false;} end',
+        }, 42),
+    ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -216,6 +241,15 @@ def main():
         # Canonical .atto package requires a real native compiler verdict.
         # These cases cannot be promoted from the header-only resolver unit.
         for case, package_files, diagnostic in (
+            ('atto-proxy-native-net-import-denied', {
+                'main.atto': 'import module Wire from "std/net"; pub fnc main():int{return 0;}',
+            }, 'native ores.std package resolution remains unsupported'),
+            ('atto-proxy-nested-package-denied', {
+                'main.atto': 'import module Lib from "+/nested/lib"; pub fnc main():int{return Lib.answer();}',
+                '.atto.pkg.toml': 'schema_version = "1"\n[project]\nroot = "."\n',
+                'nested/.atto.pkg.toml': 'schema_version = "1"\n',
+                'nested/lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+            }, 'nested package boundary'),
             ('atto-canonical-missing-source', {
                 'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
                 '.atto.pkg.toml': 'schema_version = "1"\n',
@@ -235,7 +269,9 @@ def main():
             directory = root/case
             directory.mkdir()
             for filename, source_bytes in package_files.items():
-                (directory/filename).write_text(source_bytes)
+                file_path = directory / filename
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_text(source_bytes)
             result = run([a.compiler, str(directory/'main.atto')])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((case, diagnostic, result.returncode, result.stderr))
