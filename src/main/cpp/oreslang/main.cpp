@@ -474,6 +474,14 @@ int main(int argc, char** argv) {
         }
 
         if (cortex_m_target) {
+            // The freestanding static-actor ABI is distinct from hosted
+            // actor-owned heap turns. Check this before generic Cortex-M
+            // bootstrap admission so even incomplete actor programs cannot
+            // accidentally claim sealed critical state lowering.
+            for (const auto& actor : ast.actors)
+                if (actor.sealed_scalar_state)
+                    throw std::runtime_error(
+                        "cortex-m sealed critical actor state requires target-specific owned turn lowering");
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls
             // merely because they happen to compile into some LLVM IR.
