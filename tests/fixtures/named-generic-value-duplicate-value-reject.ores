@@ -1,0 +1,3 @@
+// Named and positional source values cannot target one formal slot.
+fnc add<T>(T first, int second): int { return first + second; }
+pub fnc main(): int { return add<T=int>(42, first: 2); }
