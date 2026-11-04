@@ -9,6 +9,7 @@ on:
       - '.github/workflows/atto-native-test-parity.yml'
       - 'scripts/build-native-atto-fuzz-target.sh'
       - 'scripts/test-native-atto-fuzz-target.sh'
+      - 'scripts/test-native-atto-fuzz-adapter-source-free.sh'
       - 'tests/native_atto_fuzz_stdin_adapter.c'
       - 'examples/atto-native-fuzz-project/**'
   workflow_dispatch:
@@ -43,6 +44,9 @@ jobs:
           sudo apt-get install -y build-essential cmake clang llvm-dev cargo rustc python3
           clang --version
           rustc --version
+      - name: Verify source-free native LLVM IR stdin adapter controls
+        shell: bash
+        run: bash scripts/test-native-atto-fuzz-adapter-source-free.sh "$(command -v clang)"
       - name: Verify Rust source-fuzz host oracle
         run: cargo test --manifest-path tests/rust-harness/Cargo.toml --locked
       - name: Build actual LLVM compiler and Rust native test harness
