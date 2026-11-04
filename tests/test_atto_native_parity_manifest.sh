@@ -47,8 +47,22 @@ cp "$negatives" "$tmp/negative.tsv"
 sed -i '/^std-alias-attempt|/d' "$tmp/negative.tsv"
 reject 'missing reserved std negative'
 cp "$negatives" "$tmp/negative.tsv"
+# Case/expected value replacements which still satisfy ID/path/count shape.
+cp "$cases" "$tmp/cases.tsv"
+sed -i 's#^arith-add|positive/arith-add.atto|42$#arith-add|positive/arith-subtract.atto|42#' "$tmp/cases.tsv"
+reject 'same-exit source substitution'
+cp "$cases" "$tmp/cases.tsv"
+sed -i 's#^arith-add|positive/arith-add.atto|42$#arith-add|positive/arith-add.atto|41#' "$tmp/cases.tsv"
+reject 'valid-range expected exit substitution'
+cp "$cases" "$tmp/cases.tsv"
+cp "$negatives" "$tmp/negative.tsv"
+sed -i 's#unknown function#unknown symbol#' "$tmp/negative.tsv"
+reject 'plausible diagnostic substitution'
+cp "$negatives" "$tmp/negative.tsv"
 if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
 python3 "$root/tests/verify_atto_guest_receipts.py" --self-test
-echo 'PASS: nine source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
+python3 "$root/tests/test_atto_native_guest_receipts_cli.py"
+PYTHONOPTIMIZE=2 python3 "$root/tests/test_atto_native_guest_receipts_cli.py"
+echo 'PASS: twelve source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
