@@ -3856,6 +3856,8 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-core-library-sources-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-core-library-sources-test PRIVATE cxx_std_17)
+    target_compile_definitions(oreslang-core-library-sources-test PRIVATE
+        ATTO_SCALAR_SOURCE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/stdlib/testing_scalar.atto")
     target_compile_options(oreslang-core-library-sources-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_core_library_registry_provider_policy
