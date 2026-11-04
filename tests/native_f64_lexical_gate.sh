@@ -13,6 +13,7 @@ scratch="$(mktemp -d)"
 trap 'rm -rf -- "$scratch"' EXIT
 pass=0
 reject=0
+native_executions=0
 # A repeated case ID must not be able to satisfy totals by substituting for
 # a missing fixture. Baseline macOS Bash 3.2-compatible: no associative arrays.
 : > "$scratch/.case_ids"
@@ -37,20 +38,28 @@ positive() {
       cat "$scratch/$name.compiler.stderr" >&2; exit 1; }
   [[ -s "$scratch/$name.ll" && ! -s "$scratch/$name.compiler.stderr" ]] ||
     { echo "NATIVE_F64_COMPILER_IR_OR_DIAGNOSTIC: $name" >&2; exit 1; }
-  "$clang" -x ir "$scratch/$name.ll" -o "$scratch/$name.native" \
-    > "$scratch/$name.link.stdout" 2> "$scratch/$name.link.stderr" ||
-    { echo "NATIVE_F64_LINK_FAILED: $name" >&2
-      cat "$scratch/$name.link.stderr" >&2; exit 1; }
-  [[ -x "$scratch/$name.native" && ! -s "$scratch/$name.link.stderr" ]] ||
-    { echo "NATIVE_F64_LINK_DIAGNOSTIC: $name" >&2; exit 1; }
-  local rc=0
-  "$scratch/$name.native" > "$scratch/$name.stdout" \
-    2> "$scratch/$name.stderr" || rc=$?
-  [[ "$rc" -eq "$expected_exit" && ! -s "$scratch/$name.stdout" &&
-     ! -s "$scratch/$name.stderr" ]] ||
-    { echo "NATIVE_F64_EXIT_MISMATCH: $name rc=$rc" >&2; exit 1; }
+  # The same compiler-emitted IR must execute correctly with and without
+  # Clang optimization. Both runs are authentic native guest executions,
+  # never a host/reference calculation or an inferred pass from one binary.
+  local opt rc image
+  for opt in 0 2; do
+    image="$scratch/$name.O$opt.native"
+    "$clang" "-O$opt" -x ir "$scratch/$name.ll" -o "$image" \
+      > "$scratch/$name.O$opt.link.stdout" 2> "$scratch/$name.O$opt.link.stderr" ||
+      { echo "NATIVE_F64_LINK_FAILED: $name O$opt" >&2
+        cat "$scratch/$name.O$opt.link.stderr" >&2; exit 1; }
+    [[ -x "$image" && ! -s "$scratch/$name.O$opt.link.stderr" ]] ||
+      { echo "NATIVE_F64_LINK_DIAGNOSTIC: $name O$opt" >&2; exit 1; }
+    rc=0
+    "$image" > "$scratch/$name.O$opt.stdout" \
+      2> "$scratch/$name.O$opt.stderr" || rc=$?
+    [[ "$rc" -eq "$expected_exit" && ! -s "$scratch/$name.O$opt.stdout" &&
+       ! -s "$scratch/$name.O$opt.stderr" ]] ||
+      { echo "NATIVE_F64_EXIT_MISMATCH: $name O$opt rc=$rc expected=$expected_exit" >&2; exit 1; }
+    native_executions=$((native_executions + 1))
+    echo "NATIVE_F64_GUEST_EXACT: $name O$opt"
+  done
   pass=$((pass + 1))
-  echo "NATIVE_F64_GUEST_EXACT: $name"
 }
 
 negative() {
@@ -276,6 +285,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }' 'native branch-local f64 storage requires scoped double lowering'
 
-[[ "$pass" -eq 25 && "$reject" -eq 16 ]] ||
+[[ "$pass" -eq 25 && "$reject" -eq 16 && "$native_executions" -eq 50 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=25; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only, not num.atto library execution)"
+echo "NATIVE_F64_SCALAR_CASES_PASS=25; NATIVE_F64_O0_O2_EXECUTIONS=50; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only; NOT full num.atto library execution)"
