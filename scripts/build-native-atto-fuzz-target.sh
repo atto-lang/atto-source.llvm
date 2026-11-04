@@ -58,15 +58,22 @@ for protected in "$source_file" "$compiler" "$auditor" "$clang_path" "$adapter";
 done
 work="$(mktemp -d "$output_dir/.atto-fuzz-build.XXXXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
-# Bound IR as it is produced; checking its size only after a completed
-# compiler run would permit multi-gigabyte output before fail-closed admission.
-# pipefail ensures a compiler terminated by SIGPIPE cannot count as success.
+# Bound IR while it is produced. Capture both pipeline statuses BEFORE
+# another command can overwrite PIPESTATUS; even a SIGPIPE-terminated compiler
+# or truncated LLVM module must never become a valid test artifact.
+set +e
 bounded "$compiler" --target=host "$source_file" | head -c 2000001 > "$work/guest.ll"
-[[ -s "$work/guest.ll" ]] ||
-  { echo 'LLVM compiler emitted empty IR' >&2; exit 1; }
+stage_status=("${PIPESTATUS[@]}")
+set -e
+[[ "${#stage_status[@]}" == 2 && "${stage_status[1]}" == 0 ]] ||
+  { echo 'LLVM guest IR capture failed' >&2; exit 1; }
 bytes="$(wc -c < "$work/guest.ll")"
 (( bytes <= 2000000 )) ||
   { echo 'LLVM guest IR exceeds bounded size' >&2; exit 1; }
+[[ "${stage_status[0]}" == 0 ]] ||
+  { echo "LLVM compiler did not complete: exit ${stage_status[0]}" >&2; exit "${stage_status[0]}"; }
+[[ -s "$work/guest.ll" ]] ||
+  { echo 'LLVM compiler emitted empty IR' >&2; exit 1; }
 bounded "$auditor" "$work/guest.ll" >/dev/null
 count="$(grep -Ec '^define (dso_local )?i64 @fuzz_byte\(i64[[:space:]][^,)]*\)[[:space:]]' "$work/guest.ll" || true)"
 [[ "$count" == 1 ]] ||
