@@ -303,21 +303,31 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
             std::cerr << "oreslang-llvmc: analysis v0 inconclusive; ambiguous callable identity\n";
             return 2;
         }
-        const auto remaining = oreslang::realtime_detail::kMaxRealtimeCallEdges - edges;
-        const auto facts = oreslang::realtime_detail::direct_facts(fn, remaining, &ast);
-        if (facts.call_budget_exceeded) {
-            std::cerr << "oreslang-llvmc: analysis v0 inconclusive; call graph budget exceeded\n";
-            return 2;
-        }
-        edges += facts.calls.size();
+        // Check the narrow, bounded syntax before invoking direct_facts:
+        // the RT collector recursively walks nested expression children.
+        // Unproven source must not exhaust the compiler's host stack merely
+        // to produce an advisory result; its effect row stays inconclusive.
+        const bool structural_proof = function_proven(fn);
         Row row;
-        row.direct = facts.effects;
-        row.calls = facts.calls;
         row.unknown = unknown_source_surface || !reportable_id(key) ||
-            !function_proven(fn) || fn.native_internal ||
-            !facts.effects.valid() || !facts.bounded_calls ||
-            !facts.bounded_cleanup || facts.unsupported_runtime ||
+            !structural_proof || fn.native_internal ||
             (fn.has_declared_effects && !fn.declared_effects.valid());
+        if (structural_proof) {
+            const auto remaining =
+                oreslang::realtime_detail::kMaxRealtimeCallEdges - edges;
+            const auto facts =
+                oreslang::realtime_detail::direct_facts(fn, remaining, &ast);
+            if (facts.call_budget_exceeded) {
+                std::cerr << "oreslang-llvmc: analysis v0 inconclusive; call graph budget exceeded\n";
+                return 2;
+            }
+            edges += facts.calls.size();
+            row.direct = facts.effects;
+            row.calls = facts.calls;
+            row.unknown = row.unknown || !facts.effects.valid() ||
+                !facts.bounded_calls || !facts.bounded_cleanup ||
+                facts.unsupported_runtime;
+        }
         rows.emplace(key, std::move(row));
     }
     struct Result { FunctionEffects effects{}; bool unknown = false; };
