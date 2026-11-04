@@ -4779,3 +4779,70 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_request_context_local_host_only
         PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Native typed-AST local macros + linked public Const<int> import integration.
+# All guest fixtures invoke oreslang-llvmc and clang against real source.
+# Source-authored tests are NOT evidence until a stepful exact-head run.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-typed-macro-parser-test
+        tests/native_macro_aot_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-typed-macro-parser-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-typed-macro-parser-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-typed-macro-parser-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-typed-macro-parser-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-typed-macro-parser-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_typed_macro_parser_contract
+        COMMAND oreslang-native-typed-macro-parser-test)
+    set_tests_properties(native_typed_macro_parser_contract PROPERTIES TIMEOUT 40)
+
+    find_program(ORE_NATIVE_MACRO_INTEGRATION_CLANG NAMES clang)
+    if(ORE_NATIVE_MACRO_INTEGRATION_CLANG)
+        foreach(macro_fixture IN ITEMS
+                literal-42 identity-42 nested-42
+                template-twice-42 template-twice-nested-42)
+            set(macro_expect_literal ON)
+            if(macro_fixture MATCHES "^template-twice-")
+                set(macro_expect_literal OFF)
+            endif()
+            add_test(NAME "native_macro_${macro_fixture}_real_guest_42"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_fixture}.atto"
+                    "-DCLANG=${ORE_NATIVE_MACRO_INTEGRATION_CLANG}"
+                    "-DREQUIRE_LITERAL_IR_RETURN=${macro_expect_literal}"
+                    "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/typed-macro-${macro_fixture}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+            set_tests_properties("native_macro_${macro_fixture}_real_guest_42"
+                PROPERTIES TIMEOUT 90)
+        endforeach()
+    endif()
+
+    foreach(macro_fixture IN ITEMS
+            overflow-reject dynamic-const-reject wrong-kind-reject
+            unresolved-reject template-twice-name-reject
+            template-twice-composite-reject template-twice-overflow-reject)
+        set(macro_error "NATIVE_MACRO_EXPANDER_REQUIRED")
+        if(macro_fixture STREQUAL "overflow-reject" OR
+                macro_fixture STREQUAL "template-twice-overflow-reject")
+            set(macro_error "NATIVE_MACRO_CONST_OVERFLOW")
+        elseif(macro_fixture STREQUAL "dynamic-const-reject")
+            set(macro_error "NATIVE_MACRO_CONST_UNCLOSED")
+        endif()
+        add_test(NAME "native_macro_${macro_fixture}_zero_ir"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_fixture}.atto"
+                "-DDIAGNOSTIC=${macro_error}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+        set_tests_properties("native_macro_${macro_fixture}_zero_ir"
+            PROPERTIES TIMEOUT 30)
+    endforeach()
+endif()
