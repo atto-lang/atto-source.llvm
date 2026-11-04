@@ -866,6 +866,21 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_module_imports.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_source_module_graph_execution PROPERTIES TIMEOUT 120)
+    
+    # Portable AttoLang source should reach real LLVM IR and an O0/O2 native
+    # guest binary. The shell gate uses no Python or synthetic interpreters.
+    # This is the scalar/import subset only, NOT Java TestKit/actor parity.
+    if(UNIX)
+        find_program(ORE_ATTO_BASH NAMES bash REQUIRED)
+        add_test(NAME native_atto_first_source_import_aot_parity
+            COMMAND "${ORE_ATTO_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_first_aot_import_parity.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_RT_AOT_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto-first-parity")
+        set_tests_properties(native_atto_first_source_import_aot_parity
+            PROPERTIES TIMEOUT 90)
+    endif()
 
     # Pure host resolver security test for canonical +/ project-root imports.
     # This does not claim pkg:/bare-path resolution or full TOML semantics.
