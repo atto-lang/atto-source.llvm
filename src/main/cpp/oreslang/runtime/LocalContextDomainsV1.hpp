@@ -152,11 +152,17 @@ public:
         ExecutionStampV1 current,
         const LogicalLocalKeyV1<Domain, T>& key) const {
         if (!authorized(current)) return std::nullopt;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!open_) return std::nullopt;
-        auto found = slots_.find(key.id_);
-        if (found == slots_.end()) return std::nullopt;
-        return static_cast<const LocalCellV1<T>&>(*found->second).value;
+        std::shared_ptr<LocalCellBaseV1> pinned;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!open_) return std::nullopt;
+            auto found = slots_.find(key.id_);
+            if (found == slots_.end()) return std::nullopt;
+            pinned = found->second;
+        }
+        // A guest/host copy constructor must never execute under this lock.
+        // Pin the cell so a reentrant close/erase cannot destroy the source.
+        return static_cast<const LocalCellV1<T>&>(*pinned).value;
     }
 
     template <class T>
@@ -259,7 +265,8 @@ public:
             const auto& table = slots().values;
             auto found = table.find(id_);
             if (found == table.end()) return std::nullopt;
-            return static_cast<const LocalCellV1<T>&>(*found->second).value;
+            auto pinned = found->second; // copy may reenter and erase this key
+            return static_cast<const LocalCellV1<T>&>(*pinned).value;
         }
         bool erase() const {
             auto& table = slots().values;
