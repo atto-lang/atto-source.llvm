@@ -1,0 +1,17 @@
+define inverted struct Eight as
+    let x: int;
+    a: int;
+    b: int;
+    c: int;
+    d: int;
+    e: int;
+    f: int;
+    g: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Eight>.with_capacity(2);
+    rows.push(1, 2, 3, 4, 5, 6, 7, 8);
+    rows.set(0, x, 42);
+    return rows.get(0, x);
+}
