@@ -289,6 +289,11 @@ private:
                 // Bind the lexical import path to the opened descriptor's
                 // identity before recognizing a cached dependency or a cycle.
                 // A second name for the same source must not silently collapse.
+                // First close the host-path ownership boundary. Do not read
+                // imported source bytes, even speculatively, until the
+                // lexically selected path has a permitted logical unit ID.
+                const auto preflight_logical_id =
+                    source_ids->preflight_path(lexical_dependency);
                 const auto dependency_path = dependency.string();
                 const auto known = paths.find(dependency.string());
                 selected = known == paths.end() ? units.size() : known->second;
@@ -305,6 +310,8 @@ private:
                     fail(current, "source file cannot import itself through a filesystem alias");
                 const auto child_logical_id =
                     source_ids->admit(lexical_dependency, expected_child_identity);
+                if (preflight_logical_id != child_logical_id)
+                    fail(current, "source identity changed between preflight and read");
                 if (selected != units.size() &&
                     units[selected]->logical_id != child_logical_id)
                     fail(current, "linked import resolved a conflicting logical unit ID");
