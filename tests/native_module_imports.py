@@ -241,6 +241,12 @@ def main():
             ('project-array', '[[project]]\nroot = "src"\n', 'project.root'),
             ('project-array-quoted', '[["project"]]\nroot = "src"\n', 'project.root'),
             ('project-array-spaced', "[[ 'project' ]]\nroot = 'src'\n", 'project.root'),
+            ('escaped-project-key', '["pro\\u006aect".root]\nnote="ignored"\n', 'escaped keys'),
+            ('escaped-root-key', '[project."ro\\u006ft"]\nnote="ignored"\n', 'escaped keys'),
+            ('escaped-root-assignment', 'project."ro\\u006ft" = "src"\n', 'escaped keys'),
+            ('escaped-project-assignment', '"proj\\u0065ct".root = "src"\n', 'escaped keys'),
+            ('nested-project-descendant', '[project.root.extra]\nnote="ignored"\n', 'nested project table'),
+            ('unknown-project-subtable', '[project.logging]\nnote="ignored"\n', 'nested project table'),
             ('duplicate-project-table', '[project]\nname="first"\n[project]\nname="second"\n', 'duplicate project table'),
         ]
         for name, manifest_tail, diagnostic in manifest_rejects:
