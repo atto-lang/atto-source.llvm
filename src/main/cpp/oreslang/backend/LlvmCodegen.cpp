@@ -632,6 +632,19 @@ llvm::Value* lower(const Expression& expr,
                 ordered.push_back(moves->result_destination);
                 ordered.push_back(moves->result_region);
             }
+            // Fail before emitting a call if any source-to-formal
+            // permutation or scalar-generic instantiation disagrees with
+            // the already-declared LLVM ABI. Never rely on LLVM verifier
+            // failure, implicit bitcasts or a later host compiler error.
+            for (std::size_t slot = 0; slot < ordered.size(); ++slot) {
+                if (!ordered[slot] ||
+                        ordered[slot]->getType() !=
+                            callee->getFunctionType()->getParamType(slot)) {
+                    throw std::runtime_error(
+                        "native call ABI type mismatch for '" + expr.name +
+                        "' formal slot " + std::to_string(slot));
+                }
+            }
             return builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
         }
