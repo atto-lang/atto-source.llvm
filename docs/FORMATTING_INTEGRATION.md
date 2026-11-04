@@ -101,8 +101,14 @@ exercises direct/transitive flags, missing-call propagation, recursion,
 generic and duplicate identity, declared-effect non-certification, and
 adversarial graph budgets. The real-compiler CTest
 `native_exception_effect_analyze_inconclusive_cli` exercises native
-`.atto` source including an already-supported caught throw and a
-potentially failing arithmetic call, as well as unknown/unsupported grammar
+`.atto` source including the existing **legacy integer** caught-throw
+fixture and a potentially failing arithmetic call, as well as
+unknown/unsupported grammar
 and no-IR/no-mutation assertions. Neither test has yet yielded an
 inspectable exact-head compiler execution receipt on the blocked source
 organization; do not count them as PASS before a stepful authorized run.
+
+The caught-throw fixture uses the native backend's legacy `throw int` slice.
+It does **not** satisfy AttoLang's canonical `std/error.Error`-subclass-only
+throw operand contract, and must never be used as evidence of typed
+Java/GraalVM/LLVM guest exception parity. See LLVM issue #143.
