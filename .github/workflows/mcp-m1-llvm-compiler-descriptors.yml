@@ -83,6 +83,20 @@ jobs:
       - name: Execute .atto and .ores native compiler descriptor mode
         run: python3 tests/test_mcp_m1_compiler_cli.py --compiler build-mcp-m1/oreslang-llvmc
       - name: Link and execute native AttoLang guest with retained descriptor
-        run: python3 tests/test_mcp_m1_native_aot_embed.py --compiler build-mcp-m1/oreslang-llvmc --clang clang --objcopy objcopy
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 tests/test_mcp_m1_native_aot_embed.py \
+            --compiler build-mcp-m1/oreslang-llvmc --clang clang --objcopy objcopy \
+            --report build-mcp-m1/mcp-m1-aot-receipt.json
+          python3 -m json.tool build-mcp-m1/mcp-m1-aot-receipt.json > /dev/null
+      - name: Upload compiler-backed guest evidence only after actual execution
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atto-mcp-m1-guest-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build-mcp-m1/mcp-m1-aot-receipt.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Distinguish metadata from guest runtime evidence
         run: echo 'AOT_GUEST_EXECUTION_WITH_READ_ONLY_DESCRIPTOR_NO_MCP_SERVER'
