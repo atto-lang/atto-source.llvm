@@ -189,6 +189,47 @@ int main() {
               "stale retirement duplicated tickets");
     }
 
+    // A release-versus-STOP race may return a promoted ticket to the
+    // scheduler, but retirement must still produce exactly one terminal
+    // disposition for every waiting ticket. No stale promotion may execute
+    // in the retired actor incarnation, regardless of thread ordering.
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        CriticalGate gate;
+        const auto owner = gate.request();
+        const auto waitingA = gate.request();
+        const auto waitingB = gate.request();
+        CriticalGate::Token handoff;
+        CriticalGate::Retirement receipt;
+        std::thread releaser([&] { handoff = gate.release(owner.token); });
+        std::thread retiring([&] { receipt = gate.retire(); });
+        releaser.join();
+        retiring.join();
+
+        check(gate.retired(), "release-vs-retirement lost closure");
+        check(gate.waiting() == 0, "release-vs-retirement retained queue");
+        check(!gate.holds(owner.token) && !gate.holds(waitingA.token)
+                  && !gate.holds(waitingB.token),
+              "release-vs-retirement retained executable ticket");
+        check(!handoff || handoff == waitingA.token,
+              "handoff skipped the first FIFO waiter");
+
+        const auto disposition = [&](CriticalGate::Token ticket) {
+            int count = receipt.revoked_owner == ticket ? 1 : 0;
+            for (const auto queued : receipt.cancelled_waiters) {
+                if (queued == ticket) ++count;
+            }
+            return count;
+        };
+        check(disposition(waitingA.token) == 1
+                  && disposition(waitingB.token) == 1,
+              "waiting ticket lost or duplicated on concurrent STOP");
+        check(receipt.revoked_owner == owner.token
+                  || receipt.revoked_owner == waitingA.token,
+              "retirement did not record the last live owner");
+        check(!gate.release(waitingA.token) && !gate.release(waitingB.token),
+              "old retired waiter was readmitted");
+    }
+
     (void)first.release(fresh.token);
     (void)second.release(independent.token);
     return 0;
