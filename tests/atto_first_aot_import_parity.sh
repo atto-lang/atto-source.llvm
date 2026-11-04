@@ -16,6 +16,19 @@ for name in main.atto math.atto explicit.atto; do
   [[ -f "$fixtures/$name" ]] || fail "missing checked-in .atto fixture: $name"
 done
 
+# Pin the exact shared Java/LLVM AttoLang fixture blob IDs before execution.
+command -v git >/dev/null 2>&1 || fail "Git required for pinned fixture identity"
+for pin in \
+    main.atto:f152f9b46014975f471b827c82e8fe28107f9a0e \
+    math.atto:01aa7b955eb3e69d9714c4a6893b6f900e493097 \
+    explicit.atto:f9502fb537f0a6b1bf2fd000f45ca2163bd9d30f; do
+  IFS=: read -r name expected <<< "$pin"
+  observed="$(git hash-object -- "$fixtures/$name")" ||
+    fail "could not hash checked-in fixture: $name"
+  [[ "$observed" == "$expected" ]] ||
+    fail "shared Java/LLVM fixture blob mismatch: $name"
+done
+
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 new_case() {
