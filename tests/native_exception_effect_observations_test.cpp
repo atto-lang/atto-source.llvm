@@ -78,6 +78,12 @@ void unresolved_and_known_effect_both_survive() {
     p.functions.push_back(function("parent", call("callee")));
     p.functions.push_back(function("missing", call("ffi_or_missing")));
     p.functions.push_back(function("root", call("missing")));
+    auto combined = function("combined", call("missing"));
+    LocalBinding linked{};
+    linked.name = "linked";
+    linked.initializer = call("callee");
+    combined.locals.push_back(std::move(linked));
+    p.functions.push_back(std::move(combined));
     const auto report = observe_exceptional_effects(p);
     require(report.unresolved_edges == 1, "unresolved direct call tracked once");
     require(report.has_unknown(), "missing calls are not effect-free");
@@ -89,6 +95,11 @@ void unresolved_and_known_effect_both_survive() {
     require(root->has_unknown_call(), "unknown propagates across caller edges");
     require(!root->has_observed(FunctionEffect::Panic),
             "unknown must not fabricate positive observed panic");
+    const auto* combined_result = report.find("combined/0");
+    require(combined_result && combined_result->has_unknown_call(),
+            "known and unresolved callees both reach the same parent");
+    require(combined_result->has_observed(FunctionEffect::Panic),
+            "unknown marker must not erase a separately observed panic");
 }
 
 void recursive_effect_fixed_point() {
