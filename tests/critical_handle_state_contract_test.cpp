@@ -9,6 +9,8 @@ static constexpr std::uint32_t READ = static_cast<std::uint32_t>(FunctionEffect:
 static constexpr std::uint32_t WRITE = static_cast<std::uint32_t>(FunctionEffect::StateWrite);
 static constexpr std::uint32_t SUSPEND = static_cast<std::uint32_t>(FunctionEffect::Suspend);
 static constexpr std::uint32_t IO = static_cast<std::uint32_t>(FunctionEffect::Io);
+static constexpr std::uint32_t BLOCK = static_cast<std::uint32_t>(FunctionEffect::Block);
+static constexpr std::uint32_t FFI = static_cast<std::uint32_t>(FunctionEffect::Ffi);
 
 int main() {
     CriticalStateCallback c{};
@@ -96,6 +98,21 @@ int main() {
     c.inferred = row(READ | IO);
     CHECK(admit_critical_handle_state(c, row(READ | IO))
             == CriticalStateAdmission::CriticalBodyIo);
+    c.inferred = row(READ | BLOCK);
+    CHECK(admit_critical_handle_state(c, row(READ | BLOCK))
+            == CriticalStateAdmission::CriticalBodyBlocking);
+    c.inferred = row(READ | FFI);
+    CHECK(admit_critical_handle_state(c, row(READ | FFI))
+            == CriticalStateAdmission::CriticalBodyFfi);
+    c.inferred = row(READ | BLOCK | FFI);
+    CHECK(admit_critical_handle_state(c, row(READ | BLOCK | FFI))
+            == CriticalStateAdmission::CriticalBodyBlocking);
+    c.inferred = row(READ | IO | BLOCK | FFI);
+    CHECK(admit_critical_handle_state(c, row(READ | IO | BLOCK | FFI))
+            == CriticalStateAdmission::CriticalBodyIo);
+    c.inferred = row(READ | SUSPEND | IO | BLOCK | FFI);
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND | IO | BLOCK | FFI))
+            == CriticalStateAdmission::CriticalBodySuspension);
 
     // Trusted admission must not accept forged/reserved bits in either the
     // inferred callback row or the caller's upper-bound "using" row.
