@@ -8,6 +8,8 @@
 
 static _Atomic(uintptr_t) published_task = 0;
 static _Atomic(int) carrier_await_status = -1;
+static _Atomic(int) tasklocal_producer_ready = 0;
+static _Atomic(int) tasklocal_producer_release = 0;
 
 typedef struct {
     void* task;
@@ -26,6 +28,13 @@ static int64_t tasklocal_producer(void) {
     int64_t missing = -1;
     assert(!oreslang_source_task_local_i64_get_checked(&missing));
     assert(oreslang_source_task_local_i64_set_checked(41));
+    // Keep a real scheduler turn active while a foreign pthread attempts to
+    // spoof the TaskLocal accessor with an otherwise valid native symbol.
+    atomic_store_explicit(
+        &tasklocal_producer_ready, 1, memory_order_release);
+    while (!atomic_load_explicit(
+               &tasklocal_producer_release, memory_order_acquire))
+        sched_yield();
     int64_t value = 0;
     assert(oreslang_source_task_local_i64_get_checked(&value));
     assert(value == 41);
@@ -90,6 +99,14 @@ int main(void) {
     void* owned = NULL;
     assert(oreslang_source_task_start_i64_checked(tasklocal_producer, &owned)
         == ORES_SOURCE_TASK_OK);
+    while (!atomic_load_explicit(
+               &tasklocal_producer_ready, memory_order_acquire))
+        sched_yield();
+    // Reject foreign access WHILE the right Task is actively running.
+    assert(!oreslang_source_task_local_i64_set_checked(99));
+    assert(!oreslang_source_task_local_i64_get_checked(&forbidden));
+    atomic_store_explicit(
+        &tasklocal_producer_release, 1, memory_order_release);
     int64_t owned_result = 0;
     assert(oreslang_source_task_await_i64_checked(owned, &owned_result)
         == ORES_SOURCE_TASK_OK);
