@@ -19,7 +19,8 @@ inline bool is_disallowed_format_codepoint(std::uint32_t cp) {
         (cp >= 0x0890 && cp <= 0x0891) || cp == 0x08e2 ||
         cp == 0x180e || (cp >= 0x200b && cp <= 0x200f) ||
         (cp >= 0x202a && cp <= 0x202e) ||
-        (cp >= 0x2060 && cp <= 0x206f) ||
+        ((cp >= 0x2060 && cp <= 0x2064) ||
+         (cp >= 0x2066 && cp <= 0x206f)) ||
         cp == 0xfeff || (cp >= 0xfff9 && cp <= 0xfffb) ||
         cp == 0x110bd || cp == 0x110cd ||
         (cp >= 0x13430 && cp <= 0x1343f) ||
@@ -153,6 +154,7 @@ public:
             throw std::runtime_error("ATTO_UNIT_SOURCE_CHANGED");
         for (const auto& entry : stamps_) {
             if (entry.first != logical_id &&
+                    (observed.device != 0 || observed.inode != 0) &&
                     entry.second.device == observed.device &&
                     entry.second.inode == observed.inode)
                 throw std::runtime_error("ATTO_UNIT_SOURCE_ALIAS: duplicate opened inode");
