@@ -10,6 +10,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+if sys.platform.startswith("linux"):
+    import resource
 
 # 75 = bounded guest frame exhaustion; 42 = ordinary process return.
 CASES = {
@@ -27,6 +29,21 @@ CASES = {
     "overflow_on_unwind_blocked": (
         "fnc descend(int n): int { return 9223372036854775807 + descend(n - 1); }\n"
         "pub fnc main(): int { return descend(100000); }\n", 75),
+    "bounded_recursive_success": (
+        "fnc count(int n): int { return n == 0 ? 0 : 1 + count(n - 1); }\n"
+        "pub fnc main(): int { return count(20); }\n", 20),
+    "bounded_recursive_exact_depth_64": (
+        "fnc count(int n): int { return n == 0 ? 0 : 1 + count(n - 1); }\n"
+        "pub fnc main(): int { return count(62); }\n", 62),
+    "bounded_recursive_65th_denied": (
+        "fnc count(int n): int { return n == 0 ? 0 : 1 + count(n - 1); }\n"
+        "pub fnc main(): int { return count(63); }\n", 75),
+    "lazy_conditional_recursion_not_taken": (
+        "fnc guard(int n): int { return n == 0 ? 42 : guard(n - 1); }\n"
+        "pub fnc main(): int { return guard(0); }\n", 42),
+    "nested_recursive_operand_fail_fast": (
+        "fnc f(int n): int { return f(n - 1) + f(n - 1); }\n"
+        "pub fnc main(): int { return f(100000); }\n", 75),
 }
 
 # Counts include OS guest main: 63 helpers + main = 64 legal frames.
@@ -56,9 +73,20 @@ CASES.update({
         "pub fnc main(): int { return descend(100000); }\n", None),
 })
 
-def run(argv, timeout=20):
+def run(argv, timeout=20, low_stack=False):
+    # A real Linux low-stack OS process, not just an IR declaration. Windows
+    # and other hosts still execute the ordinary native process check.
+    preexec = None
+    if low_stack and sys.platform.startswith("linux"):
+        def restrict_stack():
+            soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+            cap = 1024 * 1024  # 1 MiB: below typical 8 MiB host stack.
+            if hard != resource.RLIM_INFINITY:
+                cap = min(cap, hard)
+            resource.setrlimit(resource.RLIMIT_STACK, (cap, hard))
+        preexec = restrict_stack
     return subprocess.run(argv, capture_output=True, stdin=subprocess.DEVNULL,
-                          timeout=timeout, check=False)
+                          timeout=timeout, check=False, preexec_fn=preexec)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -103,6 +131,13 @@ def main():
             if observed.returncode != expected_exit or observed.stdout or observed.stderr:
                 raise RuntimeError(label + ": unexpected native status/stdout/stderr: "
                                    + repr((observed.returncode, observed.stdout, observed.stderr)))
+            # On Linux repeat the deep recursion with an actual reduced
+            # native process stack. No SIGSEGV/SIGBUS may masquerade as 75.
+            if expected_exit == 75 and sys.platform.startswith("linux"):
+                small = run([str(exe.resolve())], low_stack=True)
+                if small.returncode != 75 or small.stdout or small.stderr:
+                    raise RuntimeError(label + ": 1MiB native stack process did not preserve controlled failure")
+                print("PASS Linux native low-stack execution (1 MiB)", label)
             print("PASS real AttoLang -> LLVM -> native", label,
                   "exit", observed.returncode,
                   "ir_sha256", hashlib.sha256(compiled.stdout).hexdigest(),
