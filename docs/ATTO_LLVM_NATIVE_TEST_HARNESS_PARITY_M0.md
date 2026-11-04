@@ -196,3 +196,32 @@ from six to **ten** (six manifest fixtures + four dynamic). The scalar
 corpus requires 80 native O0/O2 executions; the concurrently added
 four receipt suites require eight more, so the combined target is **88
 native executions**. Zero-step CI is never execution evidence.
+
+
+## Current-parent M0 source-only gate extension (2026-11-04 UTC)
+
+This review slice targets the parent LLVM compiler draft's **40 authored scalar
+`.atto` guest programs × Clang O0/O2 (80 required executions)** and **four
+receipt suites × O0/O2 (eight required executions)**, for **88 required native
+guest executions**, plus ten expected compiler-negative admissions. No real
+LLVM compiler/guest executions are asserted here.
+
+- Preserve the current four-suite guest-owned receipt verifier and its
+  three-argument CLI `OUTPUT_FILE SUITE OBSERVED_EXIT`, including independent
+  native process exit binding, no-follow input reads, and its self-tests under
+  Python optimization. Never regress to the former two-argument interface.
+- Exercise that actual three-argument CLI in separate subprocess-based
+  source-only integration tests, including all four valid suites and adversarial
+  stream, identity, exit, FIFO, symlink, missing/oversize input and bad arity
+  tests, under normal and optimized Python.
+- Freeze the deliberate 40/6 fixture ID/path/expected-exit and diagnostics
+  mapping to their reviewed Git blob hashes, so shape-valid replacements
+  cannot silently pass the inventory guard; intentional fixture updates must
+  update reviewed mapping identities.
+- Trigger the focused LLVM native parity workflow when CMake, compiler,
+  runtime, stdlib, scripts or tests change, rather than only a narrow resolver
+  file list. Preserve prior specific path checks and fail-closed mutation tests.
+
+All these are **source-only assertions** until the source-org runner starts,
+real `oreslang-llvmc`, no-GC audit, Clang, 88 native guests and ten compiler
+negative cases have executed on an immutable reviewed head.
