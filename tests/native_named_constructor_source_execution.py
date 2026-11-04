@@ -56,6 +56,43 @@ POSITIVE = {
   return p.tens * 10 + p.ones;
 }
 """, 42),
+    # Name-to-slot substitution must survive both source-side arithmetic
+    # and class-field initializer arithmetic, rather than merely reshuffle
+    # constants at the LLVM ABI.
+    "explicit-named-arithmetic": ("""define class Pair as
+  pub final int left: first + 1;
+  pub final int right: second * 2;
+  constructor(int first, int second) { return; }
+end
+pub fnc main(): int {
+  let Pair p = new Pair(second: 7 * 2, first: 10 + 3);
+  return p.left + p.right;
+}
+""", 42),
+    # The checked binder handles three independent formal slots, not only the
+    # two-argument 'Pair' special case from the minimal native baseline.
+    "triple-named-reordered": ("""define class Trio as
+  pub final int a: first;
+  pub final int b: second;
+  pub final int c: third;
+  constructor(int first, int second, int third) { return; }
+end
+pub fnc main(): int {
+  let Trio t = new Trio(third: 3, first: 19, second: 20);
+  return t.a + t.b + t.c;
+}
+""", 42),
+    "triple-positional-named": ("""define class Trio as
+  pub final int a: first;
+  pub final int b: second;
+  pub final int c: third;
+  constructor(int first, int second, int third) { return; }
+end
+pub fnc main(): int {
+  let Trio t = new Trio(19, third: 3, second: 20);
+  return t.a + t.b + t.c;
+}
+""", 42),
 }
 
 NEGATIVE = {
@@ -104,6 +141,17 @@ NEGATIVE = {
   return p.tens;
 }
 """, "unknown named native constructor argument 'unknown'"),
+    "triple-positional-slot-collision": ("""define class Trio as
+  pub final int a: first;
+  pub final int b: second;
+  pub final int c: third;
+  constructor(int first, int second, int third) { return; }
+end
+pub fnc main(): int {
+  let Trio t = new Trio(19, third: 3, first: 20);
+  return t.a + t.b + t.c;
+}
+""", "duplicate native constructor argument binding"),
 }
 MAX_OUTPUT = 2 * 1024 * 1024
 
@@ -139,8 +187,9 @@ def verify(compiler, clang, optimization):
                 str(clang), optimization, "-Wno-override-module",
                 "-x", "ir", str(ll), "-o", str(binary),
             ])
-            if rc:
-                raise AssertionError(f"{name}: native linker rc={rc}, stderr={err!r}")
+            if rc or out or err:
+                raise AssertionError(
+                    f"{name}: native linker rc={rc}, stdout={out!r}, stderr={err!r}")
             rc, out, err = execute([str(binary)])
             if rc != expected or out or err:
                 raise AssertionError(
