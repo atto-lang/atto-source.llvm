@@ -82,6 +82,26 @@ ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG="$(command -v clang)" \
   bash tests/atto_native_harness_parity.sh --run
 ```
 
+## Independent guest receipt smoke in the parent LLVM branch
+
+The upstream native harness has additionally added
+`tests/atto_native_guest_receipts.sh` and
+`tests/verify_atto_guest_receipts.py`. Those are **separate AttoLang guest
+programs** that actually print a bounded `ORES_TEST` PASS or FAIL event and
+a summary, then exit with the correct status. The parent workflow requires
+four further native O0/O2 process executions (two guest fixtures × two
+optimization levels). That is useful **single-case receipt smoke**, not
+the complete Java native `TestSuite` implementation.
+
+The scalar-only module in this PR does **not** generate receipts itself.
+Subject to admitted exact-head proof, the combined harness requires
+**60 scalar guest executions + four independent receipt smoke executions**,
+and **eight compiler negatives**. The stdout smoke may not be counted as
+native `TestCase` registration, skip/filter/fail-fast, isolation or actor
+TestKit parity. The parent native receipt additions, their no-GC IR
+auditor, and their adversarial verifier are preserved in the reconciled
+integration tree.
+
 ## Not established
 
 The source-owning private GitHub Actions organization has historically
