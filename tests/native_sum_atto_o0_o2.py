@@ -123,6 +123,7 @@ def main():
                 "native region source missing or symlinked")
     count = 0
     production_count = 0
+    all_receipts = []
     with tempfile.TemporaryDirectory(prefix="atto-native-sum-") as temp:
         temporary = Path(temp)
         # Real, source-built Rust auditor must reject known tracing collector IR.
@@ -193,18 +194,27 @@ def main():
                           timeout=60, env=env)
             require(process.returncode == 0 and published.is_file(),
                     "production AOT publisher failed for " + filename)
+            native_header = published.read_bytes()[:4]
+            if sys.platform == "darwin":
+                require(native_header in
+                        (b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+                         b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe"),
+                        "production AOT artifact is not Mach-O")
+            else:
+                require(native_header == b"\x7fELF",
+                        "production AOT artifact is not ELF")
             actual = run([str(published)], timeout=10)
             require(actual.returncode == expected and
                     source.read_bytes() == original,
                     "production AOT guest failed or source mutated")
-            for receipt in receipts:
-                print(receipt)
-                count += 1
+            all_receipts.extend(receipts)
+            count += len(receipts)
             production_count += 1
-            print("NATIVE_ATTO_SUM_PRODUCTION_AOT_PASS|source=" + filename +
-                  "|exit=" + str(expected) +
-                  "|auditor_sha256=" + sha(auditor.read_bytes()) +
-                  "|binary_sha256=" + sha(published.read_bytes()))
+            all_receipts.append(
+                "NATIVE_ATTO_SUM_PRODUCTION_AOT_PASS|source=" + filename +
+                "|exit=" + str(expected) +
+                "|auditor_sha256=" + sha(auditor.read_bytes()) +
+                "|binary_sha256=" + sha(published.read_bytes()))
         # Negative AOT publisher: a missing/failing auditor must leave an
         # existing output untouched; a compiler failure alone is not evidence.
         sentinel = temporary / "preexisting-aot"
@@ -246,7 +256,12 @@ def main():
             negatives += 1
     require(count == 2 * len(POSITIVES) and
             production_count == len(POSITIVES) and
-            negatives == len(NEGATIVES), "native parity matrix incomplete")
+            negatives == len(NEGATIVES) and
+            len(all_receipts) == count + production_count,
+            "native parity matrix incomplete")
+    # Do not emit any PASS receipt if even the last negative fails.
+    for receipt in all_receipts:
+        print(receipt)
     print("NATIVE_ATTO_SUM_MATRIX_PASS|executed=" + str(count) +
           "|production_aot=" + str(production_count) +
           "|compiler_rejections=" + str(negatives) +
