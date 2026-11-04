@@ -12,6 +12,7 @@ on:
       - "tests/native_actorlocal_scheduler_turn_test.cpp"
       - "tests/tasklocal_i64_e2e.rs"
       - "tests/fixtures/tasklocal-i64-source.atto"
+      - "tests/fixtures/tasklocal-keyed-i64-source.atto"
       - "tests/source_task_i64_runtime_test.c"
       - "CMakeLists.txt"
       - ".github/workflows/native-tasklocal-i64-guest.yml"
