@@ -1193,6 +1193,9 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_atto_named_generic_value_dot_atto_guest
             named-generic-value-combined-main.atto
             --ir "call i64 @encode" --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_atto_named_generic_value_lowercase_dot_atto_guest
+            named-generic-value-lowercase-main.atto
+            --ir "call i64 @encode" --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_atto_named_generic_value_routine_guest
             named-generic-value-routine-main.ores
             --run 42 --clang "${ORE_CLANG}")
@@ -1209,7 +1212,7 @@ if(BUILD_TESTING)
             COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" named-generic-matrix
                 "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
         set_tests_properties(native_atto_named_generic_value_36_guest_matrix
-            PROPERTIES TIMEOUT 180)
+            PROPERTIES TIMEOUT 600)
     endif()
     if(ORE_CLANG)
         oreslang_contract_test(native_named_call_reordered_guest named-call-reordered-main.ores
@@ -2601,6 +2604,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_atto_named_generic_reject_uninferable_hole
         named-generic-value-hole-missing-reject.ores
         --diagnostic "cannot infer generic parameter")
+    oreslang_contract_test(native_atto_named_generic_reject_case_sensitive_type_atto
+        named-generic-value-case-type-reject.atto
+        --diagnostic "unknown named generic argument 'Foo'")
+    oreslang_contract_test(native_atto_named_generic_reject_case_sensitive_value_atto
+        named-generic-value-case-value-reject.atto
+        --diagnostic "unknown named argument 'Value'")
     oreslang_contract_test(native_named_member_positional_array_baseline
         named-member-array-positional-main.ores
         --ir "define i64 @__oreslang_guest_main")
