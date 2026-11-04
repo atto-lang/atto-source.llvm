@@ -19,7 +19,13 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build --parallel 2
-      - name: Compile and execute three exact-head StateGraph guest programs
+      - name: Real LLVM canonical-if source CTest (not full StateGraph parity)
+        run: |
+          ctest --test-dir build --output-on-failure -R '^stategraph_canonical_then_native_guest        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/test-stategraph-native-llvm.sh
+
+      - name: Compile and execute exact-head StateGraph scalar and canonical-source guests
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/test-stategraph-native-llvm.sh
