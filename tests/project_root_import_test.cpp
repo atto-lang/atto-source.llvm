@@ -281,6 +281,18 @@ int main() {
     }
 #endif
     {
+        const auto dir = temp / "invalid-importing-source-extension";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        for (const char* filename : {"main", "main.txt", "main.ATTO", "main.ores.bak"}) {
+            write_text(dir/filename, "");
+            must_fail(std::string("invalid importing source ") + filename,
+                      "native importing source must use .atto or .ores extension",
+                      [&] { (void)resolve(dir/filename, "+/lib"); });
+        }
+    }
+    {
         const auto dir = temp / "extension";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
