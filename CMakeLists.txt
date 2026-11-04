@@ -1196,6 +1196,16 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_atto_named_generic_value_lowercase_dot_atto_guest
             named-generic-value-lowercase-main.atto
             --ir "call i64 @encode" --run 42 --clang "${ORE_CLANG}")
+        # 24 named type slots need ~96 lookahead tokens; ensure the parser
+        # recognizes a generic call rather than falling back to comparison.
+        oreslang_contract_test(native_atto_named_generic_value_large_type_list_guest
+            named-generic-value-large-arity-main.atto
+            --ir "call i64 @identity" --run 42 --clang "${ORE_CLANG}")
+        # Type parameter names and runtime formal labels may overlap.
+        # Their mappings must stay independent and preserve formal ABI order.
+        oreslang_contract_test(native_atto_named_generic_value_overlapping_labels_guest
+            named-generic-value-overlapping-labels-main.atto
+            --ir "call i64 @combine" --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_atto_named_generic_value_routine_guest
             named-generic-value-routine-main.ores
             --run 42 --clang "${ORE_CLANG}")
