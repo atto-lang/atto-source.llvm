@@ -2370,6 +2370,36 @@ if(BUILD_TESTING)
     set_tests_properties(native_source_task_i64_compiled_execution
         PROPERTIES TIMEOUT 180)
 
+    # First real compiler-backed TaskLocal<int> scalar scope on an admitted
+    # SourceTask producer: no arbitrary keys and no false migration claims.
+    set(ORE_TASKLOCAL_I64_E2E
+        "${CMAKE_CURRENT_BINARY_DIR}/oreslang-tasklocal-i64-e2e")
+    add_custom_command(
+        OUTPUT "${ORE_TASKLOCAL_I64_E2E}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -O -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/tasklocal_i64_e2e.rs"
+            -o "${ORE_TASKLOCAL_I64_E2E}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/tasklocal_i64_e2e.rs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/tasklocal-i64-source.atto"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
+        VERBATIM)
+    add_custom_target(oreslang-tasklocal-i64-e2e-build ALL
+        DEPENDS "${ORE_TASKLOCAL_I64_E2E}")
+    if(ORE_CLANG)
+        add_test(NAME native_tasklocal_i64_compiled_guest
+            COMMAND "${ORE_TASKLOCAL_I64_E2E}"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        add_test(NAME native_tasklocal_i64_compiled_guest
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_tasklocal_i64_compiled_guest
+        PROPERTIES TIMEOUT 180)
+
     set(ORE_SOURCE_FUTURE_PIPELINE_E2E
         "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-future-pipeline-i64-e2e")
     add_custom_command(
