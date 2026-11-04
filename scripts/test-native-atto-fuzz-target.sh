@@ -79,13 +79,22 @@ done
 # The compiler must run, but the mandatory Rust no-GC IR audit MUST reject
 # publication when the auditor fails. This is a deliberate negative mutation
 # of the build gate, not proof of guest runtime safety.
-export ORES_NO_GC_IR_AUDIT="$(command -v false)"
+cat > "$work/failing-ir-auditor" <<'AUDITOR'
+#!/usr/bin/env bash
+# Do not copy the compiler, IR, or source outside the test work dir.
+printf 'ATTO_FAILING_IR_AUDIT_REACHED\\n' >&2
+exit 7
+AUDITOR
+chmod 700 "$work/failing-ir-auditor"
+export ORES_NO_GC_IR_AUDIT="$work/failing-ir-auditor"
 set +e
 bash "$builder" "$root/tests/fixtures/atto-fuzz-byte.atto" "$good" >"$output" 2>"$errors"
 status=$?
 set -e
-[[ "$status" != 0 ]] ||
-  { echo 'native LLVM fuzz builder ignored a failing IR auditor' >&2; exit 1; }
+[[ "$status" == 7 ]] ||
+  { echo "native LLVM fuzz builder ignored a failing IR auditor or did not reach it (rc=$status)" >&2; exit 1; }
+grep -Fqx 'ATTO_FAILING_IR_AUDIT_REACHED' "$errors" ||
+  { echo 'LLVM compiler failed before mandatory IR auditor denial was tested' >&2; exit 1; }
 cmp -s "$good" "$work/preserved" ||
   { echo 'failing IR audit overwrote previously published fuzz executable' >&2; exit 1; }
 export ORES_NO_GC_IR_AUDIT="$auditor"
