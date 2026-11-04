@@ -111,6 +111,21 @@ int main() {
     quota.push(4);
     rejects([&] { quota.push(4); }, "capacity exceeded");
 
+    // Named detached snapshots use bounded compiler-local ordinals. A
+    // structural owner mutation cannot invalidate an already copied value.
+    LinearPlan detached(schema, 1);
+    detached.push(4);
+    rejects([&] { detached.read_snapshot_field(0, "x"); },
+            "invalid inverted snapshot value reference");
+    const auto snapshot_id = detached.snapshot(0);
+    assert(snapshot_id == 0);
+    detached.write_runtime_checked(0, "x");
+    detached.erase_swap(0);
+    assert(detached.read_snapshot_field(snapshot_id, "id") == 1);
+    detached.close();
+    rejects([&] { detached.read_snapshot_field(snapshot_id, "x"); },
+            "closed inverted HIR owner");
+
     // Compiler work is bounded and exhaustion cannot publish an extra HIR op.
     LinearPlan budget(schema, 1);
     budget.push(4);
