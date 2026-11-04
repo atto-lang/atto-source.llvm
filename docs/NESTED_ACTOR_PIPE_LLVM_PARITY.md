@@ -194,3 +194,15 @@ one **positive** comment-only lexical-control `.atto` fixture that
 must compile and exit 7 under Clang. These compiler cases have not
 yet been executed against the hardened branch; no green checks may be
 inferred from merely registering them.
+
+## Bounded plan validation complexity
+
+The validated native plan now retains compiler-produced numeric
+`source_index`/`target_index` for each sequential DATA edge, checks
+adjacency and source-generated path identity before returning the plan,
+and sorts edges by those indices. This replaces repeated actor-path
+string scans during link validation and comparison with bounded
+O(stages + edges log edges) planning, within the declared budget. These
+indices are **not** runtime actor IDs or authority tickets. The
+production compiler and scheduler must still authenticate every
+generation and connection separately.

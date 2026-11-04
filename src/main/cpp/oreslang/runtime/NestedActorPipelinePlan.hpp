@@ -88,6 +88,9 @@ struct PlannedPipeEdge {
     std::string owner_scope;
     std::string payload;
     std::size_t capacity;
+    // Compiler-derived stage indices, not guest-controlled actor identities.
+    std::size_t source_index;
+    std::size_t target_index;
 };
 
 struct PlannedPipeChild {
@@ -251,7 +254,9 @@ inline NestedPipePlan check_nested_actor_pipeline(
                     plan.actors_[current.first].path,
                     plan.scopes_.at(owner).path,
                     plan.actors_[previous->last].stage.outbound,
-                    current_capacity
+                    current_capacity,
+                    previous->last,
+                    current.first
                 });
             }
             if (!first) first = current;
@@ -270,23 +275,22 @@ inline NestedPipePlan check_nested_actor_pipeline(
     const auto connections = check_actor_pipeline(flattened);
     if (connections.size() != plan.edges_.size())
         throw std::logic_error("nested pipe graph edge mismatch");
-    for (auto& edge : plan.edges_) {
-        const auto it = std::find_if(plan.actors_.begin(), plan.actors_.end(),
-            [&](const PlannedPipeActor& actor) { return actor.path == edge.source_path; });
-        if (it == plan.actors_.end()) throw std::logic_error("nested pipe source missing");
-        const auto index = static_cast<std::size_t>(it - plan.actors_.begin());
-        if (index >= connections.size() || edge.target_path != plan.actors_[index + 1].path ||
-                edge.payload != connections[index].payload)
+
+    // Validate compiler-derived consecutive stage indices directly; avoid
+    // repeatedly scanning strings (quadratic/cubic work on nested graphs).
+    // This planner cannot authenticate runtime ActorRef generations.
+    for (const auto& edge : plan.edges_) {
+        if (edge.source_index >= connections.size() ||
+                edge.target_index != edge.source_index + 1 ||
+                edge.target_index >= plan.actors_.size() ||
+                edge.source_path != plan.actors_[edge.source_index].path ||
+                edge.target_path != plan.actors_[edge.target_index].path ||
+                edge.payload != connections[edge.source_index].payload)
             throw std::invalid_argument("nested pipe stage linkage mismatch");
     }
     std::sort(plan.edges_.begin(), plan.edges_.end(),
-        [&](const PlannedPipeEdge& a, const PlannedPipeEdge& b) {
-            auto source_index = [&](const std::string& path) {
-                for (std::size_t i = 0; i < plan.actors_.size(); ++i)
-                    if (plan.actors_[i].path == path) return i;
-                return plan.actors_.size();
-            };
-            return source_index(a.source_path) < source_index(b.source_path);
+        [](const PlannedPipeEdge& a, const PlannedPipeEdge& b) {
+            return a.source_index < b.source_index;
         });
     return plan;
 }

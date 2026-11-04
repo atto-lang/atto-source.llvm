@@ -81,6 +81,14 @@ int main() {
         check(graph.edges()[0].payload == "Bytes" &&
                 graph.edges()[1].payload == "Csv" &&
                 graph.edges()[2].payload == "Rows", "edge type order changed");
+        for (std::size_t index = 0; index < graph.edges().size(); ++index) {
+            const auto& edge = graph.edges()[index];
+            check(edge.source_index == index && edge.target_index == index + 1,
+                  "nested pipe edge indices do not match source order");
+            check(edge.source_path == graph.actors()[index].path &&
+                    edge.target_path == graph.actors()[index + 1].path,
+                  "nested pipe path no longer matches checked stage indices");
+        }
         check(graph.edges()[0].capacity == 1024 &&
                 graph.edges()[1].capacity == 1024 &&
                 graph.edges()[2].capacity == 1024 &&
