@@ -44,7 +44,7 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ImportedMacro, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field, ImportedMacro
     };
     Kind kind;
     std::size_t offset = 0;
@@ -68,9 +68,9 @@ struct Expression {
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
+    mutable std::string sum_type;
     // Compiler-only invocation classification, never a runtime or LLVM ABI.
     bool imported_macro_const_argument = false;
-    mutable std::string sum_type;
 };
 
 struct Parameter {
@@ -446,11 +446,11 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
-    bool macro_namespace = false;
     std::string selected_module;
     std::string local_name;
     std::string path;
     std::size_t offset = 0;
+    bool macro_namespace = false;
 };
 
 // Only checked declarations recorded by the native typed-AST parser may
@@ -473,8 +473,6 @@ struct TypeConstraintDescriptor {
 
 struct Program {
     std::vector<ModuleImport> imports;
-    // Compile-time metadata is deliberately not moved into the linked guest.
-    std::vector<NativeMacroDecl> native_macros;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
     std::string namespace_name;
@@ -487,6 +485,8 @@ struct Program {
     std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
+    // Compile-time metadata is deliberately not moved into the linked guest.
+    std::vector<NativeMacroDecl> native_macros;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
