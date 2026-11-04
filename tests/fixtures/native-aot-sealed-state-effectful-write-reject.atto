@@ -1,0 +1,9 @@
+// A critical actor state turn must not call unmodeled guest functions.
+fnc external_value(): int { return 7; }
+define actor Worker as {
+  state { let total: int = 0; }
+  pub critical handle_state(int n): int {
+    total = external_value();
+    return total;
+  }
+}
