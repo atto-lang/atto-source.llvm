@@ -17,6 +17,10 @@ die() { printf 'FAIL AttoLang LLVM native guest parity: %s\n' "$*" >&2; exit 1; 
 [[ -f "$manifest" && ! -L "$manifest" && -f "$negative_manifest" && ! -L "$negative_manifest" ]] ||
   die 'missing or symlinked trusted test manifests'
 [[ "$manifest" != "$negative_manifest" ]] || die 'manifests alias each other'
+[[ -d "$corpus" && ! -L "$corpus" &&
+   -d "$corpus/positive" && ! -L "$corpus/positive" &&
+   -d "$corpus/negative" && ! -L "$corpus/negative" ]] ||
+  die 'symlinked native parity source directory'
 declare -A seen=()
 declare -a positive_ids=() positive_paths=() expected_exits=()
 declare -a negative_ids=() negative_paths=() diagnostic_needles=()
@@ -60,6 +64,14 @@ for path in "$manifest" "$negative_manifest" \
     "${positive_paths[@]/#/$corpus/}" "${negative_paths[@]/#/$corpus/}"; do
   [[ -f "$path" && ! -L "$path" ]] || die "nonregular source: $path"
 done
+
+# Reviewed 40-positive / 6-source-negative mappings are frozen by Git blob.
+# Explicitly update the hashes when changing a reviewed parity contract.
+command -v git >/dev/null || die 'git hash-object required for pinned manifests'
+[[ "$(git hash-object -- "$manifest")" == "f632b25781b55f04dfd0519b25089410333edc51" ]] ||
+  die 'positive 40-case contract manifest was substituted'
+[[ "$(git hash-object -- "$negative_manifest")" == "7c5545448b7011bfddb77be09607f9fef2cb734f" ]] ||
+  die 'negative six-case manifest was substituted'
 
 if [[ "$mode" == --inventory-only ]]; then
   echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=40 negative=6 (NO_COMPILER_EXECUTION)'
