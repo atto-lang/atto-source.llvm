@@ -71,15 +71,20 @@ template <class T> struct Cell final : CellBase {
     const T value;
 };
 
-// Dynamic host payloads other than UTF-8 strings fail closed until explicit
-// bounded type descriptors exist. This does not replace the guest ownership
-// checker: trivially-copyable host structs may still carry forbidden pointers.
+// This host entrypoint deliberately admits only primitive scalar / enum
+// values and bounded UTF-8 strings. is_trivially_copyable<T> is NOT enough:
+// e.g. struct { void* capability; } is trivially copyable yet would leak a
+// raw host pointer across domains. Struct/record support must be introduced
+// only with compiler-checked, transitive ownership/type descriptors.
 template <class T>
 std::size_t value_bytes(const T& value) noexcept {
-    (void) value; // fixed-size trivially-copyable specializations use sizeof(T)
     if constexpr (std::is_same_v<T, std::string>) return value.size();
-    else if constexpr (std::is_trivially_copyable_v<T>) return sizeof(T);
-    else return std::numeric_limits<std::size_t>::max();
+    else if constexpr (std::is_arithmetic_v<T> || std::is_enum_v<T>)
+        return sizeof(T);
+    else {
+        (void) value;
+        return std::numeric_limits<std::size_t>::max();
+    }
 }
 
 template <class T> constexpr bool local_value_allowed_v =
