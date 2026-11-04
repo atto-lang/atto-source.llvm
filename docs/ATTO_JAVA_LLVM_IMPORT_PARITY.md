@@ -57,3 +57,5 @@ real-time or sanitizer safety.
   source hashes. Extend to Wasm, Forge/Cranelift, and .NET separately.
 - Treat zero-step GitHub Actions, host-only C++ models, and unexecuted source
   fixtures as **NOT EXECUTED**, never parity PASS.
+
+The byte-identical Java linked-guest counterpart is [Java PR #2537](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/2537), which asserts guest exit 42 and explicit canonical-source selection. This relationship is source-level until both runners execute.
