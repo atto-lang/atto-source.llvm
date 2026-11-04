@@ -20,11 +20,19 @@ These are authored targets **NOT EXECUTED** until a job records nonzero executed
 
 The `scripts/run-llvm-m1-guest.mjs` adapter in that **separate** private repository requires the locked source tree and SHA-pinned real LLVM compiler, AOT linker script, IR auditor and Clang. It invokes the native AOT path and checks all 16 actual stdout test records; its receipt is `LLVM_EXECUTED_CANDIDATE_NOT_ATTESTED` until independent provenance review.
 
-**Not implemented by this scalar patch:** full `Result<float,String>`, `List<float>`, float function parameters/returns, source-level `sqrt`, deterministic reductions on lists, matrix layouts, SoA particle energy, and full numerical test harness execution. Do not promote any of the 16 `num.atto` fixtures to LLVM PASS based on 20 scalar probes.
+**Not implemented by this scalar patch:** full `Result<float,String>`, `List<float>`, float function parameters/returns, source-level `sqrt`, deterministic reductions on lists, matrix layouts, SoA particle energy, and full numerical test harness execution. Do not promote any of the 16 `num.atto` fixtures to LLVM PASS based on the 25 scalar source probes, even if their O0/O2 executions pass.
 
 ## CI and security gates
 
 Source-org GitHub Actions failures with null/empty steps are runner-admission failures, not compiler test results. Do **not** mirror private LLVM compiler source into another organization without independently approved destination ID, protected source authority, exact-tree proof and verified ref/object cleanup. Keep this PR draft and request independent review. After runner admission, build full LLVM C++/runtime, execute the focused CTest positives and negatives, retain exact compiler and Clang digests, verify no IR for negatives, then run the full seven-file numerical M1 fixture and independently compare Java.
+
+## Source-to-IR and native-image admission hardening (November 4, 2026)
+
+The native f64 CTest now refuses a source-blind compiler stub that emits only an integer `main`. Every positive floating-point fixture must contain a **real LLVM `double` instruction** (alloca/load/store/floating operation) rather than a comment pretending to be floating IR; the dedicated integer control is the only exception. A real `i32 @main` definition is required. The test requires valid native linked-image magic (ELF, Mach-O or PE) rather than accepting shell/Node wrappers, verifies fixture/source and IR SHA-256 identities before and after *each* native guest, and verifies that the linked image is unchanged after execution. Test source, exit status and expected diagnostics have explicit size/range budgets. SHA-256 output supports GNU `sha256sum` on Linux or `shasum -a 256` on macOS.
+
+The separate `native_f64_harness_adversarial_host_only` CTest, also invoked as the CI Bash preflight, uses **six fake-compiler/host-binary negative mutations**: fabricated double IR comments, wrong native main, intentional linker failure, script shim, actual host C constant-result executable, and linker-stage mutation of source IR. Every mutation must fail closed; `HOST_ONLY_F64_GATE_ADVERSARIAL_PASS=6` is **not** compiled AttoLang, a native AttoLang guest, a numerical library test, or LLVM–Java parity.
+
+**Execution evidence limitation:** none of this source-local hardening has yet run in the blocked LLVM source-org GitHub Actions environment. A local, source-free host probe verified example ELF magic versus script magic and the anchored typed-double regex, but not the full harness or the AttoLang compiler. Keep the PR draft until source-owned exact-head CMake/CTest runs with nonzero steps and independent review.
 
 ## Exact-head runner admission canary
 
