@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -39,18 +40,19 @@ public:
         friend class FrozenTcpSlab;
         explicit Pin(std::shared_ptr<State> state) : state_(std::move(state)), active_(true) {}
         std::shared_ptr<State> state_;
-        bool active_ = false;
+        // A foreign-slab read must not race a trusted release on another slab.
+        std::atomic<bool> active_{false};
     public:
         Pin(const Pin&) = delete;
         Pin& operator=(const Pin&) = delete;
         Pin(Pin&& other) noexcept
-            : state_(std::move(other.state_)), active_(std::exchange(other.active_, false)) {}
+            : state_(std::move(other.state_)), active_(other.active_.exchange(false, std::memory_order_acq_rel)) {}
         Pin& operator=(Pin&&) = delete;
         ~Pin() noexcept {
-            if (!active_ || !state_) return;
+            if (!state_) return;
             std::lock_guard<std::mutex> lock(state_->mutex);
+            if (!active_.exchange(false, std::memory_order_acq_rel)) return;
             --state_->pins;
-            active_ = false;
             state_->maybe_release();
         }
     };
@@ -71,14 +73,15 @@ public:
     }
     std::optional<std::uint8_t> read_byte(const Pin& pin, std::size_t index) const {
         std::lock_guard<std::mutex> lock(state_->mutex);
-        if (!pin.active_ || pin.state_.get() != state_.get()
+        if (pin.state_.get() != state_.get()
+            || !pin.active_.load(std::memory_order_acquire)
             || index >= state_->bytes.size()) return std::nullopt;
         return state_->bytes[index];
     }
     bool release_pin(Pin& pin) {
         std::lock_guard<std::mutex> lock(state_->mutex);
-        if (!pin.active_ || pin.state_.get() != state_.get()) return false;
-        pin.active_ = false;
+        if (pin.state_.get() != state_.get()
+            || !pin.active_.exchange(false, std::memory_order_acq_rel)) return false;
         --state_->pins;
         state_->maybe_release();
         return true;
