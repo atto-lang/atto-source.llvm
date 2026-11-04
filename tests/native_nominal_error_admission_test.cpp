@@ -37,6 +37,31 @@ int main() {
     nullable.nullable = true;
     require(ErrorOperandVerdict::NullableOperand, nullable, classes);
     auto forged_classes = classes;
+    ExceptionalOperandProof alternatives;
+    alternatives.shape = ExceptionalValueShape::Union;
+    require(ErrorOperandVerdict::EmptyUnion, alternatives, classes);
+    alternatives.variants.push_back(nominal("pkg.BaseError"));
+    alternatives.variants.push_back(nominal("pkg.MyError"));
+    require(ErrorOperandVerdict::Admitted, alternatives, classes);
+    alternatives.variants.push_back(primitive);
+    require(ErrorOperandVerdict::NotNominal, alternatives, classes);
+    alternatives.variants.pop_back();
+    for (unsigned i = 0; i < kMaxErrorUnionVariants; ++i)
+        alternatives.variants.push_back(nominal("pkg.BaseError"));
+    require(ErrorOperandVerdict::TooManyUnionVariants, alternatives, classes);
+    auto duplicates = classes;
+    duplicates.push_back(classes[2]);
+    require(ErrorOperandVerdict::DuplicateClass, nominal("pkg.MyError"), duplicates);
+    auto cyclic = classes;
+    cyclic.push_back({"pkg.CycleA", "pkg.CycleB", false});
+    cyclic.push_back({"pkg.CycleB", "pkg.CycleA", false});
+    require(ErrorOperandVerdict::CyclicHierarchy, nominal("pkg.CycleA"), cyclic);
+    auto invalid_parent = classes;
+    invalid_parent.push_back({"pkg.Orphan", "pkg.Ghost", false});
+    require(ErrorOperandVerdict::UnresolvedClass, nominal("pkg.Orphan"), invalid_parent);
+    auto forged_nested = classes;
+    forged_nested[1].verified_stdlib_root = true;
+    require(ErrorOperandVerdict::InvalidHierarchy, nominal("pkg.MyError"), forged_nested);
     forged_classes[0].verified_stdlib_root = false;
     require(ErrorOperandVerdict::UnverifiedCanonicalRoot,
             nominal("std/error.Error"), forged_classes);
