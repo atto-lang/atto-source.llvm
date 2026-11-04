@@ -51,6 +51,45 @@ if(MODE STREQUAL "native")
   file(SHA256 "${COMPILER}" compiler_sha256)
   file(SHA256 "${CLANG}" clang_sha256)
   set(observations "")
+  # A compiler that ignores the source and always returns success could pass
+  # all 37 value comparisons. Probe both a false and a true equality through
+  # the same actual frontend -> LLVM IR -> Clang -> native execution path.
+  foreach(control IN ITEMS false true)
+    set(control_source "${WORKDIR}/checked-control-${control}.atto")
+    set(control_ir "${WORKDIR}/checked-control-${control}.ll")
+    set(control_native "${WORKDIR}/checked-control-${control}.native")
+    if(control STREQUAL "false")
+      set(rhs "41")
+      set(required_exit "43")
+    else()
+      set(rhs "40")
+      set(required_exit "42")
+    endif()
+    file(WRITE "${control_source}" "pub fnc main(): int {\n  if (40 eq ${rhs}) { return 42; } fi\n  return 43;\n}\n")
+    execute_process(COMMAND "${COMPILER}" "${control_source}"
+      RESULT_VARIABLE control_compiled OUTPUT_FILE "${control_ir}"
+      ERROR_VARIABLE control_compiler_error TIMEOUT 10)
+    if(NOT "${control_compiled}" STREQUAL "0" OR NOT EXISTS "${control_ir}")
+      message(FATAL_ERROR "LLVM native control compiler failure (${control}): ${control_compiled}: ${control_compiler_error}")
+    endif()
+    file(SIZE "${control_ir}" control_ir_bytes)
+    if(control_ir_bytes LESS 16 OR control_ir_bytes GREATER 131072)
+      message(FATAL_ERROR "invalid native control IR size")
+    endif()
+    execute_process(COMMAND "${CLANG}" -Wno-override-module -x ir "${control_ir}" -o "${control_native}"
+      RESULT_VARIABLE control_linked OUTPUT_VARIABLE control_link_out
+      ERROR_VARIABLE control_link_err TIMEOUT 20)
+    if(NOT "${control_linked}" STREQUAL "0" OR NOT EXISTS "${control_native}" OR
+       NOT "${control_link_out}" STREQUAL "")
+      message(FATAL_ERROR "Clang native control link failure (${control}): ${control_link_err}")
+    endif()
+    execute_process(COMMAND "${control_native}" RESULT_VARIABLE control_result
+      OUTPUT_VARIABLE control_out ERROR_VARIABLE control_err TIMEOUT 5)
+    if(NOT "${control_result}" STREQUAL "${required_exit}" OR
+       NOT "${control_out}" STREQUAL "" OR NOT "${control_err}" STREQUAL "")
+      message(FATAL_ERROR "native source equality control ${control} failed: expected ${required_exit}, got ${control_result}")
+    endif()
+  endforeach()
 endif()
 set(prefix "// oreslang:checked-i64-v1\npub fnc main(): int {return ")
 set(suffix ";}\n")
@@ -169,10 +208,28 @@ if(NOT value_count EQUAL 37 OR NOT trap_count EQUAL 13)
   message(FATAL_ERROR "checked-i64 candidate case counts have drifted")
 endif()
 if(MODE STREQUAL "native")
+  # Compilation and execution can be long; reject any source ref or critical
+  # binary/fixture mutation observed during the suite before issuing receipts.
+  execute_process(COMMAND git -C "${SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE after_head OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE after_head_status TIMEOUT 5)
+  execute_process(COMMAND git -C "${SOURCE_DIR}" rev-parse "HEAD^{tree}"
+    OUTPUT_VARIABLE after_tree OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE after_tree_status TIMEOUT 5)
+  file(SHA256 "${CORPUS}" after_corpus_sha256)
+  file(SHA256 "${COMPILER}" after_compiler_sha256)
+  file(SHA256 "${CLANG}" after_clang_sha256)
+  if(NOT after_head_status STREQUAL "0" OR NOT after_tree_status STREQUAL "0" OR
+     NOT after_head STREQUAL head OR NOT after_tree STREQUAL tree OR
+     NOT after_corpus_sha256 STREQUAL sha256 OR
+     NOT after_compiler_sha256 STREQUAL compiler_sha256 OR
+     NOT after_clang_sha256 STREQUAL clang_sha256)
+    message(FATAL_ERROR "checked-i64 source revision or compiler inputs changed during native execution")
+  endif()
   if(NOT DEFINED REPORT OR REPORT STREQUAL "")
     set(REPORT "${WORKDIR}/llvm-checked-i64-native-receipt.json")
   endif()
-  file(WRITE "${REPORT}" "{\n  \"schema\":\"atto-llvm-checked-i64-native-v1\",\n  \"verification\":\"LLVM_NATIVE_GUEST_EXECUTED\",\n  \"source_head\":\"${head}\",\n  \"source_tree\":\"${tree}\",\n  \"corpus_sha256\":\"${sha256}\",\n  \"compiler_sha256\":\"${compiler_sha256}\",\n  \"clang_sha256\":\"${clang_sha256}\",\n  \"values_checked\":${value_count},\n  \"overflow_guests_trapped\":${trap_count},\n  \"results\":[\n${observations}\n  ]\n}\n")
+  file(WRITE "${REPORT}" "{\n  \"schema\":\"atto-llvm-checked-i64-native-v1\",\n  \"verification\":\"LLVM_NATIVE_GUEST_EXECUTED\",\n  \"source_head\":\"${head}\",\n  \"source_tree\":\"${tree}\",\n  \"corpus_sha256\":\"${sha256}\",\n  \"compiler_sha256\":\"${compiler_sha256}\",\n  \"clang_sha256\":\"${clang_sha256}\",\n  \"equality_control_guests\":2,\n  \"values_checked\":${value_count},\n  \"overflow_guests_trapped\":${trap_count},\n  \"results\":[\n${observations}\n  ]\n}\n")
   message(STATUS "LLVM checked-i64 native guests: ${value_count} exact full-width values + ${trap_count} traps; receipt ${REPORT}")
 else()
   message(STATUS "HOST-ONLY checked-i64 candidate admission: ${value_count} values, ${trap_count} overflow expectations")
