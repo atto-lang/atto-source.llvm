@@ -214,23 +214,34 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
     // exceptional-effect proof: checked arithmetic, deferred cleanup and
     // mutable locals can fail in ways its RT effect bits do not describe.
     // Only literal/variable/direct-call scalar expressions are complete in v0.
-    const auto scalar_proven = [](const auto& self, const oreslang::Expression* expr)
-            -> bool {
+    // Use a bounded iterative walk: adversarial call-argument nesting must
+    // not exhaust the host stack while a source file is being analyzed.
+    const auto scalar_proven = [](const oreslang::Expression* expr) -> bool {
         if (!expr) return true;
-        switch (expr->kind) {
-            case oreslang::Expression::Kind::Integer:
-            case oreslang::Expression::Kind::Boolean:
-            case oreslang::Expression::Kind::Variable:
-                return true;
-            case oreslang::Expression::Kind::Call:
-                if (expr->type_arguments_present || !expr->type_arguments.empty())
+        std::vector<const oreslang::Expression*> pending{expr};
+        std::size_t visited = 0;
+        while (!pending.empty()) {
+            if (++visited > 4096 || pending.size() > 4096) return false;
+            const auto* next = pending.back();
+            pending.pop_back();
+            switch (next->kind) {
+                case oreslang::Expression::Kind::Integer:
+                case oreslang::Expression::Kind::Boolean:
+                case oreslang::Expression::Kind::Variable:
+                    break;
+                case oreslang::Expression::Kind::Call:
+                    if (next->type_arguments_present || !next->type_arguments.empty())
+                        return false;
+                    for (const auto& argument : next->arguments) {
+                        if (!argument) return false;
+                        pending.push_back(argument.get());
+                    }
+                    break;
+                default:
                     return false;
-                for (const auto& argument : expr->arguments)
-                    if (!self(self, argument.get())) return false;
-                return true;
-            default:
-                return false;
+            }
         }
+        return true;
     };
     const auto function_proven = [&](const oreslang::Function& fn) -> bool {
         if (fn.has_declared_effects || fn.scalar_while ||
@@ -253,10 +264,10 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
                 param.mode != oreslang::Parameter::Mode::Value) return false;
         for (const auto& statement : fn.statements) {
             if (statement.kind != oreslang::Statement::Kind::Return ||
-                !scalar_proven(scalar_proven, statement.expression.get()))
+                !scalar_proven( statement.expression.get()))
                 return false;
         }
-        return scalar_proven(scalar_proven, fn.result.get());
+        return scalar_proven( fn.result.get());
     };
     std::map<std::string, Row> rows;
     const bool unknown_source_surface =
