@@ -59,6 +59,53 @@ pub fnc main(): int { return combine<B=int, A=int>(second: two(), first: four())
 }
 pub fnc main(): int { return encode(second: 2, first: 4); }
 """, 42),
+    # Generic instance methods reuse checked scalar direct-call
+    # specialization after the receiver becomes an owned/reborrowed self slot.
+    "generic-instance-explicit": ("""define class Box as
+  let int n=42;
+  pub identity<T=int>(T value): int { return value; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.identity<T=int>(42);
+}
+""", 42),
+    "generic-instance-inferred": ("""define class Box as
+  let int n=42;
+  pub identity<T>(T value): int { return value; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.identity(42);
+}
+""", 42),
+    "generic-instance-named-reordered": ("""define class Box as
+  let int n=42;
+  pub combine<A=int, B=A>(A first, B second): int { return first * 10 + second; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.combine<B=int, A=int>(second: 2, first: 4);
+}
+""", 42),
+    "generic-instance-mixed-arguments": ("""define class Box as
+  let int n=42;
+  pub add<T=int>(T first, T second): int { return first + second; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.add<T=int>(19, second: 23);
+}
+""", 42),
+    "generic-instance-dependent-default": ("""define class Box as
+  let int n=42;
+  pub value<A=int, B=A>(A first, B second): int { return first + second; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.value<A=int>(second: 23, first: 19);
+}
+""", 42),
 }
 INVALID = {
     "missing-required": ("""fnc fixed<T>(): int { return 42; }
@@ -213,6 +260,93 @@ pub fnc main(): int {
   return 42;
 }
 """, "unknown named native constructor argument 'unknown'"),
+    "generic-method-nongeneric-invocation": ("""define class Box as
+  let int n=42;
+  pub value(int x): int { return x; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.value<T=int>(42);
+}
+""", "call-site type arguments require generic function"),
+    "generic-method-unknown-type-name": ("""define class Box as
+  let int n=42;
+  pub id<T=int>(T x): int { return x; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<Missing=int>(42);
+}
+""", "unknown named generic argument"),
+    "generic-method-type-duplicate": ("""define class Box as
+  let int n=42;
+  pub id<A=int, B=int>(A x): int { return x; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<A=int, A=int>(42);
+}
+""", "duplicate generic argument 'A'"),
+    "generic-method-type-positional-after-named": ("""define class Box as
+  let int n=42;
+  pub id<A=int, B=int>(A x): int { return x; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<A=int, int>(42);
+}
+""", "positional generic argument after named argument"),
+    "generic-method-unknown-value-label": ("""define class Box as
+  let int n=42;
+  pub id<T=int>(T value): int { return value; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<T=int>(unknown: 42);
+}
+""", "unknown named argument"),
+    "generic-method-duplicate-value-label": ("""define class Box as
+  let int n=42;
+  pub id<T=int>(T first, T second): int { return first + second; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<T=int>(first: 19, first: 23);
+}
+""", "duplicate named member argument"),
+    "generic-method-value-positional-after-named": ("""define class Box as
+  let int n=42;
+  pub id<T=int>(T first, T second): int { return first + second; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<T=int>(second: 23, 19);
+}
+""", "positional member argument cannot follow named argument"),
+    "generic-method-bool-type-unsupported": ("""define class Box as
+  let int n=42;
+  pub id<T=int>(T value): int { return value; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<T=bool>(42);
+}
+""", "native scalar generic type requires int or bare '_'"),
+    "generic-array-method-reject": ("""pub fnc main(): int {
+  let mut Array<int> values=new Array<int>();
+  values.add(42);
+  return values.get<T=int>(index: 0);
+}
+""", "native Array methods do not accept generic type arguments"),
+    "generic-method-private-access": ("""define class Box as
+  let int n=42;
+  hidden<T=int>(T value): int { return value; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.hidden<T=int>(42);
+}
+""", "private instance method is not accessible"),
 }
 
 _CASE_ID = re.compile(r"generics\.scalar\.[a-z0-9]+(?:-[a-z0-9]+)*\Z")
