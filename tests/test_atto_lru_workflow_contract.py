@@ -18,9 +18,9 @@ REQUIRED=(
     "atto_lru_hash_quotient atto_lru_probe_wrap",
     "atto_lru_slot_recycle atto_lru_recency_touch",
     "--output-junit build/atto-lru/lru-ctest.xml",
-    "set(names)!=required or len(set(names))!=5",
-    'c.find("skipped") is not None',
-    "ATTO_LLVM_LRU_GUEST_EXECUTION=PASS native_guests=4 source_guards=1",
+    "python3 tests/atto_lru_junit_gate.py build/atto-lru/lru-ctest.xml",
+    "python3 -m unittest discover -s tests -p 'test_atto_lru_junit_gate.py' -v",
+
     "git diff --quiet --exit-code",
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
 )
@@ -61,8 +61,8 @@ class WorkflowAdmission(unittest.TestCase):
 
     def test_skipped_tests_cannot_claim_pass(self):
         with self.assertRaisesRegex(ValueError, "missing"):
-            verify(self.source.replace('c.find("skipped") is not None',
-                                       'False'))
+            verify(self.source.replace("python3 tests/atto_lru_junit_gate.py build/atto-lru/lru-ctest.xml",
+                                       "echo 'No JUnit validation'"))
 
     def test_unpinned_checkout_rejected(self):
         with self.assertRaisesRegex(ValueError, "missing"):

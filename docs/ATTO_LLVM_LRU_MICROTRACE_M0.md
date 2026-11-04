@@ -82,3 +82,25 @@ the evidence classification; the new job must actually execute nonempty
 steps on its exact head and pass before declaring even this *narrow*
 four-microtrace LLVM slice. The seven complete LRU cache fixtures and
 Java/LLVM cross-backend parity remain separate unverified milestones.
+
+## CTest JUnit disabled/notrun receipt hardening
+
+A real local CTest 3.31 source-free probe confirmed that a disabled test may
+appear as `<testcase status="disabled">` without any nested `<skipped>`
+element. Checking only missing/failure/skipped children can therefore
+misclassify an unexecuted guest as successful.
+
+The workflow now invokes `tests/atto_lru_junit_gate.py` after CTest exits
+successfully. It requires a single CTest `testsuite`, exactly five unique
+named cases, matching declared test counts, zero suite-level
+failures/errors/disabled/skipped, each case `status="run"`, and no case-level
+error/failure/skipped children. Missing, symlinked, empty or oversized
+reports are denied. A passing JUnit gate still requires independent
+compiler/toolchain provenance.
+
+`tests/test_atto_lru_junit_gate.py` has 13 source-free positive/negative
+cases, including genuine disabled/notrun semantic variants. All 13 passed
+in a local Python run with byte-identical Git blob IDs:
+verifier `36dd4a5da525f171241287dd005b2f76693d1905`,
+tests `4820300f20a81778cde7f02af5c5368a362f6307`.
+These tests do NOT compile or execute AttoLang programs.

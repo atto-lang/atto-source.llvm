@@ -55,6 +55,7 @@ jobs:
           set -euo pipefail
           python3 tests/atto_lru_llvm_source.py | tee /tmp/atto-lru-source-only.log
           python3 -m unittest discover -s tests -p 'test_atto_lru_workflow_contract.py' -v
+          python3 -m unittest discover -s tests -p 'test_atto_lru_junit_gate.py' -v
           grep -Fx 'ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=4 mutations_rejected=7 native_compiler_guest=NOT_EXECUTED' /tmp/atto-lru-source-only.log
 
       - name: Build actual oreslang-llvmc from exact HEAD
@@ -93,22 +94,7 @@ jobs:
             --output-junit build/atto-lru/lru-ctest.xml \
             -R '^atto_lru_(hash_quotient|probe_wrap|slot_recycle|recency_touch|micro_source_inventory)$' \
             | tee build/atto-lru/lru-native-execution.log
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          from pathlib import Path
-          root=ET.parse(Path("build/atto-lru/lru-ctest.xml")).getroot()
-          cases=root.findall(".//testcase")
-          required={"atto_lru_hash_quotient","atto_lru_probe_wrap",
-                    "atto_lru_slot_recycle","atto_lru_recency_touch",
-                    "atto_lru_micro_source_inventory"}
-          names=[c.attrib.get("name") for c in cases]
-          if len(cases)!=5 or set(names)!=required or len(set(names))!=5:
-              raise SystemExit("incorrect native CTest execution inventory")
-          if any(c.find("failure") is not None or c.find("error") is not None
-                 or c.find("skipped") is not None for c in cases):
-              raise SystemExit("failure or skip cannot pass native LRU CI")
-          print("ATTO_LLVM_LRU_GUEST_EXECUTION=PASS native_guests=4 source_guards=1")
-          PY
+          python3 tests/atto_lru_junit_gate.py build/atto-lru/lru-ctest.xml
 
       - name: Reverify source and toolchain after native execution
         shell: bash
