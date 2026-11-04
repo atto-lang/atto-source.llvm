@@ -40,6 +40,7 @@ int main() {
     rejects("ATTO_UNIT_ROOT_ESCAPE", [&]{ ids.admit(root / ".." / "outside.atto"); });
     rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id("/tmp/consumer.atto"); });
     rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id("C:/producer.atto"); });
+    rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id("project\\\\alias.atto"); });
     rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id("project/../producer.atto"); });
     rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id("project/\xE2\x80\xAEproducer.atto"); });
     rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id("project/\xC0\xAF.atto"); });
