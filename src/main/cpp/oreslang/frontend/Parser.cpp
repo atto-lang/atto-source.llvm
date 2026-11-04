@@ -2075,36 +2075,63 @@ private:
             require("=");
             require("task");
             require("{");
-            if (token_.text == "TaskLocal") {
-                // Deliberately narrow first executable surface: a single
-                // compiler-known TaskLocal<int> scalar slot on a capture-free
-                // Task<int> producer. No key allocation or ambient actor TLS.
+            auto parse_static_task_key = [&]() {
                 require("TaskLocal");
                 require("<");
                 require("int");
+                std::string key_name;
+                if (accept(",")) {
+                    // A named compiler key, not a guest runtime number.
+                    require("key");
+                    require("=");
+                    key_name = identifier();
+                    if (key_name == "default")
+                        fail("TaskLocal<int> reserves key name default");
+                }
                 require(">");
+                return key_name;
+            };
+            while (token_.text == "TaskLocal") {
+                if (task.task_local_i64_keys.size() >= 8)
+                    fail("TaskLocal<int> exceeds eight static keys");
+                const std::string key_name = parse_static_task_key();
+                if (std::any_of(task.task_local_i64_keys.begin(),
+                                task.task_local_i64_keys.end(),
+                                [&](const SourceTaskLocalI64KeyBinding& known) {
+                                    return known.key_name == key_name;
+                                }))
+                    fail("TaskLocal<int> duplicate static key");
                 require(".");
                 require("set");
                 require("(");
-                task.task_local_i64_initial = expression();
+                SourceTaskLocalI64KeyBinding entry;
+                entry.key_name = key_name;
+                entry.slot = static_cast<std::uint32_t>(
+                    task.task_local_i64_keys.size());
+                entry.initializer = expression();
                 require(")");
                 require(";");
-                if (!native_capture_free_task_tree(*task.task_local_i64_initial))
+                if (!native_capture_free_task_tree(*entry.initializer))
                     fail("TaskLocal<int> initial value must be capture-free scalar");
+                task.task_local_i64_keys.push_back(std::move(entry));
             }
             require("return");
             if (token_.text == "TaskLocal") {
-                require("TaskLocal");
-                require("<");
-                require("int");
-                require(">");
+                const std::string key_name = parse_static_task_key();
                 require(".");
                 require("get");
                 require("(");
                 require(")");
-                task.task_local_i64_return = true;
-                if (!task.task_local_i64_initial)
+                const auto found = std::find_if(
+                    task.task_local_i64_keys.begin(),
+                    task.task_local_i64_keys.end(),
+                    [&](const SourceTaskLocalI64KeyBinding& known) {
+                        return known.key_name == key_name;
+                    });
+                if (found == task.task_local_i64_keys.end())
                     fail("TaskLocal<int>.get requires a preceding TaskLocal<int>.set");
+                task.task_local_i64_return = true;
+                task.task_local_i64_return_slot = found->slot;
             } else {
                 task.result = expression();
             }
@@ -4960,8 +4987,13 @@ private:
                 if (!task.awaited ||
                         (!task.result && !task.task_local_i64_return) ||
                         (task.result && !native_capture_free_task_tree(*task.result)) ||
-                        (task.task_local_i64_initial &&
-                         !native_capture_free_task_tree(*task.task_local_i64_initial)))
+                        !std::all_of(task.task_local_i64_keys.begin(),
+                                     task.task_local_i64_keys.end(),
+                            [](const SourceTaskLocalI64KeyBinding& entry) {
+                                return entry.initializer &&
+                                    native_capture_free_task_tree(
+                                        *entry.initializer);
+                            }))
                     throw std::runtime_error(
                         "native Task<int> v1 requires one consumed capture-free producer");
                 const std::unordered_map<std::string, ScalarType> empty_variables;
@@ -4970,11 +5002,13 @@ private:
                         *task.result, empty_variables, functions) != ScalarType::I64)
                     throw std::runtime_error(
                         "native Task<int> producer must return int");
-                if (task.task_local_i64_initial &&
-                    validate_scalar_expression(*task.task_local_i64_initial,
-                        empty_variables, functions) != ScalarType::I64)
-                    throw std::runtime_error(
-                        "TaskLocal<int>.set requires a scalar int value");
+                for (const auto& entry : task.task_local_i64_keys) {
+                    if (!entry.initializer ||
+                        validate_scalar_expression(*entry.initializer,
+                            empty_variables, functions) != ScalarType::I64)
+                        throw std::runtime_error(
+                            "TaskLocal<int>.set requires a scalar int value");
+                }
                 if (fn.locals.empty() ||
                         fn.locals.front().task_await_name != task.name)
                     throw std::runtime_error(
