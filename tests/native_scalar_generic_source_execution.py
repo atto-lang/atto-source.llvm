@@ -245,7 +245,7 @@ def run(argv):
         return subprocess.CompletedProcess(argv, result.returncode,
                                            out.read(), err.read())
 
-def verify(compiler, clang):
+def verify(compiler, clang, clang_opt):
     with tempfile.TemporaryDirectory(prefix="oreslang-native-generics-") as tmp:
         tmp = Path(tmp)
         for name, (source, exit_code) in VALID.items():
@@ -257,7 +257,7 @@ def verify(compiler, clang):
             ll = tmp / (name + ".ll")
             exe = tmp / name
             ll.write_bytes(result.stdout)
-            linking = run([str(clang), "-Wno-override-module", "-x", "ir", str(ll), "-o", str(exe)])
+            linking = run([str(clang), clang_opt, "-Wno-override-module", "-x", "ir", str(ll), "-o", str(exe)])
             if linking.returncode:
                 raise AssertionError(f"{name}: Clang failed: {linking.stderr!r}")
             executed = run([str(exe)])
@@ -281,5 +281,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", type=Path, required=True)
     parser.add_argument("--clang", type=Path, required=True)
+    parser.add_argument("--clang-opt", choices=("-O0", "-O2"), default="-O0")
     args = parser.parse_args()
-    verify(args.compiler.resolve(), args.clang.resolve())
+    verify(args.compiler.resolve(), args.clang.resolve(), args.clang_opt)
