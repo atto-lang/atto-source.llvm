@@ -32,10 +32,10 @@ bash scripts/verify-native-sanitizer-controls.sh address undefined thread
 ```
 
 The dedicated `atto-native-test-parity.yml` workflow pins the exact PR
-head and Git tree, checks an inventory of **four** tests, and executes:
+head and Git tree, checks an inventory of **five** Linux tests, and executes:
 a Rust host-only oracle self-test; a real compiler-backed source-mutator;
 a linked canonical `.atto` guest returning 42; and invalid source
-rejection without partial LLVM IR. Zero-step jobs are not test evidence.
+rejection without partial LLVM IR; and a real compiler-generated `.atto` actor handler linked against the native actor-owned heap with ASan+UBSan. Zero-step jobs are not test evidence.
 
 The source-mutator generates `.atto` programs in a temporary directory
 and computes independent addition oracles in the OS exit domain [0,192].
