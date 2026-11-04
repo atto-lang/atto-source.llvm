@@ -109,7 +109,19 @@ pub fnc main(): int {
   values.set(value: source_value(), index: source_index());
   return values.get(index: 0);
 }
-""", 42, 1),
+""", 42, 1),    "named-constructor-owned-array-swap": ("""define class Pair as
+  pub final mut Array<int> left;
+  pub final mut Array<int> right;
+end
+pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  let mut Array<int> b = new Array<int>();
+  a.add(19);
+  b.add(23);
+  let Pair p = new Pair(right: rt take b, left: rt take a);
+  return p.left.get(index: 0) + p.right.get(index: 0);
+}
+""", 42, 2),
 }
 
 # These are *valid Oreslang source programs* that compile successfully but
