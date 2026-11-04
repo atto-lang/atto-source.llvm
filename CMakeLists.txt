@@ -2979,6 +2979,11 @@ if(BUILD_TESTING)
         oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
         # Same byte-exact scalar corpus in LLVM, .NET and Wasm. These are
         # genuine LLVM compiler/Clang/OS guest tests, not UI/FFI parity.
+        # Host integrity only; compile/link/run evidence comes from guest CTests below.
+        add_test(NAME attoxp_scalar_shared_source_pins
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/attoxp_scalar_manifest_test.py")
+        set_tests_properties(attoxp_scalar_shared_source_pins PROPERTIES TIMEOUT 15)
         oreslang_contract_test(attoxp_scalar_guest_answer42 ../../contracts/attoxp-scalar-v1/answer-42.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(attoxp_scalar_guest_decrement41 ../../contracts/attoxp-scalar-v1/decrement-41.atto --run 41 --clang "${ORE_CLANG}")
         oreslang_contract_test(attoxp_scalar_guest_reset0 ../../contracts/attoxp-scalar-v1/reset-zero.atto --run 0 --clang "${ORE_CLANG}")
