@@ -1,0 +1,32 @@
+// Reject different objects with duplicate/reordered IDs without mutating counts.
+import module Run from "ores.std/testing/m1";
+import class TestCase from "ores.std/testing/m1";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase first = new TestCase();
+  let mut TestCase duplicate = new TestCase();
+  let mut TestCase filtered = new TestCase();
+  let mut RunSummary summary = new RunSummary();
+  first.id = 2;
+  first.outcome = 0;
+  duplicate.id = 2;
+  duplicate.outcome = 1;
+  filtered.id = 4;
+  filtered.selected = false;
+  if Run.record(rt mut borrow suite, rt borrow first) != 0; then return 3; fi
+  if Run.should_run(rt borrow suite, rt borrow duplicate); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow duplicate) != -4; then return 3; fi
+  if suite.total != 1 || suite.passed != 1 || suite.failed != 0 || suite.last_id != 2; then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow filtered) != 3; then return 3; fi
+  duplicate.id = 3;
+  if Run.record(rt mut borrow suite, rt borrow duplicate) != -4; then return 3; fi
+  if suite.total != 1 || suite.filtered != 1 || suite.last_id != 4; then return 3; fi
+  val int status = Run.finish(rt borrow suite, rt mut borrow summary);
+  if status != 0 || summary.total != 1 || summary.passed != 1 ||
+    summary.failed != 0 || summary.skipped != 0 || summary.filtered != 1; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/identity/no-replay|");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=1");
+  return status;
+}
