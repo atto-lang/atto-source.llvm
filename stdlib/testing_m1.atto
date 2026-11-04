@@ -18,6 +18,9 @@ define module testing_m1 as
     pub let int skipped = 0;
     pub let int filtered = 0;
     pub let int halted = 0;
+    // Highest admitted case ID, including skipped or filtered descriptors.
+    // Strictly ascending IDs prohibit replay across distinct TestCase objects.
+    pub let int last_id = 0;
     pub let bool fail_fast = false;
   end
 
@@ -30,11 +33,13 @@ define module testing_m1 as
   end
 
   pub fnc should_run(borrow TestSuite suite, borrow TestCase candidate): bool {
-    return suite.halted == 0 && candidate.selected && !candidate.skipped;
+    return suite.halted == 0 && candidate.selected && !candidate.skipped &&
+      candidate.id > suite.last_id && suite.total < 1024;
   }
 
   // 0 PASS, 1 FAIL, 2 SKIP, 3 FILTER, 4 NOT_RUN after fail-fast;
-  // -1 invalid descriptor, -2 quota exceeded. Both errors are atomic.
+  // -1 invalid descriptor, -2 quota exceeded, -4 replayed/out-of-order ID.
+  // Rejections are atomic, including the last admitted identity.
   pub fnc record(borrow mut TestSuite suite, borrow TestCase candidate): int {
     if suite.halted != 0; then
       return 4;
@@ -42,17 +47,22 @@ define module testing_m1 as
     if candidate.id <= 0 || candidate.outcome < 0 || candidate.outcome > 1; then
       return -1;
     fi
+    if candidate.id <= suite.last_id; then
+      return -4;
+    fi
     if !candidate.selected; then
       if suite.filtered >= 1024; then
         return -2;
       fi
       suite.filtered = suite.filtered + 1;
+      suite.last_id = candidate.id;
       return 3;
     fi
     if suite.total >= 1024; then
       return -2;
     fi
     suite.total = suite.total + 1;
+    suite.last_id = candidate.id;
     if candidate.skipped; then
       suite.skipped = suite.skipped + 1;
       return 2;
