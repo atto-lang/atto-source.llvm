@@ -1,0 +1,79 @@
+name: Atto MCP M1 LLVM compile-time descriptors (not runtime MCP)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/runtime/McpCompilerDescriptorsV1.hpp'
+      - 'tests/native_mcp_compiler_descriptor_m1_test.cpp'
+      - 'tests/test_mcp_m1_compiler_cli.py'
+      - 'tests/fixtures/mcp-descriptor-public.*'
+      - 'CMakeLists.txt'
+      - '.github/workflows/mcp-m1-llvm-compiler-descriptors.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  metadata-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        variant: [optimized, sanitized]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact head and tree
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "SOURCE_SHA=$EXPECTED"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and execute deterministic metadata host checks
+        env:
+          CXX: ${{ matrix.compiler }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          flags=(-O2 -DNDEBUG)
+          if [[ "$VARIANT" == sanitized ]]; then
+            flags=(-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
+          fi
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror \
+             "${flags[@]}" -pthread -I src/main/cpp \
+             tests/native_mcp_compiler_descriptor_m1_test.cpp -o "$RUNNER_TEMP/m1-metadata-host"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+             "$RUNNER_TEMP/m1-metadata-host"
+          echo 'EVIDENCE_SCOPE=HOST_AST_METADATA_HELPER_ONLY'
+  llvm-compiler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact compiler source identity
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "SOURCE_SHA=$EXPECTED"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Build real LLVM compiler
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev cmake build-essential
+          cmake -S . -B build-mcp-m1 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build build-mcp-m1 --target oreslang-llvmc --parallel 2
+      - name: Execute .atto and .ores native compiler descriptor mode
+        run: python3 tests/test_mcp_m1_compiler_cli.py --compiler build-mcp-m1/oreslang-llvmc
+      - name: Distinguish metadata from guest runtime evidence
+        run: echo 'COMPILER_METADATA_ONLY_NO_NATIVE_GUEST_LINK_OR_MCP_SERVER'
