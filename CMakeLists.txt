@@ -384,6 +384,16 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Compiler -> LLVM IR -> Clang -> native process for AttoLang .atto named
+    # generic + named value calls. Diagnostics must reject before producing IR.
+    # This is a distinct scalar-only executable gate, not collection/method parity.
+    add_test(NAME native_atto_named_generic_value_source_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_generic_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_atto_named_generic_value_source_execution
+        PROPERTIES TIMEOUT 240)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.
