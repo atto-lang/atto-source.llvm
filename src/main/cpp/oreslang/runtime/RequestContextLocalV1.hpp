@@ -148,14 +148,23 @@ public:
 
     template <typename T>
     std::optional<T> get_copy(const RequestLocalKeyV1<T>& key) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!open_ || cancellation_->is_cancelled())
-            return std::nullopt;
-        const auto found = slots_.find(key.id_);
-        if (found == slots_.end())
-            return std::nullopt;
-        // Key IDs are minted uniquely and typed; no user-supplied key ID.
-        return std::static_pointer_cast<const Cell<T>>(found->second)->value;
+        std::shared_ptr<const Cell<T>> pinned;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!open_ || cancellation_->is_cancelled())
+                return std::nullopt;
+            const auto found = slots_.find(key.id_);
+            if (found == slots_.end())
+                return std::nullopt;
+            // Unique typed key IDs are host minted, never guest supplied.
+            // Keep the original cell alive while a user-defined T copy runs
+            // after dropping our mutex. A reentrant copy can close/cancel,
+            // replace or erase the request without invalidating this source.
+            pinned = std::static_pointer_cast<const Cell<T>>(found->second);
+        }
+        // An already-authorized read may return its pinned snapshot after a
+        // concurrent close. It MUST NOT expose a borrowed mutable reference.
+        return pinned->value;
     }
 
     bool close() noexcept {
