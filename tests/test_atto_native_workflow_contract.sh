@@ -22,6 +22,12 @@ receipt_line="$(gate_line "printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|")"
 unique() { [[ "$(count "$1")" -eq 1 ]] || die "expected exactly one: $1"; }
 unique 'name: AttoLang LLVM native harness executable parity (O0 O2)'
 unique '  atto-native-executable:'
+unique "      - 'CMakeLists.txt'"
+unique "      - 'cmake/**'"
+unique "      - 'src/main/**'"
+unique "      - 'tests/**'"
+unique "      - 'scripts/**'"
+unique "      - 'stdlib/**'"
 unique 'Checkout exact source head without persistent credentials'
 unique 'Bind exact commit and tree'
 unique 'Verify source-free inventory and adversarial fixture mutations'
@@ -32,7 +38,7 @@ unique 'Execute 40 actual .atto guests at Clang O0 and O2'
 unique 'Assert unchanged source and exact head after execution'
 unique 'Preserve host-observed native evidence (not ORES_TEST guest receipts)'
 unique 'bash tests/atto_native_harness_parity.sh --run'
-unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=2|optimizations=2|native=4|testkit=NOT_IMPLEMENTED'
+unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=4|optimizations=2|native=8|testkit=NOT_IMPLEMENTED'
 unique "grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|'"
 unique "tests/atto_native_guest_receipts.sh"
 unique "tests/verify_atto_guest_receipts.py"
@@ -134,7 +140,7 @@ if [[ "$#" -eq 0 ]]; then
     die 'source harness bypassed mandatory no-GC auditor'
   fi
 fi
-echo 'PASS LLVM canonical .atto workflow source-only admission (seven adversarial mutations)'
+echo 'PASS LLVM canonical .atto workflow source-only admission (ten adversarial mutations)'
 "
 unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED"
 unique 'atto_native_harness_compiler_guest_o0_o2'
@@ -158,6 +164,35 @@ if grep -Eq '^ "\$RUNNER_TEMP/|^ *shell: bash$' "$workflow"; then
     die 'orphaned YAML/heredoc text'
   fi
 fi
+# Parse all YAML run blocks with bash -n; marker-count checks cannot detect
+# unterminated shell quoting in the real CI workflow.
+python3 - "$workflow" <<'PY'
+import pathlib
+import subprocess
+import sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+blocks = []
+for i, line in enumerate(lines):
+    if line != "        run: |":
+        continue
+    body = []
+    for next_line in lines[i + 1:]:
+        if next_line.startswith("          "):
+            body.append(next_line[10:])
+        elif not next_line:
+            body.append("")
+        else:
+            break
+    blocks.append("\n".join(body) + "\n")
+if len(blocks) != 8:
+    raise SystemExit("wrong CI shell block count: " + str(len(blocks)))
+for i, block in enumerate(blocks, 1):
+    result = subprocess.run(["bash", "-n"], input=block, text=True,
+                            capture_output=True, check=False)
+    if result.returncode:
+        raise SystemExit("bad CI shell block %d: %s" % (i, result.stderr))
+PY
+
 if [[ "$#" -eq 0 ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf -- "$tmp"' EXIT
@@ -177,6 +212,11 @@ if [[ "$#" -eq 0 ]]; then
     die 'false Java receipt parity accepted'
   fi
   cp "$workflow" "$tmp/fixture.yml"
+  sed -i '/ctest --test-dir build --output-on-failure --no-tests=error -R /s/.$//' "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'unterminated workflow CI shell quote was accepted'
+  fi
+  cp "$workflow" "$tmp/fixture.yml"
   sed -i 's/persist-credentials: false/persist-credentials: true/g' "$tmp/fixture.yml"
   if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
     die 'persistent GitHub checkout credentials accepted'
@@ -191,5 +231,19 @@ if [[ "$#" -eq 0 ]]; then
   if ATTO_NATIVE_HARNESS_SCRIPT="$tmp/mutated-harness.sh" bash "$0" "$workflow" >/dev/null 2>&1; then
     die 'source harness bypassed mandatory no-GC auditor'
   fi
+  grep -Fvx "      - 'src/main/**'" "$workflow" > "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'compiler-source trigger omission accepted'
+  fi
+  grep -Fvx "      - 'CMakeLists.txt'" "$workflow" > "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'CMake-source trigger omission accepted'
+  fi
+  cp "$workflow" "$tmp/fixture.yml"
+  sed -i 's/suites=4|optimizations=2|native=8/suites=2|optimizations=2|native=4/' "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'guest receipt suite omission accepted'
+  fi
+
 fi
-echo 'PASS LLVM canonical .atto workflow source-only admission (six adversarial mutations)'
+echo 'PASS LLVM canonical .atto workflow source-only admission (ten adversarial mutations)'
