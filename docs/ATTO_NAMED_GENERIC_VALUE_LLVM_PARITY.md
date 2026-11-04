@@ -93,13 +93,18 @@ potentially crossing a caller's intended package boundary. Such declarations
 now fail closed pending a complete TOML parser. Dotted project descendants
 (`[project.root.extra]`, `[project.logging]`) and Unicode-escaped TOML
 key spellings are also rejected, so escaping cannot disguise a project-root
-setting. Duplicate `[project]` tables are rejected; unrelated
-`[build.*]` and `[build] root=...` metadata remain allowed.
+setting. Dotted `project.root.path =`, `project . root . path =`, and
+`[project]` followed by `root . path =` are rejected too: TOML permits
+both arbitrary whitespace around dots and nested key assignments.
+Duplicate `[project]` tables are rejected; unrelated `[build.*]` and
+`[build] root . config=...` metadata remain allowed.
 
-Added **14 negative compiler scenarios** to `native_source_module_graph_execution`
-requiring no LLVM IR and **15 direct resolver cases** (14 negative and one
-unrelated-root positive) to `native_project_root_import_security`. These
-are authored tests, not backend execution evidence.
+Added **22 negative compiler scenarios** to `native_source_module_graph_execution`
+requiring no LLVM IR plus one positive `.atto` native compile/link/guest
+case exercising unrelated dotted build metadata. The standalone
+`native_project_root_import_security` suite gains **23 cases**
+(22 negative and one unrelated-root positive). These are authored tests,
+not backend execution evidence.
 
 ## Generic-call token lookahead and separate binding namespaces
 
