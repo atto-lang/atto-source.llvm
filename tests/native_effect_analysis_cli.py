@@ -54,6 +54,20 @@ def main(compiler):
     assert "main/0" in result.stdout
     assert "helper/0" in result.stdout
 
+    # Actual native bool and scalar-parameter source must share the same
+    # portable v0 no-codegen receipt format as the Java frontend.
+    for source in (
+        "pub fnc main(): bool { return true; }\n",
+        "fnc identity(int value): int { return value; }\n"
+        "pub fnc main(): int { return identity(7); }\n",
+    ):
+        result = run(compiler, source, flags=("--analyze",))
+        assert result.returncode == 0, (
+            result.returncode, result.stdout, result.stderr
+        )
+        assert "status=known" in result.stdout
+        assert "known_effects=none" in result.stdout
+
     # Checked arithmetic is not proved effect-free by the current native
     # direct-facts collector. It must not become a positive effect certificate.
     arithmetic = run(compiler,
