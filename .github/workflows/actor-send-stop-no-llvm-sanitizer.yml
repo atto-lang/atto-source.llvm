@@ -8,6 +8,8 @@ on:
       - 'tests/native_actor_send_stop_race_test.c'
       - 'tests/test_barrier.h'
       - '.github/workflows/actor-send-stop-no-llvm-sanitizer.yml'
+      - 'scripts/verify-native-sanitizer-controls.sh'
+      - 'scripts/test-verify-native-sanitizer-controls.sh'
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,20 +26,41 @@ jobs:
             flags: '-O2 -UNDEBUG'
           - flavor: clang-asan-ubsan
             cc: clang
-            flags: '-O1 -g -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer'
+            flags: '-O1 -g -UNDEBUG -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer'
+          - flavor: gcc-tsan
+            cc: gcc
+            flags: '-O1 -g -UNDEBUG -fPIE -pie -fsanitize=thread -fno-omit-frame-pointer'
     steps:
-      - name: Checkout evaluated PR tree with no persisted credentials
+      - name: Checkout exact PR head with no persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Record exact Git tree and reject dirty checkout
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bind exact PR head and clean Git tree
         shell: bash
+        env:
+          EXPECTED_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          echo "EVALUATED_SOURCE_COMMIT=$(git rev-parse HEAD)"
-          echo "EVALUATED_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
-          test -z "$(git status --porcelain)"
+          [[ "$EXPECTED_SOURCE_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "EXACT_SOURCE_HEAD=$EXPECTED_SOURCE_HEAD"
+          echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Verify sanitizer controls before instrumented native workload
+        if: matrix.flavor != 'gcc'
+        shell: bash
+        env:
+          SANITIZER_CC: ${{ matrix.cc }}
+          FLAVOR: ${{ matrix.flavor }}
+        run: |
+          set -euo pipefail
+          bash scripts/test-verify-native-sanitizer-controls.sh
+          if [[ "$FLAVOR" == gcc-tsan ]]; then
+            bash scripts/verify-native-sanitizer-controls.sh thread
+          else
+            bash scripts/verify-native-sanitizer-controls.sh address undefined
+          fi
       - name: Compile real actor scheduler + race harness
         shell: bash
         env:
@@ -57,6 +80,9 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3; do
             echo "SEND_STOP_ATTEMPT=$attempt"
-            timeout 45s /tmp/oreslang-native-send-stop-race | grep -Fx NATIVE_SEND_STOP_RACE_PASS
+            TSAN_OPTIONS=halt_on_error=1:exitcode=86:second_deadlock_stack=1 \
+            ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:exitcode=86 \
+            UBSAN_OPTIONS=halt_on_error=1:exitcode=86 \
+              timeout 45s /tmp/oreslang-native-send-stop-race | grep -Fx NATIVE_SEND_STOP_RACE_PASS
           done
-          echo "NATIVE_SEND_STOP_EXACT_TREE_PASS attempts=3"
+          echo "NATIVE_SEND_STOP_EXACT_HEAD_PASS attempts=3 flavor=${{ matrix.flavor }}"
