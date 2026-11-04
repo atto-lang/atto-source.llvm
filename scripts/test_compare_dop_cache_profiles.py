@@ -218,6 +218,17 @@ class ThreeLayoutComparisonTests(unittest.TestCase):
         # Normal single-link evidence must remain usable after unlink.
         self.assertIn("soa", compare(self.paths)["median_rates"])
 
+    def test_invalid_l2_event_syntax_and_duplicate_pair_rejected(self):
+        for events in (["bad;event", "l2_miss"],
+                       ["cycles", "l2_miss"],
+                       ["l2_requests", "l2_requests"]):
+            with self.subTest(events=events):
+                self.reports["aosoa"]["hardware_l2_events"] = events
+                self.reports["aosoa"]["events"] = list(EVENTS) + events
+                self.flush()
+                with self.assertRaisesRegex(ValueError, "L2"):
+                    compare(self.paths)
+
     def test_zero_source_tree_and_missing_l2_event_not_accepted(self):
         self.reports["aosoa"]["source_tree"] = None
         self.flush()
