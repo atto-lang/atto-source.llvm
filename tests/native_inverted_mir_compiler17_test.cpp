@@ -78,19 +78,42 @@ int main() {
     const I64PairIrOperands next_inputs{{{9, 77}}, {}};
     const auto reference_ir = I64PairLlvmEmitter(2).build(next_module, next_inputs);
     assert(emitter.build(next_module, next_inputs) == reference_ir);
-    // Snapshot is a genuine detached value in the native reference, but this
-    // restricted guest emitter cannot materialize/return one. Do not silently
-    // discard checked MIR snapshot reads and claim guest parity.
+    // Detached snapshot def-use is independently checked in MIR. The LLVM
+    // scalar must be loaded BEFORE owner mutation, swap-delete and teardown.
     LinearPlan snapshot_plan(layout, 2);
     snapshot_plan.push(2);
-    snapshot_plan.snapshot(0);
-    snapshot_plan.read_runtime_checked(0, "x");
+    const auto snapshot_id = snapshot_plan.snapshot(0);
+    snapshot_plan.write_runtime_checked(0, "x");
+    snapshot_plan.erase_swap(0);
+    snapshot_plan.read_snapshot_field(snapshot_id, "x");
     snapshot_plan.close();
     const auto snapshot_mir = Module::lower(snapshot_plan);
+    const I64PairIrOperands snapshot_args{{{42, 77}}, {99}};
+    const auto snapshot_ir = emitter.build(snapshot_mir, snapshot_args);
+    assert(snapshot_ir.find("store i64 99, ptr") != std::string::npos);
+    assert(snapshot_ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
+    assert(snapshot_ir == I64PairLlvmEmitter(2).build(snapshot_mir, snapshot_args));
+
+    auto forged_snapshot = snapshot_mir.instructions();
+    // Snapshot reference 1 is never defined; copied values must not be forged.
+    forged_snapshot[5].index = 1;
     reject([&] {
-        (void)emitter.build(snapshot_mir,
-                            I64PairIrOperands{{{9, 77}}, {}});
-    }, "snapshot value lowering not implemented");
+        (void)Module::verify_external(layout, 2, forged_snapshot);
+    }, "invalid inverted MIR snapshot reference");
+    forged_snapshot = snapshot_mir.instructions();
+    forged_snapshot[2].require_bounds_guard = false;
+    reject([&] {
+        (void)Module::verify_external(layout, 2, forged_snapshot);
+    }, "mandatory owner/generation/bounds guard missing");
+    LinearPlan runtime_oob(layout, 2);
+    runtime_oob.push(2);
+    const auto oob = runtime_oob.snapshot_runtime_checked(1);
+    runtime_oob.read_snapshot_field(oob, "x");
+    runtime_oob.close();
+    const auto oob_ir = emitter.build(Module::lower(runtime_oob),
+                                       I64PairIrOperands{{{42, 77}}, {}});
+    assert(oob_ir.find("icmp ult i64 1, ") != std::string::npos);
+    assert(oob_ir.find("call void @llvm.trap()") != std::string::npos);
     assert(emitter.build(next_module, next_inputs) == reference_ir);
     // External open-owner MIR remains valid for other targets, but never
     // bypasses the standalone LLVM guest teardown gate.
