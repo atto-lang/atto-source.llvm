@@ -171,14 +171,22 @@ struct ActorSpawnBinding {
     std::size_t offset = 0;
 };
 
+struct SourceTaskLocalI64KeyBinding {
+    // Restricted compiler-owned static named key; "" is the legacy default.
+    // Slots are assigned deterministically in first-set source order.
+    std::string key_name;
+    std::unique_ptr<Expression> initializer;
+    std::uint32_t slot = 0;
+};
+
 struct SourceTaskI64Binding {
     std::string name;
     std::unique_ptr<Expression> result;
-    // Narrow first compiler-backed TaskLocal<int> source slice. A Task owns
-    // one implicit i64 slot; full typed static keys await AOT descriptors.
-    // Only a source Task producer may initialize/read this slot.
-    std::unique_ptr<Expression> task_local_i64_initial;
+    // Compiler-admitted TaskLocal<int> keys only. This does not admit
+    // arbitrary TaskLocal<T>, task inheritance or captureful producers.
+    std::vector<SourceTaskLocalI64KeyBinding> task_local_i64_keys;
     bool task_local_i64_return = false;
+    std::uint32_t task_local_i64_return_slot = 0;
     std::size_t offset = 0;
     bool awaited = false;
 };
