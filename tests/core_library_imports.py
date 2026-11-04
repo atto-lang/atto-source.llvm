@@ -66,6 +66,8 @@ def main():
     parser.add_argument("--lld")
     parser.add_argument("--wasm-ld")
     args = parser.parse_args()
+    if args.clang is not None and not args.clang.strip():
+        raise ValueError("native guest-link evidence requires a nonempty Clang command")
 
     with tempfile.TemporaryDirectory(prefix="ores-core-registry-") as temp:
         root = Path(temp)
