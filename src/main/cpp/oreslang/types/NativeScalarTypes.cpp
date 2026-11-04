@@ -104,7 +104,7 @@ void validate_native_scalar_types(const Program& program) {
                 const bool option = type.kind == NativeSumType::Kind::Option;
                 if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err") ||
                         e.arguments.size() != (e.name == "None" ? 0u : 1u)) fail(e.offset, "sum variant/payload arity");
-                if (!e.arguments.empty()) require(expression(*e.arguments[0], locals), scalar(e.name == "Err" ? type.error_type : type.value_type), e.offset, "sum payload type");
+                if (!e.arguments.empty()) assign(*e.arguments[0], expression(*e.arguments[0], locals), scalar(e.name == "Err" ? type.error_type : type.value_type), e.offset, "sum payload type");
                 return {Kind::Sum, type.name};
             }
             case E::SumAccess: {
@@ -114,7 +114,7 @@ void validate_native_scalar_types(const Program& program) {
                 const bool query = option ? e.name == "is_some" || e.name == "is_none" : e.name == "is_ok" || e.name == "is_err";
                 if ((!query && e.name != "unwrap" && e.name != "unwrap_or") || e.arguments.size() != (e.name == "unwrap_or" ? 1u : 0u))
                     fail(e.offset, "sum member or payload arity");
-                if (e.name == "unwrap_or") require(expression(*e.arguments.at(0), locals), scalar(type.value_type), e.offset, "sum fallback type");
+                if (e.name == "unwrap_or") assign(*e.arguments.at(0), expression(*e.arguments.at(0), locals), scalar(type.value_type), e.offset, "sum fallback type");
                 return query ? scalar(true) : scalar(type.value_type);
             }
             case E::Integer: return scalar(false);

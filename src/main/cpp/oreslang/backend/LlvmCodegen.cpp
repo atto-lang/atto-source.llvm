@@ -183,8 +183,9 @@ llvm::Value* lower_unwidened(const Expression& expr,
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
             const auto tag = option ? (expr.name == "Some" ? 1 : 0) : (error ? 1 : 0);
-            auto* payload = expr.arguments.empty() ? llvm::ConstantInt::get(i64, 0)
+            llvm::Value* payload = expr.arguments.empty() ? llvm::ConstantInt::get(i64, 0)
                 : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
+            if (payload->getType()->isDoubleTy()) payload = builder.CreateBitCast(payload, i64, "sum.f64.bits");
             auto* values = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, count), "sum.fields");
             for (std::size_t i = 0; i < count; ++i) builder.CreateStore(llvm::ConstantInt::get(i64, 0),
                 builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
@@ -210,7 +211,8 @@ llvm::Value* lower_unwidened(const Expression& expr,
             auto* absent = llvm::BasicBlock::Create(builder.getContext(), "sum.payload.absent", function);
             builder.CreateCondBr(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, selected)), present, absent);
             builder.SetInsertPoint(present);
-            auto* value = builder.CreateCall(moves->record_get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
+            llvm::Value* value = builder.CreateCall(moves->record_get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
+            if (type.value_type == ScalarType::F64) value = builder.CreateBitCast(value, builder.getDoubleTy(), "sum.f64");
             if (!fallback) {
                 builder.SetInsertPoint(absent);
                 auto panic = function->getParent()->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
@@ -218,7 +220,7 @@ llvm::Value* lower_unwidened(const Expression& expr,
             }
             auto* merge = llvm::BasicBlock::Create(builder.getContext(), "sum.fallback.merge", function);
             builder.CreateBr(merge); builder.SetInsertPoint(absent); builder.CreateBr(merge);
-            builder.SetInsertPoint(merge); auto* result = builder.CreatePHI(i64, 2);
+            builder.SetInsertPoint(merge); auto* result = builder.CreatePHI(value->getType(), 2);
             result->addIncoming(value, present); result->addIncoming(fallback, absent); return result;
         }
         case Expression::Kind::RecordConstruct: {
@@ -268,7 +270,7 @@ llvm::Value* lower_unwidened(const Expression& expr,
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
             auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
-            auto runtime = module->getOrInsertFunction("ores_string_literal",
+            auto runtime = module->getOrInsertFunction("ores_string_literal_interned",
                 llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
             return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
         }
@@ -297,6 +299,17 @@ llvm::Value* lower_unwidened(const Expression& expr,
             return builder.CreateCall(runtime, {value}, "int.text");
         }
         case Expression::Kind::Console: {
+            // A lone numeric operand prints without any region allocation.
+            if (expr.name != "fail" && expr.left->kind == Expression::Kind::ToText &&
+                    (expr.left->left->resolved_type == ScalarType::F64 ||
+                     expr.left->left->resolved_type == ScalarType::I64)) {
+                auto* operand = lower(*expr.left->left, builder, i64, storage, field_storage, functions, moves);
+                const bool real = operand->getType()->isDoubleTy();
+                auto print = builder.GetInsertBlock()->getModule()->getOrInsertFunction(
+                    real ? "ores_string_print_f64" : "ores_string_print_i64",
+                    llvm::FunctionType::get(i64, {operand->getType(), i64}, false));
+                return builder.CreateCall(print, {operand, llvm::ConstantInt::get(i64, expr.name == "println")}, "console.status");
+            }
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             if (expr.name == "fail") {
                 auto* module = builder.GetInsertBlock()->getModule();
@@ -857,7 +870,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 std::any_of(main_it->parameters.begin(), main_it->parameters.end(),
                     [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
         throw std::runtime_error("native main does not admit f64 process ABI");
-    bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
+    bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false, record_arrays = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
     for (const auto& cls : source.classes) flat_classes.emplace(cls.name, native_flat_class(cls, layouts));
@@ -883,7 +896,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (wasm32_target)
                 throw std::runtime_error("wasm32 scoped array owners require allocator-provider scope qualification");
             if (s.branch_local->array_element_type == ScalarType::String) string_runtime = true;
-            if (!s.branch_local->array_record_class.empty()) record_runtime = true;
+            if (!s.branch_local->array_record_class.empty()) record_runtime = record_arrays = true;
         }
         if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex)
             iteration_runtime = true;
@@ -899,6 +912,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (fn.return_type == ScalarType::String) string_runtime = true;
         for (const auto& p : fn.parameters) if (p.scalar_type == ScalarType::String) string_runtime = true;
         for (const auto& local : fn.locals) {
+            if (!local.array_record_class.empty()) record_arrays = true;
             if (!local.array_record_class.empty() || (local.record_view && !class_owns_arrays(local.class_name))) record_runtime = true;
             if (local.int_array && local.array_element_type == ScalarType::String) string_runtime = true;
             scan_string(local.initializer.get());
@@ -917,7 +931,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions) scan_function(fn);
     for (const auto& cls : source.classes) for (const auto& field : cls.fields) {
         if (field.int_array && field.array_element_type == ScalarType::String) string_runtime = true;
-        if (!field.array_record_class.empty()) record_runtime = true;
+        if (!field.array_record_class.empty()) record_runtime = record_arrays = true;
         if (field.scalar_type == ScalarType::String) string_runtime = true;
         scan_string(field.initializer_expression.get());
     }
@@ -925,6 +939,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (const auto& field : actor.fields) scan_string(field.initializer.get());
         scan_function(actor.on_message);
     }
+    // Fields are copied out of a record as soon as it is bound, so a handle only
+    // outlives its iteration through a record array element or a stored sum.
+    const bool loop_record_reclaim = record_runtime && !record_arrays && source.sum_types.empty();
     if (string_runtime || record_runtime || owning_result_runtime || iteration_runtime) {
         if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
                 [](const Function& f) {
@@ -1147,7 +1164,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     std::unordered_map<std::string, llvm::StructType*> class_types;
     std::unordered_map<std::string, const ClassDecl*> record_classes;
     std::unordered_map<std::string, std::uint64_t> record_schemas;
-    llvm::FunctionCallee record_new, record_get, record_check, sum_check;
+    llvm::FunctionCallee record_new, record_get, record_check, sum_check, recordMark, recordRelease;
     if (record_runtime) {
         record_new = module.getOrInsertFunction("ores_record_new",
             llvm::FunctionType::get(i64, {i64, i64, native_ptr}, false));
@@ -1157,6 +1174,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(i64, {i64, i64, i64}, false));
         record_check = module.getOrInsertFunction("ores_record_check",
             llvm::FunctionType::get(i64, {i64, i64}, false));
+        if (loop_record_reclaim) {
+            recordMark = module.getOrInsertFunction("ores_record_mark", llvm::FunctionType::get(i64, {}, false));
+            recordRelease = module.getOrInsertFunction("ores_record_release",
+                llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
+        }
     }
     std::unordered_map<std::string, std::unordered_map<std::string, std::size_t>> field_indices;
     std::unordered_map<std::string, bool> class_has_arrays;
@@ -2034,6 +2056,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 auto* body = llvm::BasicBlock::Create(context, "for.index.body", function);
                 auto* step = llvm::BasicBlock::Create(context, "for.index.step", function);
                 auto* exit = llvm::BasicBlock::Create(context, "for.index.exit", function);
+                llvm::Value* record_mark = loop_record_reclaim ? builder.CreateCall(recordMark, {}, "loop.record.mark") : nullptr;
                 builder.CreateBr(header); builder.SetInsertPoint(header);
                 auto* condition = lower(*stmt.condition, builder, i64, storage, field_storage, declarations, &region_moves);
                 builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), body, exit);
@@ -2043,6 +2066,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 loop_targets.pop_back();
                 if (!builder.GetInsertBlock()->getTerminator()) builder.CreateBr(step);
                 builder.SetInsertPoint(step);
+                if (record_mark) builder.CreateCall(recordRelease, {record_mark});
                 auto* next = lower(*stmt.loop_step, builder, i64, storage, field_storage, declarations, &region_moves);
                 builder.CreateStore(next, counter.address); builder.CreateBr(header);
                 active_scopes.pop_back(); builder.SetInsertPoint(exit); end_scope(counter); return;

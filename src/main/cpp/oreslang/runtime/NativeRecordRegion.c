@@ -113,6 +113,12 @@ int64_t ores_record_get(int64_t handle, int64_t schema, int64_t field) {
     return record->fields[field];
 }
 
+int64_t ores_record_mark(void) { return (int64_t)region.count; }
+void ores_record_release(int64_t mark) {
+    Region* r = &region;
+    if (r->active && !r->failed && mark >= 0 && (size_t)mark <= r->count) r->count = (size_t)mark;
+}
+
 int64_t ores_record_region_end(void) {
     Region* r = &region;
     if (!r->active) return 1;

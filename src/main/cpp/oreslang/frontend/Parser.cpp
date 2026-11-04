@@ -2487,7 +2487,8 @@ private:
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> dispatch_statement;
         std::function<Statement()> foreach_statement;
-        std::function<Statement()> conditional_statement;
+        std::function<Statement(std::unique_ptr<Expression>)> conditional_statement;
+        std::function<Statement(std::unique_ptr<Expression>)> keyword_conditional;
         std::size_t loop_depth = 0;
         std::size_t hidden_loop_counters = 0;
         // Java: rt fail(message) is a catchable failure. Native admission (see
@@ -2647,25 +2648,34 @@ private:
             loop.then_statements = loop_body();
             return loop;
         };
-        conditional_statement = [&]() {
+        // `if c then ... elif d then ... else ... fi`, past the opening keyword.
+        keyword_conditional = [&](std::unique_ptr<Expression> condition) {
             Statement statement;
-            statement.offset = token_.offset;
+            statement.offset = condition->offset;
             statement.kind = Statement::Kind::Conditional;
-            statement.condition = expression();
-            const bool had_semicolon = accept(";");
-            const bool keyword_arm = accept("then") || accept("do");
-            if (had_semicolon && !keyword_arm) require("do");
-            if (keyword_arm) {
-                statement.then_statements = branch_arm(false, true);
-                if (accept("elif") || accept("elseif")) {
-                    statement.else_statements.push_back(conditional_statement());
-                    return statement; // the nested arm consumed the shared `fi`
-                }
-                if (accept("else")) statement.else_statements = branch_arm(false, true);
-            } else {
-                require("{"); statement.then_statements = branch_arm(false, false); require("}");
-                if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
+            statement.condition = std::move(condition);
+            statement.then_statements = branch_arm(false, true);
+            if (accept("elif") || accept("elseif")) {
+                auto next = expression();
+                accept(";");
+                if (!accept("then")) require("do");
+                statement.else_statements.push_back(keyword_conditional(std::move(next)));
+                return statement; // the nested arm consumed the shared `fi`
             }
+            if (accept("else")) statement.else_statements = branch_arm(false, true);
+            require("fi");
+            return statement;
+        };
+        conditional_statement = [&](std::unique_ptr<Expression> condition) {
+            const bool had_semicolon = accept(";");
+            if (accept("then") || accept("do")) return keyword_conditional(std::move(condition));
+            if (had_semicolon) require("do");
+            Statement statement;
+            statement.offset = condition->offset;
+            statement.kind = Statement::Kind::Conditional;
+            statement.condition = std::move(condition);
+            require("{"); statement.then_statements = branch_arm(false, false); require("}");
+            if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
             require("fi");
             return statement;
         };
@@ -2728,7 +2738,8 @@ private:
                 }
                 if (token_.text == "if" && !finally_scope) {
                     advance();
-                    actions.push_back(conditional_statement());
+                    auto condition = expression();
+                    actions.push_back(conditional_statement(std::move(condition)));
                     continue;
                 }
                 Statement statement;
@@ -3055,21 +3066,21 @@ private:
             if (token_.text == "if") {
                 const auto offset = token_.offset;
                 require("if");
-                // Ordinary conditionals share one structured form so `else`,
-                // `elif` and void returns behave as in Java. Guard lowering
-                // remains only for protected and class-valued returns.
-                if (!terminal_try_finally && value.return_class.empty() && value.return_sum.empty() &&
-                        !return_guards_started) {
-                    if (++branch_count > 128) fail("native conditional CFG limit exceeded (128)");
-                    value.statements.push_back(conditional_statement());
-                    continue;
-                }
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
                 const bool had_semicolon = accept(";");
                 const bool then_form = accept("then") || accept("do");
                 if (had_semicolon && !then_form) require("do");
+                // Keyword conditionals share one structured form so `else`,
+                // `elif` and void returns behave as in Java. Brace guards keep
+                // their own ownership-checked early-return lowering.
+                if (then_form && !terminal_try_finally && value.return_class.empty() &&
+                        value.return_sum.empty() && !return_guards_started) {
+                    if (++branch_count > 128) fail("native conditional CFG limit exceeded (128)");
+                    value.statements.push_back(keyword_conditional(std::move(condition)));
+                    continue;
+                }
                 if (!then_form) require("{");
                 if (accept("return")) {
                     if (value.returns_void)
@@ -4118,10 +4129,11 @@ private:
             auto payload = [&]() -> ScalarType {
                 if (accept("int")) return ScalarType::I64;
                 if (accept("bool")) return ScalarType::Bool;
+                if (accept_f64_type()) return ScalarType::F64;
                 if (accept("String") || accept("string")) return ScalarType::String;
                 fail("native sum class/compound payload requires ownership and lifetime lowering");
             };
-            auto scalar_name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
+            auto scalar_name = [](ScalarType t) { return t == ScalarType::F64 ? "float" : t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
             type.value_type = payload(); name += "<" + std::string(scalar_name(type.value_type));
             if (type.kind == NativeSumType::Kind::Result) { require(","); type.error_type = payload(); name += "," + std::string(scalar_name(type.error_type)); }
             require(">"); type.name = name + ">";
@@ -4564,7 +4576,7 @@ private:
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
                     const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
-                    if (actual != (index ? ScalarType::I64 : element))
+                    if (!scalar_assignable(*argument, actual, index ? ScalarType::I64 : element))
                         throw std::runtime_error(std::string(element == ScalarType::I64
                             ? "native Array<int> arguments require int, got "
                             : "native Array<String> argument type mismatch, got ") +
