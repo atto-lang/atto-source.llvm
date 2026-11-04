@@ -11,5 +11,6 @@ namespace oreslang {
 Program load_native_program(const std::string& source_path, std::string source,
                             SourceIdentity identity, bool experimental_owned_int,
                             bool experimental_rt_scalar_loop, bool host_target,
-                            std::uint32_t admitted_provider_bits = 0u);
+                            std::uint32_t admitted_provider_bits = 0u,
+                            bool experimental_sealed_scalar_state = false);
 }
