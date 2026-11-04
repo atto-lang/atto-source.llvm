@@ -2,9 +2,11 @@
 
 Status: **draft implementation and compiler-backed CTest targets**, not a verified
 cross-backend guest parity receipt. Java and the shared conformance repository
-have broader syntax/semantic targets. The compiler's existing `.ores` extension
-is retained for compatibility; the independent `.atto` manifest is a target,
-not proof that this native frontend presently accepts `.atto` paths.
+have broader syntax/semantic targets. This branch also admits `.atto`
+direct-entry source paths and extensionless relative/project-root imports
+resolved by the importing source's suffix. Explicit `.ores` and `.atto`
+paths remain valid during migration. This is implementation plus pending
+executable validation, not a stepful parity receipt.
 
 ## Working subset targeted by this patch
 
@@ -47,18 +49,22 @@ slot, never the original source index.
 | Non-i64 generic actuals: bool/string/classes | Fail closed |
 | Move/borrow/actor/suspension generic crossing | Existing strict owner/effect gates |
 | Generic `Any`/`Unknown` fallback and implicit conversion | Not admitted |
-| LLVM `.atto` source admission | Not certified by these `.ores` CTests |
+| LLVM `.atto` source admission | Direct native guest CTest added; not yet executed |
+| `.atto` relative and `+/` module imports | Compiler graph + root-security suites added; not yet executed |
+| Legacy `.ores` imports | Preserved; extensionless default chooses importing source suffix |
 
 ## Executable evidence gates
 
 The focused workflow `.github/workflows/named-call-exact-head.yml`
 checks the exact Git commit/tree, builds `oreslang-llvmc` and its Rust
 test harness, requires all named-call CTests in the inventory, and runs
-the same selected suite. Its newly authored 16 CTests comprise:
+the same selected suite. Its newly authored **17** CTests comprise:
 
 - **5 positive native linked guest executions**: combined named generics
   + values, a direct-only routine, explicit inference hole, positional
   prefix, and reordered source-effect case (expected exits 42/42/42/42/12).
+- **1 additional positive `.atto` linked guest** running the same combined
+  generic/value ABI and expecting exit 42 (not merely a renamed `.ores` label).
 - **1 real LLVM IR-order assertion**, checking `read_second` precedes
   `read_first` after named binding.
 - **1 combinatorial real native test** that generates and compiles all 36
@@ -70,9 +76,15 @@ the same selected suite. Its newly authored 16 CTests comprise:
   duplicated/unknown/ordered generic slots, value-slot collision,
   unknown value label, and uninferable hole.
 
-These 16 CTests (51 individual positive native guest executions when fully
-run) are additive to previously registered named-call and
-member-call tests. A test listing, authored test source, zero-step job, or
+These 17 dedicated CTests together require **42 native guest executions**
+(5 legacy-source guests, 1 AttoLang-source guest, 36 generated permutation
+guests), 1 IR-order proof and 9 source rejection cases. The workflow also
+requires the existing `native_source_module_graph_execution` and
+`native_project_root_import_security` CTests, which now cover `.atto`
+relative imports, project-root imports, mixed explicit extension migration,
+negative no-fallback cases, nested package fences and symlink escape.
+The workflow gates **27 CTest names** in total (8 original, 17 new,
+2 import/security suites). All are pending real execution. A test listing, authored test source, zero-step job, or
 host binder oracle does not establish execution. For promotion require
 exact-head source/tree attestation, nonzero executed job steps,
 `ctest --output-on-failure` pass counts, LLVM IR emission and Clang
@@ -90,8 +102,9 @@ generic declaration/source binding; Java #2508 is a review of
 identity-bound named call optimizer proofs stacked on Java #2086.
 LLVM #1228 is a prerequisite for member-call fail-closed parsing.
 
-The next native milestones are explicit `.atto` entry-point admission,
-stable compile-time generic specialization identity beyond i64,
+The next native milestones are verified (stepful) `.atto` guest/source
+admission and import tests, stable compile-time generic specialization
+identity beyond i64,
 proper generic method/constructor ABI, optional presence metadata and
 call ownership/effect checks across both labeled maps. These must
 not be promoted by this scalar-only patch.
