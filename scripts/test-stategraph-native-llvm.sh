@@ -116,6 +116,46 @@ if [[ "$cycle_status" -ne 42 || -s "$tmp/out" || -s "$tmp/err" ]]; then
 fi
 printf 'SG_LLVM_SHARED_CYCLE_NATIVE_PASS blob=%s guest_exit=42\n' "$cycle_blob"
 
+
+# Actual LLVM compiler regression for canonical "if expr then ... fi".
+# The same source blob is present in the Java/JVM parity branch.
+canonical=contracts/stategraph-portability/shared-canonical-then.ores
+canonical_blob=ad42a13d1542d8df6215bff42d056a489015c842
+[[ -f "$canonical" && ! -L "$canonical" ]]
+git ls-files --error-unmatch -- "$canonical" >/dev/null
+[[ "$(git hash-object "$canonical")" = "$canonical_blob" ]]
+[[ "$(git rev-parse "HEAD:$canonical")" = "$canonical_blob" ]]
+timeout --kill-after=3s 90s bash scripts/compile-aot.sh "$canonical" "$tmp/canonical" ||
+  { echo 'SG_LLVM_CANONICAL_THEN_COMPILER_NOT_ACCEPTED' >&2; exit 1; }
+[[ -x "$tmp/canonical" ]]
+set +e
+timeout --kill-after=3s 30s "$tmp/canonical" > "$tmp/out" 2> "$tmp/err"
+canonical_status=$?
+set -e
+if [[ "$canonical_status" -ne 42 || -s "$tmp/out" || -s "$tmp/err" ]]; then
+  cat "$tmp/err" >&2
+  echo "SG_LLVM_CANONICAL_THEN_GUEST_NOT_ACCEPTED status=$canonical_status" >&2
+  exit 1
+fi
+printf 'SG_LLVM_CANONICAL_THEN_NATIVE_PASS blob=%s guest_exit=42\n' "$canonical_blob"
+
+# Negative companion: "if x = y then" is assignment and must not parse.
+bad_condition=tests/fixtures/stategraph-canonical-then-assignment-reject.ores
+[[ -f "$bad_condition" && ! -L "$bad_condition" ]]
+git ls-files --error-unmatch -- "$bad_condition" >/dev/null
+[[ "$(git hash-object "$bad_condition")" = "$(git rev-parse "HEAD:$bad_condition")" ]]
+set +e
+timeout --kill-after=3s 30s build/oreslang-llvmc --target=host "$bad_condition" \
+  > "$tmp/bad-condition.ll" 2> "$tmp/bad-condition.err"
+bad_condition_status=$?
+set -e
+if [[ "$bad_condition_status" -eq 0 || -s "$tmp/bad-condition.ll" ]]; then
+  echo "SG_LLVM_CANONICAL_CONDITION_NOT_FAIL_CLOSED status=$bad_condition_status" >&2
+  exit 1
+fi
+printf 'SG_LLVM_CANONICAL_ASSIGNMENT_REJECTED blob=%s (negative proof only)\n' \
+  "$(git rev-parse "HEAD:$bad_condition")"
+
 for name in scalar guard nominal; do
   source="tests/fixtures/stategraph-parity-$name.ores"
   git ls-files --error-unmatch "$source" >/dev/null
