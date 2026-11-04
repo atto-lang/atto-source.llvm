@@ -1,6 +1,12 @@
 #include "oreslang/runtime/LocalContextDomainsV1.hpp"
 
 #include <atomic>
+#include <unordered_set>
+#include <set>
+#include <list>
+#include <forward_list>
+#include <deque>
+#include <any>
 #include <unordered_map>
 #include <variant>
 #include <tuple>
@@ -42,9 +48,22 @@ static_assert(!local_value_allowed_v1<std::vector<std::optional<std::string_view
 static_assert(!local_value_allowed_v1<std::variant<int, std::string_view>>);
 static_assert(!local_value_allowed_v1<std::map<int, std::string_view>>);
 static_assert(!local_value_allowed_v1<std::unordered_map<int, std::string_view>>);
+static_assert(!local_value_allowed_v1<std::shared_ptr<int>>);
+static_assert(!local_value_allowed_v1<std::weak_ptr<int>>);
+static_assert(!local_value_allowed_v1<std::function<void()>>);
+static_assert(!local_value_allowed_v1<std::any>);
+static_assert(!local_value_allowed_v1<std::optional<std::shared_ptr<int>>>);
+static_assert(!local_value_allowed_v1<std::vector<std::function<void()>>>);
+static_assert(!local_value_allowed_v1<std::deque<int*>>);
+static_assert(!local_value_allowed_v1<std::list<int*>>);
+static_assert(!local_value_allowed_v1<std::forward_list<int*>>);
+static_assert(!local_value_allowed_v1<std::set<int*>>);
+static_assert(!local_value_allowed_v1<std::unordered_set<int*>>);
+
 
 #if __cplusplus >= 202002L
 static_assert(!local_value_allowed_v1<std::span<int>>);
+static_assert(!local_value_allowed_v1<std::ranges::ref_view<std::vector<int>>>);
 #endif
 
 namespace {
