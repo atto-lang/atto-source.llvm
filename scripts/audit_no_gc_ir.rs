@@ -218,7 +218,10 @@ mod tests {
         drop(oversized);
         let result = audit_file(name);
         assert!(result.unwrap_err().contains("64 MiB"));
-        fs::remove_file(path).expect("remove test file");
+        let reset = OpenOptions::new().write(true).open(&path).expect("reopen");
+        reset.set_len(0).expect("truncate oversized test file");
+        drop(reset);
+        fs::remove_file(&path).expect("remove test file");
 
         let dir = std::env::temp_dir();
         let result = audit_file(dir.to_str().expect("temp dir UTF-8"));
