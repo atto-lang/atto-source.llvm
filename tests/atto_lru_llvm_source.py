@@ -14,6 +14,10 @@ CASES = {
     "probe-wrap": ("a2ac8c42146684f3b0bcf5cde26dd111ff6867ae", 17, True),
     "slot-recycle": ("342f2691520613ebc6edd37d55816c3c8e6b0343", 29, True),
     "recency-touch": ("91051df9cda94d6a94beaff7cde44f3b8da13ea0", 61, True),
+    "aos-triple-reuse": ("a704e4281d4b507aa3765d867e057cbc17e77aa8", 43, True),
+    "aos-pair-occupancy": ("a19e13c653e26c0c46cb69c931a6b65d898328bd", 44, True),
+    "aos-padded-zero": ("2e1eb69028edcfffcef15ad2e1185a1bd9fc1ed5", 45, True),
+    "aosoa-tail-reset": ("9ca881cca2c33ac937816cd6774bee1ab9a6d7c9", 46, True),
 }
 
 def require(ok: bool, msg: str) -> None:
@@ -24,6 +28,15 @@ def blob(data: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
 
 def verify(root: Path, check_cmake: bool = True) -> None:
+    source_dir = root / PREFIX
+    require(source_dir.is_dir() and not source_dir.is_symlink(),
+            "missing or symlinked LLVM LRU fixture directory")
+    # Reject undeclared .atto files, including upper-case extension aliases.
+    # Merely verifying the listed eight can miss extra injected guest sources.
+    found = {path.name for path in source_dir.iterdir()
+             if path.name.lower().endswith(".atto")}
+    expected = {name + ".atto" for name in CASES}
+    require(found == expected, "unreviewed LLVM LRU fixture inventory")
     for name, (expected_blob, expected_exit, needs_array) in CASES.items():
         relative = PREFIX / (name + ".atto")
         current = root
@@ -91,6 +104,27 @@ def main() -> None:
             else:
                 raise RuntimeError("LLVM source mutation was accepted: " + name)
             path.write_bytes(original)
+        # An extra canonical or case-variant guest source fails before linking.
+        extra = dst / PREFIX / "unreviewed.atto"
+        extra.write_text("pub fnc main(): int { return 0; }\n", encoding="utf-8")
+        try:
+            verify(dst, check_cmake=False)
+        except RuntimeError as exc:
+            require("unreviewed LLVM LRU fixture inventory" in str(exc),
+                    "extra source rejected for wrong reason")
+        else:
+            raise RuntimeError("extra source was admitted")
+        extra.unlink()
+        uppercase = dst / PREFIX / "unreviewed.ATTO"
+        uppercase.write_text("pub fnc main(): int { return 0; }\n", encoding="utf-8")
+        try:
+            verify(dst, check_cmake=False)
+        except RuntimeError as exc:
+            require("unreviewed LLVM LRU fixture inventory" in str(exc),
+                    "case-variant source rejected for wrong reason")
+        else:
+            raise RuntimeError("case-variant source was admitted")
+        uppercase.unlink()
         # A dangling symlink must not be accepted as a valid source.
         symlink_case = dst / PREFIX / "probe-wrap.atto"
         symlink_bytes = symlink_case.read_bytes()
@@ -129,7 +163,7 @@ def main() -> None:
                     "missing runtime rejected for wrong reason")
         else:
             raise RuntimeError("missing native array runtime was accepted")
-    print("ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=4 mutations_rejected=7 "
+    print("ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=8 mutations_rejected=13 "
           "native_compiler_guest=NOT_EXECUTED")
 
 if __name__ == "__main__":
