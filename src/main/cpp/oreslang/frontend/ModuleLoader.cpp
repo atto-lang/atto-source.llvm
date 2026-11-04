@@ -172,7 +172,10 @@ private:
             unit->classes.insert(cls.name); unit->class_exports.emplace(cls.name, cls.exported);
             unit->constructor_exports.emplace(cls.name, !cls.explicit_constructor || cls.constructor_exported);
         }
-        paths.emplace(unit->path.string(), index);
+        // Imported source modules are indexed by canonical logical unit ID;
+        // only compiler-owned virtual core libraries retain registry keys.
+        paths.emplace(unit->compiler_owned_library
+            ? unit->path.string() : unit->logical_source_id, index);
         units.push_back(std::move(unit));
         auto& current = *units[index];
         if (!current.program.imports.empty() && scalar_loop)
@@ -293,23 +296,18 @@ private:
                     }
                 }
 
-                const auto known = paths.find(dependency.string());
-                if (known != paths.end()) {
-                    const auto known_path = dependency.string();
-                    const auto current_identity = capture_source_identity(
-                        known_path.c_str(), max_bytes,
-                        "native source exceeds 8 MiB identity check budget");
-                    // A cycle/backedge is free of a new unit charge, but
-                    // never exempts the source from identity revalidation.
-                    source_admission->admit(dependency, current_identity);
-                }
+                const auto dependency_path = dependency.string();
+                const auto expected_child_identity = capture_source_identity(
+                    dependency_path.c_str(), max_bytes - read_bytes,
+                    "native import graph exceeds 8 MiB source read budget");
+                const auto logical_dependency =
+                    source_admission->admit(dependency, expected_child_identity);
+                const auto known = paths.find(logical_dependency);
+                // The real compiler's graph is keyed by the same root-relative
+                // identity that its parser/source-unit registry admitted.
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
                 if (selected == units.size()) {
-                    const auto dependency_path = dependency.string();
-                    const auto expected_child_identity = capture_source_identity(
-                        dependency_path.c_str(), max_bytes - read_bytes,
-                        "native import graph exceeds 8 MiB source read budget");
                     SourceIdentity child_identity;
                     auto child_text = read_regular_source(
                         dependency_path.c_str(), max_bytes - read_bytes,
@@ -334,7 +332,8 @@ private:
                             depth + 1, false,
                             frontend::CompilerLibraryTier::Core, 0u);
                     else
-                        paths.emplace(dependency.string(), selected);
+                        // Aliases never acquire a second logical graph key.
+                        paths.emplace(logical_dependency, selected);
                 }
             }
             if (imported.local_name == current.program.module)
