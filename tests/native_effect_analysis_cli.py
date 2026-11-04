@@ -113,7 +113,7 @@ def main(compiler):
     functions.append("fnc step_70(): int { return 42; }")
     functions.append("pub fnc main(): int { return step_0(); }")
     deep_graph = run(
-        compiler, "\\n".join(functions) + "\\n", flags=("--analyze",)
+        compiler, "\n".join(functions) + "\n", flags=("--analyze",)
     )
     assert deep_graph.returncode != 0, (
         deep_graph.returncode, deep_graph.stdout, deep_graph.stderr
