@@ -2722,7 +2722,12 @@ private:
         bool return_guards_started = false;
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
-        std::size_t ordered_root_local_count = 0;
+        // The initial declaration prefix and declarations after effects share
+        // one aggregate budget. Counting only ordered declarations allowed a
+        // source file to bypass the intended per-function root-local ceiling.
+        std::size_t ordered_root_local_count = value.locals.size();
+        if (ordered_root_local_count > 64)
+            fail("native root local limit exceeded (64)");
         while (token_.text != "return") {
             // LLVM already lowers ordered ScopedLocal statements, including
             // their ownership state and exit drops. Admit the same lexical
@@ -2732,7 +2737,7 @@ private:
                 if (terminal_try_finally || return_guards_started)
                     fail("native ordered root local cannot follow a terminal try/return guard");
                 if (++ordered_root_local_count > 64)
-                    fail("native ordered root local limit exceeded (64)");
+                    fail("native root local limit exceeded (64)");
                 value.statements.push_back(scoped_local());
                 continue;
             }
