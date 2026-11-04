@@ -1,4 +1,5 @@
 #include "oreslang/frontend/ProjectRootImport.hpp"
+#include "oreslang/frontend/SourceInput.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -244,6 +245,35 @@ int main() {
         must_fail("canonical Atto import cannot follow symlink parent",
                   "symlinked AttoLang source path",
                   [&] { (void)resolve(dir/"main.atto", "+/aliased/lib"); });
+    }
+#endif
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "atto-pinned-import-handoff";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "define module Lib as end");
+        write_text(dir/"replacement.atto", "define module Wrong as end");
+        fs::path admitted;
+        const auto identity = oreslang::resolve_project_root_import(
+            dir/"main.atto", "+/lib", read_manifest, &admitted);
+        if (identity != fs::canonical(dir/"lib.atto") ||
+                admitted != dir/"lib.atto")
+            throw std::runtime_error(
+                "canonical import resolution erased pinned source open path");
+        // The source path was valid at resolution. Mutate it before
+        // descriptor admission, which must fail closed rather than follow
+        // the replacement link to an unreviewed package source.
+        fs::rename(dir/"lib.atto", dir/"lib-original.atto");
+        fs::create_symlink(dir/"replacement.atto", dir/"lib.atto");
+        must_fail("source symlink after module resolution",
+                  "symlinked AttoLang source path", [&] {
+            const auto name = admitted.string();
+            (void)capture_source_identity(name.c_str(), 1024,
+                                           "native source limit");
+        });
+        if (!fs::exists(dir/"lib-original.atto"))
+            throw std::runtime_error("original import disappeared");
     }
 #endif
 #if !defined(_WIN32)
