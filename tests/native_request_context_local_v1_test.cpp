@@ -9,11 +9,21 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
+#include <initializer_list>
 #include <thread>
 #include <utility>
 #include <vector>
 
 using namespace oreslang::runtime;
+
+// RequestLocal uses the SAME host owned-value policy as logical/physical
+// local storage. Borrow-only C++ views are negative type-admission fixtures.
+static_assert(local_value_allowed_v1<std::string>);
+static_assert(!local_value_allowed_v1<int*>);
+static_assert(!local_value_allowed_v1<std::reference_wrapper<int>>);
+static_assert(!local_value_allowed_v1<std::string_view>);
+static_assert(!local_value_allowed_v1<std::initializer_list<int>>);
 
 namespace {
 using Context = RequestContextLocalV1;
