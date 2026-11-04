@@ -636,6 +636,10 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            // Java M0 admits compiler-only durable declarations. LLVM has no
+            // typed history state, command-manifest or replay ABI yet.
+            if (token_.text == "activity" || token_.text == "workflow")
+                fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
             if (token_.text == "mtd") {
                 program.functions.push_back(extension_method(exported));
                 continue;
@@ -722,6 +726,10 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                // Java M0 admits compiler-only durable declarations. LLVM has no
+                // typed history state, command-manifest or replay ABI yet.
+                if (token_.text == "activity" || token_.text == "workflow")
+                    fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
                 if (token_.text == "mtd") {
                     program.functions.push_back(extension_method(public_class));
                     continue;

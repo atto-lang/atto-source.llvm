@@ -877,6 +877,41 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Durable M0 language declarations are compiler-metadata only in Java.
+    # LLVM does not have the history/manifest/replay ABI, so native compilation
+    # must fail with the same explicit capability marker for all introducers.
+    # These invoke the real oreslang-llvmc; they cannot be green on a parser mock.
+    oreslang_contract_test(native_durable_m0_activity_failclosed
+        durable-m0-activity-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_workflow_failclosed
+        durable-m0-workflow-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_public_activity_failclosed
+        durable-m0-public-activity-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_public_workflow_failclosed
+        durable-m0-public-workflow-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_nested_comment_failclosed
+        durable-m0-comment-gap-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    # A durable declaration in comments must not poison an ordinary scalar guest.
+    oreslang_contract_test(native_durable_m0_comment_nontrigger
+        durable-m0-quoted-comments-native.atto --ir "ret i64 42")
+
+    add_test(NAME native_durable_m0_shared_corpus_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture "${CMAKE_CURRENT_SOURCE_DIR}/contracts/durable-m0/v1/checkout.atto"
+            --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    set_tests_properties(native_durable_m0_shared_corpus_failclosed
+        PROPERTIES TIMEOUT 30)
+
+    # Same 1,671-byte canonical manifest reference checked in .NET/Wasm and
+    # platform conformance. This does NOT imply LLVM emitted the manifest.
+    add_test(NAME native_durable_m0_manifest_v1_reference_bytes
+        COMMAND "${CMAKE_COMMAND}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/durable-m0/v1/verify-manifest.cmake")
+    set_tests_properties(native_durable_m0_manifest_v1_reference_bytes
+        PROPERTIES TIMEOUT 15)
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
