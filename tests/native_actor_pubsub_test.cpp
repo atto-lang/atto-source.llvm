@@ -149,6 +149,8 @@ int main() {
     auto blocked = bus.publish(a.group_id(), "reliable", 10, 1, "two");
     check(blocked.backpressured && blocked.accepted == 0 && blocked.sequence == 0,
           "reliable publication was partially admitted under backpressure");
+    check(!bus.try_publish_reliable(a.group_id(), "reliable", 10, 1, "try-full"),
+          "nonblocking RELIABLE try admitted a full subscriber edge");
     check(bus.queued_payload_bytes() == 6,
           "failed reliable admission changed byte accounting");
     check(bus.try_read(a.group_id(), "reliable", 11, 1).value() == "one",
@@ -158,7 +160,11 @@ int main() {
     check(bus.queued_payload_bytes() == 0,
           "reliable reads did not reclaim payload bytes");
 
-    auto second = bus.publish(a.group_id(), "reliable", 10, 1, "two");
+    auto second_try =
+        bus.try_publish_reliable(a.group_id(), "reliable", 10, 1, "two");
+    check(second_try.has_value(),
+          "nonblocking RELIABLE try did not admit reclaimed capacity");
+    auto second = second_try.value();
     check(second.accepted == 2 && !second.backpressured && second.sequence == 2,
           "reliable capacity was not reclaimed");
     check(bus.queued_payload_bytes() == 6,
@@ -175,10 +181,16 @@ int main() {
         (void)bus.publish(a.group_id(), "reliable", 12, 1, "stale");
     }), "departed member published using a cached group/topic name");
     check(rejected([&] {
+        (void)bus.try_publish_reliable(a.group_id(), "reliable", 12, 1, "stale");
+    }), "try publish accepted a departed actor generation");
+    check(rejected([&] {
         (void)bus.try_read(a.group_id(), "reliable", 12, 1);
     }), "departed member read using a cached topic name");
 
 
+    check(rejected([&] {
+        (void)bus.try_publish_reliable(a.group_id(), "latest", 10, 1, "not-core");
+    }), "try RELIABLE accidentally admitted a LATEST extension topic");
     check(bus.subscribe(a.group_id(), "latest", 11, 1), "latest subscribe");
     auto latest1 = bus.publish(a.group_id(), "latest", 10, 1, "old");
     auto latest2 = bus.publish(a.group_id(), "latest", 10, 1, "new");
