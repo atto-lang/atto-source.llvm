@@ -2474,8 +2474,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 llvm::IRBuilder<> unwind(ret);
                 llvm::Value* current = unwind.CreateLoad(
                     i64, guest_frame_depth, "atto.frame.depth.release");
-                unwind.CreateStore(unwind.CreateSub(current,
-                    llvm::ConstantInt::get(i64, 1)), guest_frame_depth);
+                // A malformed generated path must not wrap the thread-local
+                // depth to UINT64_MAX and poison subsequent execution.
+                llvm::Value* empty = unwind.CreateICmpEQ(
+                    current, llvm::ConstantInt::get(i64, 0));
+                llvm::Value* next = unwind.CreateSelect(empty,
+                    llvm::ConstantInt::get(i64, 0),
+                    unwind.CreateSub(current, llvm::ConstantInt::get(i64, 1)));
+                unwind.CreateStore(next, guest_frame_depth);
+                llvm::Value* flagged = unwind.CreateLoad(
+                    unwind.getInt1Ty(), guest_frame_exhausted);
+                unwind.CreateStore(unwind.CreateOr(flagged, empty),
+                    guest_frame_exhausted);
             }
         }
     }
