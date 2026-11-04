@@ -42,7 +42,10 @@ integrated tree; an unmerged `main` baseline will reject the implicit twin.
 3. Repeats with **both explicit and extensionless** `math.atto` imports
    while a same-name legacy `.ores` returns 17. Canonical `.atto` must
    execute and return 42 in both cases.
-4. Requires missing, invalid, directory-masquerading, and dangling-link
+4. Confirms missing `.atto` with a legitimate legacy-only `.ores` migration
+   dependency still compiles/executes and returns 42, matching Java's
+   documented fallback contract.
+5. Requires missing, invalid, directory-masquerading, and dangling-link
    canonical dependencies to be rejected *without emitting any LLVM IR*.
 
 The gate does not execute Java, independently establish Java's implicit-import
