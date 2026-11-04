@@ -24,7 +24,12 @@ struct ExceptionalEffectObservation {
     bool unproved_direct = false;
 
     bool has_observed(FunctionEffect effect) const noexcept {
-        return transitive.has(effect);
+        const auto bit = static_cast<std::uint32_t>(effect);
+        // Unresolved is an intentionally invalid bit in FunctionEffects.
+        // A real observed throw must not disappear when unknown is also set.
+        return bit != 0 && (bit & (bit - 1u)) == 0 &&
+            (bit & FunctionEffects::KnownBits) != 0 &&
+            (transitive.bits & bit) != 0;
     }
     bool has_unknown_call() const noexcept {
         return (transitive.bits & FunctionEffects::UnresolvedCallBit) != 0;
