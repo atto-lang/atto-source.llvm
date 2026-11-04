@@ -22,6 +22,12 @@ clang_path="$(cd "$(dirname "$clang_path")" && pwd -P)/$(basename "$clang_path")
 }
 compiler_before="$(sha256sum "$compiler")"
 clang_before="$(sha256sum "$clang_path")"
+auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
+[[ -f "$auditor" && -x "$auditor" ]] || {
+  echo "NOT_EXECUTED: no-GC IR auditor is unavailable" >&2; exit 69;
+}
+auditor="$(cd "$(dirname "$auditor")" && pwd -P)/$(basename "$auditor")"
+auditor_before="$(sha256sum "$auditor")"
 source_before="$(sha256sum "$source")"
 # A hanging or runaway guest is never a successful AOT smoke result.
 command -v timeout >/dev/null 2>&1 || {
@@ -32,7 +38,7 @@ trap 'rm -rf -- "$work"' EXIT
 # Compiler and linker can also stall. Bound the whole source-to-native
 # pipeline; a timeout (124/137) or nonzero compile is never a guest pass.
 if timeout --signal=TERM --kill-after=3s 180s \
-    env ORESLANG_LLVMC="$compiler" CLANG="$clang_path" \
+    env ORESLANG_LLVMC="$compiler" CLANG="$clang_path" ORES_NO_GC_IR_AUDIT="$auditor" \
     bash "$root/scripts/compile-aot.sh" "$source" "$work/guest"; then
   :
 else
@@ -45,6 +51,9 @@ fi
 }
 [[ "$(sha256sum "$clang_path")" == "$clang_before" ]] || {
   echo "Clang changed during AOT verification" >&2; exit 1;
+}
+[[ "$(sha256sum "$auditor")" == "$auditor_before" ]] || {
+  echo "no-GC IR auditor changed during AOT verification" >&2; exit 1;
 }
 [[ "$(sha256sum "$source")" == "$source_before" ]] || {
   echo ".atto guest source changed during AOT verification" >&2; exit 1;
@@ -63,14 +72,17 @@ if timeout --signal=TERM --kill-after=3s 40s "$work/guest"; then
   [[ "$(sha256sum "$clang_path")" == "$clang_before" ]] || {
     echo "Clang changed during native execution" >&2; exit 1;
   }
+  [[ "$(sha256sum "$auditor")" == "$auditor_before" ]] || {
+    echo "no-GC IR auditor changed during native execution" >&2; exit 1;
+  }
   [[ "$(sha256sum "$source")" == "$source_before" ]] || {
     echo ".atto guest source changed during native execution" >&2; exit 1;
   }
   [[ "$(sha256sum "$work/guest" | awk '{print $1}')" == "$guest_sha256" ]] || {
     echo "native guest binary changed during execution" >&2; exit 1;
   }
-  printf 'PASS: native LLVM/Clang guest executed 32768-row .atto SoA checksum binary_sha256=%s source_sha256=%s compiler_sha256=%s clang_sha256=%s\n' \
-    "$guest_sha256" "${source_before%% *}" "${compiler_before%% *}" "${clang_before%% *}"
+  printf 'PASS: native LLVM/Clang guest executed 32768-row .atto SoA checksum binary_sha256=%s source_sha256=%s compiler_sha256=%s clang_sha256=%s auditor_sha256=%s\n' \
+    "$guest_sha256" "${source_before%% *}" "${compiler_before%% *}" "${clang_before%% *}" "${auditor_before%% *}"
 else
   status=$?
   echo "FAIL: guest returned nonzero exit status $status" >&2
