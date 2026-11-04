@@ -105,6 +105,7 @@ int main() {
     });
 #endif
 
+#if !defined(_WIN32)
     // Reject aliases even when the second link is outside the import closure.
     const auto alias = project / "lib/hardlink.atto";
     fs::create_hard_link(producer, alias);
@@ -115,6 +116,7 @@ int main() {
         source.admit(alias, identity(alias));
     });
     fs::remove(alias);
+#endif
 
     // A path-replaced source cannot reuse the registry's previous identity.
     const auto retained = project / "old-producer.atto";
