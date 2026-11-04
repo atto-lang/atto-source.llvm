@@ -57,3 +57,23 @@ optimization levels, and the evidence limitation that a live MCP server was
 not tested. The pinned source-org artifact-upload action rejects missing
 receipts. A queued job, zero-step Actions failure, or source-free host test
 is not compiler-backed guest evidence, even if a workflow was triggered.
+
+
+## Independent native guest receipt validation
+
+After the compiler-backed O0/O2 test creates a success-only receipt,
+`tests/mcp_m1_verify_native_receipt.py` strictly verifies its fields against
+the trusted checkout head and root tree. It requires exactly the four
+`.atto`/`.ores` × O0/O2 executions, the expected exit code, fixed evidence
+scope, digest formats, descriptor parity, bounded descriptor sizes, and an
+explicit default-off/negative-admission result. Duplicate JSON keys, unknown
+fields, non-finite numbers, fake hashes, missing cases and contradictory
+claims fail closed. The dedicated source-free `unittest` suite contains
+29 positive/negative checks.
+
+**Important:** this is a **receipt format/consistency verifier**, not a
+cryptographic signature, a verified compiler provenance service, or guest
+execution. Only an independently trusted, exact-head, stepful native
+compiler workflow can support the `COMPILER_BACKED_NATIVE_GUEST_EXECUTED`
+classification. CI runs the verifier after the real executable test and
+before uploading the receipt; zero-step jobs remain `NOT_EXECUTED`.
