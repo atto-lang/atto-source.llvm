@@ -54,6 +54,28 @@ def main(compiler):
     assert "main/0" in result.stdout
     assert "helper/0" in result.stdout
 
+    # Checked arithmetic is not proved effect-free by the current native
+    # direct-facts collector. It must not become a positive effect certificate.
+    arithmetic = run(compiler,
+                     "pub fnc main(): int { return 1 + 2; }\n",
+                     flags=("--analyze",))
+    assert arithmetic.returncode == 2, (arithmetic.returncode, arithmetic.stderr)
+    assert "status=inconclusive" in arithmetic.stdout, arithmetic.stdout
+
+    # Parsed try/catch source has an exceptional edge. Its effect closure is
+    # not yet supported by v0 even when ordinary LLVM guest lowering exists.
+    caught = run(compiler, """pub fnc main(): int {
+  try {
+    throw 43;
+  } catch (err) {
+    return err;
+  } finally {
+  }
+}
+""", flags=("--analyze",))
+    assert caught.returncode == 2, (caught.returncode, caught.stderr)
+    assert "status=inconclusive" in caught.stdout, caught.stdout
+
     # Malformed source cannot be reported as admitted or effect-free.
     malformed = run(compiler, "pub fnc main(): int { return ; }\n",
                     flags=("--analyze",))
