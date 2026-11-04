@@ -2,6 +2,14 @@ if(NOT DEFINED COMPILER OR NOT DEFINED FIXTURE OR NOT DEFINED STAGING OR NOT DEF
     message(FATAL_ERROR "COMPILER, FIXTURE, STAGING and CLANG are required")
 endif()
 file(MAKE_DIRECTORY "${STAGING}")
+# Snapshot both the compiler and the consumer *before* executing either.
+# Post-execution-only hashes are not trustworthy identity receipts.
+if(NOT EXISTS "${COMPILER}" OR IS_DIRECTORY "${COMPILER}"
+        OR NOT EXISTS "${FIXTURE}" OR IS_DIRECTORY "${FIXTURE}")
+    message(FATAL_ERROR "missing real compiler or consumer fixture")
+endif()
+file(SHA256 "${COMPILER}" compiler_before_sha256)
+file(SHA256 "${FIXTURE}" source_before_sha256)
 # A linked macro AOT receipt must bind BOTH physical source files. The guest
 # process is executed only after the compiler consumed the producer.
 if(DEFINED PRODUCER)
@@ -45,6 +53,9 @@ endif()
 # compiler and independently linked native executable bytes. A source-only
 # test must never emit this success marker.
 file(SHA256 "${FIXTURE}" source_sha256)
+if(NOT source_sha256 STREQUAL source_before_sha256)
+    message(FATAL_ERROR "macro consumer source changed during compiler/guest execution")
+endif()
 if(DEFINED PRODUCER)
     file(SHA256 "${PRODUCER}" producer_after_sha256)
     if(NOT producer_after_sha256 STREQUAL producer_before_sha256)
@@ -55,6 +66,9 @@ else()
     set(producer_receipt "")
 endif()
 file(SHA256 "${COMPILER}" compiler_sha256)
+if(NOT compiler_sha256 STREQUAL compiler_before_sha256)
+    message(FATAL_ERROR "macro compiler binary changed during compilation/guest execution")
+endif()
 file(SHA256 "${ir_file}" ir_sha256)
 file(SHA256 "${binary}" guest_sha256)
 message(STATUS
