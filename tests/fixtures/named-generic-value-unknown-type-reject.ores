@@ -1,0 +1,3 @@
+// Named generic spelling is a case-sensitive declaration identity.
+fnc fixed<A=int, B=int>(): int { return 42; }
+pub fnc main(): int { return fixed<missing=int>(); }
