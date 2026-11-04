@@ -187,6 +187,18 @@ OresNativePubSubPublishReceipt output_receipt(const Receipt& receipt) {
     };
 }
 
+template<class Receipt>
+OresNativePubSubPublishReceiptV2 output_receipt_v2(const Receipt& receipt) {
+    return OresNativePubSubPublishReceiptV2{
+        static_cast<std::uint64_t>(receipt.subscribers),
+        static_cast<std::uint64_t>(receipt.accepted),
+        static_cast<std::uint64_t>(receipt.dropped),
+        static_cast<std::uint64_t>(receipt.coalesced),
+        receipt.backpressured ? 1 : 0,
+        receipt.sequence
+    };
+}
+
 } // namespace
 
 extern "C" OresNativeActorPubSubRuntime* ores_native_actor_pubsub_open(
@@ -416,6 +428,26 @@ extern "C" OresNativePubSubStatus ores_native_actor_pubsub_publish_i64(
     });
 }
 
+// A separate V2 entrypoint preserves the exact footprint of legacy V1
+// callers while exposing native topic-local sequence admission to future IR.
+extern "C" OresNativePubSubStatus ores_native_actor_pubsub_publish_i64_v2(
+        OresNativeActorPubSubRuntime* runtime,
+        std::uint64_t group_id,
+        const char* topic_name,
+        OresSourceActorIdentity publisher,
+        std::int64_t value,
+        OresNativePubSubPublishReceiptV2* out_receipt) {
+    if (!valid_runtime_and_actor(runtime, publisher) || group_id == 0
+            || !valid_topic_name(topic_name) || !out_receipt)
+        return ORES_NATIVE_PUBSUB_INVALID;
+    return guarded([&] {
+        const auto receipt = runtime->i64_bus.publish(
+            group_id, topic_name, publisher.logical_id,
+            publisher.scheduler_generation, value);
+        *out_receipt = output_receipt_v2(receipt);
+    });
+}
+
 extern "C" OresNativePubSubStatus
 ores_native_actor_pubsub_try_read_i64(
         OresNativeActorPubSubRuntime* runtime,
@@ -527,6 +559,28 @@ ores_native_actor_pubsub_publish_utf8(
             group_id, topic_name,
             publisher.logical_id, publisher.scheduler_generation, frozen);
         *out_receipt = output_receipt(receipt);
+    });
+}
+
+extern "C" OresNativePubSubStatus ores_native_actor_pubsub_publish_utf8_v2(
+        OresNativeActorPubSubRuntime* runtime,
+        std::uint64_t group_id,
+        const char* topic_name,
+        OresSourceActorIdentity publisher,
+        const char* payload,
+        std::size_t payload_length,
+        OresNativePubSubPublishReceiptV2* out_receipt) {
+    if (!valid_runtime_and_actor(runtime, publisher) || group_id == 0
+            || !valid_topic_name(topic_name) || !out_receipt
+            || payload_length > NativeActorPubSubAdmission<std::string>::DEFAULT_EDGE_BYTES
+            || !valid_utf8_bytes(payload, payload_length))
+        return ORES_NATIVE_PUBSUB_INVALID;
+    return guarded([&] {
+        const std::string frozen(payload ? payload : "", payload_length);
+        const auto receipt = runtime->utf8_bus.publish(
+            group_id, topic_name, publisher.logical_id,
+            publisher.scheduler_generation, frozen);
+        *out_receipt = output_receipt_v2(receipt);
     });
 }
 

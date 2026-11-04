@@ -72,6 +72,65 @@ int main(void) {
     check(ores_native_actor_pubsub_subscribe_i64(
         runtime, 2, "events", subscriber) == ORES_NATIVE_PUBSUB_OK);
 
+    /* V2 receipts are additive ABI symbols; V1 struct stays byte-for-byte.
+     * RELIABLE retry after a full queue must not consume a topic sequence. */
+    check(ores_native_actor_pubsub_define_i64_topic(
+        runtime, 1, "sequence-v2", ORES_NATIVE_PUBSUB_RELIABLE, 1)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_i64(
+        runtime, 1, "sequence-v2", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    OresNativePubSubPublishReceiptV2 v2 = {0};
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 31, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 1 && v2.subscribers == 1
+        && v2.accepted == 1 && !v2.backpressured);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 32, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 0 && v2.accepted == 0 && v2.backpressured);
+    int64_t sequence_value = 0;
+    check(ores_native_actor_pubsub_try_read_i64(
+        runtime, 1, "sequence-v2", subscriber, &sequence_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(sequence_value == 31);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 33, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 2 && v2.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_i64(
+        runtime, 1, "sequence-v2", subscriber, &sequence_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(sequence_value == 33);
+
+    check(ores_native_actor_pubsub_define_utf8_topic(
+        runtime, 2, "utf8-sequence-v2", ORES_NATIVE_PUBSUB_RELIABLE, 1)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_utf8(
+        runtime, 2, "utf8-sequence-v2", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", publisher, "one", 3, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 1 && v2.accepted == 1);
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", publisher, "two", 3, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 0 && v2.backpressured && v2.accepted == 0);
+    char v2_buffer[8] = {0};
+    size_t v2_length = 0;
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "utf8-sequence-v2", subscriber,
+        v2_buffer, sizeof v2_buffer, &v2_length) == ORES_NATIVE_PUBSUB_OK);
+    check(v2_length == 3 && memcmp(v2_buffer, "one", 3) == 0);
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", publisher, "two", 3, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 2 && v2.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "utf8-sequence-v2", subscriber,
+        v2_buffer, sizeof v2_buffer, &v2_length) == ORES_NATIVE_PUBSUB_OK);
+    check(v2_length == 3 && memcmp(v2_buffer, "two", 3) == 0);
+
     OresNativePubSubPublishReceipt receipt = {0};
     check(ores_native_actor_pubsub_publish_i64(
         runtime, 1, "events", publisher, 11, &receipt)

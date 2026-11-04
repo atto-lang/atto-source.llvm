@@ -35,6 +35,18 @@ typedef struct {
     int backpressured;
 } OresNativePubSubPublishReceipt;
 
+/* V2 has a distinct type and symbols. NEVER append to the V1 struct:
+ * callers built with the original C ABI only allocated the V1 footprint.
+ * sequence==0 denotes a refused atomic admission, not a delivered event. */
+typedef struct {
+    uint64_t subscribers;
+    uint64_t accepted;
+    uint64_t dropped;
+    uint64_t coalesced;
+    int backpressured;
+    uint64_t sequence;
+} OresNativePubSubPublishReceiptV2;
+
 /*
  * Trusted native runtime control ABI. These handles/functions are targets for
  * compiler-generated lowering and host/runtime tests; they are not reflection
@@ -103,6 +115,15 @@ OresNativePubSubStatus ores_native_actor_pubsub_publish_i64(
     int64_t value,
     OresNativePubSubPublishReceipt* out_receipt);
 
+/* Trusted compiler/runtime ABI v2: returns the nonwrapping topic sequence. */
+OresNativePubSubStatus ores_native_actor_pubsub_publish_i64_v2(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresSourceActorIdentity publisher,
+    int64_t value,
+    OresNativePubSubPublishReceiptV2* out_receipt);
+
 OresNativePubSubStatus ores_native_actor_pubsub_try_read_i64(
     OresNativeActorPubSubRuntime* runtime,
     uint64_t group_id,
@@ -145,6 +166,15 @@ OresNativePubSubStatus ores_native_actor_pubsub_publish_utf8(
     const char* payload,
     size_t payload_length,
     OresNativePubSubPublishReceipt* out_receipt);
+
+OresNativePubSubStatus ores_native_actor_pubsub_publish_utf8_v2(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresSourceActorIdentity publisher,
+    const char* payload,
+    size_t payload_length,
+    OresNativePubSubPublishReceiptV2* out_receipt);
 
 OresNativePubSubStatus ores_native_actor_pubsub_try_read_utf8(
     OresNativeActorPubSubRuntime* runtime,
