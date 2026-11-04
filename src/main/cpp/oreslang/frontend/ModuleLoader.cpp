@@ -1,5 +1,6 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
+#include "oreslang/frontend/NativeLogicalSourceAdmission.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
 #include <filesystem>
 #include <functional>
@@ -16,6 +17,7 @@ constexpr std::size_t max_bytes = 8u * 1024u * 1024u;
 constexpr std::size_t max_units = 128, max_depth = 32;
 struct Unit {
     fs::path path;
+    std::string logical_source_id;
     SourceIdentity identity;
     Program program;
     std::string prefix;
@@ -37,6 +39,7 @@ class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
+    std::unique_ptr<frontend::NativeLogicalSourceAdmission> source_admission;
     bool owned, scalar_loop, host;
     std::uint32_t root_provider_bits = 0;
 public:
@@ -45,6 +48,9 @@ public:
         : owned(owned), scalar_loop(scalar_loop), host(host),
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
+        // Validate the caller-spelled entry before canonical() erases aliases.
+        source_admission = std::make_unique<frontend::NativeLogicalSourceAdmission>(path);
+        source_admission->admit(fs::path(path), identity);
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
@@ -129,6 +135,8 @@ private:
         const auto index = units.size();
         auto unit = std::make_unique<Unit>();
         unit->path = std::move(path); unit->identity = identity;
+        if (!compiler_owned_library)
+            unit->logical_source_id = source_admission->admit(unit->path, identity);
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
         unit->compiler_owned_library = compiler_owned_library;
         unit->compiler_library_tier = compiler_library_tier;
@@ -261,6 +269,10 @@ private:
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
                     dependency = project_root_import_detail::resolve_native_source_suffix(
                         current.path.parent_path() / fs::path(raw));
+                    // Inspect the original path spelling before canonicalization;
+                    // otherwise a within-root symlink becomes invisible to admission.
+                    frontend::logical_source_detail::no_symlink_components(
+                        dependency, source_admission->root());
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
@@ -286,10 +298,12 @@ private:
                         "native import graph exceeds 8 MiB source read budget",
                         &child_identity, &expected_child_identity);
                     read_bytes += child_text.size();
-                    // Compare descriptor identities too: hard-link aliases must
-                    // not bypass self-edge rejection or duplicate unit identity.
+                    // A second filename for the same descriptor is not a new
+                    // source owner. Never silently collapse hardlink aliases.
                     for (std::size_t i = 0; i < units.size(); ++i) {
                         if (same_file(units[i]->identity, child_identity)) {
+                            if (units[i]->path != dependency)
+                                fail(current, "native source file alias has multiple logical IDs");
                             selected = i;
                             break;
                         }
