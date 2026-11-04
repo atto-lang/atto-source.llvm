@@ -50,4 +50,28 @@ for CXX in g++ clang++; do
     echo "raw-pointer scoped key unexpectedly compiled with $CXX" >&2; exit 1
   fi
 done
+# Cross-language native execution authority is included by the C++ actor gate:
+# keep its original C11 ABI and real physical-claim tests working too.
+for CC in gcc clang; do
+  if ! command -v "$CC" >/dev/null 2>&1; then continue; fi
+  "$CC" -std=c11 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+    -I"$ROOT/src/main/cpp" "$ROOT/tests/native_execution_authority_test.c" \
+    -o "$OUT/execution-authority-$CC"
+  "$OUT/execution-authority-$CC"
+done
+
+# Optional exact-source sanitizer matrix, enabled by the source-local workflow.
+if [ "${ORES_SCOPED_LOCAL_RUN_SANITIZERS:-0}" = "1" ]; then
+  for CXX in g++ clang++; do
+    if ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
+    for testfile in native_scoped_local_storage_v1_test native_actor_local_gate_v1_test; do
+      "$CXX" -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+        -fsanitize=address,undefined -fno-omit-frame-pointer \
+        -I"$ROOT/src/main/cpp" "$ROOT/tests/$testfile.cpp" \
+        -o "$OUT/asan-$testfile-$CXX"
+      ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" "$OUT/asan-$testfile-$CXX"
+    done
+  done
+fi
+
 printf '%s\n' 'SCOPED_LOCAL_HOST_ONLY_COMPILER_AND_NEGATIVE_PASS'
