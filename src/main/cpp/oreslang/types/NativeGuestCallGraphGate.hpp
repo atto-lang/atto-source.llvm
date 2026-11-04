@@ -65,8 +65,7 @@ public:
             std::size_t span = 1;
             for (const auto& child : graph.at(key)) {
                 const auto child_span = visit(child, depth + 1);
-                if (child_span >= max_depth ||
-                        span > max_depth - child_span)
+                if (child_span >= max_depth)
                     throw std::runtime_error("native guest call depth budget exceeded");
                 span = std::max(span, child_span + 1);
             }
