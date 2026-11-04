@@ -50,6 +50,41 @@ int main() {
     check(memberships.join(b, 11, 1), "join subscriber 11 B");
 
     NativeActorPubSubAdmission<std::string> bus(memberships, 8, 4);
+    // Portable conformance PS018 and group-scoped PS021–PS026 require
+    // exact ASCII names, not permissive native UTF-8 / locale admission.
+    // The C ABI must share the same validation function.
+    {
+        using oreslang::runtime::valid_portable_topic_name;
+        NativeActorPubSubAdmission<std::string> names(memberships, 16, 4);
+        for (const std::string& good : {
+                std::string("a"), std::string("A"),
+                std::string("orders.created/v1-2_3"),
+                std::string(128, 'a')}) {
+            check(valid_portable_topic_name(good),
+                  "portable valid topic rejected by shared validator");
+            names.define_topic(a.group_id(), good,
+                NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 1);
+        }
+        for (const std::string& bad : {
+                std::string(), std::string("."), std::string("_"),
+                std::string("9topic"), std::string("bad space"),
+                std::string(" bad"), std::string("bad\tname"),
+                std::string("bad:name"), std::string("bad\\name"),
+                std::string(129, 'a'), std::string("a\0z", 3),
+                std::string("\xC3\xA9"), std::string("a\xC2\xA0b"),
+                std::string("\xFF", 1)}) {
+            check(!valid_portable_topic_name(bad),
+                  "invalid portable topic admitted by shared validator");
+            bool invalid = false;
+            try {
+                names.define_topic(a.group_id(), bad,
+                    NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 1);
+            } catch (const std::invalid_argument&) { invalid = true; }
+            check(invalid, "native topic admitted nonportable name");
+        }
+        check(names.close_group(a.group_id()) == 4,
+              "rejected topic names consumed capacity or leaked state");
+    }
     bool c1_control_rejected = false;
     try {
         bus.define_topic(
