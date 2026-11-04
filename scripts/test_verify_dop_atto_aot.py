@@ -122,6 +122,23 @@ class FailClosedVerifierTests(unittest.TestCase):
         result = self.run_negative("compiler_mutated")
         self.assertIn("LLVM guest compiler changed", result.stderr)
 
+    def test_guest_binary_mutated_during_execution_is_refused(self):
+        # An exit-0 guest must still fail if its executable bytes change
+        # while it runs. The verifier hashes native output before and after.
+        stub = self.root / "scripts" / "compile-aot.sh"
+        stub.write_text(
+            "#!/bin/sh\n"
+            "cat > \"$2\" <<'GUEST'\n"
+            "#!/bin/sh\n"
+            "echo '# changed at runtime' >> \"$0\"\n"
+            "exit 0\n"
+            "GUEST\n"
+            "chmod +x \"$2\"\n",
+            encoding="utf-8",
+        )
+        result = self.run_negative()
+        self.assertIn("native guest binary changed during execution", result.stderr)
+
     def test_mutated_clang_is_refused(self):
         result = self.run_negative("clang_mutated")
         self.assertIn("Clang changed", result.stderr)
