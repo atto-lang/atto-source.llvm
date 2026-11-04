@@ -433,6 +433,47 @@ def main():
         if not result.returncode or result.stdout or 'outside the admitted project root' not in result.stderr:
             raise AssertionError(('projectless host escape', result.returncode, result.stdout[:150], result.stderr))
         passed+=1
+        # Lexical admission must happen BEFORE extensionless suffix probes.
+        # A present vs missing outside target must not change the compiler's
+        # diagnostic category or permit even a partial LLVM IR module.
+        for outside_exists in (False, True):
+            name = 'atto-preprobe-outside-existing' if outside_exists else 'atto-preprobe-outside-absent'
+            directory = root/name; directory.mkdir()
+            owned = directory/'owned'; owned.mkdir()
+            (owned/'main.atto').write_text(
+                'import module Outside from "../../forbidden"; '
+                'pub fnc main():int{return 0;}')
+            if outside_exists:
+                (root/'forbidden.atto').write_text(
+                    'define module Outside as pub fnc answer():int{return 42;} end')
+            else:
+                (root/'forbidden.atto').unlink(missing_ok=True)
+            result = run([a.compiler, str(owned/'main.atto')])
+            if result.returncode == 0 or result.stdout or (
+                'outside the admitted project root' not in result.stderr):
+                raise AssertionError((name, 'preprobe source ownership failure',
+                                      result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+
+        # A lexically in-root extensionless path may still traverse a
+        # symlinked ancestor. Reject it BEFORE querying .atto/.ores children,
+        # even if the symlink points at an existing outside producer.
+        if hasattr(os, 'symlink'):
+            directory = root/'atto-preprobe-symlink-ancestor'; directory.mkdir()
+            outside = directory/'outside'; outside.mkdir()
+            (outside/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            owned = directory/'owned'; owned.mkdir()
+            (owned/'main.ores').write_text(
+                'import module Lib from "./alias/lib"; '
+                'pub fnc main():int{return 0;}')
+            (owned/'alias').symlink_to(outside, target_is_directory=True)
+            result = run([a.compiler, str(owned/'main.ores')])
+            if not result.returncode or result.stdout or 'native source symlink alias denied' not in result.stderr:
+                raise AssertionError(('preprobe symlinked ancestor',
+                                      result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+
         # A hardlink alias outside the graph is still ambiguous ownership.
         if hasattr(os, 'link'):
             directory=root/'atto-hardlink-outside-graph'; directory.mkdir()

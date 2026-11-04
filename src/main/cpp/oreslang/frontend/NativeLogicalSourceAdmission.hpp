@@ -108,12 +108,21 @@ inline void validate_logical_id(std::string_view value) {
     }
 }
 
-inline void no_symlink_components(const fs::path& original, const fs::path& root) {
+// Pure lexical ownership check: call this BEFORE suffix discovery or any
+// status/canonical/read operation on an untrusted import path. In particular,
+// existence of a file outside the root must not influence diagnostics.
+inline fs::path checked_relative_source_path(const fs::path& original,
+                                             const fs::path& root) {
     const auto absolute = fs::absolute(original).lexically_normal();
     const auto relative = absolute.lexically_relative(root);
-    if (relative.empty() || relative.is_absolute() ||
-        *relative.begin() == fs::path(".."))
+    if (relative.empty() || relative == fs::path(".") ||
+        relative.is_absolute() || *relative.begin() == fs::path(".."))
         throw std::runtime_error("native source is outside the admitted project root");
+    return relative;
+}
+
+inline void no_symlink_components(const fs::path& original, const fs::path& root) {
+    const auto relative = checked_relative_source_path(original, root);
     auto next = root;
     for (const auto& component : relative) {
         next /= component;

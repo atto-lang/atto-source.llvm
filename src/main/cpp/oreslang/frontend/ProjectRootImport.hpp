@@ -148,12 +148,14 @@ inline fs::path resolve_native_source_suffix(
     modern += ".atto";
     fs::path legacy = candidate;
     legacy += ".ores";
+    // Canonical .atto importers never need to probe for a legacy sibling:
+    // selection is unconditional, including when that sibling is missing,
+    // symlinked, unreadable, or otherwise attacker-controlled.
+    if (canonical_atto_importer) return modern;
     const bool has_modern = exists_marker(modern);
     const bool has_legacy = exists_marker(legacy);
-    // A canonical importer must never silently downgrade to legacy source,
-    // even when a legacy twin exists. Legacy importers retain their prior
-    // ambiguity rejection until a shared migration policy is ratified.
-    if (canonical_atto_importer) return modern;
+    // Legacy importers retain the ambiguity rejection until the shared
+    // migration policy is ratified; no implicit downgrade for .atto.
     if (has_modern && has_legacy)
         throw std::runtime_error(
             "ambiguous native source import: both .atto and .ores exist; use explicit extension");
