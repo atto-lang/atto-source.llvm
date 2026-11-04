@@ -95,6 +95,14 @@ int main() {
     round(s, 1);
     round(s, 2);
 
+    // Terminal-fenced teardown must not reclaim storage for a still-live
+    // actor, even from an authorized CONTROL-plane host OS thread.
+    for (std::size_t i = 0; i < 2; ++i) {
+        assert(!actor_local_close_after_terminal_v1(
+            s.scheduler, s.actors[i], *s.scope[i], s.stamps[i]));
+        assert(s.scope[i]->is_open());
+    }
+
     for (std::size_t i = 0; i < 2; ++i) {
         assert(ores_native_actor_scheduler_stop(s.scheduler, s.actors[i]));
         auto wrong_owner = s.stamps[i];
@@ -105,6 +113,7 @@ int main() {
         assert(actor_local_close_after_terminal_v1(
             s.scheduler, s.actors[i], *s.scope[i], s.stamps[i]));
         assert(!s.scope[i]->is_open());
+        assert(!s.scope[i]->get_copy(s.stamps[i], s.key));
         assert(!actor_local_close_after_terminal_v1(
             s.scheduler, s.actors[i], *s.scope[i], s.stamps[i]));
     }
