@@ -20,7 +20,9 @@ enum class CriticalStateAdmission : std::uint8_t {
     EffectExceedsUsing,
     LoanAcrossSuspension,
     MissingContinuationFence,
-    ScopeDenied
+    ScopeDenied,
+    CriticalBodySuspension,
+    CriticalBodyIo
 };
 
 struct CriticalStateCallback {
@@ -50,16 +52,16 @@ inline CriticalStateAdmission admit_critical_handle_state(
     if (!using_effects.permits(callback.inferred)) {
         return CriticalStateAdmission::EffectExceedsUsing;
     }
-    if (callback.inferred.has(FunctionEffect::Suspend)) {
-        // A state-backed loan may not cross a yielding reduction boundary.
-        // The callback resumes only on a generation-fenced re-admitted turn.
-        if (callback.state_loan_live_across_suspend) {
-            return CriticalStateAdmission::LoanAcrossSuspension;
-        }
-        if (!callback.continuation_generation_fenced) {
-            return CriticalStateAdmission::MissingContinuationFence;
-        }
-    }
+    // A generation-fenced continuation or a released mutable loan cannot
+    // authorize await/yield *inside* an admitted critical body. The actor's
+    // logical non-reentrant turn is separate from this short gate permit.
+    if (callback.inferred.has(FunctionEffect::Suspend))
+        return CriticalStateAdmission::CriticalBodySuspension;
+    // The current effect system does not distinguish proven nonblocking
+    // pure native calls from arbitrary host I/O. Fail closed until checked
+    // nonblocking effect summaries exist; do not accept carrier parking.
+    if (callback.inferred.has(FunctionEffect::Io))
+        return CriticalStateAdmission::CriticalBodyIo;
     return CriticalStateAdmission::Accept;
 }
 
