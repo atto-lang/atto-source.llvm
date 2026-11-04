@@ -122,16 +122,31 @@ public:
         // Match the ordinary frontend's reserved-identifier boundary even
         // though this intentionally separate source slice has no general AST.
         for (const auto banned : {
-            "self", "return", "end", "as", "define", "declare", "pub", "private",
-            "await", "async", "void", "Failure", "on_panic", "stop", "child",
-            "actor", "isoactor", "supervisor", "class", "module", "namespace",
-            "import", "from", "trait", "interface", "enum", "type", "struct",
-            "fnc", "routine", "method", "mtd", "static", "gen", "generator",
-            "int", "bool", "true", "false", "null", "let", "val", "final",
-            "const", "mut", "while", "for", "if", "then", "else", "fi",
-            "match", "switch", "select", "throw", "raise", "panic",
-            "trap", "defer", "recover", "try", "catch", "finally",
-            "extends", "implements", "conforms", "with", "using"
+            "self", "return", "end", "as", "define",
+            "declare", "pub", "private", "await", "async",
+            "void", "Failure", "on_panic", "stop", "child",
+            "actor", "isoactor", "supervisor", "class", "module",
+            "namespace", "import", "from", "trait", "interface",
+            "enum", "type", "struct", "fnc", "routine",
+            "method", "mtd", "static", "gen", "generator",
+            "int", "bool", "true", "false", "null",
+            "let", "val", "final", "const", "mut",
+            "while", "for", "if", "then", "else",
+            "fi", "match", "switch", "select", "throw",
+            "raise", "panic", "trap", "defer", "recover",
+            "try", "catch", "finally", "extends", "implements",
+            "conforms", "with", "using", "pattern", "contract",
+            "do", "new", "spawn", "done", "rt",
+            "suspends", "suspend", "critical", "nlex", "def",
+            "of", "loop", "block", "break", "continue",
+            "yield", "super", "elseif", "elif", "matches",
+            "is", "default", "eq", "neq", "nb",
+            "readch", "writech", "cb", "shared", "untrusted",
+            "types", "typeof", "impl", "abstract", "Iterator",
+            "AsyncIterator", "borrow", "obj", "arr", "gpu",
+            "cpu", "quantum", "over", "structural", "pure",
+            "Some", "None", "Ok", "Err", "requires",
+            "serial", "critical-read", "critical-write", "nb-select"
         }) {
             if (value == banned) denied("reserved supervisor identifier");
         }
