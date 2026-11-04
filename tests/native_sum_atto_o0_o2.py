@@ -48,30 +48,73 @@ def run(command, *, stdin=None, timeout=60, env=None):
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
+NO_GC_SUCCESS = (
+    b"STRICT_NO_GC_IR_SCREENED_ONLY "
+    b"(linked binary and FFI audit still required)\n"
+)
+
+
 def check_no_gc(auditor, ir_path, original):
+    # Source-owned CI builds the genuine Rust auditor in the CMake build tree.
+    # The CLI must reject malformed success transcripts and detect mutation
+    # of the auditor or checked IR during the invocation. Name/marker alone
+    # are not an independent provenance attestation.
     require(auditor.name == "oreslang-no-gc-ir-audit" and
             auditor.is_file() and not auditor.is_symlink() and
             os.access(auditor, os.X_OK), "no-GC auditor missing or unsafe")
+    before = auditor.stat()
+    original_auditor = auditor.read_bytes()
     ir_path.write_bytes(original)
     screened = run([str(auditor), str(ir_path)], timeout=10)
     require(screened.returncode == 0 and
-            b"STRICT_NO_GC_IR_SCREENED_ONLY" in screened.stdout and
+            screened.stdout == NO_GC_SUCCESS and
             not screened.stderr, "mandatory source-built no-GC audit failed")
     require(ir_path.read_bytes() == original, "no-GC audit modified compiler IR")
+    after = auditor.stat()
+    require(not auditor.is_symlink() and
+            (before.st_dev, before.st_ino, before.st_mode, before.st_size,
+             before.st_mtime_ns) ==
+            (after.st_dev, after.st_ino, after.st_mode, after.st_size,
+             after.st_mtime_ns) and
+            auditor.read_bytes() == original_auditor,
+            "no-GC auditor changed during IR audit")
 
 
 def self_test():
-    # Synthetic, source-only invocation checks; never guest/compiler proof.
+    # Synthetic SOURCE-ONLY invocation checks, NOT guest/compiler evidence.
+    # Negative failures must be attributable to the expected control, never
+    # to an unrelated Python or shell failure.
     with tempfile.TemporaryDirectory(prefix="atto-auditor-selftest-") as td:
         root = Path(td)
         ir_file = root / "sample.ll"
         sample = b"; ModuleID = 'synthetic'\n"
+        success_line = NO_GC_SUCCESS.decode("ascii").strip()
         cases = (
-            ("missing", None),
-            ("denied", "#!/bin/sh\nexit 17\n"),
-            ("tamper", "#!/bin/sh\nprintf changed >> \"$1\"\necho STRICT_NO_GC_IR_SCREENED_ONLY\n"),
+            ("missing", None, "no-GC auditor missing or unsafe"),
+            ("denied", "#!/bin/sh\nexit 17\n",
+             "mandatory source-built no-GC audit failed"),
+            ("tamper", '#!/bin/sh\nprintf changed >> "$1"\n'
+             'echo "' + success_line + '"\n',
+             "no-GC audit modified compiler IR"),
+            ("marker-prefix", "#!/bin/sh\n"
+             'echo "NOT_A_PROOF ' + success_line + '"\n',
+             "mandatory source-built no-GC audit failed"),
+            ("marker-suffix", "#!/bin/sh\n"
+             'echo "' + success_line + ' FAKE"\n',
+             "mandatory source-built no-GC audit failed"),
+            ("no-marker", "#!/bin/sh\nexit 0\n",
+             "mandatory source-built no-GC audit failed"),
+            ("stderr", "#!/bin/sh\n"
+             'echo "' + success_line + '"\n'
+             'echo UNEXPECTED_STDERR >&2\n',
+             "mandatory source-built no-GC audit failed"),
+            ("self-modifying", "#!/bin/sh\n"
+             'printf "# changed\\n" >> "$0"\n'
+             'echo "' + success_line + '"\n',
+             "no-GC auditor changed during IR audit"),
         )
-        for name, body in cases:
+        negative_count = 0
+        for name, body, diagnostic in cases:
             auditor = root / name / "oreslang-no-gc-ir-audit"
             if body is not None:
                 auditor.parent.mkdir()
@@ -79,17 +122,36 @@ def self_test():
                 auditor.chmod(0o700)
             try:
                 check_no_gc(auditor, ir_file, sample)
-            except (OSError, RuntimeError):
-                pass
+            except RuntimeError as error:
+                require(diagnostic in str(error),
+                        "auditor negative " + name +
+                        " failed for the wrong reason: " + str(error))
+                negative_count += 1
             else:
                 raise RuntimeError("unsafe " + name + " auditor was accepted")
         passing = root / "pass" / "oreslang-no-gc-ir-audit"
         passing.parent.mkdir()
-        passing.write_text("#!/bin/sh\necho STRICT_NO_GC_IR_SCREENED_ONLY\n")
+        passing.write_text("#!/bin/sh\n"
+                           'echo "' + success_line + '"\n')
         passing.chmod(0o700)
         check_no_gc(passing, ir_file, sample)
-    print("NATIVE_SUM_AUDITOR_SOURCE_ONLY_PASS|negatives=3|guest=NOT_EXECUTED")
-
+        # A valid binary via a symlink remains untrusted even if it prints the
+        # right success line. Do not resolve the symlink before validation.
+        alias = root / "alias" / "oreslang-no-gc-ir-audit"
+        alias.parent.mkdir()
+        alias.symlink_to(passing)
+        try:
+            check_no_gc(alias, ir_file, sample)
+        except RuntimeError as error:
+            require("no-GC auditor missing or unsafe" in str(error),
+                    "symlink auditor rejected for unexpected reason")
+            negative_count += 1
+        else:
+            raise RuntimeError("symlink no-GC auditor was accepted")
+        require(negative_count == len(cases) + 1,
+                "auditor negative mutation coverage incomplete")
+    print("NATIVE_SUM_AUDITOR_SOURCE_ONLY_PASS|negatives=" +
+          str(negative_count) + "|guest=NOT_EXECUTED")
 
 def main():
     parser = argparse.ArgumentParser()
