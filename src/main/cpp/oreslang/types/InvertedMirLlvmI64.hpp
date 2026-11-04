@@ -78,6 +78,11 @@ public:
         pushes_ = 0;
         writes_ = 0;
         last_read_ = "0";
+        // A host-internal partial MIR may be valid, but executable guest IR
+        // must always revoke the owner and scrub its columns before return.
+        if (module.instructions().empty() ||
+                module.instructions().back().kind != OpKind::Close)
+            throw std::logic_error("inverted MIR LLVM requires terminal owner close");
         if (module.layout().columns() != 2 ||
             module.layout().column(0).type != InvertedScalarKind::I64 ||
             module.layout().column(1).type != InvertedScalarKind::I64 ||
