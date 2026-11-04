@@ -174,18 +174,18 @@ void malformed_utf8_is_rejected_without_mutation() {
     // Overlong, stray continuation, surrogate, >U+10FFFF, truncated
     // and valid 4-byte supplementary Unicode scalar.
     const std::string invalid[] = {
-        std::string("\\xC0\\x80"),
-        std::string("\\x80"),
-        std::string("\\xED\\xA0\\x80"),
-        std::string("\\xF4\\x90\\x80\\x80"),
-        std::string("\\xF0\\x9F")
+        std::string("\xC0\x80"),
+        std::string("\x80"),
+        std::string("\xED\xA0\x80"),
+        std::string("\xF4\x90\x80\x80"),
+        std::string("\xF0\x9F")
     };
     for (const auto& sample : invalid) {
         assert(!actor.set(key, id(88), sample));
         assert(actor.get_copy(key, id(88)) == std::string("original"));
         assert(actor.used_bytes() == 8);
     }
-    assert(actor.set(key, id(88), std::string("\\xF0\\x9F\\x98\\x80")));
+    assert(actor.set(key, id(88), std::string("\xF0\x9F\x98\x80")));
     assert(actor.used_bytes() == 4);
     ThreadLocalKeyV1<std::string> thread_key;
     PhysicalThreadLocalStoreV1::clear_current_thread();
