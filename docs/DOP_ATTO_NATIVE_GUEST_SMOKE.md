@@ -24,6 +24,26 @@ Expected result:
 - Velocity at last row remains 2.
 - Native process exits **0** only on the expected result.
 
+## Ordered lexical locals and LLVM parity
+
+The native frontend now admits a **bounded** ordinary function-local
+declaration after an earlier effect or indexed loop via existing
+`ScopedLocal` lowering, rather than falsely requiring every local to be
+declared before the first statement. The 32,768-row fixture intentionally
+declares `let int checksum` after its initialization/integration loops to
+exercise that capability in a real LLVM → Clang executable.
+
+The native restriction is currently **64 ordered root locals per function**.
+A new workflow step builds and runs a small positive ordered-local program
+and checks three compiler-negative cases: use before declaration, duplicate
+binding, and the 65th root binding. Ownership, cleanup and lexical scoping
+are handled by the existing root `ScopedLocal` path. This is a narrow
+syntactic/semantic parity slice, **not** full Java local-owner or
+actor-owned `Region<T>` parity.
+
+These steps are specified on the branch, but **NOT_VERIFIED** until
+the exact-head workflow receives a real runner and executes its steps.
+
 ## Actual AOT gate
 
 After building `oreslang-llvmc` with the repository's real CMake/LLVM
