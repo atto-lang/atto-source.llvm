@@ -140,6 +140,27 @@ int main() {
         });
     }
 
+    // A symlink to the project-root directory itself is permitted; aliases
+    // below that root are not, and the logical path must be identical.
+    const auto root_alias = tmp / "project-root-alias";
+    optional.clear();
+    fs::create_directory_symlink(root, root_alias, optional);
+    if (!optional) {
+        HostLogicalSourceUnitIds aliased(root_alias / "app" / "consumer.atto");
+        equals(aliased.admit(root_alias / "app" / "consumer.atto",
+                             snapshot(entry)), "project/app/consumer.atto");
+        equals(aliased.admit(entry, snapshot(entry)), "project/app/consumer.atto");
+    }
+
+    const auto downgrade = tmp / "marker-downgrade";
+    write_file(downgrade / ".atto.pkg.toml", "[project]\nroot = \"..\"\n");
+    write_file(downgrade / ".ores.pkg.toml", "schema_version = \"1\"\n");
+    write_file(downgrade / "main.atto", "pub fnc main():int{return 42;}");
+    rejects("invalid canonical marker must not use legacy fallback",
+            "canonical", [&] {
+                HostLogicalSourceUnitIds invalid(downgrade / "main.atto");
+            });
+
     std::cout << "LLVM_HOST_LOGICAL_UNIT_IDS_COMPONENT_PASS\n";
     return 0;
 }
