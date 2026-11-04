@@ -462,8 +462,12 @@ private:
             fail(unit, "NATIVE_MACRO_EXPANDER_REQUIRED: imported macro signature/argument unsupported");
         if (unit.logical_source_id.empty())
             fail(unit, "NATIVE_MACRO_PROVENANCE: consumer source has no admitted logical identity");
-        auto& unit_expansions =
-            imported_macro_expansions_by_unit[unit.logical_source_id];
+        // Initialize each admitted source unit from the parser's local
+        // expansion count. Imported and local macros share ONE portable
+        // 128-expansion ceiling; neither path gets an additional quota.
+        auto& unit_expansions = imported_macro_expansions_by_unit.try_emplace(
+            unit.logical_source_id,
+            unit.program.native_macro_expansions).first->second;
         if (++unit_expansions > 128)
             fail(unit, "NATIVE_MACRO_BUDGET: imported expansion count exceeds 128 per source unit");
         if (syntax_identity) {
