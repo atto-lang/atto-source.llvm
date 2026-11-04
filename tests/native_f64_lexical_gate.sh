@@ -59,7 +59,8 @@ positive() {
   grep -Eq '^define[[:space:]].*i32[[:space:]]+@main\(' "$scratch/$name.ll" ||
     { echo "NATIVE_F64_MISSING_NATIVE_MAIN: $name" >&2; exit 1; }
   if [[ "$name" != integer_control ]]; then
-    grep -Eq '(alloca|load|store|fadd|fsub|fmul|fdiv|fcmp)[[:space:]].*double' "$scratch/$name.ll" ||
+    # Match actual LLVM instructions, not '; fadd double' in a forged comment.
+    grep -Eq '^[[:space:]]*(%[A-Za-z0-9_.$-]+[[:space:]]*=[[:space:]]*(alloca[[:space:]]+double|load[[:space:]]+double|f(add|sub|mul|div|neg|cmp)[[:space:]].*double)|store[[:space:]]+double)' "$scratch/$name.ll" ||
       { echo "NATIVE_F64_NO_TYPED_DOUBLE_IR: $name" >&2; exit 1; }
   fi
   # Hash the exact source and compiler-produced IR; do not print source contents.
