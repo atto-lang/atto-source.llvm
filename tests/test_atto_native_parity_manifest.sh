@@ -60,4 +60,5 @@ if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
 python3 "$root/tests/verify_atto_guest_receipts.py" --self-test
+python3 "$root/tests/test_atto_native_guest_receipts_cli.py"
 echo 'PASS: eleven source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
