@@ -158,9 +158,27 @@ set -e
 [[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 && ! -s "$tmp/dangling.ll" ]] ||
   die 'LLVM accepted dangling canonical .atto symlink or downgraded to .ores'
 
+# The Java native test harness is not yet implemented in LLVM stdlib.
+# Make the unsupported boundary an explicit negative compiler admission,
+# not a fake passing 'ORES_TEST' line or a host-only canary.
+mkdir "$tmp/unsupported-stdlib"
+printf '%s\n' 'import module Test from "ores.std/testing"; pub fnc main(): int { return 42; }' \
+  > "$tmp/unsupported-stdlib/main.atto"
+set +e
+timeout 30s "$compiler" --target=host "$tmp/unsupported-stdlib/main.atto" \
+  > "$tmp/unsupported-stdlib.ll" 2> "$tmp/unsupported-stdlib.stderr"
+status=$?
+set -e
+[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 &&
+   ! -s "$tmp/unsupported-stdlib.ll" ]] ||
+  die 'LLVM falsely admitted unsupported std/testing as executable guest parity'
+grep -Fq 'native ores.std package resolution remains unsupported' \
+  "$tmp/unsupported-stdlib.stderr" ||
+  die 'LLVM std/testing unsupported boundary lacks explicit diagnostic'
+
 for path in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$path" | cut -d ' ' -f1)" == "${original_hash["$path"]}" ]] ||
     die "guest source/manifest mutated during compiler execution: $path"
 done
 
-printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=17|optimizations=2|negative=5|guest_receipt_protocol=UNSUPPORTED\n'
+printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=17|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED\n'
