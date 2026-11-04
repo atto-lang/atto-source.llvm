@@ -119,6 +119,19 @@ required before numeric parity is marked complete.
 Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI and must
 pin a compiler revision carrying the same checked arithmetic semantics.
 
+## AttoLang test-CLI and native LLVM parity
+
+The LLVM backend now carries a bounded Rust source-mutation regression
+for canonical `.atto` compilation and native execution, an equivalent legacy
+`.ores` guest, and independent negative parser/oracle checks. This is **source
+fuzzing of compiled scalar programs**, not `atto test --fuzz` stdin/corpus parity.
+Separate ASan+UBSan and TSan host-native actor lanes require positive and
+negative detector controls. Live `atto test --race` is still inconclusive
+until an authenticated, complete compiler/runtime race recorder is integrated.
+
+See [LLVM test parity and evidence matrix](docs/ATTO_TEST_LLVM_PARITY.md)
+for exact commands and explicit unverified boundaries.
+
 ## Build and test
 
 Requires LLVM development libraries 14+, CMake 3.20+, C++17, Rust and ideally Clang.
