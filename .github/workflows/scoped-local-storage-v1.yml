@@ -32,12 +32,19 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           submodules: false
-      - name: report exact tree
+      - name: fail closed unless testing the immutable PR head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          git rev-parse HEAD
-          git rev-parse HEAD^{tree}
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_HEAD"
+          echo "NATIVE_SCOPED_LOCAL_EXACT_HEAD=$actual"
+          echo "NATIVE_SCOPED_LOCAL_EXACT_TREE=$(git rev-parse HEAD^{tree})"
       - name: gcc and clang host-only tests
         run: |
           bash -n scripts/test-scoped-locals-v1.sh
