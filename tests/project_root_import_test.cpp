@@ -182,12 +182,62 @@ int main() {
     }
 #endif
     {
+        const auto dir = temp / "atto-extension";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"src/main.atto", "");
+        write_text(dir/"src/main.ores", "");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        // Both files exist: extensionless imports must preserve source dialect.
+        if (resolve(dir/"src/main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("AttoLang project-root import selected legacy file");
+        if (resolve(dir/"src/main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("legacy project-root import selected AttoLang file");
+        // Explicit cross-extension import is unambiguous for migration.
+        if (resolve(dir/"src/main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("explicit legacy source import mismatch");
+        if (resolve(dir/"src/main.ores", "+/lib.atto") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("explicit AttoLang source import mismatch");
+    }
+    {
+        const auto dir = temp / "atto-no-fallback";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.ores", "");
+        must_fail("AttoLang missing native source", "cannot resolve native project-root import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-nested-package";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"nested/.ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("AttoLang nested package boundary", "nested package boundary",
+                  [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
+    }
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "atto-symlink-escape";
+        const auto outside = temp / "outside-source.atto";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(outside, "");
+        fs::create_symlink(outside, dir/"lib.atto");
+        must_fail("AttoLang symlink target escape", "escapes physical package root",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+#endif
+    {
         const auto dir = temp / "extension";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
+        write_text(dir/"main.atto", "");
         write_text(dir/"lib.txt", "");
-        must_fail("extension", ".ores source files",
+        must_fail("extension", ".atto or .ores source files",
                   [&] { (void)resolve(dir/"main.ores", "+/lib.txt"); });
+        must_fail("AttoLang extension", ".atto or .ores source files",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib.txt"); });
     }
 
     std::cout << "PASS project-root import resolver security cases\n";
