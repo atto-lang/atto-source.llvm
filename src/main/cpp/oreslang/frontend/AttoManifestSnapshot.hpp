@@ -4,9 +4,11 @@
 // This is a best-effort race detector, not an atomic multi-file filesystem snapshot.
 #include "oreslang/frontend/ProjectRootImport.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
+#include <cstddef>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace oreslang::frontend {
 
