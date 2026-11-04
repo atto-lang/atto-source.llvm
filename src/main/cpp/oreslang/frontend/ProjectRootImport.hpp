@@ -70,6 +70,7 @@ inline void validate_manifest(const std::string& manifest_bytes) {
     std::size_t project_root_count = 0;
     bool in_root_section = true;
     bool in_project_section = false;
+    bool saw_project_section = false;
     std::istringstream lines(manifest_bytes);
     std::string line;
     while (std::getline(lines, line)) {
@@ -86,6 +87,13 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         if (first != std::string::npos && line[first] == '[') {
             in_root_section = false;
             in_project_section = std::regex_match(line, project_section);
+            // TOML forbids redefining a table. A regex-only native subset
+            // must not silently accept an invalid canonical package that the
+            // Java TOML parser rejects, even if root remains ".".
+            if (in_project_section && saw_project_section)
+                throw std::runtime_error(
+                    "duplicate [project] table requires full TOML parser");
+            saw_project_section = saw_project_section || in_project_section;
         }
         if (in_root_section && std::regex_match(line, version_key)) {
             if (!std::regex_match(line, version))
