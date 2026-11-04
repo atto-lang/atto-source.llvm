@@ -121,6 +121,24 @@ static inline int ores_execution_owns(OresNativeExecutionAuthority* a,
     ores_execution_unlock(a);
     return ok;
 }
+/* Same execution-claim check, with RUNNING phase authenticated under
+ * ONE native lock. RequestLocal must not authorize STOPPING cleanup turns,
+ * even if those turns may still own a physical actor carrier. Callers must
+ * separately couple STOP to logical request cancellation: this predicate
+ * alone cannot hold a lease across arbitrary user callbacks. */
+static inline int ores_execution_owns_running(
+        OresNativeExecutionAuthority* a, OresExecutionClaim claim) {
+    if (!a) return 0;
+    ores_execution_lock(a);
+    int ok = a->phase == ORES_EXEC_RUNNING
+        && claim.carrier && a->owner == claim.carrier
+        && claim.generation == a->generation
+        && claim.sequence == a->sequence
+        && pthread_equal(a->owner_thread, pthread_self());
+    ores_execution_unlock(a);
+    return ok;
+}
+
 /* Called only after guest code has unwound, not at the point where a Future
  * is produced. SUSPENDED never means two carriers may execute concurrently. */
 static inline int ores_execution_leave(OresNativeExecutionAuthority* a,
