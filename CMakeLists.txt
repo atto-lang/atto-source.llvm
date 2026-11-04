@@ -2037,6 +2037,18 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-supervisor-control-turn-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_link_libraries(oreslang-supervisor-control-turn-test PRIVATE Threads::Threads)
     add_test(NAME native_supervisor_priority_control COMMAND oreslang-supervisor-control-turn-test)
+    # An explicit, separate source STOP-only plan with checked Failure
+    # admission. Runtime executes parent CONTROL, not general LLVM guest IR.
+    add_executable(oreslang-native-supervisor-stop-only-source-test
+        tests/native_supervisor_stop_only_source_test.cpp)
+    target_include_directories(oreslang-native-supervisor-stop-only-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-supervisor-stop-only-source-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-supervisor-stop-only-source-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-supervisor-stop-only-source-test PRIVATE Threads::Threads)
+    add_test(NAME native_supervisor_source_stop_only_control
+        COMMAND oreslang-native-supervisor-stop-only-source-test)
     add_executable(oreslang-effect-unwind-test tests/effect_unwind_test.cpp)
     target_include_directories(oreslang-effect-unwind-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-effect-unwind-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
