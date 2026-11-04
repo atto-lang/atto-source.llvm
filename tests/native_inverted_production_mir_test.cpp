@@ -43,6 +43,19 @@ Program make_source() {
     return p;
 }
 
+Program make_snapshot_source() {
+    auto p = make_source();
+    using Kind = InvertedSourceOperation::Kind;
+    p.inverted_main->operations = {
+        InvertedSourceOperation{Kind::Push, 0, "", {{42, 7}}, 0},
+        InvertedSourceOperation{Kind::Snapshot, 0, "", {}, 0, "saved"},
+        InvertedSourceOperation{Kind::WriteField, 0, "x", {}, 99},
+        InvertedSourceOperation{Kind::EraseSwap, 0, "", {}, 0},
+        InvertedSourceOperation{Kind::ReturnSnapshotRead, 0, "x", {}, 0, "saved"}
+    };
+    return p;
+}
+
 template<class F> void reject(F&& fn, const char* expected) {
     try { fn(); }
     catch (const std::exception& e) {
@@ -74,6 +87,65 @@ int main() {
     assert(ir.find("icmp ult i64") != std::string::npos);
     assert(ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
 
+    // An actual detached value is independently represented by the typed
+    // source operation, HIR/MIR snapshot ordinal, and final copied SSA scalar.
+    {
+        const auto snapshot = verify_production_inverted_i64(make_snapshot_source());
+        const auto& code = snapshot.mir.instructions();
+        assert(code.size() == 7);
+        assert(code[2].kind == OpKind::Snapshot);
+        assert(code[2].require_owner_guard && code[2].require_bounds_guard &&
+               code[2].require_generation_guard);
+        assert(code[5].kind == OpKind::ReadSnapshotField &&
+               code[5].index == 0 && code[5].column == 0);
+        assert(!code[5].require_generation_guard && !code[5].require_bounds_guard);
+        const auto snapshot_ir = emit_native_i64_pair_ir(snapshot.mir, snapshot.operands);
+        assert(snapshot_ir.find("store i64 99, ptr") != std::string::npos);
+        assert(snapshot_ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
+        assert(snapshot_ir.find("icmp ult i64 0, ") != std::string::npos);
+        assert(I64PairLlvmEmitter(snapshot.mir.capacity()).build(
+            snapshot.mir, snapshot.operands) == snapshot_ir);
+
+        auto forged_mir = code;
+        forged_mir[5].index = 1;
+        reject([&] { (void)Module::verify_external(snapshot.mir.layout(),
+            snapshot.mir.capacity(), forged_mir); },
+            "invalid inverted MIR snapshot reference");
+    }
+    {
+        auto forged = make_snapshot_source();
+        forged.inverted_main->operations[4].snapshot_name = "unknown";
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+            "return requires declared snapshot");
+    }
+    {
+        auto forged = make_snapshot_source();
+        forged.inverted_main->operations[1].snapshot_name = "rows";
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+            "invalid or duplicate inverted snapshot binding");
+    }
+    {
+        auto forged = make_snapshot_source();
+        forged.inverted_main->operations[1].field = "x";
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+            "invalid or duplicate inverted snapshot binding");
+    }
+    {
+        auto forged = make_snapshot_source();
+        forged.inverted_main->operations[4].index = 1;
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+            "invalid inverted snapshot return metadata");
+    }
+    {
+        auto forged = make_snapshot_source();
+        forged.inverted_main->operations[1].index = 2;
+        // This is a dynamic runtime trap, not a compiler exception based
+        // solely on source row counts.
+        const auto runtime = verify_production_inverted_i64(forged);
+        const auto ir = emit_native_i64_pair_ir(runtime.mir, runtime.operands);
+        assert(ir.find("icmp ult i64 2, ") != std::string::npos);
+        assert(ir.find("call void @llvm.trap()") != std::string::npos);
+    }
     {
         auto forged = make_source();
         forged.inverted_main->operations[2].field = "id";
