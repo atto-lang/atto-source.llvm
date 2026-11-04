@@ -4763,3 +4763,35 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_request_context_local_host_only
         PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Byte-identical 50-program Java/JS/LLVM scalar floor. The host manifest gate
+# never reports backend parity: only the second test executes a native guest.
+# The LLVM compiler must lower each unchanged program to IR, and Clang must
+# link and execute all 50 .atto programs. Parser-only tests do not qualify.
+if(BUILD_TESTING AND UNIX)
+    find_program(ATTO_SCALAR50_CLANG NAMES clang)
+    set(ATTO_EXPECTED_SOURCE_SHA "" CACHE STRING
+        "Optional exact checked-out source SHA for the AttoLang native parity receipt")
+    add_test(NAME atto_shared_scalar50_manifest_host_only
+        COMMAND "${CMAKE_COMMAND}"
+          "-DMODE=validate"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/shared-scalar50-v1.tsv"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_shared_scalar50_native.cmake")
+    set_tests_properties(atto_shared_scalar50_manifest_host_only
+        PROPERTIES TIMEOUT 15 LABELS "host-only;parity-candidate")
+    add_test(NAME atto_shared_scalar50_native_guest
+        COMMAND "${CMAKE_COMMAND}"
+          "-DMODE=native"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DEXPECTED_SOURCE_SHA=${ATTO_EXPECTED_SOURCE_SHA}"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/shared-scalar50-v1.tsv"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DCLANG=${ATTO_SCALAR50_CLANG}"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-shared-scalar50-native"
+          "-DREPORT=${CMAKE_CURRENT_BINARY_DIR}/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_shared_scalar50_native.cmake")
+    set_tests_properties(atto_shared_scalar50_native_guest
+        PROPERTIES TIMEOUT 600 LABELS "native-guest;source-execution;atto-parity"
+        RUN_SERIAL TRUE)
+endif()
