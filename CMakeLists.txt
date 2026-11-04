@@ -881,6 +881,14 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-host-logical-ids-test)
     set_tests_properties(native_host_logical_source_ids_security PROPERTIES TIMEOUT 20)
 
+    # Native compiler -> LLVM IR -> Clang -> native guest, distinct from the
+    # host logical-ID C++ component test and from Java imported macros.
+    add_test(NAME native_host_logical_source_ids_linked_guest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_logical_source_id_guest.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}")
+    set_tests_properties(native_host_logical_source_ids_linked_guest PROPERTIES TIMEOUT 120)
+
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
