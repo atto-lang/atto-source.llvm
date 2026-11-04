@@ -97,6 +97,11 @@ inline I64PairResult execute_native_i64_pair(
                 result.snapshots.push_back({std::get<0>(row), std::get<1>(row)});
                 break;
             }
+            case OpKind::ReadSnapshotField:
+                // Detached copy stays valid after mutation, erase_swap and
+                // teardown; no owner-relative pointer or row handle escapes.
+                result.reads.push_back(result.snapshots.at(op.index).at(op.column));
+                break;
             case OpKind::Close:
                 owner.reset();
                 break;
