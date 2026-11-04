@@ -124,6 +124,12 @@ inline std::filesystem::path resolve_project_root_import(
 
     if (raw.rfind("+/", 0) != 0)
         throw std::runtime_error("native project-root resolver requires +/ import");
+    // Standalone callers must not bypass the module loader's entry-dialect
+    // admission gate merely by using a different source extension.
+    if (importing_source.extension() != ".atto" &&
+            importing_source.extension() != ".ores")
+        throw std::runtime_error(
+            "native importing source must use .atto or .ores extension");
 
     std::error_code error;
     const auto source = fs::canonical(importing_source, error);
