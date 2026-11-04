@@ -1,0 +1,4 @@
+// Deliberately wrong guest property; the native fuzz runner MUST detect this.
+pub fnc fuzz_byte(int octet): int {
+  return octet + 2;
+}
