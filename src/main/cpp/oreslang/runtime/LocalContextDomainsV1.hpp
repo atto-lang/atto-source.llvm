@@ -1,5 +1,7 @@
 #pragma once
 
+#include "oreslang/runtime/LocalValueAdmissionV1.hpp"
+
 // AttoLang native HOST substrate for ThreadLocal, TaskLocal and ActorLocal.
 // The existing RequestContextLocalV1.hpp owns HTTP RequestLocal. None of
 // these C++ APIs are guest intrinsics or grant actor/task execution authority.
@@ -70,11 +72,6 @@ struct LocalCellV1 final : LocalCellBaseV1 {
     explicit LocalCellV1(T input) : value(std::move(input)) {}
     T value;
 };
-
-template <class T>
-constexpr bool local_value_allowed_v1 =
-    std::is_copy_constructible_v<T> && !std::is_pointer_v<T> &&
-    !std::is_reference_v<T>;
 
 // Host-minted opaque typed key. Runtime/guest ABI must never expose raw IDs.
 // These host type traits do NOT replace guest Send/Sync and ownership checks.
