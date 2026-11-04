@@ -1,0 +1,3 @@
+// Native routine is direct-call-only; its named generic and value slots still bind.
+routine identity<T>(T value): T { return value; }
+pub fnc main(): int { return identity<T=int>(value: 42); }
