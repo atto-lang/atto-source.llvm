@@ -29,7 +29,8 @@ class FailClosedVerifierTests(unittest.TestCase):
         shutil.copyfile(VERIFIER, scripts / "verify-dop-atto-aot.sh")
         self.compiler = self.root / "test-compiler"
         self.clang = self.root / "test-clang"
-        for tool in (self.compiler, self.clang):
+        self.auditor = self.root / "test-no-gc-auditor"
+        for tool in (self.compiler, self.clang, self.auditor):
             tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             tool.chmod(0o700)
         compiler_stub = scripts / "compile-aot.sh"
@@ -43,6 +44,7 @@ class FailClosedVerifierTests(unittest.TestCase):
             "  source_mutated) printf '// mutation\\n' >> \"$1\" ;;\n"
             "  compiler_mutated) printf '# mutation\\n' >> \"$ORESLANG_LLVMC\" ;;\n"
             "  clang_mutated) printf '# mutation\\n' >> \"$CLANG\" ;;\n"
+            "  auditor_mutated) printf '# mutation\\n' >> \"$ORES_NO_GC_IR_AUDIT\" ;;\n"
             "  *) exit 90 ;;\n"
             "esac\n"
             "if [[ \"$DOP_NEGATIVE_CASE\" != no_binary ]]; then\n"
@@ -54,7 +56,9 @@ class FailClosedVerifierTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.env = dict(os.environ, ORESLANG_LLVMC=str(self.compiler),
-                        CLANG=str(self.clang), DOP_NEGATIVE_CASE="")
+                        CLANG=str(self.clang),
+                        ORES_NO_GC_IR_AUDIT=str(self.auditor),
+                        DOP_NEGATIVE_CASE="")
 
     def run_negative(self, case=None, **overrides):
         env = dict(self.env, **overrides)
@@ -88,6 +92,15 @@ class FailClosedVerifierTests(unittest.TestCase):
         result = self.run_negative(CLANG=str(self.root / "missing"))
         self.assertEqual(result.returncode, 69)
         self.assertIn("Clang native linker is unavailable", result.stderr)
+
+    def test_missing_no_gc_auditor_is_not_executed(self):
+        result = self.run_negative(ORES_NO_GC_IR_AUDIT=str(self.root / "missing-auditor"))
+        self.assertEqual(result.returncode, 69)
+        self.assertIn("no-GC IR auditor is unavailable", result.stderr)
+
+    def test_mutated_no_gc_auditor_is_refused(self):
+        result = self.run_negative("auditor_mutated")
+        self.assertIn("no-GC IR auditor changed", result.stderr)
 
     def test_compile_failure_is_refused(self):
         result = self.run_negative("build_error")
