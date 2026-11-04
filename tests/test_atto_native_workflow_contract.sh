@@ -45,6 +45,14 @@ for name, source, tag in (("M1", m1, "ATTO_M1"), ("M2", m2, "ATTO_M2")):
     if changed == embedded or changed == source.read_text():
         raise SystemExit("ineffective compiler-owned source mutation: " + name)
     if name == "M1":
+        finish = embedded.split("pub fnc finish(", 1)[1]
+        require_before = finish.index("result.total = suite.total;")
+        for guard in ("suite.total < 0", "suite.filtered < 0",
+                      "suite.total != suite.passed + suite.failed + suite.skipped",
+                      "suite.total + suite.filtered > 0 && suite.last_id <= 0",
+                      "suite.halted != 0 && (!suite.fail_fast || suite.failed == 0)"):
+            if guard not in finish or finish.index(guard) > require_before:
+                raise SystemExit("M1 RunSummary validation must precede output: " + guard)
         if embedded.count("suite.last_id = candidate.id;") != 2:
             raise SystemExit("M1 replay identity must commit on selected/filtered paths")
         if "candidate.id <= suite.last_id" not in embedded:
@@ -64,6 +72,24 @@ for name, source, tag in (("M1", m1, "ATTO_M1"), ("M2", m2, "ATTO_M2")):
 PY
 
 unique 'stdlib/testing_m2.atto'
+# The native guest stdout stream is bounded *during* capture, not
+# after a guest has already filled disk. Exit/PIPESTATUS and the verifier must
+# remain in the executable path.
+receipt_runner="$root/tests/atto_native_guest_receipts.sh"
+verifier="$root/tests/verify_atto_guest_receipts.py"
+[[ -f "$receipt_runner" && ! -L "$receipt_runner" && -f "$verifier" && ! -L "$verifier" ]] ||
+  die 'untrusted receipt runner or verifier'
+[[ "$(grep -Fc 'head -c 4097 > "$tmp/guest.stdout"' "$receipt_runner")" -eq 1 ]] ||
+  die 'native receipt stdout capture is not bounded'
+[[ "$(grep -Fc 'wc -c < "$tmp/guest.stdout"' "$receipt_runner")" -eq 1 ]] ||
+  die 'native receipt stdout oversize rejection missing'
+grep -Fq 'MAX_RECEIPT_BYTES = 4096' "$verifier" ||
+  die 'native receipt verifier byte cap drift'
+[[ "$(grep -Fc 'statuses=("${PIPESTATUS[@]}")' "$receipt_runner")" -eq 1 ]] ||
+  die 'native receipt publisher lost independently observed guest exit'
+[[ "$(grep -Fc 'm1-finish-integrity' "$receipt_runner")" -eq 2 ]] ||
+  die 'M1 invalid ledger test must appear in both source hash and execution loop'
+
 unique '  atto-native-executable:'
 unique 'Checkout exact source head without persistent credentials'
 unique 'Bind exact commit and tree'
@@ -75,12 +101,12 @@ unique 'Execute 40 actual .atto guests at Clang O0 and O2'
 unique 'Assert unchanged source and exact head after execution'
 unique 'Preserve host-observed native evidence (not ORES_TEST guest receipts)'
 unique 'bash tests/atto_native_harness_parity.sh --run'
-unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=23|optimizations=2|native=46|testkit=PARTIAL_M2'
+unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=24|optimizations=2|native=48|testkit=PARTIAL_M2'
 [[ "$(grep -Ec "^          test .*ATTO_LLVM_NATIVE_HOST_OBSERVED.*-eq 80$" "$workflow")" -eq 1 ]] ||
   die 'native scalar guest count is not 80'
 unique "grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|'"
-[[ "$(grep -Ec "^          test .*ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED.*-eq 46$" "$workflow")" -eq 1 ]] ||
-  die 'expected exactly 46 compiled native guest receipt executions'
+[[ "$(grep -Ec "^          test .*ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED.*-eq 48$" "$workflow")" -eq 1 ]] ||
+  die 'expected exactly 48 compiled native guest receipt executions'
 unique "tests/atto_native_guest_receipts.sh"
 unique "tests/verify_atto_guest_receipts.py"
 unique 'ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"'
@@ -166,9 +192,16 @@ if [[ "$#" -eq 0 ]]; then
     die 'unterminated workflow CI shell quote was accepted'
   fi
   cp "$workflow" "$tmp/fixture.yml"
-  sed -i 's/-eq 46/-eq 45/g' "$tmp/fixture.yml"
+  sed -i 's/-eq 48/-eq 47/g' "$tmp/fixture.yml"
   if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
     die 'reduced M2 guest-execution gate accepted'
+  fi
+  cp "$receipt_runner" "$tmp/mutated-stdout-runner.sh"
+  sed -i 's/head -c 4097/cat/g' "$tmp/mutated-stdout-runner.sh"
+  # The contract validates the checked-in runner; mutation of a detached
+  # runner is not used as a source-root replacement.
+  if grep -Fq 'head -c 4097 > "$tmp/guest.stdout"' "$tmp/mutated-stdout-runner.sh"; then
+    die 'stdout capture mutant did not remove size limit'
   fi
   cp "$workflow" "$tmp/fixture.yml"
   sed -i 's/persist-credentials: false/persist-credentials: true/g' "$tmp/fixture.yml"
