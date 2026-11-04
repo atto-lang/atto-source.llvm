@@ -249,7 +249,7 @@ int main() {
 #if !defined(_WIN32)
     {
         const auto dir = temp / "atto-entry-file-symlink";
-        write_text(dir/".atto.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"real.atto", "");
         write_text(dir/"lib.atto", "");
         fs::create_symlink(dir/"real.atto", dir/"main.atto");
@@ -258,7 +258,7 @@ int main() {
     }
     {
         const auto dir = temp / "atto-entry-parent-symlink";
-        write_text(dir/".atto.pkg.toml", "schema_version = \\"1\\"\\n");
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"real/main.atto", "");
         write_text(dir/"lib.atto", "");
         fs::create_directory_symlink(dir/"real", dir/"alias");
@@ -287,16 +287,16 @@ int main() {
             throw std::runtime_error("legacy importer migration fallback regressed");
     }
     {
+    {
         const auto dir = temp / "atto-duplicate-project-table";
         write_text(dir/".atto.pkg.toml",
-                   "schema_version = \\"1\\"\\n[project]\\nname = \\"first\\"\\n"
-                   "[project]\\nroot = \\".\\"\\n");
+                   "schema_version = \"1\"\n[project]\nname = \"first\"\n"
+                   "[project]\nroot = \".\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         must_fail("canonical duplicate project table", "duplicate [project]",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
-    {
         const auto dir = temp / "atto-malformed-manifest";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/".atto.pkg.toml", "schema_version = \"999\"\n");
