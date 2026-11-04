@@ -75,7 +75,7 @@ if(MODE STREQUAL "native")
   foreach(control IN ITEMS false true)
     set(control_source "${WORKDIR}/checked-control-${control}.atto")
     set(control_ir "${WORKDIR}/checked-control-${control}.ll")
-    set(control_native "${WORKDIR}/checked-control-${control}.native")
+    file(REMOVE "${control_ir}" "${WORKDIR}/checked-control-${control}.O0.native" "${WORKDIR}/checked-control-${control}.O2.native")
     if(control STREQUAL "false")
       set(rhs "41")
       set(required_exit "43")
@@ -94,19 +94,23 @@ if(MODE STREQUAL "native")
     if(control_ir_bytes LESS 16 OR control_ir_bytes GREATER 131072)
       message(FATAL_ERROR "invalid native control IR size")
     endif()
-    execute_process(COMMAND "${CLANG}" -Wno-override-module -x ir "${control_ir}" -o "${control_native}"
-      RESULT_VARIABLE control_linked OUTPUT_VARIABLE control_link_out
-      ERROR_VARIABLE control_link_err TIMEOUT 20)
-    if(NOT "${control_linked}" STREQUAL "0" OR NOT EXISTS "${control_native}" OR
-       NOT "${control_link_out}" STREQUAL "")
-      message(FATAL_ERROR "Clang native control link failure (${control}): ${control_link_err}")
-    endif()
-    execute_process(COMMAND "${control_native}" RESULT_VARIABLE control_result
-      OUTPUT_VARIABLE control_out ERROR_VARIABLE control_err TIMEOUT 5)
-    if(NOT "${control_result}" STREQUAL "${required_exit}" OR
-       NOT "${control_out}" STREQUAL "" OR NOT "${control_err}" STREQUAL "")
-      message(FATAL_ERROR "native source equality control ${control} failed: expected ${required_exit}, got ${control_result}")
-    endif()
+    foreach(opt IN ITEMS O0 O2)
+      set(control_native "${WORKDIR}/checked-control-${control}.${opt}.native")
+      file(REMOVE "${control_native}")
+      execute_process(COMMAND "${CLANG}" "-${opt}" -Wno-override-module -x ir "${control_ir}" -o "${control_native}"
+        RESULT_VARIABLE control_linked OUTPUT_VARIABLE control_link_out
+        ERROR_VARIABLE control_link_err TIMEOUT 20)
+      if(NOT "${control_linked}" STREQUAL "0" OR NOT EXISTS "${control_native}" OR
+         NOT "${control_link_out}" STREQUAL "")
+        message(FATAL_ERROR "Clang native control ${opt} link failure (${control}): ${control_link_err}")
+      endif()
+      execute_process(COMMAND "${control_native}" RESULT_VARIABLE control_result
+        OUTPUT_VARIABLE control_out ERROR_VARIABLE control_err TIMEOUT 5)
+      if(NOT "${control_result}" STREQUAL "${required_exit}" OR
+         NOT "${control_out}" STREQUAL "" OR NOT "${control_err}" STREQUAL "")
+        message(FATAL_ERROR "native source equality control ${control} ${opt} failed: expected ${required_exit}, got ${control_result}")
+      endif()
+    endforeach()
   endforeach()
 endif()
 set(prefix "// oreslang:checked-i64-v1\npub fnc main(): int {return ")
@@ -163,8 +167,7 @@ foreach(i RANGE 0 49)
     set(base "${WORKDIR}/checked-${i}")
     set(source_file "${base}.atto")
     set(ir_file "${base}.ll")
-    set(native_file "${base}.native")
-    file(REMOVE "${ir_file}" "${native_file}")
+    file(REMOVE "${ir_file}" "${base}.O0.native" "${base}.O2.native")
     file(WRITE "${source_file}" "${native_source}")
     file(SHA256 "${source_file}" native_source_sha256)
     # The expression hash is based on the exact unchanged JS source program.
@@ -189,37 +192,42 @@ foreach(i RANGE 0 49)
         message(FATAL_ERROR "overflow candidate lacks checked-i64 trap lowering: ${id}")
       endif()
     endif()
-    execute_process(COMMAND "${CLANG}" -Wno-override-module -x ir "${ir_file}" -o "${native_file}"
-      RESULT_VARIABLE link_code OUTPUT_VARIABLE link_stdout
-      ERROR_VARIABLE link_stderr TIMEOUT 20)
-    if(NOT "${link_code}" STREQUAL "0" OR NOT EXISTS "${native_file}" OR
-       NOT "${link_stdout}" STREQUAL "")
-      message(FATAL_ERROR "LLVM checked-i64 link failed ${id}: ${link_code}: ${link_stderr}")
-    endif()
-    execute_process(COMMAND "${native_file}"
-      RESULT_VARIABLE observed OUTPUT_VARIABLE guest_stdout
-      ERROR_VARIABLE guest_stderr TIMEOUT 5)
-    if(NOT "${guest_stdout}" STREQUAL "" OR NOT "${guest_stderr}" STREQUAL "")
-      message(FATAL_ERROR "unexpected checked-i64 guest output for ${id}")
-    endif()
-    if(kind STREQUAL "value")
-      if(NOT "${observed}" STREQUAL "42")
-        message(FATAL_ERROR "incorrect full-width checked-i64 native value for ${id}: ${observed}")
+    foreach(opt IN ITEMS O0 O2)
+      set(native_file "${base}.${opt}.native")
+      file(REMOVE "${native_file}")
+      execute_process(COMMAND "${CLANG}" "-${opt}" -Wno-override-module -x ir "${ir_file}" -o "${native_file}"
+        RESULT_VARIABLE link_code OUTPUT_VARIABLE link_stdout
+        ERROR_VARIABLE link_stderr TIMEOUT 20)
+      if(NOT "${link_code}" STREQUAL "0" OR NOT EXISTS "${native_file}" OR
+         NOT "${link_stdout}" STREQUAL "")
+        message(FATAL_ERROR "LLVM checked-i64 ${opt} link failed ${id}: ${link_code}: ${link_stderr}")
       endif()
-      set(native_observed "\"value-eq\"")
-    else()
-      # LLVM llvm.trap becomes SIGILL on x86-64 and may be SIGTRAP on other
-      # supported native targets. Ordinary nonzero exits are NOT a trap proof.
-      if(NOT "${observed}" MATCHES "^(Illegal instruction|Trace/breakpoint trap|Abort trap)$")
-        message(FATAL_ERROR "overflow native guest did not trap ${id}: ${observed}")
+      execute_process(COMMAND "${native_file}"
+        RESULT_VARIABLE observed OUTPUT_VARIABLE guest_stdout
+        ERROR_VARIABLE guest_stderr TIMEOUT 5)
+      if(NOT "${guest_stdout}" STREQUAL "" OR NOT "${guest_stderr}" STREQUAL "")
+        message(FATAL_ERROR "unexpected checked-i64 guest output ${id} ${opt}")
       endif()
-      set(native_observed "\"overflow-trap\"")
-    endif()
+      if(kind STREQUAL "value")
+        if(NOT "${observed}" STREQUAL "42")
+          message(FATAL_ERROR "incorrect full-width checked-i64 native value ${id} ${opt}: ${observed}")
+        endif()
+        set(native_observed "\"value-eq\"")
+      else()
+        # Native traps must be observed: a generic nonzero exit or compiler
+        # rejection cannot be mistaken for a real checked-overflow guest trap.
+        if(NOT "${observed}" MATCHES "^(Illegal instruction|Trace/breakpoint trap|Abort trap)$")
+          message(FATAL_ERROR "overflow native guest did not trap ${id} ${opt}: ${observed}")
+        endif()
+        set(native_observed "\"overflow-trap\"")
+      endif()
+      set("observed_${opt}" "${observed}")
+    endforeach()
     if(NOT observations STREQUAL "")
       string(APPEND observations ",\n")
     endif()
     string(APPEND observations
-      "    {\"id\":\"${id}\",\"kind\":\"${kind}\",\"native_observed\":${native_observed},\"raw_guest_result\":\"${observed}\",\"original_source_sha256\":\"${original_source_sha256}\",\"native_source_sha256\":\"${native_source_sha256}\"}")
+      "    {\"id\":\"${id}\",\"kind\":\"${kind}\",\"native_observed\":${native_observed},\"raw_guest_result\":\"${observed_O0}\",\"raw_guest_result_o2\":\"${observed_O2}\",\"original_source_sha256\":\"${original_source_sha256}\",\"native_source_sha256\":\"${native_source_sha256}\"}")
   endif()
 endforeach()
 if(NOT value_count EQUAL 37 OR NOT trap_count EQUAL 13)
@@ -247,7 +255,7 @@ if(MODE STREQUAL "native")
   if(NOT DEFINED REPORT OR REPORT STREQUAL "")
     set(REPORT "${WORKDIR}/llvm-checked-i64-native-receipt.json")
   endif()
-  file(WRITE "${REPORT}" "{\n  \"schema\":\"atto-llvm-checked-i64-native-v1\",\n  \"verification\":\"LLVM_NATIVE_GUEST_EXECUTED\",\n  \"source_head\":\"${head}\",\n  \"source_tree\":\"${tree}\",\n  \"corpus_sha256\":\"${sha256}\",\n  \"compiler_sha256\":\"${compiler_sha256}\",\n  \"clang_sha256\":\"${clang_sha256}\",\n  \"equality_control_guests\":2,\n  \"values_checked\":${value_count},\n  \"overflow_guests_trapped\":${trap_count},\n  \"results\":[\n${observations}\n  ]\n}\n")
+  file(WRITE "${REPORT}" "{\n  \"schema\":\"atto-llvm-checked-i64-native-v1\",\n  \"verification\":\"LLVM_NATIVE_GUEST_EXECUTED\",\n  \"source_head\":\"${head}\",\n  \"source_tree\":\"${tree}\",\n  \"corpus_sha256\":\"${sha256}\",\n  \"compiler_sha256\":\"${compiler_sha256}\",\n  \"clang_sha256\":\"${clang_sha256}\",\n  \"optimization_modes\":[\"O0\",\"O2\"],\n  \"equality_control_guests\":4,\n  \"executed_guest_processes\":104,\n  \"values_checked\":${value_count},\n  \"overflow_guests_trapped\":${trap_count},\n  \"results\":[\n${observations}\n  ]\n}\n")
   message(STATUS "LLVM checked-i64 native guests: ${value_count} exact full-width values + ${trap_count} traps; receipt ${REPORT}")
 else()
   message(STATUS "HOST-ONLY checked-i64 candidate admission: ${value_count} values, ${trap_count} overflow expectations")
