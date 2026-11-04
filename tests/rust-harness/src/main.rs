@@ -1,4 +1,5 @@
 mod checked_i64;
+mod atto_source_fuzz;
 
 use std::{
     env,
@@ -876,6 +877,25 @@ fn real_main() -> Result<(), String> {
             let clang = path_arg(&args, 3, "usage: checked-i64 <compiler> <clang>")?;
             checked_i64::run_cases(&compiler, &clang)
         }
+        Some("atto-source-fuzz") => {
+            let compiler = path_arg(&args, 2, "usage: atto-source-fuzz <compiler> <clang> [seed] [cases]")?;
+            let clang = path_arg(&args, 3, "usage: atto-source-fuzz <compiler> <clang> [seed] [cases]")?;
+            if args.len() > 6 {
+                return Err("atto-source-fuzz accepts at most [seed] [cases]".to_string());
+            }
+            let seed = args.get(4).map_or(Ok(1729u64), |s| s.parse::<u64>()
+                .map_err(|_| "atto-source-fuzz seed must be u64".to_string()))?;
+            let cases = args.get(5).map_or(Ok(8usize), |s| s.parse::<usize>()
+                .map_err(|_| "atto-source-fuzz cases must be 1..24".to_string()))?;
+            atto_source_fuzz::run_cases(&compiler, &clang, seed, cases)
+        }
+        Some("atto-source-fuzz-selftest") => {
+            if args.len() != 2 {
+                return Err("usage: atto-source-fuzz-selftest".to_string());
+            }
+            atto_source_fuzz::self_test()
+        }
+
         Some("realtime-profile") => {
             let compiler = path_arg(&args, 2, "usage: realtime-profile <compiler>")?;
             realtime_profile(&compiler)
@@ -925,7 +945,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
+            "usage: oreslang-llvm-test-harness <atto-source-fuzz|atto-source-fuzz-selftest|realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }
