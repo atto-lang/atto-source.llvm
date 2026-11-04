@@ -229,14 +229,13 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Kill spinning code without cooperation | Under 1 ms | macOS, Linux |
 | ASan+UBSan on host | Clean, core and lowered, 31 + 13 cases | Linux |
 | TSan on host | No races in 31 cases and in real spawn, send and stop programs, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
-| Compiler build with gcc, host with gcc | 31 + 13 cases | Linux |
+| Host built with gcc | 31 + 13 cases | Linux |
 | Existing wasm32 and rejection tests | 171 of 172 pass. `native_exit_reject_unsupported_async_root` fails the same way without this change | Linux |
 | Wasmtime targeted kill | 6 spinning tenants ended one at a time, none early, worst about 2 ms | macOS |
 | Wasmtime: 1000 Stores | 200,000 turns at about 1.3M/s, contained faults and memory bomb | macOS |
-| .NET hosts 1000 VMs through the loader | 30,000 correct turns, while the CLR forced 545 GCs and caught about 1.09M null faults; wrong digest refused | Linux, CoreCLR JIT |
+| .NET hosts 1000 VMs through the loader | 30,000 correct turns under CoreCLR JIT and NativeAOT, while the CLR forced 751 and 1196 GCs and caught 1.5M and 2.4M null faults; wrong digest refused | Linux |
 | x86_64 under emulation | 31 of 31 core cases, 13 of 13 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
 | Real x86_64 hardware, other kernels, PKU | **Not run** | |
-| NativeAOT on ABI v3 | **Not rerun**, passed on v1 | |
 | Wasmtime on Linux, .NET on macOS | **Not run** | |
 | GitHub Actions | **Not run**: source-org jobs fail to start on billing, and `.github/workflows/tenant-vm.yml` is ready for when that is resolved. Private source was deliberately not mirrored to another org | |
 
