@@ -147,6 +147,26 @@ public:
         return receipt;
     }
 
+    /** Logical ticket quiescence only. A scheduler must independently prove
+     * that all physically executing guest critical bodies have exited.
+     */
+    [[nodiscard]] bool quiescent() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return !owner_ && waiting_.empty();
+    }
+
+    /** Atomic empty-gate retirement: a concurrent request either wins the
+     * ticket or sees the closed gate. Never split observation from closure.
+     * Returns false if the current generation owns or queues any ticket.
+     */
+    [[nodiscard]] bool retire_if_quiescent() {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (closed_) return true;
+        if (owner_ || !waiting_.empty()) return false;
+        closed_ = true;
+        return true;
+    }
+
     [[nodiscard]] bool retired() const {
         std::lock_guard<std::mutex> lock(mu_);
         return closed_;
