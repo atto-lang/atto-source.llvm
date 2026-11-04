@@ -502,6 +502,18 @@ ASan/UBSan, each ran both legacy and sealed ABI spellings successfully:
 oracle; it is **NOT an LLVM guest execution receipt** because the handler
 was not compiler generated.
 
+
+**Independent LLVM native-link adapter (not guest codegen):** a locally
+hand-authored LLVM IR module with the verified `Worker_init` plus either
+`Worker_on_message` or `Worker_handle_state` exports was compiled to a
+native object by Clang 17, linked to the same exact production actor heap C
+and exact two-actor acceptance harness, and executed. Optimized and
+ASan/UBSan runs passed for both ABI spellings: **4/4 LLVM IR adapter
+executions PASS**. The adapter explicitly models the compiler's declared
+field-init/read/write and scoped-new/drop calls, but the IR is **not** the
+output of `oreslang-llvmc`; it cannot certify parsing, type checking,
+LLVM code generation or full AttoLang guest parity.
+
 **Still NOT_EXECUTED:** building `oreslang-llvmc` from this branch (local
 LLVM dev libraries / `llvm-config` are unavailable), actual `.atto`
 parser/typechecker/codegen tests, LLVM-emitted native object/link/guest,
