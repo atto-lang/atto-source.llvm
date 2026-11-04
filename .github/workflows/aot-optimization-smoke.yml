@@ -5,6 +5,7 @@ on:
       - scripts/compile-aot.sh
       - scripts/test-compile-aot-optimization.sh
       - scripts/test-compile-aot-guest-parity.sh
+      - scripts/test-compile-aot-guest-parity-contract.sh
       - contracts/atto-parity-v1/add.atto
       - tests/fixtures/numerics-atto-main.atto
       - .github/workflows/aot-optimization-smoke.yml
@@ -13,6 +14,7 @@ on:
       - scripts/compile-aot.sh
       - scripts/test-compile-aot-optimization.sh
       - scripts/test-compile-aot-guest-parity.sh
+      - scripts/test-compile-aot-guest-parity-contract.sh
       - contracts/atto-parity-v1/add.atto
       - tests/fixtures/numerics-atto-main.atto
       - .github/workflows/aot-optimization-smoke.yml
@@ -43,7 +45,10 @@ jobs:
           set -euo pipefail
           bash -n scripts/compile-aot.sh
           bash -n scripts/test-compile-aot-optimization.sh
+          bash -n scripts/test-compile-aot-guest-parity-contract.sh
           bash scripts/test-compile-aot-optimization.sh
+          # Separate synthetic negative control; never certify AttoLang guest execution.
+          bash scripts/test-compile-aot-guest-parity-contract.sh
 
   compiler-backed-atto-guest:
     runs-on: ubuntu-24.04

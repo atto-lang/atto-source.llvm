@@ -21,10 +21,12 @@ for relative in "$@"; do
   cp -- "$input" "$tmp/pristine-$n"
   source_hash="$(sha256sum "$input" | cut -d' ' -f1)"
   for level in 0 2; do
+    # Bind the frontend probe to the same O-level as native AOT compilation.
+    # Otherwise the comparison can silently measure the previous iteration.
+    export ORESLANG_LLVM_AOT_OPT_LEVEL="$level"
     ir="$tmp/program-$n-$level.ll"
     "$compiler" --target=host "$input" > "$ir"
     [[ -s "$ir" ]] && grep -Eq '^define .*@' "$ir" || { echo 'missing native IR' >&2; exit 1; }
-    export ORESLANG_LLVM_AOT_OPT_LEVEL="$level"
     executable="$tmp/native-$n-$level"
     "$root/scripts/compile-aot.sh" "$input" "$executable" > "$tmp/build-$n-$level.log"
     [[ -x "$executable" ]] || { echo 'missing executable' >&2; exit 1; }
