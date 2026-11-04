@@ -805,9 +805,14 @@ void validate_i64_ownership(Program& program) {
                 };
                 const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
                     [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                if (cls == program.classes.end())
+                    throw std::runtime_error("unknown native constructor class");
+                // A malformed late label must not mutate affine owner state
+                // while examining an earlier rt take argument.
+                const auto ctor_slots = native_constructor_argument_slots(binding, *cls);
                 for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
                     const auto& arg = binding.constructor_arguments[i];
-                    const auto* field = constructor_field(*cls, i);
+                    const auto* field = constructor_field(*cls, ctor_slots[i]);
                     if (field && !field->class_name.empty()) {
                         const Expression& source = arg->kind == Expression::Kind::Take && arg->left ? *arg->left : *arg;
                         if (source.kind != Expression::Kind::Variable) reject(*arg, "nested constructor requires a unique named class owner");
