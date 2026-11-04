@@ -44,6 +44,54 @@ int main() {
     rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id("project/\xE2\x80\xAEproducer.atto"); });
     rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id("project/\xC0\xAF.atto"); });
     rejects("ATTO_UNIT_ID_INVALID", []{ validate_logical_unit_id(std::string(4097, 'a')); });
+    // Full codepoint validation: allow ordinary emoji but reject Cf
+    // controls, zero-width characters and Unicode tag characters.
+    validate_logical_unit_id("project/emoji-\xF0\x9F\x99\x82.atto");
+    rejects("ATTO_UNIT_ID_INVALID", []{
+        validate_logical_unit_id("project/soft-hyphen-\xC2\xAD.atto");
+    });
+    rejects("ATTO_UNIT_ID_INVALID", []{
+        validate_logical_unit_id("project/zero-width-\xE2\x80\x8B.atto");
+    });
+    rejects("ATTO_UNIT_ID_INVALID", []{
+        validate_logical_unit_id("project/tag-\xF3\xA0\x80\x81.atto");
+    });
+    rejects("ATTO_UNIT_ID_INVALID", []{
+        validate_logical_unit_id("project/with//empty.atto");
+    });
+    rejects("ATTO_UNIT_ID_INVALID", []{
+        validate_logical_unit_id("project/trailing.atto/");
+    });
+    // The same logical unit cannot change its descriptor-backed source identity.
+    oreslang::frontend::SourceStamp original{};
+    original.device = 1;
+    original.inode = 200;
+    original.size = 42;
+    original.valid = true;
+    ids.bind_opened_source("project/main.atto", original);
+    ids.bind_opened_source("project/main.atto", original);
+    auto replaced = original;
+    replaced.inode = 201;
+    rejects("ATTO_UNIT_SOURCE_CHANGED", [&]{
+        ids.bind_opened_source("project/main.atto", replaced);
+    });
+    rejects("ATTO_UNIT_SOURCE_UNVERIFIED", [&]{
+        ids.bind_opened_source("project/unknown.atto", original);
+    });
+    rejects("ATTO_UNIT_SOURCE_ALIAS", [&]{
+        ids.bind_opened_source("project/lib/producer.atto", original);
+    });
+    const auto nested = root / "nested";
+    write(nested / ".atto.pkg.toml");
+    write(nested / "foreign.atto");
+    rejects("ATTO_UNIT_NESTED_PACKAGE", [&]{
+        ids.admit(nested / "foreign.atto");
+    });
+    const auto parent_link = root / "alias-directory";
+    fs::create_directory_symlink(root / "lib", parent_link);
+    rejects("ATTO_UNIT_SOURCE_ALIAS", [&]{
+        ids.admit(parent_link / "producer.atto");
+    });
     const auto link = root / "link.atto";
     fs::create_symlink(main, link);
     rejects("ATTO_UNIT_SOURCE_ALIAS", [&]{ ids.admit(link); });
