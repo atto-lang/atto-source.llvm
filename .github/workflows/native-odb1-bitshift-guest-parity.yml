@@ -5,6 +5,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
       - 'tests/fixtures/odb1-bitshift-*.atto'
       - 'tests/native_odb1_bitshift_source_execution.sh'
       - 'tests/native_odb1_shift_host_oracle.cpp'
