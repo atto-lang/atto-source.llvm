@@ -68,6 +68,7 @@ jobs:
             native_atto_named_generic_value_inference_hole_guest
             native_atto_named_generic_value_positional_prefix_guest
             native_atto_named_generic_value_source_order_guest
+            native_atto_named_generic_value_36_guest_matrix
             native_atto_named_generic_reject_bool_as_i64
             native_atto_named_generic_reject_string_as_i64
             native_atto_named_generic_reject_reordered_bool
