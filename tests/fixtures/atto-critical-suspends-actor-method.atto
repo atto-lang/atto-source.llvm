@@ -1,0 +1,7 @@
+// EXPECT_COMPILE_ERROR: E_CRITICAL_SUSPENDS_DECL
+define actor InvalidActor as
+  let tally: int = 0;
+  pub critical suspends fnc on_message(int x): int {
+    return x;
+  }
+end
