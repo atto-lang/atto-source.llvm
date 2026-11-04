@@ -9,7 +9,7 @@ scalar probes implement the real graph engine.
 | Required behavior | LLVM current evidence | Proof required for parity |
 |---|---|---|
 | i64/bool scalar expressions and guarded routing | Native source subset exists | Exact guest running and Java/LLVM outputs compared |
-| Canonical scalar superstep merge and route | Shared authored test, Git blob `0c1213cbedaf439e8f554627cf2174f4f2684d94` | Actual Java/JVM and LLVM/Clang native runs return 42 |
+| Canonical scalar superstep merge and route | Shared authored test, Git blob `054d4e9fe297c520513686feae076dc921f581ac` | Actual Java/JVM and LLVM/Clang native runs return 42 |
 | Generic `GraphState<T>` constructor, field, return | Canonical fixture blob `c3a67b837a73f427a6157c446cc6e3989e9a66da`; no executed result | Build actual compiler and run unchanged guest with exit 42 |
 | Owned generic node/patch arrays | No supported `Array<GraphNode<S>>`, `Array<StatePatch<S>>` lowering proven | Implement and test owned array lifetime and destructor/borrow laws |
 | First-class `Fnc<StatePatch<S>(S)>` stored in node objects | Unsupported escaping callback layout in current documented native subset | Typed callback ABI, captures/loan safety and AOT lowering |
