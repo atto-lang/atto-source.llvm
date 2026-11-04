@@ -83,6 +83,12 @@ public:
             module.layout().column(1).type != InvertedScalarKind::I64 ||
             module.capacity() != cap_)
             throw std::invalid_argument("experimental MIR LLVM requires matching two-i64 layout");
+        // Verified MIR can represent an open owner for other contexts. This
+        // standalone guest main cannot return without revoking and scrubbing
+        // its nonescaping stack-local SoA owner.
+        if (module.instructions().empty() ||
+                module.instructions().back().kind != OpKind::Close)
+            throw std::logic_error("MIR LLVM requires terminal owner close");
         code_ = "; typed MIR, experimental local i64 pair LLVM IR; no external row handles\n";
         code_ += "declare void @llvm.trap()\n";
         code_ += "define i32 @main() {\nentry:\n";

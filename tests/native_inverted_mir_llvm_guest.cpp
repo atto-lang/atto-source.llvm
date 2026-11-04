@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 int main(int argc, char** argv) {
-  if (argc != 3) { std::cerr << "Usage: mir_llvm_guest <positive|closed|bounds|immutable|missing-operand> <out.ll>\n";return 2; }
+  if (argc != 3) { std::cerr << "Usage: mir_llvm_guest <positive|closed|bounds|unclosed|immutable|missing-operand> <out.ll>\n";return 2; }
   try {
     using namespace oreslang; using namespace oreslang::dop::hir; using namespace oreslang::dop::mir;
     InvertedStructDecl decl; decl.name = "Pair";
@@ -18,7 +18,7 @@ int main(int argc, char** argv) {
       plan.push(2); plan.push(2);
       plan.borrow_read("id"); plan.release_read("id");
       plan.write_runtime_checked(1,"x"); plan.erase_swap(0);
-      plan.read_runtime_checked(0,"x");
+      plan.read_runtime_checked(0,"x"); plan.close();
       operands.rows = {{{11,501},{21,502}}}; operands.writes = {42};
     } else if (mode == "closed") {
       // A detached SSA result is returned after revocation and volatile
@@ -26,12 +26,16 @@ int main(int argc, char** argv) {
       plan.push(2); plan.read_runtime_checked(0, "x"); plan.close();
       operands.rows = {{{42, 501}}};
     } else if (mode == "bounds") {
-      plan.push(2);plan.read_runtime_checked(1,"x");
+      plan.push(2);plan.read_runtime_checked(1,"x"); plan.close();
       operands.rows = {{{11,501}}};
+    } else if (mode == "unclosed") {
+      // A valid open MIR cannot become a returned standalone guest main.
+      plan.push(2); plan.read_runtime_checked(0,"x");
+      operands.rows = {{{42,501}}};
     } else if (mode == "immutable") {
       plan.push(2); plan.write_runtime_checked(0,"id");
     } else if (mode == "missing-operand") {
-      plan.push(2);
+      plan.push(2); plan.close();
     } else { throw std::invalid_argument("unknown MIR fixture"); }
     const auto ir = emit_native_i64_pair_ir(Module::lower(plan), operands);
     std::ofstream output(argv[2]); output << ir;

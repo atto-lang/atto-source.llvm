@@ -34,8 +34,9 @@ int main() {
     plan.push(2);
     plan.read_runtime_checked(0, "id");
     plan.write_runtime_checked(0, "x");
+    plan.close();
     const auto code = Module::lower(plan);
-    assert(code.instructions().size() == 4);
+    assert(code.instructions().size() == 5);
     assert(code.instructions()[1].kind == OpKind::Push);
     assert(code.instructions()[2].require_bounds_guard);
     assert(code.instructions()[2].require_generation_guard);
@@ -72,10 +73,19 @@ int main() {
     LinearPlan next_plan(layout, 2);
     next_plan.push(2);
     next_plan.read_runtime_checked(0, "id");
+    next_plan.close();
     const auto next_module = Module::lower(next_plan);
     const I64PairIrOperands next_inputs{{{9, 77}}, {}};
     const auto reference_ir = I64PairLlvmEmitter(2).build(next_module, next_inputs);
     assert(emitter.build(next_module, next_inputs) == reference_ir);
+    // External open-owner MIR remains valid for other targets, but never
+    // bypasses the standalone LLVM guest teardown gate.
+    LinearPlan unclosed(layout, 2);
+    unclosed.push(2);
+    reject([&] {
+        (void)emitter.build(Module::lower(unclosed),
+                            I64PairIrOperands{{{1, 2}}, {}});
+    }, "terminal owner close");
     reject([&] {
         (void)emitter.build(code, I64PairIrOperands{{}, {42}});
     }, "missing MIR LLVM push operands");

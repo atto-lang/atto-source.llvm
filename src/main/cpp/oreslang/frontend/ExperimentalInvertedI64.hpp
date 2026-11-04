@@ -299,6 +299,8 @@ public:
         finish();
         need("}");
         if (cur().text != "<eof>" || !returned_) fail("trailing unsupported inverted code");
+        // The checked two-column MIR guest returns SSA, never a live owner.
+        if (fields_.size() == 2) typed_plan_->close();
         // Independently recheck the whole source operation stream as typed
         // MIR before returning ANY LLVM IR. Main production codegen still
         // rejects these declarations; this is explicitly opt-in.

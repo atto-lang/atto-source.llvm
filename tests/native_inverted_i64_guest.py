@@ -71,6 +71,8 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
         if "%generation = alloca [" not in result.stdout or (
                 "load i1, ptr %alive" not in result.stdout):
             raise AssertionError("typed MIR guest omitted live-row or owner check")
+        if "store volatile i1 false, ptr %alive" not in result.stdout:
+            raise AssertionError("two-column guest omitted terminal owner revocation")
         ir_path, executable = temp / f"positive-{i}.ll", temp / f"positive-{i}"
         ir_path.write_text(result.stdout, encoding="utf-8")
         compile_result = subprocess.run(
