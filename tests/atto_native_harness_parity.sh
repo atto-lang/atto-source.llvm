@@ -26,7 +26,7 @@ while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
      "$path" =~ ^positive/[a-z0-9-]+\.atto$ &&
      "$expected" =~ ^(0|[1-9][0-9]{0,2})$ ]] ||
     die "invalid positive manifest entry: $id"
-  (( 10#$expected <= 255 )) || die "exit status exceeds OS byte: $id"
+  (( 10#$expected <= 123 )) || die "exit status must be below timeout/invocation/signal range: $id"
   [[ -z "${seen["$id"]+yes}" ]] || die "duplicate test identity $id"
   [[ -z "${seen_sources["$path"]+yes}" ]] || die "duplicate manifest source path: $path"
   seen_sources["$path"]=1
@@ -113,7 +113,7 @@ for idx in "${!positive_ids[@]}"; do
     timeout 10s "$exe" > "$tmp/guest.stdout" 2> "$tmp/guest.stderr"
     status=$?
     set -e
-    [[ "$status" -eq "$expected" && "$status" -ne 124 && "$status" -ne 137 ]] ||
+    [[ "$status" -eq "$expected" && "$status" -lt 124 ]] ||
       die "wrong native guest OS result: $id O$level expected=$expected got=$status"
     [[ ! -s "$tmp/guest.stdout" && ! -s "$tmp/guest.stderr" ]] ||
       die "unexpected guest stdout/stderr: $id O$level"
@@ -138,7 +138,7 @@ for idx in "${!negative_ids[@]}"; do
   timeout 30s "$compiler" --target=host "$path" > "$ir" 2> "$tmp/negative-$id.stderr"
   status=$?
   set -e
-  [[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 && ! -s "$ir" ]] ||
+  [[ "$status" -gt 0 && "$status" -lt 124 && ! -s "$ir" ]] ||
     die "invalid negative admission result: $id status=$status"
   grep -Fq "${diagnostic_needles[$idx]}" "$tmp/negative-$id.stderr" ||
     die "unexpected native compiler rejection diagnostic: $id"
@@ -157,7 +157,7 @@ timeout 30s "$compiler" --target=host "$tmp/no-downgrade/main.atto" \
   > "$tmp/no-downgrade.ll" 2> "$tmp/no-downgrade.stderr"
 status=$?
 set -e
-[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 && ! -s "$tmp/no-downgrade.ll" ]] ||
+[[ "$status" -gt 0 && "$status" -lt 124 && ! -s "$tmp/no-downgrade.ll" ]] ||
   die 'LLVM silently admitted an extensionless legacy-only dependency'
 grep -Fq 'cannot resolve native import' "$tmp/no-downgrade.stderr" ||
   die 'missing stable canonical-legacy rejection reason'
@@ -174,7 +174,7 @@ timeout 30s "$compiler" --target=host "$tmp/dangling/main.atto" \
   > "$tmp/dangling.ll" 2> "$tmp/dangling.stderr"
 status=$?
 set -e
-[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 && ! -s "$tmp/dangling.ll" ]] ||
+[[ "$status" -gt 0 && "$status" -lt 124 && ! -s "$tmp/dangling.ll" ]] ||
   die 'LLVM accepted dangling canonical .atto symlink or downgraded to .ores'
 
 # The Java native test harness is not yet implemented in LLVM stdlib.
@@ -188,7 +188,7 @@ timeout 30s "$compiler" --target=host "$tmp/unsupported-stdlib/main.atto" \
   > "$tmp/unsupported-stdlib.ll" 2> "$tmp/unsupported-stdlib.stderr"
 status=$?
 set -e
-[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 &&
+[[ "$status" -gt 0 && "$status" -lt 124 &&
    ! -s "$tmp/unsupported-stdlib.ll" ]] ||
   die 'LLVM falsely admitted unsupported std/testing as executable guest parity'
 grep -Fq 'native ores.std package resolution remains unsupported' \
@@ -206,7 +206,7 @@ timeout 30s "$compiler" --target=wasm32-unknown-unknown --library-profile=core \
   2> "$tmp/reject-freestanding-std.stderr"
 status=$?
 set -e
-[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 &&
+[[ "$status" -gt 0 && "$status" -lt 124 &&
    ! -s "$tmp/reject-freestanding-std.ll" ]] ||
   die 'LLVM admitted hosted scalar testing into freestanding wasm'
 grep -Fq 'native ores.std testing scalar requires hosted target' \
@@ -224,7 +224,7 @@ timeout 30s "$compiler" --target=wasm32-unknown-unknown --library-profile=core \
   2> "$tmp/reject-freestanding-m2.stderr"
 status=$?
 set -e
-[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 &&
+[[ "$status" -gt 0 && "$status" -lt 124 &&
    ! -s "$tmp/reject-freestanding-m2.ll" ]] ||
   die 'LLVM admitted hosted M2 registered callbacks into freestanding wasm'
 grep -Fq 'native ores.std testing scalar requires hosted target' \
