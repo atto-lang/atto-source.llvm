@@ -36,8 +36,8 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "015022980c1a4e10a3b98b821dcd6d343744bcc0"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "2d110b25312aacc376c971c99c0e8bc66c7bb700"
-          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "1cc3e8efab7f9477ccab20ae13b0fef6c6d524f8"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "935024958df132ebd762bc6e757d4d3bc2d9d798"
+          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "bb24b184a0a0090e0a5519edfc330b66e138c39b"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
         shell: bash
