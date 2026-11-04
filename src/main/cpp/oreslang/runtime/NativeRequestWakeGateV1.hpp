@@ -32,7 +32,9 @@ public:
                 || !ticket.target.scheduler_domain || !ticket.target.generation
                 || !ticket.slot_generation || !ticket.continuation_slot
                 || !ticket.continuation_generation || !ticket.code_generation
-                || !ticket.descriptor_generation)
+                || !ticket.descriptor_generation
+                || !ores_native_actor_scheduler_current_data_issued_wake(
+                    data_origin.scheduler_, ticket, data_origin.original_mail_))
             return {};
         return std::unique_ptr<NativeRequestWakeGateV1>(
             new NativeRequestWakeGateV1(
