@@ -6,7 +6,7 @@
 
 This draft implements native `*.atto` source admission, compiler-produced
 LLVM IR, real Clang `-O0` and `-O2` linked executables, and observed native OS
-exit statuses. The **17 positive** programs and **six negative** cases (three
+exit statuses. The **19 positive** programs and **six negative** cases (three
 checked-in compiler negatives, plus implicit legacy import, dangling canonical
 import and unsupported `ores.std/testing`) are covered by the focused workflow.
 
@@ -22,7 +22,7 @@ A passing count from this subset must never be reported as the Java native
 | Contract | Java / GraalVM | LLVM at this draft |
 | --- | --- | --- |
 | Canonical `.atto` input | compiler-integrated | compiler-produced LLVM IR |
-| Scalar expressions / direct calls | supported by source model | 17 native executable cases |
+| Scalar expressions / direct calls | supported by source model | 19 native executable cases |
 | Explicit and extensionless `.atto` imports | canonical source | included executable cases |
 | `.atto.pkg.toml` `+/...` import | canonical package | one native executable plus C++ security tests |
 | Canonical/legacy peer precedence | `.atto` wins; legacy explicit | `.atto` wins; `.atto` caller requires explicit `.ores` |
@@ -40,11 +40,11 @@ A passing count from this subset must never be reported as the Java native
   source-free inventory mutations. These checks never increment guest count.
 - Build **real** `oreslang-llvmc` via CMake; execute updated C++ project-root
   import security tests.
-- For each of 17 reviewed `.atto` sources, run the compiler twice to emit
+- For each of 19 reviewed `.atto` sources, run the compiler twice to emit
   nonempty LLVM IR defining `@main`, compile independently at Clang `-O0`
   and `-O2`, execute both binaries, assert exact native OS exit code, ensure
   no unexpected stdout/stderr, and compare independently emitted IR.
-  This yields **34 compiler-backed native executions** only if steps actually run.
+  This yields **38 compiler-backed native executions** only if steps actually run.
 - All six unsupported/invalid cases must produce nonzero compiler exit,
   diagnostic stderr, **no partial emitted IR**, no timeout or runner abort.
 - Guard the manifest, package marker, and positive/negative AttoLang guest
@@ -54,7 +54,7 @@ A passing count from this subset must never be reported as the Java native
 
 The native compiler's OS-exit ABI is a bounded `0..255` result. Java's test
 framework uses guest-produced per-case machine receipts. These are **different
-reporting abstractions**; do not equate the 17 LLVM programs with the 132
+reporting abstractions**; do not equate the 19 LLVM programs with the 132
 authored Java TestCase registrations.
 
 ### Important remaining gaps
