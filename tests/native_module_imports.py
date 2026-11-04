@@ -162,6 +162,26 @@ def main():
         'main.atto': imported_identity_quota_program(128),
         'producer.atto': identity_producer,
     }, 42))
+    # Quota is per admitted *consumer source unit*, not per linked graph:
+    # each module may expand 128 identities, while 129 in any one still fails.
+    # This is a real four-file compiler->IR->native exit-42 fixture.
+    def quota_consumer(module_name, result):
+        statements = ''.join(
+            f'val v_{i}:int=lib.identity!(syntax expr 1);'
+            for i in range(128))
+        return ('import * as lib from "./producer.atto"; '
+                f'define module {module_name} as '
+                'pub fnc answer():int{' + statements +
+                f'return {result};' + '} end')
+    positives.append(('atto-linked-macro-two-consumers-128-each', {
+        'main.atto': (
+            'import module A from "./a.atto"; '
+            'import module B from "./b.atto"; '
+            'pub fnc main():int{return A.answer()+B.answer();}'),
+        'producer.atto': identity_producer,
+        'a.atto': quota_consumer('A', 20),
+        'b.atto': quota_consumer('B', 22),
+    }, 42))
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
