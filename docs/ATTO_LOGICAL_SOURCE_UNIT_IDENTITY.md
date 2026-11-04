@@ -11,9 +11,12 @@ are never accepted as public logical IDs.
 - A declared project-root-relative identity, bounded to 4096 bytes.
 - UTF-8 scalar validation and rejection of control/format spoofing, dot
   components, empty segments, absolute/drive-spelled IDs and root escapes.
-- No source symlinks or multiply-linked files in the project inventory.
+- No source symlinks, multiply-linked files, or imports through nested
+  package markers in the project inventory.
 - Per-linker identity registry; idempotent same-file imports and duplicate
   object alias rejection, without cross-project or process-global state.
+- Opened device/inode/size/mtime/ctime SourceIdentity is bound to the logical
+  ID per build; repeated imports must not silently replace source contents.
 - Existing SourceInput pinned-descriptor reads and SourceIdentity checks stay
   authoritative; this source-ID layer does NOT replace them.
 
@@ -25,10 +28,18 @@ are never accepted as public logical IDs.
 - Filesystem metadata checks are not a handle-pinned atomic multi-file graph
   snapshot. Moving or swapping files during compilation remains a separate
   race-hardening gate.
-- CTest `native_atto_host_logical_unit_identity` is host-only. Execute it
-  with actual C++17 GCC/Clang and sanitizers; separately run real
-  `oreslang-llvmc` module graph and Clang-linked native guests. No pass is
-  inferred from source review or GitHub jobs with empty/null steps.
+- CTest `native_atto_host_logical_unit_identity` is host-only. The local
+  byte-identical Git blobs were compiled with GCC 14.2 and Clang 17 under
+  `-Wall -Wextra -Wpedantic -Werror`, and passed. Clang 17 ASan+UBSan also
+  passed. These are local host executions, not source-org CI or compiler guest.
+- `native_atto_logical_unit_linked_guest_gate` requires real
+  `oreslang-llvmc` -> LLVM IR -> Clang O0 and O2 binaries, exit status 42,
+  and four fail-closed source-input cases. This CTest is AUTHORED, NOT_EXECUTED.
+  The Python script passed syntax compilation only; no native LLVM compiler
+  was available locally.
+- GitHub Actions source-owned workflow now includes both tests and repaired
+  native CTest command quoting. Runner admission and exact-head CI remain
+  independent evidence gates; null/empty steps are NOT_EXECUTED.
 
 ## Follow-ups
 1. Verify exact SHA/tree in a source-authorized stepful runner.
