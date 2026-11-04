@@ -78,3 +78,25 @@ The local environment has no LLVM development CMake configuration and lacks
 the private native compiler checkout, so no actual `oreslang-llvmc` build or
 native AttoLang guest execution took place locally. Source-org Actions
 continue to fail with zero executed steps; do not mark guest parity passed.
+
+## Receipt laundering protections
+
+Both native test drivers remove their designated prior success receipt before
+compiler work begins. The source-org CI job also removes the two well-known
+receipt paths immediately before CTest, uploads artifacts only after the
+complete CTest and independent JSON audit succeed, and treats missing reports
+as an error. A failed or skipped native job **cannot** claim parity by uploading
+an old receipt from a reused workspace. The scripts reject report destinations
+outside their dedicated workdir. The source, corpus, compiler and Clang
+identities are re-read after all executions and before any new receipt is
+written.
+
+A local CMake 3.31.6 control confirmed the declared report path comparison
+rejects off-workdir paths, and a synthetic stale receipt was removed by the
+same CMake file removal operation. These are local **harness checks only**.
+
+Local Clang 17 also executed two hand-authored LLVM IR programs: signed-i64
+minimum plus zero returned 42 after full-width equality, while maximum plus
+one through `llvm.sadd.with.overflow.i64` triggered an `Illegal instruction`
+trap. This validates the host LLVM IR / Clang behavior **without** exercising
+`oreslang-llvmc`; do not cite it as compiled AttoLang source parity.
