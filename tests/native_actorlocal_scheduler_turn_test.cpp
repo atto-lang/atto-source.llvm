@@ -28,6 +28,10 @@ void on_actor_message(void* user, std::size_t index, std::uint64_t payload) {
     assert(!actor_local_current_turn_v1(
         s.scheduler, s.actors[1-index], s.stamps[1-index]));
 
+    // Retirement must never park this actor's carrier while its callback
+    // remains active, even when the caller has an otherwise correct stamp.
+    assert(!actor_local_close_after_terminal_v1(
+        s.scheduler, s.actors[index], *s.scope[index], s.stamps[index]));
     if (payload == 1) {
         assert(actor_local_set_on_turn_v1(s.scheduler, s.actors[index],
             *s.scope[index], s.stamps[index], s.key,
@@ -93,9 +97,16 @@ int main() {
 
     for (std::size_t i = 0; i < 2; ++i) {
         assert(ores_native_actor_scheduler_stop(s.scheduler, s.actors[i]));
-        assert(ores_native_actor_scheduler_wait_done(
-            s.scheduler, s.actors[i]));
-        assert(s.scope[i]->close());
+        auto wrong_owner = s.stamps[i];
+        ++wrong_owner.actor_generation;
+        assert(!actor_local_close_after_terminal_v1(
+            s.scheduler, s.actors[i], *s.scope[i], wrong_owner));
+        // The lifecycle helper itself executes the real terminal fence.
+        assert(actor_local_close_after_terminal_v1(
+            s.scheduler, s.actors[i], *s.scope[i], s.stamps[i]));
+        assert(!s.scope[i]->is_open());
+        assert(!actor_local_close_after_terminal_v1(
+            s.scheduler, s.actors[i], *s.scope[i], s.stamps[i]));
     }
     ores_native_actor_scheduler_retire(s.scheduler);
     assert(ores_native_actor_scheduler_drain(s.scheduler));
