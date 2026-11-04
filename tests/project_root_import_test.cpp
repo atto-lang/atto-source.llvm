@@ -140,6 +140,29 @@ int main() {
             must_fail("nested project root table " + std::to_string(i), "project.root",
                       [&] { (void)resolve(dir/"main.atto", "+/lib"); });
         }
+        // TOML basic keys can Unicode-escape project/root to evade a
+        // byte-only table-name check. This bounded parser rejects escapes
+        // in keys rather than pretending to decode full TOML.
+        const std::string escaped_keys[] = {
+            "[\"pro\\u006aect\".root]\nnote=\"unsupported\"\n",
+            "[project.\"ro\\u006ft\"]\nnote=\"unsupported\"\n",
+            "project.\"ro\\u006ft\" = \"src\"\n",
+            "\"proj\\u0065ct\".root = \"src\"\n",
+        };
+        for (std::size_t i = 0; i < sizeof(escaped_keys)/sizeof(escaped_keys[0]); ++i) {
+            write_text(dir/".ores.pkg.toml", schema + escaped_keys[i]);
+            must_fail("escaped project/root key " + std::to_string(i), "escaped keys",
+                      [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        }
+        const std::string deeper_tables[] = {
+            "[project.root.extra]\nnote=\"unsupported\"\n",
+            "[project.logging]\nnote=\"unsupported\"\n",
+        };
+        for (std::size_t i = 0; i < sizeof(deeper_tables)/sizeof(deeper_tables[0]); ++i) {
+            write_text(dir/".ores.pkg.toml", schema + deeper_tables[i]);
+            must_fail("unsupported project subtable " + std::to_string(i), "nested project table",
+                      [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        }
         // A duplicated TOML table declaration is invalid even when no
         // root key is present. Accepting it can hide conflicting policy.
         write_text(dir/".ores.pkg.toml",
@@ -150,7 +173,7 @@ int main() {
     {
         const auto dir = temp / "unrelated-root-table-allowed";
         write_text(dir/".ores.pkg.toml",
-                   "schema_version = \"1\"\n[build]\nroot=\"src\"\n[project]\nname=\"demo\"\n");
+                   "schema_version = \"1\"\n[build.logging]\nname=\"safe\"\n[build]\nroot=\"src\"\n[project]\nname=\"demo\"\n");
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
