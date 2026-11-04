@@ -292,6 +292,21 @@ def main():
                 raise AssertionError((case, diagnostic, result.returncode, result.stderr))
             passed += 1
 
+        # Entry-source admission is independent of import graph depth.
+        # A syntactically plausible file cannot hide NUL or malformed UTF-8
+        # bytes just because its extension is the new .atto suffix.
+        for case, bad_source, diagnostic in (
+            ('atto-entry-nul', b'pub fnc main():int{return 42;}\x00', 'NUL byte'),
+            ('atto-entry-invalid-utf8', b'\xff', 'valid UTF-8'),
+        ):
+            directory = root/case
+            directory.mkdir()
+            (directory/'main.atto').write_bytes(bad_source)
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((case, diagnostic, result.returncode, result.stderr))
+            passed += 1
+
         directory = root/'atto-canonical-package-guest'
         directory.mkdir()
         (directory/'main.atto').write_text(
