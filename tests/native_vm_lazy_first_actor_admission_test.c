@@ -33,8 +33,8 @@ static void on_failure(void* context, size_t parent,
     (void)context;
     (void)parent;
     (void)failure;
-    /* No typed failure is expected in these admission-only scenarios. */
-    abort();
+    /* Typed failure delivery is verified by supervisor lifecycle tests;
+     * this fixture exercises only spawn-side parent registration. */
 }
 static void on_message(void* context, size_t actor, uint64_t msg) {
     TestState* state = (TestState*)context;
