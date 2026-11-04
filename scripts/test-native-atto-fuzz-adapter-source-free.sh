@@ -36,11 +36,15 @@ printf '\x00\x01\x7f\xff' | "$work/good" >"$work/out" 2>"$work/err"
 [[ ! -s "$work/out" && ! -s "$work/err" ]] ||
   { echo 'source-free adapter empty input control failed' >&2; exit 1; }
 head -c 65536 /dev/zero > "$work/exact-bound.bin"
+[[ "$(wc -c < "$work/exact-bound.bin")" == 65536 ]] ||
+  { echo 'failed to create exact 65536-byte native stdin fixture' >&2; exit 1; }
 "$work/good" < "$work/exact-bound.bin" >"$work/out" 2>"$work/err"
 [[ ! -s "$work/out" && ! -s "$work/err" ]] ||
   { echo 'source-free adapter exact byte bound failed' >&2; exit 1; }
-set +e
 head -c 65537 /dev/zero > "$work/over-bound.bin"
+[[ "$(wc -c < "$work/over-bound.bin")" == 65537 ]] ||
+  { echo 'failed to create exact 65537-byte native stdin fixture' >&2; exit 1; }
+set +e
 "$work/good" < "$work/over-bound.bin" >"$work/out" 2>"$work/err"
 over=$?
 set -e
