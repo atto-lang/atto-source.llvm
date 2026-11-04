@@ -1286,7 +1286,17 @@ private:
         // Match the Java frontend's declaration spelling contract. The native
         // actor subset still lowers only on_message(int) and cannot admit
         // arbitrary methods, static fnc members or suspension frames.
-        if (token_.text == "suspend" || token_.text == "suspends") {
+        if (token_.text == "suspend" || token_.text == "suspends"
+                || token_.text == "critical") {
+            if ((token_.text == "critical"
+                    && (peek_next().text == "suspends" || peek_next().text == "suspend"))
+                || ((token_.text == "suspends" || token_.text == "suspend")
+                    && peek_next().text == "critical")) {
+                fail("E_CALLABLE_MODIFIERS: native 'critical suspends' is forbidden for actor methods");
+            }
+            if (token_.text == "critical") {
+                fail("E_CRITICAL_UNSUPPORTED: native critical actor method requires checked owned guard admission");
+            }
             fail("native suspends actor method requires continuation lowering");
         }
         // Actor method modifiers have their own admission boundary. Do not
@@ -1784,7 +1794,7 @@ private:
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
             if (peek_next().text == "critical")
-                fail("native 'critical suspends' is forbidden: protected bodies cannot suspend");
+                fail("E_CALLABLE_MODIFIERS: native 'critical suspends' is forbidden: protected bodies cannot suspend");
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         // Check compound READ/WRITE modes before handling legacy critical,
@@ -1794,8 +1804,8 @@ private:
         }
         if (token_.text == "critical") {
             if (peek_next().text == "suspends" || peek_next().text == "suspend")
-                fail("native 'critical suspends' is forbidden: protected bodies cannot suspend");
-            fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
+                fail("E_CALLABLE_MODIFIERS: native 'critical suspends' is forbidden: protected bodies cannot suspend");
+            fail("E_CRITICAL_UNSUPPORTED: native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
