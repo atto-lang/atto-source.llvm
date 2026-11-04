@@ -39,6 +39,8 @@ for relative in "$@"; do
   cmp -s "$tmp/program-$n-0.ll" "$tmp/program-$n-2.ll" || { echo 'frontend IR not deterministic across Clang options' >&2; exit 1; }
   # Emit success only after the complete O0/O2 pair passes the IR parity gate.
   for level in 0 2; do
+    ir="$tmp/program-$n-$level.ll"
+    executable="$tmp/native-$n-$level"
     printf 'ATTO_LLVM_NATIVE_GUEST_PASS|head=%s|source=%s|O%s|exit=42|source_sha256=%s|ir_sha256=%s|binary_sha256=%s\n' "$EXPECTED_HEAD" "$relative" "$level" "$source_hash" "$(sha256sum "$ir" | cut -d' ' -f1)" "$(sha256sum "$executable" | cut -d' ' -f1)"
   done
   n=$((n + 1))

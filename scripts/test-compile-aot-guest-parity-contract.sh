@@ -47,6 +47,13 @@ if ! bash "$tmp/repo/scripts/test-compile-aot-guest-parity.sh" > "$tmp/positive.
   exit 1
 fi
 grep -Fq 'ATTO_LLVM_GUEST_MATRIX_PASS|' "$tmp/positive.stdout" || { echo 'missing synthetic baseline marker' >&2; exit 1; }
+# Receipt provenance: O0 and O2 must not both accidentally report the last-loop O2 binary.
+# Clang -O0 and -O2 native executables are expected to differ for this synthetic IR.
+mapfile -t binary_hashes < <(grep '^ATTO_LLVM_NATIVE_GUEST_PASS|' "$tmp/positive.stdout" | sed -n 's/.*|binary_sha256=\\([0-9a-f]*\\)$/\\1/p')
+[[ "${#binary_hashes[@]}" == 4 ]] || { echo 'expected four per-level binary receipts' >&2; exit 1; }
+[[ "${binary_hashes[0]}" != "${binary_hashes[1]}" && "${binary_hashes[2]}" != "${binary_hashes[3]}" ]] || {
+  echo 'O0 and O2 binary receipts incorrectly share a hash' >&2; exit 1;
+}
 if ATTO_CONTRACT_DIVERGE=1 bash "$tmp/repo/scripts/test-compile-aot-guest-parity.sh" > "$tmp/negative.stdout" 2> "$tmp/negative.stderr"; then
   echo 'frontend IR O0/O2 divergence was not rejected' >&2
   exit 1
