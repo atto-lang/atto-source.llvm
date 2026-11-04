@@ -27,6 +27,8 @@ printf '\x00\x01\x7f\xff' | "$good" >"$output" 2>"$errors"
   { echo 'empty input should be a clean no-op' >&2; exit 1; }
 # The exact maximum input must be admitted without writing diagnostics.
 head -c 65536 /dev/zero > "$work/exact-bound.bin"
+[[ "$(wc -c < "$work/exact-bound.bin")" == 65536 ]] ||
+  { echo 'failed to create exact 65536-byte native stdin fixture' >&2; exit 1; }
 "$good" < "$work/exact-bound.bin" >"$output" 2>"$errors"
 [[ ! -s "$output" && ! -s "$errors" ]] ||
   { echo 'maximally bounded LLVM fuzz input did not pass' >&2; exit 1; }
@@ -39,8 +41,10 @@ set -e
   { echo "mutated compiled LLVM guest escaped the property oracle (rc=$status)" >&2; exit 1; }
 grep -Fq 'ATTO_LLVM_FUZZ_MISMATCH position=0 input=0 expected=1 got=2' "$errors" ||
   { echo 'compiled guest mutation failed to report a bounded byte discrepancy' >&2; exit 1; }
-set +e
 head -c 65537 /dev/zero > "$work/over-bound.bin"
+[[ "$(wc -c < "$work/over-bound.bin")" == 65537 ]] ||
+  { echo 'failed to create exact 65537-byte native stdin fixture' >&2; exit 1; }
+set +e
 "$good" < "$work/over-bound.bin" >"$output" 2>"$errors"
 status=$?
 set -e
