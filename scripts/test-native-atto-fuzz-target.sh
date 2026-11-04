@@ -51,8 +51,21 @@ set -e
   { echo 'malformed LLVM guest rebuilt target unexpectedly' >&2; exit 1; }
 cmp -s "$good" "$work/preserved" ||
   { echo 'failed compiler admission overwrote the previous runnable target' >&2; exit 1; }
+# Prevent silently linking a host-incompatible guest ABI. A compiler may
+# legitimately accept these AttoLang source signatures in another context;
+# this one-input native property adapter MUST refuse both.
+for wrong in atto-fuzz-wrong-arity.atto atto-fuzz-wrong-return.atto; do
+  set +e
+  bash "$builder" "$root/tests/fixtures/$wrong" "$good" >"$output" 2>"$errors"
+  status=$?
+  set -e
+  [[ "$status" != 0 ]] ||
+    { echo "native fuzz target accepted incompatible guest ABI: $wrong" >&2; exit 1; }
+  cmp -s "$good" "$work/preserved" ||
+    { echo "failed ABI gate overwrote the previous native executable: $wrong" >&2; exit 1; }
+done
 if find "$work" -maxdepth 1 -name '.atto-fuzz-build.*' | grep -q .; then
   echo 'native fuzz builder leaked temporary IR or executable artifacts' >&2
   exit 1
 fi
-printf 'ATTO_LLVM_NATIVE_STDIN_FUZZ_PASS compiled_good=1 compiled_mutant=1 negative=3 limit=65536\n'
+printf 'ATTO_LLVM_NATIVE_STDIN_FUZZ_PASS compiled_good=1 compiled_mutant=1 negative=5 limit=65536\n'
