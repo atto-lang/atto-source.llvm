@@ -190,7 +190,7 @@ private:
         if (package_manifest) package_manifest->recheck();
     }
     [[noreturn]] static void fail(const Unit& unit, const std::string& reason) {
-        throw std::runtime_error(unit.path.string() + ": " + reason);
+        throw std::runtime_error(unit.logical_unit_id + ": " + reason);
     }
     static bool same_file(SourceIdentity left, SourceIdentity right) {
         return left.valid && right.valid && left.device == right.device && left.inode == right.inode;
