@@ -190,7 +190,7 @@ def main():
             ('atto-no-implicit-legacy', './lib', {'lib.ores': library}, 'cannot resolve native import'),
             ('atto-reject-unknown-extension', './lib.txt', {'lib.txt': library}, 'must use .atto or .ores extension'),
             ('atto-no-implicit-project-legacy', '+/lib',
-                {'.ores.pkg.toml': 'schema_version = "1"\\n', 'lib.ores': library},
+                {'.ores.pkg.toml': 'schema_version = "1"\n', 'lib.ores': library},
                 'cannot resolve native project-root import'),
         ):
             directory = root/name; directory.mkdir()
