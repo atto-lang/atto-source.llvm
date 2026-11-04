@@ -21,34 +21,43 @@ reject() {
     fail "accepted corrupted manifest: $label"
   fi
 }
-cp "$cases" "$tmp/cases.tsv"
-cp "$negatives" "$tmp/negative.tsv"
+reset_manifests() {
+  cp "$cases" "$tmp/cases.tsv"
+  cp "$negatives" "$tmp/negative.tsv"
+}
+reset_manifests
 sed -i 's/^arith-add|/arith-subtract|/' "$tmp/cases.tsv"
 reject 'duplicate positive case ID'
-cp "$cases" "$tmp/cases.tsv"
+reset_manifests
+sed -i 's#^arith-subtract|positive/arith-subtract.atto#arith-subtract|positive/arith-add.atto#' "$tmp/cases.tsv"
+reject 'duplicate positive source path'
+reset_manifests
 sed -i 's#positive/arith-add.atto#positive/../negative/invalid-syntax.atto#' "$tmp/cases.tsv"
 reject 'directory traversal source'
-cp "$cases" "$tmp/cases.tsv"
+reset_manifests
 sed -i 's#^arith-add|positive/arith-add.atto|42#arith-add|positive/arith-add.atto|999#' "$tmp/cases.tsv"
 reject 'out-of-range native exit status'
-cp "$cases" "$tmp/cases.tsv"
+reset_manifests
 sed -i '/^arith-add|/d' "$tmp/cases.tsv"
 reject 'missing positive'
-cp "$cases" "$tmp/cases.tsv"
+reset_manifests
 grep '^arith-add|' "$cases" >> "$tmp/cases.tsv"
 reject 'extra positive'
-cp "$cases" "$tmp/cases.tsv"
+reset_manifests
 sed -i '/^unknown-function|/d' "$tmp/negative.tsv"
 reject 'missing negative'
-cp "$negatives" "$tmp/negative.tsv"
+reset_manifests
 sed -i 's#negative/unknown-function.atto#negative/../positive/arith-add.atto#' "$tmp/negative.tsv"
 reject 'negative traversal'
-cp "$negatives" "$tmp/negative.tsv"
+reset_manifests
+sed -i 's#^invalid-syntax|negative/invalid-syntax.atto#invalid-syntax|negative/unknown-function.atto#' "$tmp/negative.tsv"
+reject 'duplicate negative source path'
+reset_manifests
 sed -i '/^std-alias-attempt|/d' "$tmp/negative.tsv"
 reject 'missing reserved std negative'
-cp "$negatives" "$tmp/negative.tsv"
+reset_manifests
 if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
 python3 "$root/tests/verify_atto_guest_receipts.py" --self-test
-echo 'PASS: nine source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
+echo 'PASS: eleven source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
