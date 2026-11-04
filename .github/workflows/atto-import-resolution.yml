@@ -44,7 +44,13 @@ jobs:
         run: |
           set -euo pipefail
           for compiler in g++ clang++; do
-            "${compiler}" -std=c++20 -O1 -Wall -Wextra -Wpedantic -Werror \
+            # GCC 14 -O1 raises a spurious -Wmaybe-uninitialized in its own
+            # std::regex implementation with -Werror. Keep *all* warnings
+            # fatal and compile this host-only unit at -O0 for GCC; retain
+            # -O1 for Clang and the independent compiler-backed native gate.
+            optimize=-O1
+            if [[ "$compiler" == g++ ]]; then optimize=-O0; fi
+            "${compiler}" -std=c++20 "$optimize" -Wall -Wextra -Wpedantic -Werror \
               -UNDEBUG -Isrc/main/cpp tests/project_root_import_test.cpp \
               -o "$RUNNER_TEMP/atto-root-import-${compiler}"
             "$RUNNER_TEMP/atto-root-import-${compiler}"
