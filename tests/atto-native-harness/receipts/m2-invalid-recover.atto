@@ -1,0 +1,35 @@
+// Compiler-owned M2 source-executed scalar bodies (not indirect user closures).
+import module M2 from "ores.std/testing/m2";
+import class RegisteredCase from "ores.std/testing/m2.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1.ores";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut RegisteredCase first = new RegisteredCase();
+  first.id = 1;
+  first.body_kind = 99;
+  first.actual = 42;
+  first.expected = 42;
+  let mut RegisteredCase second = new RegisteredCase();
+  second.id = 2;
+  second.body_kind = 2;
+  second.actual = 42;
+  second.expected = 41;
+  let mut RunSummary summary = new RunSummary();
+  val int rejected = M2.run_pair(rt mut borrow suite, rt mut borrow first, rt mut borrow second, rt mut borrow summary);
+  if rejected != -3 || suite.total != 0 || suite.passed != 0 ||
+    first.visited != 0 || first.invocations != 0 || second.invocations != 0; then
+    return 3;
+  fi
+  first.body_kind = 1;
+  val int status = M2.run_pair(rt mut borrow suite, rt mut borrow first, rt mut borrow second, rt mut borrow summary);
+  if status != 0 || summary.total != 2 || summary.passed != 2 ||
+    summary.failed != 0 || first.invocations != 1 || second.invocations != 1; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-m2/recovery/first|");
+  stdio.println("ORES_TEST|PASS|llvm-m2/recovery/second|");
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+  return status;
+}
