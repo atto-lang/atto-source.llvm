@@ -115,5 +115,52 @@ int main() {
         duplicate_denied = std::string(error.what()).find("collision") != std::string::npos;
     }
     assert(duplicate_denied);
+    // M1: a cycle is admitted only when the LLVM emitter opts in to its
+    // checked thread-local frame entry/exit ABI. The old fail-closed public
+    // require_bounded() contract remains unchanged.
+    assert(Gate::inspect({{"f/0", {"f/0"}}}, true).recursive);
+    assert(Gate::inspect({{"a/0", {"b/0"}}, {"b/0", {"a/0"}}}, true).recursive);
+    assert(!Gate::inspect({{"a/0", {"b/0"}}, {"b/0", {}}}, true).recursive);
+
+    oreslang::Program scalar;
+    oreslang::Function recurse;
+    recurse.name = "recurse";
+    recurse.parameters.emplace_back();
+    recurse.result = call("recurse", 1);
+    scalar.functions.push_back(std::move(recurse));
+    oreslang::Function main_function;
+    main_function.name = "main";
+    main_function.exported = true;
+    main_function.result = call("recurse", 1);
+    scalar.functions.push_back(std::move(main_function));
+    assert(oreslang::require_native_guest_call_graph_bounded(scalar, true));
+    bool denied_without_codegen = false;
+    try {
+        (void)oreslang::require_native_guest_call_graph_bounded(scalar);
+    } catch (const std::runtime_error& e) {
+        denied_without_codegen =
+            std::string(e.what()).find("recursive") != std::string::npos;
+    }
+    assert(denied_without_codegen);
+
+    // Untrusted host entrypoints, effectful/owned frames and actor handlers
+    // do not become safe merely because the graph inspector permits cycles.
+    scalar.functions.front().exported = true;
+    bool exported_denied = false;
+    try { (void)oreslang::require_native_guest_call_graph_bounded(scalar, true); }
+    catch (const std::runtime_error& e) {
+        exported_denied =
+            std::string(e.what()).find("exported helper") != std::string::npos;
+    }
+    assert(exported_denied);
+    scalar.functions.front().exported = false;
+    scalar.actors.emplace_back();
+    bool actor_denied_for_m1 = false;
+    try { (void)oreslang::require_native_guest_call_graph_bounded(scalar, true); }
+    catch (const std::runtime_error& e) {
+        actor_denied_for_m1 =
+            std::string(e.what()).find("without actors") != std::string::npos;
+    }
+    assert(actor_denied_for_m1);
     return 0;
 }
