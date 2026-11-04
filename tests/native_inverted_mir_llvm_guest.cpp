@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 int main(int argc, char** argv) {
-  if (argc != 3) { std::cerr << "Usage: mir_llvm_guest <positive|closed|bounds|unclosed|immutable|missing-operand> <out.ll>\n";return 2; }
+  if (argc != 3) { std::cerr << "Usage: mir_llvm_guest <positive|closed|bounds|unclosed|snapshot|immutable|missing-operand> <out.ll>\n";return 2; }
   try {
     using namespace oreslang; using namespace oreslang::dop::hir; using namespace oreslang::dop::mir;
     InvertedStructDecl decl; decl.name = "Pair";
@@ -32,6 +32,11 @@ int main(int argc, char** argv) {
       // A valid open MIR cannot become a returned standalone guest main.
       plan.push(2); plan.read_runtime_checked(0,"x");
       operands.rows = {{{42,501}}};
+    } else if (mode == "snapshot") {
+      // Legal typed MIR, but the guest emitter cannot materialize this value.
+      // Rejection must happen before opening the output IR artifact.
+      plan.push(2); plan.snapshot(0); plan.read_runtime_checked(0, "x"); plan.close();
+      operands.rows = {{{42, 501}}};
     } else if (mode == "immutable") {
       plan.push(2); plan.write_runtime_checked(0,"id");
     } else if (mode == "missing-operand") {
