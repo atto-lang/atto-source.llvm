@@ -22,6 +22,12 @@ receipt_line="$(gate_line "printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|")"
 unique() { [[ "$(count "$1")" -eq 1 ]] || die "expected exactly one: $1"; }
 unique 'name: AttoLang LLVM native harness executable parity (O0 O2)'
 unique '  atto-native-executable:'
+unique "      - 'CMakeLists.txt'"
+unique "      - 'cmake/**'"
+unique "      - 'src/main/**'"
+unique "      - 'tests/**'"
+unique "      - 'scripts/**'"
+unique "      - 'stdlib/**'"
 unique 'Checkout exact source head without persistent credentials'
 unique 'Bind exact commit and tree'
 unique 'Verify source-free inventory and adversarial fixture mutations'
@@ -91,5 +97,13 @@ if [[ "$#" -eq 0 ]]; then
   if ATTO_NATIVE_HARNESS_SCRIPT="$tmp/mutated-harness.sh" bash "$0" "$workflow" >/dev/null 2>&1; then
     die 'source harness bypassed mandatory no-GC auditor'
   fi
+  grep -Fvx "      - 'src/main/**'" "$workflow" > "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'compiler-source change trigger removed without detection'
+  fi
+  grep -Fvx "      - 'CMakeLists.txt'" "$workflow" > "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'top-level build change trigger removed without detection'
+  fi
 fi
-echo 'PASS LLVM canonical .atto workflow source-only admission (six adversarial mutations)'
+echo 'PASS LLVM canonical .atto workflow source-only admission (eight adversarial mutations)'
