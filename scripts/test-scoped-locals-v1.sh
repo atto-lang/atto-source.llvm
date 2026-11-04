@@ -72,12 +72,14 @@ done
 # both the original-mail API and the DATA dispatcher are compiled/linked.
 for CC in gcc clang; do
   if ! command -v "$CC" >/dev/null 2>&1; then continue; fi
-  "$CC" -std=c11 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
-    -I"$ROOT/src/main/cpp" \
-    "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
-    "$ROOT/tests/native_original_data_mail_sequence_v1_test.c" \
-    -o "$OUT/native-original-data-mail-$CC"
-  "$OUT/native-original-data-mail-$CC"
+  for testfile in native_original_data_mail_sequence_v1_test native_data_mail_stop_v1_test; do
+    "$CC" -std=c11 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+      -I"$ROOT/src/main/cpp" \
+      "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
+      "$ROOT/tests/$testfile.c" \
+      -o "$OUT/$testfile-$CC"
+    "$OUT/$testfile-$CC"
+  done
 done
 
 # C11 scheduler + C++ RequestLocal gate integration. Compile the REAL native
@@ -105,14 +107,16 @@ done
 if [ "${ORES_SCOPED_LOCAL_RUN_SANITIZERS:-0}" = "1" ]; then
   for CC in gcc clang; do
     if ! command -v "$CC" >/dev/null 2>&1; then continue; fi
-    "$CC" -std=c11 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
-      -fsanitize=address,undefined -fno-omit-frame-pointer \
-      -I"$ROOT/src/main/cpp" \
-      "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
-      "$ROOT/tests/native_original_data_mail_sequence_v1_test.c" \
-      -o "$OUT/asan-native-original-data-mail-$CC"
-    ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
-      "$OUT/asan-native-original-data-mail-$CC"
+    for testfile in native_original_data_mail_sequence_v1_test native_data_mail_stop_v1_test; do
+      "$CC" -std=c11 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+        -fsanitize=address,undefined -fno-omit-frame-pointer \
+        -I"$ROOT/src/main/cpp" \
+        "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
+        "$ROOT/tests/$testfile.c" \
+        -o "$OUT/asan-$testfile-$CC"
+      ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
+        "$OUT/asan-$testfile-$CC"
+    done
   done
   for pair in gcc:g++ clang:clang++; do
     CC="${pair%%:*}"
