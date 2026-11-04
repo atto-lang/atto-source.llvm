@@ -22,8 +22,10 @@ typedef struct {
     int producer_on_carrier;
     // The current restricted TaskLocal<int> specialization owns one inline
     // scalar value. It is retired with this SourceTask, never pthread TLS.
-    int task_local_present;
-    int64_t task_local_i64;
+    // Fixed-size owned TaskLocal i64 cells, never pthread TLS. Runtime
+    // allocation and byte usage are bounded independent of guest input.
+    unsigned char task_local_present[ORES_SOURCE_TASK_LOCAL_I64_SLOTS];
+    int64_t task_local_i64[ORES_SOURCE_TASK_LOCAL_I64_SLOTS];
 } SourceTaskI64;
 
 typedef struct {
@@ -80,26 +82,50 @@ static SourceTaskI64* current_tasklocal_owner_locked(void) {
     return runtime.task;
 }
 
-int oreslang_source_task_local_i64_set_checked(int64_t value) {
+int oreslang_source_task_local_i64_set_slot_checked(
+        uint32_t slot, int64_t value) {
+    if (slot >= ORES_SOURCE_TASK_LOCAL_I64_SLOTS) return 0;
     if (pthread_mutex_lock(&runtime.mutex) != 0) abort();
     SourceTaskI64* task = current_tasklocal_owner_locked();
-    int ok = task != NULL;
+    const int ok = task != NULL;
     if (ok) {
-        task->task_local_i64 = value;
-        task->task_local_present = 1;
+        task->task_local_i64[slot] = value;
+        task->task_local_present[slot] = 1;
     }
     if (pthread_mutex_unlock(&runtime.mutex) != 0) abort();
     return ok;
 }
 
-int oreslang_source_task_local_i64_get_checked(int64_t* out_value) {
-    if (!out_value) return 0;
+int oreslang_source_task_local_i64_get_slot_checked(
+        uint32_t slot, int64_t* out_value) {
+    if (!out_value || slot >= ORES_SOURCE_TASK_LOCAL_I64_SLOTS) return 0;
     if (pthread_mutex_lock(&runtime.mutex) != 0) abort();
     SourceTaskI64* task = current_tasklocal_owner_locked();
-    int ok = task != NULL && task->task_local_present;
-    if (ok) *out_value = task->task_local_i64;
+    const int ok = task != NULL && task->task_local_present[slot];
+    if (ok) *out_value = task->task_local_i64[slot];
     if (pthread_mutex_unlock(&runtime.mutex) != 0) abort();
     return ok;
+}
+
+int oreslang_source_task_local_i64_clear_slot_checked(uint32_t slot) {
+    if (slot >= ORES_SOURCE_TASK_LOCAL_I64_SLOTS) return 0;
+    if (pthread_mutex_lock(&runtime.mutex) != 0) abort();
+    SourceTaskI64* task = current_tasklocal_owner_locked();
+    const int ok = task != NULL && task->task_local_present[slot];
+    if (ok) {
+        task->task_local_i64[slot] = 0;
+        task->task_local_present[slot] = 0;
+    }
+    if (pthread_mutex_unlock(&runtime.mutex) != 0) abort();
+    return ok;
+}
+
+int oreslang_source_task_local_i64_set_checked(int64_t value) {
+    return oreslang_source_task_local_i64_set_slot_checked(0u, value);
+}
+
+int oreslang_source_task_local_i64_get_checked(int64_t* out_value) {
+    return oreslang_source_task_local_i64_get_slot_checked(0u, out_value);
 }
 
 void oreslang_source_task_local_i64_set(int64_t value) {
