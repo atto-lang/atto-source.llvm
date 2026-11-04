@@ -136,24 +136,26 @@ with tempfile.TemporaryDirectory(prefix="ores-inverted-i64-") as scratch:
         if case_id == 1 and "; typed MIR, experimental local i64 pair LLVM IR" not in bad.stdout:
             raise AssertionError(
                 "two-column negative bounds fixture bypassed verified MIR codegen")
-        ir_path, executable = temp / f"bounds-{case_id}.ll", temp / f"bounds-{case_id}"
+        ir_path = temp / f"bounds-{case_id}.ll"
         ir_path.write_text(bad.stdout, encoding="utf-8")
-        result = subprocess.run(
-            [args.clang, "-x", "ir", str(ir_path), "-o", str(executable)],
-            capture_output=True, text=True, timeout=90, check=False)
-        if result.returncode:
-            raise AssertionError(
-                "bounds LLVM IR failed compilation: " + result.stderr)
-        execution = subprocess.run(
-            [str(executable)], cwd=temp,
-            capture_output=True, timeout=15, check=False)
-        # subprocess exposes signal termination as a negative signal
-        # number; this cannot be forged by returning a nonzero exit status.
-        # LLVM trap lowers to SIGILL or SIGTRAP on supported Linux targets.
-        if execution.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
-            raise AssertionError(
-                "out-of-bounds read did not signal SIGILL/SIGTRAP in "
-                + bad_source.name + ": " + str(execution.returncode))
+        # The guard must survive LLVM's optimized IR lowering as well as O0.
+        for opt in ("-O0", "-O2"):
+            executable = temp / f"bounds-{case_id}-{opt[2:]}"
+            result = subprocess.run(
+                [args.clang, opt, "-x", "ir", str(ir_path), "-o", str(executable)],
+                capture_output=True, text=True, timeout=90, check=False)
+            if result.returncode:
+                raise AssertionError(
+                    f"bounds {opt} LLVM IR failed compilation: " + result.stderr)
+            execution = subprocess.run(
+                [str(executable)], cwd=temp,
+                capture_output=True, timeout=15, check=False)
+            # A native signal, not an arbitrary 132/133 exit code, proves
+            # the compiled guest executed the bounds trap.
+            if execution.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
+                raise AssertionError(
+                    "out-of-bounds read did not signal SIGILL/SIGTRAP in "
+                    + bad_source.name + " " + opt + ": " + str(execution.returncode))
 
     negative_sources = [
         ("define inverted class P as x:int; end\nfnc main():int{return 0;}",
