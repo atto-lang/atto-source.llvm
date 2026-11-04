@@ -275,6 +275,15 @@ def verify(compiler, clang, clang_opt):
             result = run([str(compiler), str(path)])
             if result.returncode == 0 or result.returncode < 0 or result.stdout:
                 raise AssertionError(f"{name}: compiler must reject before IR, rc={result.returncode}")
+            # Sanitizer failures are not valid expected compiler diagnostics.
+            # Otherwise a frontend crash after printing the expected substring
+            # could be mistakenly counted as a negative-test pass.
+            sanitizer_signatures = (
+                b"AddressSanitizer", b"UndefinedBehaviorSanitizer",
+                b"LeakSanitizer", b"runtime error: signed integer overflow",
+            )
+            if any(signature in result.stderr for signature in sanitizer_signatures):
+                raise AssertionError(f"{name}: native sanitizer error: {result.stderr!r}")
             if diagnostic.encode() not in result.stderr:
                 raise AssertionError(f"{name}: expected {diagnostic!r}, got {result.stderr!r}")
             print(f"PASS reject {name}: {diagnostic}", flush=True)
