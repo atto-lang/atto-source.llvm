@@ -1,0 +1,11 @@
+// EXPECT_COMPILE_ERROR: STATE_CONTAINER_BACKEND_UNSUPPORTED
+// The native LLVM compiler must reject protected regions until typed
+// ownership, class method effect and RW permit lowering are implemented.
+define state container Counter as
+  state { let int count: 41; }
+  peek(int unused) -> int ::
+    return handle_state(critical-read |snapshot| -> {
+      snapshot.count;
+    });
+  end
+end
