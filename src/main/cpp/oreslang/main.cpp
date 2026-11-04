@@ -247,7 +247,9 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
             return false;
         for (const auto& param : fn.parameters)
             if (!param.class_name.empty() || !param.sum_type.empty() ||
-                !param.generic_type.empty()) return false;
+                !param.generic_type.empty() ||
+                param.scalar_type == oreslang::ScalarType::String ||
+                param.mode != oreslang::Parameter::Mode::Value) return false;
         for (const auto& statement : fn.statements) {
             if (statement.kind != oreslang::Statement::Kind::Return ||
                 !scalar_proven(scalar_proven, statement.expression.get()))
