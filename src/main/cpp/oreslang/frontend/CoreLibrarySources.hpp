@@ -68,8 +68,8 @@ inline bool is_reserved_alloc_import(std::string_view raw) noexcept {
 }
 
 inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
-    // Admit only the compiler-owned scalar-testing submodule. The full
-    // ores.std/testing TestSuite surface remains intentionally unsupported.
+    // Admit only explicit hosted scalar-testing and bounded M1 ledger modules.
+    // The full ores.std/testing callable TestSuite remains fail-closed.
     return is_reserved_core_import(raw) || is_reserved_alloc_import(raw) ||
         raw == "ores.std/testing/scalar" ||
         raw == "ores.std/testing/scalar.atto" ||
