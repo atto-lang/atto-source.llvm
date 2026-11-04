@@ -109,6 +109,25 @@ int main(void) {
         == ORES_NATIVE_PUBSUB_OK);
     check(sequence_value == 33);
 
+    /* No subscribers still consumes a successful topic sequence, and the
+     * legacy V1 symbol must advance the SAME counter as the V2 symbol. */
+    check(ores_native_actor_pubsub_unsubscribe_i64(
+        runtime, 1, "sequence-v2", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 34, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 3 && v2.subscribers == 0 && v2.accepted == 0);
+    OresNativePubSubPublishReceipt legacy_sequence_receipt = {0};
+    check(ores_native_actor_pubsub_publish_i64(
+        runtime, 1, "sequence-v2", publisher, 35,
+        &legacy_sequence_receipt) == ORES_NATIVE_PUBSUB_OK);
+    check(legacy_sequence_receipt.subscribers == 0
+        && legacy_sequence_receipt.accepted == 0);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 36, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 5 && v2.subscribers == 0 && v2.accepted == 0);
+
     check(ores_native_actor_pubsub_define_utf8_topic(
         runtime, 2, "utf8-sequence-v2", ORES_NATIVE_PUBSUB_RELIABLE, 1)
         == ORES_NATIVE_PUBSUB_OK);
