@@ -3942,7 +3942,8 @@ private:
                 require_macro("syntax");
                 require_macro("expr");
             }
-            expr->kind = Expression::Kind::ImportedMacro;
+            expr->kind = Expression::Kind::Call;
+            expr->imported_macro_pending = true;
             expr->arguments.push_back(expression());
             require_macro(")");
             return expr;
