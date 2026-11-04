@@ -25,15 +25,19 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Pin native logical-context and dependency blobs
+      - name: Verify exact PR head and pin native logical-context dependencies
         shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "38108839ba86e557caeb706aa2be72cc94de3903"
-          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "d27547867bc4b5babc3c6a97e8fc2ed4938fd8b5"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "4b7cab067a3e5980f4a000a14e0682cef21b6daa"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "a25dcdf9000b52886d48fcfcba5a44329bd2f606"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "ed45606527de07ae2c404972bd26ff995b15756d"
+          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "0513bd7609cf53e712a51be7227fec32d21a8b97"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "76f8160873c6af0df0dbb13741183600c16550bf"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "9cf2a76ac30fd0d9b8620facfb1b887475ee1e90"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
       - name: Compile and execute real actor two-request isolation
         shell: bash
