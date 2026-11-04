@@ -1188,6 +1188,11 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_atto_named_generic_value_combined_guest
             named-generic-value-combined-main.ores
             --ir "call i64 @encode" --run 42 --clang "${ORE_CLANG}")
+        # The AttoLang filename is a genuine compiler input, not a
+        # declaration-only manifest or renamed .ores test label.
+        oreslang_contract_test(native_atto_named_generic_value_dot_atto_guest
+            named-generic-value-combined-main.atto
+            --ir "call i64 @encode" --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_atto_named_generic_value_routine_guest
             named-generic-value-routine-main.ores
             --run 42 --clang "${ORE_CLANG}")
