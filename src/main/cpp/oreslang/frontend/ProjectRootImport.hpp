@@ -196,7 +196,10 @@ inline void validate_suffix(std::string_view suffix) {
 inline std::filesystem::path resolve_project_root_import(
         const std::filesystem::path& importing_source,
         std::string_view raw,
-        const std::function<std::string(const std::filesystem::path&)>& read_manifest) {
+        const std::function<std::string(const std::filesystem::path&)>& read_manifest,
+        // Optional exact unresolved source path for a descriptor-pinned read.
+        // The canonical return value remains the deduplicated unit identity.
+        std::filesystem::path* original_source_path = nullptr) {
     namespace fs = std::filesystem;
     using namespace project_root_import_detail;
 
@@ -278,6 +281,10 @@ inline std::filesystem::path resolve_project_root_import(
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
     reject_nested_package(physical_root, target);
+    // Record the selected source pathname *before* canonical() erases
+    // potential symlink changes. The caller must read bytes through this
+    // path with O_NOFOLLOW on every component for canonical .atto inputs.
+    if (original_source_path != nullptr) *original_source_path = candidate;
     return target;
 }
 
