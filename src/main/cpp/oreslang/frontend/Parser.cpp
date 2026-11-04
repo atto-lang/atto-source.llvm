@@ -2356,7 +2356,18 @@ private:
                 binding.aggregate_type = callable_aggregate_aliases_.at(alias);
                 binding.name = identifier();
                 require("=");
-                binding.initializer = expression();
+                // Java/GraalVM treats a 'type T = record { ... }' declaration
+                // as compile-time shape metadata and 'record { ... }' as a
+                // value. The exact native stack subset can admit that value
+                // for a typed immutable local, but must still prove its kind
+                // and complete field shape below. No nominal/owning ABI is
+                // inferred from this spelling.
+                const bool inline_shape =
+                    token_.text == "infer" ||
+                    ((token_.text == "record" || token_.text == "struct") &&
+                     peek_next().text == "{");
+                binding.initializer = inline_shape
+                    ? infer_stack_aggregate() : expression();
                 const types::NativeAggregateShape* actual = nullptr;
                 if (binding.initializer->kind == Expression::Kind::AggregateConstruct &&
                         binding.initializer->aggregate_type)
