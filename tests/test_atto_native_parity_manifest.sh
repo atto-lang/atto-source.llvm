@@ -11,7 +11,7 @@ trap 'rm -rf -- "$tmp"' EXIT
 
 fail() { echo "FAIL source-free AttoLang LLVM inventory: $*" >&2; exit 1; }
 bash "$runner" --inventory-only > "$tmp/positive.log"
-grep -Fqx 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=16 negative=3 (NO_COMPILER_EXECUTION)' \
+grep -Fqx 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=17 negative=3 (NO_COMPILER_EXECUTION)' \
   "$tmp/positive.log" || fail 'good inventory did not pass'
 reject() {
   label="$1"
