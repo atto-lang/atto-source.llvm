@@ -6,11 +6,23 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <initializer_list>
 #include <thread>
 #include <utility>
 #include <vector>
 
 using namespace oreslang::runtime;
+
+// Compile-time negative proof: a shallow C++ wrapper must not become a
+// transferable ActorLocal/TaskLocal/ThreadLocal value by type erasure.
+static_assert(local_value_allowed_v1<int>);
+static_assert(local_value_allowed_v1<std::string>);
+static_assert(!local_value_allowed_v1<int*>);
+static_assert(!local_value_allowed_v1<int&>);
+static_assert(!local_value_allowed_v1<std::reference_wrapper<int>>);
+static_assert(!local_value_allowed_v1<std::string_view>);
+static_assert(!local_value_allowed_v1<std::initializer_list<int>>);
 
 namespace {
 constexpr ExecutionStampV1 actor_a{9, 18, 71, 3, 1, 101, 1};
