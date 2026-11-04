@@ -271,10 +271,10 @@ jobs:
           # Demand generated actor definitions and real scoped owner calls.
           grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_init\(' "$IR"
           grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_on_message\(' "$IR"
-          grep -Eq '[[:space:]]call .*@ores_actor_i64_heap_scoped_new\(' "$IR"
-          grep -Eq '[[:space:]]call .*@ores_actor_i64_heap_scoped_drop\(' "$IR"
-          grep -Eq '[[:space:]]call .*@ores_actor_i64_heap_field_read\(' "$IR"
-          grep -Eq '[[:space:]]call .*@ores_actor_i64_heap_field_write\(' "$IR"
+          grep -Eq '^[[:space:]]*(%[[:alnum:]_.-]+[[:space:]]*=[[:space:]]*)?((musttail|notail|tail)[[:space:]]+)?call[[:space:]]+[^;]*@ores_actor_i64_heap_scoped_new\(' "$IR"
+          grep -Eq '^[[:space:]]*(%[[:alnum:]_.-]+[[:space:]]*=[[:space:]]*)?((musttail|notail|tail)[[:space:]]+)?call[[:space:]]+[^;]*@ores_actor_i64_heap_scoped_drop\(' "$IR"
+          grep -Eq '^[[:space:]]*(%[[:alnum:]_.-]+[[:space:]]*=[[:space:]]*)?((musttail|notail|tail)[[:space:]]+)?call[[:space:]]+[^;]*@ores_actor_i64_heap_field_read\(' "$IR"
+          grep -Eq '^[[:space:]]*(%[[:alnum:]_.-]+[[:space:]]*=[[:space:]]*)?((musttail|notail|tail)[[:space:]]+)?call[[:space:]]+[^;]*@ores_actor_i64_heap_field_write\(' "$IR"
           if [[ "$MODE" == optimized ]]; then
             FLAGS=(-O2 -DNDEBUG)
           elif [[ "$MODE" == asan-ubsan ]]; then
@@ -330,7 +330,7 @@ jobs:
             exit 1
           fi
           for fn in scoped_new scoped_drop field_read field_write; do
-            grep -Eq "[[:space:]]call .*@ores_actor_i64_heap_${fn}\\(" "$SEALED_IR"
+            grep -Eq "^[[:space:]]*(%[[:alnum:]_.-]+[[:space:]]*=[[:space:]]*)?((musttail|notail|tail)[[:space:]]+)?call[[:space:]]+[^;]*@ores_actor_i64_heap_${fn}\\(" "$SEALED_IR"
           done
           for entry in \
             "native-aot-sealed-state-missing-critical-reject.atto|native sealed actor state requires pub critical handle_state" \
