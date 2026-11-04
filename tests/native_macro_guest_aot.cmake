@@ -2,6 +2,14 @@ if(NOT DEFINED COMPILER OR NOT DEFINED FIXTURE OR NOT DEFINED STAGING OR NOT DEF
     message(FATAL_ERROR "COMPILER, FIXTURE, STAGING and CLANG are required")
 endif()
 file(MAKE_DIRECTORY "${STAGING}")
+# A linked macro AOT receipt must bind BOTH physical source files. The guest
+# process is executed only after the compiler consumed the producer.
+if(DEFINED PRODUCER)
+    if(NOT EXISTS "${PRODUCER}")
+        message(FATAL_ERROR "imported macro producer is missing")
+    endif()
+    file(SHA256 "${PRODUCER}" producer_before_sha256)
+endif()
 execute_process(COMMAND "${COMPILER}" "${FIXTURE}"
     RESULT_VARIABLE emitted_status OUTPUT_VARIABLE guest_ir ERROR_VARIABLE diagnostic TIMEOUT 25)
 if(NOT emitted_status EQUAL 0)
@@ -37,8 +45,17 @@ endif()
 # compiler and independently linked native executable bytes. A source-only
 # test must never emit this success marker.
 file(SHA256 "${FIXTURE}" source_sha256)
+if(DEFINED PRODUCER)
+    file(SHA256 "${PRODUCER}" producer_after_sha256)
+    if(NOT producer_after_sha256 STREQUAL producer_before_sha256)
+        message(FATAL_ERROR "macro producer changed during compilation/guest execution")
+    endif()
+    set(producer_receipt " producer_sha256=${producer_after_sha256}")
+else()
+    set(producer_receipt "")
+endif()
 file(SHA256 "${COMPILER}" compiler_sha256)
 file(SHA256 "${ir_file}" ir_sha256)
 file(SHA256 "${binary}" guest_sha256)
 message(STATUS
-    "MACRO_LLVM_LINKED_GUEST_AOT_PASS value=42 exit=42 source_sha256=${source_sha256} compiler_sha256=${compiler_sha256} ir_sha256=${ir_sha256} guest_sha256=${guest_sha256}")
+    "MACRO_LLVM_LINKED_GUEST_AOT_PASS value=42 exit=42 source_sha256=${source_sha256}${producer_receipt} compiler_sha256=${compiler_sha256} ir_sha256=${ir_sha256} guest_sha256=${guest_sha256}")
