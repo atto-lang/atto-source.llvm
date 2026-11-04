@@ -94,6 +94,9 @@ def self_test() -> None:
         valid.write_bytes(expected("mixed"))
         require(read_bounded_receipts(valid) == expected("mixed"),
                 "bounded regular fixture rejected")
+        # Exercise the actual two-argument CLI path used by the LLVM shell.
+        require(main([str(valid), "mixed"]) == 0,
+                "valid two-argument native verifier CLI rejected")
         link = folder / "symlink.txt"
         link.symlink_to(valid)
         try:
@@ -117,14 +120,14 @@ def main(argv: list[str]) -> int:
     if argv == ["--self-test"]:
         self_test()
         return 0
-    if len(argv) != 3 or argv[2] not in ("pass", "fail", "mixed"):
+    if len(argv) != 2 or argv[1] not in ("pass", "fail", "mixed"):
         print("usage: verify_atto_guest_receipts.py OUTPUT_FILE pass|fail|mixed", file=sys.stderr)
         return 2
-    path = pathlib.Path(argv[1])
+    path = pathlib.Path(argv[0])
     try:
         payload = read_bounded_receipts(path)
         # The *actual* exit status must be checked by the shell runner too.
-        if not verify(payload, argv[2], 0 if argv[2] == "pass" else 1):
+        if not verify(payload, argv[1], 0 if argv[1] == "pass" else 1):
             raise ValueError("wrong native guest receipt stream")
     except (OSError, ValueError) as exc:
         print("invalid LLVM native guest receipts: " + str(exc), file=sys.stderr)
