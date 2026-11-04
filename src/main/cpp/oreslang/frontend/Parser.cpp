@@ -3783,8 +3783,14 @@ private:
     bool generic_call_type_arguments_ahead() const {
         if (token_.text != "<") return false;
         Lexer probe = lexer_; // already positioned immediately after '<'
+        // Named generics consume four tokens per slot (name = type ,).
+        // The old 64-token probe silently stopped recognizing otherwise
+        // valid 17+ slot calls and parsed '<' as a comparison instead.
+        // Keep a finite 4096-token cap for hostile inputs while admitting
+        // large but ordinary declaration-identity argument lists.
+        constexpr std::size_t kMaxNativeGenericCallLookaheadTokens = 4096;
         std::size_t budget = 0;
-        while (++budget <= 64) {
+        while (++budget <= kMaxNativeGenericCallLookaheadTokens) {
             const Token next = probe.next();
             if (next.kind == Kind::End) return false;
             if (next.text == ">") return probe.next().text == "(";
