@@ -34,8 +34,9 @@ int main() {
     plan.push(2);
     plan.read_runtime_checked(0, "id");
     plan.write_runtime_checked(0, "x");
+    plan.close();
     const auto code = Module::lower(plan);
-    assert(code.instructions().size() == 4);
+    assert(code.instructions().size() == 5);
     assert(code.instructions()[1].kind == OpKind::Push);
     assert(code.instructions()[2].require_bounds_guard);
     assert(code.instructions()[2].require_generation_guard);
@@ -72,6 +73,7 @@ int main() {
     LinearPlan next_plan(layout, 2);
     next_plan.push(2);
     next_plan.read_runtime_checked(0, "id");
+    next_plan.close();
     const auto next_module = Module::lower(next_plan);
     const I64PairIrOperands next_inputs{{{9, 77}}, {}};
     const auto reference_ir = I64PairLlvmEmitter(2).build(next_module, next_inputs);
@@ -79,6 +81,17 @@ int main() {
     reject([&] {
         (void)emitter.build(code, I64PairIrOperands{{}, {42}});
     }, "missing MIR LLVM push operands");
+    assert(emitter.build(next_module, next_inputs) == reference_ir);
+
+    // The executable IR boundary must reject a verified-but-open host plan.
+    LinearPlan open_plan(layout, 2);
+    open_plan.push(2);
+    open_plan.read_runtime_checked(0, "x");
+    const auto open_mir = Module::lower(open_plan);
+    reject([&] {
+        (void)emitter.build(open_mir, I64PairIrOperands{{{42, 501}}, {}});
+    }, "terminal owner close");
+    // Failed emit must not poison subsequent compiler transactions.
     assert(emitter.build(next_module, next_inputs) == reference_ir);
     return 0;
 }
