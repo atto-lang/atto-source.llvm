@@ -22,6 +22,31 @@ CASES = {
                            "pub fnc main(): int { return down(100000); }\n", False),
 }
 
+# Exercise actual source->IR admission at the exact static 64/65-frame
+# boundary, not just the standalone graph model.
+def chain(length):
+    functions = []
+    for i in range(length):
+        target = "42" if i == length - 1 else f"f{i+1}()"
+        functions.append(f"fnc f{i}(): int {{ return {target}; }}")
+    functions.append("pub fnc main(): int { return f0(); }")
+    return "\\n".join(functions) + "\\n"
+
+CASES.update({
+    "acyclic_depth_64": (chain(63), True),
+    "acyclic_depth_65": (chain(64), False),
+    "conditional_hidden_self_cycle": (
+        "fnc loop(int n): int { return n == 0 ? 0 : loop(n - 1); }\\n"
+        "pub fnc main(): int { return 42; }\\n", False),
+    "unreachable_self_cycle": (
+        "fnc unused(int n): int { return unused(n - 1); }\\n"
+        "pub fnc main(): int { return 42; }\\n", False),
+    "arity_overloads_acyclic": (
+        "fnc f(): int { return 41; }\\n"
+        "fnc f(int value): int { return value + 1; }\\n"
+        "pub fnc main(): int { return f(f()); }\\n", True),
+})
+
 def run(argv, timeout=20):
     return subprocess.run(argv, capture_output=True, stdin=subprocess.DEVNULL,
                           timeout=timeout, check=False)
@@ -58,8 +83,11 @@ def main():
             else:
                 if compiled.returncode == 0 or compiled.stdout:
                     raise RuntimeError(label + ": recursive source emitted native LLVM IR")
-                if b"native recursive call graph requires bounded guest frames" not in compiled.stderr:
-                    raise RuntimeError(label + ": failure was not the expected bounded-frame admission")
+                expected = (b"native guest call depth budget exceeded"
+                            if label == "acyclic_depth_65"
+                            else b"native recursive call graph requires bounded guest frames")
+                if expected not in compiled.stderr:
+                    raise RuntimeError(label + ": failure was not the expected stack admission")
                 print("PASS fail-closed recursive .atto admission", label)
     return 0
 
