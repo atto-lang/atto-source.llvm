@@ -2519,6 +2519,20 @@ private:
             class_receivers_ = receivers;
             require("}"); return loop;
         };
+        // Only a syntactically proven terminal failure path may be emitted as a
+        // guard. Never allow a fall-through branch to reach guarded code.
+        std::function<bool(const std::vector<Statement>&)> guard_failure_exits;
+        guard_failure_exits = [&](const std::vector<Statement>& body) -> bool {
+            if (body.empty()) return false;
+            const Statement& last = body.back();
+            if (last.kind == Statement::Kind::Return) return true;
+            if (last.kind == Statement::Kind::Conditional) {
+                return !last.then_statements.empty() && !last.else_statements.empty()
+                    && guard_failure_exits(last.then_statements)
+                    && guard_failure_exits(last.else_statements);
+            }
+            return false;
+        };
         branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
             struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
@@ -2576,20 +2590,17 @@ private:
                         predicate = std::move(combined);
                     }
                     require("{");
-                    require("return");
-                    if (!value.return_class.empty())
-                        fail("native guard class return requires ownership-aware exit lowering");
-                    Statement terminal;
-                    terminal.kind = Statement::Kind::Return; terminal.offset = offset;
-                    if (!value.returns_void) terminal.expression = expression();
-                    accept(";"); require("}");
+                    auto failure = branch_arm(false, false);
+                    require("}");
+                    if (!guard_failure_exits(failure))
+                        fail("AttoLang guard failure block must terminate on every path");
                     if (token_.text == "else" || token_.text == "fi")
                         fail("AttoLang guard has no else or fi");
                     Statement inverted;
                     inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
                     inverted.condition = make_expression(Expression::Kind::LogicalNot, offset);
                     inverted.condition->left = std::move(predicate);
-                    inverted.then_statements.push_back(std::move(terminal));
+                    inverted.then_statements = std::move(failure);
                     actions.push_back(std::move(inverted));
                     continue;
                 }
@@ -2614,7 +2625,10 @@ private:
                     if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
                     statement.kind = Statement::Kind::Return;
                     if (!value.returns_void) statement.expression = expression();
-                    require(";"); actions.push_back(std::move(statement));
+                    if (!accept(";") && token_.text != "}"
+                            && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
+                        fail("native return requires ';' or a closing block delimiter");
+                    actions.push_back(std::move(statement));
                     if (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
                         fail("native statement follows terminal return");
                     continue;
@@ -2945,21 +2959,18 @@ private:
                     predicate = std::move(combined);
                 }
                 require("{");
-                require("return");
-                if (!value.return_class.empty())
-                    fail("native guard class return requires ownership-aware exit lowering");
                 if (++branch_count > 128) fail("native structured guard limit exceeded (128)");
-                Statement terminal;
-                terminal.kind = Statement::Kind::Return; terminal.offset = offset;
-                if (!value.returns_void) terminal.expression = expression();
-                accept(";"); require("}");
+                auto failure = branch_arm(false, false);
+                require("}");
+                if (!guard_failure_exits(failure))
+                    fail("AttoLang guard failure block must terminate on every path");
                 if (token_.text == "else" || token_.text == "fi")
                     fail("AttoLang guard has no else or fi");
                 Statement inverted;
                 inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
                 inverted.condition = make_expression(Expression::Kind::LogicalNot, offset);
                 inverted.condition->left = std::move(predicate);
-                inverted.then_statements.push_back(std::move(terminal));
+                inverted.then_statements = std::move(failure);
                 value.statements.push_back(std::move(inverted));
                 continue;
             }
