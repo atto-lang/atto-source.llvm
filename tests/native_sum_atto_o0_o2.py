@@ -112,6 +112,18 @@ def self_test():
              'printf "# changed\\n" >> "$0"\n'
              'echo "' + success_line + '"\n',
              "no-GC auditor changed during IR audit"),
+            # Restore file metadata after a same-size mutation. The
+            # fingerprint check must catch this even when stat is unchanged.
+            ("same-metadata-tamper", "#!/usr/bin/env python3\n"
+             "from pathlib import Path\nimport os\n"
+             "p = Path(__file__)\n"
+             "before = p.stat()\n"
+             "contents = p.read_bytes()\n"
+             "p.write_bytes(contents.replace(b'# ZERO', b'# ONE!', 1))\n"
+             "os.utime(p, ns=(before.st_atime_ns, before.st_mtime_ns))\n"
+             'print("' + success_line + '")\n'
+             "# ZERO\n",
+             "no-GC auditor changed during IR audit"),
         )
         negative_count = 0
         for name, body, diagnostic in cases:
