@@ -417,6 +417,7 @@ fn named_generic_value_matrix(compiler: &Path, clang: &Path) -> Result<(), Strin
     let values = [0, 4, 2];
     let temp = TempDir::new("atto-native-named-generic-matrix-")
         .map_err(|e| e.to_string())?;
+    let mut compiled_cases = 0usize;
     let mut executed = 0usize;
     for generic_order in PERMS {
         for value_order in PERMS {
@@ -431,33 +432,44 @@ fn named_generic_value_matrix(compiler: &Path, clang: &Path) -> Result<(), Strin
             let program = format!(
                 "fnc encode<A=int,B=int,C=int>(A first,B second,C third): int {{ return first * 100 + second * 10 + third; }}\n                 pub fnc main(): int {{ return encode<{type_args}>({actuals}); }}\n"
             );
-            let src = temp.path.join(format!("case-{executed}.ores"));
-            let ir = temp.path.join(format!("case-{executed}.ll"));
-            let binary = temp.path.join(format!("case-{executed}"));
+            // Exercise the canonical AttoLang suffix, not only a legacy .ores
+            // compatibility path, for each one of the 36 independent binders.
+            let src = temp.path.join(format!("case-{compiled_cases}.atto"));
+            let ir = temp.path.join(format!("case-{compiled_cases}.ll"));
             fs::write(&src, program).map_err(|e| e.to_string())?;
             let compiled = run(compiler, [src.as_os_str()])?;
             require(compiled.status.success() && compiled.stdout.starts_with(b"; ModuleID"),
-                format!("named matrix case {executed} native compiler failed: {}",
+                format!("named matrix case {compiled_cases} native compiler failed: {}",
                     stderr(&compiled)))?;
             require(compiled.stderr.is_empty(),
-                format!("named matrix case {executed} emitted unexpected diagnostics: {}",
+                format!("named matrix case {compiled_cases} emitted unexpected diagnostics: {}",
                     stderr(&compiled)))?;
             fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
-            let linked = Command::new(clang)
-                .arg("-x").arg("ir").arg(&ir).arg("-o").arg(&binary)
-                .output().map_err(|e| format!("matrix case {executed} Clang: {e}"))?;
-            require(linked.status.success(),
-                format!("named matrix case {executed} LLVM link failed: {}",
-                    stderr(&linked)))?;
-            let guest = run(&binary, std::iter::empty::<&OsStr>())?;
-            require(guest.status.code() == Some(42),
-                format!("named matrix case {executed} wrong guest ABI exit {:?}: {}",
-                    guest.status.code(), stderr(&guest)))?;
-            executed += 1;
+            // Link and execute the SAME compiler IR under both Clang modes.
+            // Optimizer-dependent ABI mistakes must not be hidden by O0 only.
+            for optimization in ["-O0", "-O2"] {
+                let binary = temp.path.join(format!(
+                    "case-{compiled_cases}-{}", &optimization[1..]));
+                let linked = Command::new(clang)
+                    .arg(optimization).arg("-x").arg("ir").arg(&ir)
+                    .arg("-o").arg(&binary)
+                    .output().map_err(|e| format!(
+                        "matrix case {compiled_cases} {optimization} Clang: {e}"))?;
+                require(linked.status.success(),
+                    format!("named matrix case {compiled_cases} {optimization} LLVM link failed: {}",
+                        stderr(&linked)))?;
+                let guest = run(&binary, std::iter::empty::<&OsStr>())?;
+                require(guest.status.code() == Some(42),
+                    format!("named matrix case {compiled_cases} {optimization} wrong guest ABI exit {:?}: {}",
+                        guest.status.code(), stderr(&guest)))?;
+                executed += 1;
+            }
+            compiled_cases += 1;
         }
     }
-    require(executed == 36, "incomplete 3! x 3! native binding matrix")?;
-    println!("PASS 36/36 native LLVM named generic + value guest binaries");
+    require(compiled_cases == 36 && executed == 72,
+        "incomplete 3! x 3! x 2-mode native binding matrix")?;
+    println!("PASS 36/36 .atto native LLVM named generic + value cases, 72/72 O0/O2 guest binaries");
     Ok(())
 }
 
