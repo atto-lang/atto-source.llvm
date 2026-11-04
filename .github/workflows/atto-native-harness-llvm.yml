@@ -64,16 +64,16 @@ jobs:
           set -euo pipefail
           ctest --test-dir build --output-on-failure --timeout 120 \
             -R '^native_project_root_import_security$'
-      - name: Execute 16 canonical .atto programs at Clang O0 and O2
+      - name: Execute 17 canonical .atto programs at Clang O0 and O2
         shell: bash
         run: |
           set -euo pipefail
           ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG="$(command -v clang)" \
             bash tests/atto_native_harness_parity.sh --run \
             | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-          test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 32
+          test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 34
           test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 3
-          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=16|optimizations=2|negative=5|guest_receipt_protocol=UNSUPPORTED' \
+          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=17|optimizations=2|negative=5|guest_receipt_protocol=UNSUPPORTED' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
       - name: Verify source checkout unchanged after actual native guest execution
         shell: bash
