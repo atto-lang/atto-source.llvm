@@ -20,8 +20,6 @@ typedef struct {
     int consuming;
     int consumed;
     int producer_on_carrier;
-    // The current restricted TaskLocal<int> specialization owns one inline
-    // scalar value. It is retired with this SourceTask, never pthread TLS.
     // Fixed-size owned TaskLocal i64 cells, never pthread TLS. Runtime
     // allocation and byte usage are bounded independent of guest input.
     unsigned char task_local_present[ORES_SOURCE_TASK_LOCAL_I64_SLOTS];
@@ -365,6 +363,23 @@ int oreslang_source_task_runtime_shutdown(void) {
     }
     if (!scheduler || !task || runtime.closing ||
             ores_native_actor_scheduler_is_current_carrier(scheduler)) {
+        if (pthread_mutex_unlock(&runtime.mutex) != 0) abort();
+        return 0;
+    }
+
+    /*
+     * Reject premature retirement WITHOUT fencing a still-running producer.
+     * Otherwise an external shutdown racing await could set closing=1 while
+     * the scheduler callback is still executing, making its authenticated
+     * TaskLocal write fail closed/abort instead of allowing the Task to finish.
+     * Lock order is runtime.mutex then task->mutex; await releases its task
+     * mutex before reacquiring runtime.mutex on lease retirement.
+     */
+    if (pthread_mutex_lock(&task->mutex) != 0) abort();
+    const int ready_to_retire = task->done && task->consumed &&
+        task->producer_on_carrier;
+    if (pthread_mutex_unlock(&task->mutex) != 0) abort();
+    if (!ready_to_retire) {
         if (pthread_mutex_unlock(&runtime.mutex) != 0) abort();
         return 0;
     }
