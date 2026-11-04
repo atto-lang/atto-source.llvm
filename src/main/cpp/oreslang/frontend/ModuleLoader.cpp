@@ -456,6 +456,7 @@ private:
         expr.arguments.clear();
         expr.argument_names.clear();
         expr.imported_macro_const_argument = false;
+        expr.imported_macro_pending = false;
     }
 
     void expression(const Unit& unit, Expression* expr) {
@@ -464,7 +465,7 @@ private:
         expression(unit, expr->condition.get()); expression(unit, expr->condition_lhs.get()); expression(unit, expr->condition_rhs.get());
         expression(unit, expr->when_true.get()); expression(unit, expr->when_false.get());
         for (auto& arg : expr->arguments) expression(unit, arg.get());
-        if (expr->kind == Expression::Kind::ImportedMacro) {
+        if (expr->imported_macro_pending) {
             expand_imported_macro(unit, *expr);
             return;
         }
