@@ -1,0 +1,32 @@
+import module Run from "ores.std/testing/m1";
+import class TestCase from "ores.std/testing/m1.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1.ores";
+
+// Fail-fast stops later case bodies; no forged receipt for an unexecuted case.
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  suite.fail_fast = true;
+  let mut TestCase first = new TestCase();
+  first.id = 1;
+  first.outcome = 0;
+  if Run.record(rt mut borrow suite, rt borrow first) != 0; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/fast/add|");
+  let mut TestCase second = new TestCase();
+  second.id = 2;
+  second.outcome = 1;
+  if Run.record(rt mut borrow suite, rt borrow second) != 1; then return 3; fi
+  stdio.println("ORES_TEST|FAIL|llvm-m1/fast/subtract|expected=42");
+  let mut TestCase not_run = new TestCase();
+  not_run.id = 3;
+  if Run.should_run(rt borrow suite, rt borrow not_run); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow not_run) != 4; then return 3; fi
+  let mut RunSummary summary = new RunSummary();
+  val int status = Run.finish(rt borrow suite, rt mut borrow summary);
+  if status != 1 || summary.total != 2 || summary.passed != 1 ||
+     summary.failed != 1 || summary.skipped != 0 || summary.filtered != 0; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0");
+  return status;
+}
