@@ -102,11 +102,11 @@ inline void validate_manifest(const std::string& manifest_bytes) {
 }
 
 /**
- * Resolve only the two admitted native source extensions. Extensionless
- * extensionless imports are intentionally ambiguous if both canonical .atto
- * and legacy .ores names exist. Migration must never silently select one twin.
- * Inspect directory entries (not only target existence), so dangling symlinks
- * and same-inode aliases still count as conflicting source names.
+ * Resolve only the two admitted native source extensions. Canonical .atto
+ * importers select .atto exclusively for extensionless imports. Legacy .ores
+ * importers retain ambiguity rejection for .atto/.ores twins until conformance
+ * migration policy is settled. Inspect directory entries (not only target
+ * existence), including dangling symlinks and same-inode aliases.
  */
 inline bool is_atto_source(const fs::path& candidate) {
     auto suffix = candidate.extension().string();
