@@ -125,6 +125,27 @@ def main():
             'producer.atto': 'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
         }, 42),
     ])
+    # Two-file imported Syntax<Expr> expansion must remain compile-time only.
+    # The single-use path forwards caller AST once; repeated unquote is only
+    # allowed for a checked, closed integer literal (no duplicated effects).
+    positives.extend([
+        ('atto-linked-public-syntax-identity', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.identity!(syntax expr 42);}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+        }, 42),
+        ('atto-linked-public-syntax-identity-call', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc forty():int{return 40;} pub fnc main():int{return lib.identity!(syntax expr forty()+2);}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+        }, 42),
+        ('atto-linked-public-syntax-twice', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.twice!(syntax expr 21);}',
+            'producer.atto': 'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+        }, 42),
+        ('atto-linked-public-syntax-nested', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.identity!(syntax expr lib.twice!(syntax expr 21));}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; } define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+        }, 42),
+    ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -505,6 +526,36 @@ def main():
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
             passed += 1
+        # Imported syntax forms preserve the local typed-AST safety floor.
+        syntax_negative_cases = [
+            ('twice-runtime-call',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc effect():int{return 21;} pub fnc main():int{return lib.twice!(syntax expr effect());}',
+             'repeated unquote requires a closed integer literal'),
+            ('twice-variable',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc main():int{val value:int=21;return lib.twice!(syntax expr value);}',
+             'repeated unquote requires a closed integer literal'),
+            ('twice-overflow',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc main():int{return lib.twice!(syntax expr 4611686018427387904);}',
+             'NATIVE_MACRO_CONST_OVERFLOW'),
+            ('identity-wrong-argument-kind',
+             'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+             'pub fnc main():int{return lib.identity!(const 42);}',
+             'NATIVE_MACRO_EXPANDER_REQUIRED'),
+        ]
+        for name, producer, consumer, diagnostic in syntax_negative_cases:
+            directory = root / ('atto-linked-syntax-' + name); directory.mkdir()
+            (directory/'producer.atto').write_text(producer)
+            (directory/'main.atto').write_text(
+                'import * as lib from "./producer.atto"; ' + consumer)
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode,
+                                      result.stdout[:150], result.stderr))
+            passed += 1
+
         # A normal module import cannot forge compile-time macro provenance.
         directory=root/'atto-linked-macro-forged-module-alias'; directory.mkdir()
         (directory/'producer.atto').write_text(
