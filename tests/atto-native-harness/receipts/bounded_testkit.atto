@@ -1,0 +1,50 @@
+// Bounded native AttoLang TestKit M0: ordinary, executable guest source.
+// These are genuine nominal case/suite values; callbacks, arbitrary names,
+// skip/filter and full Java TestSuite remain UNSUPPORTED.
+define module bounded_testkit as
+  define pub class TestCase as
+    pub val String name;
+    pub val int result;
+  end
+
+  define pub class TestSuite as
+    pub val String name;
+  end
+
+  pub fnc expect_equal_int(int actual, int expected): int {
+    return actual == expected ? 0 : 1;
+  }
+
+  // Always evaluate and emit both cases in lexical order. The assertion
+  // results are supplied by guest expressions, not by a host-written receipt.
+  pub fnc run_two(borrow TestSuite suite, borrow TestCase first, borrow TestCase second): int {
+    let int passed = 0;
+    if first.result == 0; then
+      stdio.println("ORES_TEST|PASS|", suite.name, "/", first.name, "|");
+      passed = passed + 1;
+    else
+      stdio.println("ORES_TEST|FAIL|", suite.name, "/", first.name, "|expected=0");
+    fi
+
+    if second.result == 0; then
+      stdio.println("ORES_TEST|PASS|", suite.name, "/", second.name, "|");
+      passed = passed + 1;
+    else
+      stdio.println("ORES_TEST|FAIL|", suite.name, "/", second.name, "|expected=0");
+    fi
+
+    // The current LLVM String ABI cannot stringify arbitrary int counts.
+    // This bounded two-case implementation exhaustively maps passed=0/1/2
+    // to the exact wire protocol instead of lying about summary counts.
+    if passed == 2; then
+      stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+      return 0;
+    fi
+    if passed == 1; then
+      stdio.println("ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0");
+      return 1;
+    fi
+    stdio.println("ORES_TEST|SUMMARY|total=2|passed=0|failed=2|skipped=0|filtered=0");
+    return 1;
+  }
+end

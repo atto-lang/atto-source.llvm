@@ -22,16 +22,19 @@ verifier="$root/tests/verify_atto_guest_receipts.py"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 declare -A original_hash
-for source in "$corpus/pass.atto" "$corpus/fail.atto" "$corpus/multi-pass.atto" "$corpus/multi-fail.atto" "$runtime" "$verifier"; do
+for source in "$corpus/pass.atto" "$corpus/fail.atto" "$corpus/multi-pass.atto" "$corpus/multi-fail.atto" \
+    "$corpus/bounded_testkit.atto" "$corpus/bounded-pp.atto" "$corpus/bounded-pf.atto" \
+    "$corpus/bounded-fp.atto" "$corpus/bounded-ff.atto" "$runtime" "$verifier"; do
   [[ -f "$source" && ! -L "$source" ]] || die "source absent or symlinked: $source"
   original_hash["$source"]="$(sha256sum "$source" | cut -d' ' -f1)"
 done
 python3 "$verifier" --self-test
 PYTHONOPTIMIZE=2 python3 "$verifier" --self-test
-for kind in pass fail multi-pass multi-fail; do
+for kind in pass fail multi-pass multi-fail bounded-pp bounded-pf bounded-fp bounded-ff; do
   source="$corpus/$kind.atto"
   expected=0
-  [[ "$kind" != fail && "$kind" != multi-fail ]] || expected=1
+  [[ "$kind" != fail && "$kind" != multi-fail && "$kind" != bounded-pf &&
+     "$kind" != bounded-fp && "$kind" != bounded-ff ]] || expected=1
   for level in 0 2; do
     ir="$tmp/$kind-O$level.ll"
     exe="$tmp/$kind-O$level.exe"
@@ -75,4 +78,4 @@ for source in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$source" | cut -d' ' -f1)" == "${original_hash["$source"]}" ]] ||
     die "guest input mutated during compiler execution: $source"
 done
-echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=4|optimizations=2|native=8|testkit=NOT_IMPLEMENTED'
+echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=8|optimizations=2|native=16|testkit=BOUNDED_TWO_CASES'

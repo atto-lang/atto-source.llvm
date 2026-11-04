@@ -21,3 +21,4 @@ and one final summary. Together with one-case pass/fail, these require eight
 native LLVM/Clang processes at O0/O2. The verifier binds actual native exit,
 ordered bytes, and a no-follow bounded read; this does not mean full TestSuite
 or Actor TestKit parity.
+\nThe `bounded_testkit.atto` experiment adds four M0 suites using nominal `TestCase` and `TestSuite` values, runtime-computed outcomes and bounded two-case summary accounting. It deliberately does not expose unrestricted case-name input or claim full `ores.std/testing` parity. These must pass the real production compiler and Clang O0/O2 before being counted as executable evidence.\n

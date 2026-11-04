@@ -1,0 +1,11 @@
+// Concrete two-case TestKit guest: result is computed, not receipt-forged.
+import class TestCase from "./bounded_testkit.atto";
+import class TestSuite from "./bounded_testkit.atto";
+import module bounded_testkit from "./bounded_testkit.atto";
+
+pub routine main(): int {
+  val TestSuite suite = new TestSuite("llvm-native");
+  val TestCase first = new TestCase("bounded/first", bounded_testkit.expect_equal_int(42, 42));
+  val TestCase second = new TestCase("bounded/second", bounded_testkit.expect_equal_int(41, 42));
+  return bounded_testkit.run_two(rt borrow suite, rt borrow first, rt borrow second);
+}
