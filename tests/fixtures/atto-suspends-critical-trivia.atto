@@ -1,0 +1,5 @@
+// EXPECT_COMPILE_ERROR: E_CRITICAL_SUSPENDS_DECL
+pub suspends
+  critical routine work(): int {
+  return 1;
+}
