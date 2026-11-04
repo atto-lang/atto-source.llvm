@@ -1,0 +1,67 @@
+name: AttoLang named generic LLVM exact-head native gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/native_scalar_generic_source_execution.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/named-generic-atto-exact-head.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  named-generic-llvm:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact same-repository source head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify immutable commit, tree, and clean checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "ATTO_NAMED_EXACT_HEAD=$EXPECTED_SHA"
+          echo "ATTO_NAMED_EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev jq python3
+      - name: Build actual LLVM compiler
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+      - name: Verify exact-head named generic and value-call CTest inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --show-only=json-v1 > build/atto-named-tests.json
+          jq -e '(.tests | type) == "array"' build/atto-named-tests.json >/dev/null
+          jq -r '.tests[].name' build/atto-named-tests.json | LC_ALL=C sort -u > build/atto-named-test-names.txt
+          required=(
+            native_atto_named_generic_value_source_execution
+            native_atto_named_generic_value_source_execution_O2
+            native_scalar_generic_contract_harness_selftest
+          )
+          for name in "${required[@]}"; do
+            if ! grep -Fxq -- "$name" build/atto-named-test-names.txt; then
+              echo "::error::Required exact-head test missing: $name" >&2
+              exit 1
+            fi
+          done
+          echo "ATTO_NAMED_TESTS_REGISTERED=${#required[@]}"
+      - name: Execute compiler, diagnostics, LLVM IR, Clang and native guests at O0/O2
+        run: |
+          ctest --test-dir build -R '^native_(atto_named_generic_value_source_execution(_O2)?|scalar_generic_contract_harness_selftest)$' \
+            --output-on-failure --no-tests=error --timeout 240 --parallel 2
