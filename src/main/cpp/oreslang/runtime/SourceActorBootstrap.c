@@ -583,8 +583,13 @@ void* oreslang_source_actor_spawn(
 
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
+    /* Unlike the metadata-only compiler root, a source actor becomes
+     * externally observable after this call. Require a live native worker
+     * (with its run-loop check-in) before publishing the actor handle.
+     * All subsequent idle actors reuse that worker; runnable pressure
+     * still grows bounded native carriers on demand. */
     instance->ref =
-        ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
+        ores_native_vm_spawn_ready(group.vm, ORES_NATIVE_VM_MAIN, slot);
     ensure(instance->ref.scheduler_domain
         && instance->ref.actor_slot == slot);
     group.live++;
