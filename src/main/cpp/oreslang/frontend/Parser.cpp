@@ -1855,7 +1855,8 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         value.name = owner.empty() ? identifier() : owner + "." + identifier();
-        if (!owner.empty() && token_.text == "<") fail("native generic methods require typed receiver monomorphization");
+        // Scalar-i64 generic methods use the same closed-world binder as free functions.
+        // The receiver remains a separately checked hidden loan, never a generic value.
         if (accept("<")) {
             if (accept(">")) fail("native generic declaration cannot be empty");
             do {
@@ -3744,39 +3745,8 @@ private:
         else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
-        if (generic_call_type_arguments_ahead()) {
-            require("<");
-            expr->type_arguments_present = true;
-            if (!accept(">")) {
-                bool seen_named = false;
-                do {
-                    GenericTypeArgument argument;
-                    if (token_.kind == Kind::Identifier && token_.text != "int") {
-                        Lexer lookahead = lexer_;
-                        if (lookahead.next().text == "=") {
-                            argument.name = identifier();
-                            require("=");
-                            seen_named = true;
-                        }
-                    }
-                    if (argument.name.empty() && seen_named)
-                        fail("positional generic argument after named argument");
-                    if (accept("_")) argument.infer = true;
-                    else if (accept("int")) argument.type = "int";
-                    else if (token_.kind == Kind::Identifier &&
-                             scalar_alias_targets_.count(std::string(token_.text))) {
-                        std::string alias = identifier();
-                        if (resolve_scalar_alias(alias) != ScalarType::I64)
-                            fail("native scalar generic type requires int ABI");
-                        argument.type = "int";
-                    } else fail("native scalar generic type requires int or bare '_' (non-scalar generics unsupported)");
-                    expr->type_arguments.push_back(std::move(argument));
-                } while (accept(","));
-                require(">");
-            }
-            if (token_.text != "(")
-                fail("generic type arguments require a call");
-        }
+        if (generic_call_type_arguments_ahead())
+            parse_generic_type_actuals(*expr);
         if (accept("(")) {
             expr->kind = Expression::Kind::Call;
             bool named_seen = false;
@@ -3813,6 +3783,11 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
+            // Class instance method type arguments are checked only after
+            // their receiver has resolved to a concrete nominal class.
+            // Preserve them on the member expression until checked rewriting.
+            if (generic_call_type_arguments_ahead())
+                parse_generic_type_actuals(*field);
             // Keep ActorRef.send(...) for the outer actor action parser.
             // Eager ArrayCall parsing would erase the send/stop ordering.
             const bool named_class_receiver = field->left
@@ -3848,6 +3823,40 @@ private:
             expr = std::move(field);
         }
         return expr;
+    }
+
+    void parse_generic_type_actuals(Expression& expr) {
+        require("<");
+        expr.type_arguments_present = true;
+        if (!accept(">")) {
+            bool seen_named = false;
+            do {
+                GenericTypeArgument argument;
+                if (token_.kind == Kind::Identifier && token_.text != "int") {
+                    Lexer lookahead = lexer_;
+                    if (lookahead.next().text == "=") {
+                        argument.name = identifier();
+                        require("=");
+                        seen_named = true;
+                    }
+                }
+                if (argument.name.empty() && seen_named)
+                    fail("positional generic argument after named argument");
+                if (accept("_")) argument.infer = true;
+                else if (accept("int")) argument.type = "int";
+                else if (token_.kind == Kind::Identifier &&
+                         scalar_alias_targets_.count(std::string(token_.text))) {
+                    std::string alias = identifier();
+                    if (resolve_scalar_alias(alias) != ScalarType::I64)
+                        fail("native scalar generic type requires int ABI");
+                    argument.type = "int";
+                } else fail("native scalar generic type requires int or bare '_' (non-scalar generics unsupported)");
+                expr.type_arguments.push_back(std::move(argument));
+            } while (accept(","));
+            require(">");
+        }
+        if (token_.text != "(")
+            fail("generic type arguments require a call");
     }
 
     bool generic_call_type_arguments_ahead() const {
