@@ -24,7 +24,7 @@ API, kernel launcher, GPU profiler, or measured cache improvement.
 
 ## Reproducible host comparison
 
-Build `native_actor_shard_layout_bench` from a trusted exact Git tree outside
+Build the CMake target `oreslang-native-actor-shard-bench` from a trusted exact Git tree outside
 the clean source checkout and attest its source-to-binary provenance. Use a
 Linux host with permission to read un-multiplexed CPU perf counters.
 
@@ -34,13 +34,13 @@ Pass the same trusted `--tree` SHA to each invocation:
 ```sh
 python3 scripts/profile_cache_locality.py --tree "$TREE" \
   --output /tmp/ores-aos.json --repeats 5 --warmups 2 -- \
-  /absolute/path/native_actor_shard_layout_bench --layout aos --rows 100000 --iterations 200
+  /absolute/path/oreslang-native-actor-shard-bench --layout aos --rows 100000 --iterations 200
 python3 scripts/profile_cache_locality.py --tree "$TREE" \
   --output /tmp/ores-soa.json --repeats 5 --warmups 2 -- \
-  /absolute/path/native_actor_shard_layout_bench --layout soa --rows 100000 --iterations 200
+  /absolute/path/oreslang-native-actor-shard-bench --layout soa --rows 100000 --iterations 200
 python3 scripts/profile_cache_locality.py --tree "$TREE" \
   --output /tmp/ores-aosoa.json --repeats 5 --warmups 2 -- \
-  /absolute/path/native_actor_shard_layout_bench --layout aosoa --rows 100000 --iterations 200
+  /absolute/path/oreslang-native-actor-shard-bench --layout aosoa --rows 100000 --iterations 200
 
 python3 scripts/compare_dop_cache_profiles.py \
   --aos /tmp/ores-aos.json --soa /tmp/ores-soa.json \
