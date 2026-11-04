@@ -2105,6 +2105,15 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
+    # Reconciled PR #1289 fail-closed compile boundary: host callbacks may
+    # copy out only void/scalars until owned-aggregate proof is implemented.
+    add_test(NAME native_logical_mutex_scalar_copyout_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/critical_scalar_copyout_compile_test.py"
+            --cxx "${CMAKE_CXX_COMPILER}"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_tests_properties(native_logical_mutex_scalar_copyout_failclosed
+        PROPERTIES TIMEOUT 40)
     add_executable(oreslang-function-effects-test tests/function_effects_test.cpp)
     target_include_directories(oreslang-function-effects-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
