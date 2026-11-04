@@ -210,6 +210,7 @@ int main(int argc, char** argv) {
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
     bool mcp_descriptors_only = false;
+    bool mcp_embed_descriptors = false;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
@@ -277,6 +278,12 @@ int main(int argc, char** argv) {
                 return 2;
             }
             mcp_descriptors_only = true;
+        } else if (arg == "--mcp-embed-descriptors") {
+            if (mcp_embed_descriptors) {
+                std::cerr << "duplicate mcp-embed-descriptors option\n";
+                return 2;
+            }
+            mcp_embed_descriptors = true;
         } else if (arg == "--constraint-descriptors") {
             if (constraint_descriptors_only) {
                 std::cerr << "duplicate constraint-descriptors option\n";
@@ -373,6 +380,16 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // Only the tested hosted LLVM path may retain descriptor bytes.
+    if (mcp_embed_descriptors &&
+            (mcp_descriptors_only || constraint_descriptors_only || tree_shake ||
+             !tree_shake_roots.empty() || native_hard_rt_profile || rt_check_only ||
+             rt_entry_seen || rt_report_seen || experimental_owned_int ||
+             experimental_rt_scalar_loop || target_seen || allocator_provider_seen)) {
+        std::cerr << "mcp-embed-descriptors requires ordinary host LLVM codegen\n";
+        return 2;
+    }
+
     if (constraint_descriptors_only &&
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
@@ -400,7 +417,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--mcp-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--mcp-descriptors] [--mcp-embed-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -772,9 +789,13 @@ int main(int argc, char** argv) {
             require_function_only_tree_shake_surface(ast);
             tree_shake_functions(ast, tree_shake_roots);
         }
+        // Compiler-generated, public-only descriptor from the admitted AST.
+        // No client-provided metadata, runtime reflection or guest invocation.
+        const auto mcp_payload = mcp_embed_descriptors
+            ? oreslang::runtime::mcp_m1::emit_json(ast) : std::string();
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider);
+                bounded_allocator_provider, mcp_payload);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

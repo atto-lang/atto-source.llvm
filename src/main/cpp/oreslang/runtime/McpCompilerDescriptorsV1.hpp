@@ -73,6 +73,8 @@ inline std::string emit_json(const ValidatedProgram& program) {
         "{\"schema\":\"atto.mcp.aot-descriptors.m1.v1\","
         "\"backend\":\"llvm\",\"visibility\":\"public_only\","
         "\"retention\":\"opt_in\",\"executed_guest\":false,"
+        "\"abi\":\"atto.mcp.native.descriptor.v1\","
+        "\"generation_binding\":\"host_runtime_required\","
         "\"descriptors\":[";
     for (std::size_t i=0; i<entries.size(); ++i) {
         if (i) out += ',';

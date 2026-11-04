@@ -19,3 +19,8 @@ actual `.atto` and `.ores` compiler execution requires a built
 in a native AOT guest artifact and binding them to generation / ABI / tenant
 is a later increment; source-free tests are not such proof. Production MCP
 transport and mutation remain forbidden.
+
+
+## M1 native AOT descriptor retention (host ELF only)
+
+The opt-in --mcp-embed-descriptors flag emits verified LLVM IR containing a bounded compiler-generated public-only descriptor in exported constant symbol __atto_mcp_descriptor_v1, section .atto.mcp.v1. The llvm.used retention list ensures the ELF linker preserves the section under --gc-sections. The artifact carries ABI atto.mcp.native.descriptor.v1 and a host_runtime_required generation marker; no runtime generation authority is inferred from compile-time data. No listener, reflection, JIT or guest invocation is introduced by inspection. The emitted metadata is capped at 8192 bytes plus NUL, rejects unsupported modes/targets, and cannot include private function names or source paths. The native test builds oreslang-llvmc, compiles and links .atto and .ores guest binaries, runs main (exit 42), extracts descriptor bytes using objcopy, checks deterministic schema and negative flag admission. Missing tools or zero-step CI are NOT_EXECUTED, not passes.

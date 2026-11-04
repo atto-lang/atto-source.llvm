@@ -3,9 +3,11 @@ on:
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.*'
       - 'src/main/cpp/oreslang/runtime/McpCompilerDescriptorsV1.hpp'
       - 'tests/native_mcp_compiler_descriptor_m1_test.cpp'
       - 'tests/test_mcp_m1_compiler_cli.py'
+      - 'tests/test_mcp_m1_native_aot_embed.py'
       - 'tests/fixtures/mcp-descriptor-public.*'
       - 'CMakeLists.txt'
       - '.github/workflows/mcp-m1-llvm-compiler-descriptors.yml'
@@ -70,10 +72,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y clang llvm-dev cmake build-essential
+          sudo apt-get install -y clang llvm-dev cmake build-essential binutils
           cmake -S . -B build-mcp-m1 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           cmake --build build-mcp-m1 --target oreslang-llvmc --parallel 2
       - name: Execute .atto and .ores native compiler descriptor mode
         run: python3 tests/test_mcp_m1_compiler_cli.py --compiler build-mcp-m1/oreslang-llvmc
+      - name: Link and execute native AttoLang guest with retained descriptor
+        run: python3 tests/test_mcp_m1_native_aot_embed.py --compiler build-mcp-m1/oreslang-llvmc --clang clang --objcopy objcopy
       - name: Distinguish metadata from guest runtime evidence
-        run: echo 'COMPILER_METADATA_ONLY_NO_NATIVE_GUEST_LINK_OR_MCP_SERVER'
+        run: echo 'AOT_GUEST_EXECUTION_WITH_READ_ONLY_DESCRIPTOR_NO_MCP_SERVER'

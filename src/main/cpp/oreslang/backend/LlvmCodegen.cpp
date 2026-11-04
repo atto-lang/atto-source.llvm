@@ -15,7 +15,9 @@
 
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -643,7 +645,8 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
-                                  bool bounded_allocator_provider) {
+                                  bool bounded_allocator_provider,
+                                  std::string_view mcp_descriptor_payload) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -2924,6 +2927,39 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.CreateRet(builder.CreateSelect(valid, narrowed,
                 llvm::ConstantInt::get(i32, 1), "checked.exit.status"));
         }
+    }
+
+    if (!mcp_descriptor_payload.empty()) {
+        // A bounded compiler-generated, public-only descriptor in a read-only
+        // native section. Neither parser nor guest methods run at inspection.
+        if (wasm32_target || cortex_m_target ||
+            mcp_descriptor_payload.size() > 8192 ||
+            mcp_descriptor_payload.find('\0') != std::string_view::npos ||
+            mcp_descriptor_payload.find("atto.mcp.aot-descriptors.m1.v1") ==
+                std::string_view::npos)
+            throw std::runtime_error("invalid native MCP descriptor embedding");
+        if (module.getNamedGlobal("__atto_mcp_descriptor_v1"))
+            throw std::runtime_error("reserved MCP descriptor symbol collision");
+        for (const auto& fn : source.functions)
+            if (fn.name == "__atto_mcp_descriptor_v1")
+                throw std::runtime_error("reserved MCP descriptor source name");
+        auto* bytes = llvm::ConstantDataArray::getString(
+            context, llvm::StringRef(mcp_descriptor_payload.data(),
+                                     mcp_descriptor_payload.size()), true);
+        auto* descriptor = new llvm::GlobalVariable(
+            module, bytes->getType(), true, llvm::GlobalValue::ExternalLinkage,
+            bytes, "__atto_mcp_descriptor_v1");
+        descriptor->setSection(".atto.mcp.v1");
+        descriptor->setAlignment(llvm::Align(1));
+        // llvm.used survives --gc-sections, unlike llvm.compiler.used.
+        auto* ptr = llvm::Type::getInt8PtrTy(context);
+        auto* pointer = llvm::ConstantExpr::getPointerCast(descriptor, ptr);
+        auto* used = llvm::ConstantArray::get(
+            llvm::ArrayType::get(ptr, 1), {pointer});
+        auto* keep = new llvm::GlobalVariable(
+            module, used->getType(), false, llvm::GlobalValue::AppendingLinkage,
+            used, "llvm.used");
+        keep->setSection("llvm.metadata");
     }
 
     std::string diagnostics;
