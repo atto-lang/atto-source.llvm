@@ -32,3 +32,28 @@ The generated payload contains a deterministic 16-digit `module_id` derived from
 ## Fail-closed compiler admission for metadata-only mode
 
 The `--mcp-descriptors` metadata-only path now requires the fully verified LLVM IR lowering of the loaded native AST to succeed **before** it can write a descriptor manifest to stdout. The reserved LLVM native `abort` symbol is a regression: source parsing and metadata naming must not allow a manifest for a program that the backend rejects. The opt-in `--mcp-embed-descriptors` branch already runs full backend lowering before returning generated IR. The negative fixture requires both descriptor modes and default compilation to fail without producing output. This changes compiler admission, not guest/runtime execution evidence.
+
+
+## Exact-head compiler-backed AOT receipt (execution required)
+
+The standalone source-free linker canary cannot establish compiled guest parity.
+The dedicated workflow now calls `tests/test_mcp_m1_native_aot_embed.py`
+with `--report build-mcp-m1/mcp-m1-aot-receipt.json` and passes the trusted
+pull-request head SHA through `EXPECTED_HEAD`. The test fails closed if the
+compiler, Clang, objcopy, readelf, Git source identity, or any native fixture
+is unavailable. A stale receipt is removed before running.
+
+The test executes four linked native guests: `.atto` and `.ores` compiled
+at both O0 and O2. Each must return 42. It inspects the allocated, nonwritable,
+nonexecutable descriptor section, globally visible descriptor symbol, retained
+descriptor byte-for-byte equality with a separate invocation of
+`--mcp-descriptors`, consistent manifest and ABI metadata, and omission in
+default-off binaries. It also runs negative admission fixtures.
+
+**Only after all checks pass**, it writes an evidence receipt containing:
+the exact Git commit and tree, compiler SHA-256, the four executable SHA-256
+digests, descriptor and canonical-metadata SHA-256 digests, native exit statuses,
+optimization levels, and the evidence limitation that a live MCP server was
+not tested. The pinned source-org artifact-upload action rejects missing
+receipts. A queued job, zero-step Actions failure, or source-free host test
+is not compiler-backed guest evidence, even if a workflow was triggered.
