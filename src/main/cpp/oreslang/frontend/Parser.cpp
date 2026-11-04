@@ -4760,6 +4760,12 @@ private:
             }
         }
         for (const auto& fn : program.functions) {
+            // Guest symbols must never shadow the native TaskLocal slot ABI.
+            // Otherwise the compiler's call declaration could alias a source
+            // function, silently bypassing checked scheduler ownership.
+            if (fn.name.rfind("oreslang_source_task_local_", 0) == 0)
+                throw std::runtime_error(
+                    "source function name collides with reserved TaskLocal runtime ABI");
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) params.insert(param.name);
             std::unordered_set<std::string> live_actors;
