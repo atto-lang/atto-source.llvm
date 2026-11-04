@@ -4283,6 +4283,15 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 25)
     endforeach()
 
+    if(UNIX)
+        add_test(NAME native_macro_imported_filesystem_security
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_imported_macro_filesystem_security.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>")
+        set_tests_properties(native_macro_imported_filesystem_security
+            PROPERTIES TIMEOUT 90)
+    endif()
+
     # Exercise the actual compiler executable without adding a Python test
     # dependency. Rejection must exit 1, carry the dedicated diagnostic, and
     # emit no stdout/partial LLVM IR.
