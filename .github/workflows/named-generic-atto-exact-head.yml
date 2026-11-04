@@ -97,7 +97,7 @@ jobs:
             '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
             '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined'
           cmake --build build-sanitized --target oreslang-llvmc --parallel 2
-      - name: Execute named scalar source admission under ASan and UBSan
+      - name: Execute named scalar and constructor admission under ASan and UBSan
         shell: bash
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
@@ -105,5 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build-sanitized \
-            -R '^native_atto_named_generic_value_source_execution$' \
+            -R '^(native_atto_named_generic_value_source_execution|native_atto_named_constructor_source_execution) \
+            --output-on-failure --no-tests=error --timeout 240
+ \
             --output-on-failure --no-tests=error --timeout 240
