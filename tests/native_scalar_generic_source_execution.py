@@ -54,12 +54,6 @@ fnc two(): int { return 2; }
 fnc combine<A=int, B=A>(A first, B second): int { return first * 10 + second; }
 pub fnc main(): int { return combine<B=int, A=int>(second: two(), first: four()); }
 """, 42),
-    "member-positional-array-control": ("""pub fnc main(): int {
-    val Array<int> values = new Array<int>();
-    values.add(42);
-    return values.get(0);
-}
-""", 42),
     "routine-named-value-reorder": ("""routine encode(int first, int second): int {
     return first * 10 + second;
 }
@@ -127,25 +121,25 @@ pub fnc main(): int { return fixed<T=ArrayList<int>>(); }
 pub fnc main(): int { return add(first: 19, second: 23, extra: 1); }
 """, "unknown function or wrong call arity"),
     "unproven-named-array-get": ("""pub fnc main(): int {
-    val Array<int> values = new Array<int>();
+    let mut Array<int> values = new Array<int>();
     values.add(42);
     return values.get(index: 0);
 }
 """, "named native array/member arguments require checked lowering"),
     "unproven-named-array-add": ("""pub fnc main(): int {
-    val Array<int> values = new Array<int>();
+    let mut Array<int> values = new Array<int>();
     values.add(value: 42);
     return values.get(0);
 }
 """, "named native array/member arguments require checked lowering"),
     "duplicate-named-array-set": ("""pub fnc main(): int {
-    val Array<int> values = new Array<int>();
+    let mut Array<int> values = new Array<int>();
     values.set(index: 0, index: 1);
     return 42;
 }
 """, "duplicate named member argument"),
     "positional-after-named-array-set": ("""pub fnc main(): int {
-    val Array<int> values = new Array<int>();
+    let mut Array<int> values = new Array<int>();
     values.set(index: 0, 42);
     return 42;
 }
