@@ -672,6 +672,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (source.actors.size() > 1)
             throw std::runtime_error("wasm32 actor guest supports one actor per instance");
         for (const auto& actor : source.actors) {
+            if (actor.sealed_scalar_state)
+                throw std::runtime_error(
+                    "wasm32 sealed critical actor state requires separate turn/heap lowering");
             if (actor.fields.empty() || actor.fields.size() > 16)
                 throw std::runtime_error("wasm32 actor guest requires 1..16 scalar fields");
             if (actor.on_message.parameters.size() != 1 || !actor.on_message.result ||
@@ -996,7 +999,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 llvm::Function::ExternalLinkage, prefix + "init", module));
             actorHandlers.emplace(actor.name, llvm::Function::Create(
                 llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
-                llvm::Function::ExternalLinkage, prefix + "on_message", module));
+                llvm::Function::ExternalLinkage,
+                prefix + (actor.sealed_scalar_state ? "handle_state" : "on_message"),
+                module));
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
