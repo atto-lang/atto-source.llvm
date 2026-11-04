@@ -6,6 +6,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'tests/native_scalar_generic_source_execution.py'
+      - 'tests/native_int_array_source_execution.py'
       - 'CMakeLists.txt'
       - '.github/workflows/named-generic-atto-exact-head.yml'
   workflow_dispatch:
