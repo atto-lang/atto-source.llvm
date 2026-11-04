@@ -135,6 +135,31 @@ def main(compiler):
         )
         assert not rejected.stdout, (options, rejected.stdout)
 
+    # A self-recursive real source must not be reported as effect-free.
+    # The native compiler may reject recursion during admission (exit 1)
+    # or admit it for an inconclusive analysis (exit 2); neither is a PASS.
+    recursive = run(
+        compiler,
+        "fnc recurse(): int { return recurse(); }\n"
+        "pub fnc main(): int { return recurse(); }\n",
+        flags=("--analyze",),
+    )
+    assert recursive.returncode != 0, (
+        recursive.returncode, recursive.stdout, recursive.stderr
+    )
+    assert "status=known" not in recursive.stdout
+
+    # An unresolved target is not a trusted typed-effect summary.
+    unresolved = run(
+        compiler,
+        "pub fnc main(): int { return undefined_helper(); }\n",
+        flags=("--analyze",),
+    )
+    assert unresolved.returncode != 0, (
+        unresolved.returncode, unresolved.stdout, unresolved.stderr
+    )
+    assert "status=known" not in unresolved.stdout
+
     # Malformed source cannot be reported as admitted or effect-free.
     malformed = run(compiler, "pub fnc main(): int { return ; }\n",
                     flags=("--analyze",))
