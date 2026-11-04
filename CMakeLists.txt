@@ -58,6 +58,20 @@ if(BUILD_TESTING)
     add_test(NAME native_scoped_file_host_boundary COMMAND oreslang-native-scoped-file-test)
     set_tests_properties(native_scoped_file_host_boundary PROPERTIES TIMEOUT 15)
 
+    # 45 real C++ HOST authorization decisions; no guest lowering or runtime report.
+    add_executable(oreslang-native-scoped-policy-oracle
+        contracts/v1/native_scoped_policy_oracle.cpp)
+    target_include_directories(oreslang-native-scoped-policy-oracle PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1")
+    target_compile_options(oreslang-native-scoped-policy-oracle PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_scoped_host_authorization_45
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/verify_native_policy_vectors.py"
+            --binary $<TARGET_FILE:oreslang-native-scoped-policy-oracle>)
+    set_tests_properties(native_scoped_host_authorization_45 PROPERTIES TIMEOUT 120)
+
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)

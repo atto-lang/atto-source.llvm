@@ -129,6 +129,17 @@ escape and every unmediated host-I/O path remain outside this adapter's
 security claim. A genuine compiler/runtime guest adapter must be wired
 and executed before a 52-case guest report can be certified.
 
+## Canonical host-policy authorization coverage (not guest parity)
+
+The native_scoped_policy_oracle.cpp executable evaluates the actual compiled
+C++ ScopedPolicy against the 45 canonical authorization cases, and the
+SHA-256-pinned verify_native_policy_vectors.py script checks each exact
+decision without shell evaluation. The remaining seven serialization
+cases are explicitly NOT_EXECUTED by this oracle; no runtime-report JSON
+or executed-guest certification is generated. Passing this CTest proves
+only C++ host-policy decisions, not real guest operations, native executable
+permission manifests, flags-2-env integration or syscall containment.
+
 ## Required negative gates before release
 
 - Guest without explicit grant cannot read/write host files, connect to network, read environment, spawn child processes, access system information, load native libraries, or load external code, including via alternative host APIs.
