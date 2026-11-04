@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Real LLVM compiler -> LLVM IR -> Clang O0/O2 -> native OS-exit test harness.
+# These are guest executions for the portable AttoLang scalar subset, NOT
+# TestCase/RunSummary/ORES_TEST runtime parity with the Java standard library.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+corpus="$root/tests/atto-native-harness"
+manifest="${ATTO_NATIVE_PARITY_MANIFEST:-$corpus/cases.tsv}"
+negative_manifest="${ATTO_NATIVE_NEGATIVE_MANIFEST:-$corpus/negative.tsv}"
+compiler="${ORESLANG_LLVMC:-$root/build/oreslang-llvmc}"
+clang="${CLANG:-clang}"
+mode="${1:---run}"
+
+die() { printf 'FAIL AttoLang LLVM native guest parity: %s\n' "$*" >&2; exit 1; }
+[[ "$mode" == --run || "$mode" == --inventory-only ]] ||
+  die 'expected --run or --inventory-only'
+[[ -f "$manifest" && ! -L "$manifest" && -f "$negative_manifest" && ! -L "$negative_manifest" ]] ||
+  die 'missing or symlinked trusted test manifests'
+[[ "$manifest" != "$negative_manifest" ]] || die 'manifests alias each other'
+declare -A seen=()
+declare -a positive_ids=() positive_paths=() expected_exits=()
+declare -a negative_ids=() negative_paths=() diagnostic_needles=()
+while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
+  [[ "$id" == \#* || -z "$id" ]] && continue
+  [[ -z "${extra:-}" && "$id" =~ ^[a-z][a-z0-9-]*$ &&
+     "$path" =~ ^positive/[a-z0-9-]+\.atto$ &&
+     "$expected" =~ ^(0|[1-9][0-9]{0,2})$ ]] ||
+    die "invalid positive manifest entry: $id"
+  (( 10#$expected <= 255 )) || die "exit status exceeds OS byte: $id"
+  [[ -z "${seen["$id"]+yes}" ]] || die "duplicate test identity $id"
+  seen["$id"]=1
+  [[ -f "$corpus/$path" && ! -L "$corpus/$path" ]] ||
+    die "missing or symlinked .atto source: $id"
+  positive_ids+=("$id"); positive_paths+=("$path"); expected_exits+=("$expected")
+done < "$manifest"
+[[ "${#positive_ids[@]}" -eq 16 ]] || die "expected 16 admitted native scalar cases"
+
+while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
+  [[ "$id" == \#* || -z "$id" ]] && continue
+  [[ -z "${extra:-}" && "$id" =~ ^[a-z][a-z0-9-]*$ &&
+     "$path" =~ ^negative/[a-z0-9-]+\.atto$ && -n "$needle" ]] ||
+    die "invalid negative manifest entry: $id"
+  [[ -z "${seen["$id"]+yes}" ]] || die "duplicate negative identity $id"
+  seen["$id"]=1
+  [[ -f "$corpus/$path" && ! -L "$corpus/$path" ]] ||
+    die "missing or symlinked negative .atto source: $id"
+  negative_ids+=("$id"); negative_paths+=("$path"); diagnostic_needles+=("$needle")
+done < "$negative_manifest"
+[[ "${#negative_ids[@]}" -eq 3 ]] || die 'expected exactly three negative fixtures'
+[[ -f "$corpus/positive/module-helper.atto" &&
+   ! -L "$corpus/positive/module-helper.atto" ]] || die 'missing .atto module dependency'
+for path in "$manifest" "$negative_manifest" \
+    "$corpus/positive/module-helper.atto" \
+    "${positive_paths[@]/#/$corpus/}" "${negative_paths[@]/#/$corpus/}"; do
+  [[ -f "$path" && ! -L "$path" ]] || die "nonregular source: $path"
+done
+
+if [[ "$mode" == --inventory-only ]]; then
+  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=16 negative=3 (NO_COMPILER_EXECUTION)'
+  exit 0
+fi
+[[ -x "$compiler" && ! -L "$compiler" ]] || die "missing non-symlink executable compiler: $compiler"
+clang_exe="$(command -v "$clang")" || die "missing Clang"
+[[ -x "$clang_exe" ]] || die 'Clang is not executable'
+command -v timeout >/dev/null || die 'timeout required'
+command -v sha256sum >/dev/null || die 'sha256sum required'
+tmp="$(mktemp -d)"
+trap 'rm -rf -- "$tmp"' EXIT
+declare -A original_hash=()
+for path in "$manifest" "$negative_manifest" \
+    "$corpus/positive/module-helper.atto" \
+    "${positive_paths[@]/#/$corpus/}" "${negative_paths[@]/#/$corpus/}"; do
+  original_hash["$path"]="$(sha256sum "$path" | cut -d ' ' -f1)"
+done
+
+for idx in "${!positive_ids[@]}"; do
+  id="${positive_ids[$idx]}"; path="$corpus/${positive_paths[$idx]}"
+  expected="${expected_exits[$idx]}"
+  for level in 0 2; do
+    ir="$tmp/$id-O$level.ll"; exe="$tmp/$id-O$level.exe"
+    set +e
+    timeout 60s "$compiler" --target=host "$path" > "$ir" 2> "$tmp/compile.err"
+    compiled=$?
+    set -e
+    [[ "$compiled" -eq 0 && -s "$ir" ]] ||
+      { head -c 4096 "$tmp/compile.err" >&2; die "compiler did not produce admitted IR: $id O$level exit=$compiled"; }
+    grep -Eq 'define[[:space:]]+i32[[:space:]]+@main\(' "$ir" ||
+      die "compiler produced IR without a native main: $id O$level"
+    timeout 60s "$clang_exe" "-O$level" -x ir "$ir" -o "$exe" \
+      > "$tmp/clang.stdout" 2> "$tmp/clang.err" ||
+      { head -c 4096 "$tmp/clang.err" >&2; die "LLVM IR did not link: $id O$level"; }
+    [[ -f "$exe" && -x "$exe" && ! -L "$exe" ]] || die "native executable absent: $id O$level"
+    set +e
+    timeout 10s "$exe" > "$tmp/guest.stdout" 2> "$tmp/guest.stderr"
+    status=$?
+    set -e
+    [[ "$status" -eq "$expected" && "$status" -ne 124 && "$status" -ne 137 ]] ||
+      die "wrong native guest OS result: $id O$level expected=$expected got=$status"
+    [[ ! -s "$tmp/guest.stdout" && ! -s "$tmp/guest.stderr" ]] ||
+      die "unexpected guest stdout/stderr: $id O$level"
+    # This host-observed marker is NOT a guest-generated ORES_TEST receipt.
+    printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|%s|O%s|exit=%s|compiler=real|clang=real|guest=executed\n' \
+      "$id" "$level" "$expected"
+  done
+  cmp -s "$tmp/$id-O0.ll" "$tmp/$id-O2.ll" ||
+    die "compiler IR changed between optimization-mode invocations: $id"
+done
+
+# Fail-closed source admission: nonzero status alone cannot count as a
+# rejection if the compiler emitted any partial IR, or was killed by timeout.
+for idx in "${!negative_ids[@]}"; do
+  id="${negative_ids[$idx]}"; path="$corpus/${negative_paths[$idx]}"
+  ir="$tmp/negative-$id.ll"
+  set +e
+  timeout 30s "$compiler" --target=host "$path" > "$ir" 2> "$tmp/negative-$id.stderr"
+  status=$?
+  set -e
+  [[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 && ! -s "$ir" ]] ||
+    die "invalid negative admission result: $id status=$status"
+  grep -Fq "${diagnostic_needles[$idx]}" "$tmp/negative-$id.stderr" ||
+    die "unexpected native compiler rejection diagnostic: $id"
+  printf 'ATTO_LLVM_NEGATIVE_HOST_OBSERVED|%s|rejected=1|partial_ir=0\n' "$id"
+done
+
+# A canonical .atto importer cannot implicitly load a legacy-only .ores file.
+# The .ores file is temporary test input, not new canonical library source.
+mkdir "$tmp/no-downgrade"
+printf '%s\n' 'import module Legacy from "./legacy"; pub fnc main(): int { return Legacy.answer(); }' \
+  > "$tmp/no-downgrade/main.atto"
+printf '%s\n' 'define module Legacy as pub fnc answer(): int { return 42; } end' \
+  > "$tmp/no-downgrade/legacy.ores"
+set +e
+timeout 30s "$compiler" --target=host "$tmp/no-downgrade/main.atto" \
+  > "$tmp/no-downgrade.ll" 2> "$tmp/no-downgrade.stderr"
+status=$?
+set -e
+[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 && ! -s "$tmp/no-downgrade.ll" ]] ||
+  die 'LLVM silently admitted an extensionless legacy-only dependency'
+grep -Fq 'cannot resolve native import' "$tmp/no-downgrade.stderr" ||
+  die 'missing stable canonical-legacy rejection reason'
+
+# A dangling canonical .atto symlink must not redirect to its legacy peer.
+mkdir "$tmp/dangling"
+printf '%s\n' 'import module Legacy from "./legacy"; pub fnc main(): int { return Legacy.answer(); }' \
+  > "$tmp/dangling/main.atto"
+printf '%s\n' 'define module Legacy as pub fnc answer(): int { return 42; } end' \
+  > "$tmp/dangling/legacy.ores"
+ln -s absent-atto "$tmp/dangling/legacy.atto"
+set +e
+timeout 30s "$compiler" --target=host "$tmp/dangling/main.atto" \
+  > "$tmp/dangling.ll" 2> "$tmp/dangling.stderr"
+status=$?
+set -e
+[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 && ! -s "$tmp/dangling.ll" ]] ||
+  die 'LLVM accepted dangling canonical .atto symlink or downgraded to .ores'
+
+for path in "${!original_hash[@]}"; do
+  [[ "$(sha256sum "$path" | cut -d ' ' -f1)" == "${original_hash["$path"]}" ]] ||
+    die "guest source/manifest mutated during compiler execution: $path"
+done
+
+printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=16|optimizations=2|negative=5|guest_receipt_protocol=UNSUPPORTED\n'
