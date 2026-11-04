@@ -1,13 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Executes real native C++ host slab code, not compiled guest actor code.
+# Executes actual native C++ host slab tests, NOT compiled guest actor code.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-g++}"
+MODE="${SANITIZER_MODE:-address-undefined}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+case "$MODE" in
+  address-undefined)
+    sanitizers=(-fsanitize=address,undefined)
+    ;;
+  thread)
+    sanitizers=(-fsanitize=thread)
+    ;;
+  *)
+    echo "unsupported native sanitizer mode: $MODE" >&2
+    exit 2
+    ;;
+esac
 "$CXX" -std=c++20 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
-  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  "${sanitizers[@]}" -fno-omit-frame-pointer \
   -I"$ROOT/src/main/cpp" "$ROOT/tests/frozen_tcp_slab_test.cpp" \
   -o "$WORK/frozen_tcp_slab_test"
-ASAN_OPTIONS=detect_leaks=1 "$WORK/frozen_tcp_slab_test"
-printf '%s\n' 'NATIVE_FROZEN_TCP_SLAB_HOST_SANITIZERS_PASS'
+if [[ "$MODE" == "thread" ]]; then
+  TSAN_OPTIONS="halt_on_error=1" "$WORK/frozen_tcp_slab_test"
+else
+  ASAN_OPTIONS="detect_leaks=1" "$WORK/frozen_tcp_slab_test"
+fi
+printf 'NATIVE_FROZEN_TCP_SLAB_%s_PASS\n' "$MODE"
