@@ -116,6 +116,7 @@ inline ExceptionalEffectObservations observe_exceptional_effects(const Program& 
         // A source `using` declaration is a stated upper bound, not a
         // compiler-verified source of behavior or a proof of no effects.
         const bool unproved = direct.unsupported_runtime ||
+            direct.unproved_checked_arithmetic ||
             !direct.bounded_calls || !direct.bounded_cleanup ||
             !fn.method_owner.empty() || !fn.generic_parameters.empty() ||
             (fn.has_declared_effects &&
