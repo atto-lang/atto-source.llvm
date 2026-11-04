@@ -149,3 +149,48 @@ verify the **exact pull-request head** and current policy, source, test and
 scheduler Git blob hashes. Zero-step CI failures are runner admission failures,
 not an AttoLang pass or failing unit-test result. No private-source export to
 another organization occurred; the authorization hold remains in force.
+
+
+## 2026-11-04 follow-up: composite alias admission and RequestLocal erase
+
+### Corrected replacement regression
+
+The authored RequestLocal destructor regression had a false premise: defining a
+custom destructor suppresses C++'s implicit move constructor. The original
+`ReentrantRequestDrop` probe was **copied**, not moved, during `set(T)`.
+That caused the captured `on_drop` callback to run during the first insertion
+rather than exactly once on actual cell replacement. The test now explicitly
+moves `std::function` callbacks and disarms moved-from temporaries. A
+standalone C++17 reproduction of old vs fixed semantics ran with GCC and
+Clang; old=2 premature callbacks, fixed=1 owner callback.
+
+### RequestLocal quota reclamation
+
+`RequestContextLocalV1::erase<T>` now removes one key and returns a quota
+slot, returning false for absent, closed, or cancelled requests. The
+`shared_ptr` is retired **after** unlocking, so value destructors may
+reenter the same request safely. Added positive 32-slot quota reuse, duplicate
+erase denial, cancelled/closed erase denial, deterministic reentrant
+destructor -> set replacement, and concurrent erase/set/cancel tests.
+
+### Deepened host-only alias restrictions
+
+`LocalValueAdmissionV1.hpp` now rejects direct `std::shared_ptr`,
+`std::weak_ptr`, `std::function`, and `std::any`. Its recursive STL
+container specializations reject hidden pointers or borrowed views inside
+`optional`, `pair`, `tuple`, `array`, `vector`, `deque`, `list`,
+`forward_list`, `set`, `unordered_set`, `map`, `unordered_map` and
+`variant`; in C++20, every `std::ranges::view` is rejected, including
+reference views. This is intentionally conservative: `rt share` must use a
+dedicated, governed host-guest capability, not an opaque C++ smart pointer.
+C++ cannot inspect arbitrary user-defined struct fields, so **this is still
+not a substitute for AttoLang compiler-level recursive ownership/Send/Copy
+checks**; guest exposure remains denied.
+
+The **exact checked-in policy blob**
+`7b79138951aa878fe2ee43cfcef21277cb68b256` matches the locally compiled
+header and passed compile-time positive/negative assertion suites with GCC
+C++17/C++20, Clang C++17/C++20 and Clang C++20 ASan/UBSan.
+Full RequestLocal and ActorLocal/TaskLocal/ThreadLocal repository tests have
+only been **authored**, not executed on the source-org CI runner; do not
+promote model/isolated header evidence to full guest parity.
