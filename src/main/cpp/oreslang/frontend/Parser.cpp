@@ -1301,8 +1301,13 @@ private:
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
         require("as");
         const bool braced = accept("{");
-        if (token_.text == "state") {
-            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
+        // One deliberately bounded sealed-state slice: 1..16 native i64
+        // fields and one non-suspending critical handle_state(int): int.
+        // The actor turn itself owns the exclusive heap admission; no
+        // general object state, reentrant lock or scheduler suspension.
+        if (accept("state")) {
+            actor.sealed_scalar_state = true;
+            require("{");
         }
         std::unordered_set<std::string> names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
@@ -1320,6 +1325,7 @@ private:
             require(";");
             actor.fields.push_back(std::move(field));
         }
+        if (actor.sealed_scalar_state) require("}");
         if (token_.text == "final") {
             fail("native final actor fields require typed field initialization and ownership lowering");
         }
@@ -1333,6 +1339,15 @@ private:
         // arbitrary methods, static fnc members or suspension frames.
         if (token_.text == "suspend" || token_.text == "suspends") {
             fail("native suspends actor method requires continuation lowering");
+        }
+        if (actor.sealed_scalar_state) {
+            if (!accept("critical"))
+                fail("native sealed actor state requires pub critical handle_state(int)");
+            if (token_.text == "suspend" || token_.text == "suspends" ||
+                    token_.text == "async")
+                fail("native critical actor state handler cannot suspend");
+        } else if (token_.text == "critical") {
+            fail("legacy native actor on_message cannot claim critical state ABI");
         }
         // Actor method modifiers have their own admission boundary. Do not
         // allow the fixed-int actor subset to parse these as method names or
@@ -1349,7 +1364,12 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         method.name = identifier();
-        if (method.name != "on_message") fail("native actor supports only on_message");
+        if (actor.sealed_scalar_state) {
+            if (method.name != "handle_state")
+                fail("native sealed actor state supports only critical handle_state");
+        } else if (method.name != "on_message") {
+            fail("native actor supports only on_message");
+        }
         require("(");
         if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
