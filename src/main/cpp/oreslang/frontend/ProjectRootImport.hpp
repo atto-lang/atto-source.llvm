@@ -53,7 +53,7 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         throw std::runtime_error("native package manifest exceeds 64 KiB");
     // NUL cannot occur in a TOML text manifest. Different consumers must
     // never disagree because one treats a truncated C-string as the file.
-    if (manifest_bytes.find('\\0') != std::string::npos)
+    if (manifest_bytes.find('\0') != std::string::npos)
         throw std::runtime_error("native package manifest contains NUL byte");
     if (manifest_bytes.find("\"\"\"") != std::string::npos ||
             manifest_bytes.find("'''") != std::string::npos)
