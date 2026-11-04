@@ -71,6 +71,10 @@ CASES.update({
     "exported_recursive_helper_denied": (
         "pub fnc descend(int n): int { return descend(n - 1); }\n"
         "pub fnc main(): int { return descend(100000); }\n", None),
+    "recursive_large_abi_frame_denied": (
+        "fnc wide(int a,int b,int c,int d,int e,int f,int g,int h,int i): int { "
+        "return wide(a,b,c,d,e,f,g,h,i); }\n"
+        "pub fnc main(): int { return wide(1,2,3,4,5,6,7,8,9); }\n", None),
 })
 
 def run(argv, timeout=20, low_stack=False):
