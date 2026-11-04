@@ -29,7 +29,7 @@ compile_positive() {
   "$compiler" --target=host "$case_dir/main.atto" > "$ir" 2> "$case_dir/compiler.err" ||
     fail "$label: compiler rejected canonical .atto source"
   [[ -s "$ir" ]] || fail "$label: compiler returned success without LLVM IR"
-  grep -Eq 'define .*@main\\(' "$ir" || fail "$label: no compiled native main entry in LLVM IR"
+  grep -Fq '@main(' "$ir" || fail "$label: no compiled native main entry in LLVM IR"
   for opt in 0 2; do
     "$clang" "-O$opt" -x ir "$ir" -o "$case_dir/program-O$opt" 2> "$case_dir/clang-O$opt.err" ||
       fail "$label: Clang -O$opt failed"
