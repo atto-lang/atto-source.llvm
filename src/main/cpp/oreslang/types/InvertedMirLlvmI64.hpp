@@ -89,6 +89,14 @@ public:
         if (module.instructions().empty() ||
                 module.instructions().back().kind != OpKind::Close)
             throw std::logic_error("MIR LLVM requires terminal owner close");
+        // A detached snapshot is a value-producing operation in the native
+        // reference. This restricted i64-pair emitter has no snapshot result
+        // representation. Silently loading and discarding it would compile
+        // an incorrect guest program; reject before emitting any LLVM IR.
+        for (const auto& op : module.instructions()) {
+            if (op.kind == OpKind::Snapshot)
+                throw std::logic_error("MIR LLVM snapshot value lowering not implemented");
+        }
         code_ = "; typed MIR, experimental local i64 pair LLVM IR; no external row handles\n";
         code_ += "declare void @llvm.trap()\n";
         code_ += "define i32 @main() {\nentry:\n";
@@ -129,12 +137,8 @@ public:
                          slot_ptr(op.column ? "%col1" : "%col0", idx));
                     break;
                 }
-                case OpKind::Snapshot: {
-                    const auto idx = index_guard(op.index);
-                    (void)load(slot_ptr("%col0", idx));
-                    (void)load(slot_ptr("%col1", idx));
-                    break;
-                }
+                case OpKind::Snapshot:
+                    throw std::logic_error("MIR LLVM snapshot value lowering not implemented");
                 case OpKind::EraseSwap: {
                     const auto idx = index_guard(op.index);
                     const auto length = load("%length");
