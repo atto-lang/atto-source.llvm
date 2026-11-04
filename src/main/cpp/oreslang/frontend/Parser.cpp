@@ -674,6 +674,7 @@ public:
                     fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: imported macro lacks descriptor-bound producer authority");
                 if (!module_names_.insert(alias).second)
                     fail("NATIVE_IMPORTED_MACRO_DUPLICATE: imported alias conflicts with module binding");
+                program.compile_time_macro_imports.push_back(*matching);
                 for (const auto& signature : matching->exports) {
                     if (macros_.size() >= kMaxNativeMacroDefinitions)
                         fail("NATIVE_MACRO_BUDGET: aggregate imported macro declarations exceeded");
