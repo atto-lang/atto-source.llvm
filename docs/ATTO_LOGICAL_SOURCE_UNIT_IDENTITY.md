@@ -49,3 +49,35 @@ are never accepted as public logical IDs.
    policy; reject unsupported compiler macro imports in the meantime.
 4. Harmonize .atto extensionless legacy fallback policy across Java,
    LLVM, Wasm, Cranelift and .NET before broad parity promotion.
+
+## Follow-up hardening (2026-11-04)
+
+- The first canonical or legacy package marker is now read (bounded 64 KiB,
+  UTF-8) and validated before granting logical-root ownership even when the
+  guest imports only `./relative` files. An invalid preferred canonical marker
+  fails closed; a valid legacy sibling cannot silently override it.
+- The real guest harness adds canonical relative-import cases for invalid,
+  oversized, and symlinked `.atto.pkg.toml` files. Rejection requires nonzero
+  exit and no emitted IR/object; the positive path still requires LLVM IR,
+  Clang O0/O2, and executable exit code 42.
+- The native guest CI gate now verifies the presence of all five required
+  registered CTest names before execution, to prevent a zero-selected-tests
+  false green.
+- Local Python harness syntax compilation succeeded; substituting `/bin/true`
+  for both compiler and linker causes the guest harness to fail as intended.
+  That is **harness-adversarial evidence only**, not guest compilation.
+- Source-owned Actions [run 41777567554](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41777567554)
+  reports `steps=null` for both admission and guest jobs. No source-owned
+  execution receipt exists for the updated compiler code.
+- The private alternate repository `gha-indie-worker/gha-indie-worker-docs`
+  demonstrated a stepful **source-free** GCC/Clang probe
+  [run 41777357635](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/41777357635).
+  This is not source transfer authorization or proof of remaining minutes.
+
+### Private-source transfer hold
+
+Java security issue #962 and conformance issue #315 require independent
+approval of the immutable source head/tree, exact destination numeric repo ID,
+protected-source policy, workflow and retention, plus unresolved exposure-gate
+closure **before** cross-org transfer. No private LLVM source has been mirrored;
+this draft must stay source-owned until approval is independently recorded.
