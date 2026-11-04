@@ -118,6 +118,25 @@ if(NOT count EQUAL 50)
   message(FATAL_ERROR "native scalar50 suite must contain fifty source programs")
 endif()
 if(MODE STREQUAL "native")
+  # Pin the exact Git revision and the real compiler, Clang and corpus bytes
+  # through completion; a mid-run replacement cannot inherit this receipt.
+  execute_process(COMMAND git -C "${SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE after_source_head OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE after_head_status TIMEOUT 5)
+  execute_process(COMMAND git -C "${SOURCE_DIR}" rev-parse "HEAD^{tree}"
+    OUTPUT_VARIABLE after_source_tree OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE after_tree_status TIMEOUT 5)
+  file(SHA256 "${CORPUS}" after_corpus_sha256)
+  file(SHA256 "${COMPILER}" after_compiler_sha256)
+  file(SHA256 "${CLANG}" after_clang_sha256)
+  if(NOT after_head_status STREQUAL "0" OR NOT after_tree_status STREQUAL "0" OR
+     NOT after_source_head STREQUAL source_head OR
+     NOT after_source_tree STREQUAL source_tree OR
+     NOT after_corpus_sha256 STREQUAL corpus_sha256 OR
+     NOT after_compiler_sha256 STREQUAL compiler_sha256 OR
+     NOT after_clang_sha256 STREQUAL clang_sha256)
+    message(FATAL_ERROR "scalar50 source revision or compiler inputs changed during native execution")
+  endif()
   if(NOT DEFINED REPORT OR REPORT STREQUAL "")
     set(REPORT "${WORKDIR}/llvm-scalar50-native-receipt.json")
   endif()
