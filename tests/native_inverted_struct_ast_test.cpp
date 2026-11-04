@@ -117,6 +117,75 @@ fnc main(): int {
           ir.find("call void @llvm.trap()") != std::string::npos,
           "production verified MIR failed to emit checked native IR");
 
+    // A named source snapshot must bind to a detached nominal row value,
+    // survive later writes and be selectable by its own source identifier.
+    auto snapshots = parse_program(R"atto(
+define inverted struct Position as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<Position>.with_capacity(2);
+    rows.push(42, 7);
+    let saved = rows.snapshot(0);
+    rows.set(0, x, 99);
+    rows.erase_swap(0);
+    return saved.x;
+}
+)atto");
+    check(snapshots.inverted_main.has_value(), "snapshot AST source missing");
+    check(snapshots.inverted_main->operations.size() == 5,
+          "production snapshot AST action order corrupted");
+    check(snapshots.inverted_main->operations[1].snapshot_name == "saved" &&
+          snapshots.inverted_main->operations[1].kind ==
+              InvertedSourceOperation::Kind::Snapshot,
+          "snapshot binding identity not recorded");
+    check(snapshots.inverted_main->operations[4].snapshot_name == "saved" &&
+          snapshots.inverted_main->operations[4].kind ==
+              InvertedSourceOperation::Kind::ReturnSnapshotRead,
+          "snapshot return not distinguished from live owner read");
+    const auto snapshot_mir = dop::mir::verify_production_inverted_i64(snapshots);
+    check(snapshot_mir.mir.instructions()[2].kind == dop::hir::OpKind::Snapshot &&
+          snapshot_mir.mir.instructions()[5].kind ==
+              dop::hir::OpKind::ReadSnapshotField,
+          "source snapshot failed independent MIR lowering");
+    const auto snapshot_ir = dop::mir::emit_native_i64_pair_ir(
+        snapshot_mir.mir, snapshot_mir.operands);
+    check(snapshot_ir.find("store i64 99, ptr") != std::string::npos &&
+          snapshot_ir.find("store volatile i1 false, ptr %alive") != std::string::npos,
+          "source snapshot lost mutation or owner close");
+
+    rejects([] {
+        (void)parse_program(R"atto(
+define inverted struct P as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(42, 7);
+    return unknown.x;
+}
+)atto");
+    }, "return requires declared snapshot");
+    rejects([] {
+        (void)parse_program(R"atto(
+define inverted struct P as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(42, 7);
+    let saved = rows.snapshot(0);
+    let saved = rows.snapshot(0);
+    return saved.x;
+}
+)atto");
+    }, "snapshot binding must be distinct");
+    rejects([] {
+        (void)parse_program(R"atto(
+define inverted struct P as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(42, 7);
+    let saved = other.snapshot(0);
+    return saved.x;
+}
+)atto");
+    }, "snapshot must target the local owner");
+
     rejects([] {
         (void)parse_program(R"ores(
 define inverted struct P as let x: int; id: int; end
