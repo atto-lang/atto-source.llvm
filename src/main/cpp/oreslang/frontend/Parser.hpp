@@ -481,6 +481,9 @@ struct TypeConstraintDescriptor {
 
 struct Program {
     std::vector<ModuleImport> imports;
+    // Compiler-only source admission/provenance: never lowered as guest data.
+    // Each binding includes the trusted producer logical ID and source SHA-256.
+    std::vector<NativeMacroBinding> compile_time_macro_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
     std::string namespace_name;
