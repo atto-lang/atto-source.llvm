@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$EXPECTED_HEAD"
-          printf 'SOURCE_FREE_RUNNER_ADMITTED_HEAD=%s\\n' "$EXPECTED_HEAD"
+          printf 'SOURCE_FREE_RUNNER_ADMITTED_HEAD=%s\n' "$EXPECTED_HEAD"
           echo "SOURCE_FREE_CANARY_ONLY_NOT_COMPILER_OR_GUEST"
   compiler-backed-f64:
     name: Native LLVM f64 source-to-IR-to-executable
