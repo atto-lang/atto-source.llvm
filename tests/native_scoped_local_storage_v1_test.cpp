@@ -103,6 +103,58 @@ void close_racing_writer() {
     }
 }
 
+void byte_budget_replacement_removal_and_utf8() {
+    ActorLocalStoreV1 a(id(55)), b(id(56));
+    ActorLocalKeyV1<std::string> key;
+    ActorLocalKeyV1<std::string> another;
+    assert(a.set(key, id(55), std::string(8192, 'x')));
+    assert(a.used_bytes() == 8192);
+    assert(!a.set(key, id(55), std::string(8193, 'z')));
+    assert(a.get_copy(key, id(55)) == std::string(8192, 'x'));
+    assert(!a.set(another, id(55), std::string("over")));
+    // Each actor has its own quota; size exhaustion is not process-global.
+    assert(b.set(key, id(56), std::string(8192, 'b')));
+    assert(a.set(key, id(55), std::string("abc")));
+    assert(a.used_bytes() == 3);
+    assert(a.set(another, id(55), std::string("\xC3\xA9")));
+    assert(a.used_bytes() == 5); // UTF-8 bytes, not character count
+    assert(!a.remove(key, id(56)));
+    assert(a.remove(key, id(55)));
+    assert(!a.remove(key, id(55)));
+    assert(a.used_bytes() == 2);
+    assert(a.remove(another, id(55)));
+    assert(a.used_bytes() == 0);
+    a.close();
+    assert(!a.set(key, id(55), std::string("late")));
+    assert(a.used_bytes() == 0);
+}
+
+void physical_thread_byte_budget_and_scrub() {
+    ThreadLocalKeyV1<std::string> key;
+    ThreadLocalKeyV1<int> counter;
+    PhysicalThreadLocalStoreV1::clear_current_thread();
+    assert(PhysicalThreadLocalStoreV1::set(key, std::string(8192, 'a')));
+    assert(!PhysicalThreadLocalStoreV1::set(counter, 4));
+    assert(!PhysicalThreadLocalStoreV1::set(key, std::string(8193, 'z')));
+    assert(PhysicalThreadLocalStoreV1::get_copy(key) == std::string(8192, 'a'));
+    assert(PhysicalThreadLocalStoreV1::set(key, std::string("small")));
+    assert(PhysicalThreadLocalStoreV1::set(counter, 4));
+    assert(PhysicalThreadLocalStoreV1::used_bytes() == 9);
+    assert(PhysicalThreadLocalStoreV1::remove(counter));
+    assert(!PhysicalThreadLocalStoreV1::remove(counter));
+    assert(PhysicalThreadLocalStoreV1::used_bytes() == 5);
+    PhysicalThreadLocalStoreV1::clear_current_thread();
+    assert(PhysicalThreadLocalStoreV1::used_bytes() == 0);
+    assert(!PhysicalThreadLocalStoreV1::get_copy(key));
+}
+
+void disallowed_unknown_dynamic_payload_fails_closed() {
+    ActorLocalStoreV1 store(id(77));
+    ActorLocalKeyV1<std::vector<int>> dynamic;
+    assert(!store.set(dynamic, id(77), std::vector<int>{1, 2, 3}));
+    assert(store.used_bytes() == 0);
+}
+
 void invalid_identity_denied() {
     bool threw=false;
     try { ActorLocalStoreV1 invalid({}); }
@@ -117,6 +169,9 @@ int main() {
     physical_carrier_reuse_and_scrub();
     exhaustion_and_atomic_replacement();
     close_racing_writer();
+    byte_budget_replacement_removal_and_utf8();
+    physical_thread_byte_budget_and_scrub();
+    disallowed_unknown_dynamic_payload_fails_closed();
     invalid_identity_denied();
     std::puts("SCOPED_LOCAL_HOST_ONLY_PASS");
 }
