@@ -161,9 +161,14 @@ inline std::filesystem::path resolve_project_root_import(
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
     fs::path candidate = package_root / fs::path(std::string(suffix));
-    if (candidate.extension().empty()) candidate += ".ores";
-    if (candidate.extension() != ".ores")
-        throw std::runtime_error("native project-root imports require .ores source files");
+    // Match extensionless project-root imports to the importing unit,
+    // without a fallback search that might silently select a different
+    // source when both legacy and AttoLang files exist.
+    if (candidate.extension().empty())
+        candidate += source.extension() == ".atto" ? ".atto" : ".ores";
+    if (candidate.extension() != ".atto" && candidate.extension() != ".ores")
+        throw std::runtime_error(
+            "native project-root imports require .atto or .ores source files");
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)
