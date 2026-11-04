@@ -292,6 +292,10 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
         [&](const std::string& key) -> Result {
             if (const auto found = resolved.find(key); found != resolved.end())
                 return found->second;
+            // Refuse an unbounded DFS on attacker-controlled native call graphs.
+            // A deep acyclic call chain is still unknown, not a proven effect-free graph.
+            if (active.size() >= 64)
+                return {{}, true};
             if (!active.insert(key).second)
                 return {{}, true}; // cycle: never infer pure from recursion
             const auto row = rows.find(key);
