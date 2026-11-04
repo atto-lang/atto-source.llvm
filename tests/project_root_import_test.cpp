@@ -180,6 +180,15 @@ int main() {
         if (!saw_canonical || target != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("manifest canonical read binding mismatch");
     }
+    {
+        const auto dir = temp / "in-root-source-alias";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"real.atto", "");
+        fs::create_symlink(dir/"real.atto", dir/"alias.atto");
+        must_fail("in-root project-root source alias", "symlink source alias",
+                  [&] { (void)resolve(dir/"main.atto", "+/alias.atto"); });
+    }
 #endif
     {
         const auto dir = temp / "modern-source";
