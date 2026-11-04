@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Option<bool> flag = Some(true ? true : false);
+  return flag.unwrap_or(false) ? 42 : 0;
+}

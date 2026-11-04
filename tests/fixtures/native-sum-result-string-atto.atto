@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Result<int,String> result = Err(true ? "failure" : "other");
+  return result.is_err() ? 42 : 0;
+}
