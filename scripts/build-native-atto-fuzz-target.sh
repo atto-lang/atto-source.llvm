@@ -32,7 +32,7 @@ adapter="$root/tests/native_atto_fuzz_stdin_adapter.c"
 # cannot hang the fuzz build indefinitely. GNU coreutils is required here
 # (the compiler-backed CTest is Linux-only); macOS may use gtimeout.
 limit="${ATTO_FUZZ_BUILD_TIMEOUT_SECONDS:-60}"
-[[ "$limit" =~ ^[1-9][0-9]?$ || "$limit" == 100 || "$limit" == 110 || "$limit" == 120 ]] ||
+[[ "$limit" =~ ^[1-9][0-9]{0,2}$ ]] ||
   { echo 'ATTO_FUZZ_BUILD_TIMEOUT_SECONDS must be an integer 1..120' >&2; exit 64; }
 limit_numeric=$((10#$limit))
 (( limit_numeric <= 120 )) ||
