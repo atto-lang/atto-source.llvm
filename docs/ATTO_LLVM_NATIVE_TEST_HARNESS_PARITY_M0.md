@@ -276,3 +276,42 @@ user-defined functions or closures, implement first-class callable
 `TestBody`, dynamic test lists or suite trees, arbitrary names with escape
 validation, cross-suite duplicate-name fencing, or Java-equivalent callbacks.
 The unqualified `ores.std/testing` import must continue failing closed.
+
+
+## Follow-up security audit: cross-case replay and alternate private runner (Nov 4, 2026)
+
+**Supersedes the older M0/M1/M2 counts above.** The current authored
+acceptance gate is **40 scalar programs × O0/O2 (80 native processes)** and
+**23 receipt guests × O0/O2 (46 native processes)**, totaling **126 required
+native guest executions**, plus **11 compiler-negative scenarios**. All remain
+`NOT_EXECUTED` on this head pending an admitted source-owning runner.
+
+An identity-replay hole was discovered in the bounded M1/M2 guest ledger:
+distinct objects with the same integer ID could be admitted through separate
+`run_one` calls. M1 `TestSuite.last_id` now tracks the highest admitted
+case ID; `record` atomically rejects ID replay or non-increasing order with
+`-4` for PASS/FAIL/SKIP/FILTER and preserves state on quota or invalid-data
+rejection. M1 `should_run` rejects replay/invalid/quota cases before caller
+evaluation. M2 rejects already admitted IDs before `invoke_scalar_body`,
+preflights two-case identities and visited flags before executing either body,
+and preserves fail-fast and poison-body non-execution.
+
+New canonical guests `m1-replay.atto`, `m2-replay.atto` and
+`m2-out-of-order.atto` prove the intended counters, no duplicate invocation,
+atomic rejection and corrected-order recovery. CI and receipt verifier
+require exact stdout, expected native exit code, no-GC IR audit and O0/O2
+parity. Compiler-owned M1/M2 source identity is checked byte-for-byte, and
+source-only guards assert replay checks occur before body dispatch.
+
+**Runner evidence:** original source-org LLVM Actions continues returning
+`steps=[]` / admission failure. A separate **private** destination
+`gha-indie-worker/gha-indie-worker-docs` completed a source-free native
+compiler probe with five executed steps, and a Clang/GCC/sanitizer probe with
+seven executed steps. These prove usable runner/toolchain admission at those
+specific commits, **not remaining billing balance or source compiler
+execution**. Private-source export remains **disabled** by the independently
+unapproved cross-org security hold in conformance PR #263. No source Git tree,
+blob, patch or credentials were copied to that alternate organization.
+A source-bearing mirror requires explicit destination-scoped independent
+security signoff, disposition of existing incidents, protected-main controls
+and source/tree identity, provenance, retention and cleanup review.
