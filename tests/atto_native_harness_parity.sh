@@ -17,7 +17,7 @@ die() { printf 'FAIL AttoLang LLVM native guest parity: %s\n' "$*" >&2; exit 1; 
 [[ -f "$manifest" && ! -L "$manifest" && -f "$negative_manifest" && ! -L "$negative_manifest" ]] ||
   die 'missing or symlinked trusted test manifests'
 [[ "$manifest" != "$negative_manifest" ]] || die 'manifests alias each other'
-declare -A seen=()
+declare -A seen=() seen_sources=()
 declare -a positive_ids=() positive_paths=() expected_exits=()
 declare -a negative_ids=() negative_paths=() diagnostic_needles=()
 while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
@@ -28,6 +28,8 @@ while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
     die "invalid positive manifest entry: $id"
   (( 10#$expected <= 255 )) || die "exit status exceeds OS byte: $id"
   [[ -z "${seen["$id"]+yes}" ]] || die "duplicate test identity $id"
+  [[ -z "${seen_sources["$path"]+yes}" ]] || die "duplicate manifest source path: $path"
+  seen_sources["$path"]=1
   seen["$id"]=1
   [[ -f "$corpus/$path" && ! -L "$corpus/$path" ]] ||
     die "missing or symlinked .atto source: $id"
@@ -41,6 +43,8 @@ while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
      "$path" =~ ^negative/[a-z0-9-]+\.atto$ && -n "$needle" ]] ||
     die "invalid negative manifest entry: $id"
   [[ -z "${seen["$id"]+yes}" ]] || die "duplicate negative identity $id"
+  [[ -z "${seen_sources["$path"]+yes}" ]] || die "duplicate manifest source path: $path"
+  seen_sources["$path"]=1
   seen["$id"]=1
   [[ -f "$corpus/$path" && ! -L "$corpus/$path" ]] ||
     die "missing or symlinked negative .atto source: $id"
