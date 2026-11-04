@@ -76,7 +76,7 @@ jobs:
           test "$(grep -c '^negative ' tests/native_f64_lexical_gate.sh)" -eq 16
           echo "F64_SOURCE_CASES=25 POSITIVE; 16 NEGATIVE; TWO OPTIMIZATION EXECUTIONS EACH"
 
-      - name: Install pinned OS-packaged LLVM 18, Clang 18 and native build dependencies
+      - name: Install Ubuntu LLVM/Clang 18 packages (major version only; digests recorded later)
         shell: bash
         run: |
           set -euo pipefail
