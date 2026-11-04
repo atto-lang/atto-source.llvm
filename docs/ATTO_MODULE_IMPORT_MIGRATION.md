@@ -24,8 +24,13 @@ For relative `./lib`, `../lib` and project-root `+/lib` imports:
 
 The change retains existing source-content UTF-8 checks, source identity
 checks, regular-file-only admission, package nesting detection and root
-symlink boundary checks. It does not automatically rename `.ores.pkg.toml`
-or alter module runtime semantics.
+symlink boundary checks. Existing `.ores.pkg.toml` manifests remain
+compatible without a required rename. New AttoLang packages may use
+`.atto.pkg.toml`. A directory with both manifest names is rejected rather
+than silently changing package authority. Both markers count as nested package
+boundaries for `+/` and `../` resolution. The compiler still requires
+`schema_version = "1"`; this does not expand general TOML semantics or
+change module runtime behavior.
 
 ## Tests and evidence
 
