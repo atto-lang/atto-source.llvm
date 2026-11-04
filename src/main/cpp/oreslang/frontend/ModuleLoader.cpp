@@ -445,18 +445,55 @@ private:
         }
         if (!exported || !exported->exported)
             fail(unit, "NATIVE_MACRO_PRIVATE: unknown or private imported macro");
-        if (exported->kind != NativeMacroDecl::Kind::ConstIntQuote ||
-            !expr.imported_macro_const_argument || expr.arguments.size() != 1 ||
-            !expr.arguments[0])
+        const auto kind = exported->kind;
+        const bool const_quote = kind == NativeMacroDecl::Kind::ConstIntQuote;
+        const bool syntax_identity = kind == NativeMacroDecl::Kind::SyntaxExprIdentity;
+        const bool syntax_twice = kind == NativeMacroDecl::Kind::SyntaxExprLiteralTwice;
+        if ((!const_quote && !syntax_identity && !syntax_twice) ||
+            expr.imported_macro_const_argument != const_quote ||
+            expr.arguments.size() != 1 || !expr.arguments[0])
             fail(unit, "NATIVE_MACRO_EXPANDER_REQUIRED: imported macro signature/argument unsupported");
         if (++imported_macro_expansions > 128)
             fail(unit, "NATIVE_MACRO_BUDGET: imported expansion count exceeds 128");
-        std::size_t visited = 0;
-        const auto constant = imported_macro_const(unit, *expr.arguments[0], 0, visited);
-        // The single typed literal is a fresh AST result and retains no
-        // generated identifier, host path or runtime macro invocation.
-        expr.kind = Expression::Kind::Integer;
-        expr.integer = constant;
+        if (syntax_identity) {
+            // Move the original caller AST exactly once: no duplicated
+            // effects, mutable loans, captures, or additional evaluation.
+            // Subexpressions were already qualified before this call.
+            auto forwarded = std::move(expr.arguments.front());
+            expr = std::move(*forwarded);
+            return;
+        }
+        if (syntax_twice) {
+            // Conservative typed-template parity with the local expander:
+            // the duplicated slot must be a single closed i64 literal. A
+            // variable, call, borrow, or effectful expression must never be
+            // evaluated twice by source expansion.
+            if (expr.arguments.front()->kind != Expression::Kind::Integer)
+                fail(unit, "NATIVE_MACRO_EXPANDER_REQUIRED: repeated unquote requires a closed integer literal");
+            const auto value = expr.arguments.front()->integer;
+            std::int64_t checked_sum = 0;
+            if (__builtin_add_overflow(value, value, &checked_sum))
+                fail(unit, "NATIVE_MACRO_CONST_OVERFLOW: repeated imported literal exceeds signed i64");
+            const auto location = expr.arguments.front()->offset;
+            auto first = std::make_unique<Expression>();
+            first->kind = Expression::Kind::Integer;
+            first->integer = value;
+            first->offset = location;
+            auto second = std::make_unique<Expression>();
+            second->kind = Expression::Kind::Integer;
+            second->integer = value;
+            second->offset = location;
+            expr.kind = Expression::Kind::Add;
+            expr.left = std::move(first);
+            expr.right = std::move(second);
+        } else {
+            std::size_t visited = 0;
+            const auto constant = imported_macro_const(unit, *expr.arguments[0], 0, visited);
+            // The single typed literal is a fresh AST result and retains no
+            // generated identifier, host path or runtime macro invocation.
+            expr.kind = Expression::Kind::Integer;
+            expr.integer = constant;
+        }
         expr.name.clear();
         expr.arguments.clear();
         expr.argument_names.clear();
