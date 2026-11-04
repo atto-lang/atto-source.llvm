@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Option<int> absent = None();
+  return absent.unwrap_or(42);
+}

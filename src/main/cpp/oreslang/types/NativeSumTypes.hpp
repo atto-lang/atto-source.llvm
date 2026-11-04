@@ -77,6 +77,8 @@ inline void resolve_native_sums(Program& program) {
         if (e.kind == E::Boolean) return {ScalarType::Bool};
         if (e.kind == E::Integer) return {};
         if (e.kind == E::Field) {
+            if (!e.left)
+                throw std::runtime_error("native sum field missing receiver");
             const auto owner = expression(*e.left, env, {});
             if (!owner.cls.empty() && classes.count(owner.cls))
                 for (const auto& field : classes.at(owner.cls)->fields) if (field.name == e.name) return field_hint(field);
@@ -105,6 +107,8 @@ inline void resolve_native_sums(Program& program) {
         }
         if (e.kind == E::RecordConstruct) {
             for (std::size_t i = 0; i < e.arguments.size(); ++i) {
+                if (!e.arguments[i])
+                    throw std::runtime_error("native sum record constructor has null argument");
                 const ClassField* field = classes.count(e.name) ? constructor_field(*classes.at(e.name), i) : nullptr;
                 expression(*e.arguments[i], env, field ? field->sum_type : std::string{});
             }

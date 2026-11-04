@@ -14,6 +14,8 @@ import tempfile
 POSITIVES = (
     ("native-sum-option-bool-atto.atto", 42),
     ("native-sum-result-string-atto.atto", 42),
+    ("native-sum-option-none-atto.atto", 42),
+    ("native-sum-result-ok-atto.atto", 42),
 )
 NEGATIVES = (
     ("native-sum-option-bool-invalid-atto.atto",
@@ -24,6 +26,14 @@ NEGATIVES = (
      "native sum conditional branch payload types do not match"),
     ("native-sum-result-string-conditional-invalid-atto.atto",
      "native sum conditional branch payload types do not match"),
+    ("native-sum-option-bool-fallback-invalid-atto.atto",
+     "native sum unwrap_or fallback type does not match payload"),
+    ("native-sum-result-fallback-invalid-atto.atto",
+     "native sum unwrap_or fallback type does not match payload"),
+    ("native-sum-result-ok-invalid-atto.atto",
+     "native sum constructor payload type does not match declared variant"),
+    ("native-sum-option-none-arity-invalid-atto.atto",
+     "native sum constructor requires its exact positional payload arity"),
 )
 
 def require(condition, message):
@@ -64,6 +74,7 @@ def main():
                     source.suffix == ".atto", "invalid positive .atto fixture")
             original = source.read_bytes()
             ir_hashes = []
+            receipts = []
             for level in (0, 2):
                 generated = run([str(compiler), "--target=host", str(source)])
                 require(generated.returncode == 0 and
@@ -93,30 +104,38 @@ def main():
                         "native guest returned wrong exit code: " + filename +
                         " O" + str(level))
                 require(source.read_bytes() == original, "fixture mutated")
-                print("NATIVE_ATTO_SUM_PASS|source=" + filename +
-                      "|opt=O" + str(level) + "|exit=" + str(expected) +
-                      "|source_sha256=" + sha(original) +
-                      "|ir_sha256=" + ir_hashes[-1] +
-                      "|binary_sha256=" + sha(executable.read_bytes()))
-                count += 1
+                receipts.append("NATIVE_ATTO_SUM_PASS|source=" + filename +
+                                "|opt=O" + str(level) +
+                                "|exit=" + str(expected) +
+                                "|source_sha256=" + sha(original) +
+                                "|ir_sha256=" + ir_hashes[-1] +
+                                "|binary_sha256=" +
+                                sha(executable.read_bytes()))
             require(ir_hashes[0] == ir_hashes[1],
                     "same source generated different frontend IR for O0/O2")
+            for receipt in receipts:
+                print(receipt)
+                count += 1
         negatives = 0
         for filename, diagnostic in NEGATIVES:
             source = fixtures / filename
             require(source.is_file() and not source.is_symlink() and
                     source.suffix == ".atto", "invalid negative fixture")
             original = source.read_bytes()
-            for level in (0, 2):
-                rejected = run([str(compiler), "--target=host", str(source)])
-                require(rejected.returncode == 1, "bad source not rejected")
-                require(not rejected.stdout, "failed compiler emitted LLVM IR")
-                require(diagnostic.encode() in rejected.stderr,
-                        "wrong rejection diagnostic for " + filename)
-                require(source.read_bytes() == original, "negative source mutated")
-                negatives += 1
-    require(count == 4 and negatives == 8, "native parity matrix incomplete")
-    print("NATIVE_ATTO_SUM_MATRIX_PASS|executed=4|negative=8|synthetic_ir=NO")
+            # Admission runs in oreslang-llvmc, before Clang optimization.
+            # Retesting the same rejection twice is not an O0/O2 test.
+            rejected = run([str(compiler), "--target=host", str(source)])
+            require(rejected.returncode == 1, "bad source not rejected")
+            require(not rejected.stdout, "failed compiler emitted LLVM IR")
+            require(diagnostic.encode() in rejected.stderr,
+                    "wrong rejection diagnostic for " + filename)
+            require(source.read_bytes() == original, "negative source mutated")
+            negatives += 1
+    require(count == 2 * len(POSITIVES) and negatives == len(NEGATIVES),
+            "native parity matrix incomplete")
+    print("NATIVE_ATTO_SUM_MATRIX_PASS|executed=" + str(count) +
+          "|compiler_rejections=" + str(negatives) +
+          "|clang_levels=O0,O2|synthetic_ir=NO")
 
 if __name__ == "__main__":
     try:

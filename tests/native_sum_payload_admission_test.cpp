@@ -169,6 +169,24 @@ Program malformed_sum_access(bool missing_receiver) {
     else access->arguments.front().reset();
     return program;
 }
+// Fail closed on malformed AST children even when bypassing the source parser.
+Program malformed_field_payload() {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto field = scalar(Kind::Field);
+    field->name = "value"; // Deliberately omit required receiver.
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(field));
+    return program;
+}
+Program malformed_record_payload() {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto record = scalar(Kind::RecordConstruct);
+    record->name = "Missing";
+    record->arguments.push_back(nullptr);
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(record));
+    return program;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -211,6 +229,11 @@ int main() {
             "access missing receiver", "unwrap_or with null receiver");
         require_rejection(malformed_sum_access(false),
             "access has null argument", "unwrap_or with null fallback");
+        require_rejection(malformed_field_payload(),
+            "native sum field missing receiver", "field with null receiver");
+        require_rejection(malformed_record_payload(),
+            "native sum record constructor has null argument",
+            "record constructor with null value");
         require_rejection(malformed_call_payload(true, false),
             "call argument name count mismatch", "partial named-call AST vector");
         require_rejection(malformed_call_payload(false, true),
@@ -297,7 +320,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 50 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 52 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
