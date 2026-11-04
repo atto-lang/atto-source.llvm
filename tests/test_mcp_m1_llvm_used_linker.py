@@ -1,4 +1,5 @@
 """Source-free linker-retention canary. NOT compiled AttoLang guest parity."""
+import re
 import shutil
 import subprocess
 import tempfile
@@ -11,8 +12,19 @@ def execute(args):
     if p.returncode: raise AssertionError(f"{args[0]} failed: {p.stderr[:800]}")
     return p
 
+def verify_read_only(binary):
+    sections=subprocess.run(['readelf','-W','-S',str(binary)],capture_output=True,text=True,timeout=30)
+    if sections.returncode:
+        raise AssertionError(f'readelf failed: {sections.stderr[:300]}')
+    matching=[]
+    for line in sections.stdout.splitlines():
+        match=re.match(r'^\s*\[\s*\d+\]\s+\.atto\.mcp\.v1\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+',line)
+        if match: matching.append((match.group(1),match.group(6)))
+    if len(matching)!=1 or matching[0][0]!='PROGBITS' or 'A' not in matching[0][1] or any(c in matching[0][1] for c in 'WX'):
+        raise AssertionError(f'descriptor must be retained once in read-only allocated ELF section: {matching}')
+
 def main():
-    if not shutil.which('clang') or not shutil.which('objcopy'):
+    if not shutil.which('clang') or not shutil.which('objcopy') or not shutil.which('readelf'):
         raise SystemExit("NOT_EXECUTED: clang or objcopy missing")
     payload=''.join(f'\\{b:02X}' for b in PAYLOAD)
     ir=f'''@__atto_mcp_descriptor_v1 = constant [{len(PAYLOAD)} x i8] c"{payload}", section ".atto.mcp.v1", align 1
@@ -26,6 +38,7 @@ define i32 @main() {{ ret i32 0 }}
         exe=root/'probe'
         execute(['clang','-x','ir','-O2','-fdata-sections',ir_path,'-Wl,--gc-sections','-o',exe])
         assert subprocess.run([str(exe)],capture_output=True).returncode==0
+        verify_read_only(exe)
         blob=root/'payload.bin'
         execute(['objcopy','--dump-section',f'.atto.mcp.v1={blob}',exe])
         assert blob.read_bytes()==PAYLOAD
