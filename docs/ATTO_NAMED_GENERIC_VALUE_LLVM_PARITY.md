@@ -90,11 +90,14 @@ The small native `.ores.pkg.toml` reader must not silently ignore TOML
 `[[project]]`. A `project.root` setting would otherwise appear accepted
 while `+/` imports continue resolving from the manifest directory,
 potentially crossing a caller's intended package boundary. Such declarations
-now fail closed pending a complete TOML parser. Duplicate `[project]`
-tables are also rejected; unrelated `[build] root=...` remains allowed.
+now fail closed pending a complete TOML parser. Dotted project descendants
+(`[project.root.extra]`, `[project.logging]`) and Unicode-escaped TOML
+key spellings are also rejected, so escaping cannot disguise a project-root
+setting. Duplicate `[project]` tables are rejected; unrelated
+`[build.*]` and `[build] root=...` metadata remain allowed.
 
-Added **8 negative compiler scenarios** to `native_source_module_graph_execution`
-requiring no LLVM IR and **9 direct resolver cases** (8 negative and one
+Added **14 negative compiler scenarios** to `native_source_module_graph_execution`
+requiring no LLVM IR and **15 direct resolver cases** (14 negative and one
 unrelated-root positive) to `native_project_root_import_security`. These
 are authored tests, not backend execution evidence.
 
