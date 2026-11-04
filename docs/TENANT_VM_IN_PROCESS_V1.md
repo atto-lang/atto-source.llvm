@@ -38,6 +38,10 @@ Outside guest mode the same fault is a host bug, and stays fatal. So every byte 
 reads or writes on a guest's behalf must be checked first: that is how the first version could be
 crashed by any tenant (see [Audit](#audit-findings)).
 
+Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
+256 KiB of remaining stack before leaving guest mode. A shortage ends only that VM. Carrier stacks must
+therefore be at least 512 KiB.
+
 **Killing a VM.** Spinning guest code needs no compiler checks to be stopped. The host signals its
 carriers; each abandons the turn. That is safe because the VM's memory is discarded, and guest code
 holds no host locks. Host calls clear guest mode first, so a kill landing in one waits for it to
@@ -196,6 +200,7 @@ Each was reproduced against the first version before being fixed, and has a regr
 | 18 | Low | `SIGURG` was swallowed for threads that were not carriers | Chained |
 | 19 | Low | Slot generations could wrap, reviving a stale reference | Slot retired instead |
 | 20 | Low | C API could leak exceptions to P/Invoke, and did not check null lengths | Caught and checked |
+| 21 | **Critical** | A validated Wasm module could end the process: recursing with `spawn` and `stop` at each level makes a host call the first thing to cross the end of the stack, outside guest mode, where a fault is fatal | Host calls check for 256 KiB of stack on entry, and a shortage ends only that VM |
 
 Correcting an earlier claim: "a noisy tenant cannot starve a quiet one" was true of latency in that
 test, but finding 5 means CPU share was not fair until now.
@@ -215,6 +220,7 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Forged references | Made-up references, and a real one used in another VM, are refused and end only the caller's VM | macOS, Linux |
 | `.atto` state is private and durable | 1000 turns; separate per actor, tenant and program | macOS, Linux |
 | `.atto` overflow, recursion and runaway end one VM | Trap and StackOverflow; bystander unaffected across 5 rounds | macOS, Linux |
+| Stack overflow inside a host call ends one VM | C and validated Wasm guests, 3 rounds with a witness tenant. Before the fix both ended the process with a bus error | macOS, Linux |
 | Hostile Wasm stays in its cage | 64 attacks in each mode, including host pointer halves and maximum displacement: 12 in its own memory, 52 stopped, 0 left. Guard mode: all 52 fault inside its own cage | macOS, Linux |
 | Admission refuses hostile modules | 29 hand-written cases, 0 accepted | macOS, Linux |
 | Mutated modules cannot crash the pipeline | 1000 mutations: 995 refused, 5 accepted, 0 crashed | Linux |

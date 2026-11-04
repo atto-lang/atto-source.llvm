@@ -81,6 +81,7 @@ constexpr std::uint64_t kCageBytes = kAddressableBytes * 3 + (std::uint64_t{1} <
 constexpr std::uint64_t kCommitStepBytes = std::uint64_t{1} << 20;
 constexpr std::size_t kCarrierGuardBytes = std::size_t{1} << 20;
 constexpr std::size_t kSignalStackBytes = std::size_t{64} << 10;
+constexpr std::size_t kHostCallStackBytes = std::size_t{256} << 10; // malloc, locks, a first dynamic link
 constexpr std::uint32_t kAlignment = 16;
 constexpr std::uint32_t kMaxActorBytes = std::uint32_t{1} << 30;
 constexpr std::uint32_t kMaxInstanceBytes = std::uint32_t{1} << 20;
@@ -722,8 +723,21 @@ struct TenantVmHost::Core {
 
     // Guest code runs with in_guest set. Host code must clear it, so that a fault in the host
     // is treated as the host bug it is, and so that an interrupt defers to the way back.
+    //
+    // Host calls run on the guest's stack, and a guest chooses how deep that is. So running out
+    // of stack here is the guest's doing, and must not reach host code, where it would be fatal
+    // for every tenant. in_guest is still set, so if these frames touch the guard that is
+    // contained as well.
     static Carrier* host_enter() {
         Carrier* c = t_carrier;
+        const auto sp = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+        const auto stack_low = reinterpret_cast<std::uintptr_t>(c->stack_guard_low) + kCarrierGuardBytes;
+        if (sp < stack_low + kHostCallStackBytes) {
+            c->in_guest = 0;
+            c->fault_address = 0;
+            c->trap_reason = FailReason::StackOverflow;
+            siglongjmp(c->resume, 1);
+        }
         c->in_guest = 0;
         std::atomic_signal_fence(std::memory_order_seq_cst);
         return c;
@@ -1031,7 +1045,7 @@ std::future<TurnResult> ready_result(Status status) {
 } // namespace
 
 TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(limits)) {
-    if (limits.carriers == 0 || limits.max_vms == 0 || limits.carrier_stack_bytes < (std::size_t{64} << 10))
+    if (limits.carriers == 0 || limits.max_vms == 0 || limits.carrier_stack_bytes < 2 * kHostCallStackBytes)
         throw std::invalid_argument("TenantVmHost limits");
     install_handlers_once();
     Core* core = core_.get();
