@@ -46,7 +46,7 @@ def main():
         directory = Path(tmp)
         source = directory / "recursive.atto"
         source.write_text(
-            "fnc loop(int n): int { return 1 + loop(n - 1); }\n"
+            "fnc count_down(int n): int { return 1 + count_down(n - 1); }\n"
             "pub fnc main(): int { return loop(100000); }\n",
             encoding="utf-8")
         compiler = str(args.compiler.resolve())
