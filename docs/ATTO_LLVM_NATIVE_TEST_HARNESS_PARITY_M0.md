@@ -52,6 +52,19 @@ A passing count from this subset must never be reported as the Java native
   `ATTO_LLVM_NATIVE_HOST_OBSERVED` and
   `ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED` identify observed exits only.
 
+The portable subset also includes a source-level AttoLang scalar assertion
+module `scalar-assert-lib.atto`. Its passing guest returns 0 and its deliberate
+failed assertion returns 1; both outputs are tested as *observed native exits*
+under Clang O0 and O2. This does **not** implement Java `TestCase`,
+`TestSuite` or guest-emitted receipt semantics.
+
+The tests are registered in CTest only on Linux as two independent targets:
+`atto_native_harness_inventory_source_only` and
+`atto_native_harness_compiler_guest_o0_o2`. The standard CTest target must
+build and invoke the real AttoLang LLVM compiler and Clang; it cannot pass by
+running the source-only manifest guard alone. macOS/Windows support is not
+claimed for this GNU-timeout/bootstrap runner.
+
 The native compiler's OS-exit ABI is a bounded `0..255` result. Java's test
 framework uses guest-produced per-case machine receipts. These are **different
 reporting abstractions**; do not equate the 19 LLVM programs with the 132
@@ -86,7 +99,21 @@ Run locally with a built production compiler:
 bash tests/test_atto_native_parity_manifest.sh
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target oreslang-llvmc oreslang-native-project-root-import-test
-ctest --test-dir build -R '^native_project_root_import_security$' --output-on-failure
+ctest --test-dir build -R '^native_project_root_import_security
+ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG=clang \
+  bash tests/atto_native_harness_parity.sh --run
+```
+ --output-on-failure
+ctest --test-dir build -R '^atto_native_harness_inventory_source_only
+ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG=clang \
+  bash tests/atto_native_harness_parity.sh --run
+```
+ --output-on-failure
+ctest --test-dir build -R '^atto_native_harness_compiler_guest_o0_o2
+ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG=clang \
+  bash tests/atto_native_harness_parity.sh --run
+```
+ --output-on-failure
 ORESLANG_LLVMC="$PWD/build/oreslang-llvmc" CLANG=clang \
   bash tests/atto_native_harness_parity.sh --run
 ```
