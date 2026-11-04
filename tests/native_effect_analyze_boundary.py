@@ -18,6 +18,8 @@ def digest(path: pathlib.Path) -> str:
 
 
 def main() -> int:
+    if not __debug__:
+        raise RuntimeError("this test must not run with optimized-out assertions")
     if len(sys.argv) != 2:
         raise AssertionError("usage: native_effect_analyze_boundary.py <compiler>")
     compiler = pathlib.Path(sys.argv[1]).resolve(strict=True)
@@ -37,8 +39,8 @@ def main() -> int:
         for effect in ("throws", "raises", "panics"):
             source = root / f"annotated_{effect}.atto"
             source.write_text(
-                f"pub routine main(): int {effect}(Error) {{\\n"
-                "    return 0;\\n}\\n",
+                f"pub routine main(): int {effect}(Error) {{\n"
+                "    return 0;\n}\n",
                 encoding="utf-8",
             )
             annotated.append(source)
