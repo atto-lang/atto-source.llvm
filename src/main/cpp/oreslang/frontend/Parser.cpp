@@ -804,6 +804,7 @@ public:
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         program.native_macros = std::move(native_macro_declarations_);
+        program.native_macro_expansions = macro_expansions_;
         program.sum_types = std::move(sum_types_);
         return program;
     }
