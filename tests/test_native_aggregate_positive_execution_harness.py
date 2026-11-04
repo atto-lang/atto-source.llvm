@@ -7,8 +7,8 @@ import subprocess
 import unittest
 
 from native_aggregate_positive_execution import (
-    POSITIVE, NEGATIVE, verify_guest_process, verify_native_entry_linkage,
-    verify_negative_rejection,
+    POSITIVE, NEGATIVE, verify_fixture_registry, verify_guest_process,
+    verify_native_entry_linkage, verify_negative_rejection,
 )
 
 
@@ -34,6 +34,35 @@ class NativeAggregatePositiveHarnessTest(unittest.TestCase):
                          "typed-record-rejects-field-name",
                          "typed-record-rejects-field-type"}.issubset(
                              {name for name, _, _ in NEGATIVE}))
+
+    def test_executable_preflight_accepts_expanded_matrix(self):
+        # Exercise the exact guard that real main() invokes; merely checking
+        # tuple lengths would not catch an obsolete in-main 4+4 assertion.
+        verify_fixture_registry(POSITIVE, NEGATIVE)
+
+    def test_executable_preflight_rejects_legacy_four_plus_four(self):
+        with self.assertRaisesRegex(RuntimeError, "seven distinct positives"):
+            verify_fixture_registry(POSITIVE[:4], NEGATIVE[:4])
+
+    def test_executable_preflight_rejects_duplicate_fixture_id(self):
+        with self.assertRaisesRegex(RuntimeError, "seven distinct positives"):
+            verify_fixture_registry(POSITIVE, NEGATIVE[:-1] + (NEGATIVE[0],))
+
+    def test_executable_preflight_rejects_duplicate_expected_exit(self):
+        duplicate = (POSITIVE[-1][0], POSITIVE[-1][1],
+                     POSITIVE[-1][2], POSITIVE[0][3])
+        with self.assertRaisesRegex(RuntimeError, "seven distinct positives"):
+            verify_fixture_registry(POSITIVE[:-1] + (duplicate,), NEGATIVE)
+
+    def test_executable_preflight_rejects_invalid_exit(self):
+        invalid = (POSITIVE[-1][0], POSITIVE[-1][1], POSITIVE[-1][2], 128)
+        with self.assertRaisesRegex(RuntimeError, "seven distinct positives"):
+            verify_fixture_registry(POSITIVE[:-1] + (invalid,), NEGATIVE)
+
+    def test_executable_preflight_rejects_booleans_as_exits(self):
+        invalid = (POSITIVE[-1][0], POSITIVE[-1][1], POSITIVE[-1][2], True)
+        with self.assertRaisesRegex(RuntimeError, "seven distinct positives"):
+            verify_fixture_registry(POSITIVE[:-1] + (invalid,), NEGATIVE)
 
     def test_native_main_calls_guest_and_uses_result(self):
         ir = (b"; ModuleID = 'fixture'\n"
