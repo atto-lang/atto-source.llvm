@@ -150,12 +150,17 @@ void validate_native_scalar_types(const Program& program) {
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);
             case E::ArrayCall: {
+                // The native ABI is declared (index, value), but named
+                // argument expressions retain lexical source order. Never
+                // typecheck by source index after a reordered named call.
+                const auto slots = native_array_argument_slots(e);
                 const auto owner = expression(*e.left, locals);
                 if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
                 const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
                     : Type{Kind::Class, immutable_record(owner.name).name};
                 for (std::size_t i = 0; i < e.arguments.size(); ++i) {
-                    const bool index = (e.name == "get" || e.name == "set") && i == 0;
+                    const bool index = (e.name == "get" || e.name == "set") &&
+                        slots.at(i) == 0;
                     if (!index && element.kind == Kind::Class &&
                             e.arguments[i]->kind != E::RecordConstruct &&
                             e.arguments[i]->kind != E::Call && e.arguments[i]->kind != E::Conditional &&
@@ -246,10 +251,17 @@ void validate_native_scalar_types(const Program& program) {
                     binding.initializer->kind == Expression::Kind::Console;
                 require(expression(*binding.initializer, locals), discarded_effect ? Type{Kind::Void, {}} : local_type(binding), binding.offset, "local initializer type");
             }
-            for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+            if (binding.new_class) {
+                // Independently check the complete name/arity permutation
+                // before examining any actual or observing a source move.
                 const auto& cls = *classes.at(binding.class_name);
-                const auto& arg = binding.constructor_arguments[i];
-                require(expression(*arg, locals), constructor_parameter_type(cls, i), arg->offset, "constructor parameter type mismatch");
+                const auto slots = native_constructor_argument_slots(binding, cls);
+                for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                    const auto& arg = binding.constructor_arguments[i];
+                    require(expression(*arg, locals),
+                            constructor_parameter_type(cls, slots.at(i)),
+                            arg->offset, "constructor parameter type mismatch");
+                }
             }
             locals.emplace(binding.name, local_type(binding));
         }
