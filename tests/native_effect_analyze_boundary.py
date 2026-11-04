@@ -61,9 +61,14 @@ def main() -> int:
             "}\n",
             encoding="utf-8",
         )
+        checked_math = root / "checked_math.atto"
+        checked_math.write_text(
+            "pub fnc main(): int { return 1 + 2; }\n",
+            encoding="utf-8",
+        )
         dash = root / "-dash.atto"
         dash.write_text(valid, encoding="utf-8")
-        files = [atto, ores, bad, *annotated, caught, possible_panic, dash]
+        files = [atto, ores, bad, *annotated, caught, possible_panic, checked_math, dash]
         hashes = {path.name: digest(path) for path in files}
         original_names = sorted(path.name for path in root.iterdir())
 
@@ -110,6 +115,14 @@ def main() -> int:
             assert "effects inconclusive" in result.stderr, result.stderr
             assert result.stdout == "", "analysis observation leaked LLVM IR"
 
+        # A native checked-overflow trap is not a typed actor Panic.
+        # It must leave the effect-closure graph unknown.
+        arithmetic = run("--analyze", str(checked_math))
+        assert arithmetic.returncode == 2, (arithmetic.returncode, arithmetic.stderr)
+        assert "graph_unknown=1" in arithmetic.stderr, arithmetic.stderr
+        assert "panic_observed=0" in arithmetic.stderr, arithmetic.stderr
+        assert "semantic_proof=0" in arithmetic.stderr, arithmetic.stderr
+        assert arithmetic.stdout == "", "arithmetic analysis emitted LLVM IR"
         for source in annotated:
             result = run("--analyze", str(source))
             assert result.returncode in (1, 2), (
