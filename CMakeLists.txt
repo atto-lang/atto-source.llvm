@@ -415,6 +415,23 @@ if(BUILD_TESTING)
             --clang-opt=-O2)
     set_tests_properties(native_atto_named_generic_value_source_execution_O2
         PROPERTIES TIMEOUT 240)
+    # Native stack-owned class constructors with checked named argument slots.
+    # Two independently optimized guest binaries, plus no-IR diagnostic cases.
+    add_test(NAME native_atto_named_constructor_source_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_named_constructor_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}"
+            --clang-opt=-O0)
+    add_test(NAME native_atto_named_constructor_source_execution_O2
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_named_constructor_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}"
+            --clang-opt=-O2)
+    set_tests_properties(native_atto_named_constructor_source_execution
+        native_atto_named_constructor_source_execution_O2
+        PROPERTIES TIMEOUT 240)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.
