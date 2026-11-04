@@ -198,6 +198,14 @@ int ores_native_actor_scheduler_reserve_wake(
     OresNativeActorRef target, uint64_t continuation_slot,
     uint64_t continuation_generation, uint64_t code_generation,
     uint64_t descriptor_generation, OresNativeWakeTicket* out);
+/* Verifies a ticket is currently RESERVED in this scheduler's own wake
+ * credit table and was reserved during the current authenticated DATA-mail
+ * turn with this original mail ordinal. False for copied/old tickets,
+ * foreign producers, generic callbacks, other mails or STOP. This is
+ * trusted-host capture-only; it does not grant authority at resume. */
+int ores_native_actor_scheduler_current_data_issued_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
+    uint64_t expected_original_mail);
 int ores_native_actor_scheduler_transfer_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 /* Cancellation succeeds only while still RESERVED (not transferred). */
