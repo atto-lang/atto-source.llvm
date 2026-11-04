@@ -7,6 +7,10 @@ on:
       - 'tests/fixtures/*.atto'
       - 'tests/rust-harness/**'
       - '.github/workflows/atto-native-test-parity.yml'
+      - 'scripts/build-native-atto-fuzz-target.sh'
+      - 'scripts/test-native-atto-fuzz-target.sh'
+      - 'tests/native_atto_fuzz_stdin_adapter.c'
+      - 'examples/atto-native-fuzz-project/**'
   workflow_dispatch:
 permissions:
   contents: read
@@ -46,17 +50,17 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --target oreslang-llvmc oreslang-rust-test-harness --parallel 2
+          cmake --build build --target oreslang-llvmc oreslang-rust-test-harness oreslang-no-gc-ir-audit-build --parallel 2
       - name: Require all five exact native parity tests to be discovered
         shell: bash
         run: |
           set -euo pipefail
           ctest --test-dir build -N -R '^atto_(llvm|native)_' > atto-ctest-inventory.txt
           cat atto-ctest-inventory.txt
-          grep -Fqx 'Total Tests: 5' atto-ctest-inventory.txt
+          grep -Fqx 'Total Tests: 6' atto-ctest-inventory.txt
       - name: Execute compiled .atto source, actor sanitizer, and negative tests
         shell: bash
         run: |
           set -euo pipefail
           ctest --test-dir build --output-on-failure --timeout 180 -R '^atto_(llvm|native)_'
-          echo "ATTO_LLVM_NATIVE_TEST_PARITY_EXECUTED=5"
+          echo "ATTO_LLVM_NATIVE_TEST_PARITY_EXECUTED=6"
