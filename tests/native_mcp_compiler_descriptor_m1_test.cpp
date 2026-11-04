@@ -48,6 +48,7 @@ int main() {
     check(first.find("\"executed_guest\":false")!=std::string::npos);
     check(first.find("\"abi\":\"atto.mcp.native.descriptor.v1\"")!=std::string::npos);
     check(first.find("\"generation_binding\":\"host_runtime_required\"")!=std::string::npos);
+    check(first.find("\"module_id\":\"")!=std::string::npos);
     check(first.find("hidden")==std::string::npos);
     check(first.find("alpha")<first.find("zeta"));
     check(first.find("\"arity\":2")!=std::string::npos);
@@ -88,7 +89,12 @@ int main() {
     p.module="demo";
     check(!rejects(p));
     check(emit_json(p)!=first); // namespace/module participate in stable ID
+    check(emit_json(p).find("\"module_id\":\"")!=std::string::npos);
     p.module.clear();
+    p.namespace_name="another";
+    check(emit_json(p)!=first);
+    p.namespace_name.clear();
+    check(emit_json(p)==first);
     for(int i=0;i<31;i++) p.functions.push_back(fn("f"+std::to_string(i),0,true));
     check(rejects(p)); // 32-entry compiler retention budget
     p.functions.pop_back();
