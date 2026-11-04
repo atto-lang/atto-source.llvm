@@ -106,6 +106,17 @@ pub fnc main(): int {
   return b.value<A=int>(second: 23, first: 19);
 }
 """, 42),
+    "generic-instance-reordered-lexical-ir": ("""define class Box as
+  let int n=42;
+  pub combine<T=int>(T first, T second): int { return first * 10 + second; }
+end
+fnc source_two(): int { return 2; }
+fnc source_four(): int { return 4; }
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.combine<T=int>(second: source_two(), first: source_four());
+}
+""", 42),
 }
 INVALID = {
     "missing-required": ("""fnc fixed<T>(): int { return 42; }
@@ -347,6 +358,33 @@ pub fnc main(): int {
   return b.hidden<T=int>(42);
 }
 """, "private instance method is not accessible"),
+    "free-generic-explicit-bool-actual": ("""fnc identity<T=int>(T value): int { return value; }
+pub fnc main(): int { return identity<T=int>(true); }
+""", "native scalar generic argument 'value' requires int, got bool"),
+    "free-generic-inferred-bool-actual": ("""fnc identity<T>(T value): int { return value; }
+pub fnc main(): int { return identity(true); }
+""", "native scalar generic argument 'value' requires int, got bool"),
+    "free-generic-string-actual": ("""fnc identity<T=int>(T value): int { return value; }
+pub fnc main(): int { return identity<T=int>("unexpected"); }
+""", "native scalar generic argument 'value' requires int, got string"),
+    "generic-method-bool-value-rejected": ("""define class Box as
+  let int n=42;
+  pub id<T=int>(T value): int { return value; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<T=int>(value: true);
+}
+""", "native scalar generic argument 'value' requires int, got bool"),
+    "generic-method-string-value-rejected": ("""define class Box as
+  let int n=42;
+  pub id<T=int>(T value): int { return value; }
+end
+pub fnc main(): int {
+  let Box b=new Box();
+  return b.id<T=int>(value: "unexpected");
+}
+""", "native scalar generic argument 'value' requires int, got string"),
 }
 
 _CASE_ID = re.compile(r"generics\.scalar\.[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -448,6 +486,17 @@ def verify(compiler, clang, clang_opt):
             result = run([str(compiler), str(path)])
             if result.returncode or result.stderr or not result.stdout.startswith(b"; ModuleID"):
                 raise AssertionError(f"{name}: compiler rc={result.returncode}, stderr={result.stderr!r}")
+            if name == "generic-instance-reordered-lexical-ir":
+                # The class receiver loan is first, but the explicit value
+                # actuals must still be emitted exactly once in lexical order.
+                second = b"call i64 @source_two()"
+                first = b"call i64 @source_four()"
+                if result.stdout.count(second) != 1 or result.stdout.count(first) != 1:
+                    raise AssertionError(
+                        "generic method argument IR has missing/duplicated calls")
+                if result.stdout.index(second) >= result.stdout.index(first):
+                    raise AssertionError(
+                        "generic method named arguments lowered in ABI order, not source order")
             ll = tmp / (name + ".ll")
             exe = tmp / name
             ll.write_bytes(result.stdout)
