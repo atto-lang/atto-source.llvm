@@ -179,3 +179,29 @@ jobs:
           git diff --exit-code --
           git diff --cached --exit-code --
           echo 'ATTO_LLVM_SOURCE_IDENTITY_AFTER=PASS'
+
+          echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
+      - name: Recheck exact source head and tracked changes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          git diff --exit-code --
+          git diff --cached --exit-code --
+          echo 'ATTO_LLVM_SOURCE_IDENTITY_AFTER=PASS'
+
+          echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
+      - name: Recheck exact source head and tracked changes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          git diff --exit-code --
+          git diff --cached --exit-code --
+          echo 'ATTO_LLVM_SOURCE_IDENTITY_AFTER=PASS'
