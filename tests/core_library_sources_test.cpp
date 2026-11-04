@@ -32,6 +32,13 @@ int main() {
     assert(is_reserved_compiler_library_import("alloc/int_buffer"));
     assert(!is_reserved_alloc_import("./alloc/int_buffer"));
     assert(!is_reserved_compiler_library_import("ores.std/testing"));
+    assert(is_native_scalar_testing_import("ores.std/testing_scalar"));
+    assert(is_native_scalar_testing_import("ores.std/testing_scalar.atto"));
+    assert(is_native_scalar_testing_import("std/testing_scalar"));
+    assert(is_native_scalar_testing_import("std/testing_scalar.atto"));
+    assert(!is_native_scalar_testing_import("ores.std/testing"));
+    assert(!is_native_scalar_testing_import("ores.std/testing_scalar.ores"));
+    assert(!is_native_scalar_testing_import("ores.std/testing_scalar/../testing"));
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Core, CompilerLibraryTier::Core));
     assert(!compiler_library_dependency_allowed(
@@ -40,6 +47,14 @@ int main() {
         CompilerLibraryTier::Alloc, CompilerLibraryTier::Core));
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Alloc, CompilerLibraryTier::Alloc));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Core, CompilerLibraryTier::Std));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Alloc, CompilerLibraryTier::Std));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Std, CompilerLibraryTier::Core));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Std, CompilerLibraryTier::Std));
 
     const auto* numeric = find_core_library_source("ores.core/numeric");
     assert(numeric != nullptr);
@@ -71,6 +86,23 @@ int main() {
         "import module int_buffer from \"alloc/int_buffer\"") !=
         std::string_view::npos);
     assert(find_core_library_source("alloc/int_buffer") == nullptr);
+
+    const auto* testing_scalar = find_std_scalar_testing_source("ores.std/testing_scalar");
+    assert(testing_scalar != nullptr);
+    assert(testing_scalar->tier == CompilerLibraryTier::Std);
+    assert(testing_scalar->unit_id == "@ores.std/testing_scalar.atto");
+    assert(testing_scalar->module_name == "testing_scalar");
+    assert(testing_scalar->admitted_provider_bits == 0u);
+    assert(testing_scalar == find_std_scalar_testing_source("std/testing_scalar"));
+    assert(testing_scalar == find_std_scalar_testing_source("ores.std/testing_scalar.atto"));
+    assert(testing_scalar == find_std_scalar_testing_source("std/testing_scalar.atto"));
+    assert(testing_scalar->source.find("pub fnc equal_int") != std::string_view::npos);
+    assert(testing_scalar->source.find("pub fnc not_equal_int") != std::string_view::npos);
+    assert(testing_scalar->source.find("pub fnc combine_status") != std::string_view::npos);
+    assert(find_std_scalar_testing_source("ores.std/testing") == nullptr);
+    assert(find_std_scalar_testing_source("ores.std/testing_scalar.ores") == nullptr);
+    assert(find_core_library_source("ores.std/testing_scalar") == nullptr);
+    assert(find_alloc_library_source("ores.std/testing_scalar") == nullptr);
 
     assert(find_core_library_source("ores.core") == nullptr);
     assert(find_core_library_source("ores.core/unknown") == nullptr);
