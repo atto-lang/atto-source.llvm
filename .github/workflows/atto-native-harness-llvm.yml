@@ -94,8 +94,8 @@ jobs:
             | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
           test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 80
           test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 6
-          test "$(grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 40
-          grep -Fqx 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=20|optimizations=2|native=40|testkit=PARTIAL_M2' \
+          test "$(grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 46
+          grep -Fqx 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=23|optimizations=2|native=46|testkit=PARTIAL_M2' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
           grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=11|guest_receipt_protocol=UNSUPPORTED' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
