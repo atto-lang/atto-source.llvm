@@ -165,7 +165,8 @@ private:
             const auto& raw = imported.path;
             std::size_t selected = units.size();
 
-            if (frontend::is_reserved_compiler_library_import(raw)) {
+            if (frontend::is_reserved_compiler_library_import(raw) ||
+                    frontend::is_native_scalar_testing_import(raw)) {
                 const auto* library =
                     frontend::find_compiler_library_source(raw);
                 if (!library) {
@@ -175,11 +176,16 @@ private:
                     fail(current,
                         "unknown compiler-owned alloc module '" + raw + "'");
                 }
+                if (library->tier == frontend::CompilerLibraryTier::Std && !host)
+                    fail(current, "hosted-only ores.std/testing_scalar is unavailable for freestanding native targets");
                 if (current.compiler_owned_library &&
                         !frontend::compiler_library_dependency_allowed(
-                            current.compiler_library_tier, library->tier))
+                            current.compiler_library_tier, library->tier)) {
+                    if (library->tier == frontend::CompilerLibraryTier::Std)
+                        fail(current, "compiler-owned lower-tier modules may not import ores.std/*");
                     fail(current,
                         "compiler-owned ores.core modules may not depend on alloc/*");
+                }
                 const std::string unit_id(library->unit_id);
                 const auto known = paths.find(unit_id);
                 selected = known == paths.end() ? units.size() : known->second;
