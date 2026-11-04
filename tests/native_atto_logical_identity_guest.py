@@ -78,6 +78,19 @@ def main():
         must_reject(compiler, nested, "nested package", "ATTO_UNIT_NESTED_PACKAGE")
         passed += 1
 
+        # Imported-module diagnostics must use the admitted logical ID,
+        # not the host's absolute temporary directory path.
+        wrong_module = base / "logical-diagnostic"
+        write_program(wrong_module,
+                      'import module Different from "./lib"; pub fnc main():int{return 42;}')
+        diagnostic = run([compiler, str(wrong_module / "main.atto")])
+        if (diagnostic.returncode == 0 or diagnostic.stdout or
+                "project/main.atto: imported file does not declare selected module" not in diagnostic.stderr or
+                str(wrong_module) in diagnostic.stderr):
+            raise AssertionError(("logical diagnostics", diagnostic.returncode,
+                                  diagnostic.stdout, diagnostic.stderr))
+        passed += 1
+
         aliased = base / "hardlink"
         write_program(aliased)
         os.link(aliased / "lib.atto", aliased / "duplicate.atto")
