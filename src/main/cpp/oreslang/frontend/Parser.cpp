@@ -2722,7 +2722,20 @@ private:
         bool return_guards_started = false;
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
+        std::size_t ordered_root_local_count = 0;
         while (token_.text != "return") {
+            // LLVM already lowers ordered ScopedLocal statements, including
+            // their ownership state and exit drops. Admit the same lexical
+            // declaration order as Java/Graal rather than requiring all
+            // locals to precede the first effect/loop.
+            if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+                if (terminal_try_finally || return_guards_started)
+                    fail("native ordered root local cannot follow a terminal try/return guard");
+                if (++ordered_root_local_count > 64)
+                    fail("native ordered root local limit exceeded (64)");
+                value.statements.push_back(scoped_local());
+                continue;
+            }
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
