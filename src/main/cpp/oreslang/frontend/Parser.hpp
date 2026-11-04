@@ -488,6 +488,9 @@ struct Program {
     std::vector<NativeSumType> sum_types;
     // Compile-time metadata is deliberately not moved into the linked guest.
     std::vector<NativeMacroDecl> native_macros;
+    // Compiler-only expansion accounting. Imported expansions in ModuleLoader
+    // share this per-admitted-source budget with parser-local expansions.
+    std::size_t native_macro_expansions = 0;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and

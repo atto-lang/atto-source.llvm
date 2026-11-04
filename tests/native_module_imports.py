@@ -158,9 +158,45 @@ def main():
 
     identity_producer = (
         'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }')
+    # Local and imported macros in one admitted consumer share one ceiling:
+    # neither parser-local nor linker-imported paths may use a second 128.
+    local_identity = (
+        'define macro local_identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }')
+    def shared_unit_quota_program(imported_count):
+        imported = ''.join(
+            f'val imported_{i}:int=lib.identity!(syntax expr 1);'
+            for i in range(imported_count))
+        return ('import * as lib from "./producer.atto"; ' + local_identity +
+                ' pub fnc main():int{'
+                'val local_result:int=local_identity!(syntax expr 1);' +
+                imported + 'return 42;}')
+    positives.append(('atto-linked-macro-local-plus-127-imported', {
+        'main.atto': shared_unit_quota_program(127),
+        'producer.atto': identity_producer,
+    }, 42))
     positives.append(('atto-linked-public-syntax-budget-exactly-128', {
         'main.atto': imported_identity_quota_program(128),
         'producer.atto': identity_producer,
+    }, 42))
+    # Quota is per admitted *consumer source unit*, not per linked graph:
+    # each module may expand 128 identities, while 129 in any one still fails.
+    # This is a real four-file compiler->IR->native exit-42 fixture.
+    def quota_consumer(module_name, result):
+        statements = ''.join(
+            f'val v_{i}:int=lib.identity!(syntax expr 1);'
+            for i in range(128))
+        return ('import * as lib from "./producer.atto"; '
+                f'define module {module_name} as '
+                'pub fnc answer():int{' + statements +
+                f'return {result};' + '} end')
+    positives.append(('atto-linked-macro-two-consumers-128-each', {
+        'main.atto': (
+            'import module A from "./a.atto"; '
+            'import module B from "./b.atto"; '
+            'pub fnc main():int{return A.answer()+B.answer();}'),
+        'producer.atto': identity_producer,
+        'a.atto': quota_consumer('A', 20),
+        'b.atto': quota_consumer('B', 22),
     }, 42))
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
@@ -598,6 +634,20 @@ def main():
                                       result.stdout[:150], result.stderr,
                                       'unexpected compiler artifacts', sorted(artifacts)))
             passed += 1
+
+        directory = root/'atto-linked-macro-local-plus-128-imported'; directory.mkdir()
+        (directory/'producer.atto').write_text(identity_producer)
+        (directory/'main.atto').write_text(shared_unit_quota_program(128))
+        compiler = os.path.abspath(shutil.which(a.compiler) or a.compiler)
+        before = {p.name for p in directory.iterdir()}
+        result = run([compiler, str(directory/'main.atto')], cwd=directory)
+        artifacts = {p.name for p in directory.iterdir()} - before
+        if (not result.returncode or result.stdout
+                or 'NATIVE_MACRO_BUDGET' not in result.stderr or artifacts):
+            raise AssertionError(('local 1 + imported 128 must reject',
+                                  result.returncode, result.stdout[:150],
+                                  result.stderr, sorted(artifacts)))
+        passed += 1
 
         # The first expansion beyond the shared portable limit must fail
         # before writing LLVM IR, object files or a native executable.
