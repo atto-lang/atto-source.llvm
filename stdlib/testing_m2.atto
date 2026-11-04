@@ -60,6 +60,11 @@ define module testing_m2 as
     if candidate.id <= suite.last_id; then
       return -4;
     fi
+    // Public suite fields can be corrupted by a guest. Never run an
+    // executable body against an inconsistent/overflowing ledger.
+    if !Ledger.valid_state(rt borrow suite); then
+      return -1;
+    fi
 
     snapshot.id = candidate.id;
     snapshot.selected = candidate.selected;
