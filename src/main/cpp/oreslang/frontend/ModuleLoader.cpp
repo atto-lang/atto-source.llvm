@@ -297,8 +297,10 @@ private:
                 }
 
                 const auto dependency_path = dependency.string();
+                // Already-admitted cycle/backedges do not consume a fresh
+                // byte quota. Enforce the remaining limit only on a new read.
                 const auto expected_child_identity = capture_source_identity(
-                    dependency_path.c_str(), max_bytes - read_bytes,
+                    dependency_path.c_str(), max_bytes,
                     "native import graph exceeds 8 MiB source read budget");
                 const auto logical_dependency =
                     source_admission->admit(dependency, expected_child_identity);
@@ -308,6 +310,8 @@ private:
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
                 if (selected == units.size()) {
+                    if (expected_child_identity.size > max_bytes - read_bytes)
+                        fail(current, "native import graph exceeds 8 MiB source read budget");
                     SourceIdentity child_identity;
                     auto child_text = read_regular_source(
                         dependency_path.c_str(), max_bytes - read_bytes,
