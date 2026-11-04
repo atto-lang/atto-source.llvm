@@ -162,7 +162,9 @@ CMake, scripts, stdlib, and all tests; a compiler-only change must not
 silently skip the real LLVM guest check. Nine source-only workflow mutations
 exercise trigger/receipt/auditor omissions, while the fixture-inventory test
 requires 11 rejection mutations. These are authored static checks, **not**
-compiler or native evidence. Host-observed receipt markers for each suite are
+compiler or native evidence. The guest-receipt verifier must accept exactly
+two CLI arguments (OUTPUT_FILE, suite), matching the native shell call, and
+its source-only self-tests exercise this path under normal and optimized Python. Host-observed receipt markers for each suite are
 printed only after **both** O0 and O2, transcript checks and exact IR equality.
 Release still requires a stepful source-org CI run, exact-head source identity,
 real no-GC audit and all 54 native executions, plus independent review.
