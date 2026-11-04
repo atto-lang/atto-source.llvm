@@ -50,7 +50,7 @@ jobs:
           cmake --build build --parallel 2 --target oreslang-llvmc
           test -s build/oreslang-llvmc
           sha256sum build/oreslang-llvmc
-      - name: Prove canonical seven CTest cases are registered
+      - name: Prove canonical nine CTest cases are registered
         shell: bash
         run: |
           set -euo pipefail
@@ -63,7 +63,9 @@ jobs:
             atto_suspends_critical_class_method_rejected \
             atto_critical_suspends_actor_method_rejected \
             atto_protected_state_requires_typed_lowering \
-            atto_copyable_share_native_execution
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
           do
             grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
           done
@@ -72,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build \
-            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution)$' \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
             --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
           python3 - <<'PY'
           from xml.etree import ElementTree
@@ -80,12 +82,12 @@ jobs:
           tests = int(root.get('tests', '0'))
           failures = int(root.get('failures', '0'))
           skipped = int(root.get('skipped', '0'))
-          if tests != 7 or failures or skipped:
+          if tests != 9 or failures or skipped:
               raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
           names = {x.get('name') for x in root.iter('testcase')}
-          if len(names) != 7:
+          if len(names) != 9:
               raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
-          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=7')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=9')
           print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
           print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
           PY
