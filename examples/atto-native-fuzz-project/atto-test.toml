@@ -2,3 +2,5 @@
 [fuzz]
 command = ["./build/fuzz-byte"]
 max_bytes = 65536
+# Requires oreslang-test.cli PR #26: reserved adapter exit 2 is inconclusive.
+inconclusive_exits = [2]
