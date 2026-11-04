@@ -35,7 +35,7 @@ positive() {
       cat "$scratch/$name.compiler.stderr" >&2; exit 1; }
   [[ -s "$scratch/$name.ll" && ! -s "$scratch/$name.compiler.stderr" ]] ||
     { echo "NATIVE_F64_COMPILER_IR_OR_DIAGNOSTIC: $name" >&2; exit 1; }
-  "$clang" -x ir "$scratch/$name.ll" -o "$scratch/$name.native" \
+  "$clang" -Wno-override-module -x ir "$scratch/$name.ll" -o "$scratch/$name.native" \
     > "$scratch/$name.link.stdout" 2> "$scratch/$name.link.stderr" ||
     { echo "NATIVE_F64_LINK_FAILED: $name" >&2
       cat "$scratch/$name.link.stderr" >&2; exit 1; }
