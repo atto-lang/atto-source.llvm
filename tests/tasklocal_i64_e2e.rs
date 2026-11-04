@@ -113,5 +113,8 @@ fn main() {
     reject(&compiler, &dir.0, "tasklocal-double-set.atto",
         "pub fnc main(): int {\nlet Task<int> w = task { TaskLocal<int>.set(4); TaskLocal<int>.set(5); return TaskLocal<int>.get(); };\nlet int v = await w;\nreturn v;\n}\n",
         None);
-    println!("TASKLOCAL_I64_COMPILER_GUEST_PASS: 1 compiled binary and 7 rejected fixtures");
+    reject(&compiler, &dir.0, "tasklocal-abi-shadow.atto",
+        "fnc oreslang_source_task_local_i64_get(): int { return 7; }\npub fnc main(): int { return oreslang_source_task_local_i64_get(); }\n",
+        Some("reserved TaskLocal runtime ABI"));
+    println!("TASKLOCAL_I64_COMPILER_GUEST_PASS: 1 compiled binary and 8 rejected fixtures");
 }
