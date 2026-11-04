@@ -98,20 +98,49 @@ class SmokeAdmission(unittest.TestCase):
             path.write_bytes(b"changed")
             self.assertNotEqual(before, smoke.sha256(path))
 
-    def test_fake_claimed_source_sha_is_rejected_before_compiler_use(self):
+    def _invoke_from_isolated_checkout(self, temp, *, with_git):
+        """Run the real admission script without trusting the carrier's Git HEAD."""
+        import shutil
         import subprocess
         import sys
+
+        root = Path(temp)
+        scripts = root / "scripts"
+        scripts.mkdir()
+        copied_script = scripts / script.name
+        shutil.copyfile(script, copied_script)
+        if with_git:
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "scripts/" + script.name], check=True)
+            subprocess.run([
+                "git", "-C", str(root), "-c", "user.name=Conformance",
+                "-c", "user.email=conformance@example.invalid",
+                "commit", "-q", "-m", "pinned smoke fixture",
+            ], check=True)
+        report = root / "report.json"
+        result = subprocess.run([
+            sys.executable, str(copied_script), "--backend=llvm",
+            "--compiler=" + sys.executable, "--clang=" + sys.executable,
+            "--source-sha=" + ("0" * 40),
+            "--report=" + str(report),
+        ], capture_output=True, text=True, timeout=15)
+        return result, report
+
+    def test_fake_claimed_source_sha_is_rejected_before_compiler_use(self):
         with tempfile.TemporaryDirectory() as temp:
-            result = subprocess.run([
-                sys.executable, str(script), "--backend=llvm",
-                "--compiler=" + sys.executable, "--clang=" + sys.executable,
-                "--source-sha=" + ("0" * 40),
-                "--report=" + str(Path(temp) / "report.json"),
-            ], capture_output=True, text=True, timeout=15)
+            result, report = self._invoke_from_isolated_checkout(temp, with_git=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("declared source revision does not match Git checkout HEAD",
                           result.stderr)
-            self.assertFalse((Path(temp) / "report.json").exists())
+            self.assertFalse(report.exists())
+
+    def test_absent_checkout_fails_closed_before_compiler_use(self):
+        with tempfile.TemporaryDirectory() as temp:
+            result, report = self._invoke_from_isolated_checkout(temp, with_git=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cannot independently read Git checkout HEAD",
+                          result.stderr)
+            self.assertFalse(report.exists())
 
     def test_compiler_digest_reads_actual_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:

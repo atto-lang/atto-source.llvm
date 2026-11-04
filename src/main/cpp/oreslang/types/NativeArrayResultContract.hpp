@@ -15,9 +15,11 @@ enum class ResultVariant : std::uint8_t { Ok = 0, Err = 1 };
 
 struct AppendResult final {
     ResultVariant variant = ResultVariant::Ok;
-    ArrayError error = ArrayError::Limit; // ignored for Ok; never observed
+    // Zero means absent error for Ok; it is NOT a public ArrayError variant.
+    ArrayError error = static_cast<ArrayError>(0);
 };
 static_assert(std::is_trivially_copyable_v<AppendResult>);
+static_assert(static_cast<std::uint8_t>(AppendResult{}.error) == 0);
 static_assert(!std::is_convertible_v<AppendResult, std::uint32_t>);
 static_assert(!std::is_convertible_v<AppendResult, std::int64_t>);
 
@@ -58,6 +60,9 @@ inline constexpr std::size_t kAppendResultWireSize = 3;
     std::uint8_t error = 0;
     switch (value.variant) {
         case ResultVariant::Ok:
+            // A forged or stale error tag on success is not canonical.
+            // Fail before modifying the caller's wire output.
+            if (static_cast<std::uint8_t>(value.error) != 0) return false;
             variant = 0;
             break;
         case ResultVariant::Err:
