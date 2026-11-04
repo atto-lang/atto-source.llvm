@@ -63,7 +63,24 @@ def main() -> int:
         )
         dash = root / "-dash.atto"
         dash.write_text(valid, encoding="utf-8")
-        files = [atto, ores, bad, *annotated, caught, possible_panic, dash]
+        # The real source parser must reject unprotected exceptional values
+        # before LLVM IR or any guest exception execution is possible.
+        invalid_operands = {}
+        for label, statement in (
+            ("throw_int", "throw 42;"),
+            ("raise_null", "raise null;"),
+            ("panic_bool", "panic false;"),
+            ("throw_string", 'throw "not an Error";'),
+            ("throw_unproved", "throw new Error();"),
+        ):
+            source = root / f"{label}.atto"
+            source.write_text(
+                "pub routine main(): int {\n  " + statement + "\n}\n",
+                encoding="utf-8",
+            )
+            invalid_operands[source] = label
+        files = [atto, ores, bad, *annotated, caught, possible_panic, dash,
+                 *invalid_operands]
         hashes = {path.name: digest(path) for path in files}
         original_names = sorted(path.name for path in root.iterdir())
 
@@ -109,6 +126,21 @@ def main() -> int:
             assert expected in result.stderr, result.stderr
             assert "effects inconclusive" in result.stderr, result.stderr
             assert result.stdout == "", "analysis observation leaked LLVM IR"
+
+        for source, label in invalid_operands.items():
+            result = run("--analyze", str(source))
+            assert result.returncode == 1, (label, result.returncode, result.stderr)
+            assert "native exception/control effect unsupported" in result.stderr
+            assert "std/error.Error" in result.stderr, result.stderr
+            expected_code = {
+                "throw_int": "NOT_NOMINAL_ERROR",
+                "raise_null": "NULL_ERROR_OPERAND",
+                "panic_bool": "NOT_NOMINAL_ERROR",
+                "throw_string": "NOT_NOMINAL_ERROR",
+                "throw_unproved": "UNKNOWN_ERROR_TYPE",
+            }[label]
+            assert expected_code in result.stderr, (label, result.stderr)
+            assert result.stdout == "", "invalid Error value emitted LLVM IR"
 
         for source in annotated:
             result = run("--analyze", str(source))
