@@ -119,8 +119,20 @@ public:
         if (pos_ == tokens_.size() || !tokens_[pos_].identifier)
             denied("expected checked identifier");
         const auto value = tokens_[pos_++].value;
-        for (const auto banned : {"self", "return", "end", "as", "define", "pub", "await",
-                                  "async", "void", "Failure", "on_panic", "stop", "child"}) {
+        // Match the ordinary frontend's reserved-identifier boundary even
+        // though this intentionally separate source slice has no general AST.
+        for (const auto banned : {
+            "self", "return", "end", "as", "define", "declare", "pub", "private",
+            "await", "async", "void", "Failure", "on_panic", "stop", "child",
+            "actor", "isoactor", "supervisor", "class", "module", "namespace",
+            "import", "from", "trait", "interface", "enum", "type", "struct",
+            "fnc", "routine", "method", "mtd", "static", "gen", "generator",
+            "int", "bool", "true", "false", "null", "let", "val", "final",
+            "const", "mut", "while", "for", "if", "then", "else", "fi",
+            "match", "switch", "select", "throw", "raise", "panic",
+            "trap", "defer", "recover", "try", "catch", "finally",
+            "extends", "implements", "conforms", "with", "using"
+        }) {
             if (value == banned) denied("reserved supervisor identifier");
         }
         return std::string(value);
