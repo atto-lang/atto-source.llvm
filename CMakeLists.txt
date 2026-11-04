@@ -46,6 +46,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only 21-case binder test of the *production* named native Array<T>
+    # argument permutation. Guest compiler and native runtime tests are separate.
+    add_executable(oreslang-native-named-array-slot-test
+        tests/native_named_array_slot_binding_test.cpp)
+    target_include_directories(oreslang-native-named-array-slot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-named-array-slot-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_named_array_slot_binder_host_only
+        COMMAND oreslang-native-named-array-slot-test)
+    set_tests_properties(native_named_array_slot_binder_host_only PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
