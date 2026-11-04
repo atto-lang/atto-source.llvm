@@ -57,7 +57,13 @@ def check_ir(path, handler):
     if re.search(r"(?m)^\s*define [^\n]*@" + re.escape(other) + r"\(", ir):
         raise ValueError("wrong actor handler ABI defined")
     for symbol in REQUIRED_CALLS:
-        if not re.search(r"(?m)\bcall [^\n]*@" + re.escape(symbol) + r"\(", ir):
+        # A semicolon comment containing 'call @symbol' must never count as
+        # evidence. Require a real LLVM call instruction at the line start,
+        # permitting only an SSA assignment and optional tail-call prefix.
+        instruction = (r"(?m)^[ \t]*(?:%[-A-Za-z0-9_.$]+[ \t]*=[ \t]*)?"
+                       r"(?:(?:tail|musttail|notail)[ \t]+)?call[ \t]+[^;\n]*@"
+                       + re.escape(symbol) + r"\(")
+        if not re.search(instruction, ir):
             raise ValueError("missing LLVM native ownership call: " + symbol)
 
 
