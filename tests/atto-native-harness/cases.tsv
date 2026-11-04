@@ -18,3 +18,8 @@ exit-fortythree|positive/exit-fortythree.atto|43
 package-root|positive/package-root.atto|42
 scalar-assert-pass|positive/scalar-assert-pass.atto|0
 scalar-assert-failure|positive/scalar-assert-failure.atto|1
+arith-left-assoc|positive/arith-left-assoc.atto|42
+arith-nested-subtraction|positive/arith-nested-subtraction.atto|42
+call-double|positive/call-double.atto|42
+conditional-nested|positive/conditional-nested.atto|42
+scalar-assert-nested|positive/scalar-assert-nested.atto|0
