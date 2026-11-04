@@ -358,3 +358,45 @@ scheduling, automatic CONTROL redirection upon native parent shutdown,
 cross-await typed effect propagation, and source-driven actor lifecycle
 remain release blockers. Full Maven/CMake/CTest/AOT and independent review
 remain outstanding, so both PRs stay **draft/unmerged**.
+
+## Nominal `Error` operand policy (compiler-owned precondition; draft)
+
+`src/main/cpp/oreslang/types/NominalErrorAdmission.hpp` implements a bounded
+policy for checking proof objects produced by a future canonical type resolver.
+It requires an **owned**, non-null value of the canonical
+`std/error.Error` root or a compiler-resolved nominal descendant. The root
+identity must be tagged as trusted by a verified stdlib resolver, not accepted
+from a user-declared class spelled `Error`. All proven union variants must
+qualify; nullable, borrowed/shared, primitive, structural, `Any`, unknown,
+unresolved, cyclic and fake-root cases reject. Budgets cap the number of
+nominal classes (128), ancestry depth (64), and total union variants (32).
+No guest code may supply these proof objects directly.
+
+The current native parser **does not yet produce trusted canonical stdlib
+ancestry proofs**. Unprotected source `throw`, `raise`, `panic` stays
+rejected with a stable, source-type-aware diagnostic for obvious primitives,
+strings, null and unknown expressions; no LLVM IR is emitted for those
+statements. The existing legacy caught `int` throw remains a separate,
+noncanonical compatibility slice and is **not** proof of typed Error support.
+
+The CTest `native_nominal_error_admission_host_only` validates the standalone
+compiler type-proof policy. The real-compiler `--analyze` negative fixtures
+exercise fail-closed source admission, but retain exit 2 for otherwise-valid
+native sources while exception inference remains incomplete. Before the
+policy may authorize **any** guest exception, the native import/type system
+must bind a verified `std/error.Error` class ID and nominal inheritance
+graph, enforce ownership/nonnullness of actual operand expressions,
+associate effect rows with typed exception edges, and execute identical
+Java/GraalVM and LLVM `.atto` guest fixtures.
+
+### Verification evidence boundary
+
+The standalone proof-policy header and test were copied byte-for-byte into a
+local isolated build and verified against the exact GitHub Git blob IDs:
+`b27d2172833d900f0aa10d40c0ff8b9435026142` and
+`79c229088154628024fc375482a59561c3c0589c`.
+A C++17 GCC warnings-as-errors build and a Clang AddressSanitizer plus
+UndefinedBehaviorSanitizer build executed successfully locally. This proves
+only the standalone two-file unit slice; full native LLVM compilation,
+parser-negative executable receipts, Linux/macOS matrix and cross-backend
+guest parity remain **unverified** until exact-head runner admission.
