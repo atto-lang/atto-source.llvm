@@ -97,6 +97,10 @@ pub fnc main(): int {
     }
     denied(twice_def
         + "pub fnc main(int value): int { return twice!(syntax expr value); }");
+    // Shared .NET/LLVM fixture: unresolved name in scalar no-arg entry
+    // must be refused by the typed template before guest codegen.
+    denied(twice_def
+        + "pub fnc main() -> int { return twice!(syntax expr runtime_value); }");
     denied(twice_def
         + "pub fnc main(): int { return twice!(syntax expr 20 + 1); }");
     denied(twice_def
