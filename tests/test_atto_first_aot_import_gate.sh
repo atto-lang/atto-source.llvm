@@ -74,5 +74,11 @@ must_reject missing_compiler 'real compiler unavailable' \
   "$work/missing" "$clang" "$fixtures"
 must_reject missing_fixture 'missing checked-in .atto fixture' \
   "$work/accept-all" "$clang" "$work"
-[[ "$passed" -eq 7 ]] || exit 1
-echo "ATTO_FIRST_AOT_GATE_SELFTEST=7/7_SOURCE_FREE"
+mkdir -p "$work/tampered-fixtures"
+cp -- "$fixtures/main.atto" "$fixtures/math.atto" "$fixtures/explicit.atto" \
+  "$work/tampered-fixtures/"
+printf "# altered fixture bytes\n" >> "$work/tampered-fixtures/math.atto"
+must_reject changed_import_fixture 'shared Java/LLVM fixture blob mismatch: math.atto' \
+  "$work/accept-all" "$clang" "$work/tampered-fixtures"
+[[ "$passed" -eq 8 ]] || exit 1
+echo "ATTO_FIRST_AOT_GATE_SELFTEST=8/8_SOURCE_FREE"
