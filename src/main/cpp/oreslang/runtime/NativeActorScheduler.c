@@ -1016,7 +1016,7 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
 OresNativeActorRef ores_native_actor_scheduler_spawn_ready(
     OresNativeActorScheduler* s, size_t i) {
     OresNativeActorRef missing = {0, 0, 0};
-    if (!s || executing == s) return missing;
+    if (!s) return missing;
     lock(s);
     OresNativeActorRef ref = missing;
     if (!s->retired && i < s->actor_count && !s->actors[i].spawned
