@@ -4815,3 +4815,24 @@ if(BUILD_TESTING)
         COMMAND oreslang-local-context-domains-v1-test)
     set_tests_properties(native_local_context_domains_host_only PROPERTIES TIMEOUT 35)
 endif()
+
+
+# Authenticated ActorLocal v1: actual native scheduler callbacks in two actors,
+# not a simulated ExecutionStamp and not source-level .atto actor lowering.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actorlocal-current-turn-v1-test
+        tests/native_actorlocal_scheduler_turn_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-actorlocal-current-turn-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actorlocal-current-turn-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actorlocal-current-turn-v1-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-actorlocal-current-turn-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_actorlocal_authenticated_scheduler_turn
+        COMMAND oreslang-actorlocal-current-turn-v1-test)
+    set_tests_properties(native_actorlocal_authenticated_scheduler_turn
+        PROPERTIES TIMEOUT 35)
+endif()
