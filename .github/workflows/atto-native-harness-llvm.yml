@@ -8,6 +8,10 @@ on:
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/project_root_import_test.cpp'
       - 'tests/atto-native-harness/**'
+      - 'stdlib/testing_scalar.atto'
+      - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
+      - 'tests/core_library_sources_test.cpp'
+      - 'tests/test_atto_testing_scalar_contract.sh'
       - 'tests/atto_native_harness_parity.sh'
       - 'tests/test_atto_native_parity_manifest.sh'
       - 'tests/test_atto_native_workflow_contract.sh'
@@ -48,6 +52,7 @@ jobs:
           bash tests/atto_native_harness_parity.sh --inventory-only
           bash tests/test_atto_native_parity_manifest.sh
           bash tests/test_atto_native_workflow_contract.sh
+          bash tests/test_atto_testing_scalar_contract.sh
       - name: Install native compiler toolchain
         shell: bash
         run: |
@@ -61,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-no-gc-ir-audit-build oreslang-no-gc-ir-audit-tests-build
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-core-library-sources-test oreslang-no-gc-ir-audit-build oreslang-no-gc-ir-audit-tests-build
           test -x build/oreslang-no-gc-ir-audit
           ctest --test-dir build --output-on-failure --no-tests=error -R '^native_no_gc_ir_audit_unit$'
           test -x build/oreslang-llvmc
@@ -73,12 +78,13 @@ jobs:
           grep -Eq 'Test +#[0-9]+: atto_native_harness_inventory_source_only$' "$RUNNER_TEMP/atto-ctest-inventory.txt"
           grep -Eq 'Test +#[0-9]+: atto_native_harness_compiler_guest_o0_o2$' "$RUNNER_TEMP/atto-ctest-inventory.txt"
           grep -Eq 'Test +#[0-9]+: native_project_root_import_security$' "$RUNNER_TEMP/atto-ctest-inventory.txt"
-      - name: Execute native C++ import security tests
+          grep -Eq 'Test +#[0-9]+: native_core_library_registry_provider_policy$' "$RUNNER_TEMP/atto-ctest-inventory.txt"
+      - name: Execute native C++ import and stdlib registry security tests
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build --output-on-failure --timeout 120 -R '^native_project_root_import_security$'
-      - name: Execute 24 actual .atto guests at Clang O0 and O2
+          ctest --test-dir build --output-on-failure --timeout 120 -R '^(native_project_root_import_security|native_core_library_registry_provider_policy)$'
+      - name: Execute 30 actual .atto guests at Clang O0 and O2
         shell: bash
         run: |
           set -euo pipefail
@@ -86,9 +92,9 @@ jobs:
           ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit" \
             bash tests/atto_native_harness_parity.sh --run \
             | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
-          test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 48
-          test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 3
-          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=24|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED' \
+          test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 60
+          test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 5
+          grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=30|optimizations=2|negative=8|guest_receipt_protocol=UNSUPPORTED' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
       - name: Assert unchanged source and exact head after execution
         shell: bash
