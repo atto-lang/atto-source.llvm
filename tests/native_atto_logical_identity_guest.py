@@ -84,6 +84,39 @@ def main():
         must_reject(compiler, aliased, "hardlinked import", "ATTO_UNIT_SOURCE_ALIAS")
         passed += 1
 
+        # A canonical marker grants the root its identity even without +/
+        # imports. Reject malformed or symlinked markers before IR emission.
+        malformed_manifest = base / "malformed-manifest-relative"
+        write_program(malformed_manifest)
+        (malformed_manifest / ".atto.pkg.toml").write_text(
+            'schema_version = "999"\n', encoding="utf-8")
+        (malformed_manifest / ".ores.pkg.toml").write_text(
+            MANIFEST, encoding="utf-8")
+        must_reject(compiler, malformed_manifest,
+                    "invalid canonical manifest with legacy sibling",
+                    "schema_version")
+        passed += 1
+
+        oversized_manifest = base / "oversized-manifest-relative"
+        write_program(oversized_manifest)
+        (oversized_manifest / ".atto.pkg.toml").write_bytes(
+            MANIFEST.encode() + b"#" + (b"x" * 65536))
+        must_reject(compiler, oversized_manifest,
+                    "oversized canonical manifest", "64 KiB")
+        passed += 1
+
+        symlink_manifest = base / "symlink-manifest-relative"
+        write_program(symlink_manifest)
+        (symlink_manifest / ".atto.pkg.toml").unlink()
+        (symlink_manifest / "marker.toml").write_text(
+            MANIFEST, encoding="utf-8")
+        (symlink_manifest / ".atto.pkg.toml").symlink_to(
+            symlink_manifest / "marker.toml")
+        must_reject(compiler, symlink_manifest,
+                    "canonical manifest symlink",
+                    "symlinked AttoLang source path")
+        passed += 1
+
         symlink = base / "symlink"
         write_program(symlink)
         (symlink / "lib.atto").unlink()
