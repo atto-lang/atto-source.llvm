@@ -10,6 +10,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/project_root_import_test.cpp'
       - 'tests/native_module_imports.py'
+      - 'tests/fixtures/atto-native-parity/**'
       - 'CMakeLists.txt'
       - '.github/workflows/atto-import-resolution.yml'
   workflow_dispatch:
@@ -66,6 +67,12 @@ jobs:
           echo "ATTO_LLVM_SOURCE_HEAD=$EXPECTED_HEAD"
           echo "ATTO_LLVM_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
           python3 -m py_compile tests/native_module_imports.py
+          # Identical Git blobs are required on the Java and LLVM source
+          # branches; do not silently test unrelated programs called "42".
+          test "$(git hash-object --no-filters tests/fixtures/atto-native-parity/main.atto)" =             '5ffe955025a664d5f069e441a9cbcaa9227d06a8'
+          test "$(git hash-object --no-filters tests/fixtures/atto-native-parity/lib.atto)" =             '62ddcdb8c1cfe60da8aca47734c46bca7bc9ae56'
+          test "$(git hash-object --no-filters tests/fixtures/atto-native-parity/.atto.pkg.toml)" =             '66aa65f18ffcdbb743f9793249b146da083542ce'
+          echo 'ATTO_LLVM_SHARED_JAVA_FIXTURE_BLOBS=3/3 PASS'
       - name: Provision native LLVM 19 CMake and Clang compiler
         shell: bash
         run: |
