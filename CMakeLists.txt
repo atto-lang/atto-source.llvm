@@ -4258,18 +4258,30 @@ if(BUILD_TESTING)
     set_tests_properties(native_macro_aot_admission_no_runtime_fallback
         PROPERTIES TIMEOUT 20)
 
-    # Cross-unit public macros are not linked by this stage-0 parser.
-    # Explicitly reject the exact physical two-module Java #2492 fixture;
-    # successful native return-42 must only be claimed after typed artifact
-    # owner/provenance linkage and true compiler-backed guest execution.
-    add_test(NAME native_macro_imported_public_unlinked_no_ir
-        COMMAND "${CMAKE_COMMAND}"
-            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
-            "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/import-consumer.atto"
-            "-DDIAGNOSTIC=NATIVE_IMPORTED_MACRO_LINKER_REQUIRED"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
-    set_tests_properties(native_macro_imported_public_unlinked_no_ir
-        PROPERTIES TIMEOUT 25)
+    # Imported public macros are admitted only after the same closed typed
+    # macro grammar, verified physical root ownership, and producer digest.
+    # Every adversarial imported-macro fixture must fail with no partial IR.
+    foreach(macro_case IN ITEMS
+            private missing-name traversal legacy duplicate-alias overflow)
+        if(macro_case STREQUAL "private" OR macro_case STREQUAL "traversal"
+                OR macro_case STREQUAL "legacy")
+            set(macro_diagnostic "NATIVE_IMPORTED_MACRO_LINKER_REQUIRED")
+        elseif(macro_case STREQUAL "duplicate-alias")
+            set(macro_diagnostic "NATIVE_IMPORTED_MACRO_DUPLICATE")
+        elseif(macro_case STREQUAL "overflow")
+            set(macro_diagnostic "NATIVE_MACRO_CONST_OVERFLOW")
+        else()
+            set(macro_diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
+        endif()
+        add_test(NAME "native_macro_imported_${macro_case}_no_ir"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/import-${macro_case}-reject.atto"
+                "-DDIAGNOSTIC=${macro_diagnostic}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+        set_tests_properties("native_macro_imported_${macro_case}_no_ir"
+            PROPERTIES TIMEOUT 25)
+    endforeach()
 
     # Exercise the actual compiler executable without adding a Python test
     # dependency. Rejection must exit 1, carry the dedicated diagnostic, and
@@ -4321,6 +4333,28 @@ endif()
 if(BUILD_TESTING)
     find_program(ORE_NATIVE_MACRO_CLANG_EXECUTABLE NAMES clang)
     if(ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
+        # Real two-physical-file import/expand/codegen/link native guests.
+        # SHA-256 of both files is part of the executable receipt.
+        foreach(macro_case IN ITEMS literal identity)
+            if(macro_case STREQUAL "literal")
+                set(macro_consumer "import-consumer.atto")
+                set(macro_producer "import-producer.atto")
+            else()
+                set(macro_consumer "import-identity-consumer.atto")
+                set(macro_producer "import-identity-producer.atto")
+            endif()
+            add_test(NAME "native_macro_imported_${macro_case}_linked_guest_aot_42"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_consumer}"
+                    "-DPRODUCER=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_producer}"
+                    "-DCLANG=${ORE_NATIVE_MACRO_CLANG_EXECUTABLE}"
+                    "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/macro-aot-imported-${macro_case}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+            set_tests_properties("native_macro_imported_${macro_case}_linked_guest_aot_42"
+                PROPERTIES TIMEOUT 90)
+        endforeach()
+
         foreach(macro_case IN ITEMS const identity)
             set(macro_fixture
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-${macro_case}-aot.ores")
