@@ -17,6 +17,10 @@ die() { printf 'FAIL AttoLang LLVM native guest parity: %s\n' "$*" >&2; exit 1; 
 [[ -f "$manifest" && ! -L "$manifest" && -f "$negative_manifest" && ! -L "$negative_manifest" ]] ||
   die 'missing or symlinked trusted test manifests'
 [[ "$manifest" != "$negative_manifest" ]] || die 'manifests alias each other'
+[[ -d "$corpus" && ! -L "$corpus" &&
+   -d "$corpus/positive" && ! -L "$corpus/positive" &&
+   -d "$corpus/negative" && ! -L "$corpus/negative" ]] ||
+  die 'source corpus directories must be real, not symlinks'
 declare -A seen=()
 declare -a positive_ids=() positive_paths=() expected_exits=()
 declare -a negative_ids=() negative_paths=() diagnostic_needles=()
@@ -60,6 +64,14 @@ for path in "$manifest" "$negative_manifest" \
     "${positive_paths[@]/#/$corpus/}" "${negative_paths[@]/#/$corpus/}"; do
   [[ -f "$path" && ! -L "$path" ]] || die "nonregular source: $path"
 done
+
+# Review-frozen v1 inventory mapping (including error diagnostic substrings).
+# Keep these blob identities synchronized with deliberate fixture changes.
+command -v git >/dev/null || die 'git hash-object is required for manifest identity'
+[[ "$(git hash-object -- "$manifest")" == "f632b25781b55f04dfd0519b25089410333edc51" ]] ||
+  die 'positive manifest differs from reviewed current native guest mapping'
+[[ "$(git hash-object -- "$negative_manifest")" == "7c5545448b7011bfddb77be09607f9fef2cb734f" ]] ||
+  die 'negative manifest differs from reviewed current compiler diagnostic mapping'
 
 if [[ "$mode" == --inventory-only ]]; then
   echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=40 negative=6 (NO_COMPILER_EXECUTION)'
