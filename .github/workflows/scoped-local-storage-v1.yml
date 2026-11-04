@@ -28,7 +28,7 @@ permissions:
 jobs:
   native-host-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -45,4 +45,8 @@ jobs:
       - name: gcc and clang ASan UBSan host-only tests
         env:
           ORES_SCOPED_LOCAL_RUN_SANITIZERS: "1"
+        run: bash scripts/test-scoped-locals-v1.sh
+      - name: gcc ThreadSanitizer native request origin race tests
+        env:
+          ORES_SCOPED_LOCAL_RUN_TSAN: "1"
         run: bash scripts/test-scoped-locals-v1.sh
