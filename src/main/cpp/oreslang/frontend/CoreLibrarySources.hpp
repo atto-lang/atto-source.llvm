@@ -357,6 +357,8 @@ define module testing_m2 as
   // -1 malformed ID, -2 capacity, -3 unknown body, -4 duplicate admission.
   // Skipped/filtered cases never call invoke_scalar_body.
   pub fnc run_one(borrow mut TestSuite suite, borrow mut RegisteredCase candidate): int {
+    // Native LLVM requires an owning class local before structured branches.
+    let mut TestCase snapshot = new TestCase();
     if suite.halted != 0; then
       return 4;
     fi
@@ -367,7 +369,6 @@ define module testing_m2 as
       return -1;
     fi
 
-    let mut TestCase snapshot = new TestCase();
     snapshot.id = candidate.id;
     snapshot.selected = candidate.selected;
     snapshot.skipped = candidate.skipped;
