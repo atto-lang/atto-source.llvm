@@ -705,6 +705,20 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
         set_tests_properties(native_checked_i64_arithmetic PROPERTIES TIMEOUT 120)
     endif()
+    # AttoLang parity must compile actual .atto source to verified LLVM IR,
+    # link a native executable, and compare bounded results to a Rust oracle.
+    # This is source mutation, NOT stdin/coverage fuzzing or live actor races.
+    add_test(NAME atto_llvm_source_fuzz_oracle_host_only
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" atto-source-fuzz-selftest)
+    set_tests_properties(atto_llvm_source_fuzz_oracle_host_only
+        PROPERTIES TIMEOUT 15 LABELS "atto;host-model;negative")
+    if(ORE_CLANG)
+        add_test(NAME atto_llvm_compiler_backed_source_fuzz
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" atto-source-fuzz
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}" 1729 8)
+        set_tests_properties(atto_llvm_compiler_backed_source_fuzz
+            PROPERTIES TIMEOUT 180 LABELS "atto;llvm;compiler-backed;source-mutation")
+    endif()
     # Executable Oreslang method fixtures, using Rust-only tooling.
     if(ORE_CLANG)
         add_test(NAME native_inline_self_receiver_arity_aot
