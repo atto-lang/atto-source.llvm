@@ -43,6 +43,16 @@ template<class T> concept HasHandleWrite = requires(T& loan, const Store::Handle
 };
 static_assert(!HasHandleWrite<Store::Loan<0, false>>);
 static_assert(HasHandleWrite<Store::Loan<0, true>>);
+// Main-branch checked-host API remains usable without reinstating raw spans.
+template<class T> concept HasCheckedHostWrite = requires(T& loan) {
+    loan.write_at(std::size_t{}, 1.0f);
+};
+static_assert(!HasCheckedHostWrite<Store::Loan<0, false>>);
+static_assert(HasCheckedHostWrite<Store::Loan<0, true>>);
+static_assert(std::is_same_v<
+    decltype(std::declval<Store::Loan<0, false>>().read_at(std::size_t{})), float>);
+static_assert(std::is_same_v<
+    decltype(std::declval<Store::Loan<0, false>>().size_checked()), std::size_t>);
 static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
 static_assert(!std::is_default_constructible_v<Store::Handle>);
@@ -128,6 +138,11 @@ int main() {
         auto r2 = a.borrow_read<0>();
         auto w = a.borrow_write<1>();
         check(r.size() == 3 && r.get(1) == 2.5f);
+        check(r.size_checked() == 3 && r.read_at(1) == 2.5f);
+        expect<std::out_of_range>([&] { (void)r.read_at(3); });
+        expect<std::out_of_range>([&] { (void)w.write_at(3, 123); });
+        w.write_at(0, 100);
+        check(w.read_at(0) == 100);
         check(r.read_handle(h1) == 2.5f);
         expect<std::out_of_range>([&] { (void)r.read_handle(foreign_row); });
         expect<std::out_of_range>([&] { w.write_handle(foreign_row, 999); });
@@ -342,6 +357,8 @@ int main() {
         carried.emplace(owner->borrow_read<0>());
         owner.reset();
         expect<std::logic_error>([&] { (void)carried->size(); });
+        expect<std::logic_error>([&] { (void)carried->size_checked(); });
+        expect<std::logic_error>([&] { (void)carried->read_at(0); });
         expect<std::logic_error>([&] { (void)carried->read_handle(owned_row); });
     }
     carried.reset();
