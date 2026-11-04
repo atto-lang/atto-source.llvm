@@ -154,6 +154,58 @@ int main() {
     }
     assert(exported_denied);
     scalar.functions.front().exported = false;
+
+    // A 64-frame counter cannot prove physical stack safety if the guest
+    // builds huge native ABI argument lists or expression temporaries.
+    oreslang::Program wide_frame;
+    oreslang::Function wide;
+    wide.name = "wide";
+    for (std::size_t i = 0; i < 9; ++i)
+        wide.parameters.emplace_back();
+    wide.result = call("wide", 9);
+    wide_frame.functions.push_back(std::move(wide));
+    oreslang::Function wide_main;
+    wide_main.name = "main";
+    wide_main.result = call("wide", 9);
+    wide_frame.functions.push_back(std::move(wide_main));
+    bool wide_denied = false;
+    try { (void)oreslang::require_native_guest_call_graph_bounded(wide_frame, true); }
+    catch (const std::runtime_error& e) {
+        wide_denied = std::string(e.what()).find(
+            "per-frame parameter budget") != std::string::npos;
+    }
+    assert(wide_denied);
+
+    // Nested AST nodes create register spills/temporaries independently
+    // of the logical call depth. Reject huge per-frame expressions.
+    oreslang::Program deep_expression;
+    oreslang::Function expr_fn;
+    expr_fn.name = "grow";
+    expr_fn.parameters.emplace_back();
+    auto expression = call("grow", 1);
+    for (std::size_t i = 0; i < 128; ++i) {
+        auto sum = std::make_unique<oreslang::Expression>();
+        sum->kind = oreslang::Expression::Kind::Add;
+        sum->left = std::move(expression);
+        sum->right = std::make_unique<oreslang::Expression>();
+        sum->right->kind = oreslang::Expression::Kind::Integer;
+        expression = std::move(sum);
+    }
+    expr_fn.result = std::move(expression);
+    deep_expression.functions.push_back(std::move(expr_fn));
+    oreslang::Function expr_main;
+    expr_main.name = "main";
+    expr_main.result = call("grow", 1);
+    deep_expression.functions.push_back(std::move(expr_main));
+    bool expression_denied = false;
+    try { (void)oreslang::require_native_guest_call_graph_bounded(deep_expression, true); }
+    catch (const std::runtime_error& e) {
+        expression_denied = std::string(e.what()).find(
+            "per-frame expression budget") != std::string::npos;
+    }
+    assert(expression_denied);
+
+    // Retain the actor/owned-state recursive denial after resource checks.
     scalar.actors.emplace_back();
     bool actor_denied_for_m1 = false;
     try { (void)oreslang::require_native_guest_call_graph_bounded(scalar, true); }
