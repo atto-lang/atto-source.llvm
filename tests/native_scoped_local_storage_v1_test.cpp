@@ -167,6 +167,33 @@ void disallowed_unknown_dynamic_payload_fails_closed() {
     assert(store.used_bytes() == 0);
 }
 
+void malformed_utf8_is_rejected_without_mutation() {
+    ActorLocalStoreV1 actor(id(88));
+    ActorLocalKeyV1<std::string> key;
+    assert(actor.set(key, id(88), std::string("original")));
+    // Overlong, stray continuation, surrogate, >U+10FFFF, truncated
+    // and valid 4-byte supplementary Unicode scalar.
+    const std::string invalid[] = {
+        std::string("\\xC0\\x80"),
+        std::string("\\x80"),
+        std::string("\\xED\\xA0\\x80"),
+        std::string("\\xF4\\x90\\x80\\x80"),
+        std::string("\\xF0\\x9F")
+    };
+    for (const auto& sample : invalid) {
+        assert(!actor.set(key, id(88), sample));
+        assert(actor.get_copy(key, id(88)) == std::string("original"));
+        assert(actor.used_bytes() == 8);
+    }
+    assert(actor.set(key, id(88), std::string("\\xF0\\x9F\\x98\\x80")));
+    assert(actor.used_bytes() == 4);
+    ThreadLocalKeyV1<std::string> thread_key;
+    PhysicalThreadLocalStoreV1::clear_current_thread();
+    for (const auto& sample : invalid)
+        assert(!PhysicalThreadLocalStoreV1::set(thread_key, sample));
+    assert(PhysicalThreadLocalStoreV1::used_bytes() == 0);
+}
+
 void invalid_identity_denied() {
     bool threw=false;
     try { ActorLocalStoreV1 invalid({}); }
@@ -184,6 +211,7 @@ int main() {
     byte_budget_replacement_removal_and_utf8();
     physical_thread_byte_budget_and_scrub();
     disallowed_unknown_dynamic_payload_fails_closed();
+    malformed_utf8_is_rejected_without_mutation();
     invalid_identity_denied();
     std::puts("SCOPED_LOCAL_HOST_ONLY_PASS");
 }
