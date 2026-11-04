@@ -48,6 +48,9 @@ SUITES = {
     "m1-invariants": (
         b"ORES_TEST|PASS|llvm-m1/contracts/atomic-recovery|\n"
         b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
+    "m2-corrupt-state": (
+        b"ORES_TEST|PASS|llvm-m2/state/corrupt-preflight|\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
     "m1-finish-integrity": (
         b"ORES_TEST|PASS|llvm-m1/finish/invalid-state-rejected|\n"
         b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
