@@ -61,7 +61,7 @@ if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
         f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
     )
 PY
-for rejected in immutable missing-operand unclosed snapshot; do
+for rejected in immutable missing-operand unclosed snapshot no-read stale-read; do
  if "$emitter" "$rejected" "$scratch/$rejected.ll" >"$scratch/$rejected.out" 2>"$scratch/$rejected.err"; then
    echo "FAIL: MIR compiler admitted $rejected"; exit 1
  fi
@@ -71,5 +71,9 @@ for rejected in immutable missing-operand unclosed snapshot; do
  if [ "$rejected" = snapshot ] && ! grep -Fq 'snapshot value lowering not implemented' "$scratch/$rejected.err"; then
    echo "FAIL: missing compiler-owned unsupported-snapshot diagnostic"; exit 1
  fi
+ if { [ "$rejected" = no-read ] || [ "$rejected" = stale-read ]; } &&
+    ! grep -Fq 'terminal field read before close' "$scratch/$rejected.err"; then
+   echo "FAIL: missing compiler-owned terminal-result diagnostic for $rejected"; exit 1
+ fi
 done
-printf 'PASS: strict C++17 typed MIR -> real native LLVM IR (exit 42, owner close erasure, bounds trap, four rejects)\n'
+printf 'PASS: strict C++17 typed MIR -> real native LLVM IR (exit 42, owner close erasure, bounds trap, six rejects)\n'
