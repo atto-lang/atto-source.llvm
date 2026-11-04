@@ -25,13 +25,17 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Verify checked out native source blobs
+      - name: Verify exact PR head and checked out native source blobs
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "8faf03140dcd9a83ba34bfbbbdfa7cd1670ac506"
-          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "e6f707ae7df3e1b13815d4fffddc560af7c42403"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "dd8ade17c53cbcec2441a797007bfb64643699bc"
+          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "b6ddec5fba8cf06835397f1f40fe7dfb4b138564"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
         shell: bash
