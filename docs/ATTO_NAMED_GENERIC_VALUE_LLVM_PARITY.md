@@ -77,8 +77,11 @@ checks both source/target cross-suffix symlink directions and one positive
 same-suffix `.atto` import (five new assertions). The module-graph suite
 also rejects **four hard-link cross-dialect aliases**: both import orders
 across a shared `.atto`/`.ores` inode, and both self-import alias directions.
-A file's import dialect must never depend on visitation order. These are
-**registered, not yet executed** until an authorized runner is admitted.
+A file's import dialect must never depend on visitation order. The
+standalone project-root resolver also rejects invalid and extensionless
+importing-source filenames directly (four C++ negative assertions), even
+when called without the module loader. These are **registered, not yet
+executed** until an authorized runner is admitted.
 
 ## Generic-call token lookahead and separate binding namespaces
 
