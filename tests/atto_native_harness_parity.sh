@@ -20,8 +20,10 @@ die() { printf 'FAIL AttoLang LLVM native guest parity: %s\n' "$*" >&2; exit 1; 
 declare -A seen=() seen_sources=()
 declare -a positive_ids=() positive_paths=() expected_exits=()
 declare -a negative_ids=() negative_paths=() diagnostic_needles=()
-while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
+while IFS= read -r row || [[ -n "$row" ]]; do
+  IFS='|' read -r id path expected extra <<< "$row"
   [[ "$id" == \#* || -z "$id" ]] && continue
+  [[ "${row//[!|]/}" == '||' ]] || die "positive manifest must contain exactly three fields: $id"
   [[ -z "${extra:-}" && "$id" =~ ^[a-z][a-z0-9-]*$ &&
      "$path" =~ ^positive/[a-z0-9-]+\.atto$ &&
      "$expected" =~ ^(0|[1-9][0-9]{0,2})$ ]] ||
@@ -37,8 +39,10 @@ while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
 done < "$manifest"
 [[ "${#positive_ids[@]}" -eq 40 ]] || die "expected 40 admitted native scalar cases"
 
-while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
+while IFS= read -r row || [[ -n "$row" ]]; do
+  IFS='|' read -r id path needle extra <<< "$row"
   [[ "$id" == \#* || -z "$id" ]] && continue
+  [[ "${row//[!|]/}" == '||' ]] || die "negative manifest must contain exactly three fields: $id"
   [[ -z "${extra:-}" && "$id" =~ ^[a-z][a-z0-9-]*$ &&
      "$path" =~ ^negative/[a-z0-9-]+\.atto$ && -n "$needle" ]] ||
     die "invalid negative manifest entry: $id"
