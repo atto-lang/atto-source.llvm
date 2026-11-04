@@ -1,0 +1,4 @@
+# AttoLang native LLVM fuzz target: first build ./build/fuzz-byte using the LLVM compiler.
+[fuzz]
+command = ["./build/fuzz-byte"]
+max_bytes = 65536
