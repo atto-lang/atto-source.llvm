@@ -2049,6 +2049,15 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-supervisor-stop-only-source-test PRIVATE Threads::Threads)
     add_test(NAME native_supervisor_source_stop_only_control
         COMMAND oreslang-native-supervisor-stop-only-source-test)
+    add_executable(oreslang-native-supervisor-stop-only-lexical-test
+        tests/native_supervisor_stop_only_lexical_test.cpp)
+    target_include_directories(oreslang-native-supervisor-stop-only-lexical-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-supervisor-stop-only-lexical-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-supervisor-stop-only-lexical-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_stop_only_lexical_security
+        COMMAND oreslang-native-supervisor-stop-only-lexical-test)
     add_executable(oreslang-effect-unwind-test tests/effect_unwind_test.cpp)
     target_include_directories(oreslang-effect-unwind-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-effect-unwind-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
