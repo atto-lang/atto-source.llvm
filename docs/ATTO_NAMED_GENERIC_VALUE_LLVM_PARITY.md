@@ -53,6 +53,22 @@ slot, never the original source index.
 | `.atto` relative and `+/` module imports | Compiler graph + root-security suites added; not yet executed |
 | Legacy `.ores` imports | Preserved; extensionless default chooses importing source suffix |
 
+## Source dialect and symlink identity hardening
+
+The LLVM loader canonicalizes filesystem paths to enforce physical unit
+identity. It now also rejects a mismatch between the requested
+`.atto`/`.ores` source suffix and the physical target suffix, so a
+symlink cannot silently switch the extensionless resolution rule in the
+entry file, a relative import, or a `+/` package-root import.
+Same-suffix symlinks remain permitted, and explicitly importing the
+physical `.ores` file from `.atto` (or vice versa) remains supported.
+
+The `native_source_module_graph_execution` suite has seven additional
+regression scenarios: both suffix directions for entry, relative and
+project-root imports must reject with no LLVM IR; a same-suffix `.atto`
+symlink must compile, link, and execute a 42-exit native guest. These
+are **registered, not yet executed** until an authorized runner is admitted.
+
 ## Executable evidence gates
 
 The focused workflow `.github/workflows/named-call-exact-head.yml`
