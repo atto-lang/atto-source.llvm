@@ -83,6 +83,12 @@ public:
                 fail(unit, "native linked suspend functions require module continuation lowering");
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
+            // Preserve compile-time import authority in the linked AST
+            // without emitting any macro source or runtime callable into IR.
+            linked.compile_time_macro_imports.insert(
+                linked.compile_time_macro_imports.end(),
+                unit.program.compile_time_macro_imports.begin(),
+                unit.program.compile_time_macro_imports.end());
             for (const auto& type : unit.program.sum_types) {
                 bool found = false; for (const auto& existing : linked.sum_types) if (existing.name == type.name) found = true;
                 if (!found) linked.sum_types.push_back(type);
