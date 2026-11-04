@@ -46,6 +46,16 @@ fi
 if grep -Eq 'declare .*@oreslang_int_array_' "$work/program.ll"; then
   runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
 fi
+if grep -Eq 'declare .*@(oreslang_source_actor_|ores_actor_)' "$work/program.ll"; then
+  # Source actors: the native scheduler, VM and actor-owned i64 heap. Same
+  # set tests/source_actor_e2e.py links, minus its test-only receipt define.
+  rt="$root/src/main/cpp/oreslang/runtime"
+  runtime_sources+=(
+    "$rt/ActorOwnedI64Heap.c" "$rt/NativeActorScheduler.c" "$rt/NativeOresVM.c"
+    "$rt/NativeActorFuture.c" "$rt/SourceActorBootstrap.c"
+    "$rt/NativeExecutionContextStore.c" "$rt/NativeContinuationStore.c"
+    "$rt/NativeAwaitTraceBridge.c" "$rt/NativeLogicalTrace.c")
+fi
 if (( ${#runtime_sources[@]} )); then
   "$clang" "-O${opt_level}" -x ir "$work/program.ll" -x c -std=c11 \
     -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
