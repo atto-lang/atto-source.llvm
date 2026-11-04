@@ -20,8 +20,10 @@ native process with an exact, nontrivial expected exit code. The three array
 tests link the source repository's `NativeIntArrayRegion.c`. A CTest
 registration is **an authored test only**, not a passing execution receipt.
 The four exact fixture Git blobs are pinned by
-`tests/atto_lru_llvm_source.py`, which also intentionally corrupts each
-fixture in a scratch directory and proves the source guard rejects it.
+`tests/atto_lru_llvm_source.py`, which deliberately rejects seven source/CI mutations in a scratch
+directory: four modified fixture bodies, a symlinked source, an incorrect
+native exit oracle, and a missing primitive-array runtime linker input.
+It rejects commented-out or duplicate native CTest registrations.
 This source integrity gate does not invoke the LLVM compiler.
 
 This is a **narrow primitive/scalar prerequisite**, not full LRU parity:

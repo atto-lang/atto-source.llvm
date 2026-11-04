@@ -48,13 +48,26 @@ def verify(root: Path, check_cmake: bool = True) -> None:
             cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
             path = "../../" + relative.as_posix()
             register = "oreslang_contract_test(atto_lru_" + name.replace("-", "_") + " " + path
-            require(register in cmake, "unregistered LLVM guest: " + name)
-            require("--run " + str(expected_exit) in cmake[cmake.index(register):cmake.index(register)+260],
-                    "wrong native exit oracle: " + name)
+            # A commented-out line or adjacent unrelated CTest is not a
+            # registered native guest. Require one exact active invocation.
+            matches = [
+                line.strip() for line in cmake.splitlines()
+                if line.lstrip().startswith(register + " ") and
+                line.rstrip().endswith(")")
+            ]
+            require(len(matches) == 1, "missing/duplicate native CTest: " + name)
+            witness = matches[0]
+            require((' --run ' + str(expected_exit) + ' --clang "${ORE_CLANG}"') in witness,
+                    "wrong native exit/linker oracle: " + name)
+            runtime = (' --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/'
+                       'src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c"')
+            require((runtime in witness) == needs_array,
+                    "missing or unexpected native array runtime: " + name)
     if check_cmake:
         cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
-        require("atto_lru_micro_source_inventory" in cmake,
-                "source-only integrity CTest missing")
+        require(any(line.lstrip().startswith("add_test(NAME atto_lru_micro_source_inventory")
+                    for line in cmake.splitlines()),
+                "active source-only integrity CTest missing")
 
 def main() -> None:
     verify(ROOT)
@@ -62,6 +75,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="atto-llvm-lru-mutation-") as tmp:
         dst = Path(tmp)
         (dst / PREFIX).mkdir(parents=True)
+        shutil.copyfile(ROOT / "CMakeLists.txt", dst / "CMakeLists.txt")
         for name in CASES:
             path = PREFIX / (name + ".atto")
             shutil.copyfile(ROOT / path, dst / path)
@@ -77,7 +91,45 @@ def main() -> None:
             else:
                 raise RuntimeError("LLVM source mutation was accepted: " + name)
             path.write_bytes(original)
-    print("ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=4 mutations_rejected=4 "
+        # A dangling symlink must not be accepted as a valid source.
+        symlink_case = dst / PREFIX / "probe-wrap.atto"
+        symlink_bytes = symlink_case.read_bytes()
+        symlink_case.unlink()
+        symlink_case.symlink_to("missing.atto")
+        try:
+            verify(dst, check_cmake=False)
+        except RuntimeError as exc:
+            require("symlinked LLVM LRU source" in str(exc),
+                    "symlink was rejected for wrong reason")
+        else:
+            raise RuntimeError("symlinked source was admitted")
+        symlink_case.unlink()
+        symlink_case.write_bytes(symlink_bytes)
+        # CTest registration changes must fail even with intact source blobs.
+        cmake_path = dst / "CMakeLists.txt"
+        original_cmake = cmake_path.read_text(encoding="utf-8")
+        marker = "atto_lru_probe_wrap ../../contracts/atto-lru-llvm-v1/probe-wrap.atto --run 17"
+        require(marker in original_cmake, "cannot locate pinned test")
+        cmake_path.write_text(original_cmake.replace(marker, marker.replace(" --run 17", " --run 0")))
+        try:
+            verify(dst)
+        except RuntimeError as exc:
+            require("wrong native exit/linker oracle" in str(exc),
+                    "CTest exit mutation rejected for wrong reason")
+        else:
+            raise RuntimeError("wrong native exit oracle was accepted")
+        runtime = ' --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c"'
+        line = next(line for line in original_cmake.splitlines() if marker in line)
+        require(runtime in line, "missing baseline array runtime")
+        cmake_path.write_text(original_cmake.replace(line, line.replace(runtime, "")))
+        try:
+            verify(dst)
+        except RuntimeError as exc:
+            require("missing or unexpected native array runtime" in str(exc),
+                    "missing runtime rejected for wrong reason")
+        else:
+            raise RuntimeError("missing native array runtime was accepted")
+    print("ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=4 mutations_rejected=7 "
           "native_compiler_guest=NOT_EXECUTED")
 
 if __name__ == "__main__":
