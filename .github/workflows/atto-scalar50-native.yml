@@ -117,6 +117,65 @@ jobs:
             if(values!==37||traps!==13)throw Error("checked-i64 native guest inventory mismatch");
             console.log("LLVM full-width i64 equality: 37/37; checked traps: 13/13",r.source_head);
           '
+      - name: Verify per-case source hashes and independently recomputed native wrappers
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import {createHash} from "node:crypto";
+            import {readFileSync} from "node:fs";
+            import {execFileSync} from "node:child_process";
+            const sha=source=>createHash("sha256").update(source).digest("hex");
+            const read=path=>readFileSync(path,"utf8");
+            const base="contracts/atto-parity-v1/";
+            const receiptDir="build/";
+            const scalar=JSON.parse(read(receiptDir+"atto-shared-scalar50-native/llvm-scalar50-native-receipt.json"));
+            const checked=JSON.parse(read(receiptDir+"atto-checked-i64-native/llvm-checked-i64-native-receipt.json"));
+            const head=execFileSync("/usr/bin/git",["rev-parse","HEAD"],{encoding:"utf8"}).trim();
+            const tree=execFileSync("/usr/bin/git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim();
+            const compilerHash=sha(readFileSync("build/oreslang-llvmc"));
+            if(head!==process.env.EXPECTED_SOURCE_SHA ||
+               scalar.source_head!==head || checked.source_head!==head ||
+               scalar.source_tree!==tree || checked.source_tree!==tree ||
+               scalar.compiler_sha256!==compilerHash || checked.compiler_sha256!==compilerHash ||
+               scalar.clang_sha256!==checked.clang_sha256)
+              throw Error("source/compiler/tree binding mismatch between native receipts");
+            const corpus=read(base+"shared-scalar50-v1.tsv");
+            if(sha(corpus)!=="210dbe7363e5388e4f82c4de9fe7f8136ee6a7dca698ce72165e006fd5ecb0db")throw Error("scalar corpus changed");
+            const lines=corpus.trimEnd().split("\n").filter(row=>!row.startsWith("#"));
+            if(lines.length!==50)throw Error("scalar corpus size changed");
+            for(let i=0;i<50;i++){
+              const parts=lines[i].split("\t");
+              const got=scalar.results[i];
+              if(parts.length!==3 || !got || got.id!==parts[0] ||
+                 got.expected_exit!==Number(parts[1]) ||
+                 got.observed_exit!==Number(parts[1]) ||
+                 got.observed_exit_o2!==Number(parts[1]) ||
+                 got.source_sha256!==sha(parts[2]))
+                throw Error("scalar source/exit receipt mismatch at "+i);
+            }
+            const jsonText=read(base+"js-checked-i64-candidates.json");
+            if(sha(jsonText)!=="5fd8ed522dfaaead8dc1b2d780159a4f156482124b7515d0a788245fc594ebc8")throw Error("checked corpus changed");
+            const manifest=JSON.parse(jsonText);
+            if(manifest.cases?.length!==50 || checked.results?.length!==50)throw Error("checked case count mismatch");
+            const prefix="// oreslang:checked-i64-v1\npub fnc main(): int {return ";
+            const suffix=";}\n";
+            for(let i=0;i<50;i++){
+              const test=manifest.cases[i], got=checked.results[i];
+              if(!test || !got || !test.source.startsWith(prefix) || !test.source.endsWith(suffix) ||
+                 got.id!==test.id || got.kind!==test.expected.kind ||
+                 got.original_source_sha256!==sha(test.source))
+                throw Error("checked original-source binding mismatch at "+i);
+              const expression=test.source.slice(prefix.length,-suffix.length);
+              const native=test.expected.kind==="value"
+                ? "pub fnc main(): int {\n  if (("+expression+") eq ("+test.expected.value+")) { return 42; } fi\n  return 43;\n}\n"
+                : test.source;
+              if(got.native_source_sha256!==sha(native))
+                throw Error("checked native-wrapper source mismatch at "+i);
+            }
+            console.log("Authenticated original and emitted source hashes: scalar 50/50; checked-i64 50/50",head);
+          '
       - name: Preserve native guest receipt
         # Never upload stale or partial 'success' receipts from a failed test.
         if: success()
