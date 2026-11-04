@@ -1,0 +1,3 @@
+// No positional type argument after a named type argument.
+fnc fixed<A=int, B=int>(): int { return 42; }
+pub fnc main(): int { return fixed<B=int, int>(); }
