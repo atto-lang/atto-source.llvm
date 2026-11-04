@@ -33,7 +33,7 @@ declared before the first statement. The 32,768-row fixture intentionally
 declares `let int checksum` after its initialization/integration loops to
 exercise that capability in a real LLVM → Clang executable.
 
-The native restriction is currently **64 ordered root locals per function**.
+The native restriction is currently **64 aggregate root locals per function**, counting both the initial declaration prefix and later ordered declarations. The same ceiling is checked regardless of where the first effect occurs.
 A new workflow step builds and runs a small positive ordered-local program
 and checks three compiler-negative cases: use before declaration, duplicate
 binding, and the 65th root binding. Ownership, cleanup and lexical scoping
