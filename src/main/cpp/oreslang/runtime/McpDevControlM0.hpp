@@ -324,8 +324,14 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         for (const auto& s : states_) for (const auto& a : s.active) {
             if (a.token != ticket.token) continue;
-            return host.monotonic_ms <= a.deadline && host.wall_ms < a.credential_expiry &&
-                   host.generation == a.generation && host.enabled;
+            // Admission authority is bound to the authenticated host boot.
+            // A generation number may be reused after restart; never allow
+            // a stale ticket to survive boot rotation or peer revocation.
+            return host.enabled && host.peer_verified &&
+                   equals(s.boot, s.boot_len, host.boot) &&
+                   host.monotonic_ms <= a.deadline &&
+                   host.wall_ms < a.credential_expiry &&
+                   host.generation == a.generation;
         }
         return false;
     }
