@@ -64,7 +64,9 @@ positive() {
       { echo "NATIVE_F64_NO_TYPED_DOUBLE_IR: $name" >&2; exit 1; }
   fi
   # Hash the exact source and compiler-produced IR; do not print source contents.
-  hash_evidence "$scratch/$name.atto" "$scratch/$name.ll"
+  local fixture_hashes_before
+  fixture_hashes_before="$(hash_evidence "$scratch/$name.atto" "$scratch/$name.ll")"
+  printf '%s\n' "$fixture_hashes_before"
   # The same compiler-emitted IR must execute correctly with and without
   # Clang optimization. Both runs are authentic native guest executions,
   # never a host/reference calculation or an inferred pass from one binary.
@@ -78,13 +80,19 @@ positive() {
     [[ -x "$image" && ! -s "$scratch/$name.O$opt.link.stderr" &&
        ! -s "$scratch/$name.O$opt.link.stdout" ]] ||
       { echo "NATIVE_F64_LINK_DIAGNOSTIC: $name O$opt" >&2; exit 1; }
-    hash_evidence "$image"
+    local image_hash_before
+    image_hash_before="$(hash_evidence "$image")"
+    printf '%s\n' "$image_hash_before"
     rc=0
     "$image" > "$scratch/$name.O$opt.stdout" \
       2> "$scratch/$name.O$opt.stderr" || rc=$?
     [[ "$rc" -eq "$expected_exit" && ! -s "$scratch/$name.O$opt.stdout" &&
        ! -s "$scratch/$name.O$opt.stderr" ]] ||
       { echo "NATIVE_F64_EXIT_MISMATCH: $name O$opt rc=$rc expected=$expected_exit" >&2; exit 1; }
+    [[ "$(hash_evidence "$image")" == "$image_hash_before" ]] ||
+      { echo "NATIVE_F64_EXECUTABLE_MUTATED: $name O$opt" >&2; exit 1; }
+    [[ "$(hash_evidence "$scratch/$name.atto" "$scratch/$name.ll")" == "$fixture_hashes_before" ]] ||
+      { echo "NATIVE_F64_SOURCE_OR_IR_MUTATED: $name O$opt" >&2; exit 1; }
     native_executions=$((native_executions + 1))
     echo "NATIVE_F64_GUEST_EXACT: $name O$opt"
   done
