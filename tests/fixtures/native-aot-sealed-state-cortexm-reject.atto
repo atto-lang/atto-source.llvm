@@ -1,0 +1,11 @@
+// Cortex-M uses a separate freestanding static actor ABI. Never admit
+// hosted critical state turns there until target-specific ownership lowering.
+define actor Worker as {
+  state {
+    let total: int = 0;
+  }
+  pub critical handle_state(int n): int {
+    total = total + n;
+    return total;
+  }
+}
