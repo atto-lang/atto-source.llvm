@@ -1170,6 +1170,26 @@ int ores_native_actor_scheduler_reserve_wake(
     unlock(s);
     return ok;
 }
+/* Verify a WAKE ticket was genuinely RESERVED during THIS authenticated
+ * originating DATA-mail turn, not constructed from matching actor IDs or a
+ * guest-supplied original-mail integer. No wake-ticket ABI change required:
+ * the proof is in the scheduler-owned WakeCredit slot. */
+int ores_native_actor_scheduler_current_data_issued_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket,
+        uint64_t expected_original_mail) {
+    if (!s || !expected_original_mail) return 0;
+    uint64_t authenticated_mail = 0;
+    if (!ores_native_actor_scheduler_current_data_mail_sequence(
+            s, ticket.producer, &authenticated_mail)
+            || authenticated_mail != expected_original_mail)
+        return 0;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket);
+    const int ok = w && w->state == WAKE_RESERVED
+        && w->originating_data_mail == expected_original_mail;
+    unlock(s);
+    return ok;
+}
 int ores_native_actor_scheduler_transfer_wake(
         OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
     if (!s) return 0;
