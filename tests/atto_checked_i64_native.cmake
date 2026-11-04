@@ -162,7 +162,7 @@ foreach(i RANGE 0 49)
       string(APPEND observations ",\n")
     endif()
     string(APPEND observations
-      "    {\"id\":\"${id}\",\"kind\":\"${kind}\",\"native_observed\":${native_observed},\"original_source_sha256\":\"${original_source_sha256}\",\"native_source_sha256\":\"${native_source_sha256}\"}")
+      "    {\"id\":\"${id}\",\"kind\":\"${kind}\",\"native_observed\":${native_observed},\"raw_guest_result\":\"${observed}\",\"original_source_sha256\":\"${original_source_sha256}\",\"native_source_sha256\":\"${native_source_sha256}\"}")
   endif()
 endforeach()
 if(NOT value_count EQUAL 37 OR NOT trap_count EQUAL 13)
