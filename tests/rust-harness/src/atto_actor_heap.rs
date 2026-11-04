@@ -112,6 +112,7 @@ pub(super) fn execute(
     )?;
     require(
         !rejected.status.success()
+                && rejected.status.code().is_some()
             && rejected.stdout.is_empty()
             && !rejected.stderr.is_empty(),
         "unsupported .atto actor operation emitted LLVM IR or lacked a compiler diagnostic",
