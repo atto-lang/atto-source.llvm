@@ -315,3 +315,44 @@ blob, patch or credentials were copied to that alternate organization.
 A source-bearing mirror requires explicit destination-scoped independent
 security signoff, disposition of existing incidents, protected-main controls
 and source/tree identity, provenance, retention and cleanup review.
+
+
+## M1/M2 accounting-integrity hardening — November 4, 2026
+
+This section supersedes older numeric gate totals in this evolving PR.
+
+**Authored native acceptance:** 40 scalar .atto programs at O0/O2 (80
+native executions) plus 25 receipt-producing .atto guests at O0/O2
+(50 executions) = **130 native processes**, plus **11 negative compiler
+scenarios**. None counts as a pass without exact-head compiler/IR-auditor/
+Clang/native execution receipts from a real runner.
+
+M1 previously admitted structurally inconsistent public counters into
+record and finish. M1.valid_state now checks bounded nonnegative totals
+and per-status counters BEFORE their addition, preventing signed overflow;
+it checks accounting reconciliation, monotonic-ID coherence and fail-fast
+halt invariants. The pure preflight is shared by should_run, record and
+finish; finish leaves the old summary untouched on invalid state. M1
+quota-probe behavior preserves an explicit -2 result even with synthetic
+full ledgers. M2.run_one validates the M1 suite BEFORE scalar body
+execution in addition to its existing ID/visited/quota checks.
+
+The m1-finish-integrity.atto guest exercises negative, oversized,
+inconsistent and forged fail-fast counters. The new m2-corrupt-state.atto
+guest verifies those counters cannot trigger body invocation and that
+corrected state recovers. Public writable guest fields still do not
+constitute tamper-proof receipt attestation.
+
+The native guest-output runner now caps stdout WHILE CAPTURING with a
+4,097-byte reader (head -c 4097), instead of writing unbounded guest
+stdout to disk before verification. Payloads above 4,096 bytes,
+SIGPIPE/nonzero process exits, stderr, wrong bytes or wrong exit status
+fail closed. The source-contract mutation test removes the capture
+bound and must reject it. This is a resource guard, not an executable
+test pass.
+
+A separate private gha-indie-worker source-free compiler canary admitted
+real GitHub-hosted steps. Cross-organization copying of private compiler
+Git trees remains prohibited by unresolved independent security approval,
+destination controls and incident/retention disposition. No private
+source or credentials were mirrored to another organization.
