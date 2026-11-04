@@ -895,6 +895,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_durable_m0_comment_nontrigger
         durable-m0-quoted-comments-native.atto --ir "ret i64 42")
 
+    add_test(NAME native_durable_m0_shared_corpus_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture "${CMAKE_CURRENT_SOURCE_DIR}/contracts/durable-m0/v1/checkout.atto"
+            --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    set_tests_properties(native_durable_m0_shared_corpus_failclosed
+        PROPERTIES TIMEOUT 30)
+
     # Same 1,671-byte canonical manifest reference checked in .NET/Wasm and
     # platform conformance. This does NOT imply LLVM emitted the manifest.
     add_test(NAME native_durable_m0_manifest_v1_reference_bytes
