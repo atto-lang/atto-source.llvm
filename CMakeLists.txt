@@ -324,6 +324,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # This invokes the real LLVM frontend (not a compiler stub); analysis must
+    # never emit IR, run guest code, or silently treat unknown as known.
+    add_test(NAME native_effect_analysis_no_codegen_cli
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_effect_analysis_cli.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_effect_analysis_no_codegen_cli PROPERTIES TIMEOUT 90)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
