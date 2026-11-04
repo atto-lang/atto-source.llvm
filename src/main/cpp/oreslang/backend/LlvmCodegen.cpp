@@ -2482,7 +2482,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             // No cleanup/ownership path is admitted in this subset.
             for (auto& block : *function) {
                 if (block.getName() == "atto.frame.denied") continue;
-                auto* ret = llvm::dyn_cast<llvm::ReturnInst>(block.getTerminator());
+                // A generated block may remain unterminated until later
+                // lowering; dyn_cast_or_null is safe on a null terminator.
+                auto* ret = llvm::dyn_cast_or_null<llvm::ReturnInst>(
+                    block.getTerminator());
                 if (!ret) continue;
                 llvm::IRBuilder<> unwind(ret);
                 llvm::Value* current = unwind.CreateLoad(
