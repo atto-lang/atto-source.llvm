@@ -7,6 +7,9 @@ on:
       - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
       - "src/main/cpp/oreslang/runtime/SourceTaskRuntime.c"
       - "src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
+      - "src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp"
+      - "src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp"
+      - "tests/native_actorlocal_scheduler_turn_test.cpp"
       - "tests/tasklocal_i64_e2e.rs"
       - "tests/fixtures/tasklocal-i64-source.atto"
       - "tests/source_task_i64_runtime_test.c"
@@ -67,7 +70,16 @@ jobs:
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             -o "$tmp/native-tasklocal"
           "$tmp/native-tasklocal"
-          echo "TASKLOCAL_I64_HOST_EXECUTED compiler=$CC mode=$MODE"
+          "$CC" "${flags[@]}" -Isrc/main/cpp \
+            -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o "$tmp/scheduler.o"
+          if [[ "$CC" == gcc ]]; then CXX=g++; else CXX=clang++; fi
+          cxxflags=("${flags[@]/-std=c11/-std=c++17}")
+          "$CXX" "${cxxflags[@]}" -Isrc/main/cpp \
+            tests/native_actorlocal_scheduler_turn_test.cpp \
+            "$tmp/scheduler.o" -o "$tmp/native-actorlocal"
+          "$tmp/native-actorlocal"
+          echo "TASKLOCAL_I64_AND_ACTORLOCAL_HOST_EXECUTED compiler=$CC mode=$MODE"
   compiled-guest:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -94,11 +106,11 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build --target oreslang-llvmc oreslang-source-task-i64-runtime-test oreslang-tasklocal-i64-e2e-build --parallel 2
+          cmake --build build --target oreslang-llvmc oreslang-source-task-i64-runtime-test oreslang-tasklocal-i64-e2e-build oreslang-actorlocal-current-turn-v1-test --parallel 2
       - name: Run compiled .atto guest, negative compiler fixtures and native scheduler
         shell: bash
         run: |
           set -euo pipefail
           ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^native_(tasklocal_i64_compiled_guest|source_task_i64_shared_scheduler_runtime)$'
+            -R '^native_(tasklocal_i64_compiled_guest|source_task_i64_shared_scheduler_runtime|actorlocal_authenticated_scheduler_turn)$'
           echo 'TASKLOCAL_I64_GUEST_STEPFUL_PASS'
