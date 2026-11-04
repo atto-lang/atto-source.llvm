@@ -58,7 +58,10 @@ for protected in "$source_file" "$compiler" "$auditor" "$clang_path" "$adapter";
 done
 work="$(mktemp -d "$output_dir/.atto-fuzz-build.XXXXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
-bounded "$compiler" --target=host "$source_file" > "$work/guest.ll"
+# Bound IR as it is produced; checking its size only after a completed
+# compiler run would permit multi-gigabyte output before fail-closed admission.
+# pipefail ensures a compiler terminated by SIGPIPE cannot count as success.
+bounded "$compiler" --target=host "$source_file" | head -c 2000001 > "$work/guest.ll"
 [[ -s "$work/guest.ll" ]] ||
   { echo 'LLVM compiler emitted empty IR' >&2; exit 1; }
 bytes="$(wc -c < "$work/guest.ll")"
