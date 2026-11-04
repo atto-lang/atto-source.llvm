@@ -75,6 +75,11 @@ int main() {
     rejects("unowned absolute file", "outside declared source roots",
             [&] { (void)ids.admit(external1 / "producer.atto",
                                    snapshot(external1 / "producer.atto")); });
+    // Root denial must happen BEFORE opening an imported source; no attempt
+    // to read a rejected file may be hidden behind a later ID check.
+    rejects("unowned pre-read denial", "outside declared source roots",
+            [&] { (void)ids.preflight_path(external1 / "producer.atto"); });
+    equals(ids.preflight_path(producer), "project/producer.atto");
     HostLogicalSourceUnitIds configured(entry, {external1, external2});
     equals(configured.admit(external1 / "producer.atto",
                              snapshot(external1 / "producer.atto")),
@@ -108,6 +113,8 @@ int main() {
         rejects("source symlink alias", "symlink/alias", [&] {
             (void)ids.admit(root / "alias.atto", snapshot(producer));
         });
+        rejects("source symlink blocked before descriptor open", "symlink/alias",
+                [&] { (void)ids.preflight_path(root / "alias.atto"); });
     }
     optional.clear();
     fs::create_hard_link(producer, root / "hardlink.atto", optional);
