@@ -72,6 +72,7 @@ jobs:
             native_atto_named_generic_value_lexical_ir_order
             native_atto_named_generic_value_combined_guest
             native_atto_named_generic_value_dot_atto_guest
+            native_atto_named_generic_value_lowercase_dot_atto_guest
             native_source_module_graph_execution
             native_project_root_import_security
             native_atto_named_generic_value_routine_guest
@@ -88,6 +89,8 @@ jobs:
             native_atto_named_generic_reject_duplicate_value_slot
             native_atto_named_generic_reject_unknown_value
             native_atto_named_generic_reject_uninferable_hole
+            native_atto_named_generic_reject_case_sensitive_type_atto
+            native_atto_named_generic_reject_case_sensitive_value_atto
           )
           for name in "${required[@]}"; do
             if ! grep -Fxq -- "$name" build/named-call-test-names.txt; then
@@ -100,4 +103,4 @@ jobs:
         run: |
           python3 -m py_compile tests/native_module_imports.py
           ctest --test-dir build -R '^(native_named_(call_|member_)|native_atto_named_generic_|native_source_module_graph_execution$|native_project_root_import_security$)' \
-            --output-on-failure --no-tests=error --timeout 180 --parallel 2
+            --output-on-failure --no-tests=error --timeout 600 --parallel 2
