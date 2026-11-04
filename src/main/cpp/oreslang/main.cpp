@@ -192,6 +192,113 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 
 
 
+/**
+ * Compiler-owned, native-subset effect observation. This deliberately reuses
+ * the same AST walker as hard-RT admission rather than introducing a lexical
+ * second parser. It does NOT prove absence of undeclared effects or implement
+ * full-language exception effects; unknown targets/recursive closure fail 2.
+ * No guest code is executed and no generated IR is written.
+ */
+static int run_native_effect_analysis(const oreslang::Program& program) {
+    using namespace oreslang;
+    namespace detail = oreslang::realtime_detail;
+    if (!program.actors.empty() || !program.cooperative_loops.empty() ||
+        !program.generators.empty() || program.functions.empty() ||
+        program.functions.size() > detail::kMaxRealtimeFunctions) {
+        std::cerr << "ANALYZE INCONCLUSIVE: native callable coverage unavailable or over budget\n";
+        return 2;
+    }
+
+    struct Row {
+        const Function* function;
+        detail::DirectFacts direct;
+        FunctionEffects transitive{};
+    };
+    std::vector<Row> rows;
+    rows.reserve(program.functions.size());
+    std::unordered_map<std::string, std::size_t> indices;
+    std::size_t edges = 0;
+    for (const auto& function : program.functions) {
+        const std::string key = detail::function_key(function.name, function.parameters.size());
+        if (!indices.emplace(key, rows.size()).second) {
+            std::cerr << "ANALYZE INCONCLUSIVE: overloaded native callable identity is ambiguous\n";
+            return 2;
+        }
+        if (edges > detail::kMaxRealtimeCallEdges) {
+            std::cerr << "ANALYZE INCONCLUSIVE: callable edge budget exceeded\n";
+            return 2;
+        }
+        auto facts = detail::direct_facts(
+            function, detail::kMaxRealtimeCallEdges - edges, &program);
+        if (facts.call_budget_exceeded || !facts.effects.valid() ||
+            !facts.bounded_calls || !facts.bounded_cleanup ||
+            facts.unsupported_runtime) {
+            std::cerr << "ANALYZE INCONCLUSIVE: effect graph contains unsupported native semantics\n";
+            return 2;
+        }
+        edges += facts.calls.size();
+        rows.push_back(Row{&function, std::move(facts), {}});
+    }
+
+    std::vector<unsigned char> visited(rows.size(), 0);
+    std::string reason;
+    std::function<bool(std::size_t, std::size_t)> close =
+        [&](std::size_t index, std::size_t depth) -> bool {
+        if (depth > detail::kMaxRealtimeCallDepth || visited[index] == 1) {
+            reason = "recursive or over-depth callable effects have unknown closure";
+            return false;
+        }
+        if (visited[index] == 2) return true;
+        visited[index] = 1;
+        FunctionEffects effects = rows[index].direct.effects;
+        for (const auto& call : rows[index].direct.calls) {
+            const auto target = indices.find(call);
+            if (target == indices.end()) {
+                reason = "unresolved native call effects";
+                return false;
+            }
+            if (!close(target->second, depth + 1)) return false;
+            effects = effects.united(rows[target->second].transitive);
+            if (!effects.valid()) {
+                reason = "unknown or invalid transitive effects";
+                return false;
+            }
+        }
+        rows[index].transitive = effects;
+        visited[index] = 2;
+        return true;
+    };
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        if (!close(i, 1)) {
+            std::cerr << "ANALYZE INCONCLUSIVE: " << reason << '\n';
+            return 2;
+        }
+    }
+
+    std::size_t warnings = 0;
+    std::size_t shown = 0;
+    for (const auto& row : rows) {
+        for (const auto [bit, word] : {
+            std::pair{FunctionEffect::Throw, "throw"},
+            std::pair{FunctionEffect::Raise, "raise"},
+            std::pair{FunctionEffect::Panic, "panic"}}) {
+            if (!row.transitive.has(bit) || row.function->declared_effects.has(bit))
+                continue;
+            ++warnings;
+            if (shown++ >= 100) continue;
+            std::cout << "EFFECT WARNING ";
+            print_safe_diagnostic(std::cout, row.function->name, 120);
+            std::cout << ": may " << word
+                      << "; declaration optional, not an effect-free certificate\n";
+        }
+    }
+    std::cout << "ANALYZE ADVISORY backend=llvm schema=1 scope=native-ast"
+              << " inspected=" << rows.size() << " warnings=" << warnings
+              << " shown=" << std::min(shown, std::size_t{100})
+              << "; no full-language effect, guest execution, or runtime proof\n";
+    return 0;
+}
+
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
@@ -205,6 +312,7 @@ int main(int argc, char** argv) {
     bool allocator_provider_seen = false;
     bool bounded_allocator_provider = false;
     bool rt_check_only = false;
+    bool analyze_effects = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
@@ -255,6 +363,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             native_hard_rt_profile = true;
+        } else if (arg == "--analyze") {
+            if (analyze_effects) { std::cerr << "duplicate analyze option\n"; return 2; }
+            analyze_effects = true;
         } else if (arg == "--rt-check") {
             if (rt_check_only) { std::cerr << "duplicate rt-check option\n"; return 2; }
             rt_check_only = true;
@@ -319,6 +430,14 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    // The advisory analysis mode is non-executing/non-writing. Do not permit
+    // reporting/output modes to mutate files or imply a stronger qualification.
+    if (analyze_effects && (rt_check_only || native_hard_rt_profile ||
+        rt_report_seen || rt_entry_seen || constraint_descriptors_only ||
+        tree_shake || !tree_shake_roots.empty())) {
+        std::cerr << "--analyze is incompatible with RT reports and compiler output modes\n";
+        return 2;
+    }
     // Public library architecture has exactly two layers. For now the native
     // backend only certifies the freestanding core profile on targets whose ABI
     // is explicitly no-OS, and the std profile on the ordinary hosted target.
@@ -382,7 +501,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--analyze] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -422,6 +541,15 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        if (analyze_effects) {
+            // Run the real semantic/codegen admission path, but discard the
+            // generated module. This checks accepted native guest source
+            // without emitting IR, launching a guest or writing artifacts.
+            (void)oreslang::emit_verified_llvm_ir(
+                ast, wasm32_target, cortex_m_target, bounded_allocator_provider);
+            return run_native_effect_analysis(ast);
+        }
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
