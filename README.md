@@ -299,3 +299,30 @@ dot products, reductions and matrix multiplication remain unsupported here
 and must fail closed rather than silently map to i64. See the existing
 `native_float_division_unavailable` contract. Java/LLVM numerical parity is
 not claimed by this fixture.
+
+
+## Experimental no-codegen effect analysis (LLVM)
+
+`oreslang-llvmc --analyze FILE.atto` (legacy `.ores` accepted) performs
+the real native parser, module-loader and type/ownership admission path,
+but **does not emit LLVM IR, build artifacts or execute guest code**.
+It reports deterministic `ORES-ANALYZE-V0` records for native callable
+name/arity identities and conservatively collected known effect bits.
+A closed, nonrecursive directly resolved native subset returns exit 0
+with `status=known`; unsupported, imported, generic, dynamic, actor,
+recursive or otherwise unproven effects return `status=inconclusive`
+and exit 2. Invalid source fails with exit 1. An inconclusive report
+is not a compiler safety certificate.
+
+This is **native subset parity work**, not full AttoLang `throws/raises/panics`
+grammar or all-backend semantic parity. The report is based on the same
+`RealtimeAnalysis` AST effect collector used by hard-real-time admission,
+which is intentionally a conservative scanner rather than a complete
+typed transitive-exception checker. Never infer effect-freedom from
+`known_effects=none` outside that restricted native subset.
+It does not supersede the independent `atto test --effects` advisory
+scanner. Do not merge as full compiler-analysis parity without exact-head
+build/CTest and Java/GraalVM differential diagnostics.
+
+Run executable no-codegen integration evidence with
+`ctest --test-dir build -R native_effect_analysis_no_codegen_cli --output-on-failure`.
