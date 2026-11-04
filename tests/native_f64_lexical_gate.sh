@@ -128,6 +128,12 @@ positive integer_control 'pub fnc main(): int { return 42; }'
 
 # Numerical M1 scalar prerequisites only: these do NOT execute num.atto's
 # imported f64 List/Result/test-harness library or sqrt implementation.
+positive attolang_float_alias 'pub fnc main(): int {
+  val float value = 6.0 * 7.0;
+  if value == 42.0; then return 42; fi
+  return 86;
+}'
+
 positive num_m1_negative_domain 'pub fnc main(): int {
   val f64 negative = 0.0 - 1.0;
   if negative < 0.0; then return 42; fi
@@ -158,6 +164,11 @@ positive num_m1_scalar_reduction_seed 'pub fnc main(): int {
   return 86;
 }'
 
+
+negative float_alias_int_coercion 'pub fnc main(): int {
+  val float value = 42;
+  return 42;
+}' 'native scalar local initializer requires f64'
 
 negative implicit_int_to_f64 'pub fnc main(): int {
   val f64 value = 1;
@@ -207,6 +218,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }' 'native branch-local f64 storage requires scoped double lowering'
 
-[[ "$pass" -eq 19 && "$reject" -eq 12 ]] ||
+[[ "$pass" -eq 20 && "$reject" -eq 13 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=19; NEGATIVE_NO_IR_PASS=12 (M1 scalar prereqs only, not num.atto library execution)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=20; NEGATIVE_NO_IR_PASS=13 (M1 scalar prereqs only, not num.atto library execution)"
