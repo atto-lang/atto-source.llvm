@@ -230,6 +230,73 @@ int main() {
               "old retired waiter was readmitted");
     }
 
+    // Java/LLVM host-gate parity: retirement of an EMPTY gate must be atomic
+    // with request admission. Never observe quiescence, unlock, then close.
+    {
+        CriticalGate gate;
+        check(gate.quiescent(), "fresh gate was not quiescent");
+        check(gate.retire_if_quiescent(), "empty gate retirement failed");
+        check(gate.retired(), "empty retirement did not close generation");
+        check(gate.retire_if_quiescent(), "duplicate retirement was not idempotent");
+        check(!gate.try_request(), "retired gate allowed immediate ticket");
+        bool rejected = false;
+        try { (void)gate.request(); }
+        catch (const std::logic_error&) { rejected = true; }
+        check(rejected, "retired gate admitted a queued ticket");
+    }
+    {
+        CriticalGate gate;
+        const auto owner = gate.request();
+        const auto pending = gate.request();
+        check(!gate.quiescent(), "live owner and waiter looked quiescent");
+        check(!gate.retire_if_quiescent(), "live gate retired as empty");
+        check(gate.holds(owner.token), "failed retirement revoked active owner");
+        check(gate.release(owner.token) == pending.token,
+              "failed retirement disrupted FIFO handoff");
+        check(!gate.retire_if_quiescent(), "promoted owner retired as empty");
+        (void)gate.release(pending.token);
+        check(gate.quiescent(), "drained gate did not become quiescent");
+        check(gate.retire_if_quiescent(), "drained gate did not retire atomically");
+    }
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        CriticalGate gate;
+        std::atomic<bool> start{false};
+        std::atomic<bool> retired{false};
+        std::atomic<bool> admitted{false};
+        std::atomic<bool> unexpected{false};
+        CriticalGate::Token acquired;
+        std::thread requester([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            try {
+                acquired = gate.request().token;
+                admitted.store(true, std::memory_order_release);
+            } catch (const std::logic_error&) {
+                if (!gate.retired()) unexpected.store(true, std::memory_order_release);
+            } catch (...) {
+                unexpected.store(true, std::memory_order_release);
+            }
+        });
+        std::thread stopper([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            retired.store(gate.retire_if_quiescent(), std::memory_order_release);
+        });
+        start.store(true, std::memory_order_release);
+        requester.join();
+        stopper.join();
+        check(!unexpected.load(), "request/retire race raised unexpected error");
+        if (retired.load()) {
+            check(!admitted.load(), "request admitted after atomic empty retirement");
+            check(gate.retired(), "successful retirement not fenced");
+        } else {
+            check(admitted.load(), "retirement failed without live ticket");
+            check(gate.holds(acquired), "winning request lost ticket");
+            (void)gate.release(acquired);
+            check(gate.retire_if_quiescent(), "drained race gate failed retirement");
+        }
+        check(gate.retired() && gate.quiescent(),
+              "request/retire race left a live retired generation");
+    }
+
     (void)first.release(fresh.token);
     (void)second.release(independent.token);
     return 0;
