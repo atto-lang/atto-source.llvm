@@ -553,7 +553,90 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_owned_heap_contract
         COMMAND oreslang-actor-owned-heap-test)
 
+    # Compiler-ready compact object field substrate: physical i32 edges
+    # with original full-domain/generation proofs kept outside guest objects.
+    add_executable(oreslang-actor-compact-field-store-test
+        tests/actor_compact_field_store_test.cpp)
+    target_include_directories(oreslang-actor-compact-field-store-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-compact-field-store-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_compressed32_object_fields
+        COMMAND oreslang-actor-compact-field-store-test)
+    set_tests_properties(native_actor_compressed32_object_fields
+        PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-managed-ref-layout-plan-test
+        tests/managed_ref_layout_plan_test.cpp)
+    target_include_directories(oreslang-managed-ref-layout-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-ref-layout-plan-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_compiler_managed_ref_layout_admission
+        COMMAND oreslang-managed-ref-layout-plan-test)
+    set_tests_properties(native_compiler_managed_ref_layout_admission
+        PROPERTIES TIMEOUT 30)
+
+    # LLVM IR-level implementation: i32 actor-local reference loads and
+    # trusted original-generation validation before checked address decode.
+    add_executable(oreslang-managed-ref-llvm-lowering-test
+        tests/managed_ref_llvm_lowering_test.cpp)
+    target_include_directories(oreslang-managed-ref-llvm-lowering-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # SYSTEM: -Werror below is for this test, not for warnings in LLVM headers.
+    target_include_directories(oreslang-managed-ref-llvm-lowering-test SYSTEM PRIVATE
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-managed-ref-llvm-lowering-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-managed-ref-llvm-lowering-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_compact32_llvm_checked_load_store
+        COMMAND oreslang-managed-ref-llvm-lowering-test)
+    set_tests_properties(native_compact32_llvm_checked_load_store
+        PROPERTIES TIMEOUT 30)
+
+    # Execute the IR rather than trusting string/shape checks alone. IR must be
+    # compiled by the LLVM that produced it, so prefer that LLVM's own tools. A
+    # missing or mismatched toolchain fails this test rather than removing it.
+    find_program(ORE_REF32_CLANG
+        NAMES "clang++-${LLVM_VERSION_MAJOR}" clang++
+        HINTS "${LLVM_TOOLS_BINARY_DIR}")
+    find_program(ORE_STRUCTURAL_RUSTC rustc)
+    set(ORE_REF32_CLANG_MAJOR "")
+    if(ORE_REF32_CLANG)
+        execute_process(COMMAND "${ORE_REF32_CLANG}" --version
+            OUTPUT_VARIABLE ORE_REF32_CLANG_VERSION_TEXT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(ORE_REF32_CLANG_VERSION_TEXT MATCHES "version[ \t]+([0-9]+)")
+            set(ORE_REF32_CLANG_MAJOR "${CMAKE_MATCH_1}")
+        endif()
+    endif()
+    if(ORE_STRUCTURAL_RUSTC AND ORE_REF32_CLANG_MAJOR STREQUAL "${LLVM_VERSION_MAJOR}")
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-managed-ref-llvm-e2e"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-managed-ref-llvm-e2e"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e.rs"
+            VERBATIM)
+        add_custom_target(oreslang-managed-ref-llvm-e2e-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-managed-ref-llvm-e2e")
+        add_test(NAME native_compact32_llvm_executable_e2e
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-managed-ref-llvm-e2e"
+                --ir-producer "$<TARGET_FILE:oreslang-managed-ref-llvm-lowering-test>"
+                --clang "${ORE_REF32_CLANG}"
+                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e_harness.cpp")
+        set_tests_properties(native_compact32_llvm_executable_e2e
+            PROPERTIES TIMEOUT 180)
+    else()
+        message(WARNING "ref32 LLVM e2e needs rustc and a Clang matching LLVM ${LLVM_VERSION_MAJOR}; registering it as a failing test")
+        add_test(NAME native_compact32_llvm_executable_e2e
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+
+
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 
     # Exact queue snapshots are pinned to the merged upstream Git objects.
     # An unsupported feature is NOT a blanket allowance to ignore arbitrary
