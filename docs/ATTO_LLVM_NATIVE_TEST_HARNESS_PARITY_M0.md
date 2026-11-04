@@ -204,3 +204,35 @@ Four new guest programs (`bounded-pp`, `bounded-pf`, `bounded-fp`, `bounded-ff`)
 **Scope and safety:** This is an independent **bounded two-case** prototype, not canonical Java `ores.std/testing`: no callback-based TestBody, dynamic case lists, skip/filter/fail-fast, nested suites, Unicode/delimiter field escaping, or unbounded integer formatting. Case and suite names in the four fixtures are deliberately ASCII literal-safe; using unchecked arbitrary names would be an injection risk and is not admitted as a production TestKit API. The canonical `ores.std/testing` import remains fail-closed. The current compiler/runtime must actually compile and execute these sources before any backend feature parity can be claimed.
 
 The focused runner now requires 40×2 = 80 native scalar executions plus 8×2 = 16 native receipt executions, **96 total**, and ten compiler-negative scenarios. Existing zero-step GitHub Actions jobs are still NOT_EXECUTED.
+
+### Follow-up: native parity source-gate repair (2026-11-04 UTC)
+
+The current source-owned native harness expands to **40 scalar source fixtures at
+Clang O0/O2 (80 processes) plus 8 guest-owned receipt programs at O0/O2
+(16 processes), 96 required real native guest executions total**, and ten
+compiler-negative scenarios. The source-only harness, source registry and
+machine receipt verifier are distinct evidence classes.
+
+One duplicated tail in `tests/test_atto_native_workflow_contract.sh` had
+corrupted the quoted check for 16 receipt executions, repeated the source-only
+checker, and made the focused workflow's preflight unreliable. The repaired
+checker has one intact assertion, one completion path, and explicit duplicate
+detection. Its workflow change triggers now include the full compiler,
+runtime, test, stdlib and CMake source trees. This is not proof that GitHub
+Actions admitted a runner.
+
+The fixed-corpus verifier is exercised through the **actual three-argument
+subprocess CLI** `OUTPUT_FILE SUITE OBSERVED_EXIT` for all 13 currently
+registered receipt kinds, including malformed summaries, wrong independent
+native exit, symlink/FIFO/nonregular/oversized files, invalid suite and
+invalid argument count, both normally and with Python optimization enabled.
+The test also independently checks ASCII line feeds, per-case event ordering
+and summary counts, to catch a verifier and guest using the same incorrect
+receipt oracle. The 40/6 reviewed manifest mappings are Git-blob pinned;
+changing fixtures requires an explicit reviewed hash update.
+
+The repo-stored code and authored checks remain **SOURCE_ONLY / NOT_EXECUTED**
+until a stepful original-organization CI workflow actually runs the production
+compiler, mandatory no-GC LLVM IR auditor, Clang/native guests, native exit
+receipt verification and compiler negatives on one immutable source head.
+Do not promote on synthetic C, script inventory or zero-step CI evidence.
