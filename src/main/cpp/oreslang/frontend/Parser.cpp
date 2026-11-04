@@ -4694,8 +4694,11 @@ private:
                 validate_expression(*write.expression, fields, functions);
             }
             validate_expression(*method.result, fields, functions);
+            // A top-level native function must never hijack either the
+            // legacy scheduler entry or the sealed critical guest ABI.
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
-                    functions.count("oreslang_actor_" + actor.name + "_on_message"))
+                    functions.count("oreslang_actor_" + actor.name + "_on_message") ||
+                    functions.count("oreslang_actor_" + actor.name + "_handle_state"))
                 throw std::runtime_error("conflicting generated actor symbol");
         }
         // Same-file contracts are compile-time structural checks. Requiring
