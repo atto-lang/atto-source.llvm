@@ -188,6 +188,28 @@ pub fnc main(): int {
 }
 """, "expected '}'")
 
+
+NEGATIVE["guard-option-narrowing-denied"] = ("""
+pub fnc main(): int {
+  let o: Option<int> = Some(4);
+  guard o is Some { return 1; }
+  return 42;
+}
+""", "native guard is Some requires ownership-aware Option narrowing")
+
+NEGATIVE["guard-class-return-denied"] = ("""
+define class Box as
+  pub let int value = 42;
+end
+fnc create(int n): Box {
+  guard n > 0 { return new Box(); }
+  return new Box();
+}
+pub fnc main(): int {
+  return 42;
+}
+""", "native guard class return requires ownership-aware exit lowering")
+
 def execute(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=75)
 
