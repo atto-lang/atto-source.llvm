@@ -10,6 +10,7 @@ on:
       - 'tests/atto-native-harness/**'
       - 'tests/atto_native_harness_parity.sh'
       - 'tests/test_atto_native_parity_manifest.sh'
+      - 'tests/test_atto_native_workflow_contract.sh'
       - 'tests/cmake/AttoNativeHarnessParity.cmake'
       - '.github/workflows/atto-native-harness-llvm.yml'
   push:
@@ -46,6 +47,7 @@ jobs:
           set -euo pipefail
           bash tests/atto_native_harness_parity.sh --inventory-only
           bash tests/test_atto_native_parity_manifest.sh
+          bash tests/test_atto_native_workflow_contract.sh
       - name: Install native compiler toolchain
         shell: bash
         run: |
