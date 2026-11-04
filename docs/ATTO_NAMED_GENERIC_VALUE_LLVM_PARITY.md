@@ -75,19 +75,36 @@ across a shared `.atto`/`.ores` inode, and both self-import alias directions.
 A file's import dialect must never depend on visitation order. These are
 **registered, not yet executed** until an authorized runner is admitted.
 
+## Generic-call token lookahead and separate binding namespaces
+
+The native parser used to inspect only **64** tokens when deciding
+whether `<...>(...)` was a generic call. A valid call with 24 explicitly
+named type arguments needs about 96 tokens, so the parser would instead
+treat `<` as a comparison operator. The bounded lookahead is increased
+to **4,096 tokens**. The new `.atto` fixture checks recognition, full
+native compilation, Clang linking, and exit 42; the cap remains finite.
+
+A second `.atto` fixture uses `A` and `B` in **both** the generic type
+parameter map and the runtime argument map. Its declaration and call
+reverse the value labels independently of the generic labels. The
+result must be 42, proving that labels are not conflated across the two
+maps. Neither fixture has stepful execution evidence yet.
+
 ## Executable evidence gates
 
 The focused workflow `.github/workflows/named-call-exact-head.yml`
 checks the exact Git commit/tree, builds `oreslang-llvmc` and its Rust
 test harness, requires all named-call CTests in the inventory, and runs
-the same selected suite. Its newly authored **20** CTests comprise:
+the same selected suite. Its newly authored **22** CTests comprise:
 
 - **5 positive native linked guest executions**: combined named generics
   + values, a direct-only routine, explicit inference hole, positional
   prefix, and reordered source-effect case (expected exits 42/42/42/42/12).
-- **2 additional positive `.atto` linked guests**: the same combined
-  generic/value ABI, plus lowercase `<foo=int,bar=foo>` declaration/call labels
-  with reordered named values. Both expect exit 42.
+- **4 additional positive `.atto` linked guests**: the original combined
+  generic/value ABI, lowercase `<foo=int,bar=foo>` type parameter names,
+  a **24-slot named generic call** crossing the former 64-token parser
+  lookahead budget, and a call in which `A`/`B` name both compile-time
+  generic slots and runtime value slots. All four expect exit 42.
 - **1 real LLVM IR-order assertion**, checking `read_second` precedes
   `read_first` after named binding.
 - **1 combinatorial real native test** that generates and compiles all 36
@@ -101,16 +118,16 @@ the same selected suite. Its newly authored **20** CTests comprise:
   unknown value label, uninferable hole, and two case-sensitive `.atto`
   generic-type/runtime-value label failures.
 
-These 20 dedicated CTests together require **79 native guest executions**
-(5 legacy-source guests, 2 AttoLang-source guests, 72 generated permutation
+These 22 dedicated CTests together require **81 native guest executions**
+(5 legacy-source guests, 4 AttoLang-source guests, 72 generated permutation
 guests), 1 IR-order proof and 11 source rejection cases. The workflow also
 requires the existing `native_source_module_graph_execution` and
 `native_project_root_import_security` CTests, which now cover `.atto`
 relative imports, project-root imports, mixed explicit extension migration,
 negative no-fallback cases, nested package fences and symlink escape.
-The workflow gates **35 CTest names** in total (13 existing named-call/
+The workflow gates **37 CTest names** in total (13 existing named-call/
 member tests, including reordered guest ABI, mixed named calls, overload
-selection by arity, and mutable-borrow conflict/binding; 20 new scalar
+selection by arity, and mutable-borrow conflict/binding; 22 new scalar
 generic/value cases; and 2 import/security suites). All are pending real
 execution. A test listing, authored test source, zero-step job, or
 host binder oracle does not establish execution. For promotion require
