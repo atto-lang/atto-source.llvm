@@ -5,9 +5,13 @@ on:
       - contracts/atto-parity-v1/shared-scalar50-v1.tsv
       - tests/atto_shared_scalar50_native.cmake
       - tests/atto_checked_i64_native.cmake
+      - tests/atto_i64_original_native.cmake
+      - tests/atto_i64_original_guest_probe.c
       - contracts/atto-parity-v1/js-checked-i64-candidates.json
       - CMakeLists.txt
       - .github/workflows/atto-scalar50-native.yml
+      - scripts/compare-atto-js-llvm-receipts.mjs
+      - tests/atto_js_llvm_receipt_comparison.test.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -35,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang llvm-dev
+          sudo apt-get install -y build-essential binutils cmake clang llvm-dev
           clang --version
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -50,12 +54,13 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
             -DATTO_EXPECTED_SOURCE_SHA="$EXPECTED_SOURCE_SHA"
           cmake --build build --target oreslang-llvmc --parallel 2
-      - name: Validate both corpora and execute 204 O0/O2 native guest processes
+      - name: Validate corpora and execute 278 O0/O2 native guest processes
         run: |
           set -euo pipefail
           rm -f build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json
           rm -f build/atto-checked-i64-native/llvm-checked-i64-native-receipt.json
-          ctest --test-dir build --output-on-failure -R '^atto_(shared_scalar50|checked_i64)_'
+          rm -f build/atto-i64-original-native/llvm-original-i64-native-receipt.json
+          ctest --test-dir build --output-on-failure -R '^atto_(shared_scalar50|checked_i64|i64_original)_'
       - name: Audit exact-head native guest receipts
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -178,6 +183,53 @@ jobs:
             }
             console.log("Authenticated original and emitted source hashes: scalar 50/50; checked-i64 50/50",head);
           '
+      - name: Verify unchanged 37 original AttoLang sources execute with full i64 results
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import {createHash} from "node:crypto";
+            import {readFileSync} from "node:fs";
+            import {execFileSync} from "node:child_process";
+            const sha=b=>createHash("sha256").update(b).digest("hex");
+            const read=p=>readFileSync(p,"utf8");
+            const original=JSON.parse(read("build/atto-i64-original-native/llvm-original-i64-native-receipt.json"));
+            const checked=JSON.parse(read("build/atto-checked-i64-native/llvm-checked-i64-native-receipt.json"));
+            const manifest=JSON.parse(read("contracts/atto-parity-v1/js-checked-i64-candidates.json"));
+            const head=execFileSync("/usr/bin/git",["rev-parse","HEAD"],{encoding:"utf8"}).trim();
+            const tree=execFileSync("/usr/bin/git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim();
+            const hash=/^[a-f0-9]{64}$/;
+            if(head!==process.env.EXPECTED_SOURCE_SHA ||
+               original.schema!=="atto-llvm-original-i64-native-v1" ||
+               original.verification!=="LLVM_ORIGINAL_SOURCE_GUEST_EXECUTED" ||
+               original.source_head!==head || original.source_tree!==tree ||
+               original.corpus_sha256!=="5fd8ed522dfaaead8dc1b2d780159a4f156482124b7515d0a788245fc594ebc8" ||
+               original.compiler_sha256!==sha(readFileSync("build/oreslang-llvmc")) ||
+               original.compiler_sha256!==checked.compiler_sha256 ||
+               original.clang_sha256!==checked.clang_sha256 ||
+               original.probe_sha256!==sha(readFileSync("tests/atto_i64_original_guest_probe.c")) ||
+               !hash.test(original.objcopy_sha256) ||
+               original.original_value_cases!==37 ||
+               original.executed_guest_processes!==74 ||
+               JSON.stringify(original.optimization_modes)!==JSON.stringify(["O0","O2"]) ||
+               !Array.isArray(original.results) || original.results.length!==37 ||
+               manifest.cases?.length!==50)
+              throw Error("unverified original-source LLVM native guest receipt");
+            let i=0;
+            for(const spec of manifest.cases){
+              if(spec.expected?.kind!=="value")continue;
+              const item=original.results[i++];
+              if(!item || item.id!==spec.id ||
+                 item.expected_i64!==spec.expected.value ||
+                 item.source_sha256!==sha(Buffer.from(spec.source,"utf8")) ||
+                 !hash.test(item.ir_sha256) ||
+                 item.observed_exit_o0!==42 || item.observed_exit_o2!==42)
+                throw Error("unchanged source returned wrong full-width i64 at "+spec.id);
+            }
+            if(i!==37)throw Error("missing actual original-source native guest cases");
+            console.log("37/37 unchanged source programs, O0+O2, 74/74 native guest processes; HEAD:",head);
+          '
       - name: Preserve native guest receipt
         # Never upload stale or partial 'success' receipts from a failed test.
         if: success()
@@ -187,4 +239,5 @@ jobs:
           path: |
             build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json
             build/atto-checked-i64-native/llvm-checked-i64-native-receipt.json
+            build/atto-i64-original-native/llvm-original-i64-native-receipt.json
           if-no-files-found: error
