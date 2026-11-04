@@ -3665,7 +3665,7 @@ endif()
 # unquotes of the same closed literal may be duplicated before LLVM IR.
 # All others must fail compilation without leaking partial IR.
 if(BUILD_TESTING)
-    foreach(macro_case IN ITEMS template-twice-name-reject template-twice-composite-reject)
+    foreach(macro_case IN ITEMS template-twice-name-reject template-twice-unresolved-name-reject template-twice-composite-reject)
         add_test(NAME "native_macro_shared_${macro_case}_no_ir"
             COMMAND "${CMAKE_COMMAND}"
                 "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
