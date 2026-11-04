@@ -92,6 +92,48 @@ fn main() {
     assert!(trace.contains("SOURCE_TASK_RUNTIME_PASS"));
     assert!(trace.contains("producer_on_carrier=1"));
 
+    // An independent source program asks the compiler to assign TWO
+    // distinct typed key descriptors. The LLVM producer must invoke the
+    // checked keyed native ABI twice and read the second static slot.
+    let keyed = fs::read_to_string(
+        root.join("tests/fixtures/tasklocal-keyed-i64-source.atto"))
+        .expect("named TaskLocal<int> guest fixture");
+    let compiled = compile(&compiler, &dir.0, "tasklocal-keyed.atto", &keyed);
+    assert!(compiled.status.success(),
+        "typed TaskLocal<int> compiler rejected fixture: {}",
+        String::from_utf8_lossy(&compiled.stderr));
+    let keyed_ir = String::from_utf8_lossy(&compiled.stdout);
+    assert_eq!(keyed_ir.matches(
+        "call void @oreslang_source_task_local_i64_set_keyed").count(), 2,
+        "two distinct static typed keys must be emitted");
+    assert!(keyed_ir.contains(
+        "call i64 @oreslang_source_task_local_i64_get_keyed"),
+        "typed key getter must use checked runtime ABI");
+    for symbol in [
+        "oreslang_source_task_start_i64",
+        "oreslang_source_task_runtime_shutdown"] {
+        assert!(keyed_ir.contains(symbol), "missing keyed IR symbol: {symbol}");
+    }
+    let keyed_ll = dir.0.join("tasklocal-keyed.ll");
+    let keyed_exe = dir.0.join("tasklocal-keyed");
+    fs::write(&keyed_ll, &compiled.stdout).expect("write typed LLVM IR");
+    let linked = Command::new(&clang)
+        .arg(&keyed_ll).arg(&runtime).arg(&scheduler)
+        .arg("-I").arg(&include).arg("-std=c11").arg("-pthread")
+        .arg("-DORESLANG_SOURCE_TASK_TESTING=1")
+        .arg("-o").arg(&keyed_exe)
+        .current_dir(&dir.0).output().expect("typed native link invocation");
+    assert!(linked.status.success(),
+        "typed TaskLocal<int> native link failed: {}",
+        String::from_utf8_lossy(&linked.stderr));
+    let executed = Command::new(&keyed_exe).current_dir(&dir.0).output()
+        .expect("run compiler-generated typed native TaskLocal binary");
+    assert_eq!(executed.status.code(), Some(42),
+        "typed key native guest should yield 42: {}",
+        String::from_utf8_lossy(&executed.stderr));
+    assert!(String::from_utf8_lossy(&executed.stderr)
+        .contains("producer_on_carrier=1"));
+
     reject(&compiler, &dir.0, "tasklocal-missing-set.atto",
         "pub fnc main(): int {\nlet Task<int> w = task { return TaskLocal<int>.get(); };\nlet int v = await w;\nreturn v;\n}\n",
         Some("requires a preceding TaskLocal<int>.set"));
@@ -113,8 +155,26 @@ fn main() {
     reject(&compiler, &dir.0, "tasklocal-double-set.atto",
         "pub fnc main(): int {\nlet Task<int> w = task { TaskLocal<int>.set(4); TaskLocal<int>.set(5); return TaskLocal<int>.get(); };\nlet int v = await w;\nreturn v;\n}\n",
         None);
+    reject(&compiler, &dir.0, "tasklocal-named-missing-set.atto",
+        "pub fnc main(): int {\nlet Task<int> w = task { TaskLocal<int, key=a>.set(4); return TaskLocal<int, key=b>.get(); };\nlet int v = await w;\nreturn v;\n}\n",
+        Some("requires a preceding TaskLocal<int>.set"));
+    reject(&compiler, &dir.0, "tasklocal-named-double-set.atto",
+        "pub fnc main(): int {\nlet Task<int> w = task { TaskLocal<int, key=a>.set(4); TaskLocal<int, key=a>.set(5); return TaskLocal<int, key=a>.get(); };\nlet int v = await w;\nreturn v;\n}\n",
+        Some("duplicate static key"));
+    reject(&compiler, &dir.0, "tasklocal-named-over-quota.atto",
+        "pub fnc main(): int {\nlet Task<int> w = task { TaskLocal<int, key=a>.set(1); TaskLocal<int, key=b>.set(2); TaskLocal<int, key=c>.set(3); TaskLocal<int, key=d>.set(4); TaskLocal<int, key=e>.set(5); TaskLocal<int, key=f>.set(6); TaskLocal<int, key=g>.set(7); TaskLocal<int, key=h>.set(8); TaskLocal<int, key=i>.set(9); return TaskLocal<int, key=i>.get(); };\nlet int v = await w;\nreturn v;\n}\n",
+        Some("exceeds eight static keys"));
+    reject(&compiler, &dir.0, "tasklocal-named-wrong-type.atto",
+        "pub fnc main(): int {\nlet Task<int> w = task { TaskLocal<int, key=a>.set(true); return TaskLocal<int, key=a>.get(); };\nlet int v = await w;\nreturn v;\n}\n",
+        Some("TaskLocal<int>.set requires a scalar int value"));
+    reject(&compiler, &dir.0, "tasklocal-named-reserved.atto",
+        "pub fnc main(): int {\nlet Task<int> w = task { TaskLocal<int, key=default>.set(5); return TaskLocal<int, key=default>.get(); };\nlet int v = await w;\nreturn v;\n}\n",
+        Some("reserves key name default"));
+    reject(&compiler, &dir.0, "tasklocal-named-ffi-shadow.atto",
+        "fnc oreslang_source_task_local_i64_get_keyed(): int { return 7; }\npub fnc main(): int { return oreslang_source_task_local_i64_get_keyed(); }\n",
+        Some("reserved TaskLocal runtime ABI"));
     reject(&compiler, &dir.0, "tasklocal-abi-shadow.atto",
         "fnc oreslang_source_task_local_i64_get(): int { return 7; }\npub fnc main(): int { return oreslang_source_task_local_i64_get(); }\n",
         Some("reserved TaskLocal runtime ABI"));
-    println!("TASKLOCAL_I64_COMPILER_GUEST_PASS: 1 compiled binary and 8 rejected fixtures");
+    println!("TASKLOCAL_I64_COMPILER_GUEST_PASS: 2 compiled binaries and 14 rejected fixtures");
 }
