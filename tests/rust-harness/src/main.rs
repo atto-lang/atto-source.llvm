@@ -404,6 +404,63 @@ fn named_call_source_order(compiler: &Path, fixture: &Path) -> Result<(), String
     Ok(())
 }
 
+// Real compiler + Clang + native-exit matrix. No JS/Python oracle or
+// simulated binding. Test every 3! generic-label order independently of
+// every 3! named-value order and assert the formal ABI, not just a sum.
+fn named_generic_value_matrix(compiler: &Path, clang: &Path) -> Result<(), String> {
+    const PERMS: [[usize; 3]; 6] = [
+        [0, 1, 2], [0, 2, 1], [1, 0, 2],
+        [1, 2, 0], [2, 0, 1], [2, 1, 0],
+    ];
+    let types = ["A", "B", "C"];
+    let formals = ["first", "second", "third"];
+    let values = [0, 4, 2];
+    let temp = TempDir::new("atto-native-named-generic-matrix-")
+        .map_err(|e| e.to_string())?;
+    let mut executed = 0usize;
+    for generic_order in PERMS {
+        for value_order in PERMS {
+            let type_args = generic_order.iter()
+                .map(|&i| format!("{}=int", types[i]))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let actuals = value_order.iter()
+                .map(|&i| format!("{}: {}", formals[i], values[i]))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let program = format!(
+                "fnc encode<A=int,B=int,C=int>(A first,B second,C third): int {{ return first * 100 + second * 10 + third; }}\n                 pub fnc main(): int {{ return encode<{type_args}>({actuals}); }}\n"
+            );
+            let src = temp.path.join(format!("case-{executed}.ores"));
+            let ir = temp.path.join(format!("case-{executed}.ll"));
+            let binary = temp.path.join(format!("case-{executed}"));
+            fs::write(&src, program).map_err(|e| e.to_string())?;
+            let compiled = run(compiler, [src.as_os_str()])?;
+            require(compiled.status.success() && compiled.stdout.starts_with(b"; ModuleID"),
+                format!("named matrix case {executed} native compiler failed: {}",
+                    stderr(&compiled)))?;
+            require(compiled.stderr.is_empty(),
+                format!("named matrix case {executed} emitted unexpected diagnostics: {}",
+                    stderr(&compiled)))?;
+            fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
+            let linked = Command::new(clang)
+                .arg("-x").arg("ir").arg(&ir).arg("-o").arg(&binary)
+                .output().map_err(|e| format!("matrix case {executed} Clang: {e}"))?;
+            require(linked.status.success(),
+                format!("named matrix case {executed} LLVM link failed: {}",
+                    stderr(&linked)))?;
+            let guest = run(&binary, std::iter::empty::<&OsStr>())?;
+            require(guest.status.code() == Some(42),
+                format!("named matrix case {executed} wrong guest ABI exit {:?}: {}",
+                    guest.status.code(), stderr(&guest)))?;
+            executed += 1;
+        }
+    }
+    require(executed == 36, "incomplete 3! x 3! native binding matrix")?;
+    println!("PASS 36/36 native LLVM named generic + value guest binaries");
+    Ok(())
+}
+
 fn actor_persistent_fields(compiler: &Path, clang: &Path, root: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-actor-fields-").map_err(|e| e.to_string())?;
     let fixture = root.join("tests/fixtures/actor-owned-fields.ores");
@@ -828,6 +885,11 @@ fn real_main() -> Result<(), String> {
             let fixture = path_arg(&args, 3, "usage: named-call-order <compiler> <fixture>")?;
             named_call_source_order(&compiler, &fixture)
         }
+        Some("named-generic-matrix") => {
+            let compiler = path_arg(&args, 2, "usage: named-generic-matrix <compiler> <clang>")?;
+            let clang = path_arg(&args, 3, "usage: named-generic-matrix <compiler> <clang>")?;
+            named_generic_value_matrix(&compiler, &clang)
+        }
         Some("actor-persistent-fields") => {
             let compiler = path_arg(&args, 2, "usage: actor-persistent-fields <compiler> <clang> <root>")?;
             let clang = path_arg(&args, 3, "usage: actor-persistent-fields <compiler> <clang> <root>")?;
@@ -846,7 +908,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|named-generic-matrix|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }
