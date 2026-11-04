@@ -324,6 +324,19 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Compiler AST effect observations: bounded direct/transitive may-effect
+    # flags, unresolved call propagation, recursive graph convergence.
+    # Host AST model only; typed escaping effects are not yet admitted.
+    add_executable(oreslang-native-exception-effect-observations-test
+        tests/native_exception_effect_observations_test.cpp)
+    target_include_directories(oreslang-native-exception-effect-observations-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-exception-effect-observations-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_exception_effect_observations_host_only
+        COMMAND oreslang-native-exception-effect-observations-test)
+    set_tests_properties(native_exception_effect_observations_host_only
+        PROPERTIES TIMEOUT 20)
     # Exact compiled-source CLI receipt: LLVM source validation is genuine,
     # exceptional may-effect inference is intentionally inconclusive.
     add_test(NAME native_exception_effect_analyze_inconclusive_cli
