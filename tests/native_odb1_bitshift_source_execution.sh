@@ -40,7 +40,7 @@ fi
 test ! -s "$work/positive.stdout" || { echo 'unexpected guest stdout' >&2; exit 1; }
 echo 'NATIVE_ODB1_SHIFT_POSITIVE_PASS assertions=13; REAL_GUEST_EXECUTED'
 # These programs are TYPE/GRAMMAR errors, not user-visible successful IR.
-for name in odb1-bitshift-invalid-boolean-operand             odb1-bitshift-invalid-nonadjacent; do
+for name in odb1-bitshift-invalid-boolean-operand             odb1-bitshift-invalid-boolean-distance             odb1-bitshift-invalid-nonadjacent; do
   source="$root/tests/fixtures/$name.atto"
   if timeout 40s "$compiler" --target=host "$source"       >"$work/$name.ll" 2>"$work/$name.err"; then
     echo "unsupported native guest unexpectedly compiled: $name" >&2; exit 1
@@ -54,7 +54,7 @@ done
 # The Java reference requires distances 0..63. LLVM shifts at >=64 create
 # poison; negative distances must trap too. A normal numeric exit here is
 # NOT proof of runtime checking. All three fixtures must signal after building.
-for name in odb1-bitshift-invalid-negative-distance             odb1-bitshift-invalid-64-distance             odb1-bitshift-invalid-unsigned-distance; do
+for name in odb1-bitshift-invalid-negative-distance             odb1-bitshift-invalid-64-distance             odb1-bitshift-invalid-dynamic-distance             odb1-bitshift-invalid-unsigned-distance; do
   compile_guest "$name"
   rc=0
   timeout 20s "$work/$name.bin" >"$work/$name.stdout"       2>"$work/$name.runtime.err" || rc=$?
@@ -64,4 +64,4 @@ for name in odb1-bitshift-invalid-negative-distance             odb1-bitshift-in
   fi
   echo "NATIVE_ODB1_SHIFT_RUNTIME_REJECTION_PASS $name status=$rc"
 done
-echo 'NATIVE_ODB1_SHIFT_SOURCE_EXECUTION_PASS positive=13 compile_rejections=2 runtime_traps=3; NOT FULL DB CODEC PARITY'
+echo 'NATIVE_ODB1_SHIFT_SOURCE_EXECUTION_PASS positive=13 compile_rejections=3 runtime_traps=4; NOT FULL DB CODEC PARITY'
