@@ -71,7 +71,7 @@ int main() {
                 std::string(" bad"), std::string("bad\tname"),
                 std::string("bad:name"), std::string("bad\\name"),
                 std::string(129, 'a'), std::string("a\0z", 3),
-                std::string("\xC3\xA9"), std::string("a\xC2\xA0b"),
+                std::string("\xC3\xA9"), std::string("a\xC2\xA0" "b"),
                 std::string("\xFF", 1)}) {
             check(!valid_portable_topic_name(bad),
                   "invalid portable topic admitted by shared validator");
