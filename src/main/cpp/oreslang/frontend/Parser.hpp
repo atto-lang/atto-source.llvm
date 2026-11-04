@@ -174,6 +174,11 @@ struct ActorSpawnBinding {
 struct SourceTaskI64Binding {
     std::string name;
     std::unique_ptr<Expression> result;
+    // Narrow first compiler-backed TaskLocal<int> source slice. A Task owns
+    // one implicit i64 slot; full typed static keys await AOT descriptors.
+    // Only a source Task producer may initialize/read this slot.
+    std::unique_ptr<Expression> task_local_i64_initial;
+    bool task_local_i64_return = false;
     std::size_t offset = 0;
     bool awaited = false;
 };
