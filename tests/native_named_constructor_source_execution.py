@@ -20,6 +20,11 @@ IMPLICIT = """define class Pair as
   pub val int ones;
 end
 """
+MIXED = """define class Mixed as
+  pub val bool flag;
+  pub val int count;
+end
+"""
 POSITIVE = {
     "explicit-reordered": (BASE + """pub fnc main(): int {
   let Pair p = new Pair(second: 2, first: 4);
@@ -44,6 +49,18 @@ POSITIVE = {
     "implicit-mixed": (IMPLICIT + """pub fnc main(): int {
   let Pair p = new Pair(4, ones: 2);
   return p.tens * 10 + p.ones;
+}
+""", 42),
+    # The independent native scalar typechecker must resolve each source
+    # argument to its declared formal before checking bool versus int.
+    "implicit-reordered-bool-int-types": (MIXED + """pub fnc main(): int {
+  let Mixed p = new Mixed(count: 42, flag: true);
+  return p.count;
+}
+""", 42),
+    "implicit-mixed-bool-int-types": (MIXED + """pub fnc main(): int {
+  let Mixed p = new Mixed(true, count: 42);
+  return p.count;
 }
 """, 42),
     "val-owner-reordered": (BASE + """pub fnc main(): int {
@@ -96,6 +113,11 @@ pub fnc main(): int {
 }
 
 NEGATIVE = {
+    "implicit-reordered-bool-int-type-mismatch": (MIXED + """pub fnc main(): int {
+  let Mixed p = new Mixed(count: true, flag: 42);
+  return p.count;
+}
+""", "native class constructor argument requires int, got bool"),
     "unknown-label": (BASE + """pub fnc main(): int {
   let Pair p = new Pair(first: 4, unknown: 2);
   return p.tens;
