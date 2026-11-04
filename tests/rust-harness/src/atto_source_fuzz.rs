@@ -193,3 +193,40 @@ pub(super) fn self_test() -> Result<(), String> {
     println!("ATTO_LLVM_SOURCE_FUZZ_HOST_ORACLE_PASS");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seeded_cases_replay_identically_and_stay_within_exit_domain() {
+        for seed in [0, 1, 42, 1729, u64::MAX] {
+            let mut a = SplitMix64::new(seed);
+            let mut b = SplitMix64::new(seed);
+            for _ in 0..1000 {
+                let left = operands(&mut a);
+                let right = operands(&mut b);
+                assert_eq!(left, right);
+                assert!(left.0 + left.1 <= 192);
+                let generated = guest(left.0, left.1);
+                assert!(generated.contains("pub fnc main(): int"));
+                assert!(generated.contains("return x + y"));
+            }
+        }
+    }
+
+    #[test]
+    fn oracle_never_accepts_wrong_exit_or_signal() {
+        assert!(check_exit(Some(42), 42).is_ok());
+        for status in [None, Some(0), Some(41), Some(43), Some(255)] {
+            assert!(check_exit(status, 42).is_err());
+        }
+    }
+
+    #[test]
+    fn source_fuzzer_rejects_zero_and_excessive_budget_before_compiler_access() {
+        let missing = Path::new("/nonexistent-atto-compiler");
+        assert!(run_cases(missing, missing, 1729, 0).is_err());
+        assert!(run_cases(missing, missing, 1729, MAX_CASES + 1).is_err());
+    }
+}
