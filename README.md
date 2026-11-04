@@ -1,4 +1,14 @@
-# Oreslang LLVM backend
+# AttoLang Native LLVM backend
+
+**AttoLang** is the current public language name (formerly **Oreslang**).
+This compiler/runtime remains the independent native LLVM implementation; existing tool names, `.ores` fixtures, module identifiers and compiled ABI remain unchanged.
+This branding change does not establish new syntax, source-extension support,
+execution parity, AOT capabilities or zero-GC guarantees. New source SHOULD
+use `.atto` only after this particular backend has passed a real compile/run
+admission test; `.ores` remains supported wherever already implemented.
+Do not rename repositories, dependencies, commands or fixed interfaces merely
+to make their names match the public brand.
+
 
 Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
 Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
@@ -97,13 +107,17 @@ a code within `0..255`; values outside that range return failure status `1`
 rather than silently truncating to an unrelated shell status. Native source
 `std.process.exit()` and exception effects remain unsupported and fail closed.
 
-The `int` to `i64` mapping, wraparound arithmetic and other non-entrypoint
-calling conventions are still **provisional**. Their semantics must be
-reconciled with the shared Oreslang specification and Java/GraalVM behavior,
-then verified by cross-backend differential tests before those features
-are marked parity-complete.
-The native slice does not support `-9223372036854775808` as one literal.
-Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
+The `int` to `i64` mapping and other non-entrypoint calling conventions
+remain **provisional**, but default signed i64 add/subtract/multiply and unary
+negation now lower through LLVM checked-overflow intrinsics and trap on overflow;
+they no longer intentionally wrap. Native executable regression cases cover
+runtime and constant-source paths at O1/O2, including the signed minimum
+boundary. This is still a target trap ABI rather than the final typed Oreslang
+`ArithmeticOverflow` error contract, and it does not establish Math/BigInt/
+Decimal or floating-point parity. Cross-backend differential tests remain
+required before numeric parity is marked complete.
+Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI and must
+pin a compiler revision carrying the same checked arithmetic semantics.
 
 ## Build and test
 
@@ -267,3 +281,21 @@ artifact.
 The executed CTest gate compiles both shaken and unshaken IR through Clang and
 requires identical process behavior while asserting the dead private symbol is
 absent from the shaken IR.
+
+## AttoLang `.atto` source admission (integer subset)
+
+The LLVM CLI accepts canonical `.atto` source paths as well as legacy `.ores`
+paths; the file extension does not change the current parser or semantics.
+A native executable regression fixture lives at
+`tests/fixtures/numerics-atto-main.atto` and is registered as
+`numerics_atto_integer_guest` when Clang is available. It exercises the
+existing integer-only subset (forward function call and signed i64 addition)
+and must return exit code 42.
+
+This is source-extension admission only. LLVM currently does **not** lower
+floating-point values, floating division, contiguous numerical arrays, or
+tensor kernels. The numerical-library fixtures using `float`, `List<float>`,
+dot products, reductions and matrix multiplication remain unsupported here
+and must fail closed rather than silently map to i64. See the existing
+`native_float_division_unavailable` contract. Java/LLVM numerical parity is
+not claimed by this fixture.

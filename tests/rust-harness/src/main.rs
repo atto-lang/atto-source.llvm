@@ -350,6 +350,48 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
     )?;
 
     let original = fs::read(&output).map_err(|e| e.to_string())?;
+    // A host-side trampoline that always returns 42 can pass one smoke test.
+    // Distinct guest programs must produce distinct, independently runnable
+    // linked artifacts, with the compiler and PATH unavailable at execution.
+    // These tests establish only the currently implemented scalar guest slice,
+    // not full language/actor AOT parity.
+    for (label, program, expected_exit) in [
+        ("zero", "pub routine main(): int { return 0; }\n", 0),
+        ("one", "pub routine main(): int { return 1; }\n", 1),
+        ("module", "define module demo as\n  pub fnc main(): int { return 7; }\nend\n", 7),
+        ("forward-call", "pub fnc main(): int { return add(40, 2); }\nfnc add(int a, int b): int { return a + b; }\n", 42),
+    ] {
+        fs::write(&source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
+        let built = Command::new(driver)
+            .arg(&source).arg(&output)
+            .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+            .output().map_err(|e| format!("{label}: AOT driver: {e}"))?;
+        require(built.status.success(),
+            format!("{label}: native link failed: {}", stderr(&built)))?;
+        let executed = Command::new(&output)
+            .env_clear().env("PATH", "/nonexistent")
+            .output().map_err(|e| format!("{label}: native entrypoint: {e}"))?;
+        require(executed.status.code() == Some(expected_exit),
+            format!("{label}: native guest returned {:?} instead of {expected_exit}: {}",
+                executed.status.code(), stderr(&executed)))?;
+        require(executed.stdout.is_empty() && executed.stderr.is_empty(),
+            format!("{label}: unexpected guest I/O or host interpreter diagnostics"))?;
+        if expected_exit != 42 {
+            require(fs::read(&output).map_err(|e| e.to_string())? != original,
+                format!("{label}: artifact identical to baseline despite distinct guest return"))?;
+        }
+    }
+    // Rebuild the original image before negative cases: they must preserve
+    // exactly these published bytes and never publish a partial executable.
+    fs::write(&source, "fnc main(): int { return 42; }\n")
+        .map_err(|e| e.to_string())?;
+    let restored = Command::new(driver)
+        .arg(&source).arg(&output)
+        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+        .output().map_err(|e| format!("restore linked guest: {e}"))?;
+    require(restored.status.success(),
+        format!("restore linked guest failed: {}", stderr(&restored)))?;
+    let original = fs::read(&output).map_err(|e| e.to_string())?;
     for text in [
         "import module spin from \"spin\";\n",
         "this is not Oreslang\n",
@@ -369,6 +411,43 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
             "failed compile changed existing native output",
         )?;
     }
+
+    // The IR screen is a release gate, not linked-image certification. A compiler
+    // emitting collector IR must be stopped before Clang, by this specific gate.
+    fs::write(&source, "fnc main(): int { return 42; }\n").map_err(|e| e.to_string())?;
+    let fake = temp.path.join("fake-ir-compiler.sh");
+    for ir in [
+        r#"define void @guest() gc "shadow-stack" { ret void }"#,
+        r#"define void @"safe;label"() gc "shadow-stack" { ret void }"#,
+        "declare void @llvm.gcroot(ptr, ptr)",
+        "declare token @llvm.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)",
+        "declare ptr @GC_malloc(i64)",
+        "declare void @gc_collect()",
+        r#"declare void @"llvm.g\63root"(ptr, ptr)"#,
+    ] {
+        fs::write(&fake, format!("#!/bin/sh\ncat <<'IR'\n{ir}\nIR\n")).map_err(|e| e.to_string())?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        }
+        let out = Command::new(driver)
+            .arg(&source)
+            .arg(&output)
+            .env("ORESLANG_LLVMC", &fake)
+            .env("CLANG", clang)
+            .output()
+            .map_err(|e| format!("run collector IR case: {e}"))?;
+        require(!out.status.success(), format!("collector IR admitted: {ir}"))?;
+        require(
+            stderr(&out).contains("STRICT_NO_GC_IR_REJECTED"),
+            format!("{ir}: rejected by something other than the gate: {}", stderr(&out)),
+        )?;
+        require(
+            fs::read(&output).map_err(|e| e.to_string())? == original,
+            "collector IR changed existing native output",
+        )?;
+    }
+    fs::remove_file(&fake).map_err(|e| e.to_string())?;
 
     for entry in fs::read_dir(&temp.path).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
