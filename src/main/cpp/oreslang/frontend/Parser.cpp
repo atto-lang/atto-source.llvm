@@ -5997,15 +5997,13 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
-    // This AST is intentionally NOT an authorization for LLVM emission.
-    // The experimental i64-only guest adapter remains behind its explicit
-    // CLI flag until common nominal layouts and ownership HIR/MIR are wired.
+    // A parsed schema alone never authorizes guest codegen. Only a complete
+    // bounded, local two-i64 source main can cross checked typed HIR/MIR;
+    // broader inverted structs/classes and all escaped owners fail closed.
     if (!program.inverted_structs.empty()) {
-        // The actual production Program AST is now checked by the same
-        // independently verified MIR machinery as the opt-in source slice.
-        // Only synthetic allocation/close probes are constructed: this does
-        // NOT authorize real guest row operations or remove fail-closed
-        // compilation of unsupported inverted collections.
+        // The schema preflight checks only a synthetic allocate/close probe;
+        // it cannot admit guest row reads, writes, loans or lifetime effects.
+        // Complete source operations get independent verification below.
         const auto schemas = dop::mir::preflight_inverted_schemas(program);
         if (schemas.size() != program.inverted_structs.size())
             throw std::logic_error("native inverted schema preflight incomplete");

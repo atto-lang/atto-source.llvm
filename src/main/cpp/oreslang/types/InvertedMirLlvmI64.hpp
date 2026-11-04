@@ -1,7 +1,8 @@
 #pragma once
-// Experimental verified-MIR -> native LLVM IR for a LOCAL two-i64-column
-// owner. No escaped handles, actor lifetime or production source admission.
-// The C++17 LLVM compiler can include this without an LLVM SDK dependency.
+// Restricted verified-MIR -> native LLVM IR for a LOCAL two-i64-column
+// owner, now also used by the narrow default production-source compiler.
+// No escaped handles, actor suspension, general inverted schemas or RT
+// guarantees. C++17 compilation needs no LLVM SDK dependency.
 #include "oreslang/types/InvertedTypedMir.hpp"
 #include <cstddef>
 #include <cstdint>

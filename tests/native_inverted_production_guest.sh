@@ -18,15 +18,17 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
             exit 1
         fi
     done
-    "$clang" -O2 -x ir "$tmp/guest.ll" -o "$tmp/guest"
-    set +e
-    "$tmp/guest" >/dev/null 2>&1
-    actual=$?
-    set -e
-    if [ "$actual" -ne 42 ]; then
-        echo "FAIL: production native $fixture exited $actual, expected 42" >&2
-        exit 1
-    fi
+    for optimization in -O0 -O2; do
+        "$clang" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
+        set +e
+        "$tmp/guest" >/dev/null 2>&1
+        actual=$?
+        set -e
+        if [ "$actual" -ne 42 ]; then
+            echo "FAIL: production native $fixture $optimization exited $actual, expected 42" >&2
+            exit 1
+        fi
+    done
 done
 
 # A guest read past logical length is dynamically guarded, rather than
@@ -37,10 +39,11 @@ if ! grep -Fq 'call void @llvm.trap()' "$tmp/bounds.ll" ||
     echo "FAIL: production bounds guest emitted no guarded trap" >&2
     exit 1
 fi
-"$clang" -O2 -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
-# A shell status of 132/133 is ambiguous: a program can return that exit code
-# without receiving SIGILL/SIGTRAP. Python retains the actual signal number.
-python3 - "$tmp/bounds" <<'PY'
+# Real signal evidence at both optimization levels; shell exit 132/133 can
+# be forged by a normal return. Python checks SIGILL/SIGTRAP termination.
+for optimization in -O0 -O2; do
+    "$clang" "$optimization" -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
+    python3 - "$tmp/bounds" <<'PY'
 import resource
 import signal
 import subprocess
@@ -59,6 +62,7 @@ if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
         f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
     )
 PY
+done
 
 # All unsupported source must reject before emitting a single byte of IR.
 cat > "$tmp/immutable.atto" <<'ORES'
@@ -122,13 +126,19 @@ for item in \
     fi
 done
 
-if "$compiler" --profile=native-hard-rt "$fixtures/positive-column-get.atto" \
-    >"$tmp/unsafe.ll" 2>"$tmp/error.txt"; then
-    echo 'FAIL: unproved hard-RT claim admitted' >&2
-    exit 1
-fi
-if [ -s "$tmp/unsafe.ll" ]; then
-    echo 'FAIL: unproved hard-RT mode emitted IR' >&2
-    exit 1
-fi
-printf 'PASS: production .atto -> typed MIR -> checked native IR, 3 exit-42, bounds trap, 6 rejects\n'
+# Unsupported runtime/target/analysis options must fail closed before any
+# LLVM IR bytes escape. Do not grant Wasm, hard-RT or allocator claims.
+for option in --profile=native-hard-rt --target=wasm32 \
+              --constraint-descriptors --tree-shake \
+              --allocator-provider=bounded-arena; do
+    if "$compiler" "$option" "$fixtures/positive-column-get.atto" \
+        >"$tmp/unsafe.ll" 2>"$tmp/error.txt"; then
+        echo "FAIL: restricted production owner admitted option $option" >&2
+        exit 1
+    fi
+    if [ -s "$tmp/unsafe.ll" ]; then
+        echo "FAIL: restricted owner emitted IR for unsupported option $option" >&2
+        exit 1
+    fi
+done
+printf 'PASS: production .atto -> typed MIR -> checked IR, 6 native exit-42 (O0/O2), 2 bounds signals, 5 source rejects and 5 mode rejects\n'
