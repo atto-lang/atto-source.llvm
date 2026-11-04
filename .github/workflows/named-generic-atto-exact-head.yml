@@ -10,6 +10,8 @@ on:
       - 'tests/native_scalar_generic_source_execution.py'
       - 'tests/native_int_array_source_execution.py'
       - 'tests/native_named_array_slot_binding_test.cpp'
+      - 'tests/native_named_constructor_source_execution.py'
+      - 'tests/native_named_constructor_slot_binding_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/named-generic-atto-exact-head.yml'
   workflow_dispatch:
@@ -60,6 +62,9 @@ jobs:
             native_int_array_source_execution
             native_int_array_source_asan_ubsan
             native_named_array_slot_binder_host_only
+            native_named_constructor_slot_binder_host_only
+            native_atto_named_constructor_source_execution
+            native_atto_named_constructor_source_execution_O2
             native_named_call_lexical_ir_order
             native_named_call_reordered_guest
             native_named_call_mixed_guest
@@ -78,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build \
-            -R '^(native_atto_named_generic_value_source_execution(_O2)?|native_scalar_generic_contract_harness_selftest|native_int_array_source_(execution|asan_ubsan)|native_named_array_slot_binder_host_only|native_named_call_(lexical_ir_order|reordered_guest|mixed_guest|mut_borrow_binding|overload_arity_guest))$' \
+            -R '^(native_atto_named_generic_value_source_execution(_O2)?|native_atto_named_constructor_source_execution(_O2)?|native_scalar_generic_contract_harness_selftest|native_int_array_source_(execution|asan_ubsan)|native_named_array_slot_binder_host_only|native_named_constructor_slot_binder_host_only|native_named_call_(lexical_ir_order|reordered_guest|mixed_guest|mut_borrow_binding|overload_arity_guest))$' \
             --output-on-failure --no-tests=error --timeout 240 --parallel 2
 
       - name: Build ASan and UBSan instrumented LLVM frontend
