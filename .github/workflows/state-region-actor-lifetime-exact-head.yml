@@ -9,6 +9,8 @@ on:
       - 'tests/native_actor_arena_denial_test.cpp'
       - 'tests/native_actor_stop_race_test.cpp'
       - 'tests/native_aot_two_actor_owned_counter_harness.c'
+      - 'tests/emit_sealed_actor_receipt.py'
+      - 'tests/test_emit_sealed_actor_receipt.py'
       - 'tests/fixtures/native-aot-two-actor-owned-counter.atto'
       - 'tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.atto'
       - 'tests/fixtures/native-aot-sealed-two-actor-owned-counter.atto'
@@ -21,6 +23,8 @@ on:
       - 'tests/fixtures/native-aot-sealed-state-symbol-collision-reject.atto'
       - 'tests/fixtures/native-aot-sealed-state-immutable-field-reject.atto'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.hpp'
+      - 'src/main/cpp/oreslang/main.cpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
@@ -208,6 +212,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 1
+      - name: Reject forged LLVM guest receipts (offline test suite)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -m unittest discover -s tests \
+            -p test_emit_sealed_actor_receipt.py -v
       - name: Build LLVM compiler and run compiled-source two-actor AOT program
         shell: bash
         env:
@@ -386,6 +396,26 @@ jobs:
           echo "FULL_STATE_HANDLE_STATE_CERTIFIED=false"
           sha256sum "$RUNNER_TEMP/guest.o" "$RUNNER_TEMP/aot-two-actor-test" \
             "$RUNNER_TEMP/guest-sealed.o" "$RUNNER_TEMP/aot-sealed-two-actor-test"
+
+      - name: Verify and seal exact-head LLVM guest execution receipts
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          python3 -I tests/emit_sealed_actor_receipt.py \
+            --runner-temp "$RUNNER_TEMP" --mode "$MODE" \
+            --expected-head "$EXPECTED_HEAD"
+          test -s "$RUNNER_TEMP/aot-guest-receipt-$MODE.json"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Upload tested compiled guest metadata (no source or binaries)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: atto-llvm-guest-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aot-guest-receipt-${{ matrix.mode }}.json
+          if-no-files-found: error
+          retention-days: 7
 
   attolang-native-module-imports:
     # Compiler-backed .atto import graph and native resolver boundary checks.
