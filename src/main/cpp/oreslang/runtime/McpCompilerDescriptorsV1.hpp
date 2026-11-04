@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <unordered_set>
 
 namespace oreslang::runtime::mcp_m1 {
 
@@ -45,6 +46,11 @@ inline std::string emit_json(const ValidatedProgram& program) {
         (!program.namespace_name.empty() && !name_ok(program.namespace_name)))
         throw std::runtime_error("unsupported module or namespace descriptor identity");
 
+    // Opaque, deterministic identity only. Never use a descriptor ID as
+    // authentication, runtime generation authority, or an ABI capability.
+    const auto module_id = hex_id(mcp_m0::stable_id(
+        std::string("atto.mcp.module.v1/") + program.namespace_name +
+        "/" + program.module));
     struct Entry { std::string name; std::size_t arity; std::string hex; };
     std::vector<Entry> entries;
     for (const auto& f : program.functions) {
@@ -64,10 +70,13 @@ inline std::string emit_json(const ValidatedProgram& program) {
         if (lhs.name != rhs.name) return lhs.name < rhs.name;
         return lhs.arity < rhs.arity;
     });
-    for (std::size_t i=1; i<entries.size(); ++i) {
-        if (entries[i-1].name == entries[i].name &&
+    std::unordered_set<std::string> ids;
+    for (std::size_t i=0; i<entries.size(); ++i) {
+        if (i && entries[i-1].name == entries[i].name &&
             entries[i-1].arity == entries[i].arity)
             throw std::runtime_error("duplicate exported descriptor identity");
+        if (!ids.insert(entries[i].hex).second)
+            throw std::runtime_error("colliding exported descriptor ID");
     }
     std::string out =
         "{\"schema\":\"atto.mcp.aot-descriptors.m1.v1\","
@@ -75,6 +84,7 @@ inline std::string emit_json(const ValidatedProgram& program) {
         "\"retention\":\"opt_in\",\"executed_guest\":false,"
         "\"abi\":\"atto.mcp.native.descriptor.v1\","
         "\"generation_binding\":\"host_runtime_required\","
+        "\"module_id\":\"" + module_id + "\","
         "\"descriptors\":[";
     for (std::size_t i=0; i<entries.size(); ++i) {
         if (i) out += ',';
