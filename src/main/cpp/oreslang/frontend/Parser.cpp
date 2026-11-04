@@ -2582,7 +2582,7 @@ private:
                     Statement terminal;
                     terminal.kind = Statement::Kind::Return; terminal.offset = offset;
                     if (!value.returns_void) terminal.expression = expression();
-                    require(";"); require("}");
+                    accept(";"); require("}");
                     if (token_.text == "else" || token_.text == "fi")
                         fail("AttoLang guard has no else or fi");
                     Statement inverted;
@@ -2952,7 +2952,7 @@ private:
                 Statement terminal;
                 terminal.kind = Statement::Kind::Return; terminal.offset = offset;
                 if (!value.returns_void) terminal.expression = expression();
-                require(";"); require("}");
+                accept(";"); require("}");
                 if (token_.text == "else" || token_.text == "fi")
                     fail("AttoLang guard has no else or fi");
                 Statement inverted;
