@@ -275,6 +275,16 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
         }
         return scalar_proven( fn.result.get());
     };
+    // The public report escapes controls/non-ASCII and caps identities at
+    // 256 bytes. An unrepresentable identity cannot receive a positive
+    // certificate: otherwise two distinct names could print the same key.
+    const auto reportable_id = [](std::string_view key) {
+        if (key.empty() || key.size() > 256) return false;
+        return std::all_of(key.begin(), key.end(), [](unsigned char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '_' || c == '/';
+        });
+    };
     std::map<std::string, Row> rows;
     const bool unknown_source_surface =
         !ast.module.empty() || !ast.namespace_name.empty() ||
@@ -303,7 +313,8 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
         Row row;
         row.direct = facts.effects;
         row.calls = facts.calls;
-        row.unknown = unknown_source_surface || !function_proven(fn) || fn.native_internal ||
+        row.unknown = unknown_source_surface || !reportable_id(key) ||
+            !function_proven(fn) || fn.native_internal ||
             !facts.effects.valid() || !facts.bounded_calls ||
             !facts.bounded_cleanup || facts.unsupported_runtime ||
             (fn.has_declared_effects && !fn.declared_effects.valid());
