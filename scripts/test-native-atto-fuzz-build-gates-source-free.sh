@@ -51,6 +51,70 @@ printf '\x00\xff' | "$target" >"$work/guest-out" 2>"$work/guest-err"
   { echo 'source-free built target did not satisfy native scalar oracle' >&2; exit 1; }
 cp "$target" "$work/preserved"
 
+# Compiler-valid, ABI-incompatible declarations must fail BEFORE linking.
+# These are synthetic IR controls; real .atto compiler cases are tested elsewhere.
+cat > "$work/wrong-arity.c" <<'GUEST'
+#include <stdint.h>
+int64_t fuzz_byte(int64_t value, int64_t extra) { return value + extra; }
+GUEST
+cat > "$work/wrong-return.c" <<'GUEST'
+#include <stdint.h>
+void fuzz_byte(int64_t value) { (void)value; }
+GUEST
+for negative in wrong-arity wrong-return; do
+  "$clang" -S -emit-llvm -O0 "$work/$negative.c" -o "$work/$negative.ll"
+  export ATTO_SOURCE_FREE_IR="$work/$negative.ll"
+  set +e
+  bash "$builder" "$work/dummy.atto" "$target" >"$work/out" 2>"$work/err"
+  rc=$?
+  set -e
+  [[ "$rc" != 0 ]] &&
+    grep -Fq 'LLVM guest must define exactly one external fuzz_byte(i64) -> i64' "$work/err" ||
+    { echo "native fuzz builder admitted wrong LLVM ABI ($negative)" >&2; exit 1; }
+  cmp -s "$target" "$work/preserved" ||
+    { echo "wrong LLVM ABI overwrote preserved native executable ($negative)" >&2; exit 1; }
+done
+
+# IR containing the admitted signature can still be invalid; Clang must
+# verify it and the publication step must leave the previous binary intact.
+cat > "$work/broken.ll" <<'IR'
+define i64 @fuzz_byte(i64 %value) {
+entry:
+  %next = add i64 %value, %missing
+  ret i64 %next
+}
+IR
+export ATTO_SOURCE_FREE_IR="$work/broken.ll"
+set +e
+bash "$builder" "$work/dummy.atto" "$target" >"$work/out" 2>"$work/err"
+rc=$?
+set -e
+[[ "$rc" != 0 ]] ||
+  { echo 'builder published invalid LLVM IR after Clang verification failure' >&2; exit 1; }
+cmp -s "$target" "$work/preserved" ||
+  { echo 'Clang verifier failure overwrote preserved binary' >&2; exit 1; }
+
+# An actual auditor denial must return its exit 7 and cannot be bypassed by
+# a successful compiler, a valid ABI, or an already published executable.
+export ATTO_SOURCE_FREE_IR="$work/good.ll"
+cat > "$work/deny-auditor" <<'AUDITOR'
+#!/usr/bin/env bash
+echo ATTO_SOURCE_FREE_AUDITOR_DENIED >&2
+exit 7
+AUDITOR
+chmod 700 "$work/deny-auditor"
+export ORES_NO_GC_IR_AUDIT="$work/deny-auditor"
+set +e
+bash "$builder" "$work/dummy.atto" "$target" >"$work/out" 2>"$work/err"
+rc=$?
+set -e
+[[ "$rc" == 7 ]] &&
+  grep -Fqx 'ATTO_SOURCE_FREE_AUDITOR_DENIED' "$work/err" ||
+  { echo 'builder ignored source-free auditor rejection or did not reach auditor' >&2; exit 1; }
+cmp -s "$target" "$work/preserved" ||
+  { echo 'auditor rejection overwrote preserved executable' >&2; exit 1; }
+export ORES_NO_GC_IR_AUDIT="$work/auditor"
+
 # An invalid timeout may not launch ANY compiler, even one that could work.
 for bad in 0 00 01 121 999 -1 1s abc; do
   set +e
@@ -86,4 +150,4 @@ for component in compiler auditor clang; do
   cmp -s "$target" "$work/preserved" ||
     { echo "timed-out $component process overwrote executable" >&2; exit 1; }
 done
-printf 'ATTO_LLVM_SOURCE_FREE_FUZZ_BUILD_GATES_PASS timeout_mutations=11 original_preserved=1\n'
+printf 'ATTO_LLVM_SOURCE_FREE_FUZZ_BUILD_GATES_PASS timeout_mutations=11 abi_negatives=2 verifier_negative=1 audit_denial=1 original_preserved=1\n'
