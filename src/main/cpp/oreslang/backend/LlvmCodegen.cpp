@@ -654,6 +654,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     if (!source.imports.empty())
         throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
     for (const auto& actor : source.actors) {
+        // Freestanding Cortex-M actor bootstrap uses a separate static heap
+        // and handler ABI. The hosted sealed critical state/turn entrypoint
+        // must not silently lower to that unverified target.
+        if (cortex_m_target && actor.sealed_scalar_state)
+            throw std::runtime_error(
+                "cortex-m sealed critical actor state requires target-specific owned turn lowering");
         if (actor.max_actor_threads != MaxActorThreads::LOW) {
             throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
         }
