@@ -426,6 +426,20 @@ def main():
             if not result.returncode or result.stdout or 'hardlink' not in result.stderr:
                 raise AssertionError(('unseen hardlink alias', result.returncode, result.stdout[:150], result.stderr))
             passed+=1
+        # Java's linked source-macro positive remains explicitly unsupported
+        # on this native frontend. Never mistake a successful source import
+        # or runtime symbol for compile-time macro expansion.
+        directory=root/'atto-imported-macro-must-reject'; directory.mkdir()
+        (directory/'producer.atto').write_text(
+            'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }')
+        (directory/'consumer.atto').write_text(
+            'import * as lib from "./producer.atto"; '
+            'pub fnc main() -> int { return lib.literal!(const 40 + 2); }')
+        result=run([a.compiler,str(directory/'consumer.atto')])
+        if not result.returncode or result.stdout:
+            raise AssertionError(('unsupported imported macro must reject without IR',
+                                  result.returncode, result.stdout[:150], result.stderr))
+        passed+=1
         # Every unsupported target fails before emitting even a module header.
         for target in ('wasm32', 'thumbv7m-none-eabi'):
             result=run([a.compiler,'--target='+target,str(root/'private-helper/main.ores')])
