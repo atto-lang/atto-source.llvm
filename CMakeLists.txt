@@ -730,6 +730,17 @@ if(BUILD_TESTING)
         set_tests_properties(atto_llvm_compiler_backed_actor_asan_ubsan
             PROPERTIES TIMEOUT 120 LABELS "atto;llvm;compiler-backed;asan;ubsan;actor")
     endif()
+    # Compiled AttoLang guest accepts byte fuzz input through a bounded
+    # native C stdin adapter; this is NOT built-in AttoLang stdin I/O.
+    # Fail-closed when the required Rust no-GC IR auditor is not executable.
+    if(ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME atto_llvm_compiler_backed_stdin_fuzz
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-native-atto-fuzz-target.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
+        set_tests_properties(atto_llvm_compiler_backed_stdin_fuzz
+            PROPERTIES TIMEOUT 120 LABELS "atto;llvm;compiler-backed;stdin-fuzz;negative")
+    endif()
     # Executable Oreslang method fixtures, using Rust-only tooling.
     if(ORE_CLANG)
         add_test(NAME native_inline_self_receiver_arity_aot
