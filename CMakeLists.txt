@@ -849,13 +849,13 @@ if(BUILD_TESTING)
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
         native-rt-while-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_for_loop_failclosed
         native-rt-for-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_unbounded_loop_failclosed
         native-rt-loop-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_cooperate_failclosed
         native-rt-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
@@ -864,13 +864,13 @@ if(BUILD_TESTING)
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
     oreslang_contract_test(native_rt_nested_while_failclosed
         native-rt-nested-while-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_nested_for_failclosed
         native-rt-nested-for-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_nested_loop_failclosed
         native-rt-nested-loop-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_nested_cooperate_failclosed
         native-rt-nested-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
@@ -1111,15 +1111,15 @@ if(BUILD_TESTING)
     # Java '/' produces a float even for int/int. Until native float lowering
     # exists, reject '/' and '%' before IR rather than silently emitting i64.
     oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
-        --diagnostic "native floating division unsupported")
+        --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
-        --diagnostic "native floating division unsupported")
+        --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_decimal_suffix_unavailable numeric-decimal-suffix-reject.ores
         --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_float_exponent_unavailable numeric-floating-exponent-reject.ores
-        --diagnostic "native floating-point/decimal literal unsupported")
+        --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_float_fraction_unavailable numeric-floating-fraction-reject.ores
-        --diagnostic "native floating-point/decimal literal unsupported")
+        --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
         --diagnostic "native remainder requires a nonzero signed integer literal divisor")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")

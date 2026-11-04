@@ -72,7 +72,7 @@ native_exact legacy "PASS:orie-stdio" \
   'pub routine main(): int { stdio.println("PASS:orie-stdio"); return 0; }'
 
 native_reject unknown_stdout_op \
-  'pub routine main(): int { stdio.stdout.write("bad"); return 0; }' \
+  'pub routine main(): int { stdio.stdout.flush("bad"); return 0; }' \
   'unsupported native stdio operation'
 native_reject stderr_not_stdout \
   'pub routine main(): int { stdio.stderr.println("bad"); return 0; }' \

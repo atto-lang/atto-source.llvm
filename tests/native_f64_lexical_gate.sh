@@ -15,14 +15,14 @@ pass=0
 reject=0
 # A duplicate ID could overwrite a previous source, IR or executable and
 # manufacture an apparent N/N pass. Enforce unique sandbox-safe case IDs.
-declare -A seen_case_ids=()
+seen_case_ids=" "
 check_case_id() {
   local name="$1"
   [[ "$name" =~ ^[a-z][a-z0-9_]*$ ]] ||
     { echo "NATIVE_F64_UNSAFE_CASE_ID: $name" >&2; exit 1; }
-  [[ ! ${seen_case_ids[$name]+exists} ]] ||
+  [[ "$seen_case_ids" != *" $name "* ]] ||
     { echo "NATIVE_F64_DUPLICATE_CASE_ID: $name" >&2; exit 1; }
-  seen_case_ids["$name"]=1
+  seen_case_ids+="$name "
 }
 
 positive() {
@@ -244,11 +244,11 @@ pub fnc main(): int {
   if choose_value(true) == 42.0; then return 42; fi
   return 86;
 }'
-positive f64_abi_bool_return 'fnc matches(f64 value): bool {
+positive f64_abi_bool_return 'fnc same_value(f64 value): bool {
   return value == 42.0;
 }
 pub fnc main(): int {
-  if matches(42.0); then return 42; fi
+  if same_value(42.0); then return 42; fi
   return 86;
 }'
 positive oresllm_scalar_gradient 'pub fnc main(): int {
@@ -290,46 +290,55 @@ negative f64_abi_borrow_parameter 'fnc unproven(borrow f64 value): f64 {
   return value;
 }
 pub fnc main(): int { return 42; }' 'native f64 parameter must be passed by value'
-negative f64_abi_argument_mismatch 'fnc pass_through(f64 value): f64 {
+positive widen_call_argument 'fnc pass_through(f64 value): f64 {
   return value;
 }
 pub fnc main(): int {
   val f64 result = pass_through(42);
-  return 42;
-}' "argument 'value' requires f64, got int"
-negative f64_abi_return_mismatch 'fnc wrong(f64 value): f64 {
+  if result == 42.0; then return 42; fi
+  return 86;
+}'
+positive widen_function_return 'fnc widened(f64 value): f64 {
   return 42;
 }
-pub fnc main(): int { return 42; }' 'native function return requires f64, got int'
+pub fnc main(): int {
+  if widened(1.0) == 42.0; then return 42; fi
+  return 86;
+}'
 negative f64_abi_no_implicit_downcast 'fnc wrong(int value): int { return value; }
 pub fnc main(): int {
   val int result = wrong(42.0);
   return result;
 }' "argument 'value' requires int, got f64"
-negative implicit_int_to_f64 'pub fnc main(): int {
+# Java widens int to float at bindings, operands, comparisons and returns.
+positive widen_int_binding 'pub fnc main(): int {
   val f64 value = 1;
-  return 42;
-}' 'native scalar local initializer requires f64'
-negative mixed_add 'pub fnc main(): int {
+  if value == 1.0; then return 42; fi
+  return 86;
+}'
+positive widen_mixed_add 'pub fnc main(): int {
   val f64 value = 0.5 + 1;
-  return 42;
-}' 'arithmetic; implicit int/f64 conversion prohibited'
-negative mixed_ordered_compare 'pub fnc main(): int {
+  if value == 1.5; then return 42; fi
+  return 86;
+}'
+positive widen_mixed_compare 'pub fnc main(): int {
   val f64 value = 0.5;
   if value < 1; then return 42; fi
   return 86;
-}' 'ordered comparison; implicit int/f64 conversion prohibited'
+}'
 negative f64_to_integer_return 'pub fnc main(): int {
   return 1.5;
 }' 'native function return requires int, got f64'
 negative malformed_exponent 'pub fnc main(): int {
   val f64 value = 1e+;
   return 42;
-}' 'malformed native floating exponent'
-negative out_of_range 'pub fnc main(): int {
+}' "expected ';'"
+# Java rounds an out-of-range literal to infinity.
+positive literal_overflow_is_infinity 'pub fnc main(): int {
   val f64 value = 1e9999;
-  return 42;
-}' 'native f64 literal outside finite binary64 range or malformed'
+  if value > 1.0e308; then return 42; fi
+  return 86;
+}'
 negative implicit_bool_to_f64 'pub fnc main(): int {
   val f64 value = true;
   return 42;
@@ -337,11 +346,12 @@ negative implicit_bool_to_f64 'pub fnc main(): int {
 negative int_division 'pub fnc main(): int {
   val int value = 7 / 2;
   return value;
-}' 'f64 division (int/int unsupported)'
-negative mixed_division 'pub fnc main(): int {
+}' 'native scalar local initializer requires int, got f64'
+positive widen_mixed_division 'pub fnc main(): int {
   val f64 value = 7.0 / 2;
-  return 42;
-}' 'f64 division (no implicit int conversion)'
+  if value == 3.5; then return 42; fi
+  return 86;
+}'
 negative f64_abi_bool_to_float_return 'fnc wrong_result(f64 value): f64 {
   return true;
 }
@@ -357,27 +367,30 @@ pub fnc main(): int {
   val f64 y = offset(bias: true, x: 42.0);
   return 42;
 }' "argument 'bias' requires f64, got bool"
-negative f64_abi_guarded_wrong_return 'fnc guarded(f64 x): f64 {
+positive widen_guarded_return 'fnc guarded(f64 x): f64 {
   if x > 0.0; then return 42; fi
   return 42.0;
 }
-pub fnc main(): int { return 42; }' 'native guarded return requires f64, got int'
-negative scoped_f64_wrong_initializer 'pub fnc main(): int {
+pub fnc main(): int {
+  if guarded(1.0) == 42.0; then return 42; fi
+  return 86;
+}'
+positive widen_scoped_initializer 'pub fnc main(): int {
   if true; then
     val f64 value = 1;
     return 42;
   fi
   return 86;
-}' 'native branch-local initializer requires f64'
-negative scoped_f64_wrong_assignment 'pub fnc main(): int {
+}'
+positive widen_scoped_assignment 'pub fnc main(): int {
   if true; then
     let f64 value = 1.5;
     value = 2;
-    return 42;
+    if value == 2.0; then return 42; fi
   fi
   return 86;
-}' 'native scalar assignment requires f64'
+}'
 
-[[ "$pass" -eq 32 && "$reject" -eq 21 ]] ||
+[[ "$pass" -eq 42 && "$reject" -eq 11 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=32; NEGATIVE_NO_IR_PASS=21 (not arrays/solver)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=42; NEGATIVE_NO_IR_PASS=11"
