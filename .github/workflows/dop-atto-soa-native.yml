@@ -136,6 +136,24 @@ jobs:
             exit 1
           fi
           grep -F 'native root local limit exceeded (64)' "$work/diagnostic"
+          # Exercise the exact accepted boundary in both declaration forms:
+          # 64 initial locals, and 1 initial + 63 ordered locals.
+          {
+            printf 'pub routine main(): int {\n'
+            for i in $(seq 0 63); do printf '  let int p%s = %s;\n' "$i" "$i"; done
+            printf '  return p0 == 0 ? 0 : 1;\n}\n'
+          } > "$work/prefix-64.atto"
+          ORESLANG_LLVMC="$compiler" ORES_NO_GC_IR_AUDIT="$auditor" \
+            bash scripts/compile-aot.sh "$work/prefix-64.atto" "$work/prefix-64"
+          timeout 20s "$work/prefix-64"
+          {
+            printf 'pub routine main(): int {\n  let int n = 0;\n  n = n + 1;\n'
+            for i in $(seq 0 62); do printf '  let int x%s = %s;\n' "$i" "$i"; done
+            printf '  return n == 1 ? 0 : 1;\n}\n'
+          } > "$work/ordered-64.atto"
+          ORESLANG_LLVMC="$compiler" ORES_NO_GC_IR_AUDIT="$auditor" \
+            bash scripts/compile-aot.sh "$work/ordered-64.atto" "$work/ordered-64"
+          timeout 20s "$work/ordered-64"
           # The same 64-binding aggregate ceiling must also apply when all
           # declarations precede the first effect (the old bypass).
           {
