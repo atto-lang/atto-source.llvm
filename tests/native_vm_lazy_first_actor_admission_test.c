@@ -28,6 +28,14 @@ static void until(atomic_int* value) {
         sched_yield();
     }
 }
+static void on_failure(void* context, size_t parent,
+                       OresNativeActorTerminalFailure failure) {
+    (void)context;
+    (void)parent;
+    (void)failure;
+    /* No typed failure is expected in these admission-only scenarios. */
+    abort();
+}
 static void on_message(void* context, size_t actor, uint64_t msg) {
     TestState* state = (TestState*)context;
     if (actor == 0 && msg == 100) {
@@ -49,6 +57,7 @@ int main(void) {
         cfg.domains[i].mailbox_capacity = 8;
         cfg.domains[i].carrier_workers = 3;
         cfg.domains[i].on_message = on_message;
+        cfg.domains[i].on_failure = on_failure;
         cfg.domains[i].context = &states[i];
     }
 
@@ -111,6 +120,36 @@ int main(void) {
 
     atomic_store_explicit(&states[ORES_NATIVE_VM_SHARED].release_blocked, 1,
                           memory_order_release);
+    check(ores_native_vm_close(vm));
+
+    /* A metadata-only supervisor does not prestart a carrier. An injected
+     * failure on ready-child publication must not create an orphan child or
+     * supervisor-of registration. A retry for the same slot succeeds. */
+    vm = ores_native_vm_open(&cfg);
+    check(vm != NULL);
+    OresNativeActorRef supervisor = ores_native_vm_spawn(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, 0);
+    check(supervisor.scheduler_domain);
+    check(ores_native_vm_started_carriers(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE) == 0);
+    ores_native_actor_scheduler_test_fail_next_create();
+    OresNativeActorRef failed = ores_native_vm_spawn_supervised_ready(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, 1, supervisor);
+    check(!failed.scheduler_domain);
+    check(ores_native_vm_started_carriers(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE) == 0);
+    OresNativeActorRef child = ores_native_vm_spawn_supervised_ready(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, 1, supervisor);
+    check(child.scheduler_domain && child.actor_slot == 1);
+    check(ores_native_vm_started_carriers(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE) == 1);
+    OresNativeActorRef parent = ores_native_vm_supervisor_of(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, child);
+    check(parent.scheduler_domain == supervisor.scheduler_domain);
+    check(parent.actor_slot == supervisor.actor_slot);
+    check(parent.generation == supervisor.generation);
+    check(!ores_native_vm_spawn_supervised_ready(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, 1, supervisor).scheduler_domain);
     check(ores_native_vm_close(vm));
     return 0;
 }
