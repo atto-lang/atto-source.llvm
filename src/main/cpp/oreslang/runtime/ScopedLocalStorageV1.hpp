@@ -144,6 +144,17 @@ public:
              const ScopedLocalIdentityV1& caller, T value) {
         const std::size_t bytes = scoped_local_detail_v1::value_bytes(value);
         if (bytes > max_bytes) return false;
+        // Fail untrusted/stale writes before allocating a new cell. Recheck
+        // after allocation because a concurrent close/replacement may race.
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!open_ || !owner_.equals(caller)) return false;
+            const auto found = slots_.find(key.id_);
+            const std::size_t previous =
+                found == slots_.end() ? 0 : found->second->bytes;
+            if ((found == slots_.end() && slots_.size() >= max_slots)
+                    || bytes > max_bytes - (used_bytes_ - previous)) return false;
+        }
         auto next = std::make_shared<Cell<T>>(std::move(value), bytes);
         std::shared_ptr<Base> replaced;
         {
