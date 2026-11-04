@@ -1,6 +1,6 @@
 #pragma once
 /*
- * Guest ABI v3 for code running inside an in-process tenant VM.
+ * Guest ABI v4 for code running inside an in-process tenant VM.
  *
  * Graal isolates work because guest code is produced by a trusted compiler and can only
  * name memory relative to its isolate's heap base. This is the same contract:
@@ -25,7 +25,7 @@
 extern "C" {
 #endif
 
-#define ORES_VM_GUEST_ABI_VERSION 3u
+#define ORES_VM_GUEST_ABI_VERSION 4u
 
 /* The only form a guest memory access may take. */
 #define ORES_VM_AT(type, cage, offset) \
@@ -60,12 +60,22 @@ typedef int64_t (*OresVmGuestTurn)(const OresVmHostApi* host, void* instance, ui
                                    uint32_t state, uint32_t input, uint32_t input_length,
                                    uint32_t output, uint32_t output_capacity);
 
+/* A fault in a turn of this kind cannot have touched memory outside this actor's region, so the
+ * actor alone can be restarted. Only lowering that proves it may set this: bounds-checked Wasm can,
+ * and code that merely follows the addressing rule cannot, since it could write over a sibling. */
+#define ORES_VM_KIND_RESTARTABLE 1u
+
 typedef struct {
     OresVmGuestTurn turn;
     uint32_t state_bytes;
     uint32_t heap_bytes;
     uint32_t scratch_bytes; /* holds this turn's input and output */
     uint32_t instance_bytes;
+    /* What survives a restart: this many bytes right after `instance`, also outside the cage. A
+     * restart clears the actor's region and instance, and the guest loads its state back from here.
+     * A kill can land anywhere, so the guest must commit to it in a way a kill cannot tear. */
+    uint32_t stored_bytes;
+    uint32_t flags;
 } OresVmGuestKind;
 
 typedef struct {

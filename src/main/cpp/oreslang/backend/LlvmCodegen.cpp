@@ -2882,6 +2882,39 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             b.CreateStore(b.CreateLoad(i64, values.at(actor.fields[i].name)), globals[i]);
         b.CreateRet(value);
 
+        if (tenant_vm_guest) {
+            // The host keeps a committed copy of these outside guest memory, so an actor that fails can
+            // restart from them. Reads and writes a field by index, and traps on any other index.
+            auto* i32Ty = llvm::Type::getInt32Ty(context);
+            auto* count = llvm::Function::Create(llvm::FunctionType::get(i32Ty, {}, false),
+                llvm::Function::ExternalLinkage, export_prefix + "fields", module);
+            llvm::IRBuilder<> counted(llvm::BasicBlock::Create(context, "entry", count));
+            counted.CreateRet(llvm::ConstantInt::get(i32Ty, actor.fields.size()));
+            const auto accessor = [&](const std::string& name, llvm::FunctionType* type, bool write) {
+                auto* accessed = llvm::Function::Create(type, llvm::Function::ExternalLinkage, export_prefix + name, module);
+                llvm::IRBuilder<> entry(llvm::BasicBlock::Create(context, "entry", accessed));
+                auto* other = llvm::BasicBlock::Create(context, "trap", accessed);
+                auto* index = &*accessed->arg_begin();
+                auto* choice = entry.CreateSwitch(index, other, static_cast<unsigned>(globals.size()));
+                llvm::IRBuilder<> denied(other);
+                denied.CreateCall(native_trap(module));
+                denied.CreateUnreachable();
+                for (std::size_t i = 0; i < globals.size(); ++i) {
+                    auto* block = llvm::BasicBlock::Create(context, "field", accessed);
+                    choice->addCase(llvm::ConstantInt::get(i32Ty, i), block);
+                    llvm::IRBuilder<> here(block);
+                    if (write) {
+                        here.CreateStore(accessed->getArg(1), globals[i]);
+                        here.CreateRetVoid();
+                    } else {
+                        here.CreateRet(here.CreateLoad(i64, globals[i]));
+                    }
+                }
+            };
+            accessor("field_get", llvm::FunctionType::get(i64, {i32Ty}, false), false);
+            accessor("field_set", llvm::FunctionType::get(voidTy, {i32Ty, i64}, false), true);
+        }
+
         auto* teardown = llvm::Function::Create(
             llvm::FunctionType::get(voidTy, {}, false),
             llvm::Function::ExternalLinkage, export_prefix + "teardown", module);

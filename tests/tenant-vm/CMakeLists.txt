@@ -68,7 +68,7 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     set(ATTO_DEFINITION "")
     if(TENANT_VM_WASM_LD AND (TENANT_VM_ATTO_COMPILER OR TENANT_VM_ATTO_IR_DIR))
         set(ATTO_DEFINITION TENANT_VM_HAVE_ATTO)
-        foreach(fixture counter doubler spin recurse work fleet misordered)
+        foreach(fixture counter doubler spin recurse work fleet misordered pair)
             if(TENANT_VM_ATTO_COMPILER)
                 set(input "${CMAKE_CURRENT_LIST_DIR}/lowered/atto/${fixture}.atto")
             else()
@@ -80,6 +80,14 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
             endif()
             lower_guest(atto_${fixture} "${input}" ${compiler_args}
                 --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}")
+            if(fixture STREQUAL "pair")
+                lower_guest(atto_pair_fault "${input}" ${compiler_args}
+                    --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
+                    --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77)
+                lower_guest(atto_pair_unsafe "${input}" ${compiler_args}
+                    --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
+                    --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77 --test-define ORES_VM_TEST_UNSAFE_COMMIT=1)
+            endif()
         endforeach()
     endif()
     add_custom_target(tenant_vm_lowered_guests ALL DEPENDS ${LOWERED_OUTPUTS})

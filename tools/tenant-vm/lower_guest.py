@@ -295,7 +295,7 @@ def to_wasm(args, work, memory_bytes):
             [args.compiler, "--target=wasm32", "--guest-abi=tenant-vm", str(source)], args, "compile")
         (work / "guest.ll").write_bytes(ir)
         actors, has_main = source_kinds(ir.decode("utf-8", "replace"))
-        exports = [f"--export=oreslang_vm_actor_{i}_{name}" for i in range(actors) for name in ("init", "on_message")]
+        exports = [f"--export=oreslang_vm_actor_{i}_{name}" for i in range(actors) for name in ACTOR_EXPORTS]
         if has_main:
             exports.append("--export=main")
         run([args.wasm_clang or args.clang, "--target=wasm32-unknown-unknown", "-Oz", "-nostdlib", "-x", "ir", "-mno-bulk-memory",
@@ -307,6 +307,9 @@ def to_wasm(args, work, memory_bytes):
     else:
         raise Refused(f"unknown input type {source.suffix}")
     return wasm
+
+
+ACTOR_EXPORTS = ("init", "on_message", "fields", "field_get", "field_set")
 
 
 def source_kinds(ir):
@@ -382,7 +385,7 @@ def lower(args):
         wasm = to_wasm(args, work, memory_bytes)
         data = wasm.read_bytes()
         actors, has_main = source_kinds((work / "guest.ll").read_text(errors="replace")) if source_actor else (0, False)
-        required = [f"oreslang_vm_actor_{i}_{name}" for i in range(actors) for name in ("init", "on_message")]
+        required = [f"oreslang_vm_actor_{i}_{name}" for i in range(actors) for name in ACTOR_EXPORTS]
         required += ["main"] if has_main else []
         required = required if source_actor else ["turn"]
         report = admit(data, required, memory_bytes)
@@ -408,7 +411,7 @@ def lower(args):
                 if not match:
                     raise Refused(f"generated header does not declare the {export} export")
                 return match.group(1)
-            lines = [f"ORES_VM_ACTOR({i}, {generated(f'oreslang_vm_actor_{i}_init')}, {generated(f'oreslang_vm_actor_{i}_on_message')})"
+            lines = [f"ORES_VM_ACTOR({i}, " + ", ".join(generated(f"oreslang_vm_actor_{i}_{name}") for name in ACTOR_EXPORTS) + ")"
                      for i in range(actors)]
             if has_main:
                 lines.append(f"ORES_VM_MAIN({actors}, {generated('main')})")
@@ -421,7 +424,7 @@ def lower(args):
                  f"-I{args.include}", f"-I{work}", f"-I{args.wasm_rt_include}"]
         if platform.system() != "Darwin":  # Apple's linker and ABI probe large frames already
             flags.append("-fstack-clash-protection")
-        flags += defines
+        flags += defines + [f"-D{define}" for define in args.test_define]
         objects = []
         for name, source in (("guest", work / "guest.c"), ("adapter", Path(args.adapter))):
             obj = work / f"{name}.o"
@@ -442,6 +445,7 @@ def lower(args):
             "input_sha256": hashlib.sha256(Path(args.input).read_bytes()).hexdigest(),
             "wasm_sha256": hashlib.sha256(data).hexdigest(),
             "mode": args.mode,
+            "test_defines": args.test_define,  # anything here makes this a test build, not for tenants
             "memory_bytes": memory_bytes,
             "scratch_bytes": args.scratch_bytes,
             "admission": report,
@@ -471,6 +475,7 @@ def main():
     p.add_argument("--wasm-ld", default="wasm-ld")
     p.add_argument("--wat2wasm", default="wat2wasm")
     p.add_argument("--wasm2c", default="wasm2c")
+    p.add_argument("--test-define", action="append", default=[], help="fault injection for tests only")
     p.add_argument("--nm", default="nm")
     p.add_argument("--objdump", default="objdump")
     p.add_argument("--tool-seconds", type=int, default=120)

@@ -25,7 +25,7 @@ OS process
 | Heap-base-relative access | Addressing rule | Guest accesses are `cage + u32 base + u32 offset + displacement` and cannot name anything else |
 | Trusted compiler | Lowering pipeline | Admission, validation and compile flags, in `tools/tenant-vm/lower_guest.py` |
 | Isolate teardown | Retirement | Interrupt its carriers, unmap the cage; nothing to unwind |
-| One failure domain per isolate | Same, for now | A trap ends every actor in that VM, and only that VM. See gate 1 |
+| One failure domain per isolate | Same, except where a fault is shown to be confined | See [Restart](#restart) |
 
 **An actor's memory.** Each actor's linear memory is its own region of the cage, so fields, data and
 stack persist across turns and actors of one module do not collide. The Wasm instance itself
@@ -145,6 +145,50 @@ answer that looks fine. So a program sending faster than its workers drain needs
 Two compiler changes, both only reachable on wasm32: a handler can call functions, where it used to fail
 with an internal `unordered_map::at` error, and the flag above.
 
+## Restart
+
+A VM holds hundreds or thousands of actors, so one actor's fault should not end them all. A fault
+restarts only its actor when the fault itself shows nothing else was touched. Everything else still
+ends the VM.
+
+| Fault, in a bounds-checked actor | Result |
+|---|---|
+| Wasm trap: overflow, out-of-range access, `unreachable`, bad indirect call | Restart |
+| Out of carrier stack | Restart |
+| Turn over its CPU deadline | Restart. Only that turn is stopped, and siblings keep running alongside it |
+| Memory fault in the cage, which the bounds checks should have made impossible | VM fails |
+| Fault outside any cage | VM fails, and is counted as a boundary failure |
+| Kill, or cumulative CPU budget | VM fails |
+| Any fault in `main`, which may already have spawned and sent | VM fails |
+| Any fault in a kind without `ORES_VM_KIND_RESTARTABLE`, such as a guard build | VM fails |
+
+**What a restart does.** The actor's region and instance are cleared and its heap is given back. Its fields
+come back as of its last turn that finished. Its queued mail stays, in order, and runs next. The message
+that failed is not retried, since it would most likely fail again. A caller gets `ActorRestarted` and
+the reason. A `send` has no caller, so the VM counts it in `mail_lost`, and a VM that stops cleanly still
+reports `actor_restarts` and `mail_lost`, so a run with failures cannot look like a clean finish.
+
+**Stored state.** It is host memory outside the cage, so a guest cannot write to it except by finishing a
+turn. A turn writes its fields to the slot not in use, then flips a version word with one store, so a kill
+at any point leaves a complete commit. `atto_a_fault_in_a_commit_cannot_tear_state` faults exactly in a
+commit, and a control build without the flip does tear, which shows the test can tell.
+
+Two limits on what this means today:
+
+- State is fields only. It survives a restart, not the VM or the process. That is the part of "somewhere
+  like an ETS table" this needs now, and nothing here is durable across a crash of the process.
+- A kill after the commit but before the reply reports a failed turn whose effect did stay. A caller who
+  retries could apply it twice.
+
+**Waiting on a decision:**
+
+- `max_consecutive_restarts` defaults to 8, and a successful turn resets it. Something has to end a crash
+  loop, but this number and "fail the VM" are proposals, not agreed behaviour.
+- No pipeline semantics exist here. Source has no way to read a reply, so a pipeline cannot yet be written.
+- Holding a turn's sends until it commits does not arise yet, since handlers cannot send.
+- `ACTOR_RUNTIME_RESILIENCE_V1` section 9 forbids carrying mail over, and the decision was to do so. It
+  still needs amending.
+
 ## Backends
 
 | Backend | Guest code | Boundary | Status |
@@ -211,6 +255,11 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | 1000 tenants, 100,000 **compiled `.atto`** actors, one process | 300,000 correct turns, 0.4-1.4 s including startup | macOS, Linux |
 | Whole `.atto` programs run in a VM | `main` starts workers of 2 types, 23 sends arrive in order (a worker traps otherwise, and a misordered program does trap), all stop and are released. 200 rounds | macOS, Linux, x86_64 under QEMU |
 | 1000 tenants each run that program | To completion in one process, 45-130 ms natively | macOS, Linux, x86_64 under QEMU |
+| A failed actor restarts alone | From its last finished turn, with queued mail in order and siblings unaffected: trap, stack overflow and CPU deadline, in test guests and real `.atto` | macOS, Linux, x86_64 under QEMU |
+| A spinning actor does not stop its siblings | 2000 sibling turns complete alongside it in one VM | macOS, Linux, x86_64 under QEMU |
+| Kills cannot tear stored state | Deterministic fault in a commit keeps fields consistent; **control** without the flip tears. Also 300 kills at random points | macOS, Linux, x86_64 under QEMU |
+| Unconfined faults still fail the VM | Memory fault, unflagged kind, guard build, kill, and a crash loop past its limit | macOS, Linux, x86_64 under QEMU |
+| Restart under stress | About 2400 restarts across 240 VMs ended every way, clean under ASan, UBSan and TSan | Linux |
 | A refused send cannot lose mail quietly | A full mailbox ends the VM | macOS, Linux |
 | Forged references | Made-up references, and a real one used in another VM, are refused and end only the caller's VM | macOS, Linux |
 | `.atto` state is private and durable | 1000 turns; separate per actor, tenant and program | macOS, Linux |
@@ -227,14 +276,14 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Mail quota holds | Per VM and host; a dead VM returns all of it | macOS, Linux |
 | 1000 VMs, 100,000 test actors | About 20 ms to create, 300,000 turns in 0.5-0.7 s; RSS +100 MiB on Linux, +440 MiB on macOS (larger pages) | macOS, Linux |
 | Kill spinning code without cooperation | Under 1 ms | macOS, Linux |
-| ASan+UBSan on host | Clean, core and lowered, 31 + 13 cases | Linux |
-| TSan on host | No races in 31 cases and in real spawn, send and stop programs, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
-| Host built with gcc | 31 + 13 cases | Linux |
+| ASan+UBSan on host | Clean, core and lowered, 37 + 16 cases | Linux |
+| TSan on host | No races in 37 cases and in real spawn, send, stop and restart programs, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
+| Host built with gcc | 37 + 16 cases | Linux |
 | Existing wasm32 and rejection tests | 171 of 172 pass. `native_exit_reject_unsupported_async_root` fails the same way without this change | Linux |
 | Wasmtime targeted kill | 6 spinning tenants ended one at a time, none early, worst about 2 ms | macOS |
 | Wasmtime: 1000 Stores | 200,000 turns at about 1.3M/s, contained faults and memory bomb | macOS |
-| .NET hosts 1000 VMs through the loader | 30,000 correct turns under CoreCLR JIT and NativeAOT, while the CLR forced 751 and 1196 GCs and caught 1.5M and 2.4M null faults; wrong digest refused | Linux |
-| x86_64 under emulation | 31 of 31 core cases, 13 of 13 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
+| .NET hosts 1000 VMs through the loader | 30,000 correct turns under CoreCLR JIT and NativeAOT, while the CLR forced 706 and 981 GCs and caught 1.4M and 2.0M null faults; wrong digest refused | Linux |
+| x86_64 under emulation | 37 of 37 core cases, 16 of 16 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
 | Real x86_64 hardware, other kernels, PKU | **Not run** | |
 | Wasmtime on Linux, .NET on macOS | **Not run** | |
 | GitHub Actions | **Not run**: source-org jobs fail to start on billing, and `.github/workflows/tenant-vm.yml` is ready for when that is resolved. Private source was deliberately not mirrored to another org | |
@@ -288,13 +337,10 @@ If the compiler cannot be built here, `-DTENANT_VM_ATTO_IR_DIR=` takes IR it emi
 ## Open gates
 
 In priority order. Done since the first version: `.atto` to a VM, code loading, host-call coverage, the
-targeted Wasmtime kill, and the audit, which found what most needed doing first.
+targeted Wasmtime kill, actor restart, and the audit, which found what most needed doing first.
 
-1. **Actor restart from stored state.** A fault currently ends every actor in the VM. The project's direction is to
-   restart a failed actor, since a VM holds hundreds or thousands of them. With bounds checks a
-   Wasm trap has not touched memory outside its actor, so it could end only that actor, reserving VM
-   failure for faults the checks should have made impossible. It needs a decision on where stored state
-   lives and on restart budgets. Not started here.
+1. **Restart decisions.** See [Restart](#restart): the crash-loop limit, what a pipeline does when a stage
+   fails, and amending `ACTOR_RUNTIME_RESILIENCE_V1` section 9, which forbids carrying mail over.
 2. **Actor-to-actor messaging, loops and locals in handlers, richer messages.** Language and compiler work,
    on every backend. The host calls this needs already exist.
 3. **Reconcile with the process-worker direction and `tenant-isolation-v1.json`.** A decision, not code.
