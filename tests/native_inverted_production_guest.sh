@@ -5,11 +5,58 @@ set -euo pipefail
 compiler="${1:?compiler}"
 clang="${2:?clang}"
 fixtures="${3:?fixtures}"
+auditor="${4:?mandatory source-built no-GC IR auditor}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+if [[ ! -f "$auditor" || ! -x "$auditor" || -L "$auditor" ||
+      "${auditor##*/}" != "oreslang-no-gc-ir-audit" ]]; then
+    echo "FAIL: missing or unsafe source-built no-GC IR auditor" >&2
+    exit 1
+fi
+auditor_sha="$(sha256sum "$auditor" | cut -d' ' -f1)"
+printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' \
+    > "$tmp/expected-audit-success"
+audit_ir() {
+    local ir="$1"
+    local before after
+    if [[ ! -s "$ir" || "$ir" -ef "$auditor" ]]; then
+        echo "FAIL: missing or auditor-aliased inverted guest IR" >&2
+        exit 1
+    fi
+    before="$(sha256sum "$ir" | cut -d' ' -f1)"
+    if ! "$auditor" "$ir" > "$tmp/audit.stdout" 2> "$tmp/audit.stderr"; then
+        echo "FAIL: mandatory no-GC IR auditor rejected inverted guest" >&2
+        cat "$tmp/audit.stderr" >&2
+        exit 1
+    fi
+    after="$(sha256sum "$ir" | cut -d' ' -f1)"
+    if ! cmp -s "$tmp/expected-audit-success" "$tmp/audit.stdout" ||
+       [[ -s "$tmp/audit.stderr" || "$before" != "$after" ||
+          "$(sha256sum "$auditor" | cut -d' ' -f1)" != "$auditor_sha" ]]; then
+        echo "FAIL: forged, mutated or contaminated inverted no-GC IR audit" >&2
+        exit 1
+    fi
+}
+# The real auditor must deny a tracing-GC symbol before any native guest
+# compilation; a stand-in that always prints SUCCESS cannot qualify parity.
+printf '%s\n' 'declare ptr @GC_malloc(i64)' > "$tmp/known-gc.ll"
+if "$auditor" "$tmp/known-gc.ll" > "$tmp/gc.stdout" 2> "$tmp/gc.stderr"; then
+    echo "FAIL: no-GC IR auditor admitted known collector symbol" >&2
+    exit 1
+fi
+if [[ -s "$tmp/gc.stdout" ]] ||
+   ! grep -Fq 'STRICT_NO_GC_IR_REJECTED' "$tmp/gc.stderr"; then
+    echo "FAIL: no-GC rejection lacked the compiler-owned diagnostic" >&2
+    exit 1
+fi
+if [[ "$(sha256sum "$auditor" | cut -d' ' -f1)" != "$auditor_sha" ]]; then
+    echo "FAIL: auditor mutated during known-GC negative" >&2
+    exit 1
+fi
 
 for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto; do
     "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
+    audit_ir "$tmp/guest.ll"
     for required in '; typed MIR, experimental local i64 pair LLVM IR' \
         'load i1, ptr %alive' 'icmp ult i64' \
         'store volatile i1 false, ptr %alive' 'store volatile i64 0'; do
@@ -34,6 +81,7 @@ done
 # A guest read past logical length is dynamically guarded, rather than
 # allowing an inbounds GEP from a capacity-only proof.
 "$compiler" "$fixtures/negative-two-column-out-of-bounds.atto" > "$tmp/bounds.ll"
+audit_ir "$tmp/bounds.ll"
 if ! grep -Fq 'call void @llvm.trap()' "$tmp/bounds.ll" ||
    ! grep -Fq 'icmp ult i64' "$tmp/bounds.ll"; then
     echo "FAIL: production bounds guest emitted no guarded trap" >&2
@@ -141,4 +189,4 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
-printf 'PASS: production .atto -> typed MIR -> checked IR, 6 native exit-42 (O0/O2), 2 bounds signals, 5 source rejects and 5 mode rejects\n'
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 6 native exit-42 (O0/O2), 2 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
