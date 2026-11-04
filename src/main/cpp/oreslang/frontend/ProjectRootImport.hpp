@@ -25,6 +25,27 @@ inline bool exists_marker(const fs::path& path) {
     return status.type() != fs::file_type::not_found;
 }
 
+/** Canonical .atto.pkg.toml wins the legacy .ores.pkg.toml sibling. */
+inline fs::path native_package_marker(const fs::path& dir) {
+    const auto canonical = dir / ".atto.pkg.toml";
+    if (exists_marker(canonical)) return canonical;
+    const auto legacy = dir / ".ores.pkg.toml";
+    if (exists_marker(legacy)) return legacy;
+    return {};
+}
+
+inline void require_regular_native_package_marker(const fs::path& marker) {
+    std::error_code error;
+    const auto status = fs::symlink_status(marker, error);
+    if (error || status.type() == fs::file_type::not_found)
+        throw std::runtime_error("cannot safely inspect native package manifest");
+    if (marker.filename() == ".atto.pkg.toml" &&
+            status.type() != fs::file_type::regular)
+        throw std::runtime_error("canonical .atto.pkg.toml must be regular non-symlink");
+    if (!fs::is_regular_file(marker, error) || error)
+        throw std::runtime_error("native package manifest must be a regular file");
+}
+
 inline bool strict_descendant(const fs::path& root, const fs::path& path) {
     auto root_it = root.begin();
     auto path_it = path.begin();
@@ -40,7 +61,7 @@ inline void reject_nested_package(const fs::path& root, const fs::path& path) {
     for (fs::path parent = path.parent_path(); parent != root; parent = parent.parent_path()) {
         if (parent.empty() || parent == parent.root_path())
             throw std::runtime_error("native project-root import escapes physical package root");
-        if (exists_marker(parent / ".ores.pkg.toml"))
+        if (!native_package_marker(parent).empty())
             throw std::runtime_error("native project-root import crosses nested package boundary");
     }
 }
@@ -60,6 +81,9 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.[ \t]*(?:root|"root"|'root')[ \t]*=).*$)ores");
     const std::regex root_assignment(
         R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=.*$)ores");
+    // Only a literal dot package root is admitted without full TOML lowering.
+    const std::regex safe_dot_root(
+        R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=[ \t]*"[.]"[ \t]*(?:#.*)?$)ores");
 
     std::size_t version_count = 0;
     bool in_root_section = true;
@@ -69,7 +93,8 @@ inline void validate_manifest(const std::string& manifest_bytes) {
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (std::regex_match(line, project_assignment) ||
-                (in_project_section && std::regex_match(line, root_assignment)))
+                (in_project_section && std::regex_match(line, root_assignment) &&
+                 !std::regex_match(line, safe_dot_root)))
             throw std::runtime_error("native project.root requires full TOML parser");
 
         const auto first = line.find_first_not_of(" \t");
@@ -142,11 +167,9 @@ inline void enforce_relative_import_package_boundary(
     fs::path cursor = source.parent_path();
     fs::path package_root;
     for (;;) {
-        const fs::path manifest = cursor / ".ores.pkg.toml";
-        if (exists_marker(manifest)) {
-            std::error_code regular_error;
-            if (!fs::is_regular_file(manifest, regular_error) || regular_error)
-                throw std::runtime_error("native package manifest must be a regular file");
+        const fs::path manifest = native_package_marker(cursor);
+        if (!manifest.empty()) {
+            require_regular_native_package_marker(manifest);
             const auto physical_manifest = fs::canonical(manifest, error);
             if (error)
                 throw std::runtime_error("cannot resolve native package manifest");
@@ -218,11 +241,9 @@ inline std::filesystem::path resolve_project_root_import(
     fs::path cursor = source.parent_path();
     fs::path package_root;
     for (;;) {
-        const fs::path manifest = cursor / ".ores.pkg.toml";
-        if (exists_marker(manifest)) {
-            std::error_code regular_error;
-            if (!fs::is_regular_file(manifest, regular_error) || regular_error)
-                throw std::runtime_error("native package manifest must be a regular file");
+        const fs::path manifest = native_package_marker(cursor);
+        if (!manifest.empty()) {
+            require_regular_native_package_marker(manifest);
             const auto physical_manifest = fs::canonical(manifest, error);
             if (error)
                 throw std::runtime_error("cannot resolve native package manifest");
@@ -241,7 +262,7 @@ inline std::filesystem::path resolve_project_root_import(
         cursor = parent;
     }
     if (package_root.empty())
-        throw std::runtime_error("native +/ imports require nearest .ores.pkg.toml");
+        throw std::runtime_error("native +/ imports require nearest .ores.pkg.toml (legacy) or .atto.pkg.toml");
 
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
