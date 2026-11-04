@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Source integrity and adverse mutation tests; no LLVM compiler is run here."""
+"""Source integrity, adverse mutation and host-only C observer checks.
+
+Synthetic Clang LLVM IR witnesses are NOT AttoLang compiler-backed guests.
+"""
 import importlib.util
 import shutil
 from pathlib import Path
@@ -52,6 +55,34 @@ class CorpusAdversarialTests(unittest.TestCase):
     def test_empty_ir_cannot_impersonate_native_guest(self):
         with self.assertRaisesRegex(RuntimeError, "expected source-owned"):
             NATIVE.native_ir(b"; ModuleID = 'forged'\n")
+    def test_host_only_full_i64_observer_o0_o2(self):
+        # These are synthetic host LLVM IR witnesses, NOT Atto compiler
+        # execution. They prove that the observer can preserve the full
+        # signed 64-bit value at both optimization levels.
+        clang = shutil.which("clang")
+        if clang is None:
+            self.skipTest("host Clang not installed")
+        for value in (-9223372036854775808, 9223372036854775806):
+            for optimization in NATIVE.OPTIMIZATIONS:
+                with self.subTest(value=value, optimization=optimization):
+                    ir = (
+                        "; ModuleID = 'host-only-typed-i64-observer'\\n"
+                        "define i64 @__oreslang_guest_main() {\\n"
+                        "entry:\\n"
+                        f"  ret i64 {value}\\n"
+                        "}\\n"
+                        "define i32 @main() {\\n"
+                        "entry:\\n"
+                        "  ret i32 0\\n"
+                        "}\\n"
+                    ).encode("ascii")
+                    with tempfile.TemporaryDirectory(prefix="atto-host-i64-") as tmp:
+                        work = Path(tmp)
+                        native = NATIVE.link_native(Path(clang), ir, work, optimization)
+                        rc, output, diagnostic = NATIVE.execute([str(native)], work, 10)
+                        self.assertEqual((rc, output, diagnostic),
+                                         (0, (str(value) + "\\n").encode("ascii"), b""))
+
     def test_duplicate_or_referenced_os_main_denied(self):
         raw = (b"define i64 @__oreslang_guest_main() { ret i64 42 }\n"
                b"define i32 @main() { ret i32 42 }\n")
