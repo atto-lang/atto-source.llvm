@@ -18,8 +18,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 /* Only compiled in the isolated fault-injection CTest; absent in production. */
 static _Atomic int fail_next_carrier_create;
 void ores_native_actor_scheduler_test_fail_next_create(void) {
@@ -1021,13 +1021,27 @@ OresNativeActorRef ores_native_actor_scheduler_spawn_ready(
     OresNativeActorRef ref = missing;
     if (!s->retired && i < s->actor_count && !s->actors[i].spawned
             && ensure_workers_locked(s, 1)) {
-        /* pthread_create success alone is insufficient: wait until the
-         * carrier has entered its actual scheduler loop. cond_wait releases
-         * the mutex to let the new worker register its receipt. */
-        while (s->carriers_checked_in < s->started_workers) {
-            if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
+        /* pthread_create success alone is insufficient: wait until one
+         * carrier has entered its actual scheduler loop. Other workers may
+         * still be attaching; idle ActorRefs must not wait for all of them.
+         * This is a bounded admission wait, not a host busy-spin. */
+        if (s->carriers_checked_in == 0) {
+            struct timespec deadline;
+            if (clock_gettime(CLOCK_REALTIME, &deadline) == 0) {
+                deadline.tv_sec += 30;
+                while (!s->retired && s->carriers_checked_in == 0) {
+                    int rc = pthread_cond_timedwait(
+                        &s->drained, &s->lock, &deadline);
+                    if (rc == ETIMEDOUT) break;
+                    if (rc != 0) abort();
+                }
+            }
         }
-        ref = spawn_locked(s, i);
+        /* A stalled/failed OS start cannot publish an unusable ActorRef.
+         * An unready worker remains scheduler-owned for eventual check-in
+         * or VM retirement; never detach or reclaim it behind its back. */
+        if (!s->retired && s->carriers_checked_in != 0)
+            ref = spawn_locked(s, i);
     }
     unlock(s);
     return ref;
