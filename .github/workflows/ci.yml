@@ -50,6 +50,8 @@ jobs:
         run: ctest --test-dir build -R hungry_carrier_async_bounded_cancel --repeat until-fail:12 --output-on-failure
       - name: Repeat per-payload send-stop exactly-once races
         run: ctest --test-dir build -R '^native_actor_send_stop_linearizable_race$' --repeat until-fail:12 --output-on-failure --timeout 30
+      - name: Negative mutation tests must reject absent sanitizer instrumentation
+        run: bash scripts/test-verify-native-sanitizer-controls.sh
       - name: Prove ASan and UBSan detect intentional native host defects
         run: bash scripts/verify-native-sanitizer-controls.sh address undefined
       - name: ASan and UBSan native actor memory and concurrency smoke
