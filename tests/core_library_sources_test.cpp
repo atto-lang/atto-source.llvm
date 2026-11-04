@@ -1,4 +1,9 @@
 #include "oreslang/frontend/CoreLibrarySources.hpp"
+// The production CI builds Release (NDEBUG); these admission checks must
+// remain executable instead of silently turning into no-op assertions.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cstdint>
 
