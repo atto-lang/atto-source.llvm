@@ -40,3 +40,37 @@ semantics before sharing Java's full import corpus.
 
 The read-only corpus inventory establishes **formatting compatibility only**.
 It does not prove LLVM parser parity, native execution, or runtime semantics.
+
+## Native `--analyze` boundary (experimental)
+
+`oreslang-llvmc --analyze file.atto` (also legacy `.ores`) invokes
+the **real native source loader/parser and LLVM source validation** but
+does not print LLVM IR or execute guest code. After successful native
+validation it deliberately exits **2** with the diagnostic
+`exception-effect analysis unsupported ... effects inconclusive`.
+A source rejected by the native compiler returns its ordinary error (1);
+invalid or conflicting CLI flags return 2.
+
+This is not a `throws/raises/panics` inference implementation. Current
+`FunctionEffects` bits and native real-time checks do not resolve
+typed Error ancestry, transitive exceptional effect sets, direct
+defer/recover, actor panic CONTROL or dynamic unresolved calls.
+A valid native parse and IR lowering **must not** be reported as an
+effect-clean result. The only advisory effects checker remains
+`atto test --effects --file file.atto` (Rust source hints).
+
+The test `native_exception_effect_analyze_inconclusive_cli` runs the
+compiled compiler on a valid `.atto`, a legacy `.ores`, invalid source
+and incompatible option combinations. It also checks no source or
+output artifacts are written. This is real compiler **admission evidence**
+once the test has executed on a verified build, not guest exception
+semantics or cross-backend parity. The formatter subprocess wrapper
+requires an explicitly selected `ORESLANG_BIN`; pointed at this LLVM
+compiler, its exit 2 remains 2.
+
+Promotion to exit 0 requires the shared exceptional-callable-effects
+contract: typed effect parser/AST and ABI, Error-only bounds, correct
+call graph closure including unknown dispatch, recover subtraction,
+actor panic bypass and supervisor CONTROL, plus executed Java/LLVM
+source fixtures and exact-head CI. Do not change the 2 to 0 for
+unimplemented cases.
