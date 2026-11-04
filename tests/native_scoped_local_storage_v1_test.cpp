@@ -152,6 +152,18 @@ void disallowed_unknown_dynamic_payload_fails_closed() {
     ActorLocalStoreV1 store(id(77));
     ActorLocalKeyV1<std::vector<int>> dynamic;
     assert(!store.set(dynamic, id(77), std::vector<int>{1, 2, 3}));
+    // Trivially copyable does NOT imply safe: a record can embed a raw
+    // pointer or host capability. Reject until transitive guest descriptors
+    // and ownership checking exist for this type.
+    struct PointerBearing {
+        int* payload;
+        unsigned int flags;
+    };
+    static_assert(std::is_trivially_copyable_v<PointerBearing>);
+    int value = 42;
+    ActorLocalKeyV1<PointerBearing> escaped;
+    assert(!store.set(escaped, id(77), PointerBearing{&value, 1}));
+    assert(!store.get_copy(escaped, id(77)));
     assert(store.used_bytes() == 0);
 }
 
