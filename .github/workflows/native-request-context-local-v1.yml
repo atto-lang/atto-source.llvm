@@ -36,9 +36,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "e33fe616c7e3c0de47f902a6f4145d228a87c571"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "2d110b25312aacc376c971c99c0e8bc66c7bb700"
-          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "8268d1bf1132805e415f446756610793a0ca6500"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "865cb7011c54d506a782c319d88b91d74625c22e"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "935024958df132ebd762bc6e757d4d3bc2d9d798"
+          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "1be25527f7ec0abe9e787b9250ec1c24c6f78343"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "48125664994126787a0dcc27fdc9923189e37fcc"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "76f8160873c6af0df0dbb13741183600c16550bf"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "9cf2a76ac30fd0d9b8620facfb1b887475ee1e90"
