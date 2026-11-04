@@ -236,6 +236,31 @@ def verify_fixture_registry(positives, negatives):
             len(set(expected_exits)) == 7 and
             all(type(exit_code) is int and 0 < exit_code < 128 for exit_code in expected_exits),
             "aggregate executable acceptance requires seven distinct positives, exits and seven distinct negatives")
+    # Cardinality alone is not a coverage guarantee: an unrelated case could
+    # silently displace an important Java/LLVM type/value parity fixture.
+    required_positive_exits = {
+        "single-field-positional": 42,
+        "named-source-order": 19,
+        "bool-field": 7,
+        "reordered-declaration": 73,
+        "typed-record-value": 44,
+        "typed-inferred-record-value": 46,
+        "typed-inferred-struct-value": 53,
+    }
+    required_negative_diagnostics = {
+        "dynamic-wrong-field-type": "AGGREGATE_CONSTRUCTOR_FIELD_TYPE_MISMATCH",
+        "aggregate-as-i64": "AGGREGATE_RETURN_TYPE_MISMATCH",
+        "unknown-field": "AGGREGATE_FIELD_TYPE_UNVERIFIED",
+        "unsupported-string-field": "AGGREGATE_NATIVE_FIELD_UNVERIFIED",
+        "typed-record-rejects-struct": "AGGREGATE_LOCAL_INITIALIZER_KIND_MISMATCH",
+        "typed-record-rejects-field-name": "AGGREGATE_LOCAL_INITIALIZER_SHAPE_MISMATCH",
+        "typed-record-rejects-field-type": "AGGREGATE_LOCAL_INITIALIZER_SHAPE_MISMATCH",
+    }
+    require({name: status for name, _, _, status in positives} ==
+            required_positive_exits and
+            {name: diagnostic for name, _, diagnostic in negatives} ==
+            required_negative_diagnostics,
+            "aggregate executable acceptance fixture coverage or expected result changed")
 
 
 def main():
