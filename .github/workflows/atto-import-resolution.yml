@@ -5,6 +5,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/frontend/HostLogicalSourceUnitIds.hpp'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/project_root_import_test.cpp'
@@ -102,7 +103,14 @@ jobs:
             native_host_logical_source_ids_security \
             native_host_logical_source_ids_linked_guest \
             native_macro_aot_admission_no_runtime_fallback \
-            native_macro_imported_public_unlinked_no_ir \
+            native_macro_imported_literal_linked_guest_aot_42 \
+            native_macro_imported_identity_linked_guest_aot_42 \
+            native_macro_imported_private_no_ir \
+            native_macro_imported_missing-name_no_ir \
+            native_macro_imported_traversal_no_ir \
+            native_macro_imported_legacy_no_ir \
+            native_macro_imported_duplicate-alias_no_ir \
+            native_macro_imported_overflow_no_ir \
             native_macro_shared_literal-42_linked_guest_aot_42 \
             native_macro_shared_identity-42_linked_guest_aot_42 \
             native_macro_shared_nested-42_linked_guest_aot_42 \
