@@ -102,21 +102,13 @@ bool valid_utf8_bytes(const char* text, std::size_t length) noexcept {
     return true;
 }
 
-bool valid_topic_name(const char* name) {
-    if (!name || !*name) return false;
+bool valid_topic_name(const char* name) noexcept {
+    // Bounded C-string scan: match the same portable identity grammar as
+    // NativeActorPubSubAdmission<T>, not a separate UTF-8/locale policy.
+    if (!name) return false;
     std::size_t length = 0;
-    for (const unsigned char* p =
-             reinterpret_cast<const unsigned char*>(name);
-         *p != 0; ++p) {
-        if (++length > 256) return false;
-        if (*p < 0x20 || *p == 0x7f) return false;
-        // U+0080..U+009F are Unicode C1 controls (UTF-8 C2 80..9F).
-        // Match .NET char.IsControl rather than permitting control-bearing
-        // topic names on only one backend.
-        if (*p == 0xc2 && p[1] >= 0x80 && p[1] <= 0x9f)
-            return false;
-    }
-    return valid_utf8_bytes(name, length);
+    while (length <= 128 && name[length] != '\0') ++length;
+    return valid_portable_topic_name(std::string_view(name, length));
 }
 
 NativeActorPubSubAdmission<std::int64_t>::DeliveryPolicy policy(
