@@ -41,6 +41,12 @@ and inserts:
 3. Immediate failure branches after every lowered source call so that
    multiplication/addition/argument evaluation cannot run after a failed
    recursive call and raise an unrelated LLVM trap.
+   **Native stack bytes are not inferred from depth alone:** the scalar M1
+   qualification additionally caps parameters at eight per function,
+   expression nodes at 128 per function, and total expression nodes at
+   4096 per module. These are conservative admission ceilings, **not
+   a validated per-target stack-size proof**. A real 1 MiB stack run is
+   still mandatory at the intended target/optimization settings.
 4. Exactly one depth decrement before each admitted function return,
    including generated failure-return blocks. Denied prologues do not
    decrement. No lexical cleanup/defers/actor turn ownership is admitted.
@@ -111,7 +117,10 @@ ctest --test-dir build --output-on-failure \
 - Compiler-backed `.atto`: shallow return 42, deep direct/mutual/tail
   recursion returning 75 without OS stack fault, **overflow during error
   unwind does not trap**, conditional/unused cycles, arity overloads, and
-  denial of exported recursive helpers.
+  denial of exported recursive helpers and nine-parameter recursive frames.
+  Execute *both* `-O0` and `-O2` with real Clang. On Linux, repeat
+  each budget-exhaustion native process under a 1 MiB stack resource limit.
+  No zero-step workflow or single optimization level counts as parity.
 - Actor carrier host model: typed terminal reason, exactly-once cleanup,
   same-carrier sibling completion, stale token fencing.
 - Require exact head, nonempty GitHub Actions job steps, native compiler and
