@@ -72,6 +72,66 @@ jobs:
           set -euo pipefail
           bash -n scripts/compile-aot.sh
           bash -n scripts/verify-dop-atto-aot.sh
+      - name: Prove LLVM ordered root-local lowering and fail-closed diagnostics
+        shell: bash
+        env:
+          CLANG: clang
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          compiler="$RUNNER_TEMP/dop-atto-build/oreslang-llvmc"
+          auditor="$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit"
+          cat > "$work/ordered.atto" <<'ATTO'
+          pub routine main(): int {
+            let int n = 1;
+            n = n + 1;
+            let int later = n + 2;
+            return later == 4 ? 0 : 1;
+          }
+          ATTO
+          ORESLANG_LLVMC="$compiler" ORES_NO_GC_IR_AUDIT="$auditor" \
+            bash scripts/compile-aot.sh "$work/ordered.atto" "$work/ordered"
+          timeout 20s "$work/ordered"
+          for kind in use_before_declare duplicate_declare; do
+            case "$kind" in
+              use_before_declare)
+                cat > "$work/invalid.atto" <<'ATTO'
+          pub routine main(): int {
+            let int n = 1;
+            n = future + 1;
+            let int future = 2;
+            return n;
+          }
+          ATTO
+                ;;
+              duplicate_declare)
+                cat > "$work/invalid.atto" <<'ATTO'
+          pub routine main(): int {
+            let int n = 1;
+            n = n + 1;
+            let int n = 2;
+            return n;
+          }
+          ATTO
+                ;;
+            esac
+            if "$compiler" --target=host "$work/invalid.atto" >"$work/out.ll" 2>"$work/diagnostic"; then
+              echo "LLVM wrongly accepted $kind" >&2
+              exit 1
+            fi
+            test -s "$work/diagnostic"
+          done
+          {
+            printf 'pub routine main(): int {\\n  let int n = 0;\\n  n = n + 1;\\n'
+            for i in $(seq 0 64); do printf '  let int x%s = %s;\\n' "$i" "$i"; done
+            printf '  return n;\\n}\\n'
+          } > "$work/too-many.atto"
+          if "$compiler" --target=host "$work/too-many.atto" >"$work/out.ll" 2>"$work/diagnostic"; then
+            echo "LLVM accepted more than 64 ordered locals" >&2
+            exit 1
+          fi
+          grep -F 'native ordered root local limit exceeded (64)' "$work/diagnostic"
       - name: Fail closed without compiler
         shell: bash
         run: |
