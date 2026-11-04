@@ -4825,3 +4825,34 @@ if(BUILD_TESTING AND UNIX)
         PROPERTIES TIMEOUT 900 LABELS "native-guest;checked-i64;atto-parity"
         RUN_SERIAL TRUE)
 endif()
+
+
+# Direct original-source checked-i64 parity. The LLVM native C wrapper is i32
+# and limits OS exit status; only the exported @__oreslang_guest_main() is i64.
+# Keep the original source bytes completely unchanged, compile emitted IR to
+# an ELF object, rename the i32 OS main via objcopy and invoke the i64 guest
+# symbol from a fixed C oracle. No AttoLang expression rewrite is permitted.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_program(ATTO_NATIVE_OBJCOPY NAMES objcopy llvm-objcopy)
+    add_test(NAME atto_i64_original_manifest_host_only
+        COMMAND "${CMAKE_COMMAND}" "-DMODE=validate"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/js-checked-i64-candidates.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_i64_original_native.cmake")
+    set_tests_properties(atto_i64_original_manifest_host_only
+        PROPERTIES TIMEOUT 20 LABELS "host-only;original-source-i64")
+    add_test(NAME atto_i64_original_native_guest
+        COMMAND "${CMAKE_COMMAND}" "-DMODE=native"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DEXPECTED_SOURCE_SHA=${ATTO_EXPECTED_SOURCE_SHA}"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/js-checked-i64-candidates.json"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DCLANG=${ATTO_SCALAR50_CLANG}"
+          "-DOBJCOPY=${ATTO_NATIVE_OBJCOPY}"
+          "-DSHIM=${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_i64_original_guest_probe.c"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-i64-original-native"
+          "-DREPORT=${CMAKE_CURRENT_BINARY_DIR}/atto-i64-original-native/llvm-original-i64-native-receipt.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_i64_original_native.cmake")
+    set_tests_properties(atto_i64_original_native_guest
+        PROPERTIES TIMEOUT 900 LABELS "native-guest;original-source-i64;atto-parity"
+        RUN_SERIAL TRUE)
+endif()
