@@ -7,6 +7,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/atto_scalar_llvm_native.py'
+      - 'tests/atto_scalar_source_unit_migration.py'
       - 'tests/atto_scalar_llvm_negative.py'
       - 'tests/atto_scalar_v1_source.py'
       - 'tests/test_atto_scalar_native_gate.py'
@@ -71,6 +72,7 @@ jobs:
           for name in atto_scalar_v1_exact_source_only \
                       atto_scalar_v1_native_harness_adversarial \
                       atto_scalar_v1_full_i64_native \
+                      atto_scalar_v1_source_unit_migration \
                       atto_scalar_v1_removed_operators_denied \
                       atto_scalar_precedence atto_scalar_grouping \
                       atto_scalar_type_first_local \
