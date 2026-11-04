@@ -53,6 +53,7 @@ jobs:
             native_atto_named_generic_value_source_execution
             native_atto_named_generic_value_source_execution_O2
             native_scalar_generic_contract_harness_selftest
+            native_int_array_source_execution
           )
           for name in "${required[@]}"; do
             if ! grep -Fxq -- "$name" build/atto-named-test-names.txt; then
@@ -63,5 +64,7 @@ jobs:
           echo "ATTO_NAMED_TESTS_REGISTERED=${#required[@]}"
       - name: Execute compiler, diagnostics, LLVM IR, Clang and native guests at O0/O2
         run: |
-          ctest --test-dir build -R '^native_(atto_named_generic_value_source_execution(_O2)?|scalar_generic_contract_harness_selftest)$' \
+          ctest --test-dir build -R '^native_(atto_named_generic_value_source_execution(_O2)?|scalar_generic_contract_harness_selftest|int_array_source_execution) \
+            --output-on-failure --no-tests=error --timeout 240 --parallel 2
+ \
             --output-on-failure --no-tests=error --timeout 240 --parallel 2
