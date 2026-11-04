@@ -148,7 +148,8 @@ jobs:
           set -euo pipefail
           ctest --test-dir "$RUNNER_TEMP/atto-native-parity-build" \
             --output-on-failure --timeout 180 \
-            -R '^(native_project_root_import_security|native_source_module_graph_execution|native_pinned_atto_source_path_admission|native_atto_host_logical_unit_identity|native_atto_logical_unit_linked_guest_gate)          echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
+            -R '^(native_project_root_import_security|native_source_module_graph_execution|native_pinned_atto_source_path_admission|native_atto_host_logical_unit_identity|native_atto_logical_unit_linked_guest_gate)$'
+          echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
       - name: Recheck exact source head and tracked changes
         shell: bash
         env:
