@@ -46,6 +46,8 @@ int main() {
     check(first.find("\"backend\":\"llvm\"")!=std::string::npos);
     check(first.find("\"retention\":\"opt_in\"")!=std::string::npos);
     check(first.find("\"executed_guest\":false")!=std::string::npos);
+    check(first.find("\"abi\":\"atto.mcp.native.descriptor.v1\"")!=std::string::npos);
+    check(first.find("\"generation_binding\":\"host_runtime_required\"")!=std::string::npos);
     check(first.find("hidden")==std::string::npos);
     check(first.find("alpha")<first.find("zeta"));
     check(first.find("\"arity\":2")!=std::string::npos);

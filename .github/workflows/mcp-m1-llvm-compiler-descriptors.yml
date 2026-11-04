@@ -8,6 +8,7 @@ on:
       - 'tests/native_mcp_compiler_descriptor_m1_test.cpp'
       - 'tests/test_mcp_m1_compiler_cli.py'
       - 'tests/test_mcp_m1_native_aot_embed.py'
+      - 'tests/test_mcp_m1_llvm_used_linker.py'
       - 'tests/fixtures/mcp-descriptor-public.*'
       - 'CMakeLists.txt'
       - '.github/workflows/mcp-m1-llvm-compiler-descriptors.yml'
@@ -36,6 +37,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED"
           echo "SOURCE_SHA=$EXPECTED"
           echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Source-free ELF retention canary (NOT compiler/guest parity)
+        run: python3 tests/test_mcp_m1_llvm_used_linker.py
       - name: Compile and execute deterministic metadata host checks
         env:
           CXX: ${{ matrix.compiler }}
