@@ -308,8 +308,27 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 reject(expr, "ownership violation: field read conflicts with active mutable borrow");
             return;
         }
+        case Expression::Kind::Share: {
+            // A value-level share is legal for scalar Copy values only.
+            // Keep class/array ownership nominal: do not manufacture a
+            // second mutable owner by lowering Share as a scalar no-op.
+            if (expr.left && expr.left->kind == Expression::Kind::Variable) {
+                const auto& source = local(*expr.left, locals);
+                if (source.int_array || !source.class_name.empty())
+                    reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a non-Copy array or class owner");
+            } else if (expr.left && expr.left->kind == Expression::Kind::Field &&
+                       expr.left->left && expr.left->left->kind == Expression::Kind::Variable) {
+                const auto place = native_place(*expr.left);
+                const auto found = locals.find(place.first);
+                if (found != locals.end() &&
+                    (found->second.class_array_fields.count(place.second) ||
+                     found->second.subobjects.count(place.second)))
+                    reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a non-Copy owned field");
+            }
+            check_value(*expr.left, locals, functions);
+            return;
+        }
         case Expression::Kind::Copy:
-        case Expression::Kind::Share:
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
             check_value(*expr.left, locals, functions);
