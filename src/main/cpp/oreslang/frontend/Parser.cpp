@@ -5018,12 +5018,14 @@ private:
                             [&](const ClassDecl& c) { return c.name == binding.class_name; });
                         if (cls == program.classes.end())
                             throw std::runtime_error("unknown class constructor");
-                        if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
-                            throw std::runtime_error("native class constructor argument arity mismatch for '" +
-                                                     cls->name + "'");
+                        // Prove every named constructor slot before
+                        // validating any source expression or publishing
+                        // local/owned field provenance.
+                        const auto constructor_slots =
+                            native_constructor_argument_slots(binding, *cls);
                         for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
                             const auto& arg = binding.constructor_arguments[i];
-                            const auto* field = constructor_field(*cls, i);
+                            const auto* field = constructor_field(*cls, constructor_slots[i]);
                             if (field && field->int_array && arg->kind == Expression::Kind::Take &&
                                     arg->left && arg->left->kind == Expression::Kind::Variable) {
                                 validate_expression(*arg, params, functions);
@@ -5206,9 +5208,12 @@ private:
                     if (binding.new_class) {
                         const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
                             [&](const ClassDecl& c) { return c.name == binding.class_name; });
+                        const auto constructor_slots =
+                            native_constructor_argument_slots(binding, *cls);
                         for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i)
                             require_scalar(*binding.constructor_arguments[i],
-                                cls->constructor_parameter_types.empty() ? ScalarType::I64 : cls->constructor_parameter_types.at(i),
+                                cls->constructor_parameter_types.empty() ? ScalarType::I64 :
+                                    cls->constructor_parameter_types.at(constructor_slots[i]),
                                 "native class constructor argument", scalar_types);
                     }
                     continue;
