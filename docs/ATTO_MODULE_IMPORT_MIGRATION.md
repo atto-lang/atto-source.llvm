@@ -55,9 +55,12 @@ The LLVM frontend's source reader now routes `.atto` files and
 reader opens each ancestor using `openat` with `O_DIRECTORY` and
 `O_NOFOLLOW`, then opens the leaf with `O_NOFOLLOW`. It checks the
 opened descriptor's regular-file status, byte budget and source identity
-through the existing `SourceInput.hpp` admission code. Legacy `.ores`
-files keep existing compatibility semantics; source extension detection
-remains case-insensitive for `.ATTO`.
+through the existing `SourceInput.hpp` admission code. Import
+resolution now passes the **original `.atto.pkg.toml` basename** to the
+manifest read callback rather than the already-canonicalized pathname,
+so the reader cannot silently lose its no-follow admission policy. Legacy
+`.ores` files keep existing compatibility semantics; source extension
+detection remains case-insensitive for `.ATTO`.
 
 This closes the previous race where a link could be inserted after a
 preflight `symlink_status` check but before the file descriptor opened.
