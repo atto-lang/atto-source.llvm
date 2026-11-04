@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Real .ores -> LLVM IR -> Clang -> native process proof for stack-only structs.
+"""Real .atto -> LLVM IR -> Clang -> native process proof for stack-only aggregates.
 
-No native aggregate parameter/return ABI, readonly-record construction, mutable
-aggregate access, or string-field support is certified by these tests.
+Only immutable, closed int/bool struct and readonly record locals are in scope.
+No aggregate parameter/return ABI, mutable access, or string-field support
+is certified by these tests.
 """
 import argparse
 import hashlib
@@ -46,6 +47,27 @@ pub fnc main(): int {
     return value.a + value.z;
 }
 """, (), 73),
+    ("typed-record-value", """
+pub fnc main(): int {
+    type Row = record { foo: int };
+    const Row value = record { foo: 44 };
+    return value.foo;
+}
+""", (), 44),
+    ("typed-inferred-record-value", """
+pub fnc main(): int {
+    type Row = record { foo: int };
+    const Row value = infer record { foo: 46 };
+    return value.foo;
+}
+""", (), 46),
+    ("typed-inferred-struct-value", """
+pub fnc main(): int {
+    type Point = struct { x: int };
+    const Point value = infer struct { x: 53 };
+    return value.x;
+}
+""", (), 53),
 )
 
 NEGATIVE = (
@@ -78,6 +100,27 @@ pub fnc main(): int {
     return 42;
 }
 """, "AGGREGATE_NATIVE_FIELD_UNVERIFIED"),
+    ("typed-record-rejects-struct", """
+pub fnc main(): int {
+    type Row = record { foo: int };
+    const Row value = infer struct { foo: 42 };
+    return value.foo;
+}
+""", "AGGREGATE_LOCAL_INITIALIZER_KIND_MISMATCH"),
+    ("typed-record-rejects-field-name", """
+pub fnc main(): int {
+    type Row = record { foo: int };
+    const Row value = record { bar: 42 };
+    return 42;
+}
+""", "AGGREGATE_LOCAL_INITIALIZER_SHAPE_MISMATCH"),
+    ("typed-record-rejects-field-type", """
+pub fnc main(): int {
+    type Row = record { foo: int };
+    const Row value = record { foo: true };
+    return 42;
+}
+""", "AGGREGATE_LOCAL_INITIALIZER_SHAPE_MISMATCH"),
 )
 
 
@@ -122,7 +165,7 @@ def verify_native_entry_linkage(ir):
     require(guest is not None and host is not None,
             "missing exact guest or native entrypoint definition")
     body = host.group("body")
-    # This acceptance corpus has four synchronous, stack-only programs.
+    # This acceptance corpus contains bounded synchronous stack-only programs.
     # Their C wrapper must be one straight-line block with one guest call
     # and one return. Otherwise unreachable, unrelated code could contain
     # a convincing guest result while the actual host main returns a
@@ -149,7 +192,7 @@ def verify_native_entry_linkage(ir):
         result_name + rb"\s+to\s+i32\b", body)
     require(narrowed is not None,
             "native main does not convert guest result to OS status")
-    # For these four bounded, synchronous stack-only fixtures the native
+    # For these bounded, synchronous stack-only fixtures the native
     # wrapper must check the *guest* result against the 0..255 OS-exit
     # budget. All optional runtime shutdown guards are compile-time true.
     range_guard = re.search(
@@ -205,7 +248,7 @@ def main():
         for name, source, calls, expected_exit in POSITIVE:
             case_dir = root / name
             case_dir.mkdir()
-            src = case_dir / "case.ores"
+            src = case_dir / "case.atto"
             ir = case_dir / "case.ll"
             exe = case_dir / "case"
             src.write_text(source, encoding="utf-8")
@@ -215,7 +258,7 @@ def main():
                     name + ": real Oreslang compiler failed: " +
                     repr(compilation.stderr[:800]))
             verify_native_entry_linkage(compilation.stdout)
-            require(set(p.name for p in case_dir.iterdir()) == {"case.ores"} and
+            require(set(p.name for p in case_dir.iterdir()) == {"case.atto"} and
                     src.read_bytes() == original and not src.is_symlink(),
                     name + ": compiler mutated source or emitted unexpected artifacts")
             if calls:
@@ -240,7 +283,7 @@ def main():
         for name, source, diagnostic in NEGATIVE:
             case_dir = root / name
             case_dir.mkdir()
-            src = case_dir / "case.ores"
+            src = case_dir / "case.atto"
             src.write_text(source, encoding="utf-8")
             original = src.read_bytes()
             rejected = run([str(compiler), str(src)], case_dir)
@@ -252,15 +295,15 @@ def main():
                     "; result=" + repr((rejected.returncode,
                                         rejected.stdout[:300],
                                         rejected.stderr[:700]))) from exc
-            require(set(p.name for p in case_dir.iterdir()) == {"case.ores"} and
+            require(set(p.name for p in case_dir.iterdir()) == {"case.atto"} and
                     src.read_bytes() == original and not src.is_symlink(),
                     name + ": negative compiler run published files or mutated source")
     require(sha256(compiler.read_bytes()) == compiler_digest and
             sha256(clang.read_bytes()) == clang_digest,
             "compiler or Clang binary changed while guest tests executed")
     print(json.dumps({
-        "contract": "native-stack-exact-struct-v1",
-        "scope": "immutable-int-bool-local-no-aggregate-call-abi",
+        "contract": "native-stack-closed-aggregate-v2",
+        "scope": "immutable-int-bool-struct-record-local-no-aggregate-call-abi",
         "compiler_sha256": compiler_digest,
         "clang_sha256": clang_digest,
         "positive_executed": len(observations),
