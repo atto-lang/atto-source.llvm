@@ -14,6 +14,29 @@ bash scripts/build-native-atto-fuzz-target.sh \
 atto test --root examples/atto-native-fuzz-project --fuzz --seed 1729 --cases 1000
 ```
 
+For correct handling of the native adapter's reserved inconclusive
+exit 2, the project manifest sets `[fuzz].inconclusive_exits = [2]`,
+which requires [the Rust CLI companion PR #26](https://github.com/ores-truffle-oreslang/oreslang-test.cli/pull/26)
+until that change is merged. A sanitizer diagnostic still wins over the
+configured exit-code policy.
+
+After installing the updated Rust `atto-test`, the complete cross-repo
+acceptance can be run explicitly with an executable CLI path:
+
+```sh
+bash scripts/test-atto-cli-llvm-fuzz-e2e.sh \
+  build/oreslang-llvmc \
+  "$(command -v clang)" \
+  build/oreslang-no-gc-ir-audit \
+  "$(command -v atto-test)"
+```
+
+This test requires a real compiler-generated `.atto` target, executes
+1,000 normal byte cases, verifies that a compiled mutant fails, and
+replays a minimized one-byte reproducer. There is **no stub guest**
+fallback. The source CI cannot currently run it without an authorized
+installed Rust CLI and a stepful runner; it is an explicit promotion gate.
+
 This expects a separately installed `atto`/`atto-test` from the Rust
 test CLI. The `.atto` guest defines `fuzz_byte(int octet): int`; the
 native C adapter owns bounded stdin reads and independently checks
