@@ -117,8 +117,18 @@ inline void require_native_scalar_frame_subset(const Program& source) {
         throw std::runtime_error(
             "native bounded recursion requires scalar functions without actors or owned state");
     }
+    // A 64-call counter is NOT a bound on bytes consumed by native ABI
+    // frames. Until target-specific stack usage is proven, constrain argument
+    // spills and LLVM O0 expression temporaries as well as call depth.
+    constexpr std::size_t max_scalar_parameters_per_frame = 8;
+    constexpr std::size_t max_scalar_expressions_per_frame = 128;
+    constexpr std::size_t max_scalar_expressions_per_unit = 4096;
+    std::size_t total_expression_nodes = 0;
     bool has_main = false;
     for (const auto& fn : source.functions) {
+        if (fn.parameters.size() > max_scalar_parameters_per_frame)
+            throw std::runtime_error(
+                "native bounded recursion per-frame parameter budget exceeded");
         if (fn.name == "main") {
             if (!fn.parameters.empty() || has_main)
                 throw std::runtime_error(
@@ -165,10 +175,17 @@ inline void require_native_scalar_frame_subset(const Program& source) {
             const Expression* expr = pending.back();
             pending.pop_back();
             if (!expr) continue;
-            if (++visited > 16384 || expr->type_arguments_present ||
+            if (++visited > max_scalar_expressions_per_frame ||
+                    ++total_expression_nodes > max_scalar_expressions_per_unit ||
+                    expr->type_arguments_present ||
                     !expr->type_arguments.empty()) {
                 throw std::runtime_error(
-                    "native bounded recursion expression qualification exceeded");
+                    "native bounded recursion per-frame expression budget exceeded");
+            }
+            if (expr->kind == Expression::Kind::Call &&
+                    expr->arguments.size() > max_scalar_parameters_per_frame) {
+                throw std::runtime_error(
+                    "native bounded recursion call arity budget exceeded");
             }
             switch (expr->kind) {
                 case Expression::Kind::Integer:
