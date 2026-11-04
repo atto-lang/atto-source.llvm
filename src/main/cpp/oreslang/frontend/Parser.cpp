@@ -144,7 +144,7 @@ bool reserved(std::string_view name) {
         "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
-        "finally", "end", "fi", "if", "do", "else", "then", "new",
+        "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
@@ -2527,6 +2527,20 @@ private:
             class_receivers_ = receivers;
             require("}"); return loop;
         };
+        // Only a syntactically proven terminal failure path may be emitted as a
+        // guard. Never allow a fall-through branch to reach guarded code.
+        std::function<bool(const std::vector<Statement>&)> guard_failure_exits;
+        guard_failure_exits = [&](const std::vector<Statement>& body) -> bool {
+            if (body.empty()) return false;
+            const Statement& last = body.back();
+            if (last.kind == Statement::Kind::Return) return true;
+            if (last.kind == Statement::Kind::Conditional) {
+                return !last.then_statements.empty() && !last.else_statements.empty()
+                    && guard_failure_exits(last.then_statements)
+                    && guard_failure_exits(last.else_statements);
+            }
+            return false;
+        };
         branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
             struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
@@ -2561,6 +2575,43 @@ private:
                 }
                 Statement statement;
                 statement.offset = token_.offset;
+                if (token_.text == "guard" && !finally_scope) {
+                    const auto offset = token_.offset;
+                    require("guard");
+                    // No implicit Option payload projection until ownership-aware narrowing exists.
+                    {
+                        Lexer probe = lexer_;
+                        std::string previous(token_.text);
+                        for (std::size_t budget = 0; budget < 256; ++budget) {
+                            const Token candidate = probe.next();
+                            if (candidate.kind == Kind::End || candidate.text == "{") break;
+                            if (previous == "is" && candidate.text == "Some")
+                                fail("native guard is Some requires ownership-aware Option narrowing");
+                            previous = std::string(candidate.text);
+                        }
+                    }
+                    auto predicate = expression();
+                    while (accept(",")) {
+                        auto combined = make_expression(Expression::Kind::LogicalAnd, offset);
+                        combined->left = std::move(predicate);
+                        combined->right = expression();
+                        predicate = std::move(combined);
+                    }
+                    require("{");
+                    auto failure = branch_arm(false, false);
+                    require("}");
+                    if (!guard_failure_exits(failure))
+                        fail("AttoLang guard failure block must terminate on every path");
+                    if (!then_scope && (token_.text == "else" || token_.text == "fi"))
+                        fail("AttoLang guard has no else or fi");
+                    Statement inverted;
+                    inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
+                    inverted.condition = make_expression(Expression::Kind::LogicalNot, offset);
+                    inverted.condition->left = std::move(predicate);
+                    inverted.then_statements = std::move(failure);
+                    actions.push_back(std::move(inverted));
+                    continue;
+                }
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
@@ -2582,7 +2633,10 @@ private:
                     if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
                     statement.kind = Statement::Kind::Return;
                     if (!value.returns_void) statement.expression = expression();
-                    require(";"); actions.push_back(std::move(statement));
+                    if (!accept(";") && token_.text != "}"
+                            && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
+                        fail("native return requires ';' or a closing block delimiter");
+                    actions.push_back(std::move(statement));
                     if (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
                         fail("native statement follows terminal return");
                     continue;
@@ -2885,6 +2939,48 @@ private:
                     value.statements.push_back(dispatch_statement());
                     continue;
                 }
+            }
+            if (token_.text == "guard") {
+                if (terminal_try_finally)
+                    fail("native protected guard requires verified cleanup-aware lowering");
+                if (return_guards_started)
+                    fail("native guard cannot follow legacy return guards");
+                const auto offset = token_.offset;
+                require("guard");
+                // No implicit Option payload projection until ownership-aware narrowing exists.
+                {
+                    Lexer probe = lexer_;
+                    std::string previous(token_.text);
+                    for (std::size_t budget = 0; budget < 256; ++budget) {
+                        const Token candidate = probe.next();
+                        if (candidate.kind == Kind::End || candidate.text == "{") break;
+                        if (previous == "is" && candidate.text == "Some")
+                            fail("native guard is Some requires ownership-aware Option narrowing");
+                        previous = std::string(candidate.text);
+                    }
+                }
+                auto predicate = expression();
+                while (accept(",")) {
+                    auto combined = make_expression(Expression::Kind::LogicalAnd, offset);
+                    combined->left = std::move(predicate);
+                    combined->right = expression();
+                    predicate = std::move(combined);
+                }
+                require("{");
+                if (++branch_count > 128) fail("native structured guard limit exceeded (128)");
+                auto failure = branch_arm(false, false);
+                require("}");
+                if (!guard_failure_exits(failure))
+                    fail("AttoLang guard failure block must terminate on every path");
+                if (token_.text == "else" || token_.text == "fi")
+                    fail("AttoLang guard has no else or fi");
+                Statement inverted;
+                inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
+                inverted.condition = make_expression(Expression::Kind::LogicalNot, offset);
+                inverted.condition->left = std::move(predicate);
+                inverted.then_statements = std::move(failure);
+                value.statements.push_back(std::move(inverted));
+                continue;
             }
             if (token_.text == "if") {
                 const auto offset = token_.offset;
