@@ -69,6 +69,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-named-constructor-slot-test)
     set_tests_properties(native_named_constructor_slot_binder_host_only PROPERTIES TIMEOUT 15)
 
+    # Host-only checks of the production scalar named-class generic slot binder.
+    add_executable(oreslang-native-scalar-named-class-test
+        tests/native_scalar_named_class_binding_test.cpp)
+    target_include_directories(oreslang-native-scalar-named-class-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-scalar-named-class-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_scalar_named_class_binder_host_only
+        COMMAND oreslang-native-scalar-named-class-test)
+    set_tests_properties(native_scalar_named_class_binder_host_only PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
@@ -427,6 +438,22 @@ if(BUILD_TESTING)
             --clang-opt=-O2)
     set_tests_properties(native_atto_named_generic_value_source_execution_O2
         PROPERTIES TIMEOUT 240)
+    # First native scalar-only monomorphized named class specialization:
+    # compiler IR -> Clang -> executable at O0/O2, or no-IR diagnostic.
+    foreach(native_opt IN ITEMS O0 O2)
+        set(native_suffix "")
+        if(native_opt STREQUAL "O2")
+            set(native_suffix "_O2")
+        endif()
+        add_test(NAME native_atto_scalar_named_class_source_execution${native_suffix}
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_named_class_source_execution.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_SOURCE_I64_CLANG}"
+                --clang-opt=-${native_opt})
+        set_tests_properties(native_atto_scalar_named_class_source_execution${native_suffix}
+            PROPERTIES TIMEOUT 240)
+    endforeach()
     # Native stack-owned class constructors with checked named argument slots.
     # Two independently optimized guest binaries, plus no-IR diagnostic cases.
     add_test(NAME native_atto_named_constructor_source_execution

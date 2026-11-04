@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -149,6 +150,10 @@ struct LocalBinding {
     std::string array_record_class;
     bool record_view = false; // class-valued initializer: leaf view or uniquely owned array-containing call result
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
+    // Declaration-site and new-expression type slots, bound independently.
+    // The initial native monomorphization target accepts int representations only.
+    std::vector<GenericTypeArgument> class_type_arguments;
+    std::vector<GenericTypeArgument> constructor_type_arguments;
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.
     std::vector<std::unique_ptr<Expression>> constructor_arguments;
@@ -197,6 +202,9 @@ struct ClassMethod {
 
 struct ClassDecl {
     bool exported = false;
+    // Source-level generic names are nominal slot identities. Native v1
+    // permits only the int specialization; no erased dynamic layouts.
+    std::vector<GenericParameter> generic_parameters;
     std::vector<ClassMethod> methods;
     std::string name;
     // Up to 16 scalar i64 or owned Array<int> fields.
@@ -207,6 +215,80 @@ struct ClassDecl {
     std::vector<std::string> constructor_parameters;
     std::vector<ScalarType> constructor_parameter_types;
 };
+
+// Resolve a nominal generic specialization to declaration order, before any
+// ownership mutation or LLVM codegen. All representations are int in v1.
+// Never treat the textual order of named arguments as nominal ABI identity.
+inline std::vector<std::string> native_scalar_class_generic_slots(
+        const ClassDecl& cls, const std::vector<GenericTypeArgument>& args) {
+    const std::size_t count = cls.generic_parameters.size();
+    if (count == 0) {
+        if (!args.empty())
+            throw std::runtime_error("non-generic native class cannot accept type arguments");
+        return {};
+    }
+    if (args.size() > count)
+        throw std::runtime_error("too many native class generic arguments");
+    std::vector<std::string> slots(count);
+    std::vector<bool> assigned(count, false);
+    std::size_t positional = 0;
+    bool saw_named = false;
+    for (const auto& arg : args) {
+        std::size_t target = positional;
+        if (!arg.name.empty()) {
+            saw_named = true;
+            target = 0;
+            while (target < count && cls.generic_parameters[target].name != arg.name)
+                ++target;
+            if (target == count)
+                throw std::runtime_error("unknown named native class generic '" + arg.name + "'");
+        } else {
+            if (saw_named)
+                throw std::runtime_error("positional class generic argument after named argument");
+            ++positional;
+        }
+        if (target >= count || assigned[target])
+            throw std::runtime_error("duplicate native class generic argument");
+        assigned[target] = true;
+        if (arg.infer)
+            throw std::runtime_error("native class generic inference holes require typed constructor inference");
+        if (arg.type != "int")
+            throw std::runtime_error("native generic class specialization supports only int");
+        slots[target] = "int";
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        if (assigned[i]) continue;
+        const std::string& value = cls.generic_parameters[i].default_type;
+        if (value == "int") {
+            slots[i] = "int";
+        } else {
+            const auto dependency = std::find_if(
+                cls.generic_parameters.begin(), cls.generic_parameters.begin() + i,
+                [&](const GenericParameter& candidate) { return candidate.name == value; });
+            if (dependency == cls.generic_parameters.begin() + i ||
+                    slots[static_cast<std::size_t>(dependency - cls.generic_parameters.begin())] != "int")
+                throw std::runtime_error("cannot infer native class generic parameter '" +
+                                         cls.generic_parameters[i].name + "'");
+            slots[i] = "int";
+        }
+    }
+    return slots;
+}
+
+inline void native_verify_local_class_specialization(
+        const LocalBinding& local, const ClassDecl& cls) {
+    if (local.class_name != cls.name)
+        throw std::runtime_error("native class generic owner identity mismatch");
+    const auto declared = native_scalar_class_generic_slots(cls, local.class_type_arguments);
+    if (local.new_class) {
+        const auto created = native_scalar_class_generic_slots(
+            cls, local.constructor_type_arguments);
+        if (declared != created)
+            throw std::runtime_error("native class generic declared/constructed type mismatch");
+    } else if (!local.constructor_type_arguments.empty()) {
+        throw std::runtime_error("native non-constructor has unexpected generic type arguments");
+    }
+}
 
 inline const ClassField* constructor_field(const ClassDecl& cls, std::size_t parameter) {
     if (parameter >= cls.constructor_parameters.size()) return nullptr;

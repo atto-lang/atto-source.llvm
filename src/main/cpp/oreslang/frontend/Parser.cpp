@@ -1429,6 +1429,36 @@ private:
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal class type");
+        if (accept("<")) {
+            if (accept(">"))
+                fail("native class generic declaration requires at least one parameter");
+            do {
+                if (result.generic_parameters.size() == 16)
+                    fail("native class generic parameter limit exceeded (16)");
+                GenericParameter slot;
+                slot.name = identifier();
+                if (slot.name == "_")
+                    fail("native class generic declaration cannot use inference hole");
+                for (const auto& prior : result.generic_parameters)
+                    if (prior.name == slot.name)
+                        fail("duplicate native class generic parameter '" + slot.name + "'");
+                if (accept("=")) {
+                    if (accept("int")) {
+                        slot.default_type = "int";
+                    } else {
+                        const std::string dependency = identifier();
+                        const bool earlier = std::any_of(
+                            result.generic_parameters.begin(), result.generic_parameters.end(),
+                            [&](const GenericParameter& p) { return p.name == dependency; });
+                        if (!earlier)
+                            fail("forward or self-referential native class generic default");
+                        slot.default_type = dependency;
+                    }
+                }
+                result.generic_parameters.push_back(std::move(slot));
+            } while (accept(","));
+            require(">");
+        }
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
@@ -1443,6 +1473,8 @@ private:
             if (method_marker && !method_ahead)
                 fail("native mtd marker must precede a method signature");
             if (method_ahead) {
+                if (!result.generic_parameters.empty())
+                    fail("native generic class methods require typed receiver monomorphization");
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;
                 signature.name = method.name.substr(result.name.size() + 1);
@@ -1469,7 +1501,15 @@ private:
                             fail("native scalar constructor parameter limit exceeded (16)");
                         if (token_.text == "@")
                             fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
-                        require("int");
+                        if (!accept("int")) {
+                            const std::string parameterType = std::string(token_.text);
+                            const bool genericScalar = std::any_of(
+                                result.generic_parameters.begin(), result.generic_parameters.end(),
+                                [&](const GenericParameter& p) { return p.name == parameterType; });
+                            if (!genericScalar)
+                                fail("native constructor parameter type must be int or a scalar class generic");
+                            advance();
+                        }
                         std::string name = identifier();
                         if (!params.insert(name).second)
                             fail("duplicate native constructor parameter '" + name + "'");
@@ -1536,7 +1576,10 @@ private:
                 class_field_terminator(initializer_end);
             } else {
                 if (token_.text == "Array") fail("native Array<int> field requires mut referent capability");
-                if (token_.text != "Option" && token_.text != "Result" && token_.text != "int" && token_.text != "bool" && token_.text != "String" && token_.text != "string") {
+                const bool class_generic_scalar = std::any_of(
+                    result.generic_parameters.begin(), result.generic_parameters.end(),
+                    [&](const GenericParameter& p) { return p.name == token_.text; });
+                if (token_.text != "Option" && token_.text != "Result" && token_.text != "int" && token_.text != "bool" && token_.text != "String" && token_.text != "string" && !class_generic_scalar) {
                     if (!field.final_field || literal_const) fail("expected val or final for native nested class field");
                     field.class_name = type_identifier(); field.name = identifier();
                     if (!seen.insert(field.name).second) fail("duplicate class field '" + field.name + "'");
@@ -1546,7 +1589,10 @@ private:
                 if (token_.text == "Option" || token_.text == "Result") field.sum_type = type_identifier();
                 field.scalar_type = accept("bool") ? ScalarType::Bool :
                     (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
-                if (field.scalar_type == ScalarType::I64 && field.sum_type.empty()) require("int");
+                if (field.scalar_type == ScalarType::I64 && field.sum_type.empty()) {
+                    if (class_generic_scalar) advance();
+                    else require("int");
+                }
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
@@ -2284,15 +2330,20 @@ private:
                 binding.int_array = binding.owner_mutable = true;
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
-                        return type.text == "string" || type.text == "String" ||
-                            (type.kind == Kind::Identifier && look.next().kind == Kind::Identifier); }()) {
+                        if (type.text == "string" || type.text == "String") return true;
+                        const auto next = look.next();
+                        return type.kind == Kind::Identifier &&
+                            (next.kind == Kind::Identifier || next.text == "<"); }()) {
                 const bool mutable_value = accept("val");
                 if (!mutable_value) require("const");
                 binding.owner_mutable = mutable_value;
                 const std::string type = type_identifier();
+                binding.class_type_arguments = native_class_type_arguments();
                 binding.name = identifier();
                 require("=");
                 if (type == "string" || type == "String") {
+                    if (!binding.class_type_arguments.empty())
+                        fail("non-generic string type cannot accept class generic arguments");
                     binding.scalar_type = ScalarType::String;
                     binding.initializer = expression();
                 } else {
@@ -2306,6 +2357,7 @@ private:
                         binding.record_view = true;
                     } else {
                     if (type_identifier() != type) fail("class constructor type mismatch");
+                    binding.constructor_type_arguments = native_class_type_arguments();
                     require("(");
                     parse_constructor_actuals(binding);
                     binding.new_class = true;
@@ -2347,10 +2399,12 @@ private:
                     binding.int_array = true;
                 } else {
                 binding.class_name = type_identifier();
+                binding.class_type_arguments = native_class_type_arguments();
                 binding.name = identifier();
                 require("=");
                 if (accept("new")) {
                     const std::string ctor = type_identifier();
+                    binding.constructor_type_arguments = native_class_type_arguments();
                     if (ctor != binding.class_name) fail("class constructor type mismatch");
                     require("(");
                     parse_constructor_actuals(binding);
@@ -3945,6 +3999,35 @@ private:
         return name;
     }
 
+    // Only the stable int representation has native class layout evidence.
+    // Named applications retain lexical labels for checked declaration-slot
+    // binding; unsupported types are rejected before any LLVM IR emission.
+    std::vector<GenericTypeArgument> native_class_type_arguments() {
+        std::vector<GenericTypeArgument> args;
+        if (!accept("<")) return args;
+        if (accept(">"))
+            fail("native class generic specialization cannot use empty inferred <>");
+        do {
+            if (args.size() == 16)
+                fail("native class generic argument limit exceeded (16)");
+            GenericTypeArgument arg;
+            if (token_.kind == Kind::Identifier && peek_next().text == "=") {
+                arg.name = identifier();
+                require("=");
+            }
+            if (accept("int")) {
+                arg.type = "int";
+            } else if (accept("_")) {
+                arg.infer = true;
+            } else {
+                fail("native generic class specialization supports only int");
+            }
+            args.push_back(std::move(arg));
+        } while (accept(","));
+        require(">");
+        return args;
+    }
+
     std::string nominal_declaration_name() {
         // '_' is reserved for wildcard/inference-hole use, never a
         // stable runtime nominal identity or module contract name.
@@ -5023,6 +5106,15 @@ private:
                         "source Task<int> binding cannot be shadowed by a scalar local");
             }
             for (const auto& binding : fn.locals) {
+                // Validate the nominal type application even for a record view
+                // or an rt take. This must happen before owner publication.
+                if (!binding.class_name.empty()) {
+                    const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                        [&](const ClassDecl& c) { return c.name == binding.class_name; });
+                    if (cls == program.classes.end())
+                        throw std::runtime_error("unknown class '" + binding.class_name + "'");
+                    native_verify_local_class_specialization(binding, *cls);
+                }
                 // Validate before publishing the name: reject self/forward reads.
                 if (binding.int_array) {
                     // Construction was parsed as exactly new Array<int>().
