@@ -63,4 +63,30 @@ std::optional<T> actor_local_get_on_turn_v1(
     return scope.get_copy(stamp, key);
 }
 
+/*
+ * Trusted CONTROL-plane retirement. Call only after the source actor has
+ * stopped accepting messages. The generation-specific scheduler completion
+ * fence must finish before the logical actor's cells can be reclaimed.
+ *
+ * Never call this from a carrier (including the same actor): wait_done would
+ * block a scheduler thread. A failed wait leaves the scope OPEN so the caller
+ * can retry after resolving outstanding work; it does not forge quiescence.
+ */
+inline bool actor_local_close_after_terminal_v1(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRef actor,
+    ActorLocalScopeV1& scope,
+    ExecutionStampV1 owner) {
+    if (!scheduler || !owner.valid_actor() ||
+        owner.actor_domain != actor.scheduler_domain ||
+        owner.actor_slot != actor.actor_slot ||
+        owner.actor_generation != actor.generation ||
+        !scope.authorized(owner) ||
+        ores_native_actor_scheduler_is_current_carrier(scheduler))
+        return false;
+    if (!ores_native_actor_scheduler_wait_done(scheduler, actor))
+        return false;
+    return scope.close();
+}
+
 } // namespace oreslang::runtime
