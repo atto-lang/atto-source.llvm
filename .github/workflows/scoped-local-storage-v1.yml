@@ -5,6 +5,7 @@ on:
       - "src/main/cpp/oreslang/runtime/ScopedLocalStorageV1.hpp"
       - "src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp"
       - "src/main/cpp/oreslang/runtime/NativeRequestMailGateV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp"
       - "src/main/cpp/oreslang/runtime/NativeActorScheduler.h"
       - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
       - "src/main/cpp/oreslang/runtime/TaskCancellation.hpp"
@@ -12,6 +13,7 @@ on:
       - "tests/native_scoped_request_parity_v1_test.cpp"
       - "tests/native_request_mail_gate_v1_test.cpp"
       - "tests/native_original_data_mail_sequence_v1_test.c"
+      - "tests/native_request_data_mail_gate_v1_test.cpp"
       - "src/main/cpp/oreslang/runtime/NativeActorLocalGateV1.hpp"
       - "src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h"
       - "tests/native_actor_local_gate_v1_test.cpp"
@@ -35,7 +37,9 @@ jobs:
           git rev-parse HEAD
           git rev-parse HEAD^{tree}
       - name: gcc and clang host-only tests
-        run: bash scripts/test-scoped-locals-v1.sh
+        run: |
+          bash -n scripts/test-scoped-locals-v1.sh
+          bash scripts/test-scoped-locals-v1.sh
       - name: gcc and clang ASan UBSan host-only tests
         env:
           ORES_SCOPED_LOCAL_RUN_SANITIZERS: "1"
