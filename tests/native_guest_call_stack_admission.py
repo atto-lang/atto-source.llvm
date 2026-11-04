@@ -30,21 +30,21 @@ def chain(length):
         target = "42" if i == length - 1 else f"f{i+1}()"
         functions.append(f"fnc f{i}(): int {{ return {target}; }}")
     functions.append("pub fnc main(): int { return f0(); }")
-    return "\\n".join(functions) + "\\n"
+    return "\n".join(functions) + "\n"
 
 CASES.update({
     "acyclic_depth_64": (chain(63), True),
     "acyclic_depth_65": (chain(64), False),
     "conditional_hidden_self_cycle": (
-        "fnc loop(int n): int { return n == 0 ? 0 : loop(n - 1); }\\n"
-        "pub fnc main(): int { return 42; }\\n", False),
+        "fnc loop(int n): int { return n == 0 ? 0 : loop(n - 1); }\n"
+        "pub fnc main(): int { return 42; }\n", False),
     "unreachable_self_cycle": (
-        "fnc unused(int n): int { return unused(n - 1); }\\n"
-        "pub fnc main(): int { return 42; }\\n", False),
+        "fnc unused(int n): int { return unused(n - 1); }\n"
+        "pub fnc main(): int { return 42; }\n", False),
     "arity_overloads_acyclic": (
-        "fnc f(): int { return 41; }\\n"
-        "fnc f(int value): int { return value + 1; }\\n"
-        "pub fnc main(): int { return f(f()); }\\n", True),
+        "fnc f(): int { return 41; }\n"
+        "fnc f(int value): int { return value + 1; }\n"
+        "pub fnc main(): int { return f(f()); }\n", True),
 })
 
 def run(argv, timeout=20):
