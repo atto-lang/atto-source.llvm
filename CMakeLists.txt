@@ -3339,6 +3339,55 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # O(1) intrusive ready queues, idle spin and CPU affinity. Every queue
+    # mutation is cross-checked against an O(N) scan of lane state.
+    add_executable(oreslang-native-actor-ready-queue-stress-test
+        tests/native_actor_ready_queue_stress_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-ready-queue-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-ready-queue-stress-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-actor-ready-queue-stress-test PRIVATE
+        ORESLANG_NATIVE_SCHED_VALIDATE=1)
+    target_compile_options(oreslang-native-actor-ready-queue-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_ready_queue_stress
+        COMMAND oreslang-native-actor-ready-queue-stress-test)
+    set_tests_properties(native_actor_ready_queue_stress PROPERTIES TIMEOUT 60)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-native-actor-ready-queue-stress-tsan-test
+            tests/native_actor_ready_queue_stress_test.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-actor-ready-queue-stress-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-actor-ready-queue-stress-tsan-test PRIVATE
+            Threads::Threads)
+        target_compile_definitions(oreslang-native-actor-ready-queue-stress-tsan-test PRIVATE
+            ORESLANG_NATIVE_SCHED_VALIDATE=1)
+        target_compile_options(oreslang-native-actor-ready-queue-stress-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-actor-ready-queue-stress-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        add_test(NAME native_actor_ready_queue_stress_tsan
+            COMMAND oreslang-native-actor-ready-queue-stress-tsan-test)
+        set_tests_properties(native_actor_ready_queue_stress_tsan PROPERTIES TIMEOUT 120)
+    endif()
+    # Scheduler latency vs. kernel (condvar) and hardware (spin) floors. CTest
+    # runs a --smoke pass only; run the binary directly for real numbers.
+    add_executable(oreslang-native-actor-scheduler-latency-bench
+        tests/native_actor_scheduler_latency_bench.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-scheduler-latency-bench PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-scheduler-latency-bench PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-actor-scheduler-latency-bench PRIVATE
+        ORESLANG_BENCH_HAS_TUNING=1)
+    target_compile_options(oreslang-native-actor-scheduler-latency-bench PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_scheduler_latency_bench_smoke
+        COMMAND oreslang-native-actor-scheduler-latency-bench --smoke)
+    set_tests_properties(native_actor_scheduler_latency_bench_smoke PROPERTIES TIMEOUT 60)
     # Scheduler-owned producer continuation wake escrow: independent from
     # supervisor CONTROL and USER mail capacity. Native host substrate only.
     add_executable(oreslang-native-continuation-wake-escrow-test
