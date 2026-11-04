@@ -25,7 +25,7 @@
 | Standalone `critical` without owned gate | Restricted fail-closed | Explicit fail-closed native compiler diagnostic | No IR, no guest body run |
 | Non-suspending body under actor-owned `critical` | Restricted Java AST/effect analysis | **Not lowered to LLVM guest execution** | LLVM MIR/IR, actor ownership and body effect proof |
 | Bounded FIFO logical critical tickets | Host `CriticalGate` + tests | Native `CriticalGate` + tests | Exact-head executed host tests and per-actor binding |
-| STOP/retirement | Host Future cleanup and gate retirement | FIFO queued cancellation receipts + owner identity | Scheduler cancellation delivery outside the gate lock |
+| STOP/retirement | Host Future cleanup, retire-if-quiescent and gate retirement | FIFO queued cancellation receipts, owner identity, atomic retire-if-quiescent | Scheduler cancellation delivery outside the gate lock |
 | Scope/ticket ABA fence | Per-gate Java identity/epoch | Overflow-fenced native scope + per-gate token | Stress, restart and stale-ticket rejection |
 | Task transfer/typing authorization | Exact Program/Task identity, full typing generation and ownership epoch | `TaskCaptureAdmission` is **host/compiler-side proof only** | LLVM full typed source admission + generation-fenced guest task |
 | Guest fixture output `42` | Authored `.ores` fixture, unexecuted exact head | **NOT IMPLEMENTED** | Native LLVM guest build/run and cleanup evidence |
@@ -43,8 +43,9 @@
 - `tests/fixtures/critical-scalar-baseline.atto`:
   committed supported scalar baseline, **not** a critical guest.
 - `tests/critical_gate_test.cpp`: FIFO retirement cancellation receipts,
-  idempotent retirement, and 256 release-vs-retirement races; these are
-  **native host ticket** tests, not compiled critical-source execution.
+  idempotent retirement, 256 release-vs-retirement races, and another
+  256 request-vs-atomic-empty-retirement races; these are **native host
+  ticket** tests, not compiled critical-source execution.
 
 Use existing CTest names `native_critical_suspends_v1_source_admission`
 and `native_logical_critical_gate`. Run with exact compiler binary SHA,
