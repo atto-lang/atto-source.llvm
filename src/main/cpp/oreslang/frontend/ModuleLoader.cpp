@@ -2,6 +2,7 @@
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
 #include "oreslang/frontend/HostLogicalUnitIds.hpp"
+#include "oreslang/frontend/AttoManifestSnapshot.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -49,6 +50,7 @@ class Loader {
     std::unordered_map<std::string, std::size_t> paths;
     bool owned, scalar_loop, host;
     std::unique_ptr<frontend::HostLogicalUnitIds> logical_units;
+    std::unique_ptr<frontend::AttoManifestSnapshot> package_manifest;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
@@ -77,16 +79,8 @@ public:
                     // .atto marker through the no-follow descriptor opener.
                     const fs::path marker = has_canonical_manifest
                         ? canonical_manifest : legacy_manifest;
-                    const auto marker_path = marker.string();
-                    const auto marker_identity = capture_source_identity(
-                        marker_path.c_str(), 64u * 1024u,
-                        "native package manifest exceeds 64 KiB");
-                    const auto manifest = read_regular_source(
-                        marker_path.c_str(), 64u * 1024u,
-                        "native package manifest exceeds 64 KiB",
-                        nullptr, &marker_identity);
-                    require_valid_source_utf8(manifest);
-                    project_root_import_detail::validate_manifest(manifest);
+                    package_manifest =
+                        std::make_unique<frontend::AttoManifestSnapshot>(marker);
                     logical_units = std::make_unique<frontend::HostLogicalUnitIds>(cursor);
                     const auto logical_entry_id = logical_units->admit(entry_path);
                     // Bind the selected project path to the descriptor already
@@ -108,9 +102,11 @@ public:
         }
         visit(fs::canonical(entry_path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
+        if (package_manifest) package_manifest->recheck();
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
+            if (package_manifest) package_manifest->recheck();
             return root;
         }
         Program linked;
@@ -166,6 +162,7 @@ public:
             }
         }
         resolve_and_validate_program(linked);
+        if (package_manifest) package_manifest->recheck();
         return linked;
     }
 private:
