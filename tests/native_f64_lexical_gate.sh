@@ -14,6 +14,17 @@ trap 'rm -rf -- "$scratch"' EXIT
 pass=0
 reject=0
 native_executions=0
+hash_evidence() {
+  # macOS has shasum but does not ordinarily ship GNU sha256sum.
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$@"
+  else
+    echo "NATIVE_F64_SHA256_TOOL_MISSING" >&2
+    exit 69
+  fi
+}
 # A repeated case ID must not be able to satisfy totals by substituting for
 # a missing fixture. Baseline macOS Bash 3.2-compatible: no associative arrays.
 : > "$scratch/.case_ids"
@@ -52,7 +63,7 @@ positive() {
       { echo "NATIVE_F64_NO_TYPED_DOUBLE_IR: $name" >&2; exit 1; }
   fi
   # Hash the exact source and compiler-produced IR; do not print source contents.
-  sha256sum "$scratch/$name.atto" "$scratch/$name.ll"
+  hash_evidence "$scratch/$name.atto" "$scratch/$name.ll"
   # The same compiler-emitted IR must execute correctly with and without
   # Clang optimization. Both runs are authentic native guest executions,
   # never a host/reference calculation or an inferred pass from one binary.
@@ -66,7 +77,7 @@ positive() {
     [[ -x "$image" && ! -s "$scratch/$name.O$opt.link.stderr" &&
        ! -s "$scratch/$name.O$opt.link.stdout" ]] ||
       { echo "NATIVE_F64_LINK_DIAGNOSTIC: $name O$opt" >&2; exit 1; }
-    sha256sum "$image"
+    hash_evidence "$image"
     rc=0
     "$image" > "$scratch/$name.O$opt.stdout" \
       2> "$scratch/$name.O$opt.stderr" || rc=$?
