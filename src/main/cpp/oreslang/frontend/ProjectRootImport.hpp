@@ -239,9 +239,17 @@ inline std::filesystem::path resolve_project_root_import(
             if (physical_manifest.parent_path() != cursor)
                 throw std::runtime_error(
                     "native package manifest must reside within package directory");
-            // Reopen the already-canonical path so a manifest symlink swap after
-            // the locality check cannot redirect the bytes we validate.
-            validate_manifest(read_manifest(physical_manifest));
+            // For canonical .atto.pkg.toml, retain the ORIGINAL manifest
+            // basename when handing it to the source-reader callback. That
+            // reader pins every ancestor and the leaf using O_NOFOLLOW.
+            // Reading physical_manifest here would erase this security policy
+            // after canonical() and reintroduce a symlink-swap window.
+            //
+            // Preserve the legacy migration callback's historical physical
+            // pathname contract for .ores.pkg.toml only.
+            const auto& admitted_manifest =
+                manifest == atto_manifest ? manifest : physical_manifest;
+            validate_manifest(read_manifest(admitted_manifest));
             package_root = cursor;
             break;
         }
