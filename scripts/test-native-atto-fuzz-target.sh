@@ -82,7 +82,7 @@ done
 cat > "$work/failing-ir-auditor" <<'AUDITOR'
 #!/usr/bin/env bash
 # Do not copy the compiler, IR, or source outside the test work dir.
-printf 'ATTO_FAILING_IR_AUDIT_REACHED\\n' >&2
+echo 'ATTO_FAILING_IR_AUDIT_REACHED' >&2
 exit 7
 AUDITOR
 chmod 700 "$work/failing-ir-auditor"
