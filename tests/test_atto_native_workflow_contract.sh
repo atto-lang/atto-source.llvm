@@ -23,8 +23,8 @@ unique 'bash tests/atto_native_harness_parity.sh --run'
 unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=19|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED"
 unique 'atto_native_harness_compiler_guest_o0_o2'
 unique 'atto_native_harness_inventory_source_only'
-unique 'native_project_root_import_security'
-unique 'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"'
+[[ "$(count 'native_project_root_import_security')" -eq 2 ]] || die 'expected one CTest inventory and one execution'
+[[ "$(count 'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"')" -eq 2 ]] || die 'expected two exact-head checks'
 unique 'persist-credentials: false'
 unique "ATTO_LLVM_GUEST_TREE=\$(git rev-parse 'HEAD^{tree}')"
 unique 'ctest --test-dir build -N'
