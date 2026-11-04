@@ -300,6 +300,69 @@ int main() {
                   [&] { (void)resolve(dir/"main.ores", "+/lib.txt"); });
     }
 
+    {
+        const auto dir = temp / "atto-canonical-manifest";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"app/main.atto", "");
+        write_text(dir/"lib.atto", "");
+        if (resolve(dir/"app/main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("canonical .atto package import was not resolved");
+        oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+            dir/"app/main.atto", dir/"lib.atto");
+        write_text(temp/"outside-atto-package.atto", "");
+        must_fail("modern manifest relative escape", "escapes physical package root", [&] {
+            oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+                dir/"app/main.atto", temp/"outside-atto-package.atto");
+        });
+    }
+    {
+        const auto dir = temp / "atto-legacy-manifest-ambiguity";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"app/main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("dual package manifest root", "ambiguous AttoLang package root",
+                  [&] { (void)resolve(dir/"app/main.atto", "+/lib"); });
+        must_fail("dual package manifest relative", "ambiguous AttoLang package root", [&] {
+            oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+                dir/"app/main.atto", dir/"lib.atto");
+        });
+    }
+    {
+        const auto dir = temp / "atto-modern-nested";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"nested/.atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("modern nested +/ import", "nested package boundary",
+                  [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
+        must_fail("modern nested relative import", "nested package boundary", [&] {
+            oreslang::project_root_import_detail::enforce_relative_import_package_boundary(
+                dir/"main.atto", dir/"nested/lib.atto");
+        });
+    }
+    {
+        const auto dir = temp / "atto-nested-dual-manifests";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"nested/.atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/.ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("dual nested package manifest", "ambiguous AttoLang package root",
+                  [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
+    }
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "atto-manifest-symlink-escape";
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        write_text(temp/"external-atto-manifest.toml", "schema_version = \"1\"\n");
+        fs::create_symlink(temp/"external-atto-manifest.toml",
+                           dir/".atto.pkg.toml");
+        must_fail("modern manifest symlink escape", "must reside within package directory",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+#endif
     std::cout << "PASS project-root import resolver security cases\n";
     return 0;
 }
