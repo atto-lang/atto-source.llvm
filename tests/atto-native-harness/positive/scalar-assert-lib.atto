@@ -1,0 +1,5 @@
+define module TinyTest as
+  pub fnc equal_int(int actual, int expected): int {
+    return actual == expected ? 0 : 1;
+  }
+end

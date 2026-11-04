@@ -16,3 +16,5 @@ exit-zero|positive/exit-zero.atto|0
 exit-seven|positive/exit-seven.atto|7
 exit-fortythree|positive/exit-fortythree.atto|43
 package-root|positive/package-root.atto|42
+scalar-assert-pass|positive/scalar-assert-pass.atto|0
+scalar-assert-failure|positive/scalar-assert-failure.atto|1
