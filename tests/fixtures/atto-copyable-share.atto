@@ -1,0 +1,5 @@
+// A Copy int is shareable; LLVM must emit real native guest behavior.
+// E_SHARE_MOVE_ONLY is NOT being claimed for class/array ownership yet.
+pub fnc main(): int {
+  return rt share 42;
+}
