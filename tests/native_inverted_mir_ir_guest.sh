@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Integration check for true generated IR + native Clang, no Python required.
+# Integration check for generated LLVM IR + native Clang; Python verifies trap signals.
 set -euo pipefail
 emitter="$1"; clang="$2"
 scratch="$(mktemp -d)"
