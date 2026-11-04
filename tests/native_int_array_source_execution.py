@@ -68,6 +68,11 @@ pub fnc main(): int {
   a.set(0, inc(a.get(0)));
   return a.get(0);
 }
+""", 42, 1),    "named-call-positional-array-baseline": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(42);
+  return values.get(0);
+}
 """, 42, 1),
 }
 
