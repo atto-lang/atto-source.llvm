@@ -92,6 +92,30 @@ if [[ "$superstep_status" -ne 42 || -s "$tmp/out" || -s "$tmp/err" ]]; then
 fi
 printf 'SG_LLVM_SHARED_SUPERSTEP_NATIVE_PASS blob=%s guest_exit=42\n' "$expected_superstep_blob"
 
+
+# Byte-identical bounded recursion/conditional-route guest in Java and LLVM.
+cycle=contracts/stategraph-portability/shared-bounded-cycle.ores
+cycle_blob=3c69cdf00c4e1390898ef0594eba76c54c0e2d7f
+[[ -f "$cycle" && ! -L "$cycle" ]]
+git ls-files --error-unmatch -- "$cycle" >/dev/null
+[[ "$(git hash-object "$cycle")" = "$cycle_blob" ]] ||
+  { echo 'SG_LLVM_SHARED_CYCLE_SOURCE_DRIFT' >&2; exit 1; }
+[[ "$(git rev-parse "HEAD:$cycle")" = "$cycle_blob" ]] ||
+  { echo 'SG_LLVM_SHARED_CYCLE_HEAD_DRIFT' >&2; exit 1; }
+timeout --kill-after=3s 90s bash scripts/compile-aot.sh "$cycle" "$tmp/cycle" ||
+  { echo 'SG_LLVM_SHARED_CYCLE_COMPILE_NOT_ACCEPTED' >&2; exit 1; }
+[[ -x "$tmp/cycle" ]]
+set +e
+timeout --kill-after=3s 30s "$tmp/cycle" > "$tmp/out" 2> "$tmp/err"
+cycle_status=$?
+set -e
+if [[ "$cycle_status" -ne 42 || -s "$tmp/out" || -s "$tmp/err" ]]; then
+  cat "$tmp/err" >&2
+  echo "SG_LLVM_SHARED_CYCLE_GUEST_NOT_ACCEPTED status=$cycle_status" >&2
+  exit 1
+fi
+printf 'SG_LLVM_SHARED_CYCLE_NATIVE_PASS blob=%s guest_exit=42\n' "$cycle_blob"
+
 for name in scalar guard nominal; do
   source="tests/fixtures/stategraph-parity-$name.ores"
   git ls-files --error-unmatch "$source" >/dev/null
