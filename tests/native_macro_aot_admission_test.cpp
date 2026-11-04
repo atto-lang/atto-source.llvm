@@ -144,5 +144,48 @@ end
     scalar_value(prefix + broad + "); }", 256);
     denied(prefix + "(" + broad + "+" + broad + ")" + "); }");
 
+    // Shared scalar profile: eight declarations per translation unit.
+    const std::string identity_body =
+        "(Syntax<Expr> value) -> Syntax<Expr> { return value; }";
+    std::string definitions;
+    for (int i = 0; i < 8; ++i) {
+        definitions += "define macro ident_" + std::to_string(i) + identity_body;
+    }
+    scalar_42(definitions + "pub fnc main(): int { return 42; }");
+    denied(definitions + "define macro ident_8" + identity_body
+                   + "pub fnc main(): int { return 42; }");
+
+    // All 128 independent call sites must succeed; the 129th must fail before
+    // executable LLVM IR. This is not a nested-recursion depth check.
+    const std::string identity_def =
+        "define macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }";
+    std::string uses;
+    for (int i = 0; i < 128; ++i) {
+        if (!uses.empty()) uses += "+";
+        uses += "identity!(syntax expr 1)";
+    }
+    {
+        auto program = parse_program(
+            identity_def + "pub fnc main(): int { return " + uses + "; }");
+        check(program.functions.size() == 1);
+        check(program.functions.front().result != nullptr);
+    }
+    denied(identity_def + "pub fnc main(): int { return "
+                   + uses + "+identity!(syntax expr 1); }");
+
+    // The closed-constant evaluator admits AST depth 64 inclusive and rejects
+    // depth 65 with NATIVE_MACRO_BUDGET. The macro-input parser must allow the
+    // evaluator to issue the decisive bounded-rejection diagnostic.
+    const std::string literal_def =
+        "define macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }";
+    std::string negatives;
+    for (int i = 0; i < 64; ++i) negatives += "- ";
+    scalar_value(literal_def
+        + "pub fnc main(): int { return literal!(const "
+        + negatives + "1); }", 1);
+    denied(literal_def
+        + "pub fnc main(): int { return literal!(const "
+        + negatives + "- 1); }");
+
     return 0;
 }
