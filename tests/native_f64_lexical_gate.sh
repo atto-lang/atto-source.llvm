@@ -165,6 +165,16 @@ positive num_m1_scalar_reduction_seed 'pub fnc main(): int {
 }'
 
 
+negative float_alias_function_parameter 'pub fnc helper(float value): int {
+  return 42;
+}
+pub fnc main(): int { return 42; }' 'native f64 function parameter ABI not yet admitted'
+negative float_alias_function_return 'pub fnc main(): float { return 0.3; }' 'native f64 return ABI not yet admitted'
+negative decimal_suffix_not_ieee_f64 'pub fnc main(): int {
+  val float value = 1.25d;
+  return 42;
+}' 'native exact decimal literal unsupported until typed Decimal lowering'
+
 negative float_alias_int_coercion 'pub fnc main(): int {
   val float value = 42;
   return 42;
@@ -218,6 +228,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }' 'native branch-local f64 storage requires scoped double lowering'
 
-[[ "$pass" -eq 20 && "$reject" -eq 13 ]] ||
+[[ "$pass" -eq 20 && "$reject" -eq 16 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=20; NEGATIVE_NO_IR_PASS=13 (M1 scalar prereqs only, not num.atto library execution)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=20; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only, not num.atto library execution)"
