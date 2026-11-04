@@ -215,6 +215,12 @@ public:
             return std::get<I>(state_->columns).size();
         }
 
+        // Preserve the main-branch checked host API names through the
+        // inversion/MIR integration. All aliases re-enter the same locked,
+        // owner-checked implementation: no raw span or guest pointer escapes.
+        // Guest lowering must still use the owner-issued handle operations.
+        std::size_t size_checked() const { return size(); }
+
         // Physical-index access is host-trusted only: a bare dense row number
         // is not a guest capability and does not carry generation identity.
         Value get(std::size_t index) const {
@@ -227,6 +233,8 @@ public:
             return column[index];
         }
 
+        Value read_at(std::size_t row) const { return get(row); }
+
         // Physical-index writes are likewise host-only. Guest row views must
         // use the owner-issued capability path below, not this method.
         void set(std::size_t index, Value value) requires (Write) {
@@ -238,6 +246,10 @@ public:
                 throw std::out_of_range("inverted column loan index out of range");
             validate_field(value);
             column[index] = value;
+        }
+
+        void write_at(std::size_t row, Value value) requires (Write) {
+            set(row, value);
         }
 
         // Capability-checked row access. Resolve owner, issuer, slot and
