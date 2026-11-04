@@ -9,7 +9,13 @@ This draft adds two independently labeled native-execution matrices for **the cu
 | Shared scalar50 | `contracts/atto-parity-v1/shared-scalar50-v1.tsv` | `a948dbaf594916a6ee07f65d49a0cf5ae398ca7b` | `210dbe7363e5388e4f82c4de9fe7f8136ee6a7dca698ce72165e006fd5ecb0db` |
 | JS checked-i64 50 | `contracts/atto-parity-v1/js-checked-i64-candidates.json` | `9f3e54586a71ae4e5525e308b26c61ea70bc7232` | `5fd8ed522dfaaead8dc1b2d780159a4f156482124b7515d0a788245fc594ebc8` |
 
-The first corpus is byte-identical to the JavaScript `shared-scalar50-v1.tsv` fixture, which itself pins the Java shared source corpus. The second is byte-identical to the checked-i64 candidate manifest in [JS PR #111](https://github.com/ores-truffle-oreslang/oreslang-source.js/pull/111). These are test fixture bytes, not a compiler/runtime source mirror; no cross-organization transfers were made.
+The first corpus is byte-identical to the JavaScript `shared-scalar50-v1.tsv` fixture, which itself pins the Java shared source corpus.
+Both native matrices now recheck Git HEAD/tree and SHA-256 identities of the source
+corpus, the compiler binary and Clang after every guest finishes, **before**
+writing an executable-evidence receipt. The checked-i64 native matrix additionally
+executes two compiler-backed source-sensitivity controls: `40 eq 41` must exit
+43, and `40 eq 40` must exit 42; a source-insensitive constant-42 compiler
+cannot pass. These are additional guards, not proof of sandbox isolation. The second is byte-identical to the checked-i64 candidate manifest in [JS PR #111](https://github.com/ores-truffle-oreslang/oreslang-source.js/pull/111). These are test fixture bytes, not a compiler/runtime source mirror; no cross-organization transfers were made.
 
 ## M0 — 50 ordinary scalar source programs
 
@@ -53,3 +59,22 @@ Run the dedicated exact-head workflow `.github/workflows/atto-scalar50-native.ym
 - Full Java/LLVM compiler, ownership, actor, structured-concurrency and backend parity remains out of scope for these scalar gates.
 
 The chosen fixed test source programs avoid the legacy remainder `%` operator; `.ores` remains supported for compatibility while `.atto` is used for these new native guest files.
+
+## Local host-only verification, 2026-11-03
+
+An independently reconstructed 3,040-byte scalar50 canonical TSV produced
+SHA-256 `210dbe7363e5388e4f82c4de9fe7f8136ee6a7dca698ce72165e006fd5ecb0db`.
+CMake v3.31.6 validated all 50 manifest rows, and the CMake extraction
+round-tripped all 50 source fields unchanged into `.atto` files. A single
+expected-result mutation made the pinned digest fail with exit code 1.
+A synthetic (not canonical) 50-case JSON fixture passed the checked-i64
+manifest validation logic with 37 value and 13 overflow classifications;
+this does not establish that the exact checked-i64 JSON was executed in CMake.
+Local Clang 17 and CMake verified the signal status `Illegal instruction`
+for a synthetic C `__builtin_trap()` process and checked both expected
+true/false control statuses using synthetic C, **not** Oreslang code.
+
+The local environment has no LLVM development CMake configuration and lacks
+the private native compiler checkout, so no actual `oreslang-llvmc` build or
+native AttoLang guest execution took place locally. Source-org Actions
+continue to fail with zero executed steps; do not mark guest parity passed.
