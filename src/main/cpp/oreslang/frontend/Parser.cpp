@@ -2511,8 +2511,13 @@ private:
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
-                    if (accept(";")) {
-                        if (!accept("then")) require("do"); statement.then_statements = branch_arm(false, true);
+                    // Preserve legacy "; do"/"; then" arms while admitting
+                    // canonical "if condition then ... fi" without a semicolon.
+                    const bool semicolon_arm = accept(";");
+                    const bool canonical_then = !semicolon_arm && accept("then");
+                    if (semicolon_arm || canonical_then) {
+                        if (semicolon_arm && !accept("then")) require("do");
+                        statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
@@ -2839,10 +2844,12 @@ private:
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                const bool then_form = accept(";");
-                if (then_form) {
+                const bool semicolon_arm = accept(";");
+                const bool canonical_then = !semicolon_arm && accept("then");
+                const bool then_form = semicolon_arm || canonical_then;
+                if (semicolon_arm) {
                     if (!accept("then")) require("do");
-                } else {
+                } else if (!canonical_then) {
                     require("{");
                 }
                 if (accept("return")) {
