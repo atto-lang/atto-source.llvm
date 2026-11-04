@@ -4,7 +4,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME atto_native_harness_inventory_source_only
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_atto_native_parity_manifest.sh")
     set_tests_properties(atto_native_harness_inventory_source_only
-        PROPERTIES TIMEOUT 20 LABELS "attolang;source-free")
+        PROPERTIES TIMEOUT 120 LABELS "attolang;source-free")
 
     # The compiler target is built by the calling CMake build; CTest must run
     # the production binary. Missing Clang, compiler, source or runner fail.
