@@ -15,20 +15,19 @@ Java's canonical extension contract is
 prefer a present `.atto` before legacy `.ores`, with an explicit extension
 authoritative and no unsafe fallback through a nonregular canonical source.
 
-At this LLVM main-branch baseline,
-`ProjectRootImport.hpp::resolve_native_source_suffix` still rejects
-same-stem `.atto` plus `.ores` as ambiguous and can choose legacy `.ores`
-when `.atto` is absent. This **differs from Java's documented precedence**.
-Do not declare Java/LLVM import parity based on one happy-path compilation.
-The focused `.atto`-first precedence and invalid-leaf fix is staged
-in [LLVM #1416](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1416).
+LLVM `main` now includes the focused `.atto`-first import and
+invalid-canonical-leaf resolution fix from
+[LLVM #1416](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1416),
+merge commit `7352ae61ca3c5680e2a714566fa8906047b17c43`.
+This aligns the narrow suffix-selection policy with Java, but **does not yet
+prove executable compiler parity**: both native LLVM O0/O2 guests and Java
+linked JUnit cases still require real, independently executed receipts.
 The broader canonical-source work in
 [#1336](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1336)
 and canonical manifest work in
 [#1374](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1374)
-must be semantically reconciled, not overwritten with an older resolver.
-**This CTest now expects #1416's precedence behavior**, so run it on an
-integrated tree; an unmerged `main` baseline will reject the implicit twin.
+remain separate draft dependencies that must be semantically reconciled,
+not overwritten with an older resolver.
 
 ## Executable M0 evidence gate
 
