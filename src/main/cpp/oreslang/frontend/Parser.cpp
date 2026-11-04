@@ -1115,7 +1115,20 @@ private:
         const MacroKind kind = it->second;
         if (kind == MacroKind::ConstIntQuote) {
             require_macro("const");
-            auto argument = expression();
+            // Ordinary expressions stop at parser depth 64. A const-input
+            // expression must admit *64 AST edges* as well as its enclosing
+            // macro syntax, so allow a small, bounded parser margin here.
+            // The const evaluator still enforces depth 64 / 512 visits.
+            struct MacroConstParseScope {
+                std::size_t& depth;
+                explicit MacroConstParseScope(std::size_t& value) : depth(value) { ++depth; }
+                ~MacroConstParseScope() { --depth; }
+            };
+            std::unique_ptr<Expression> argument;
+            {
+                MacroConstParseScope scope(macro_const_parse_depth_);
+                argument = expression();
+            }
             require_macro(")");
             const std::int64_t constant = macro_const_int(*argument);
             auto result = make_expression(Expression::Kind::Integer, offset);
@@ -2721,9 +2734,12 @@ private:
     std::unique_ptr<Expression> expression() { return conditional(); }
 
     std::unique_ptr<Expression> conditional() {
-        if (++conditional_depth_ > kMaxNativeExpressionDepth) {
+        const std::size_t parser_limit = macro_const_parse_depth_ != 0
+                ? kMaxNativeExpressionDepth + 16 : kMaxNativeExpressionDepth;
+        if (++conditional_depth_ > parser_limit) {
             --conditional_depth_;
-            fail("native conditional expression nesting limit exceeded (64)");
+            fail("native conditional expression nesting limit exceeded ("
+                 + std::to_string(parser_limit) + ")");
         }
         struct ConditionalDepthGuard {
             std::size_t& depth;
@@ -2853,9 +2869,12 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
-        if (++expression_depth_ > kMaxNativeExpressionDepth) {
+        const std::size_t parser_limit = macro_const_parse_depth_ != 0
+                ? kMaxNativeExpressionDepth + 16 : kMaxNativeExpressionDepth;
+        if (++expression_depth_ > parser_limit) {
             --expression_depth_;
-            fail("native expression nesting limit exceeded (64)");
+            fail("native expression nesting limit exceeded ("
+                 + std::to_string(parser_limit) + ")");
         }
         struct DepthGuard {
             std::size_t& depth;
@@ -4862,6 +4881,7 @@ private:
     std::string extension_method_name_;
     std::size_t extension_offset_ = 0;
     bool actor_threads_enum_seen_ = false;
+    std::size_t macro_const_parse_depth_ = 0;
     std::size_t expression_depth_ = 0;
     std::size_t conditional_depth_ = 0;
 };
