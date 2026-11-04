@@ -33,7 +33,7 @@ while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
     die "missing or symlinked .atto source: $id"
   positive_ids+=("$id"); positive_paths+=("$path"); expected_exits+=("$expected")
 done < "$manifest"
-[[ "${#positive_ids[@]}" -eq 16 ]] || die "expected 16 admitted native scalar cases"
+[[ "${#positive_ids[@]}" -eq 17 ]] || die "expected 17 admitted native scalar cases"
 
 while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
   [[ "$id" == \#* || -z "$id" ]] && continue
@@ -47,16 +47,19 @@ while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
   negative_ids+=("$id"); negative_paths+=("$path"); diagnostic_needles+=("$needle")
 done < "$negative_manifest"
 [[ "${#negative_ids[@]}" -eq 3 ]] || die 'expected exactly three negative fixtures'
+[[ -f "$corpus/positive/.atto.pkg.toml" && ! -L "$corpus/positive/.atto.pkg.toml" ]] ||
+  die 'canonical package manifest is absent or symlinked'
 [[ -f "$corpus/positive/module-helper.atto" &&
    ! -L "$corpus/positive/module-helper.atto" ]] || die 'missing .atto module dependency'
 for path in "$manifest" "$negative_manifest" \
+    "$corpus/positive/.atto.pkg.toml" \
     "$corpus/positive/module-helper.atto" \
     "${positive_paths[@]/#/$corpus/}" "${negative_paths[@]/#/$corpus/}"; do
   [[ -f "$path" && ! -L "$path" ]] || die "nonregular source: $path"
 done
 
 if [[ "$mode" == --inventory-only ]]; then
-  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=16 negative=3 (NO_COMPILER_EXECUTION)'
+  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=17 negative=3 (NO_COMPILER_EXECUTION)'
   exit 0
 fi
 [[ -x "$compiler" && ! -L "$compiler" ]] || die "missing non-symlink executable compiler: $compiler"
@@ -68,6 +71,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 declare -A original_hash=()
 for path in "$manifest" "$negative_manifest" \
+    "$corpus/positive/.atto.pkg.toml" \
     "$corpus/positive/module-helper.atto" \
     "${positive_paths[@]/#/$corpus/}" "${negative_paths[@]/#/$corpus/}"; do
   original_hash["$path"]="$(sha256sum "$path" | cut -d ' ' -f1)"
@@ -159,4 +163,4 @@ for path in "${!original_hash[@]}"; do
     die "guest source/manifest mutated during compiler execution: $path"
 done
 
-printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=16|optimizations=2|negative=5|guest_receipt_protocol=UNSUPPORTED\n'
+printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=17|optimizations=2|negative=5|guest_receipt_protocol=UNSUPPORTED\n'
