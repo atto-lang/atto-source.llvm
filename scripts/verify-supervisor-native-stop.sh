@@ -35,7 +35,7 @@ includes="-Isrc/main/cpp"
 
 # Compile and execute both the production CONTROL lane and the separate
 # opt-in, typed source STOP-only policy against the actual native host runtime.
-for testcase in supervisor_control_turn_test native_supervisor_stop_only_source_test; do
+for testcase in supervisor_control_turn_test native_supervisor_stop_only_source_test native_supervisor_stop_only_lexical_test; do
   source_file="tests/$testcase.cpp"
   clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
     -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
@@ -50,5 +50,5 @@ for testcase in supervisor_control_turn_test native_supervisor_stop_only_source_
   echo "SUPERVISOR_NATIVE_STOP_TEST=PASS case=$testcase"
 done
 
-# PASS only after all four production-header executables returned zero.
-echo "SUPERVISOR_NATIVE_STOP_EXACT_HEAD=PASS sha=$actual cases=2 clang_asan_ubsan=PASS gcc_o2=PASS"
+# PASS only after all six executable invocations returned zero.
+echo "SUPERVISOR_NATIVE_STOP_EXACT_HEAD=PASS sha=$actual cases=3 clang_asan_ubsan=PASS gcc_o2=PASS"
