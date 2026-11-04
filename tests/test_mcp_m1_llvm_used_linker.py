@@ -24,6 +24,8 @@ def verify_read_only(binary):
         raise AssertionError(f'descriptor must be retained once in read-only allocated ELF section: {matching}')
 
 def main():
+    if not __debug__:
+        raise SystemExit('INVALID_TEST_ENVIRONMENT: Python -O disables assertions')
     if not shutil.which('clang') or not shutil.which('objcopy') or not shutil.which('readelf'):
         raise SystemExit("NOT_EXECUTED: clang or objcopy missing")
     payload=''.join(f'\\{b:02X}' for b in PAYLOAD)
@@ -42,6 +44,19 @@ define i32 @main() {{ ret i32 0 }}
         blob=root/'payload.bin'
         execute(['objcopy','--dump-section',f'.atto.mcp.v1={blob}',exe])
         assert blob.read_bytes()==PAYLOAD
+        # Negative mutation: a writable descriptor section must fail admission.
+        # This test ensures read-only verification is not merely a no-op.
+        writable_ir=root/'writable.ll'
+        writable_ir.write_text(ir.replace(' = constant [',' = global ['))
+        writable=root/'writable'
+        execute(['clang','-x','ir','-O2','-fdata-sections',
+                 writable_ir,'-Wl,--gc-sections','-o',writable])
+        try:
+            verify_read_only(writable)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('writable descriptor section falsely accepted')
     print('Source-free llvm.used ELF --gc-sections linker-retention canary PASS')
 
 if __name__=='__main__': main()
