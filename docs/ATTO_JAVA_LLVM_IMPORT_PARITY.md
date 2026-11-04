@@ -20,11 +20,15 @@ At this LLVM main-branch baseline,
 same-stem `.atto` plus `.ores` as ambiguous and can choose legacy `.ores`
 when `.atto` is absent. This **differs from Java's documented precedence**.
 Do not declare Java/LLVM import parity based on one happy-path compilation.
-The staged canonical-source work in LLVM
+The focused `.atto`-first precedence and invalid-leaf fix is staged
+in [LLVM #1416](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1416).
+The broader canonical-source work in
 [#1336](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1336)
-and manifest work in
+and canonical manifest work in
 [#1374](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1374)
 must be semantically reconciled, not overwritten with an older resolver.
+**This CTest now expects #1416's precedence behavior**, so run it on an
+integrated tree; an unmerged `main` baseline will reject the implicit twin.
 
 ## Executable M0 evidence gate
 
@@ -35,12 +39,13 @@ must be semantically reconciled, not overwritten with an older resolver.
    imported `math.atto` and requires generated LLVM IR.
 2. Uses Clang at both `-O0` and `-O2`; each native executable must exit 42
    with empty stdout/stderr.
-3. Repeats with explicit `math.atto` import while a conflicting same-name
-   legacy `.ores` file exists, ensuring explicit canonical selection.
-4. Requires missing, invalid, and directory-masquerading canonical
-   dependencies to be rejected *without emitting any LLVM IR*.
+3. Repeats with **both explicit and extensionless** `math.atto` imports
+   while a same-name legacy `.ores` returns 17. Canonical `.atto` must
+   execute and return 42 in both cases.
+4. Requires missing, invalid, directory-masquerading, and dangling-link
+   canonical dependencies to be rejected *without emitting any LLVM IR*.
 
-The gate does not execute Java, prove Java's competing implicit-import
+The gate does not execute Java, independently establish Java's implicit-import
 precedence, exercise actors/ownership/stdlib testing, or prove LLVM hard
 real-time or sanitizer safety.
 
