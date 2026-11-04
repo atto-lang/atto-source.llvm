@@ -46,6 +46,10 @@ int main() {
     allow(canonical + " /* outer /* nested */ outer */");
 
     for (const std::string& invalid : std::vector<std::string>{
+        "define supervisor actor as on_panic(f: Failure): void { self.stop(f); return; } end",
+        "define supervisor class as on_panic(f: Failure): void { self.stop(f); return; } end",
+        "define supervisor S as on_panic(match: Failure): void { self.stop(match); return; } end",
+        "define supervisor S as on_panic(actor: Failure): void { self.stop(actor); return; } end",
         "define supervisor S as on_panic(f: String): void { self.stop(f); return; } end",
         "define supervisor S as on_panic(f: Failure): int { self.stop(f); return; } end",
         "define supervisor S as on_panic(f: Failure): void { self.stop(other); return; } end",
@@ -83,7 +87,7 @@ int main() {
         canonical + " // comment" + std::string(1, '\0')
     }) reject(invalid);
 
-    if (admitted != 8 || denied != 30)
+    if (admitted != 8 || denied != 34)
         throw std::runtime_error("incomplete source admission test enumeration");
     std::cout << "NATIVE_STOP_SOURCE_LEXICAL=PASS accepted=" << admitted
               << " denied=" << denied << '\n';
