@@ -21,6 +21,24 @@ receipt_line="$(gate_line "printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|")"
 
 unique() { [[ "$(count "$1")" -eq 1 ]] || die "expected exactly one: $1"; }
 unique 'name: AttoLang LLVM native harness executable parity (O0 O2)'
+# The checked-in AttoLang source must byte-match the compiler-owned
+# embedded canonical library; host or symlink fallback cannot substitute it.
+python3 - "$root/stdlib/testing_m1.atto" \
+  "$root/src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp" <<'PY'
+from pathlib import Path
+import sys
+source, header = (Path(p) for p in sys.argv[1:])
+if not source.is_file() or source.is_symlink() or not header.is_file() or header.is_symlink():
+    raise SystemExit("M1 compiler source is absent or symlinked")
+text = header.read_text()
+start, end = 'R"ATTO_M1(', ')ATTO_M1";'
+if text.count(start) != 1 or text.count(end) != 1:
+    raise SystemExit("missing or duplicated compiler-owned M1 source")
+embedded = text.split(start, 1)[1].split(end, 1)[0]
+if embedded != source.read_text():
+    raise SystemExit("compiler-owned M1 source drift")
+PY
+
 unique '  atto-native-executable:'
 unique 'Checkout exact source head without persistent credentials'
 unique 'Bind exact commit and tree'
@@ -32,11 +50,11 @@ unique 'Execute 40 actual .atto guests at Clang O0 and O2'
 unique 'Assert unchanged source and exact head after execution'
 unique 'Preserve host-observed native evidence (not ORES_TEST guest receipts)'
 unique 'bash tests/atto_native_harness_parity.sh --run'
-unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=8|optimizations=2|native=16|testkit=BOUNDED_TWO_CASES'
+unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=13|optimizations=2|native=26|testkit=PARTIAL_M1'
 [[ "$(grep -Ec "^          test .*ATTO_LLVM_NATIVE_HOST_OBSERVED.*-eq 80$" "$workflow")" -eq 1 ]] ||
   die 'native scalar guest count is not 80'
 unique "grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|'"
-[[ "$(grep -Ec '^          test .*ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED.*-eq 16
+[[ "$(grep -Ec '^          test .*ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED.*-eq 26
 unique "tests/atto_native_guest_receipts.sh"
 unique "tests/verify_atto_guest_receipts.py"
 unique 'ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"'
@@ -139,7 +157,7 @@ if [[ "$#" -eq 0 ]]; then
 fi
 echo 'PASS LLVM canonical .atto workflow source-only admission (seven adversarial mutations)'
  "$workflow")" -eq 1 ]] ||
-  die 'expected exactly 16 compiled native guest receipt executions'
+  die 'expected exactly 26 compiled native guest receipt executions'
 unique "tests/atto_native_guest_receipts.sh"
 unique "tests/verify_atto_guest_receipts.py"
 unique 'ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"'
