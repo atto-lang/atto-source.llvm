@@ -41,6 +41,7 @@ struct Expression {
         Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
         Add, Subtract, Multiply, Remainder,
+        ShiftLeft, ShiftRight, ShiftUnsignedRight,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
