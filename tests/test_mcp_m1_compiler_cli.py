@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -17,6 +18,8 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--compiler',required=True,type=Path)
     args=parser.parse_args()
+    if not __debug__:
+        raise SystemExit('INVALID_TEST_ENVIRONMENT: Python -O disables assertions')
     if not args.compiler.is_file():
         raise SystemExit('NOT_EXECUTED: compiled LLVM driver is missing')
     compiler=args.compiler.resolve()
@@ -32,9 +35,13 @@ def main():
         assert manifest['schema']=='atto.mcp.aot-descriptors.m1.v1'
         assert manifest['backend']=='llvm'
         assert manifest['retention']=='opt_in'
+        assert manifest['abi']=='atto.mcp.native.descriptor.v1'
+        assert manifest['generation_binding']=='host_runtime_required'
+        assert re.fullmatch(r'[0-9a-f]{16}',manifest['module_id'])
         assert manifest['executed_guest'] is False
         assert [(x['name'],x['arity']) for x in manifest['descriptors']]== [('add',2),('main',0)]
-        assert all(x['public'] is True and x['kind']=='function' and len(x['id'])==16 for x in manifest['descriptors'])
+        assert all(x['public'] is True and x['kind']=='function' and re.fullmatch(r'[0-9a-f]{16}',x['id']) for x in manifest['descriptors'])
+        assert len({x['id'] for x in manifest['descriptors']})==len(manifest['descriptors']), 'descriptor ID collision'
         assert 'hidden' not in result.stdout and 'pointer' not in result.stdout
         assert '/tmp/' not in result.stdout and 'password' not in result.stdout
         runs.append(manifest)
