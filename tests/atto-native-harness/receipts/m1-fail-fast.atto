@@ -1,4 +1,5 @@
 import module Run from "ores.std/testing/m1";
+import module Scalar from "ores.std/testing/scalar";
 import class TestCase from "ores.std/testing/m1.atto";
 import class TestSuite from "ores.std/testing/m1";
 import class RunSummary from "ores.std/testing/m1.ores";
@@ -9,12 +10,12 @@ pub routine main(): int {
   suite.fail_fast = true;
   let mut TestCase first = new TestCase();
   first.id = 1;
-  first.outcome = 0;
+  first.outcome = Scalar.expect_equal_int(20 + 22, 42);
   if Run.record(rt mut borrow suite, rt borrow first) != 0; then return 3; fi
   stdio.println("ORES_TEST|PASS|llvm-m1/fast/add|");
   let mut TestCase second = new TestCase();
   second.id = 2;
-  second.outcome = 1;
+  second.outcome = Scalar.expect_equal_int(41, 42);
   if Run.record(rt mut borrow suite, rt borrow second) != 1; then return 3; fi
   stdio.println("ORES_TEST|FAIL|llvm-m1/fast/subtract|expected=42");
   let mut TestCase not_run = new TestCase();

@@ -205,34 +205,36 @@ Four new guest programs (`bounded-pp`, `bounded-pf`, `bounded-fp`, `bounded-ff`)
 
 The focused runner now requires 40×2 = 80 native scalar executions plus 8×2 = 16 native receipt executions, **96 total**, and ten compiler-negative scenarios. Existing zero-step GitHub Actions jobs are still NOT_EXECUTED.
 
-### Follow-up: native parity source-gate repair (2026-11-04 UTC)
+### Atomic M1 state-container regression (authored)
 
-The current source-owned native harness expands to **40 scalar source fixtures at
-Clang O0/O2 (80 processes) plus 8 guest-owned receipt programs at O0/O2
-(16 processes), 96 required real native guest executions total**, and ten
-compiler-negative scenarios. The source-only harness, source registry and
-machine receipt verifier are distinct evidence classes.
+`m1-invariants.atto` tests invalid case identities, invalid outcomes, full selected-case quota, full filtered quota, and a halted suite. Every rejected call must return the specified code without mutating counters. It then restores valid state, records one genuine PASS and checks `RunSummary` and the native exit. Its O0/O2 gate adds two native executions, raising the authored total to **108** (80 scalar, 28 receipt) plus ten compiler-negative scenarios. The quota setup writes a test-owned mutable suite state directly and must not be mistaken for production admission or global isolation evidence.
 
-One duplicated tail in `tests/test_atto_native_workflow_contract.sh` had
-corrupted the quoted check for 16 receipt executions, repeated the source-only
-checker, and made the focused workflow's preflight unreliable. The repaired
-checker has one intact assertion, one completion path, and explicit duplicate
-detection. Its workflow change triggers now include the full compiler,
-runtime, test, stdlib and CMake source trees. This is not proof that GitHub
-Actions admitted a runner.
+## M1 scoped native TestCase/TestSuite ledger — 2026-11-03
 
-The fixed-corpus verifier is exercised through the **actual three-argument
-subprocess CLI** `OUTPUT_FILE SUITE OBSERVED_EXIT` for all 13 currently
-registered receipt kinds, including malformed summaries, wrong independent
-native exit, symlink/FIFO/nonregular/oversized files, invalid suite and
-invalid argument count, both normally and with Python optimization enabled.
-The test also independently checks ASCII line feeds, per-case event ordering
-and summary counts, to catch a verifier and guest using the same incorrect
-receipt oracle. The 40/6 reviewed manifest mappings are Git-blob pinned;
-changing fixtures requires an explicit reviewed hash update.
+The compiler now registers canonical `ores.std/testing/m1.atto`
+(and explicit `.ores` alias) from `stdlib/testing_m1.atto`. The
+source has three bounded scalar nominal classes: `TestCase` (integer
+identity, selected/skipped and outcome), `TestSuite` (counters and
+fail-fast state), and `RunSummary` (final counters). `should_run`
+and `record` distinguish PASS, FAIL, SKIP, FILTER and NOT_RUN
+without accepting invalid status or exceeding 1,024 admitted cases.
+`finish` rejects failed and no-executed suites.
 
-The repo-stored code and authored checks remain **SOURCE_ONLY / NOT_EXECUTED**
-until a stepful original-organization CI workflow actually runs the production
-compiler, mandatory no-GC LLVM IR auditor, Clang/native guests, native exit
-receipt verification and compiler negatives on one immutable source head.
-Do not promote on synthetic C, script inventory or zero-step CI evidence.
+The native test matrix retains **40 scalar .atto programs × two optimization
+levels = 80** plus **13 receipt guest .atto programs × two = 26**.
+Total **106 required native executable runs**, plus **10 compiler-negative
+admission scenarios**, with exact source SHA/tree and no-GC IR audit.
+The five M1 fixtures execute scalar assertion helpers before recording
+results and verify actual selected/skipped/fail-fast counts prior to
+printing guest-owned `ORES_TEST` lines. The existing four original
+and four concurrent bounded-receipt fixtures remain intact.
+
+**Evidence boundary:** These are authored changes only until the focused
+source-org Actions workflow completes with nonempty runner steps and
+compiler/Clang/LLVM IR, guest stdout and exit evidence. Source-only
+receipt mutation tests and parser/YAML readbacks cannot count as native
+execution. `ores.std/testing` without the `/m1` suffix remains
+explicitly unsupported, because a full Java-equivalent `TestBody`
+callable, dynamic `TestSuite` dispatcher, arbitrary string IDs and
+canonical escaping, nested suite model and actor TestKit are outstanding.
+No private-source export or unreviewed cross-organization carrier is authorized.

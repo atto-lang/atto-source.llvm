@@ -24,17 +24,24 @@ trap 'rm -rf -- "$tmp"' EXIT
 declare -A original_hash
 for source in "$corpus/pass.atto" "$corpus/fail.atto" "$corpus/multi-pass.atto" "$corpus/multi-fail.atto" \
     "$corpus/bounded_testkit.atto" "$corpus/bounded-pp.atto" "$corpus/bounded-pf.atto" \
-    "$corpus/bounded-fp.atto" "$corpus/bounded-ff.atto" "$runtime" "$verifier"; do
+    "$corpus/bounded-fp.atto" "$corpus/bounded-ff.atto" \
+    "$corpus/m1-pass.atto" "$corpus/m1-fail-fast.atto" "$corpus/m1-filter-skip.atto" \
+    "$corpus/m1-skipped.atto" "$corpus/m1-filtered.atto" "$corpus/m1-invariants.atto" \
+    "$root/stdlib/testing_m1.atto" "$root/src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp" \
+    "$runtime" "$verifier"; do
   [[ -f "$source" && ! -L "$source" ]] || die "source absent or symlinked: $source"
   original_hash["$source"]="$(sha256sum "$source" | cut -d' ' -f1)"
 done
 python3 "$verifier" --self-test
 PYTHONOPTIMIZE=2 python3 "$verifier" --self-test
-for kind in pass fail multi-pass multi-fail bounded-pp bounded-pf bounded-fp bounded-ff; do
+for kind in pass fail multi-pass multi-fail bounded-pp bounded-pf bounded-fp bounded-ff \
+    m1-pass m1-fail-fast m1-filter-skip m1-skipped m1-filtered m1-invariants; do
   source="$corpus/$kind.atto"
   expected=0
-  [[ "$kind" != fail && "$kind" != multi-fail && "$kind" != bounded-pf &&
-     "$kind" != bounded-fp && "$kind" != bounded-ff ]] || expected=1
+  case "$kind" in
+    fail|multi-fail|bounded-pf|bounded-fp|bounded-ff|m1-fail-fast|m1-skipped|m1-filtered)
+      expected=1 ;;
+  esac
   for level in 0 2; do
     ir="$tmp/$kind-O$level.ll"
     exe="$tmp/$kind-O$level.exe"
@@ -78,4 +85,4 @@ for source in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$source" | cut -d' ' -f1)" == "${original_hash["$source"]}" ]] ||
     die "guest input mutated during compiler execution: $source"
 done
-echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=8|optimizations=2|native=16|testkit=BOUNDED_TWO_CASES'
+echo 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=14|optimizations=2|native=28|testkit=PARTIAL_M1'

@@ -45,6 +45,9 @@ SUITES = {
         b"ORES_TEST|SUMMARY|total=1|passed=0|failed=0|skipped=1|filtered=0\n", 1),
     "m1-filtered": (
         b"ORES_TEST|SUMMARY|total=0|passed=0|failed=0|skipped=0|filtered=1\n", 1),
+    "m1-invariants": (
+        b"ORES_TEST|PASS|llvm-m1/contracts/atomic-recovery|\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
     "bounded-pp": (
         b"ORES_TEST|PASS|llvm-native/bounded/first|\n"
         b"ORES_TEST|PASS|llvm-native/bounded/second|\n"
@@ -116,9 +119,14 @@ def self_test() -> None:
             valid.replace(b"|passed=", b"|passed=9", 1),
             valid.replace(b"|failed=", b"|failed=9", 1),
             b"\n" + valid, valid.replace(b"\n", b"\r\n"),
-            valid.replace(b"llvm-native/", b"llvm-forged/", 1),
             valid.replace(b"|", b"\\u007c", 1),
         ]
+        # Add an identity mutation only when a case identity exists. An empty or
+        # filtered-only summary has no guest case ID to mutate.
+        if b"llvm-native/" in valid:
+            variants.append(valid.replace(b"llvm-native/", b"llvm-forged/", 1))
+        elif b"llvm-m1/" in valid:
+            variants.append(valid.replace(b"llvm-m1/", b"llvm-forged/", 1))
         if kind.startswith("bounded-"):
             variants += [
                 valid.replace(b"llvm-native/bounded/first", b"llvm-native/bounded/second", 1),
@@ -138,6 +146,8 @@ def self_test() -> None:
                 valid.replace(b"total=2", b"total=1", 1),
             ]
         for index, sample in enumerate(variants):
+            if sample == valid:
+                raise RuntimeError(f"ineffective mutation: {kind}/{index}")
             require_rejection(verify(sample, kind, code), f"{kind}/mutation-{index}")
         for wrong in (-1, 2, 124, 137, 255, 1 if code == 0 else 0):
             require_rejection(verify(valid, kind, wrong), f"{kind}/exit-{wrong}")

@@ -18,6 +18,7 @@ REVIEWED = {
     "pass", "fail", "multi-pass", "multi-fail",
     "bounded-pp", "bounded-pf", "bounded-fp", "bounded-ff",
     "m1-pass", "m1-fail-fast", "m1-filter-skip", "m1-skipped", "m1-filtered",
+    "m1-invariants",
 }
 
 
@@ -130,10 +131,10 @@ def main() -> None:
         invoke([str(output), "pass", "256"], 2, "invalid-exit")
         rejected += 1
 
-    if accepted != 13 or rejected != 86:
+    if accepted != 14 or rejected != 92:
         raise RuntimeError(f"wrong CLI probe counts: {accepted} accepted, {rejected} rejected")
     print(
-        "PASS LLVM guest receipt CLI SOURCE_ONLY accepted=13 rejected=86 "
+        "PASS LLVM guest receipt CLI SOURCE_ONLY accepted=14 rejected=92 "
         "(NO_COMPILER_OR_GUEST_EXECUTION)"
     )
 

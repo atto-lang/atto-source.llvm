@@ -1,0 +1,55 @@
+// Compiler-owned M1 TestSuite ledger must reject invalid descriptors and
+// quota exhaustion atomically, then permit a valid recovery operation.
+import module Run from "ores.std/testing/m1";
+import class TestCase from "ores.std/testing/m1";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase candidate = new TestCase();
+
+  // id 0 is invalid; never count this failure as a real test case.
+  if Run.record(rt mut borrow suite, rt borrow candidate) != -1; then return 3; fi
+  if suite.total != 0 || suite.passed != 0 || suite.failed != 0; then return 3; fi
+
+  candidate.id = 1;
+  candidate.outcome = 2;
+  if Run.record(rt mut borrow suite, rt borrow candidate) != -1; then return 3; fi
+  if suite.total != 0 || suite.passed != 0 || suite.failed != 0; then return 3; fi
+
+  // Exercise the explicit bounded total quota without looping 1024 times.
+  candidate.outcome = 0;
+  suite.total = 1024;
+  if Run.record(rt mut borrow suite, rt borrow candidate) != -2; then return 3; fi
+  if suite.total != 1024 || suite.passed != 0 || suite.failed != 0; then return 3; fi
+
+  // Filtered quota is checked independently from selected-case total.
+  suite.total = 0;
+  suite.filtered = 1024;
+  candidate.selected = false;
+  if Run.record(rt mut borrow suite, rt borrow candidate) != -2; then return 3; fi
+  if suite.filtered != 1024 || suite.total != 0 || suite.skipped != 0; then return 3; fi
+
+  // A halted suite must not count a late case.
+  suite.filtered = 0;
+  candidate.selected = true;
+  suite.halted = 1;
+  if Run.record(rt mut borrow suite, rt borrow candidate) != 4; then return 3; fi
+  if suite.total != 0 || suite.passed != 0 || suite.failed != 0; then return 3; fi
+
+  // Recovery: after restoring valid descriptor and live suite state, the
+  // same compiler-owned ledger must accept a genuine, independently checked
+  // passing case and finish with success.
+  suite.halted = 0;
+  if Run.record(rt mut borrow suite, rt borrow candidate) != 0; then return 3; fi
+  let mut RunSummary summary = new RunSummary();
+  val int status = Run.finish(rt borrow suite, rt mut borrow summary);
+  if status != 0 || summary.total != 1 || summary.passed != 1 ||
+     summary.failed != 0 || summary.skipped != 0 || summary.filtered != 0; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/contracts/atomic-recovery|");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0");
+  return 0;
+}
