@@ -479,6 +479,25 @@ def main():
                                       result.returncode, result.stdout[:150], result.stderr))
             passed += 1
 
+        # A lexically in-root extensionless path may still traverse a
+        # symlinked ancestor. Reject it BEFORE querying .atto/.ores children,
+        # even if the symlink points at an existing outside producer.
+        if hasattr(os, 'symlink'):
+            directory = root/'atto-preprobe-symlink-ancestor'; directory.mkdir()
+            outside = directory/'outside'; outside.mkdir()
+            (outside/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            owned = directory/'owned'; owned.mkdir()
+            (owned/'main.ores').write_text(
+                'import module Lib from "./alias/lib"; '
+                'pub fnc main():int{return 0;}')
+            (owned/'alias').symlink_to(outside, target_is_directory=True)
+            result = run([a.compiler, str(owned/'main.ores')])
+            if not result.returncode or result.stdout or 'native source symlink alias denied' not in result.stderr:
+                raise AssertionError(('preprobe symlinked ancestor',
+                                      result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+
         # A hardlink alias outside the graph is still ambiguous ownership.
         if hasattr(os, 'link'):
             directory=root/'atto-hardlink-outside-graph'; directory.mkdir()
