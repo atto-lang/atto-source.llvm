@@ -17,17 +17,17 @@ NEGATIVES = [
     ("removed bare async", "async fnc bad(): int { return 1; }",
      "'async' callable modifier removed"),
     ("critical and suspends", "pub critical suspends fnc bad(): int { return 1; }",
-     "'critical suspends' is forbidden"),
+     "E_CALLABLE_MODIFIERS"),
     ("suspends and critical", "pub suspends critical fnc bad(): int { return 1; }",
-     "'critical suspends' is forbidden"),
+     "E_CALLABLE_MODIFIERS"),
     ("critical routine and suspends",
      "pub critical suspends routine bad(): int { return 1; }",
-     "'critical suspends' is forbidden"),
+     "E_CALLABLE_MODIFIERS"),
     ("suspends routine and critical",
      "pub suspends critical routine bad(): int { return 1; }",
-     "'critical suspends' is forbidden"),
+     "E_CALLABLE_MODIFIERS"),
     ("missing critical lowering", "pub critical fnc bad(): int { return 1; }",
-     "critical declaration requires compiler lowering"),
+     "E_CRITICAL_UNSUPPORTED"),
     ("missing suspends lowering", "pub suspends fnc bad(): int { return 1; }",
      "suspends declaration requires"),
     ("unguarded critical block",
@@ -103,7 +103,7 @@ def main():
             fixture_bad = compile_case(
                 compiler, fixture_negative, fixture_dir / ("case" + suffix))
             if (fixture_bad.returncode != 1 or fixture_bad.stdout
-                    or "'critical suspends' is forbidden" not in fixture_bad.stderr):
+                    or "E_CALLABLE_MODIFIERS" not in fixture_bad.stderr):
                 raise AssertionError(
                     f"{suffix} fixture: compiler did not reject invalid modifier")
             require_no_artifacts(fixture_dir, "fixture negative", suffix)
