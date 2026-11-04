@@ -30,8 +30,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "428a983b6bac96e4922435ba3fcaccb574fccccf"
-          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "fa771f61cce5e86289ca6976c39a53a787bb9a82"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "8faf03140dcd9a83ba34bfbbbdfa7cd1670ac506"
+          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "e6f707ae7df3e1b13815d4fffddc560af7c42403"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
         shell: bash
