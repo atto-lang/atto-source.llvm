@@ -3,7 +3,7 @@
 //! This screens IR constructs. It says nothing about the linked runtime, dlopen
 //! or FFI closure, so a zero-GC release still needs separate linked-image evidence.
 
-use std::{env, fs, process};
+use std::{env, fs, io::Read, process};
 
 const MAX_IR_BYTES: u64 = 64 * 1024 * 1024;
 const FORBIDDEN_INTRINSICS: &[&str] = &[
@@ -119,11 +119,24 @@ fn audit_ir(text: &str) -> Result<(), String> {
 }
 
 fn audit_file(path: &str) -> Result<(), String> {
-    let size = fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
-    if size > MAX_IR_BYTES {
+    // Open once and bind checks to the opened descriptor. Metadata followed by
+    // fs::read(path) permits a path swap or file growth between the size check
+    // and the allocation. Read at most MAX+1 bytes even if the file grows.
+    let input = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let metadata = input.metadata().map_err(|e| format!("{path}: {e}"))?;
+    if !metadata.is_file() {
+        return Err("IR input must be a regular file".into());
+    }
+    if metadata.len() > MAX_IR_BYTES {
         return Err("IR input exceeds 64 MiB gate limit".into());
     }
-    let bytes = fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    input.take(MAX_IR_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() as u64 > MAX_IR_BYTES {
+        return Err("IR input grew beyond 64 MiB gate limit while reading".into());
+    }
     let text = String::from_utf8(bytes).map_err(|e| format!("{path}: not UTF-8: {e}"))?;
     audit_ir(&text)
 }
@@ -165,6 +178,33 @@ mod tests {
         ] {
             assert!(audit_ir(ir).is_err(), "admitted: {ir}");
         }
+    }
+
+    #[test]
+    fn file_reader_rejects_nonregular_and_oversized_inputs() {
+        use std::fs::{self, OpenOptions};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
+            .expect("clock").as_nanos();
+        let path = std::env::temp_dir()
+            .join(format!("atto-no-gc-audit-{}-{nonce}.ll", std::process::id()));
+        let created = OpenOptions::new().write(true).create_new(true)
+            .open(&path).expect("create isolated test file");
+        drop(created);
+        let name = path.to_str().expect("temp path UTF-8");
+        let result = audit_file(name);
+        assert!(result.is_ok(), "empty regular LLVM IR is valid: {result:?}");
+        let oversized = OpenOptions::new().write(true).open(&path).expect("open");
+        oversized.set_len(MAX_IR_BYTES + 1).expect("make sparse oversized file");
+        drop(oversized);
+        let result = audit_file(name);
+        assert!(result.unwrap_err().contains("64 MiB"));
+        fs::remove_file(path).expect("remove test file");
+
+        let dir = std::env::temp_dir();
+        let result = audit_file(dir.to_str().expect("temp dir UTF-8"));
+        assert!(result.is_err(), "directories must not be accepted as IR input");
     }
 
     #[test]
