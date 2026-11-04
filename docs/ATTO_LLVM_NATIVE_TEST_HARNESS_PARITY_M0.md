@@ -168,3 +168,21 @@ This is not Java's 40-case TestSuite parity: dynamic TestCase, TestSuite,
 ordered suite accounting, skip/filter/fail-fast and nested runners remain
 unsupported on LLVM. No execution pass is established until real runner
 steps and compiler/Clang execution logs exist.
+
+
+## Reconciled native parity gate — compiler-backed evidence required
+
+The newer LLVM suite authors **40 scalar .atto guests at O0/O2 (80 native
+executions)**, plus four independent guest-owned receipt suites at O0/O2
+(eight more), for **88 required executable runs**, and six compiler-negative
+admission scenarios. The host-verified per-optimization receipt marker is
+now emitted only after both O0/O2 guests and exact IR comparison succeed.
+
+The executable-parity workflow must cover compiler, runtime, CMake, stdlib,
+and test changes. The source-only workflow contract is a single complete
+shell script, guards the full 4-suite marker, validates all eight shell run
+blocks with `bash -n`, and adversarially rejects missing compiler/CMake
+trigger coverage. Both source manifest Git blob IDs are pinned so altering a
+valid-looking source path, expected exit, or diagnostic is a deliberate
+reviewed contract change. These checks do **not** establish native guest
+execution on zero-step Actions runners or Java TestKit parity.
