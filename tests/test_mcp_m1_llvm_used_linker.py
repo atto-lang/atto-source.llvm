@@ -37,26 +37,28 @@ define i32 @main() {{ ret i32 0 }}
         root=Path(d)
         ir_path=root/'probe.ll'
         ir_path.write_text(ir)
-        exe=root/'probe'
-        execute(['clang','-x','ir','-O2','-fdata-sections',ir_path,'-Wl,--gc-sections','-o',exe])
-        assert subprocess.run([str(exe)],capture_output=True).returncode==0
-        verify_read_only(exe)
-        blob=root/'payload.bin'
-        execute(['objcopy','--dump-section',f'.atto.mcp.v1={blob}',exe])
-        assert blob.read_bytes()==PAYLOAD
-        # Negative mutation: a writable descriptor section must fail admission.
-        # This test ensures read-only verification is not merely a no-op.
         writable_ir=root/'writable.ll'
         writable_ir.write_text(ir.replace(' = constant [',' = global ['))
-        writable=root/'writable'
-        execute(['clang','-x','ir','-O2','-fdata-sections',
-                 writable_ir,'-Wl,--gc-sections','-o',writable])
-        try:
-            verify_read_only(writable)
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError('writable descriptor section falsely accepted')
+        for optimization in ('-O0','-O2'):
+            exe=root/f'probe-{optimization[1:]}'
+            execute(['clang','-x','ir',optimization,'-fdata-sections',
+                     ir_path,'-Wl,--gc-sections','-o',exe])
+            assert subprocess.run([str(exe)],capture_output=True).returncode==0
+            verify_read_only(exe)
+            blob=root/f'payload-{optimization[1:]}.bin'
+            execute(['objcopy','--dump-section',f'.atto.mcp.v1={blob}',exe])
+            assert blob.read_bytes()==PAYLOAD
+            # Negative mutation: writable descriptors must fail at *both*
+            # optimization levels, not merely survive linker garbage collection.
+            writable=root/f'writable-{optimization[1:]}'
+            execute(['clang','-x','ir',optimization,'-fdata-sections',
+                     writable_ir,'-Wl,--gc-sections','-o',writable])
+            try:
+                verify_read_only(writable)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f'writable descriptor accepted at {optimization}')
     print('Source-free llvm.used ELF --gc-sections linker-retention canary PASS')
 
 if __name__=='__main__': main()
