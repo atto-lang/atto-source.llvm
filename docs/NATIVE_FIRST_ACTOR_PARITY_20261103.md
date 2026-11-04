@@ -17,8 +17,12 @@ would break host integrations, deterministic tests and cold VM behavior.
 This change introduces an explicit **opt-in** ready admission path:
 
 - `ores_native_actor_scheduler_spawn_ready()` creates one worker before
-  publishing a slot/generation ActorRef and waits for the real worker loop's
-  check-in receipt. First creation failure consumes no identity and can retry.
+  publishing a slot/generation ActorRef and waits for at least one real
+  worker-loop check-in receipt, with a 30-second POSIX condition-variable
+  deadline rather than an unbounded wait. It does **not** wait for unrelated
+  additional workers still starting. First creation/entry failure consumes no
+  actor identity and can retry. A late-entering worker remains scheduler-owned
+  until normal retirement; it is never detached or freed by a timeout.
 - `ores_native_vm_spawn_ready()` serializes VM retirement against the
   above startup and reference publication under the VM CONTROL lock.
 - `ores_native_vm_spawn_supervised_ready()` installs parentage only after
