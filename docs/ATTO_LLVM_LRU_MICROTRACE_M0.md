@@ -129,3 +129,31 @@ its 15/15 local tests passed at byte-identical Git blobs.
 
 An external private cross-organization mirror is *not* approved under the
 existing security hold; this change does not authorize or attempt one.
+
+## 2026-11-04 CTest JUnit test-directory path fix
+
+A real **source-free** CMake/CTest experiment exposed a deterministic
+receipt-path defect in the focused LLVM LRU workflow: CTest resolves
+`--output-junit` **relative to the directory selected by `--test-dir`**.
+Consequently, the previous invocation using
+`--test-dir build/atto-lru --output-junit build/atto-lru/lru-ctest.xml`
+would write to the nested
+`build/atto-lru/build/atto-lru/lru-ctest.xml`, while the verifier and artifact
+upload read `build/atto-lru/lru-ctest.xml`. An admitted, passing guest run
+could therefore be reported as a CI failure unrelated to compiler behavior.
+
+The corrected invocation uses
+`--test-dir build/atto-lru --output-junit lru-ctest.xml`.
+The verifier continues to consume `build/atto-lru/lru-ctest.xml`.
+`tests/test_atto_lru_ctest_path.py` independently configures a throwaway
+CMake project, executes a source-free CTest probe, and proves the output
+location. Local 2/2 tests passed against byte-identical blob
+`7d1518527e6b1b48df3794cde0630906ff4f897f`.
+The focused workflow watches and executes this test, while the existing
+workflow-contract suite has negative mutation cases that reject the old
+double-prefixed JUnit argument and removal of the path regression.
+
+This repairs a *test harness failure mode*, **not** GitHub runner admission,
+guest compiler execution, full seven-fixture LRU acceptance, or five-backend
+parity. Keep the production gate fail-closed until exact-head hosted jobs
+show nonempty executed steps and genuine native guest results.

@@ -14,6 +14,7 @@ REQUIRED=(
     'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"',
     "      - 'tests/atto_lru_junit_gate.py'",
     "      - 'tests/test_atto_lru_junit_gate.py'",
+    "      - 'tests/test_atto_lru_ctest_path.py'",
     "      - 'tests/contract.py'",
     "python3 tests/atto_lru_llvm_source.py",
     "cmake --build build/atto-lru --parallel 2 --target oreslang-llvmc",
@@ -21,9 +22,10 @@ REQUIRED=(
     "ctest --test-dir build/atto-lru -N",
     "atto_lru_hash_quotient atto_lru_probe_wrap",
     "atto_lru_slot_recycle atto_lru_recency_touch",
-    "--output-junit build/atto-lru/lru-ctest.xml",
+    "--output-junit lru-ctest.xml",
     "python3 tests/atto_lru_junit_gate.py build/atto-lru/lru-ctest.xml",
     "python3 -m unittest discover -s tests -p 'test_atto_lru_junit_gate.py' -v",
+    "python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_path.py' -v",
 
     "git diff --quiet --exit-code",
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
@@ -89,6 +91,16 @@ class WorkflowAdmission(unittest.TestCase):
     def test_native_toolchain_digest_must_be_rechecked(self):
         with self.assertRaisesRegex(ValueError, "missing"):
             verify(self.source.replace("sha256sum -c build/atto-lru/compiler-toolchain.sha256", "echo verified"))
+
+    def test_nested_ctest_junit_path_rejected(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            verify(self.source.replace("--output-junit lru-ctest.xml",
+                                       "--output-junit build/atto-lru/lru-ctest.xml"))
+
+    def test_report_path_proof_required(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            verify(self.source.replace("python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_path.py' -v",
+                                       "echo bypassed"))
 
     def test_failure_bypass_rejected(self):
         with self.assertRaisesRegex(ValueError, "bypass"):
