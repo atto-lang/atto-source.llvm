@@ -492,6 +492,7 @@ static void* carrier(void* raw) {
         recent_actor = i;
         ActorLane* lane = &s->actors[i];
         uint64_t payload = 0;
+        uint64_t original_mail_sequence = 0;
         OresNativeActorTerminalFailure failure = {0};
         OresNativeWakeTicket wake_ticket = {0};
         OresNativeWakeOutcome wake_outcome = ORES_NATIVE_WAKE_FAILED;
@@ -520,6 +521,8 @@ static void* carrier(void* raw) {
             --lane->wake_ready;
         } else {
             payload = lane->messages[lane->head];
+            original_mail_sequence = lane->mail_sequences[lane->head];
+            if (!original_mail_sequence) abort();
             if (++lane->head == s->per_actor_capacity) lane->head = 0;
             lane->queued--;
         }
@@ -548,6 +551,7 @@ static void* carrier(void* raw) {
         // Actor identity is authorized only by the physical execution claim.
         executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
         executing_claim = execution_claim;
+        executing_data_mail_sequence = kind == TURN_DATA ? original_mail_sequence : 0;
         executing_context = (OresNativeExecutionContext){
             .id = {s->domain, execution_id},
             .allocation = lane->allocation_domain,
@@ -565,6 +569,7 @@ static void* carrier(void* raw) {
         executing_wake = (OresNativeWakeTicket){0};
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
+        executing_data_mail_sequence = 0;
         executing_context = (OresNativeExecutionContext){0};
         executing = NULL;
 
