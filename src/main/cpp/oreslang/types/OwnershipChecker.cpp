@@ -390,10 +390,13 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             return;
         }
         case Expression::Kind::ArrayCall: {
+            // Independently prove the static named binding before observing
+            // ownership/loan state or evaluating any nested actual.
+            (void)native_array_argument_slots(expr);
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
             array_owner(*expr.left, locals, false);
-            if (expr.name != "get" || expr.arguments.size() != 1)
+            if (expr.name != "get")
                 reject(expr, "native Array<int> expression supports only get(index)");
             check_value(*expr.arguments[0], locals, functions);
             return;
@@ -698,6 +701,11 @@ void validate_i64_ownership(Program& program) {
             } else if (binding.name.rfind("$effect", 0) == 0 && binding.initializer &&
                     binding.initializer->kind == Expression::Kind::ArrayCall) {
                 const auto& call = *binding.initializer;
+                (void)native_array_argument_slots(call);
+                if (!call.left)
+                    reject(call, "native Array<int> mutation requires a named owner");
+                if (call.name != "add" && call.name != "set")
+                    reject(call, "native Array<int> effect supports only add(value) or set(index,value)");
                 array_owner(*call.left, locals, true);
                 for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
             } else if (!binding.task_await_name.empty()) {
@@ -1040,13 +1048,12 @@ void validate_i64_ownership(Program& program) {
             } else if (stmt.kind == Statement::Kind::Call) {
                 const Expression& call = *stmt.expression;
                 if (call.kind == Expression::Kind::ArrayCall) {
+                    (void)native_array_argument_slots(call);
                     if (!call.left)
                         reject(call, "native Array<int> mutation requires a named owner");
-                    array_owner(*call.left, state, true);
-                    const std::size_t arity = call.name == "add" ? 1 :
-                                              call.name == "set" ? 2 : 0;
-                    if (!arity || call.arguments.size() != arity)
+                    if (call.name != "add" && call.name != "set")
                         reject(call, "native Array<int> effect supports only add(value) or set(index,value)");
+                    array_owner(*call.left, state, true);
                     for (const auto& arg : call.arguments) check_value(*arg, state, functions);
                 } else if (call.kind == Expression::Kind::Call) {
                     check_call(call, state, functions);
