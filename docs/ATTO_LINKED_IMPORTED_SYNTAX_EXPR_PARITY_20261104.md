@@ -16,7 +16,7 @@ The native production parser already admits checked declarations of `Syntax<Expr
 
 `tests/native_module_imports.py` now has four additional **real compiler → LLVM IR → Clang → native guest 42** positive cases: imported identity(42), identity(40-producing call + 2), twice(21), and nested identity(twice(21)). The suite's existing harness removes source files before executing the compiled guest. Four added negatives require compiler rejection with **empty stdout (zero IR)**: runtime call duplication, variable duplication, signed-i64 overflow, and identity/wrong argument kind.
 
-These cases are authored, **not yet executed against a built compiler**. Source-level integration can still fail compilation or expose parser/ownership interactions. No JIT/AOT or five-backend PASS is claimed.
+These real compiler/guest cases are authored, **not yet executed against a built compiler**. An isolated C++17 reproduction of the AST move/literal-twice logic passed seven checks under **GCC and Clang with ASan/UBSan**; it is not the production LLVM compiler, compiler CTest, or linked guest. The targeted `llvm-smoke` [run 41886621399](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41886621399) was re-requested in the source organization and failed with **zero executed steps**. No JIT/AOT or five-backend PASS is claimed.
 
 ## Important remaining gaps
 
