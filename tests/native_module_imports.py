@@ -118,6 +118,17 @@ def main():
             'b.atto': 'import module Base from "./base.atto"; define module B as pub fnc answer():int{return Base.answer();} end',
             'base.atto': 'define module Base as pub fnc answer():int{return 21;} end',
         }, 42),
+        ('atto-canonical-package-marker', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.atto.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-canonical-package-explicit-legacy-source', {
+            'main.atto': 'import module Lib from "+/lib.ores"; pub fnc main():int{return Lib.answer();}',
+            '.atto.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 7;} end',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
     ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
@@ -206,6 +217,33 @@ def main():
             if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
                 raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
             passed += 1
+        # Canonical AttoLang package markers are admitted by the same
+        # compiler/loader as legacy markers. Dual names must fail before IR.
+        for name, manifests, diagnostic in (
+            ('atto-competing-package-markers',
+             {'.atto.pkg.toml': 'schema_version = "1"\n',
+              '.ores.pkg.toml': 'schema_version = "1"\n'},
+             'ambiguous AttoLang package root'),
+            ('atto-modern-invalid-schema',
+             {'.atto.pkg.toml': 'schema_version = "2"\n'},
+             'schema_version'),
+        ):
+            directory = root/name; directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}')
+            (directory/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            for marker, value in manifests.items():
+                (directory/marker).write_text(value)
+            before = set(directory.iterdir())
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode,
+                                      result.stdout[:150], result.stderr))
+            if set(directory.iterdir()) != before:
+                raise AssertionError((name, 'failed compile emitted side artifact'))
+            passed += 1
+
         # Project-root security failures must be compiler failures too, not
         # only host-resolver unit failures. Every case requires zero IR.
         directory = root/'atto-root-nested-package-boundary'; directory.mkdir()
