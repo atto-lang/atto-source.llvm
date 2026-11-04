@@ -4258,6 +4258,19 @@ if(BUILD_TESTING)
     set_tests_properties(native_macro_aot_admission_no_runtime_fallback
         PROPERTIES TIMEOUT 20)
 
+    # Cross-unit public macros are not linked by this stage-0 parser.
+    # Explicitly reject the exact physical two-module Java #2492 fixture;
+    # successful native return-42 must only be claimed after typed artifact
+    # owner/provenance linkage and true compiler-backed guest execution.
+    add_test(NAME native_macro_imported_public_unlinked_no_ir
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/import-consumer.atto"
+            "-DDIAGNOSTIC=NATIVE_IMPORTED_MACRO_LINKER_REQUIRED"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+    set_tests_properties(native_macro_imported_public_unlinked_no_ir
+        PROPERTIES TIMEOUT 25)
+
     # Exercise the actual compiler executable without adding a Python test
     # dependency. Rejection must exit 1, carry the dedicated diagnostic, and
     # emit no stdout/partial LLVM IR.
