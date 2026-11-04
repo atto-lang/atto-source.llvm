@@ -47,6 +47,11 @@ public:
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
         const fs::path submitted(path);
+        // A source filename is an explicit dialect boundary. Do not
+        // silently interpret arbitrary, extensionless or case-folded host
+        // filenames as the legacy language while accepting .atto sources.
+        if (submitted.extension() != ".atto" && submitted.extension() != ".ores")
+            throw std::runtime_error("native entry source must use .atto or .ores extension");
         const fs::path physical = fs::canonical(submitted);
         // A .atto alias of a physical .ores file must not silently change
         // extensionless import resolution to the legacy dialect (or vice versa).
