@@ -313,7 +313,10 @@ define module testing_m1 as
     if suite.total + suite.filtered > 0 && suite.last_id <= 0; then
       return 2;
     fi
-    if suite.halted != 0 && (!suite.fail_fast || suite.failed == 0); then
+    if suite.halted != 0 && (!suite.fail_fast || suite.failed != 1); then
+      return 2;
+    fi
+    if suite.fail_fast && suite.failed > 0 && suite.halted == 0; then
       return 2;
     fi
     result.total = suite.total;
