@@ -72,6 +72,56 @@ int main() {
         }), "Unicode whitespace-only native topic was admitted");
     }
 
+    // Direct native admission must be as strict as the C ABI: malformed UTF-8
+    // cannot create a topic, consume a sequence, or mutate queued deliveries.
+    NativeActorPubSubAdmission<std::string> utf8_strict(memberships, 2, 4);
+    for (const auto& bad : {
+            std::string("\x80"), std::string("\xc0\xaf"),
+            std::string("\xe2\x82"), std::string("\xed\xa0\x80"),
+            std::string("\xf4\x90\x80\x80"), std::string("\xff")}) {
+        bool invalid_topic = false;
+        try {
+            utf8_strict.define_topic(a.group_id(), bad,
+                NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 2);
+        } catch (const std::invalid_argument&) {
+            invalid_topic = true;
+        }
+        check(invalid_topic, "host bus admitted a malformed UTF-8 topic");
+    }
+    utf8_strict.define_topic(a.group_id(), "strict",
+        NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 2);
+    check(utf8_strict.subscribe(a.group_id(), "strict", 11, 1),
+          "strict UTF-8 subscription failed");
+    const auto utf8_first = utf8_strict.publish(
+        a.group_id(), "strict", 10, 1, std::string("h\xc3\xa9llo"));
+    check(utf8_first.sequence == 1 && utf8_first.accepted == 1,
+          "valid multilingual UTF-8 payload rejected");
+    for (const auto& bad : {
+            std::string("\x80"), std::string("\xc0\xaf"),
+            std::string("\xe2\x82"), std::string("\xed\xa0\x80"),
+            std::string("\xf4\x90\x80\x80"), std::string("\xff")}) {
+        bool invalid_payload = false;
+        try {
+            (void)utf8_strict.publish(a.group_id(), "strict", 10, 1, bad);
+        } catch (const std::invalid_argument&) {
+            invalid_payload = true;
+        }
+        check(invalid_payload, "host bus published malformed UTF-8 payload");
+    }
+    check(utf8_strict.queued_payload_bytes() == 6,
+          "rejected UTF-8 changed accepted queued bytes");
+    check(utf8_strict.try_read(a.group_id(), "strict", 11, 1).value()
+              == std::string("h\xc3\xa9llo"),
+          "UTF-8 rejection corrupted the preceding accepted payload");
+    const auto utf8_second = utf8_strict.publish(
+        a.group_id(), "strict", 10, 1, "valid");
+    check(utf8_second.sequence == 2 && utf8_second.accepted == 1,
+          "rejected UTF-8 consumed the topic-local sequence");
+    check(utf8_strict.try_read(a.group_id(), "strict", 11, 1).value()
+              == "valid", "valid payload after UTF-8 rejection lost");
+    check(utf8_strict.queued_payload_bytes() == 0,
+          "UTF-8 native validation leaked queued payload accounting");
+
     bus.define_topic(
             a.group_id(), "reliable",
             NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable,

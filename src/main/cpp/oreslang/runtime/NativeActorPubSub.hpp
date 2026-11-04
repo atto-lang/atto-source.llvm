@@ -18,6 +18,40 @@
 
 namespace oreslang::runtime {
 
+// Strict Unicode scalar UTF-8 validation shared by the trusted C++ topic
+// admission path. The C ABI already rejects these encodings, but direct
+// native bus users must not bypass the same portable contract.
+namespace detail {
+inline bool valid_pubsub_utf8(const std::string& value) noexcept {
+    std::size_t i = 0;
+    while (i < value.size()) {
+        const auto a = static_cast<unsigned char>(value[i++]);
+        if (a < 0x80u) continue;
+        std::size_t tails = 0;
+        std::uint32_t codepoint = 0;
+        std::uint32_t minimum = 0;
+        if (a >= 0xc2u && a <= 0xdfu) {
+            tails = 1; codepoint = a & 0x1fu; minimum = 0x80u;
+        } else if (a >= 0xe0u && a <= 0xefu) {
+            tails = 2; codepoint = a & 0x0fu; minimum = 0x800u;
+        } else if (a >= 0xf0u && a <= 0xf4u) {
+            tails = 3; codepoint = a & 0x07u; minimum = 0x10000u;
+        } else return false;
+        if (tails > value.size() - i) return false;
+        for (std::size_t n = 0; n < tails; ++n) {
+            const auto b = static_cast<unsigned char>(value[i++]);
+            if ((b & 0xc0u) != 0x80u) return false;
+            codepoint = (codepoint << 6) | (b & 0x3fu);
+        }
+        if (codepoint < minimum || codepoint > 0x10ffffu
+                || (codepoint >= 0xd800u && codepoint <= 0xdfffu))
+            return false;
+    }
+    return true;
+}
+} // namespace detail
+
+
 template<class T>
 struct NativeActorPubSubPayloadBytes final {
     static std::size_t size(const T&) noexcept { return sizeof(T); }
@@ -304,6 +338,14 @@ public:
                 group_id, publisher_id, publisher_generation))
             throw std::logic_error(
                 "publication requires live ActorGroup membership");
+
+        if constexpr (std::is_same_v<T, std::string>) {
+            // Reject malformed source buffers before freezing payloads or
+            // consuming topic sequences; C ABI and direct host calls agree.
+            if (!detail::valid_pubsub_utf8(value))
+                throw std::invalid_argument(
+                    "native pub-sub payload must contain valid UTF-8");
+        }
 
         const std::size_t payload_bytes =
             NativeActorPubSubPayloadBytes<T>::size(value);
@@ -605,6 +647,7 @@ private:
             DeliveryPolicy policy,
             std::size_t capacity) const {
         if (group_id == 0 || name.empty() || name.size() > 256
+                || !detail::valid_pubsub_utf8(name)
                 || unicode_whitespace_only(name)
                 || capacity == 0 || capacity > max_queue_capacity_)
             throw std::invalid_argument("invalid native pub-sub topic");
