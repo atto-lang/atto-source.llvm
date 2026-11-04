@@ -1,0 +1,3 @@
+// Runtime argument labels are case-sensitive (value != Value).
+fnc identity<foo=int>(foo value):int { return value; }
+pub fnc main():int { return identity<foo=int>(Value:42); }
