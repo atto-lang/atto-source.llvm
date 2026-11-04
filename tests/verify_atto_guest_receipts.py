@@ -148,6 +148,8 @@ def self_test() -> None:
             variants.append(valid.replace(b"llvm-native/", b"llvm-forged/", 1))
         elif b"llvm-m1/" in valid:
             variants.append(valid.replace(b"llvm-m1/", b"llvm-forged/", 1))
+        elif b"llvm-m2/" in valid:
+            variants.append(valid.replace(b"llvm-m2/", b"llvm-forged/", 1))
         if kind.startswith("bounded-"):
             variants += [
                 valid.replace(b"llvm-native/bounded/first", b"llvm-native/bounded/second", 1),
