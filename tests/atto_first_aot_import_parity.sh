@@ -67,6 +67,16 @@ end
 ORES
 compile_positive explicit_modern_with_legacy_shadow
 
+# Java parity: an extensionless import must prefer .atto when a legacy .ores
+# file with different guest behavior is also present.
+new_case implicit_modern_with_legacy_shadow main.atto
+cat > "$work/implicit_modern_with_legacy_shadow/math.ores" <<'ORES'
+define module Math as
+  pub fnc add(int n): int { return 17; }
+end
+ORES
+compile_positive implicit_modern_with_legacy_shadow
+
 new_case missing_dependency main.atto
 rm -- "$work/missing_dependency/math.atto"
 compile_negative missing_dependency
@@ -88,4 +98,15 @@ end
 ORES
 compile_negative nonregular_canonical
 
-echo "ATTO_FIRST_LLVM_AOT_GATE=4_EXECUTED_3_REJECTED"
+# Canonical presence includes dangling symlink directory entries; selecting
+# the shadowing .ores or chasing the symlink would be unsafe.
+if [[ "$(uname -s)" != "MINGW"* && "$(uname -s)" != "MSYS"* ]]; then
+  new_case dangling_modern_with_legacy_shadow main.atto
+  rm -- "$work/dangling_modern_with_legacy_shadow/math.atto"
+  ln -s "missing-canonical.atto" "$work/dangling_modern_with_legacy_shadow/math.atto"
+  cp -- "$fixtures/math.atto" "$work/dangling_modern_with_legacy_shadow/math.ores"
+  compile_negative dangling_modern_with_legacy_shadow
+  echo "ATTO_FIRST_LLVM_AOT_GATE=6_EXECUTED_4_REJECTED"
+else
+  echo "ATTO_FIRST_LLVM_AOT_GATE=6_EXECUTED_3_REJECTED_NO_SYMLINK_TEST"
+fi
