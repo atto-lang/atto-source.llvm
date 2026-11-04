@@ -6,9 +6,10 @@ executions NOT_EXECUTED until stepful CI** (2026-11-03).
 This independent branch is built **directly on the current LLVM `main` tree**
 (`040058c1750a049be43949c41f61a87d028e6ddc`). The base already
 contains `.atto` source suffix resolution, so these focused compiler
-semantic/ownership changes do **not** depend on the currently conflicting
-importer PR #1312. The earlier stacked experiment is PR #1392; this
-main-based branch supersedes its implementation for merge consideration.
+semantic/ownership changes do **not** depend on the importer history.
+GitHub confirms importer PR #1312 is **closed and merged** (merged on
+2026-11-03). The earlier stacked parity experiment, PR #1392, was closed
+unmerged and is superseded by main-based PR #1395.
 No code or Git tree has been copied outside the origin GitHub organization.
 
 ## What this changes
@@ -96,11 +97,10 @@ LLVM issue #159 and Java issue #963. A workflow with `steps=[]` is
 Java PR #2499 contains authored `E_CRITICAL_SUSPENDS_DECL`, share-move-only
 and restricted scalar protected-state diagnostics. Its authored tests have
 not executed because its private source-owned runner also lacks admission.
-This LLVM child adds AOT test candidates for the Copy subset, general non-Copy share denial, and the
+This LLVM main-based patch adds AOT test candidates for the Copy subset, general non-Copy share denial, and the
 critical/suspends parser negative contract; neither PR demonstrates
 guest parity until the runner executes.
 
 Keep the new main-based PR draft pending exact-head native test receipts,
-independent review, and the source-transfer/security incident hold. This
-branch is not blocked on #1312's parent ancestry, but real compiler proof is
-still required; no private code was transferred to another organization.
+independent review, and the source-transfer/security incident hold. PR #1312 is already merged; real compiler proof for PR #1395 is still
+required. No private code was transferred to another organization.
