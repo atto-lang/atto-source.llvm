@@ -3253,6 +3253,26 @@ if(BUILD_TESTING)
     add_test(NAME native_ores_vm_four_carrier_domains
         COMMAND oreslang-native-ores-vm-test)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # Java first-actor parity: real JNI-equivalent native worker check-in
+    # before ActorRef publication; metadata-only host spawn remains separate.
+    # Compile the ACTUAL NativeOresVM + NativeActorScheduler and inject the
+    # first pthread_create failure without polluting the production ABI.
+    add_executable(oreslang-native-vm-lazy-actor-parity-test
+        tests/native_vm_lazy_first_actor_admission_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-lazy-actor-parity-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-vm-lazy-actor-parity-test PRIVATE
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1)
+    target_link_libraries(oreslang-native-vm-lazy-actor-parity-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-lazy-actor-parity-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_lazy_first_actor_carrier_parity
+        COMMAND oreslang-native-vm-lazy-actor-parity-test)
+    set_tests_properties(native_vm_lazy_first_actor_carrier_parity PROPERTIES TIMEOUT 30)
+
     # Native scheduler cache-locality hint: bounded same-carrier reuse is
     # preempted by CONTROL and yields to competing actor lanes.
     add_executable(oreslang-native-actor-carrier-locality-test
