@@ -22,7 +22,9 @@ enum class CriticalStateAdmission : std::uint8_t {
     MissingContinuationFence,
     ScopeDenied,
     CriticalBodySuspension,
-    CriticalBodyIo
+    CriticalBodyIo,
+    CriticalBodyBlocking,
+    CriticalBodyFfi
 };
 
 struct CriticalStateCallback {
@@ -62,6 +64,13 @@ inline CriticalStateAdmission admit_critical_handle_state(
     // nonblocking effect summaries exist; do not accept carrier parking.
     if (callback.inferred.has(FunctionEffect::Io))
         return CriticalStateAdmission::CriticalBodyIo;
+    // A verified non-suspending critical body cannot park a carrier through
+    // blocking host APIs, nor hand control to unaudited foreign code. Neither
+    // is covered by the actor's logical turn or a continuation fence.
+    if (callback.inferred.has(FunctionEffect::Block))
+        return CriticalStateAdmission::CriticalBodyBlocking;
+    if (callback.inferred.has(FunctionEffect::Ffi))
+        return CriticalStateAdmission::CriticalBodyFfi;
     return CriticalStateAdmission::Accept;
 }
 
