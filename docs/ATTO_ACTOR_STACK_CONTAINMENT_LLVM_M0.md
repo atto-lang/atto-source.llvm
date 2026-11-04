@@ -46,3 +46,20 @@ cleanup-safe unwind, proper tail-call optimization for `fnc`/methods, actor
 generation and supervisor fences, low-stack native AOT execution, and a
 real two-actor process-survival test. Arbitrary host FFI/JIT native faults
 remain in a killable OS process/worker; no SIGSEGV recovery on carrier threads.
+
+## Native carrier typed failure M0 (host-only)
+
+The experimental `MultiActorCarrier` now recognizes
+`Outcome::stack_budget_exhausted` distinct from `complete`,
+`cooperate` and unknown outcomes. The failed actor's generation-fenced
+statistics retain the budget exhaustion reason, and its current turn is
+not counted complete. The worker runs its existing noexcept cancellation
+callback before terminal retirement; a sibling actor can then run on the
+same physical carrier.
+
+`native_actor_stack_budget_failure_host_only` tests those transitions
+with an explicit host-simulated budget failure. This is NOT a real
+compiler-backed `.atto` stack overflow; the LLVM compiler currently
+rejects recursive call graphs before generating IR. The callback ABI
+remains noexcept: an arbitrary C++ exception, SIGSEGV or native stack
+overflow is NOT this recoverable terminal status.

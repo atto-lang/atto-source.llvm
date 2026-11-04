@@ -96,6 +96,20 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 15)
 
     find_package(Threads REQUIRED)
+    # Native actor host-model A fails on an early typed stack budget and
+    # B succeeds later on the same carrier. NOT compiled .atto guest proof.
+    add_executable(oreslang-native-actor-stack-budget-model-test
+        tests/native_multi_actor_stack_budget_failure_test.cpp
+        src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp)
+    target_include_directories(oreslang-native-actor-stack-budget-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-stack-budget-model-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-stack-budget-model-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_stack_budget_failure_host_only
+        COMMAND oreslang-native-actor-stack-budget-model-test)
+    set_tests_properties(native_actor_stack_budget_failure_host_only PROPERTIES TIMEOUT 15)
+
     add_executable(oreslang-native-string-region-test
         tests/native_string_region_test.c src/main/cpp/oreslang/runtime/NativeStringRegion.c)
     target_include_directories(oreslang-native-string-region-test PRIVATE src/main/cpp)
