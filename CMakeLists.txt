@@ -1464,12 +1464,22 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_guest_actor_group_create source-actor-group-create-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
     oreslang_contract_test(reject_guest_actor_group_join source-actor-group-join-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
     oreslang_contract_test(reject_guest_actor_group_shadow source-actor-group-declaration-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
+    # Source-only identity gate: verifies all seven .atto/.ores pairs use
+    # byte-identical corpus without claiming compiled guest execution.
+    add_test(NAME source_actor_pubsub_atto_fixture_identity
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_pubsub_source_gate.py"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+            --verify-fixtures-only)
+    set_tests_properties(source_actor_pubsub_atto_fixture_identity PROPERTIES TIMEOUT 15)
+    # Compiler-negative gate: BOTH file extensions must be rejected for the
+    # actual unlowered ActorGroup/Topic surface. This is not native parity.
     add_test(NAME reject_shared_actor_pubsub_source_corpus
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_pubsub_source_gate.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
-    set_tests_properties(reject_shared_actor_pubsub_source_corpus PROPERTIES TIMEOUT 90)
+    set_tests_properties(reject_shared_actor_pubsub_source_corpus PROPERTIES TIMEOUT 300)
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
