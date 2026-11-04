@@ -44,7 +44,24 @@ def main() -> int:
                 encoding="utf-8",
             )
             annotated.append(source)
-        files = [atto, ores, bad, *annotated]
+        # Exact source-level observation fixtures. One is an already
+        # admitted native caught-throw guest, not an invented host policy.
+        caught = root / "caught_throw.atto"
+        caught.write_bytes(
+            (pathlib.Path(__file__).resolve().parent / "fixtures" /
+             "native-caught-throw-payload.ores").read_bytes()
+        )
+        possible_panic = root / "potential_panic.atto"
+        possible_panic.write_text(
+            "fnc compute(int divisor): int {\n"
+            "  return 11 % divisor;\n"
+            "}\n"
+            "pub fnc main(): int {\n"
+            "  return compute(2);\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        files = [atto, ores, bad, *annotated, caught, possible_panic]
         hashes = {path.name: digest(path) for path in files}
         original_names = sorted(path.name for path in root.iterdir())
 
@@ -70,6 +87,17 @@ def main() -> int:
         invalid = run("--analyze", str(bad))
         assert invalid.returncode == 1, (invalid.returncode, invalid.stderr)
         assert invalid.stdout == "", "invalid input must not emit LLVM IR"
+
+        for source, expected in ((caught, "throw_observed=1"),
+                                 (possible_panic, "panic_observed=1")):
+            result = run("--analyze", str(source))
+            assert result.returncode == 2, (
+                source.name, result.returncode, result.stderr
+            )
+            assert "compiler AST effect observations" in result.stderr
+            assert expected in result.stderr, result.stderr
+            assert "effects inconclusive" in result.stderr, result.stderr
+            assert result.stdout == "", "analysis observation leaked LLVM IR"
 
         for source in annotated:
             result = run("--analyze", str(source))
