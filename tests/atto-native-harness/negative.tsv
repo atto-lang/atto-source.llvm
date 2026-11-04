@@ -2,3 +2,5 @@
 unknown-function|negative/unknown-function.atto|unknown function
 invalid-syntax|negative/invalid-syntax.atto|oreslang-llvmc:
 missing-import|negative/missing-import.atto|cannot resolve native import
+std-scalar-legacy-suffix|negative/std-testing-scalar-legacy-suffix.atto|native ores.std package resolution remains unsupported
+std-scalar-unknown|negative/std-testing-scalar-unknown.atto|native ores.std package resolution remains unsupported
