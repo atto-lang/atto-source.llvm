@@ -8,6 +8,7 @@ on:
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/project_root_import_test.cpp'
       - 'tests/host_logical_source_unit_ids_test.cpp'
+      - 'tests/native_logical_source_id_guest.py'
       - 'tests/native_module_imports.py'
       - 'tests/contract.py'
       - 'tests/fixtures/numerics-atto-main.atto'
@@ -92,6 +93,7 @@ jobs:
             native_source_module_graph_execution \
             native_project_root_import_security \
             native_host_logical_source_ids_security \
+            native_host_logical_source_ids_linked_guest \
             numerics_atto_integer_guest \
             atto_shared_scalar_guest
           do
@@ -102,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build \
-            -R '^(native_source_module_graph_execution|native_project_root_import_security|native_host_logical_source_ids_security|numerics_atto_integer_guest|atto_shared_scalar_guest)$' \
+            -R '^(native_source_module_graph_execution|native_project_root_import_security|native_host_logical_source_ids_security|native_host_logical_source_ids_linked_guest|numerics_atto_integer_guest|atto_shared_scalar_guest)$' \
             --output-on-failure --timeout 180
       - name: Reverify source identity after tests
         shell: bash
