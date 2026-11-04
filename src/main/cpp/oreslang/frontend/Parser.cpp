@@ -594,6 +594,10 @@ public:
         Program program;
         while (token_.text == "import") {
             advance();
+            if (token_.text == "*")
+                fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: imported public compile-time "
+                     "macros require verified logical source-unit IDs and typed export "
+                     "provenance before LLVM IR; runtime fallback is forbidden");
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
             ModuleImport imported;
