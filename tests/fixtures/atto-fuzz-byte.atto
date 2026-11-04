@@ -1,0 +1,4 @@
+// A real LLVM guest scalar function, driven by a separately instrumented host stdin adapter.
+pub fnc fuzz_byte(int octet): int {
+  return octet + 1;
+}
