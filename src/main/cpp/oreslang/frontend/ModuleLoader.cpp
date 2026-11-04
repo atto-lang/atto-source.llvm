@@ -40,7 +40,10 @@ struct Unit {
 class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
-    std::size_t imported_macro_expansions = 0;
+    // The 128-expansion ceiling is per admitted consumer source unit,
+    // matching the per-unit Java macro expansion pass. A graph-global scalar
+    // would reject two independent units each using 128 permitted macros.
+    std::unordered_map<std::string, std::size_t> imported_macro_expansions_by_unit;
     std::unordered_map<std::string, std::size_t> paths;
     std::unique_ptr<frontend::NativeLogicalSourceAdmission> source_admission;
     bool owned, scalar_loop, host;
@@ -457,8 +460,12 @@ private:
             expr.imported_macro_const_argument != const_quote ||
             expr.arguments.size() != 1 || !expr.arguments[0])
             fail(unit, "NATIVE_MACRO_EXPANDER_REQUIRED: imported macro signature/argument unsupported");
-        if (++imported_macro_expansions > 128)
-            fail(unit, "NATIVE_MACRO_BUDGET: imported expansion count exceeds 128");
+        if (unit.logical_source_id.empty())
+            fail(unit, "NATIVE_MACRO_PROVENANCE: consumer source has no admitted logical identity");
+        auto& unit_expansions =
+            imported_macro_expansions_by_unit[unit.logical_source_id];
+        if (++unit_expansions > 128)
+            fail(unit, "NATIVE_MACRO_BUDGET: imported expansion count exceeds 128 per source unit");
         if (syntax_identity) {
             // Move the original caller AST exactly once: no duplicated
             // effects, mutable loans, captures, or additional evaluation.
