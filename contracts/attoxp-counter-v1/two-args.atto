@@ -1,3 +1,3 @@
-// AttoXP native LLVM guest candidate: exact exit 42, no host reference.
-pub fnc add(int left, int right): int { return left + right; }
+// LLVM scalar guest on the currently admitted x: int parameter spelling.
+pub fnc add(left: int, right: int): int { return left + right; }
 pub fnc main(): int { return add(40, 2); }

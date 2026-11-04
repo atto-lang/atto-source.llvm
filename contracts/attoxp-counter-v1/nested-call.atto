@@ -1,3 +1,3 @@
-// AttoXP nested pure-call LLVM guest, expected exit 42.
-pub fnc step(int current): int { return current + 1; }
+// Two nested source-level calls; LLVM compiler must execute guest returning 42.
+pub fnc step(current: int): int { return current + 1; }
 pub fnc main(): int { return step(step(40)); }
