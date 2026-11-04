@@ -255,6 +255,11 @@ def main():
                 '.atto.pkg.toml': 'schema_version = "1"\n',
                 'lib.ores': library,
             }, 'cannot resolve native project-root import'),
+            ('atto-canonical-duplicate-project-table', {
+                'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+                '.atto.pkg.toml': 'schema_version = "1"\n[project]\nname = "first"\n[project]\nroot = "."\n',
+                'lib.atto': library,
+            }, 'duplicate [project]'),
             ('atto-canonical-invalid-manifest', {
                 'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return 0;}',
                 '.atto.pkg.toml': 'schema_version = "999"\n',
