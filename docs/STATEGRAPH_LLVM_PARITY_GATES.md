@@ -82,3 +82,17 @@ negative budget guards, and conditional termination all must execute and exit
 42 with empty stdout/stderr on both compilers. This is not actor or generic
 StateGraph execution. The source uses `if ...; do`, which the current native
 LLVM parser admits; a source-only check does not establish runtime acceptance.
+
+## Native canonical conditional parser parity (November 3)
+
+`src/main/cpp/oreslang/frontend/Parser.cpp` now accepts the canonical
+`if condition then ... fi` spelling in both guarded-return and nested
+structured conditional arms, while preserving `if condition; do ... fi`
+and braced forms. The byte-identical positive fixture
+`contracts/stategraph-portability/shared-canonical-then.ores` has Git blob
+`ad42a13d1542d8df6215bff42d056a489015c842` in StateGraph, Java and
+LLVM and requires a native LLVM executable exiting 42 with no stdout/stderr.
+The negative fixture `tests/fixtures/stategraph-canonical-then-assignment-reject.ores`
+requires the compiler to reject `if x = y then` with a nonzero exit and
+zero emitted LLVM IR. **Parser source changes and authored tests have not yet
+been compiler-executed on the new LLVM head.**
