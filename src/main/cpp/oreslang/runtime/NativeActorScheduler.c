@@ -1249,6 +1249,18 @@ int ores_native_actor_scheduler_is_current_wake(
         return 0;
     return ores_native_actor_scheduler_is_current_actor(s, ticket.producer);
 }
+/* Request-local SourceTask resume may access its original scope only on the
+ * exact scheduler-issued continuation WAKE, with a successful READY outcome,
+ * and only while its producer actor remains RUNNING on this physical carrier.
+ * CANCELLED/FAILED, foreign callbacks and STOPPING cleanup fail closed. */
+int ores_native_actor_scheduler_is_current_ready_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!ores_native_actor_scheduler_is_current_wake(s, ticket)
+            || executing_wake_outcome != ORES_NATIVE_WAKE_READY)
+        return 0;
+    return ores_execution_owns_running(
+        &s->actors[ticket.producer.actor_slot].authority, executing_claim);
+}
 size_t ores_native_actor_scheduler_outstanding_wake_loans(
         OresNativeActorScheduler* s, OresNativeActorRef producer) {
     if (!s) return 0;
