@@ -4,6 +4,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Distinct V2 receipt symbols must not change the footprint of callers
+ * compiled against the frozen V1 struct. */
+_Static_assert(offsetof(OresNativePubSubPublishReceiptV2, sequence)
+                   >= sizeof(OresNativePubSubPublishReceipt),
+               "V2 receipt sequence overlaps the legacy V1 footprint");
+
 static void check(int condition) {
     if (!condition) abort();
 }
@@ -143,6 +149,25 @@ int main(void) {
         runtime, 1, "events", subscriber, &value)
         == ORES_NATIVE_PUBSUB_OK);
     check(value == 11);
+
+
+    /* Invalid publisher identities and NULL result pointers fail closed
+     * without reading an invalid actor's source heap or touching receipts. */
+    v2.sequence = UINT64_C(0xdeadbeef);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", foreign, 34, &v2)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(v2.sequence == UINT64_C(0xdeadbeef));
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 34, NULL)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", foreign, "bad", 3, &v2)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(v2.sequence == UINT64_C(0xdeadbeef));
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", publisher, "bad", 3, NULL)
+        == ORES_NATIVE_PUBSUB_INVALID);
 
     /* String topics share the same actor incarnation/membership fence. */
     check(ores_native_actor_pubsub_define_utf8_topic(
