@@ -2440,6 +2440,26 @@ private:
             if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
             auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
             local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
+            // Inferred const must work in a structured lexical block just as
+            // it does at the top level. Admit only a checked integer literal,
+            // so a class/generic alias or untyped expression cannot silently
+            // become i64. The normal scoped ownership checker then rejects
+            // attempts to reassign this immutable binding.
+            if (!mutable_slot && !mutable_referent &&
+                    token_.kind == Kind::Identifier) {
+                Lexer look = lexer_;
+                if (look.next().text == "=") {
+                    local->scalar_type = ScalarType::I64;
+                    local->name = identifier();
+                    require("=");
+                    local->initializer = expression();
+                    if (local->initializer->kind != Expression::Kind::Integer)
+                        fail("native inferred const requires a checked int literal initializer");
+                    require(";");
+                    statement.branch_local = std::move(local);
+                    return statement;
+                }
+            }
             if (accept("Array")) {
                 local->owner_mutable = mutable_slot ? explicit_mutable : mutable_referent;
                 require("<"); array_element(*local); require(">");

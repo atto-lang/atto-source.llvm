@@ -19,6 +19,7 @@ POSITIVE = (
     ("mixed-value-formals", "fnc add(x:int,int y):int{return x+y;}pub fnc main():int{return add(20,22);}", 42),
     ("grouped-type-first", "pub fnc main():int{int x=(2+3)*4;return x+22;}", 42),
     ("retired-symbols-in-comments", "pub fnc main():int{/* ^^ % ^ */return 42;} // ^^ % ^\n", 42),
+    ("branch-inferred-const", "pub fnc main():int{if(true){const x=7;return x*6;} fi return 0;}", 42),
 )
 NEGATIVE = (
     ("duplicate-formal", "fnc add(x:int,int x):int{return x;}pub fnc main():int{return add(20,22);}", "duplicate parameter"),
@@ -31,6 +32,8 @@ NEGATIVE = (
     ("i64-positive-overrange", "pub fnc main():int{return 9223372036854775808;}", "overflows signed 64-bit result"),
     ("i64-negative-overrange", "pub fnc main():int{return -9223372036854775809;}", "overflows signed 64-bit result"),
     ("no-bool-int-coercion", "pub fnc main():int{return true+2;}", None),
+    ("branch-inferred-const-rebind", "pub fnc main():int{if(true){const x=7;x=8;return x;} fi return 0;}", "assignment requires an unloaned mutable scalar slot"),
+    ("branch-inferred-nonliteral", "pub fnc main():int{if(true){const x=40+2;return x;} fi return 0;}", "native inferred const requires a checked int literal initializer"),
 )
 
 
@@ -61,16 +64,18 @@ def main():
             rc, ir, stderr = run_bounded([str(compiler), str(path)], work, timeout=25)
             require(rc == 0 and ir.startswith(b"; ModuleID") and stderr == b"",
                     name + " rejected by compiler: " + repr(stderr[:300]))
-            ll = work / "main.ll"
-            ll.write_bytes(ir)
-            native = work / "native"
-            rc, out, stderr = run_bounded([str(clang), "-O0", "-x", "ir",
-                                            str(ll), "-o", str(native)], work, timeout=30)
-            require(rc == 0 and native.is_file(),
-                    name + " rejected by Clang: " + repr(stderr[:300]))
-            rc, out, stderr = run_bounded([str(native)], work, timeout=10)
-            require((rc, out, stderr) == (expected, b"", b""),
-                    name + ": guest result not equal to " + str(expected))
+            for optimization in ("-O0", "-O2"):
+                suffix = optimization[1:]
+                ll = work / ("main-" + suffix + ".ll")
+                ll.write_bytes(ir)
+                native = work / ("native-" + suffix)
+                rc, out, stderr = run_bounded([str(clang), optimization, "-x", "ir",
+                                                str(ll), "-o", str(native)], work, timeout=30)
+                require(rc == 0 and native.is_file(),
+                        name + " " + optimization + " rejected by Clang: " + repr(stderr[:300]))
+                rc, out, stderr = run_bounded([str(native)], work, timeout=10)
+                require((rc, out, stderr) == (expected, b"", b""),
+                        name + " " + optimization + ": guest result not equal to " + str(expected))
         for name, source, diagnostic in NEGATIVE:
             work = root / name
             work.mkdir()
@@ -82,7 +87,7 @@ def main():
                     name + ": invalid source accepted or incorrect diagnosis: " + repr(stderr[:300]))
             require([f.name for f in work.iterdir()] == ["main.atto"],
                     name + ": denied compiler wrote an output artifact")
-    print(f"ATTO_LLVM_SCALAR_EDGES_GUEST_EXECUTED:{len(POSITIVE)} "
+    print(f"ATTO_LLVM_SCALAR_EDGES_GUEST_EXECUTED:{len(POSITIVE) * 2} "
           f"NEGATIVES_REJECTED:{len(NEGATIVE)}")
 
 

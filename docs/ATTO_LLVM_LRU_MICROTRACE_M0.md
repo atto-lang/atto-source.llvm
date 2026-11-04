@@ -98,9 +98,34 @@ error/failure/skipped children. Missing, symlinked, empty or oversized
 reports are denied. A passing JUnit gate still requires independent
 compiler/toolchain provenance.
 
-`tests/test_atto_lru_junit_gate.py` has 13 source-free positive/negative
-cases, including genuine disabled/notrun semantic variants. All 13 passed
+`tests/test_atto_lru_junit_gate.py` has 15 source-free positive/negative
+cases, including disabled/notrun and entity/DTD-denial variants. All 15 passed
 in a local Python run with byte-identical Git blob IDs:
-verifier `36dd4a5da525f171241287dd005b2f76693d1905`,
-tests `4820300f20a81778cde7f02af5c5368a362f6307`.
+verifier `645b44f3f4721fa62c6997a7096805a8692b4ff2`,
+tests `d40a5ab35df9bff245d2bd68694bd82df2422864`.
 These tests do NOT compile or execute AttoLang programs.
+
+## 2026-11-04 security audit: Python syntax, CI triggers, toolchain drift
+
+The previous `tests/test_atto_lru_workflow_contract.py` contained literal
+backslash-n sequences *outside* string literals in its `counts` dictionary,
+which is invalid Python syntax. This blocked that static test suite from
+ever running on an admitted runner. It is fixed. At the byte-identical
+GitHub blob `b9181d9c71683d186040f1d8fcb14b36c4f6bf6e`, 9/9
+host/static workflow mutation tests ran locally and passed. The focused
+workflow now triggers on modifications to its JUnit validator, JUnit
+regressions, and the shared native `tests/contract.py` compiler harness.
+A changed validator must not silently reuse stale CI evidence.
+
+The workflow fingerprints the built `oreslang-llvmc` compiler and resolved
+Clang binary before running the native CTests, then verifies both SHA-256
+digests after execution. This is toolchain drift detection, **not**
+independent compiler build provenance or protection from a malicious
+runner. The private source-owning organization still needs admitted
+nonzero Actions job steps and an independent reviewer; synthetic report
+tests and host static checks cannot be promoted to guest parity. The
+source-free JUnit verifier now rejects XML DTD/entity declarations and
+its 15/15 local tests passed at byte-identical Git blobs.
+
+An external private cross-organization mirror is *not* approved under the
+existing security hold; this change does not authorize or attempt one.

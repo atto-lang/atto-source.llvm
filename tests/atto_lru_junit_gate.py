@@ -27,7 +27,12 @@ def verify(path: Path) -> None:
             "missing or symlinked native CTest report")
     require(0 < path.stat().st_size <= 1024 * 1024,
             "empty or unbounded native CTest report")
-    root = ET.parse(path).getroot()
+    # CTest emits a simple DTD-free report. Reject XML entity/DTD tricks
+    # rather than relying on platform-dependent Expat expansion limits.
+    raw = path.read_bytes()
+    require(b"<!DOCTYPE" not in raw.upper() and b"<!ENTITY" not in raw.upper(),
+            "DTD/entities are forbidden in native CTest reports")
+    root = ET.fromstring(raw)
     require(root.tag == "testsuite", "unexpected CTest JUnit document root")
     require(root.attrib.get("tests") == "5", "incorrect JUnit declared test count")
     for attr in ("failures", "errors", "disabled", "skipped"):

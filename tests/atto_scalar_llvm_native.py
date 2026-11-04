@@ -123,22 +123,30 @@ def native_ir(ir):
     return ir.replace(old, b"define i32 @__atto_observed_os_wrapper(", 1)
 
 
-def link_native(clang, compiled_ir, work):
-    ir = work / "guest.ll"
-    obj = work / "guest.o"
+OPTIMIZATIONS = ("-O0", "-O2")
+
+
+def link_native(clang, compiled_ir, work, optimization):
+    require(optimization in OPTIMIZATIONS, "unreviewed LLVM optimization mode")
+    label = optimization[1:]
+    ir = work / ("guest-" + label + ".ll")
+    obj = work / ("guest-" + label + ".o")
     observer = work / "observer.c"
-    binary = work / "observed"
+    binary = work / ("observed-" + label)
+    # The guest IR is identical across modes; only Clang optimization differs.
     ir.write_bytes(native_ir(compiled_ir))
     observer.write_text(C_MAIN, encoding="ascii")
-    rc, out, err = execute([str(clang), "-O0", "-Wno-override-module",
+    rc, out, err = execute([str(clang), optimization, "-Wno-override-module",
                              "-x", "ir", str(ir), "-c", "-o", str(obj)], work)
     require(rc == 0 and obj.is_file() and obj.stat().st_size > 0,
-            "Clang rejected compiler-emitted LLVM IR: " + repr(err[:512]))
-    rc, out, err = execute([str(clang), "-std=c11", "-O0", "-Wall",
+            "Clang rejected compiler-emitted LLVM IR at " + optimization +
+            ": " + repr(err[:512]))
+    rc, out, err = execute([str(clang), "-std=c11", optimization, "-Wall",
                              "-Wextra", "-Werror", str(observer), str(obj),
                              "-o", str(binary)], work)
     require(rc == 0 and binary.is_file() and binary.stat().st_size > 0,
-            "Clang could not link the native i64 observer: " + repr(err[:512]))
+            "Clang could not link the native i64 observer at " + optimization +
+            ": " + repr(err[:512]))
     return binary
 
 
@@ -152,9 +160,13 @@ def check(compiler, clang):
     data = load_corpus()
     compiler_sha = hashlib.sha256(compiler.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix="atto-llvm-i64-") as temporary:
-        work = Path(temporary)
+        root = Path(temporary)
         for case, bytes_ in data:
-            src = work / (case["id"] + ".atto")
+            # Isolate every case and optimization. Never accept a stale object
+            # or guest executable left over by a previous positive/negative.
+            work = root / case["id"]
+            work.mkdir(mode=0o700)
+            src = work / "main.atto"
             src.write_bytes(bytes_)
             rc, ir, diagnostic = execute([str(compiler), str(src)], work)
             kind = case["kind"]
@@ -163,17 +175,21 @@ def check(compiler, clang):
                         diagnostic == b"",
                         "positive compiler failed: " + case["id"] +
                         " " + repr(diagnostic[:512]))
-                native = link_native(clang, ir, work)
-                rc, observed, stderr = execute([str(native)], work, 10)
-                require((rc, observed, stderr) ==
-                        (0, (case["expected_i64"] + "\n").encode(), b""),
-                        "full signed-i64 native execution diverged: " + case["id"] +
-                        " " + repr((rc, observed[:80], stderr[:80])))
-                observations.append({"case": case["id"],
-                    "typed_i64": case["expected_i64"], "mode": "native-linked-i64",
-                    "source_git_blob": case["git_blob_sha1"],
-                    "llvm_ir_sha256": hashlib.sha256(ir).hexdigest(),
-                    "native_sha256": hashlib.sha256(native.read_bytes()).hexdigest()})
+                for optimization in OPTIMIZATIONS:
+                    native = link_native(clang, ir, work, optimization)
+                    rc, observed, stderr = execute([str(native)], work, 10)
+                    require((rc, observed, stderr) ==
+                            (0, (case["expected_i64"] + "\n").encode(), b""),
+                            "full signed-i64 native execution diverged: " +
+                            case["id"] + " " + optimization +
+                            " " + repr((rc, observed[:80], stderr[:80])))
+                    observations.append({"case": case["id"],
+                        "optimization": optimization[1:],
+                        "typed_i64": case["expected_i64"],
+                        "mode": "native-linked-i64",
+                        "source_git_blob": case["git_blob_sha1"],
+                        "llvm_ir_sha256": hashlib.sha256(ir).hexdigest(),
+                        "native_sha256": hashlib.sha256(native.read_bytes()).hexdigest()})
             else:
                 family = case["diagnostic_family"]
                 if family in ("removed-operator", "immutable-binding"):
@@ -184,31 +200,34 @@ def check(compiler, clang):
                 elif rc == 0:
                     require(ir.startswith(b"; ModuleID") and diagnostic == b"",
                             "overflow emitted malformed LLVM IR: " + case["id"])
-                    native = link_native(clang, ir, work)
-                    rc_guest, stdout, stderr = execute([str(native)], work, 10)
-                    # LLVM overflow lowering uses llvm.trap, not a normal
-                    # nonzero application return. Require a real native
-                    # termination signal; an arbitrary exit 1 is not proof.
-                    require(rc_guest in (-signal.SIGILL, -signal.SIGTRAP,
-                                         -signal.SIGABRT) and
-                            stdout == b"" and stderr == b"",
-                            "checked i64 overflow did not trap natively: " + case["id"] +
-                            " " + repr((rc_guest, stdout[:100], stderr[:100])))
+                    for optimization in OPTIMIZATIONS:
+                        native = link_native(clang, ir, work, optimization)
+                        rc_guest, stdout, stderr = execute([str(native)], work, 10)
+                        # A genuine guest trap is required in both O0 and O2.
+                        # An arbitrary nonzero exit code is not overflow proof.
+                        require(rc_guest in (-signal.SIGILL, -signal.SIGTRAP,
+                                             -signal.SIGABRT) and
+                                stdout == b"" and stderr == b"",
+                                "checked i64 overflow did not trap natively: " +
+                                case["id"] + " " + optimization + " " +
+                                repr((rc_guest, stdout[:100], stderr[:100])))
                 else:
                     require(rc == 1 and ir == b"" and
                             b"overflow" in diagnostic.lower(),
                             "overflow rejected without compiler-owned overflow diagnostic: " +
                             case["id"])
-        require(len(observations) == 10,
-                "missing native full i64 positive observations")
+        require(len(observations) == 20 and
+                len({x["case"] for x in observations}) == 10,
+                "missing native O0/O2 full-i64 positive observations")
     require(hashlib.sha256(compiler.read_bytes()).hexdigest() == compiler_sha,
             "compiler mutated during full-i64 verification")
     print(json.dumps({"status": "LLVM_NATIVE_I64_EXECUTED_LOCALLY",
         "compiled_guest_positives": 10, "negative_sources_checked": 9,
+        "native_positive_executions": 20,
+        "native_optimizations": ["O0", "O2"],
         "source_only": False, "independently_verified": False,
         "compiler_sha256": compiler_sha, "observations": observations},
         sort_keys=True))
-
 
 def main():
     p = argparse.ArgumentParser()

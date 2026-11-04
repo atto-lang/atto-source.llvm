@@ -5,6 +5,9 @@ on:
       - 'contracts/atto-lru-llvm-v1/**'
       - 'tests/atto_lru_llvm_source.py'
       - 'tests/test_atto_lru_workflow_contract.py'
+      - 'tests/atto_lru_junit_gate.py'
+      - 'tests/test_atto_lru_junit_gate.py'
+      - 'tests/contract.py'
       - 'src/main/cpp/oreslang/**'
       - 'CMakeLists.txt'
       - '.github/workflows/atto-lru-llvm-m0.yml'
@@ -65,8 +68,11 @@ jobs:
           cmake -S . -B build/atto-lru -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build/atto-lru --parallel 2 --target oreslang-llvmc
           test -x build/atto-lru/oreslang-llvmc
-          sha256sum build/atto-lru/oreslang-llvmc
-          sha256sum "$(command -v clang)"
+          # Fingerprints are captured before execution and rechecked afterward.
+          # They are provenance observations, not external trusted signing.
+          sha256sum build/atto-lru/oreslang-llvmc "$(command -v clang)" \
+            > build/atto-lru/compiler-toolchain.sha256
+          cat build/atto-lru/compiler-toolchain.sha256
 
       - name: Require complete CTest inventory without duplicates
         shell: bash
@@ -107,7 +113,9 @@ jobs:
           git diff --quiet --exit-code
           git diff --cached --quiet --exit-code
           python3 tests/atto_lru_llvm_source.py
+          sha256sum -c build/atto-lru/compiler-toolchain.sha256
           printf 'ATTO_LLVM_LRU_FINAL_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          echo "ATTO_LLVM_LRU_TOOLCHAIN_STABLE=PASS"
 
       - name: Preserve source-local observations
         if: always()
@@ -118,5 +126,6 @@ jobs:
             build/atto-lru/lru-ctest-inventory.txt
             build/atto-lru/lru-ctest.xml
             build/atto-lru/lru-native-execution.log
+            build/atto-lru/compiler-toolchain.sha256
           if-no-files-found: warn
           retention-days: 14

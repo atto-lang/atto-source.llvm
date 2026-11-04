@@ -12,8 +12,12 @@ REQUIRED=(
     "persist-credentials: false",
     "github.event.pull_request.head.sha || github.sha",
     'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"',
+    "      - 'tests/atto_lru_junit_gate.py'",
+    "      - 'tests/test_atto_lru_junit_gate.py'",
+    "      - 'tests/contract.py'",
     "python3 tests/atto_lru_llvm_source.py",
     "cmake --build build/atto-lru --parallel 2 --target oreslang-llvmc",
+    "sha256sum -c build/atto-lru/compiler-toolchain.sha256",
     "ctest --test-dir build/atto-lru -N",
     "atto_lru_hash_quotient atto_lru_probe_wrap",
     "atto_lru_slot_recycle atto_lru_recency_touch",
@@ -31,8 +35,13 @@ FORBIDDEN=(
 )
 
 def verify(source: str) -> None:
-    counts={\n        "github.event.pull_request.head.sha || github.sha": 3,\n        "python3 tests/atto_lru_llvm_source.py": 2,\n        "git diff --quiet --exit-code": 2,
-        'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"': 2,\n    }\n    if any(source.count(token)!=counts.get(token,1) for token in REQUIRED):
+    counts={
+        "github.event.pull_request.head.sha || github.sha": 3,
+        "python3 tests/atto_lru_llvm_source.py": 2,
+        "git diff --quiet --exit-code": 2,
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"': 2,
+    }
+    if any(source.count(token)!=counts.get(token,1) for token in REQUIRED):
         raise ValueError("missing or duplicated native workflow gate")
     if any(token in source for token in FORBIDDEN):
         raise ValueError("unsafe native workflow bypass")
@@ -68,6 +77,18 @@ class WorkflowAdmission(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing"):
             verify(self.source.replace("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
                                        "actions/checkout@v4"))
+
+    def test_junit_verifier_changed_requires_new_workflow_run(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            verify(self.source.replace("      - 'tests/atto_lru_junit_gate.py'", "      - 'tests/moved.py'"))
+
+    def test_contract_harness_change_requires_new_workflow_run(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            verify(self.source.replace("      - 'tests/contract.py'", ""))
+
+    def test_native_toolchain_digest_must_be_rechecked(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            verify(self.source.replace("sha256sum -c build/atto-lru/compiler-toolchain.sha256", "echo verified"))
 
     def test_failure_bypass_rejected(self):
         with self.assertRaisesRegex(ValueError, "bypass"):

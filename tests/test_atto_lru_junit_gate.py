@@ -91,6 +91,19 @@ class LruJunitReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "symlinked"):
             verify(self.output)
 
+    def test_doctype_entity_denied(self):
+        self.output.write_text(
+            '<!DOCTYPE testsuite [<!ENTITY danger "forge">]>'
+            '<testsuite tests="5"/>', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "DTD/entities"):
+            verify(self.output)
+
+    def test_lowercase_doctype_denied(self):
+        self.output.write_text(
+            '<!doctype testsuite><testsuite tests="5"/>', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "DTD/entities"):
+            verify(self.output)
+
     def test_malformed_xml_denied(self):
         self.output.write_text("<testsuite>")
         with self.assertRaises(ET.ParseError):
