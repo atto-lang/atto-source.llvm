@@ -76,6 +76,7 @@ template <class T> struct Cell final : CellBase {
 // checker: trivially-copyable host structs may still carry forbidden pointers.
 template <class T>
 std::size_t value_bytes(const T& value) noexcept {
+    (void) value; // fixed-size trivially-copyable specializations use sizeof(T)
     if constexpr (std::is_same_v<T, std::string>) return value.size();
     else if constexpr (std::is_trivially_copyable_v<T>) return sizeof(T);
     else return std::numeric_limits<std::size_t>::max();
