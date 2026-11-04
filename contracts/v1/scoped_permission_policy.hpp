@@ -31,6 +31,8 @@ struct ScopeRule {
 class ScopedPolicy final {
     static constexpr std::size_t count = 8;
     static constexpr std::size_t max_rules = 512;
+    static constexpr std::size_t max_ceiling_depth = 128;
+    std::size_t ceiling_depth_ = 0;
     std::array<bool, count> ceiling_{};
     std::array<std::vector<std::string>, count> allowed_{};
     std::array<std::vector<std::string>, count> denied_{};
@@ -235,11 +237,17 @@ public:
     // Effective authority is the intersection of the runtime policy and an
     // immutable build/host policy. Repeated bounding can only attenuate.
     ScopedPolicy bounded_by(const ScopedPolicy& ceiling) const {
+        // Cross-actor delegation and artifact/host intersection must not
+        // build an unbounded recursive policy chain. Match Java actor-scope
+        // 128-level admission: reject before allocating or descending.
+        if (ceiling_depth_ + ceiling.ceiling_depth_ >= max_ceiling_depth)
+            throw std::invalid_argument("permission ceiling depth exceeded");
         ScopedPolicy result = *this;
         ScopedPolicy combined = build_ceiling_
             ? ceiling.bounded_by(*build_ceiling_)
             : ceiling;
         result.build_ceiling_ = std::make_shared<ScopedPolicy>(std::move(combined));
+        result.ceiling_depth_ = ceiling_depth_ + ceiling.ceiling_depth_ + 1;
         return result;
     }
 

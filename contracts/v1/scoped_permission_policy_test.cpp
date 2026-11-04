@@ -317,5 +317,27 @@ int main() {
                 golden.expected, golden.id);
     }
 
+    // Actor/artifact attenuation is bounded to 128 immutable ancestry levels.
+    // A user-controlled spawn chain must not induce unbounded recursive policy checks.
+    const auto env_grant = make(Permission::Env,{scope(Permission::Env,"API_KEY")});
+    auto nested = env_grant;
+    for (std::size_t level = 0; level < 128; ++level) {
+        nested = nested.bounded_by(env_grant);
+        require(nested.allows(Permission::Env, "API_KEY"), true, "bounded ancestor preserves grant");
+        require(nested.allows(Permission::Env, "UNRELATED"), false, "bounded ancestor cannot widen");
+    }
+    bool denied_excess_depth = false;
+    try { (void)nested.bounded_by(env_grant); }
+    catch (const std::invalid_argument&) { denied_excess_depth = true; }
+    require(denied_excess_depth, true, "bounded ceiling rejects depth 129");
+    denied_excess_depth = false;
+    try { (void)env_grant.bounded_by(nested); }
+    catch (const std::invalid_argument&) { denied_excess_depth = true; }
+    require(denied_excess_depth, true, "trusted host cannot supply overdeep ceiling");
+    const auto env_deny = make(Permission::Env,{scope(Permission::Env,"*"),
+                                                 scope(Permission::Env,"API_KEY",true)});
+    auto attenuated = env_grant.bounded_by(env_deny);
+    require(attenuated.allows(Permission::Env,"API_KEY"),false,"ancestor explicit deny");
+
     std::cout << "NATIVE_SCOPED_PERMISSION_POLICY_SUBSTRATE_PASS checks=" << checks << "\n";
 }
