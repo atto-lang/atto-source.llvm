@@ -4,6 +4,7 @@
 // physical pthread TLS. Compiler-produced .atto source lowering, TaskLocal,
 // ActorLocal, and guest-visible capabilities are separate release gates.
 
+#include "oreslang/runtime/LocalValueAdmissionV1.hpp"
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/TaskCancellation.hpp"
 
@@ -50,10 +51,9 @@ inline std::uint64_t allocate_request_local_key_v1() {
 
 template <typename T>
 class RequestLocalKeyV1 final {
-    static_assert(std::is_copy_constructible_v<T>,
-                  "request local snapshots must be safely copyable");
-    static_assert(!std::is_pointer_v<T> && !std::is_reference_v<T>,
-                  "borrowed pointers/references are not request locals");
+    static_assert(local_value_allowed_v1<T>,
+                  "RequestLocal requires owned copyable values with "
+                  "nothrow cleanup; raw references and borrowed views denied");
 public:
     RequestLocalKeyV1() : id_(allocate_request_local_key_v1()) {}
     RequestLocalKeyV1(const RequestLocalKeyV1&) = default;
