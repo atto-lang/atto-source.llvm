@@ -379,7 +379,11 @@ enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 struct ActorDecl {
     std::string name;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
-    Function on_message; // exactly one synchronous pub on_message(int): int
+    // Narrow native sealed-state ABI: all fields remain actor-owned i64
+    // heap slots and the synchronous critical handler holds the whole turn.
+    // This does not admit arbitrary state types, suspend or nested regions.
+    bool sealed_scalar_state = false;
+    Function on_message; // on_message or sealed critical handle_state
     std::size_t offset = 0;
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
 };
