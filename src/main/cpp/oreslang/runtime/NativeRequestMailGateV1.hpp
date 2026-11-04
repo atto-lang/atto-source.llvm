@@ -75,7 +75,12 @@ public:
     std::optional<T> get_copy(const OresExecutionClaim& current,
                               const RequestLocalKeyV1<T>& key) const {
         if (!authorized(current)) return std::nullopt;
-        return request_->get_copy(key);
+        auto snapshot = request_->get_copy(key);
+        // STOP may race the copy-out. The request store rechecks request
+        // cancellation; this second gate also rechecks physical actor phase
+        // and original-mail provenance before publishing a snapshot.
+        if (!snapshot || !authorized(current)) return std::nullopt;
+        return snapshot;
     }
 
     template <typename T>
