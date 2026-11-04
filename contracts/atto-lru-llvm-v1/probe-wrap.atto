@@ -1,0 +1,14 @@
+// LLVM LRU prerequisite: colliding hash slots and circular probing.
+pub routine main(): int {
+  val Array<int> buckets = new Array<int>();
+  for (let int i = 0; i < 5; i = i + 1) {
+    buckets.add(0);
+  }
+  let int first = 9 - (9 / 5) * 5;
+  buckets.set(first, 1);
+  let int next = first + 1;
+  next = next - (next / 5) * 5;
+  buckets.set(next, 2);
+  return first == 4 && next == 0 && buckets.get(4) == 1
+      && buckets.get(0) == 2 && buckets.get(1) == 0 ? 17 : 7;
+}
