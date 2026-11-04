@@ -1,5 +1,6 @@
 mod checked_i64;
 mod atto_source_fuzz;
+mod atto_actor_heap;
 
 use std::{
     env,
@@ -895,6 +896,15 @@ fn real_main() -> Result<(), String> {
             }
             atto_source_fuzz::self_test()
         }
+        Some("atto-actor-heap-asan") => {
+            if args.len() != 5 {
+                return Err("usage: atto-actor-heap-asan <compiler> <clang> <repo-root>".to_string());
+            }
+            let compiler = path_arg(&args, 2, "missing LLVM compiler")?;
+            let clang = path_arg(&args, 3, "missing Clang")?;
+            let root = path_arg(&args, 4, "missing LLVM repo root")?;
+            atto_actor_heap::execute(&compiler, &clang, &root)
+        }
 
         Some("realtime-profile") => {
             let compiler = path_arg(&args, 2, "usage: realtime-profile <compiler>")?;
@@ -945,7 +955,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <atto-source-fuzz|atto-source-fuzz-selftest|realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
+            "usage: oreslang-llvm-test-harness <atto-actor-heap-asan|atto-source-fuzz|atto-source-fuzz-selftest|realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }
