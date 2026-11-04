@@ -78,18 +78,6 @@ inline void validate_logical_id(std::string_view value) {
     if (value.empty() || value.size() > 4096 || value.front() == '/' ||
         value.find('\\') != std::string_view::npos)
         throw std::runtime_error("native logical source ID is not bounded relative UTF-8");
-    std::size_t start = 0;
-    while (start < value.size()) {
-        const auto slash = value.find('/', start);
-        const auto end = slash == std::string_view::npos ? value.size() : slash;
-        const auto segment = value.substr(start, end - start);
-        if (segment.empty() || segment == "." || segment == "..")
-            throw std::runtime_error("native logical source ID contains traversal or empty segment");
-        start = end + 1;
-        if (slash == std::string_view::npos) break;
-        if (start == value.size())
-            throw std::runtime_error("native logical source ID contains trailing slash");
-    }
     require_valid_source_utf8(value);
     for (std::size_t i = 0; i < value.size();) {
         const auto ch = static_cast<unsigned char>(value[i]);
@@ -103,6 +91,18 @@ inline void validate_logical_id(std::string_view value) {
         if (forbidden_codepoint(cp))
             throw std::runtime_error("native logical source ID contains nonportable Unicode or colon");
         i += length;
+    }
+    std::size_t start = 0;
+    while (start < value.size()) {
+        const auto slash = value.find('/', start);
+        const auto end = slash == std::string_view::npos ? value.size() : slash;
+        const auto segment = value.substr(start, end - start);
+        if (segment.empty() || segment == "." || segment == "..")
+            throw std::runtime_error("native logical source ID contains traversal or empty segment");
+        start = end + 1;
+        if (slash == std::string_view::npos) break;
+        if (start == value.size())
+            throw std::runtime_error("native logical source ID contains trailing slash");
     }
 }
 
