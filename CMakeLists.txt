@@ -868,6 +868,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-project-root-import-test)
     set_tests_properties(native_project_root_import_security PROPERTIES TIMEOUT 20)
 
+    # Java #2492 shared host-to-logical source-unit identity admission.
+    # Host component test only: real compiler and native linked guest run
+    # independently in native_source_module_graph_execution.
+    add_executable(oreslang-native-host-logical-ids-test
+        tests/host_logical_source_unit_ids_test.cpp)
+    target_include_directories(oreslang-native-host-logical-ids-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-host-logical-ids-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_host_logical_source_ids_security
+        COMMAND oreslang-native-host-logical-ids-test)
+    set_tests_properties(native_host_logical_source_ids_security PROPERTIES TIMEOUT 20)
+
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
