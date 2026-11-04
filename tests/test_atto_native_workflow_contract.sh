@@ -44,10 +44,23 @@ for name, source, tag in (("M1", m1, "ATTO_M1"), ("M2", m2, "ATTO_M2")):
     changed = embedded.replace("pub fnc ", "pub fnc mutation_", 1)
     if changed == embedded or changed == source.read_text():
         raise SystemExit("ineffective compiler-owned source mutation: " + name)
+    if name == "M1":
+        if embedded.count("suite.last_id = candidate.id;") != 2:
+            raise SystemExit("M1 replay identity must commit on selected/filtered paths")
+        if "candidate.id <= suite.last_id" not in embedded:
+            raise SystemExit("M1 no longer guards duplicate/out-of-order IDs")
     if name == "M2":
-        body = embedded.split("pub fnc run_one(", 1)[1]
+        body = embedded.split("pub fnc run_one(", 1)[1].split("pub fnc run_pair(", 1)[0]
         if body.index("let mut TestCase snapshot") > body.index("if suite.halted"):
             raise SystemExit("M2 class owner declared after control flow")
+        invoke_at = body.index("val int outcome = invoke_scalar_body(")
+        for guard in ("if candidate.visited != 0", "if candidate.id <= suite.last_id",
+                      "if suite.total >= 1024"):
+            if guard not in body or body.index(guard) > invoke_at:
+                raise SystemExit("M2 replay/quota guard bypassed before test body: " + guard)
+        pair = embedded.split("pub fnc run_pair(", 1)[1]
+        if pair.index("first.id >= second.id") > pair.index("run_one(rt mut borrow"):
+            raise SystemExit("M2 pair identity must be preflighted before test execution")
 PY
 
 unique 'stdlib/testing_m2.atto'
