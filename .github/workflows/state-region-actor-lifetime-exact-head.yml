@@ -11,6 +11,11 @@ on:
       - 'tests/native_aot_two_actor_owned_counter_harness.c'
       - 'tests/fixtures/native-aot-two-actor-owned-counter.atto'
       - 'tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.atto'
+      - 'tests/fixtures/native-aot-sealed-two-actor-owned-counter.atto'
+      - 'tests/fixtures/native-aot-sealed-state-wasm-reject.atto'
+      - 'tests/fixtures/native-aot-sealed-state-missing-critical-reject.atto'
+      - 'tests/fixtures/native-aot-legacy-critical-reject.atto'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
@@ -232,8 +237,9 @@ jobs:
           fi
           SRC=tests/fixtures/native-aot-two-actor-owned-counter.atto
           IR="$RUNNER_TEMP/compiled-two-actor-owned-counter.ll"
-          # Unsupported sealed actor state must fail before ANY IR output,
-          # rather than silently falling back to the legacy scalar ABI.
+          # Sealed scalar state is supported only with synchronous critical
+          # turns. Suspension must fail before ANY IR, not silently fall back
+          # to a legacy scalar actor ABI.
           DENIED="$RUNNER_TEMP/unlowered-sealed-actor-state.ll"
           if "$COMPILER" --experimental-owned-int \
               tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.atto \
@@ -242,7 +248,7 @@ jobs:
             exit 1
           fi
           test ! -s "$DENIED"
-          grep -Fq 'requires sealed handle_state lowering' \
+          grep -Fq 'native critical actor state handler cannot suspend' \
             "$RUNNER_TEMP/sealed-actor-diagnostic"
           "$COMPILER" --experimental-owned-int "$SRC" > "$IR"
           test -s "$IR"
@@ -275,12 +281,67 @@ jobs:
           "$RUNNER_TEMP/aot-two-actor-test" | tee "$RUNNER_TEMP/aot-two-actor-receipt"
           grep -Fxq 'AOT_COMPILED_TWO_ACTOR_OWNED_HEAPS_2009_TURNS_PASS' \
             "$RUNNER_TEMP/aot-two-actor-receipt"
+          # A separate sealed critical ABI must really be emitted, linked and
+          # executed. The legacy handler cannot impersonate handle_state.
+          SEALED=tests/fixtures/native-aot-sealed-two-actor-owned-counter.atto
+          SEALED_IR="$RUNNER_TEMP/compiled-sealed-actor-counter.ll"
+          "$COMPILER" --experimental-owned-int "$SEALED" > "$SEALED_IR"
+          test -s "$SEALED_IR"
+          grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_init\(' "$SEALED_IR"
+          grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_handle_state\(' "$SEALED_IR"
+          if grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_on_message\(' "$SEALED_IR"; then
+            echo "sealed state fell back to legacy actor method ABI" >&2
+            exit 1
+          fi
+          for fn in scoped_new scoped_drop field_read field_write; do
+            grep -Eq "[[:space:]]call .*@ores_actor_i64_heap_${fn}\\(" "$SEALED_IR"
+          done
+          for entry in \
+            "native-aot-sealed-state-missing-critical-reject.atto|native sealed actor state requires pub critical handle_state" \
+            "native-aot-legacy-critical-reject.atto|legacy native actor on_message cannot claim critical state ABI"; do
+            SRC_PATH="${entry%%|*}"
+            DIAGNOSTIC="${entry#*|}"
+            REJECTED="$RUNNER_TEMP/${SRC_PATH}.ll"
+            if "$COMPILER" --experimental-owned-int "tests/fixtures/$SRC_PATH" \
+              > "$REJECTED" 2> "$RUNNER_TEMP/${SRC_PATH}.err"; then
+              echo "unsupported actor contract was accepted: $SRC_PATH" >&2
+              exit 1
+            fi
+            test ! -s "$REJECTED"
+            grep -Fq "$DIAGNOSTIC" "$RUNNER_TEMP/${SRC_PATH}.err"
+          done
+          WASM_DENIED="$RUNNER_TEMP/sealed-wasm-denied.ll"
+          if "$COMPILER" --target=wasm32 \
+              tests/fixtures/native-aot-sealed-state-wasm-reject.atto \
+              > "$WASM_DENIED" 2> "$RUNNER_TEMP/sealed-wasm.err"; then
+            echo "unlowered sealed state unexpectedly admitted on wasm32" >&2
+            exit 1
+          fi
+          test ! -s "$WASM_DENIED"
+          grep -Fq 'wasm32 sealed critical actor state requires separate turn/heap lowering' \
+            "$RUNNER_TEMP/sealed-wasm.err"
+          "$CLANG" -x ir "${FLAGS[@]}" -c "$SEALED_IR" \
+            -o "$RUNNER_TEMP/guest-sealed.o"
+          "$CLANG" -x c -std=c11 "${FLAGS[@]}" -Wall -Wextra -Wpedantic -Werror \
+            -DATTO_SEALED_STATE_GUEST -Isrc/main/cpp \
+            -c tests/native_aot_two_actor_owned_counter_harness.c \
+            -o "$RUNNER_TEMP/sealed-actor-harness.o"
+          "$CLANG" "${FLAGS[@]}" "$RUNNER_TEMP/guest-sealed.o" \
+            "$RUNNER_TEMP/native-actor-heap.o" "$RUNNER_TEMP/sealed-actor-harness.o" \
+            -o "$RUNNER_TEMP/aot-sealed-two-actor-test"
+          "$RUNNER_TEMP/aot-sealed-two-actor-test" | \
+            tee "$RUNNER_TEMP/aot-sealed-two-actor-receipt"
+          grep -Fxq 'AOT_COMPILED_SEALED_TWO_ACTOR_OWNED_HEAPS_2009_TURNS_PASS' \
+            "$RUNNER_TEMP/aot-sealed-two-actor-receipt"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           echo "SOURCE_HEAD=$EXPECTED_HEAD"
           echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
           echo "COMPILER_GUEST_EXECUTED=true"
-          echo "COMPILER_GUEST_SCOPE=legacy-scalar-actor-only"
-          echo "SOURCE_STATE_HANDLE_STATE_CERTIFIED=false"
-          sha256sum "$RUNNER_TEMP/guest.o" "$RUNNER_TEMP/aot-two-actor-test"
+          echo "COMPILER_GUEST_SCOPE=legacy-scalar-and-sealed-synchronous-i64-actors"
+          echo "SOURCE_SEALED_SCALAR_STATE_VALIDATED=true"
+          echo "FULL_STATE_HANDLE_STATE_CERTIFIED=false"
+          sha256sum "$RUNNER_TEMP/guest.o" "$RUNNER_TEMP/aot-two-actor-test" \
+            "$RUNNER_TEMP/guest-sealed.o" "$RUNNER_TEMP/aot-sealed-two-actor-test"
 
   attolang-native-module-imports:
     # Compiler-backed .atto import graph and native resolver boundary checks.
