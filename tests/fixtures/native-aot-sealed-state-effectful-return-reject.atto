@@ -1,0 +1,9 @@
+// Even with no owned locals, the sealed critical return must be pure.
+fnc external_value(): int { return 7; }
+define actor Worker as {
+  state { let total: int = 0; }
+  pub critical handle_state(int n): int {
+    total = n;
+    return external_value();
+  }
+}
