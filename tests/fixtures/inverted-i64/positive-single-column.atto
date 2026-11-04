@@ -1,0 +1,9 @@
+define inverted struct Single as
+    let value: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Single>.with_capacity(2);
+    rows.push(42);
+    return rows.get(0, value);
+}

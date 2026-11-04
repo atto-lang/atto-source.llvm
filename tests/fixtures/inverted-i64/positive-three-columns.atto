@@ -1,0 +1,12 @@
+define inverted struct Triple as
+    x: int;
+    y: int;
+    z: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Triple>.with_capacity(3);
+    rows.push(1, 2, 3);
+    rows.push(4, 42, 6);
+    return rows.get(1, y);
+}
