@@ -248,6 +248,12 @@ inline std::filesystem::path resolve_project_root_import(
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
     reject_nested_package(physical_root, target);
+    // Returning only the canonical path would otherwise erase an in-root
+    // symlink alias before the logical-ID admission registry could inspect it.
+    // Root-directory symlinks are allowed; sub-root aliases are not.
+    const auto relative = candidate.lexically_relative(package_root);
+    if ((physical_root / relative).lexically_normal() != target)
+        throw std::runtime_error("native project-root import rejects symlink source alias");
     return target;
 }
 
