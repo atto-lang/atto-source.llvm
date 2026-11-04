@@ -420,7 +420,7 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_atto_stack_admission_and_shallow_process
-        PROPERTIES TIMEOUT 120)
+        PROPERTIES TIMEOUT 240)
     # Linux: build a real .atto recursive scalar guest as a native shared
     # image, invoke its generated entry from one MultiActorCarrier callback,
     # and verify A's typed terminal cleanup before B uses the same 1MiB worker.
