@@ -1,0 +1,3 @@
+// EXPECT_COMPILE_ERROR: native reader/writer critical declaration requires
+// A critical-read marker is NOT a critical+suspends pair.
+pub critical-read fnc work(): int { return 1; }

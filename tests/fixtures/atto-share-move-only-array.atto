@@ -1,0 +1,6 @@
+// EXPECT_COMPILE_ERROR: E_SHARE_MOVE_ONLY
+// An owned mutable Array<int> is not Copy; native LLVM may not alias it.
+pub fnc main(): int {
+  let mut Array<int> slots = new Array<int>();
+  return rt share slots;
+}

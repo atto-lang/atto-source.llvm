@@ -1,0 +1,8 @@
+// EXPECT_COMPILE_ERROR: E_SHARE_MOVE_ONLY
+define class Cache as
+  let int value: 42;
+end
+pub fnc main(): int {
+  let mut Cache cache = new Cache();
+  return rt share cache;
+}

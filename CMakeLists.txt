@@ -1182,6 +1182,52 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
+    # AttoLang LLVM parser parity for the Java critical/suspends contract.
+    # These require a real native compiler exit=1 and exact semantic
+    # diagnostic, never a syntax-error substring or a host-only oracle.
+    oreslang_contract_test(atto_critical_suspends_fnc_rejected
+        atto-critical-suspends-fnc.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    oreslang_contract_test(atto_suspends_critical_routine_rejected
+        atto-suspends-critical-routine.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    oreslang_contract_test(atto_critical_suspends_class_method_rejected
+        atto-critical-suspends-class-method.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    oreslang_contract_test(atto_suspends_critical_class_method_rejected
+        atto-suspends-critical-class-method.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    oreslang_contract_test(atto_critical_suspends_actor_method_rejected
+        atto-critical-suspends-actor-method.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    # Protected objects are NOT executable on LLVM. This checks fail-closed
+    # source admission only, not E_CRITICAL_READ_MUTATION or state escape.
+    oreslang_contract_test(atto_critical_suspends_comment_trivia_rejected
+        atto-critical-suspends-trivia.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    oreslang_contract_test(atto_suspends_critical_line_trivia_rejected
+        atto-suspends-critical-trivia.atto --diagnostic "E_CRITICAL_SUSPENDS_DECL")
+    # Mutation controls: neither a lone critical, lone suspends, nor
+    # adjacent critical-read may impersonate conflicting declaration effects.
+    oreslang_contract_test(atto_critical_only_remains_unlowered
+        atto-critical-only-unlowered.atto --diagnostic "native critical declaration requires compiler lowering")
+    oreslang_contract_test(atto_suspends_only_remains_unlowered
+        atto-suspends-only-unlowered.atto --diagnostic "native suspends declaration requires suspension-aware")
+    oreslang_contract_test(atto_critical_read_remains_unlowered
+        atto-critical-read-unlowered.atto --diagnostic "native reader/writer critical declaration requires")
+    # General ownership checker, not a parser-only / arbitrary substring
+    # denial. Refuse manufactured aliases of owned Array and nominal class.
+    oreslang_contract_test(atto_share_move_only_array_rejected
+        atto-share-move-only-array.atto --diagnostic "E_SHARE_MOVE_ONLY")
+    oreslang_contract_test(atto_share_move_only_class_rejected
+        atto-share-move-only-class.atto --diagnostic "E_SHARE_MOVE_ONLY")
+    oreslang_contract_test(atto_protected_state_requires_typed_lowering
+        atto-protected-state-unlowered.atto --diagnostic "STATE_CONTAINER_BACKEND_UNSUPPORTED")
+    # Copy scalars retain parity with Java rt share Copy semantics.
+    # Require real compiler IR, Clang link and native process exit.
+    if(ORE_CLANG)
+        oreslang_contract_test(atto_copyable_share_native_execution
+            atto-copyable-share.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_copyable_copy_native_execution
+            atto-copyable-copy.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_copyable_take_native_execution
+            atto-copyable-take.atto --run 42 --clang "${ORE_CLANG}")
+    endif()
+
     oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")

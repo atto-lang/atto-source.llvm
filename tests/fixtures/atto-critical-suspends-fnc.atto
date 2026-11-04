@@ -1,0 +1,5 @@
+// EXPECT_COMPILE_ERROR: E_CRITICAL_SUSPENDS_DECL
+// LLVM parser must reject conflicting declaration effects, not emit IR.
+pub critical suspends fnc work(): int {
+  return 1;
+}

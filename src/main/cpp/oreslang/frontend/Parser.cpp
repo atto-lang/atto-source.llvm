@@ -1331,6 +1331,8 @@ private:
         // Match the Java frontend's declaration spelling contract. The native
         // actor subset still lowers only on_message(int) and cannot admit
         // arbitrary methods, static fnc members or suspension frames.
+        if (at_forbidden_critical_suspends())
+            fail("E_CRITICAL_SUSPENDS_DECL: critical bodies cannot suspend");
         if (token_.text == "suspend" || token_.text == "suspends") {
             fail("native suspends actor method requires continuation lowering");
         }
@@ -1435,6 +1437,9 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
+            // Class members have a separate entrypoint from ordinary fnc.
+            if (at_forbidden_critical_suspends())
+                fail("E_CRITICAL_SUSPENDS_DECL: critical bodies cannot suspend");
             // Formatter may insert 'mtd', but method identity and receiver
             // erasure must remain unchanged. Never consume it as a class field.
             const bool method_marker = accept("mtd");
@@ -1823,6 +1828,8 @@ private:
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
             fail("native execution domain lowering unsupported");
         }
+        if (at_forbidden_critical_suspends())
+            fail("E_CRITICAL_SUSPENDS_DECL: critical bodies cannot suspend");
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
@@ -3849,6 +3856,21 @@ private:
         if (token_.text != text) return false;
         advance();
         return true;
+    }
+
+    // Exact call-site-only modifier detection; never consumes lexer tokens.
+    // Neither critical-read/write nor unrelated expression subtraction is
+    // confused with a callable's conflicting critical/suspends pair.
+    bool at_forbidden_critical_suspends() const {
+        const bool critical_first = token_.text == "critical";
+        const bool suspends_first =
+            token_.text == "suspends" || token_.text == "suspend";
+        if (!critical_first && !suspends_first) return false;
+        Lexer probe = lexer_;
+        const Token second = probe.next();
+        if (critical_first)
+            return second.text == "suspends" || second.text == "suspend";
+        return second.text == "critical";
     }
 
     // Consult a copy of the scanner rather than merging arithmetic tokens.

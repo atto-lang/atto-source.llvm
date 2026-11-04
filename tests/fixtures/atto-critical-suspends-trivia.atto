@@ -1,0 +1,5 @@
+// EXPECT_COMPILE_ERROR: E_CRITICAL_SUSPENDS_DECL
+// Comments/whitespace cannot bypass modifier-pair rejection.
+pub critical /* comment */ suspends fnc work(): int {
+  return 1;
+}

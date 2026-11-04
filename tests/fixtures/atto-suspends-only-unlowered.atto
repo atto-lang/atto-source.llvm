@@ -1,0 +1,3 @@
+// EXPECT_COMPILE_ERROR: native suspends declaration requires suspension-aware
+// Standalone suspends still needs continuation-aware ownership.
+pub suspends fnc work(): int { return 1; }
