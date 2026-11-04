@@ -137,11 +137,13 @@ define macro emit(Type target) -> SyntaxList<Decl> {
 }
 pub fnc main(): int { return 42; }
 )");
-    denied(R"(
+    // Public local macro declarations are compile-time-only and must
+    // expand by typed AST; the linked module test exercises actual exports.
+    scalar_42(R"(
 define pub macro literal(Const<int> value) -> Syntax<Expr> {
   return quote(value);
 }
-pub fnc main(): int { return 42; }
+pub fnc main(): int { return literal!(const 40 + 2); }
 )");
     denied(R"(
 define macro literal(Const<int> value) -> Syntax<Expr> {
