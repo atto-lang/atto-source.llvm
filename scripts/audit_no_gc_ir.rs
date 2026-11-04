@@ -158,7 +158,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::audit_ir;
+    use super::{audit_file, audit_ir, MAX_IR_BYTES};
 
     #[test]
     fn rejects_known_collector_ir() {
