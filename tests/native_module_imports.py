@@ -184,6 +184,18 @@ def main():
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
             passed += 1
+        # Valid source bytes under an unrecognized entry filename must
+        # never acquire .ores semantics by an implicit fallback.
+        for filename in ('main', 'main.txt', 'main.ATTO', 'main.ores.bak'):
+            name='entry-reject-'+filename.replace('.', '-')
+            directory=root/name; directory.mkdir()
+            entry=directory/filename
+            entry.write_text('pub fnc main():int{return 42;}')
+            result=run([a.compiler, str(entry)])
+            diagnostic='native entry source must use .atto or .ores extension'
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
         # Wrong suffix and missing implicit .atto are compiler rejects,
         # not permissive fallbacks to an existing legacy source.
         for name, raw, extra_files, diagnostic in (
