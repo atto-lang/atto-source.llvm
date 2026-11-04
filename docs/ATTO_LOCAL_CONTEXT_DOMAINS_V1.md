@@ -128,7 +128,7 @@ exposing any RequestLocal accessor as a guest intrinsic.
 **Shared host value type admission:** `LocalValueAdmissionV1.hpp` is used by
 all four host storage domains to reject raw pointers/references, top-level
 `std::reference_wrapper`, `std::basic_string_view`,
-`std::initializer_list` and types with potentially throwing destructors.
+`std::initializer_list`, C++20 `std::span`, and types with potentially throwing destructors.
 This is only shallow C++ host admission; composite types may still contain
 borrowed aliases, so guest compiler `Copy`/`Send`/ownership analysis remains
 mandatory. Negative `static_assert` cases were added to Task/Actor/Thread
@@ -140,7 +140,7 @@ policy compiled and executed with GCC -O2, Clang -O2, and Clang ASan/UBSan
 locally, including positive and negative compile-time assertions. A separate
 source-free RequestLocal pin-then-copy model passed 1,000 synchronous
 reentrant close operations and 200 concurrent-close runs with GCC, Clang,
-and Clang ASan/UBSan. **Neither model proves that the full RequestLocal
+Clang ASan/UBSan, and GCC TSan. **Neither model proves that the full RequestLocal
 runtime and scheduler tests executed.** Those native exact-head and compiled
 `.atto` gates still require real source CI with nonzero steps.
 
