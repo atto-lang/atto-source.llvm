@@ -24,7 +24,7 @@ typedef uint64_t OresDomainId;
 typedef struct { uint64_t handle; uint64_t generation; } OresTenantCap;
 typedef enum {
   ORES_TENANT_OK = 0,
-  ORES_TENANT_PENDING = 1,
+  ORES_TENANT_PENDING = -115,
   ORES_TENANT_DENIED = -13,
   ORES_TENANT_INVALID = -22,
   ORES_TENANT_IO_ERROR = -5,
