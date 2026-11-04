@@ -78,6 +78,8 @@ jobs:
           sudo apt-get install -y clang llvm-dev cmake build-essential binutils
           cmake -S . -B build-mcp-m1 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           cmake --build build-mcp-m1 --target oreslang-llvmc --parallel 2
+      - name: Validate native compiler test syntax before runtime claims
+        run: python3 -m py_compile tests/test_mcp_m1_compiler_cli.py tests/test_mcp_m1_native_aot_embed.py tests/test_mcp_m1_llvm_used_linker.py
       - name: Execute .atto and .ores native compiler descriptor mode
         run: python3 tests/test_mcp_m1_compiler_cli.py --compiler build-mcp-m1/oreslang-llvmc
       - name: Link and execute native AttoLang guest with retained descriptor
