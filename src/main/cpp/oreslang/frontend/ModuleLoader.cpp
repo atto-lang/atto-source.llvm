@@ -290,16 +290,21 @@ private:
                 // identity before recognizing a cached dependency or a cycle.
                 // A second name for the same source must not silently collapse.
                 const auto dependency_path = dependency.string();
+                const auto known = paths.find(dependency.string());
+                selected = known == paths.end() ? units.size() : known->second;
+                // A known cycle/back-edge reuses its admitted source byte
+                // budget. Do not charge another unit's remaining read bytes
+                // merely to verify its unchanged filesystem identity.
+                const auto identity_limit =
+                    selected == units.size() ? max_bytes - read_bytes : max_bytes;
                 const auto expected_child_identity = capture_source_identity(
-                    dependency_path.c_str(), max_bytes - read_bytes,
+                    dependency_path.c_str(), identity_limit,
                     "native import graph exceeds 8 MiB source read budget");
                 if (dependency == current.path ||
                     same_file(current.identity, expected_child_identity))
                     fail(current, "source file cannot import itself through a filesystem alias");
                 const auto child_logical_id =
                     source_ids->admit(lexical_dependency, expected_child_identity);
-                const auto known = paths.find(dependency.string());
-                selected = known == paths.end() ? units.size() : known->second;
                 if (selected != units.size() &&
                     units[selected]->logical_id != child_logical_id)
                     fail(current, "linked import resolved a conflicting logical unit ID");
