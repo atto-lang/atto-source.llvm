@@ -72,3 +72,48 @@ authorization and security governance.
   (not native AttoLang guest execution).
 - `native_nested_actor_pipe_guest_failclosed`: expected compiler rejection.
 - True `Actor.pipe` LLVM parity: **NOT_IMPLEMENTED / NOT_VERIFIED**.
+
+## Exact-blob local native compilation evidence (host-only)
+
+Authoring validation on Linux x86_64 (kernel 6.18.57), with
+Clang 17.0.0 and GCC 14.2.0, compiled the *same bytes* that were
+committed to this source branch:
+
+- Existing nominal contract Git blob:
+  `d37b500299e402684c6fb66bd890c55472faa5bf`.
+- Nested plan header Git blob:
+  `6990d9cda166e05e615faf1a532d2e1f5712b611`.
+- Native test Git blob:
+  `fec517db761d28dadac9c0557298b1b19054bd91`.
+
+These source hashes were independently computed using `git hash-object`
+on the local C++ files and matched the uploaded GitHub blobs. The standalone
+C++17 test compiled using `-Wall -Wextra -Wpedantic -Werror -UNDEBUG`
+and **executed successfully**, without skipped test steps, under:
+
+| Compiler | Optimization/instrumentation | Executed outcome |
+| --- | --- | --- |
+| Clang 17.0.0 | `-O0` | PASS |
+| Clang 17.0.0 | `-O2` | PASS |
+| GCC 14.2.0 | `-O0` | PASS |
+| GCC 14.2.0 | `-O2` | PASS |
+| Clang 17.0.0 | `-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer` | PASS |
+
+The sanitizer run used `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1`
+and `UBSAN_OPTIONS=halt_on_error=1`. Recorded SHA-256 hashes:
+Clang O2 binary `bb847aa5a09147e51472ddf2fbef76396f887be8ed58cb279733669226ff5693`,
+GCC O2 binary `865a13a43d5d99de6ccf03ecfd96caed57cd97e5c8275961f092f2040b1c3948`,
+sanitizer binary `3d91bbb00515e42237764cd5d3b38e0a3803e5f1516650a432b052ae9508eeae`.
+
+**This is a local standalone native-header regression, not a complete CMake
+build, LLVM IR generation, actor-runtime execution, full guest AOT,
+GitHub Actions execution, or five-backend parity.** The current environment
+does not have an LLVMConfig.cmake needed to build the full LLVM compiler.
+
+At initial PR head `0d4d33862d65bbf08fd073f77e2c43bad20e77b2`,
+the source-org LLVM compiler
+[run 41754205684](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41754205684)
+and conformance
+[run 41754205765](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/41754205765)
+completed unsuccessfully with **zero job steps**. They provide no
+source-test verdict.
