@@ -31,13 +31,15 @@ impl TempDir {
         // The native harness writes compiler-generated IR and guest binaries
         // here. Set permissions at creation, not afterwards: a permissive
         // caller umask must not expose private CI source/outputs to peers.
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
+            builder.create(&path)?;
         }
-        builder.create(&path)?;
+        #[cfg(not(unix))]
+        fs::create_dir(&path)?;
         Ok(Self { path })
     }
 }
@@ -57,6 +59,19 @@ where
         .args(args)
         .output()
         .map_err(|e| format!("failed to run {}: {e}", program.display()))
+}
+
+
+#[cfg(all(test, unix))]
+#[test]
+fn native_harness_temporary_directory_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = TempDir::new("atto-private-").expect("create a test scratch dir");
+    let mode = fs::metadata(&scratch.path)
+        .expect("inspect test scratch dir")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "temporary compiler artifacts must not be world-readable");
 }
 
 fn stdout(out: &Output) -> String {
