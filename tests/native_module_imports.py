@@ -194,12 +194,12 @@ def main():
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
-        # Extensionless migration twins are ambiguous by policy. They must
-        # fail before LLVM IR is emitted; explicit suffixes remain selectable.
+        # Canonical .atto importers select only .atto, even with a legacy
+        # sibling. Prove it with the real compiler, Clang, and executed guest.
         for name, main_source, project_root in (
-            ('atto-relative-ambiguous-twins',
+            ('atto-relative-canonical-twins',
              'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}', False),
-            ('atto-root-ambiguous-twins',
+            ('atto-root-canonical-twins',
              'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}', True),
         ):
             directory = root/name; directory.mkdir()
@@ -207,11 +207,24 @@ def main():
             (directory/'lib.atto').write_text('define module Lib as pub fnc answer():int{return 42;} end')
             (directory/'lib.ores').write_text('define module Lib as pub fnc answer():int{return 7;} end')
             if project_root:
-                (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+                (directory/'.atto.pkg.toml').write_text(
+                    'schema_version = "1"\n[project]\nroot = "."\n')
             result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
-                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            if result.returncode: raise AssertionError((name, result.stderr))
+            (directory/'guest.ll').write_text(result.stdout)
+            built = run([a.clang, str(directory/'guest.ll'), '-O2', '-o', str(directory/'guest')])
+            if built.returncode or run([str(directory/'guest')], env={'PATH':'/nonexistent'}).returncode != 42:
+                raise AssertionError((name, 'canonical importer failed real guest 42', built.stderr))
             passed += 1
+        directory = root/'atto-no-implicit-legacy-fallback'; directory.mkdir()
+        (directory/'main.atto').write_text(
+            'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}')
+        (directory/'lib.ores').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        result = run([a.compiler, str(directory/'main.atto')])
+        if not result.returncode or result.stdout or 'cannot resolve native import' not in result.stderr:
+            raise AssertionError(('implicit legacy fallback admitted', result.returncode, result.stdout[:150], result.stderr))
+        passed += 1
         # Project-root security failures must be compiler failures too, not
         # only host-resolver unit failures. Every case requires zero IR.
         directory = root/'atto-root-nested-package-boundary'; directory.mkdir()
@@ -237,7 +250,7 @@ def main():
             (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
             (directory/'lib.atto').symlink_to(outside)
             result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'escapes physical package root' not in result.stderr:
+            if not result.returncode or result.stdout or 'symlinked AttoLang source path' not in result.stderr:
                 raise AssertionError(('atto project-root symlink escape', result.returncode,
                                       result.stdout[:150], result.stderr))
             passed += 1
@@ -250,7 +263,7 @@ def main():
                 'define module Lib as pub fnc answer():int{return 42;} end')
             os.link(directory/'lib.atto', directory/'lib.ores')
             result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
+            if not result.returncode or result.stdout or 'hardlink' not in result.stderr:
                 raise AssertionError(('atto hardlink twin ambiguity', result.returncode,
                                       result.stdout[:150], result.stderr))
             passed += 1
