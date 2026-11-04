@@ -103,7 +103,9 @@ public:
     [[nodiscard]] Token release(Token token) {
         std::lock_guard<std::mutex> lock(mu_);
         validate(token);
-        if (closed_) return {};
+        // A retired generation still owns its in-flight physical lease.
+        // Release must drain that owner, but it must never hand off a
+        // successor after the generation was fenced.
         if (owner_ != token) {
             for (auto it = waiting_.begin(); it != waiting_.end(); ++it) {
                 if (*it == token) {
@@ -114,7 +116,7 @@ public:
             return {}; // idempotent stale/duplicate release
         }
         owner_ = {};
-        if (waiting_.empty()) return {};
+        if (closed_ || waiting_.empty()) return {};
         owner_ = waiting_.front();
         waiting_.pop_front();
         return owner_;
@@ -131,10 +133,12 @@ public:
     }
 
     /**
-     * Revoke owner and queued tickets at actor-generation retirement. Caller
-     * MUST first quiesce the physically running body: this fences future
-     * admission but cannot interrupt a guest critical mutation mid-instruction.
-     * No callbacks run under the bookkeeping mutex.
+     * Fence future ticket admission and issue queued cancellation receipts.
+     * The original owner is retained as a physical-cleanup liability until
+     * release(owner) is observed after the already-running body exits. This
+     * prevents a retired generation with an in-flight callback from
+     * spuriously appearing quiescent. holds() still rejects all retired
+     * tickets for NEW guest entry. No callbacks run under this mutex.
      */
     [[nodiscard]] Retirement retire() {
         std::lock_guard<std::mutex> lock(mu_);
@@ -142,7 +146,7 @@ public:
         if (closed_) return receipt; // exactly-once generation fence
         closed_ = true;
         receipt.revoked_owner = owner_;
-        owner_ = {};
+        // Do not clear owner_: only its physical unwind can release it.
         receipt.cancelled_waiters.swap(waiting_);
         return receipt;
     }
@@ -161,8 +165,8 @@ public:
      */
     [[nodiscard]] bool retire_if_quiescent() {
         std::lock_guard<std::mutex> lock(mu_);
-        if (closed_) return true;
         if (owner_ || !waiting_.empty()) return false;
+        if (closed_) return true;
         closed_ = true;
         return true;
     }
