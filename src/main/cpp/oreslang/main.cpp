@@ -264,17 +264,23 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
         !ast.imports.empty() || !ast.actors.empty() || !ast.classes.empty() ||
         !ast.cooperative_loops.empty() || !ast.generators.empty() ||
         !ast.contracts.empty() || !ast.conforms.empty();
-    if (ast.functions.size() > 4096)
-        throw std::runtime_error("analysis v0 function budget exceeded");
+    if (ast.functions.size() > oreslang::realtime_detail::kMaxRealtimeFunctions) {
+        std::cerr << "oreslang-llvmc: analysis v0 inconclusive; function budget exceeded\n";
+        return 2;
+    }
     std::size_t edges = 0;
     for (const auto& fn : ast.functions) {
         const auto key = function_key(fn.name, fn.parameters.size());
-        if (rows.count(key))
-            throw std::runtime_error("analysis v0 ambiguous callable identity");
-        const auto remaining = std::size_t{30000} - edges;
+        if (rows.count(key)) {
+            std::cerr << "oreslang-llvmc: analysis v0 inconclusive; ambiguous callable identity\n";
+            return 2;
+        }
+        const auto remaining = oreslang::realtime_detail::kMaxRealtimeCallEdges - edges;
         const auto facts = oreslang::realtime_detail::direct_facts(fn, remaining, &ast);
-        if (facts.call_budget_exceeded)
-            throw std::runtime_error("analysis v0 call graph budget exceeded");
+        if (facts.call_budget_exceeded) {
+            std::cerr << "oreslang-llvmc: analysis v0 inconclusive; call graph budget exceeded\n";
+            return 2;
+        }
         edges += facts.calls.size();
         Row row;
         row.direct = facts.effects;
@@ -294,7 +300,7 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
                 return found->second;
             // Refuse an unbounded DFS on attacker-controlled native call graphs.
             // A deep acyclic call chain is still unknown, not a proven effect-free graph.
-            if (active.size() >= 64)
+            if (active.size() >= oreslang::realtime_detail::kMaxRealtimeCallDepth)
                 return {{}, true};
             if (!active.insert(key).second)
                 return {{}, true}; // cycle: never infer pure from recursion
