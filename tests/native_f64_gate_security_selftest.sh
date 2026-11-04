@@ -32,7 +32,7 @@ define i32 @wrong_main() {
 }
 IR
     ;;
-  typed_link_fail|constant_42)
+  typed_link_fail|constant_42|script_shim)
     cat <<'IR'
 define i32 @main() {
   %real = alloca double, align 8
@@ -49,16 +49,31 @@ cat > "$scratch/mock-clang" <<'MOCK'
 set -euo pipefail
 [[ "$#" -ge 5 ]] || exit 70
 if [[ "$MOCK_MODE" == typed_link_fail ]]; then exit 88; fi
-[[ "$MOCK_MODE" == constant_42 ]] || exit 71
+[[ "$MOCK_MODE" == constant_42 || "$MOCK_MODE" == script_shim ]] || exit 71
 output=""
 while (( $# > 0 )); do
   if [[ "$1" == -o && $# -ge 2 ]]; then output="$2"; shift 2; else shift; fi
 done
 [[ -n "$output" ]] || exit 72
-printf '#!/bin/sh\nexit 42\n' > "$output"
+if [[ "$MOCK_MODE" == script_shim ]]; then
+  printf '#!/bin/sh\nexit 42\n' > "$output"
+else
+  [[ -f "$HOST_CONSTANT42_IMAGE" ]] || exit 73
+  cp "$HOST_CONSTANT42_IMAGE" "$output"
+fi
 chmod 700 "$output"
 MOCK
 chmod 700 "$scratch/mock-compiler" "$scratch/mock-clang"
+# A real host C compiler produces an executable machine-code constant-42
+# fixture, deliberately NOT an AttoLang compiler or guest.
+command -v cc >/dev/null 2>&1 ||
+  { echo "HOST_F64_CC_MISSING" >&2; exit 69; }
+cat > "$scratch/constant42.c" <<'C'
+int main(void) { return 42; }
+C
+cc -O0 "$scratch/constant42.c" -o "$scratch/constant42"
+[[ -x "$scratch/constant42" ]] || exit 69
+export HOST_CONSTANT42_IMAGE="$scratch/constant42"
 
 reject() {
   local label="$1" mode="$2" diagnostic="$3"
@@ -78,5 +93,6 @@ reject() {
 reject comment_only comment_only 'NATIVE_F64_NO_TYPED_DOUBLE_IR: scalar_local'
 reject wrong_entry wrong_entry 'NATIVE_F64_MISSING_NATIVE_MAIN: scalar_local'
 reject failed_link typed_link_fail 'NATIVE_F64_LINK_FAILED: scalar_local O0'
+reject shell_native_shim script_shim 'NATIVE_F64_LINK_NOT_NATIVE_IMAGE: scalar_local O0'
 reject fabricated_constant_42 constant_42 'NATIVE_F64_EXIT_MISMATCH: f64_nested_local_read_exit_37 O0 rc=42 expected=37'
-echo "HOST_ONLY_F64_GATE_ADVERSARIAL_PASS=4; NO_ATTO_COMPILER_OR_GUEST_EXECUTED"
+echo "HOST_ONLY_F64_GATE_ADVERSARIAL_PASS=5; NO_ATTO_COMPILER_OR_GUEST_EXECUTED"
