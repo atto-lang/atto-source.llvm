@@ -108,6 +108,7 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_LIST_DIR}/../native_inverted_i64_guest.py"
             --compiler "$<TARGET_FILE:oreslang-inverted-i64-standalone-driver>"
+            --standalone-mode
             --clang "${ORE_LLVM_IR_CLANG}"
             --fixtures "${CMAKE_CURRENT_LIST_DIR}/../fixtures/inverted-i64")
     set_tests_properties(inverted_i64_standalone_source_to_native PROPERTIES TIMEOUT 180)
