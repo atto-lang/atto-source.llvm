@@ -2863,6 +2863,12 @@ if(BUILD_TESTING)
                 -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 -p "test_atto_scalar_native_gate.py" -v)
         set_tests_properties(atto_scalar_v1_native_harness_adversarial PROPERTIES TIMEOUT 45)
+        # Supplemental actual LLVM source grammar and ownership conformance:
+        # six compiler->Clang->native results and ten denied-source controls.
+        add_test(NAME atto_scalar_v1_edge_cases_native
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_llvm_edges.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+        set_tests_properties(atto_scalar_v1_edge_cases_native PROPERTIES TIMEOUT 300)
         add_test(NAME atto_scalar_v1_subprocess_harness_adversarial
             COMMAND "${Python3_EXECUTABLE}" -m unittest discover
                 -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
@@ -2887,8 +2893,8 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:oreslang-llvmc>" "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(atto_scalar_v1_removed_operators_denied PROPERTIES TIMEOUT 50)
 
-        # Native LLVM LRU microtraces (four real AttoLang compiler -> Clang guests).
-        # Admit source-only inventory independently; never count a zero-step job.
+        # Four real AttoLang LRU LLVM/Clang guest microtraces, plus
+        # independent exact-source admission. Not full LRU parity.
         oreslang_contract_test(atto_lru_hash_quotient ../../contracts/atto-lru-llvm-v1/hash-quotient.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_lru_probe_wrap ../../contracts/atto-lru-llvm-v1/probe-wrap.atto --run 17 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
         oreslang_contract_test(atto_lru_slot_recycle ../../contracts/atto-lru-llvm-v1/slot-recycle.atto --run 29 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
