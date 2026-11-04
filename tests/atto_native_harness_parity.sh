@@ -17,6 +17,10 @@ die() { printf 'FAIL AttoLang LLVM native guest parity: %s\n' "$*" >&2; exit 1; 
 [[ -f "$manifest" && ! -L "$manifest" && -f "$negative_manifest" && ! -L "$negative_manifest" ]] ||
   die 'missing or symlinked trusted test manifests'
 [[ "$manifest" != "$negative_manifest" ]] || die 'manifests alias each other'
+[[ -d "$corpus" && ! -L "$corpus" &&
+   -d "$corpus/positive" && ! -L "$corpus/positive" &&
+   -d "$corpus/negative" && ! -L "$corpus/negative" ]] ||
+  die 'symlinked native parity corpus directory'
 declare -A seen=()
 declare -a positive_ids=() positive_paths=() expected_exits=()
 declare -a negative_ids=() negative_paths=() diagnostic_needles=()
@@ -60,6 +64,14 @@ for path in "$manifest" "$negative_manifest" \
     "${positive_paths[@]/#/$corpus/}" "${negative_paths[@]/#/$corpus/}"; do
   [[ -f "$path" && ! -L "$path" ]] || die "nonregular source: $path"
 done
+
+# Prevent valid-looking source, exit or diagnostic swaps from altering the
+# 40-case v1 contract without an explicit reviewed manifest update.
+command -v git >/dev/null || die 'git hash-object required for pinned contract'
+[[ "$(git hash-object -- "$manifest")" == "f632b25781b55f04dfd0519b25089410333edc51" ]] ||
+  die 'positive manifest not the reviewed 40-case contract'
+[[ "$(git hash-object -- "$negative_manifest")" == "c60defdb79a765b5a5287950b80ff9827e6e506b" ]] ||
+  die 'negative manifest differs from reviewed contract'
 
 if [[ "$mode" == --inventory-only ]]; then
   echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=40 negative=3 (NO_COMPILER_EXECUTION)'
