@@ -33,6 +33,8 @@ Program initial(const std::string& sum, const std::string& name,
         "Option<int>", ScalarType::I64, ScalarType::I64});
     program.sum_types.push_back({NativeSumType::Kind::Option,
         "Option<String>", ScalarType::String, ScalarType::I64});
+    program.sum_types.push_back({NativeSumType::Kind::Option,
+        "Option<bool>", ScalarType::Bool, ScalarType::I64});
     program.sum_types.push_back({NativeSumType::Kind::Result,
         "Result<int,String>", ScalarType::I64, ScalarType::String});
     Function function;
@@ -79,6 +81,16 @@ Program conditional_default(Kind yes, Kind no) {
     ternary->when_false = scalar(no);
     program.functions.front().locals.back().initializer->arguments.front() =
         std::move(ternary);
+    return program;
+}
+Program conditional_bool_payload() {
+    Program program = initial("Option<bool>", "Some", scalar(Kind::Boolean));
+    auto ternary = scalar(Kind::Conditional);
+    ternary->condition = scalar(Kind::Boolean);
+    ternary->when_true = scalar(Kind::Boolean);
+    ternary->when_false = scalar(Kind::Boolean);
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(ternary));
     return program;
 }
 // Check the error arm of Result<int,String>, not just Some/Option paths.
@@ -163,6 +175,21 @@ void require_success(Program p, const std::string& label) {
         throw std::runtime_error(label + ": unexpectedly rejected: " + e.what());
     }
 }
+void require_conditional_annotation(Program p, ScalarType scalar,
+                                    const std::string& label) {
+    try { resolve_native_sums(p); }
+    catch (const std::exception& e) {
+        throw std::runtime_error(label + ": unexpectedly rejected: " + e.what());
+    }
+    const auto& outer = p.functions.front().locals.front().initializer;
+    if (!outer || outer->arguments.size() != 1 || !outer->arguments.front() ||
+        outer->arguments.front()->kind != Kind::Conditional ||
+        outer->arguments.front()->resolved_type != scalar ||
+        !outer->arguments.front()->sum_type.empty() ||
+        !outer->arguments.front()->resolved_class.empty()) {
+        throw std::runtime_error(label + ": typed conditional metadata not propagated");
+    }
+}
 void require_rejection(Program p, const std::string& diagnostic,
                        const std::string& label) {
     try { resolve_native_sums(p); }
@@ -218,6 +245,12 @@ int main() {
             "conditional missing guard or branch", "ternary without false branch");
         require_success(conditional_error(Kind::String, Kind::String),
             "both Result Err ternary arms are String");
+        require_conditional_annotation(conditional_error(Kind::String, Kind::String),
+            ScalarType::String, "Result Err<String> conditional must lower as String");
+        require_conditional_annotation(conditional_bool_payload(),
+            ScalarType::Bool, "Option<bool> conditional must lower as bool");
+        require_rejection(initial("Option<bool>", "Some", scalar(Kind::Integer)),
+            "payload type does not match", "no int in Option<bool>");
         require_rejection(conditional_error(Kind::String, Kind::Integer),
             "conditional branch payload types do not match", "Err false arm is int");
         require_rejection(conditional_error(Kind::Integer, Kind::String),
@@ -264,7 +297,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 47 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 50 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';

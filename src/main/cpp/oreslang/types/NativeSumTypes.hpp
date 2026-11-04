@@ -177,6 +177,13 @@ inline void resolve_native_sums(Program& program) {
                 (yes.array && (yes.element != no.element ||
                                yes.element_class != no.element_class)))
                 throw std::runtime_error("native sum conditional branch payload types do not match");
+            // The Hint must be reflected in the typed AST, not only returned
+            // to the surrounding Some/Ok/Err validation. Otherwise a bool or
+            // String ternary can pass the payload checker while later native
+            // lowering still sees Expression's default i64 annotation.
+            e.resolved_type = yes.scalar;
+            e.sum_type = yes.sum;
+            e.resolved_class = yes.cls;
             return yes;
         }
         Hint left;
