@@ -209,12 +209,30 @@ grep -Fq 'native ores.std testing scalar requires hosted target' \
   "$tmp/reject-freestanding-std.stderr" ||
   die 'freestanding std/testing scalar rejection diagnostic missing'
 
+# M2 is hosted-only even though registered scalar callbacks have no I/O.
+# A freestanding guest may not smuggle std/testing via the /m2 alias.
+mkdir "$tmp/reject-freestanding-m2"
+printf '%s\n' 'import module M2 from "ores.std/testing/m2"; pub fnc main(): int { return 42; }' \
+  > "$tmp/reject-freestanding-m2/main.atto"
+set +e
+timeout 30s "$compiler" --target=wasm32-unknown-unknown --library-profile=core \
+  "$tmp/reject-freestanding-m2/main.atto" > "$tmp/reject-freestanding-m2.ll" \
+  2> "$tmp/reject-freestanding-m2.stderr"
+status=$?
+set -e
+[[ "$status" -ne 0 && "$status" -ne 124 && "$status" -ne 137 &&
+   ! -s "$tmp/reject-freestanding-m2.ll" ]] ||
+  die 'LLVM admitted hosted M2 registered callbacks into freestanding wasm'
+grep -Fq 'native ores.std testing scalar requires hosted target' \
+  "$tmp/reject-freestanding-m2.stderr" ||
+  die 'freestanding std/testing M2 rejection diagnostic missing'
+
 for path in "${!original_hash[@]}"; do
   [[ "$(sha256sum "$path" | cut -d ' ' -f1)" == "${original_hash["$path"]}" ]] ||
     die "guest source/manifest mutated during compiler execution: $path"
 done
 
-# Two one-case guest ORES_TEST smokes are a separate gate (not TestSuite parity).
+# Guest ORES_TEST smokes are a separate gate (not full TestSuite parity).
 ORESLANG_LLVMC="$compiler" CLANG="$clang_exe" ORES_NO_GC_IR_AUDIT="$auditor" \
   bash "$root/tests/atto_native_guest_receipts.sh"
-printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=10|guest_receipt_protocol=UNSUPPORTED\n'
+printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=11|guest_receipt_protocol=UNSUPPORTED\n'
