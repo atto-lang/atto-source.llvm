@@ -44,7 +44,19 @@ cp "$negatives" "$tmp/negative.tsv"
 sed -i 's#negative/unknown-function.atto#negative/../positive/arith-add.atto#' "$tmp/negative.tsv"
 reject 'negative traversal'
 cp "$negatives" "$tmp/negative.tsv"
+# A shape-valid replacement of a source/exit/diagnostic must still fail.
+cp "$cases" "$tmp/cases.tsv"
+sed -i 's#^arith-add|positive/arith-add.atto|42$#arith-add|positive/arith-subtract.atto|42#' "$tmp/cases.tsv"
+reject 'positive source substitution with same expected exit'
+cp "$cases" "$tmp/cases.tsv"
+sed -i 's#^arith-add|positive/arith-add.atto|42$#arith-add|positive/arith-add.atto|41#' "$tmp/cases.tsv"
+reject 'plausible but forged expected native exit'
+cp "$cases" "$tmp/cases.tsv"
+cp "$negatives" "$tmp/negative.tsv"
+sed -i 's#unknown function#unknown symbol#' "$tmp/negative.tsv"
+reject 'forged negative compiler diagnostic'
+cp "$negatives" "$tmp/negative.tsv"
 if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
-echo 'PASS: eight source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
+echo 'PASS: eleven source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
