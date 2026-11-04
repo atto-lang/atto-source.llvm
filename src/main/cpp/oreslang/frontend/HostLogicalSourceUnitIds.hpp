@@ -57,17 +57,26 @@ class HostLogicalSourceUnitIds final {
                 throw std::runtime_error("native logical source-unit ID has noncanonical characters");
         }
     }
+    // The native compiler builds as C++17. Avoid the C++20 string_view API.
+    static bool has_prefix(std::string_view value, std::string_view prefix) {
+        return value.size() >= prefix.size() &&
+               value.substr(0, prefix.size()) == prefix;
+    }
+    static bool has_suffix(std::string_view value, std::string_view suffix) {
+        return value.size() >= suffix.size() &&
+               value.substr(value.size() - suffix.size()) == suffix;
+    }
     static void require_canonical_id(std::string_view name) {
         checked_ascii(name);
         if (name.front() == '/' || name.find("//") != name.npos ||
             name.find("/./") != name.npos || name.find("/../") != name.npos ||
-            name.ends_with("/.") || name.ends_with("/..") ||
-            name.starts_with("./") || name.starts_with("../") ||
+            has_suffix(name, "/.") || has_suffix(name, "/..") ||
+            has_prefix(name, "./") || has_prefix(name, "../") ||
             name.back() == '/')
             throw std::runtime_error("native logical source-unit ID must be root-relative");
-        if (!name.starts_with("project/") && !name.starts_with("external/"))
+        if (!has_prefix(name, "project/") && !has_prefix(name, "external/"))
             throw std::runtime_error("native source-unit ID lacks a declared root namespace");
-        if (name.starts_with("external/")) {
+        if (has_prefix(name, "external/")) {
             const auto slash = name.find('/', 9);
             if (slash == name.npos || slash == 9)
                 throw std::runtime_error("native external source-unit ID lacks root ordinal");
