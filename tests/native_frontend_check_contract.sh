@@ -14,6 +14,11 @@ printf 'fnc main(): int { return ;\n' > "$tmp/bad.atto"
 
 # The real native parser accepts a supported-source fixture with no IR output.
 "$compiler" --check "$tmp/good.atto" > "$tmp/out" 2> "$tmp/err"
+"$compiler" --check "$fixtures/cfg-guard-call.ores" > "$tmp/legacy-out" 2> "$tmp/legacy-err"
+if [ -s "$tmp/legacy-out" ]; then
+  echo "--check unexpectedly emitted output for legacy .ores" >&2
+  exit 1
+fi
 if [ -s "$tmp/out" ]; then
   echo "--check unexpectedly emitted compiler output" >&2
   exit 1
@@ -26,21 +31,31 @@ if "$compiler" --check "$tmp/bad.atto" > "$tmp/out" 2> "$tmp/err"; then
 fi
 
 # Compiler effects are NOT implemented: fail closed, even on valid input.
-if "$compiler" --analyze "$tmp/good.atto" > "$tmp/out" 2> "$tmp/err"; then
-  echo "--analyze falsely certified unsupported effects" >&2
+set +e
+"$compiler" --analyze "$tmp/good.atto" > "$tmp/out" 2> "$tmp/err"
+analysis_status=$?
+set -e
+if [ "$analysis_status" -ne 2 ]; then
+  echo "--analyze must reject unsupported typed analysis with exit 2 (got $analysis_status)" >&2
   exit 1
 fi
 grep -q 'typed throws/raises/panics' "$tmp/err"
+if [ -s "$tmp/out" ]; then
+  echo "unsupported analysis unexpectedly emitted stdout" >&2
+  exit 1
+fi
 
 # Ensure incompatible mixed modes do not bypass the no-codegen boundary.
 if "$compiler" --check --rt-check "$tmp/good.atto" > "$tmp/out" 2> "$tmp/err"; then
   echo "--check combined with --rt-check" >&2
   exit 1
 fi
+grep -q -- '--check is frontend-only' "$tmp/err"
 if "$compiler" --check --tree-shake "$tmp/good.atto" > "$tmp/out" 2> "$tmp/err"; then
   echo "--check combined with --tree-shake" >&2
   exit 1
 fi
+grep -q -- '--check is frontend-only' "$tmp/err"
 
 
 # The --check path is a real parser/semantic admission, not a regex scan.
@@ -60,6 +75,7 @@ if "$compiler" --check "$tmp/transitive.atto" > "$tmp/out" 2> "$tmp/err"; then
   echo "--check falsely accepted effects with unproven call summaries" >&2
   exit 1
 fi
+grep -q 'using effects require transitive call summaries' "$tmp/err"
 
 # The source-admission mode must not create a guest-code artifact.
 if find "$tmp" -type f \( -name '*.ll' -o -name '*.bc' -o -name '*.o' -o -name '*.wasm' \) \
