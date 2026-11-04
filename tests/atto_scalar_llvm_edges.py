@@ -61,16 +61,18 @@ def main():
             rc, ir, stderr = run_bounded([str(compiler), str(path)], work, timeout=25)
             require(rc == 0 and ir.startswith(b"; ModuleID") and stderr == b"",
                     name + " rejected by compiler: " + repr(stderr[:300]))
-            ll = work / "main.ll"
-            ll.write_bytes(ir)
-            native = work / "native"
-            rc, out, stderr = run_bounded([str(clang), "-O0", "-x", "ir",
-                                            str(ll), "-o", str(native)], work, timeout=30)
-            require(rc == 0 and native.is_file(),
-                    name + " rejected by Clang: " + repr(stderr[:300]))
-            rc, out, stderr = run_bounded([str(native)], work, timeout=10)
-            require((rc, out, stderr) == (expected, b"", b""),
-                    name + ": guest result not equal to " + str(expected))
+            for optimization in ("-O0", "-O2"):
+                suffix = optimization[1:]
+                ll = work / ("main-" + suffix + ".ll")
+                ll.write_bytes(ir)
+                native = work / ("native-" + suffix)
+                rc, out, stderr = run_bounded([str(clang), optimization, "-x", "ir",
+                                                str(ll), "-o", str(native)], work, timeout=30)
+                require(rc == 0 and native.is_file(),
+                        name + " " + optimization + " rejected by Clang: " + repr(stderr[:300]))
+                rc, out, stderr = run_bounded([str(native)], work, timeout=10)
+                require((rc, out, stderr) == (expected, b"", b""),
+                        name + " " + optimization + ": guest result not equal to " + str(expected))
         for name, source, diagnostic in NEGATIVE:
             work = root / name
             work.mkdir()
@@ -82,7 +84,7 @@ def main():
                     name + ": invalid source accepted or incorrect diagnosis: " + repr(stderr[:300]))
             require([f.name for f in work.iterdir()] == ["main.atto"],
                     name + ": denied compiler wrote an output artifact")
-    print(f"ATTO_LLVM_SCALAR_EDGES_GUEST_EXECUTED:{len(POSITIVE)} "
+    print(f"ATTO_LLVM_SCALAR_EDGES_GUEST_EXECUTED:{len(POSITIVE) * 2} "
           f"NEGATIVES_REJECTED:{len(NEGATIVE)}")
 
 
