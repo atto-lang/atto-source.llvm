@@ -60,6 +60,11 @@ pub fnc main(): int { return combine<B=int, A=int>(second: two(), first: four())
     return values.get(0);
 }
 """, 42),
+    "routine-named-value-reorder": ("""routine encode(int first, int second): int {
+    return first * 10 + second;
+}
+pub fnc main(): int { return encode(second: 2, first: 4); }
+""", 42),
 }
 INVALID = {
     "missing-required": ("""fnc fixed<T>(): int { return 42; }
