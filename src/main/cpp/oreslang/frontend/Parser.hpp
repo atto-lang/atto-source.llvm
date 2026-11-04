@@ -482,12 +482,14 @@ struct InvertedStructDecl {
 // production source operations, NOT LLVM IR or a compiler authorization;
 // an independent typed HIR/MIR verifier must admit the complete stream.
 struct InvertedSourceOperation {
-    enum class Kind { Push, WriteField, EraseSwap, ReturnRead };
+    enum class Kind { Push, WriteField, EraseSwap, Snapshot, ReturnRead, ReturnSnapshotRead };
     Kind kind = Kind::Push;
     std::size_t index = 0;
     std::string field;
     std::array<std::int64_t, 2> values{};
     std::int64_t value = 0;
+    // Snapshot bindings are source-local, nominal detached values, not owner handles.
+    std::string snapshot_name;
 };
 struct InvertedSourceMain {
     std::string schema_name;
