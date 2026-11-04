@@ -326,6 +326,7 @@ inline void require_expression_depth(std::size_t depth, std::size_t offset) {
 // ownership-checked class field read: no nested calls or ownership transfers.
 bool nonthrowing_protected_read(const Expression& expr) {
     if (expr.kind == Expression::Kind::Integer ||
+            expr.kind == Expression::Kind::Floating ||
             expr.kind == Expression::Kind::Boolean ||
             expr.kind == Expression::Kind::Variable) return true;
     return expr.kind == Expression::Kind::Field && expr.left &&
@@ -343,6 +344,7 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     if (expr.kind == Expression::Kind::Add ||
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply ||
+            expr.kind == Expression::Kind::Divide ||
             expr.kind == Expression::Kind::Remainder ||
             expr.kind == Expression::Kind::Equal ||
             expr.kind == Expression::Kind::NotEqual ||
@@ -459,7 +461,7 @@ bool native_constructor_scalar_tree(const Expression& expr,
                                     std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     using Kind = Expression::Kind;
-    if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean || expr.kind == Kind::String ||
+    if (expr.kind == Kind::Integer || expr.kind == Kind::Floating || expr.kind == Kind::Boolean || expr.kind == Kind::String ||
             expr.kind == Kind::Variable) return true;
     if (expr.kind == Kind::SumConstruct)
         return std::all_of(expr.arguments.begin(), expr.arguments.end(), [&](const auto& arg) {
@@ -470,7 +472,7 @@ bool native_constructor_scalar_tree(const Expression& expr,
     if (expr.kind == Kind::Negate || expr.kind == Kind::LogicalNot)
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
-            expr.kind == Kind::Multiply || expr.kind == Kind::Remainder ||
+            expr.kind == Kind::Multiply || expr.kind == Kind::Divide || expr.kind == Kind::Remainder ||
             expr.kind == Kind::Equal ||
             expr.kind == Kind::NotEqual || expr.kind == Kind::Less ||
             expr.kind == Kind::LessEqual || expr.kind == Kind::Greater ||
@@ -519,7 +521,8 @@ std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
 }
 
 std::string native_dispatch_constant_key(const Expression& expr) {
-    if (expr.kind == Expression::Kind::Integer)
+    if (expr.kind == Expression::Kind::Floating ||
+            expr.kind == Expression::Kind::Integer)
         return "int:" + std::to_string(expr.integer);
     if (expr.kind == Expression::Kind::Boolean)
         return std::string("bool:") + (expr.boolean ? "true" : "false");
@@ -1644,6 +1647,7 @@ private:
                 });
             if (!result.explicit_constructor && !field.constructor_argument &&
                     !literal_sum && field.initializer_expression->kind != Expression::Kind::Integer &&
+                    field.initializer_expression->kind != Expression::Kind::Floating &&
                     field.initializer_expression->kind != Expression::Kind::Boolean &&
                     field.initializer_expression->kind != Expression::Kind::String)
                 fail("native nonliteral class field initializer requires explicit scalar constructor");
@@ -4810,6 +4814,31 @@ private:
     static void validate(const Program& program) {
         validate_type_only_declarations(program);
         const NativeClassLayouts layouts(program);
+        // Java's rt fail is catchable and runs cleanup while unwinding. Native
+        // rt fail terminates the process, so it must not coexist with any
+        // handler or cleanup that Java would have executed.
+        {
+            std::function<bool(const std::vector<Statement>&, bool)> scan =
+                [&](const std::vector<Statement>& items, bool want_failure) {
+                    return std::any_of(items.begin(), items.end(), [&](const Statement& item) {
+                        const bool hit = want_failure
+                            ? item.kind == Statement::Kind::Call && item.expression &&
+                              item.expression->kind == Expression::Kind::Console && item.expression->name == "fail"
+                            : item.kind == Statement::Kind::Defer;
+                        return hit || scan(item.then_statements, want_failure) ||
+                            scan(item.else_statements, want_failure);
+                    });
+                };
+            bool any_failure = false, any_cleanup = false;
+            for (const auto& fn : program.functions) {
+                any_failure = any_failure || scan(fn.statements, true);
+                any_cleanup = any_cleanup || scan(fn.statements, false) ||
+                    fn.caught_throw_value || !fn.caught_throw_defers.empty();
+            }
+            if (any_failure && any_cleanup)
+                throw std::runtime_error("native rt fail requires unwind lowering: "
+                    "the program also declares defer, try or catch cleanup");
+        }
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
             if (cls.constructor_exported && !cls.exported)
@@ -5426,7 +5455,7 @@ private:
                                       const char* where, const TypeMap& env) {
                 const ScalarType actual =
                     validate_scalar_expression(expr, env, functions);
-                if (actual != expected)
+                if (!scalar_assignable(expr, actual, expected))
                     throw std::runtime_error(std::string(where) + " requires " +
                         scalar_type_name(expected) + ", got " +
                         scalar_type_name(actual) + " at byte " +

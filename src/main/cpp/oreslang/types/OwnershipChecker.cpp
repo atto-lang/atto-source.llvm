@@ -763,7 +763,7 @@ void validate_i64_ownership(Program& program) {
                 std::function<void(const Expression&)> validate_scalar;
                 validate_scalar = [&](const Expression& expr) {
                     using K = Expression::Kind;
-                    if (expr.kind == K::Integer || expr.kind == K::Boolean || expr.kind == K::String) return;
+                    if (expr.kind == K::Integer || expr.kind == K::Floating || expr.kind == K::Boolean || expr.kind == K::String) return;
                     if (expr.kind == K::SumConstruct) {
                         for (const auto& arg : expr.arguments) validate_scalar(*arg);
                         return;
@@ -784,7 +784,7 @@ void validate_i64_ownership(Program& program) {
                         validate_scalar(*expr.left); return;
                     }
                     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
-                            expr.kind == K::Multiply || expr.kind == K::Equal ||
+                            expr.kind == K::Multiply || expr.kind == K::Divide || expr.kind == K::Equal ||
                             expr.kind == K::NotEqual || expr.kind == K::Less ||
                             expr.kind == K::LessEqual || expr.kind == K::Greater ||
                             expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
