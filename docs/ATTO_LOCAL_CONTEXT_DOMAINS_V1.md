@@ -99,3 +99,9 @@ not authenticate tenant or isolate scope. Guest API exposure is blocked until
 that authority is derived from trusted scheduler/tenant admission, not caller
 supplied identity. The source repository's GitHub Actions remain a zero-step
 runner-admission blocker.
+
+## Native TLS teardown regression (November 4, 2026)
+
+PhysicalThreadLocalsV1 now marks its storage closing before releasing per-thread values. Get, set and erase reject reentrant value destructors during thread exit. A native regression covers 32 thread-exit cycles. The local C++17 teardown model passed GCC, Clang and Clang ASan/UBSan; these results do not certify the full repository binary.
+
+The native local-context GitHub workflow now checks out the exact PR head and verifies refreshed header and test object hashes. The source organization's Actions jobs remain unexecuted. A separate source-free GitHub Actions canary in benefactor-cc/benefactor-e2e (run 41776988571) completed five steps successfully, demonstrating runner capacity only. No AttoLang source was moved. The repository's cross-organization private-source approval list remains empty, so source mirroring is prohibited until independent authorization.
