@@ -459,6 +459,13 @@ int main(int argc, char** argv) {
         source_namespace = ast.namespace_name;
 
         if (mcp_descriptors_only) {
+            // Fail closed: an AST accepted by the loader may still be rejected
+            // by LLVM's verified lowering (e.g. reserved ABI symbols).
+            // A descriptor must never advertise a program the backend cannot
+            // compile. This mode does not execute or link the guest.
+            const std::string verified_ir = oreslang::emit_verified_llvm_ir(
+                ast, false, false, false);
+            (void)verified_ir;
             std::cout << oreslang::runtime::mcp_m1::emit_json(ast);
             std::cout.flush();
             return 0;

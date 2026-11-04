@@ -9,7 +9,7 @@ on:
       - 'tests/test_mcp_m1_compiler_cli.py'
       - 'tests/test_mcp_m1_native_aot_embed.py'
       - 'tests/test_mcp_m1_llvm_used_linker.py'
-      - 'tests/fixtures/mcp-descriptor-public.*'
+      - 'tests/fixtures/mcp-descriptor-*'
       - 'CMakeLists.txt'
       - '.github/workflows/mcp-m1-llvm-compiler-descriptors.yml'
   workflow_dispatch:

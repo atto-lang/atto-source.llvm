@@ -71,6 +71,11 @@ def main():
             manifests.append(manifest)
         assert manifests[0]==manifests[1], '.atto vs .ores metadata mismatch'
         source=ROOT/'tests/fixtures/mcp-descriptor-public.atto'
+        reserved=ROOT/'tests/fixtures/mcp-descriptor-reserved-llvm.atto'
+        for flag in ('--mcp-descriptors','--mcp-embed-descriptors'):
+            rejected=run([compiler,flag,reserved])
+            assert rejected.returncode!=0, f'reserved ABI symbol accepted with {flag}'
+            assert not rejected.stdout.strip(), 'rejected source emitted an artifact'
         ordinary=ok([compiler,source]).stdout
         assert '@__atto_mcp_descriptor_v1' not in ordinary and '.atto.mcp.v1' not in ordinary
         ordinary_ir=work/'no-embed.ll'
