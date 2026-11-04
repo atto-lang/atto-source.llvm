@@ -9,6 +9,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace oreslang::dop::mir {
@@ -48,6 +49,7 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
 
     hir::LinearPlan plan(schema, source.capacity);
     I64PairIrOperands operands;
+    std::unordered_map<std::string, std::size_t> detached_values;
     bool returned = false;
     for (std::size_t i = 0; i < source.operations.size(); ++i) {
         const auto& operation = source.operations[i];
@@ -58,26 +60,54 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
             throw std::out_of_range("production inverted row index exceeds signed i64");
         switch (operation.kind) {
             case InvertedSourceOperation::Kind::Push:
-                if (!operation.field.empty() || operation.index != 0 ||
-                        operation.value != 0)
+                if (!operation.field.empty() || !operation.snapshot_name.empty() ||
+                        operation.index != 0 || operation.value != 0)
                     throw std::invalid_argument("invalid inverted push source metadata");
                 plan.push(2);
                 operands.rows.push_back(operation.values);
                 break;
             case InvertedSourceOperation::Kind::WriteField:
-                if (operation.values != std::array<std::int64_t, 2>{})
+                if (operation.values != std::array<std::int64_t, 2>{} ||
+                        !operation.snapshot_name.empty())
                     throw std::invalid_argument("invalid inverted write source metadata");
                 plan.write_runtime_checked(operation.index, operation.field);
                 operands.writes.push_back(operation.value);
                 break;
             case InvertedSourceOperation::Kind::EraseSwap:
-                if (!operation.field.empty() || operation.value != 0 ||
+                if (!operation.field.empty() || !operation.snapshot_name.empty() ||
+                        operation.value != 0 ||
                         operation.values != std::array<std::int64_t, 2>{})
                     throw std::invalid_argument("invalid inverted erase source metadata");
                 plan.erase_swap(operation.index);
                 break;
+            case InvertedSourceOperation::Kind::Snapshot: {
+                if (!operation.field.empty() || operation.value != 0 ||
+                        operation.values != std::array<std::int64_t, 2>{} ||
+                        operation.snapshot_name.empty() ||
+                        operation.snapshot_name == source.owner_name ||
+                        detached_values.count(operation.snapshot_name))
+                    throw std::invalid_argument("invalid or duplicate inverted snapshot binding");
+                const auto ordinal = plan.snapshot_runtime_checked(operation.index);
+                detached_values.emplace(operation.snapshot_name, ordinal);
+                break;
+            }
+            case InvertedSourceOperation::Kind::ReturnSnapshotRead: {
+                if (operation.index != 0 || operation.value != 0 ||
+                        operation.values != std::array<std::int64_t, 2>{} ||
+                        operation.snapshot_name.empty())
+                    throw std::invalid_argument("invalid inverted snapshot return metadata");
+                if (i + 1 != source.operations.size())
+                    throw std::logic_error("production inverted terminal read must be last");
+                const auto it = detached_values.find(operation.snapshot_name);
+                if (it == detached_values.end())
+                    throw std::logic_error("production inverted return requires declared snapshot");
+                plan.read_snapshot_field(it->second, operation.field);
+                plan.close();
+                returned = true;
+                break;
+            }
             case InvertedSourceOperation::Kind::ReturnRead:
-                if (operation.value != 0 ||
+                if (operation.value != 0 || !operation.snapshot_name.empty() ||
                         operation.values != std::array<std::int64_t, 2>{})
                     throw std::invalid_argument("invalid inverted return source metadata");
                 if (i + 1 != source.operations.size())
