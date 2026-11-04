@@ -76,7 +76,10 @@ inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
         raw == "ores.std/testing/scalar.ores" ||
         raw == "ores.std/testing/m1" ||
         raw == "ores.std/testing/m1.atto" ||
-        raw == "ores.std/testing/m1.ores";
+        raw == "ores.std/testing/m1.ores" ||
+        raw == "ores.std/testing/m2" ||
+        raw == "ores.std/testing/m2.atto" ||
+        raw == "ores.std/testing/m2.ores";
 }
 
 inline bool compiler_library_dependency_allowed(
@@ -307,6 +310,130 @@ end
         kTestingM1Source,
         0u
     };
+    static constexpr std::string_view kTestingM2Source =
+R"ATTO_M2(// LLVM M2: deterministic, bounded, guest-owned registered scalar test bodies.
+// This is NOT a general function value, closure, or full std/testing TestBody.
+// Body opcodes are registry-local pure scalar operations, NOT user functions.
+// No actor messages, reflection, host dispatch, indirect function calls, or I/O.
+import module Ledger from "ores.std/testing/m1";
+import module Scalar from "ores.std/testing/scalar";
+import class TestSuite from "ores.std/testing/m1.atto";
+import class RunSummary from "ores.std/testing/m1.ores";
+import class TestCase from "ores.std/testing/m1";
+
+define module testing_m2 as
+  pub define class RegisteredCase as
+    pub let int id = 0;
+    pub let int body_kind = 0;
+    pub let int actual = 0;
+    pub let int expected = 0;
+    pub let bool selected = true;
+    pub let bool skipped = false;
+    pub let int invocations = 0;
+    pub let int visited = 0;
+    pub let int outcome = 0;
+  end
+
+  // Stable first M2 scalar operation IDs: 1 equality, 2 inequality,
+  // 3 strictly less, 4 strictly greater. Unknown opcodes fail closed.
+  // A body can be reached only after the caller's selection/skip gates.
+  pub fnc invoke_scalar_body(borrow RegisteredCase candidate): int {
+    if candidate.body_kind == 1; then
+      return Scalar.expect_equal_int(candidate.actual, candidate.expected);
+    fi
+    if candidate.body_kind == 2; then
+      return Scalar.expect_not_equal_int(candidate.actual, candidate.expected);
+    fi
+    if candidate.body_kind == 3; then
+      return Scalar.expect_less_int(candidate.actual, candidate.expected);
+    fi
+    if candidate.body_kind == 4; then
+      return Scalar.expect_greater_int(candidate.actual, candidate.expected);
+    fi
+    return -3;
+  }
+
+  // Returns 0 PASS, 1 FAIL, 2 SKIP, 3 FILTER, 4 NOT_RUN;
+  // -1 malformed ID, -2 capacity, -3 unknown body, -4 duplicate admission.
+  // Skipped/filtered cases never call invoke_scalar_body.
+  pub fnc run_one(borrow mut TestSuite suite, borrow mut RegisteredCase candidate): int {
+    if suite.halted != 0; then
+      return 4;
+    fi
+    if candidate.visited != 0; then
+      return -4;
+    fi
+    if candidate.id <= 0 || candidate.invocations != 0; then
+      return -1;
+    fi
+
+    let mut TestCase record = new TestCase();
+    record.id = candidate.id;
+    record.selected = candidate.selected;
+    record.skipped = candidate.skipped;
+    if !candidate.selected || candidate.skipped; then
+      val int ignored = Ledger.record(rt mut borrow suite, rt borrow record);
+      if ignored == 2 || ignored == 3; then
+        candidate.visited = 1;
+      fi
+      return ignored;
+    fi
+
+    // Do not execute the body when the ledger would reject quota.
+    if suite.total >= 1024; then
+      return -2;
+    fi
+    val int outcome = invoke_scalar_body(rt borrow candidate);
+    if outcome != 0 && outcome != 1; then
+      return -3;
+    fi
+    record.outcome = outcome;
+    val int status = Ledger.record(rt mut borrow suite, rt borrow record);
+    if status == 0 || status == 1; then
+      candidate.outcome = outcome;
+      candidate.invocations = 1;
+      candidate.visited = 1;
+    fi
+    return status;
+  }
+
+  // Two is an explicit bounded v1 capacity. Reject duplicate IDs before
+  // either callback; stop after fail-fast or an admission error.
+  // The return is the final guest OS result; callers own receipt formatting.
+  pub fnc run_pair(
+    borrow mut TestSuite suite,
+    borrow mut RegisteredCase first,
+    borrow mut RegisteredCase second,
+    borrow mut RunSummary result
+  ): int {
+    if first.id == second.id; then
+      return -5;
+    fi
+    val int first_status = run_one(rt mut borrow suite, rt mut borrow first);
+    if first_status < 0; then
+      return first_status;
+    fi
+    val int second_status = run_one(rt mut borrow suite, rt mut borrow second);
+    if second_status < 0; then
+      return second_status;
+    fi
+    return Ledger.finish(rt borrow suite, rt mut borrow result);
+  }
+end
+)ATTO_M2";
+    static constexpr CoreLibrarySource kTestingM2{
+        CompilerLibraryTier::Std,
+        "ores.std/testing/m2",
+        "testing_m2",
+        "@ores.std/testing/m2.atto",
+        kTestingM2Source,
+        0u
+    };
+    if (raw == "ores.std/testing/m2" ||
+        raw == "ores.std/testing/m2.atto" ||
+        raw == "ores.std/testing/m2.ores")
+        return &kTestingM2;
+
     if (raw == "ores.std/testing/m1" ||
         raw == "ores.std/testing/m1.atto" ||
         raw == "ores.std/testing/m1.ores")
