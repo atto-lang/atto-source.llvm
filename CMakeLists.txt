@@ -2978,6 +2978,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_heap_no_tracing_gc
              COMMAND oreslang-actor-heap-test)
 
+    # The gate itself must remain live until every frame/FFI lease drops.
+    # A dangling lease used to silently address destroyed gate storage.
+    add_executable(oreslang-actor-heap-borrow-gate-lifetime-test
+        tests/actor_heap_borrow_gate_lifetime_test.cpp)
+    target_include_directories(oreslang-actor-heap-borrow-gate-lifetime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-heap-borrow-gate-lifetime-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_heap_gate_live_lease_drop_fence
+        COMMAND oreslang-actor-heap-borrow-gate-lifetime-test)
+    set_tests_properties(native_actor_heap_gate_live_lease_drop_fence
+        PROPERTIES TIMEOUT 30)
+
     # Linux-specific actor-neutral wake/park primitive. This does NOT
     # implement the actor scheduler or certify lock-free mailbox delivery.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
