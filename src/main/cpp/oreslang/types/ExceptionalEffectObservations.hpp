@@ -78,7 +78,10 @@ inline ExceptionalEffectObservations observe_exceptional_effects(const Program& 
     // represented by this ordinary-function graph; never certify coverage.
     report.unmodeled_program = !program.actors.empty() ||
         !program.imports.empty() || !program.classes.empty() ||
-        !program.cooperative_loops.empty() || !program.generators.empty();
+        !program.cooperative_loops.empty() || !program.generators.empty() ||
+        !program.sum_types.empty() || !program.type_only_declarations.empty() ||
+        !program.type_constraint_descriptors.empty() || !program.contracts.empty() ||
+        !program.conforms.empty();
     const auto count = program.functions.size();
     if (count > realtime_detail::kMaxRealtimeFunctions) {
         report.budget_exceeded = true;
