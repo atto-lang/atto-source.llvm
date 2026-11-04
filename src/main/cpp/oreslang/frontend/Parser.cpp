@@ -2556,6 +2556,18 @@ private:
                 if (token_.text == "guard" && !finally_scope) {
                     const auto offset = token_.offset;
                     require("guard");
+                    // No implicit Option payload projection until ownership-aware narrowing exists.
+                    {
+                        Lexer probe = lexer_;
+                        std::string previous(token_.text);
+                        for (std::size_t budget = 0; budget < 256; ++budget) {
+                            const Token candidate = probe.next();
+                            if (candidate.kind == Kind::End || candidate.text == "{") break;
+                            if (previous == "is" && candidate.text == "Some")
+                                fail("native guard is Some requires ownership-aware Option narrowing");
+                            previous = std::string(candidate.text);
+                        }
+                    }
                     auto predicate = expression();
                     while (accept(",")) {
                         auto combined = make_expression(Expression::Kind::LogicalAnd, offset);
@@ -2913,6 +2925,18 @@ private:
                     fail("native guard cannot follow legacy return guards");
                 const auto offset = token_.offset;
                 require("guard");
+                // No implicit Option payload projection until ownership-aware narrowing exists.
+                {
+                    Lexer probe = lexer_;
+                    std::string previous(token_.text);
+                    for (std::size_t budget = 0; budget < 256; ++budget) {
+                        const Token candidate = probe.next();
+                        if (candidate.kind == Kind::End || candidate.text == "{") break;
+                        if (previous == "is" && candidate.text == "Some")
+                            fail("native guard is Some requires ownership-aware Option narrowing");
+                        previous = std::string(candidate.text);
+                    }
+                }
                 auto predicate = expression();
                 while (accept(",")) {
                     auto combined = make_expression(Expression::Kind::LogicalAnd, offset);
