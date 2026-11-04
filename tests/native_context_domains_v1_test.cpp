@@ -89,7 +89,7 @@ void test_exact_drop_and_physical_tls() {
     assert(!num.get_copy());
 }
 
-void test_bounds_and_cancel_close_race() {
+void test_bounds_and_close_race() {
     assert(!TaskLocalScopeV1::open({}));
     assert(!ActorLocalScopeV1::open({}));
     auto scope = TaskLocalScopeV1::open(actor_a);
@@ -128,6 +128,6 @@ void test_bounds_and_cancel_close_race() {
 int main() {
     test_isolation_and_migration();
     test_exact_drop_and_physical_tls();
-    test_bounds_and_cancel_close_race();
+    test_bounds_and_close_race();
     std::puts("LOCAL_CONTEXT_DOMAINS_V1_HOST_PASS");
 }
