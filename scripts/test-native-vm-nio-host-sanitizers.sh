@@ -35,9 +35,10 @@ for toolchain in gcc clang; do
   cxx="$([[ "$toolchain" == gcc ]] && printf 'g++' || printf 'clang++')"
   command -v "$cc" >/dev/null
   command -v "$cxx" >/dev/null
+  SANITIZER_CC="$cc" bash scripts/verify-native-sanitizer-controls.sh address undefined
   dest="$tmp/$toolchain"
   mkdir -p "$dest"
-  shared=(-O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer
+  shared=(-O1 -g -pthread -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
           -Wall -Wextra -Wpedantic -Werror -I"$source_root")
   for name in NativeOresVM NativeActorScheduler NativeActorFuture; do
     "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c "$runtime/$name.c" -o "$dest/$name.o"
@@ -70,7 +71,7 @@ done
 for toolchain in gcc clang; do
   cxx="$([[ "$toolchain" == gcc ]] && printf 'g++' || printf 'clang++')"
   "$cxx" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -pthread \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer \
     -I"$source_root" \
     tests/actor_max_threads_source_admission_test.cpp \
     "$source_root/oreslang/frontend/Parser.cpp" \
