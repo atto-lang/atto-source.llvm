@@ -7,7 +7,7 @@ This is a source-local native compiler admission slice, not imported compile-tim
 - HostLogicalSourceUnitIds is constructed per linked build, and returns root-scoped identities such as project/app/consumer.atto and external/1/producer.atto.
 - Only the nearest package root or package-less entry directory is owned implicitly. External source roots require explicit configuration. The production LLVM loader supplies no ambient external roots.
 - Canonical .atto.pkg.toml is preferred over .ores.pkg.toml at the same directory. Malformed, unreadable or symlinked markers fail closed. The canonical reader supports only [project] root = "." at M0, not arbitrary TOML.
-- Linked import closure admission verifies a physical path against a descriptor identity before reusing a dependency; a per-build registry rejects root escapes, hardlinks, duplicate logical aliases and in-root symlink redirects.
+- Linked import closure admission calls preflight_path on the lexical dependency BEFORE opening its bytes, then verifies its descriptor identity before reusing a dependency; a per-build registry rejects root escapes, hardlinks, duplicate logical aliases and in-root symlink redirects.
 - Known import cycle/back-edges do not consume the new-source byte quota.
 - Logical IDs are bounded to 4096 characters with a deliberately conservative ASCII-only filename policy. This safely rejects non-ASCII names that Java currently allows: remaining Unicode acceptance parity must be implemented explicitly, not assumed.
 - Physical source paths remain available to the trusted reader and diagnostics; the loader records the root-scoped logical key separately.
