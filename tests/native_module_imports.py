@@ -303,6 +303,32 @@ def main():
         passed += 1
 
         if hasattr(os, 'symlink'):
+            # Entry admission must reject the user's original symlinked path
+            # before ModuleLoader canonicalizes unit identities. Otherwise
+            # the leaf/parent alias disappears from imported-unit validation.
+            directory = root/'atto-symlinked-entry-source'
+            directory.mkdir()
+            (directory/'real.atto').write_text(
+                'pub fnc main():int{return 42;}')
+            (directory/'main.atto').symlink_to(directory/'real.atto')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or (
+                    'symlinked AttoLang source path' not in result.stderr):
+                raise AssertionError(('Atto symlinked CLI entry', result.stderr))
+            passed += 1
+
+            directory = root/'atto-symlinked-entry-parent'
+            directory.mkdir()
+            (directory/'real').mkdir()
+            (directory/'real/main.atto').write_text(
+                'pub fnc main():int{return 42;}')
+            (directory/'alias').symlink_to(directory/'real', target_is_directory=True)
+            result = run([a.compiler, str(directory/'alias/main.atto')])
+            if not result.returncode or result.stdout or (
+                    'symlinked AttoLang source path' not in result.stderr):
+                raise AssertionError(('Atto symlinked CLI parent', result.stderr))
+            passed += 1
+
             directory = root/'atto-symlinked-import-source'
             directory.mkdir()
             (directory/'main.atto').write_text(
