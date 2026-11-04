@@ -1,0 +1,8 @@
+// 24 named type slots exceed the old 64-token generic-call lookahead.
+// All names have independent, case-sensitive declaration identity.
+fnc identity<G00=int,G01=int,G02=int,G03=int,G04=int,G05=int,G06=int,G07=int,G08=int,G09=int,G10=int,G11=int,G12=int,G13=int,G14=int,G15=int,G16=int,G17=int,G18=int,G19=int,G20=int,G21=int,G22=int,G23=int>(int value):int {
+  return value;
+}
+pub fnc main():int {
+  return identity<G23=int,G22=int,G21=int,G20=int,G19=int,G18=int,G17=int,G16=int,G15=int,G14=int,G13=int,G12=int,G11=int,G10=int,G09=int,G08=int,G07=int,G06=int,G05=int,G04=int,G03=int,G02=int,G01=int,G00=int>(value:42);
+}
