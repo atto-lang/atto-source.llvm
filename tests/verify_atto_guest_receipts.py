@@ -29,24 +29,24 @@ SUITES = {
         b"ORES_TEST|FAIL|llvm-native/multi/subtract|expected=42\n"
         b"ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0\n", 1),
     "bounded-pp": (
-        b"ORES_TEST|PASS|llvm-native/bounded/first|\\n"
-        b"ORES_TEST|PASS|llvm-native/bounded/second|\\n"
-        b"ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0\\n", 0),
+        b"ORES_TEST|PASS|llvm-native/bounded/first|\n"
+        b"ORES_TEST|PASS|llvm-native/bounded/second|\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0\n", 0),
 
     "bounded-pf": (
-        b"ORES_TEST|PASS|llvm-native/bounded/first|\\n"
-        b"ORES_TEST|FAIL|llvm-native/bounded/second|expected=0\\n"
-        b"ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0\\n", 1),
+        b"ORES_TEST|PASS|llvm-native/bounded/first|\n"
+        b"ORES_TEST|FAIL|llvm-native/bounded/second|expected=0\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0\n", 1),
 
     "bounded-fp": (
-        b"ORES_TEST|FAIL|llvm-native/bounded/first|expected=0\\n"
-        b"ORES_TEST|PASS|llvm-native/bounded/second|\\n"
-        b"ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0\\n", 1),
+        b"ORES_TEST|FAIL|llvm-native/bounded/first|expected=0\n"
+        b"ORES_TEST|PASS|llvm-native/bounded/second|\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0\n", 1),
 
     "bounded-ff": (
-        b"ORES_TEST|FAIL|llvm-native/bounded/first|expected=0\\n"
-        b"ORES_TEST|FAIL|llvm-native/bounded/second|expected=0\\n"
-        b"ORES_TEST|SUMMARY|total=2|passed=0|failed=2|skipped=0|filtered=0\\n", 1),
+        b"ORES_TEST|FAIL|llvm-native/bounded/first|expected=0\n"
+        b"ORES_TEST|FAIL|llvm-native/bounded/second|expected=0\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=0|failed=2|skipped=0|filtered=0\n", 1),
 
 }
 
