@@ -327,7 +327,17 @@ void test_request_reentrant_drop_after_replacement() {
     })));
     assert(scope->set(key, ReentrantRequestDrop([] {})));
     assert(callbacks.load() == 1);
-    // Erase runs destructor of the replacement AFTER removing the cell.
+    // Erase runs destructor AFTER removing the key and releasing the lock.
+    // A reentrant destructor may install a new cell; outer erase must not
+    // discard it or deadlock on the same RequestLocal mutex.
+    assert(scope->set(key, ReentrantRequestDrop([weak, &key, &callbacks] {
+        ++callbacks;
+        auto live = weak.lock();
+        assert(live);
+        assert(live->set(key, ReentrantRequestDrop([] {})));
+    })));
+    assert(scope->erase(key));
+    assert(callbacks.load() == 2);
     assert(scope->erase(key));
     assert(!scope->erase(key));
     assert(!scope->get_copy(key));
@@ -350,6 +360,7 @@ void test_cancel_and_set_race() {
                 std::this_thread::yield(); // test worker, not carrier
             for (int n = 0; n != 200; ++n) {
                 if (!scope->set(key, n)) break;
+                if ((n % 3) == 0) (void)scope->erase(key);
                 (void)scope->get_copy(key);
             }
         });
