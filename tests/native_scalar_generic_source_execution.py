@@ -202,6 +202,17 @@ pub fnc main(): int { return combine<T=int>(First: 4, second: 2); }
 }
 pub fnc main(): int { return bad(42); }
 """, "native Array<int> operation requires a live array owner"),
+    "constructor-late-unknown-before-affine-move": ("""define class Pair as
+  pub final mut Array<int> left;
+  pub final mut Array<int> right;
+end
+pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  let mut Array<int> b = new Array<int>();
+  let Pair p = new Pair(left: rt take a, unknown: rt take b);
+  return 42;
+}
+""", "unknown named native constructor argument 'unknown'"),
 }
 
 _CASE_ID = re.compile(r"generics\.scalar\.[a-z0-9]+(?:-[a-z0-9]+)*\Z")
