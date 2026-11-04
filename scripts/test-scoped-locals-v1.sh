@@ -11,6 +11,10 @@ for CXX in g++ clang++; do
     -I"$ROOT/src/main/cpp" "$ROOT/tests/native_scoped_local_storage_v1_test.cpp" \
     -o "$OUT/scoped-locals-$CXX"
   "$OUT/scoped-locals-$CXX"
+  "$CXX" -std=c++17 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+    -I"$ROOT/src/main/cpp" "$ROOT/tests/native_actor_local_gate_v1_test.cpp" \
+    -o "$OUT/native-actor-local-gate-$CXX"
+  "$OUT/native-actor-local-gate-$CXX"
 done
 if [ "$found" -eq 0 ]; then echo 'No C++17 compiler available' >&2; exit 1; fi
 # Compile-time scope confusion must fail, not reinterpret actor keys as TaskLocal.
