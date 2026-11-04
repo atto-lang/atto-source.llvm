@@ -142,7 +142,15 @@ int main() {
         check(old_generation.waiting() == 0, "retirement leaked queued ticket");
         check(!old_generation.holds(held.token), "retired actor still owns gate");
         check(!old_generation.holds(queued.token), "retired queued ticket admitted");
+        check(!old_generation.quiescent(),
+              "retired generation became quiescent before physical owner unwind");
+        check(!old_generation.retire_if_quiescent(),
+              "retired generation released live owner without unwind");
         check(!old_generation.release(held.token), "retired owner released a successor");
+        check(old_generation.quiescent(),
+              "retired generation did not quiesce after owner unwind");
+        check(old_generation.retire_if_quiescent(),
+              "retired quiescent generation was not idempotently fenced");
         check(!old_generation.release(queued.token), "retired waiter released a successor");
         check(!old_generation.try_request(), "retired try critical was admitted");
         bool rejected = false;
@@ -180,10 +188,13 @@ int main() {
               "retirement cancellation order differs from FIFO");
         check(!gate.holds(owner.token) && gate.waiting() == 0,
               "retired gate retained executable ticket authority");
+        check(!gate.quiescent(), "retirement prematurely lost physical owner");
+        check(!gate.retire_if_quiescent(), "retirement bypassed owner cleanup");
         check(!gate.release(firstWaiter.token),
               "cancelled waiter re-entered retired generation");
         check(!gate.release(owner.token),
               "revoked owner handed off after retirement");
+        check(gate.quiescent(), "retired physical owner failed to unwind");
         const auto duplicate = gate.retire();
         check(!duplicate.revoked_owner && duplicate.cancelled_waiters.empty(),
               "stale retirement duplicated tickets");
@@ -228,6 +239,10 @@ int main() {
               "retirement did not record the last live owner");
         check(!gate.release(waitingA.token) && !gate.release(waitingB.token),
               "old retired waiter was readmitted");
+        check(!gate.release(receipt.revoked_owner),
+              "retired owner handed off a new invocation");
+        check(gate.quiescent(), "retirement race lost physical owner unwind");
+        check(gate.retire_if_quiescent(), "retired drained gate not idempotent");
     }
 
     // Java/LLVM host-gate parity: retirement of an EMPTY gate must be atomic
