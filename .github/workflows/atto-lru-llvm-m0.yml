@@ -93,7 +93,7 @@ jobs:
           set -euo pipefail
           ctest --test-dir build/atto-lru --output-on-failure -V --timeout 120 \
             --output-junit build/atto-lru/lru-ctest.xml \
-            -R '^atto_lru_(hash_quotient|probe_wrap|slot_recycle|recency_touch|aos_triple_reuse|aos_pair_occupancy|aos_padded_zero|aosoa_tail_reset|micro_source_inventory) \
+            -R '^atto_lru_(hash_quotient|probe_wrap|slot_recycle|recency_touch|aos_triple_reuse|aos_pair_occupancy|aos_padded_zero|aosoa_tail_reset|micro_source_inventory)$' \
             | tee build/atto-lru/lru-native-execution.log
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
@@ -112,49 +112,6 @@ jobs:
                  or c.find("skipped") is not None for c in cases):
               raise SystemExit("failure or skip cannot pass native LRU CI")
           print("ATTO_LLVM_LRU_GUEST_EXECUTION=PASS native_guests=8 source_guards=1")
-          PY
-
-      - name: Reverify source and toolchain after native execution
-        shell: bash
-        env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git diff --quiet --exit-code
-          git diff --cached --quiet --exit-code
-          python3 tests/atto_lru_llvm_source.py
-          printf 'ATTO_LLVM_LRU_FINAL_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
-
-      - name: Preserve source-local observations
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: atto-llvm-lru-m0-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            build/atto-lru/lru-ctest-inventory.txt
-            build/atto-lru/lru-ctest.xml
-            build/atto-lru/lru-native-execution.log
-          if-no-files-found: warn
-          retention-days: 14
- \
-            | tee build/atto-lru/lru-native-execution.log
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          from pathlib import Path
-          root=ET.parse(Path("build/atto-lru/lru-ctest.xml")).getroot()
-          cases=root.findall(".//testcase")
-          required={"atto_lru_hash_quotient","atto_lru_probe_wrap",
-                    "atto_lru_slot_recycle","atto_lru_recency_touch",
-                    "atto_lru_micro_source_inventory"}
-          names=[c.attrib.get("name") for c in cases]
-          if len(cases)!=5 or set(names)!=required or len(set(names))!=5:
-              raise SystemExit("incorrect native CTest execution inventory")
-          if any(c.find("failure") is not None or c.find("error") is not None
-                 or c.find("skipped") is not None for c in cases):
-              raise SystemExit("failure or skip cannot pass native LRU CI")
-          print("ATTO_LLVM_LRU_GUEST_EXECUTION=PASS native_guests=4 source_guards=1")
           PY
 
       - name: Reverify source and toolchain after native execution
