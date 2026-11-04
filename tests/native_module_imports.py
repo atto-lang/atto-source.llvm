@@ -190,6 +190,16 @@ def main():
         'main.ores': 'import module Math from "./math"; pub fnc main():int{return Math.identity<int>(42);}',
         'math.ores': 'define module Math as pub fnc identity<T>(T x):T{return x;} end',
     }, 42))
+    # This source and canonical manifest are byte-identical to the Java
+    # examples/atto-native-parity fixture (Git blob SHAs verified separately).
+    # It is a *real* compiler -> LLVM IR -> Clang -> executable exit-42
+    # contract, not a Python simulation or host-only source inspection.
+    parity_dir = Path(__file__).resolve().parent/'fixtures/atto-native-parity'
+    parity_files = {}
+    for name in ('main.atto', 'lib.atto', '.atto.pkg.toml'):
+        parity_files[name] = (parity_dir/name).read_text(encoding='utf-8')
+    positives.append(('atto-shared-java-module-parity', parity_files, 42))
+
     passed = compared = 0
     with tempfile.TemporaryDirectory(prefix='ores-native-imports-') as temporary:
         root = Path(temporary)
