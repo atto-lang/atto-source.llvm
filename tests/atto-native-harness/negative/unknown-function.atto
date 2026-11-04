@@ -1,0 +1,1 @@
+pub fnc main(): int { return absent_native_harness_fn(42); }

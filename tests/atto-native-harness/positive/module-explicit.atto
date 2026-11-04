@@ -1,0 +1,2 @@
+import module Lib from "./module-helper.atto";
+pub fnc main(): int { return Lib.answer(); }

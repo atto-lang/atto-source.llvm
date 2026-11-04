@@ -1,0 +1,17 @@
+# AttoLang LLVM native executable parity subset v1: id|source|expected_exit
+arith-add|positive/arith-add.atto|42
+arith-subtract|positive/arith-subtract.atto|42
+arith-multiply|positive/arith-multiply.atto|42
+arith-divide|positive/arith-divide.atto|42
+nested-precedence|positive/nested-precedence.atto|42
+signed-values|positive/signed-values.atto|42
+conditional-true|positive/conditional-true.atto|42
+conditional-false|positive/conditional-false.atto|42
+equal-branch|positive/equal-branch.atto|42
+direct-call|positive/direct-call.atto|42
+nested-call|positive/nested-call.atto|42
+module-explicit|positive/module-explicit.atto|42
+module-extensionless|positive/module-extensionless.atto|42
+exit-zero|positive/exit-zero.atto|0
+exit-seven|positive/exit-seven.atto|7
+exit-fortythree|positive/exit-fortythree.atto|43

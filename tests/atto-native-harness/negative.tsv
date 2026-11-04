@@ -1,0 +1,4 @@
+# id|source|expected_stderr_substring
+unknown-function|negative/unknown-function.atto|unknown function
+invalid-syntax|negative/invalid-syntax.atto|error
+missing-import|negative/missing-import.atto|cannot resolve native import
