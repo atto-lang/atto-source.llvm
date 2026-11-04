@@ -30,4 +30,20 @@ for CXX in g++ clang++; do
     echo "scope-confusion unexpectedly compiled with $CXX" >&2; exit 1
   fi
 done
+# Raw pointer element types cannot be used as scoped local keys.
+cat > "$OUT/raw-pointer-negative.cpp" <<'CPP'
+#include "oreslang/runtime/ScopedLocalStorageV1.hpp"
+using namespace oreslang::runtime;
+int main() {
+  ActorLocalKeyV1<int*> unsafe;
+  return unsafe.host_key_id_for_diagnostics() != 0;
+}
+CPP
+for CXX in g++ clang++; do
+  if ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
+  if "$CXX" -std=c++17 -fsyntax-only -I"$ROOT/src/main/cpp" \
+       "$OUT/raw-pointer-negative.cpp" >"$OUT/ptr-neg.log" 2>&1; then
+    echo "raw-pointer scoped key unexpectedly compiled with $CXX" >&2; exit 1
+  fi
+done
 printf '%s\n' 'SCOPED_LOCAL_HOST_ONLY_COMPILER_AND_NEGATIVE_PASS'
