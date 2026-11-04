@@ -4393,6 +4393,19 @@ if(BUILD_TESTING)
             set_tests_properties("native_macro_shared_${macro_case}_linked_guest_aot_42"
                 PROPERTIES TIMEOUT 90)
         endforeach()
+
+        # Synthetic negative tests of the receipt verifier only: never count
+        # them as successful Atto compiler or native guest executions.
+        if(UNIX)
+            add_test(NAME native_macro_receipt_input_mutation_denial
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_macro_guest_receipt_pins.py"
+                    --cmake "${CMAKE_COMMAND}"
+                    --clang "${ORE_NATIVE_MACRO_CLANG_EXECUTABLE}"
+                    --receipt-script "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+            set_tests_properties(native_macro_receipt_input_mutation_denial
+                PROPERTIES TIMEOUT 90)
+        endif()
     endif()
 endif()
 
