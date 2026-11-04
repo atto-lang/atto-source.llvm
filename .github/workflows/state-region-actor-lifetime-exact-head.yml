@@ -245,7 +245,7 @@ jobs:
           # turns. Suspension must fail before ANY IR, not silently fall back
           # to a legacy scalar actor ABI.
           DENIED="$RUNNER_TEMP/unlowered-sealed-actor-state.ll"
-          if "$COMPILER" --experimental-owned-int \
+          if "$COMPILER" --experimental-owned-int --experimental-sealed-scalar-state \
               tests/fixtures/native-aot-unlowered-sealed-actor-state-reject.atto \
               > "$DENIED" 2> "$RUNNER_TEMP/sealed-actor-diagnostic"; then
             echo "unimplemented sealed state unexpectedly compiled" >&2
@@ -289,7 +289,18 @@ jobs:
           # executed. The legacy handler cannot impersonate handle_state.
           SEALED=tests/fixtures/native-aot-sealed-two-actor-owned-counter.atto
           SEALED_IR="$RUNNER_TEMP/compiled-sealed-actor-counter.ll"
-          "$COMPILER" --experimental-owned-int "$SEALED" > "$SEALED_IR"
+          # Unflagged default admission must fail before emitting any IR.
+          UNFLAGGED="$RUNNER_TEMP/sealed-unflagged-reject.ll"
+          if "$COMPILER" --experimental-owned-int "$SEALED" \
+              > "$UNFLAGGED" 2> "$RUNNER_TEMP/sealed-unflagged.err"; then
+            echo "unflagged experimental sealed scalar actor was admitted" >&2
+            exit 1
+          fi
+          test ! -s "$UNFLAGGED"
+          grep -Fq 'native sealed actor state requires --experimental-sealed-scalar-state' \
+            "$RUNNER_TEMP/sealed-unflagged.err"
+          "$COMPILER" --experimental-owned-int --experimental-sealed-scalar-state \
+            "$SEALED" > "$SEALED_IR"
           test -s "$SEALED_IR"
           grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_init\(' "$SEALED_IR"
           grep -Eq '^[[:space:]]*define .*@oreslang_actor_Worker_handle_state\(' "$SEALED_IR"
@@ -310,7 +321,8 @@ jobs:
             SRC_PATH="${entry%%|*}"
             DIAGNOSTIC="${entry#*|}"
             REJECTED="$RUNNER_TEMP/${SRC_PATH}.ll"
-            if "$COMPILER" --experimental-owned-int "tests/fixtures/$SRC_PATH" \
+            if "$COMPILER" --experimental-owned-int --experimental-sealed-scalar-state \
+              "tests/fixtures/$SRC_PATH" \
               > "$REJECTED" 2> "$RUNNER_TEMP/${SRC_PATH}.err"; then
               echo "unsupported actor contract was accepted: $SRC_PATH" >&2
               exit 1
@@ -319,7 +331,7 @@ jobs:
             grep -Fq "$DIAGNOSTIC" "$RUNNER_TEMP/${SRC_PATH}.err"
           done
           WASM_DENIED="$RUNNER_TEMP/sealed-wasm-denied.ll"
-          if "$COMPILER" --target=wasm32 \
+          if "$COMPILER" --target=wasm32 --experimental-sealed-scalar-state \
               tests/fixtures/native-aot-sealed-state-wasm-reject.atto \
               > "$WASM_DENIED" 2> "$RUNNER_TEMP/sealed-wasm.err"; then
             echo "unlowered sealed state unexpectedly admitted on wasm32" >&2
