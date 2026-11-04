@@ -75,6 +75,41 @@ pub fnc main(): int {
   return values.get(0);
 }
 """, 42, 1),
+    "named-array-add": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(value: 42);
+  return values.get(0);
+}
+""", 42, 1),
+    "named-array-get": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(42);
+  return values.get(index: 0);
+}
+""", 42, 1),
+    "named-array-set-reordered": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(value: 42, index: 0);
+  return values.get(index: 0);
+}
+""", 42, 1),
+    "named-array-set-mixed": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(0, value: 42);
+  return values.get(index: 0);
+}
+""", 42, 1),
+    "named-array-set-lexical-ir": ("""fnc source_value(): int { return 42; }
+fnc source_index(): int { return 0; }
+pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(value: source_value(), index: source_index());
+  return values.get(index: 0);
+}
+""", 42, 1),
 }
 
 # These are *valid Oreslang source programs* that compile successfully but
@@ -208,7 +243,7 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
     with tempfile.TemporaryDirectory(prefix="oreslang-array-source-") as directory:
         work = Path(directory)
         for name, (source, exit_code, owners) in POSITIVE.items():
-            suffix = ".atto" if name == "named-call-positional-array-baseline" else ".ores"
+            suffix = ".atto" if name.startswith("named-") else ".ores"
             source_path = work / f"{name}{suffix}"
             source_path.write_text(source, encoding="utf-8")
             compiled = run([str(compiler), str(source_path)])
@@ -231,6 +266,18 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
                 raise AssertionError(f"{name}: legacy aborting allocator remains in generated IR")
             if not ir or b"define i32 @main()" not in ir:
                 raise AssertionError(f"{name}: missing native compiler-generated entrypoint")
+            if name == "named-array-set-lexical-ir":
+                # The source expression for 'value' executes before 'index',
+                # even though ABI argument order is (index, value). Check the
+                # generated (unoptimized) IR rather than trusting fixture labels.
+                value_call = b"call i64 @source_value()"
+                index_call = b"call i64 @source_index()"
+                if ir.count(value_call) != 1 or ir.count(index_call) != 1:
+                    raise AssertionError(
+                        "named native array argument calls missing or duplicated in LLVM IR")
+                if ir.index(value_call) >= ir.index(index_call):
+                    raise AssertionError(
+                        "named Array.set emitted ABI order instead of lexical source order")
             ll = work / f"{name}.ll"
             ll.write_bytes(ir)
             exe = work / name
