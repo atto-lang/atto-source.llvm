@@ -27,6 +27,7 @@ struct Unit {
     bool core_closure_complete = false;
     std::unordered_map<std::string, std::size_t> dependencies;
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
+    std::unordered_map<std::string, std::pair<std::size_t, std::string>> function_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
     std::unordered_set<std::string> classes;
@@ -308,6 +309,20 @@ private:
             if (imported.local_name == current.program.module)
                 fail(current, "native imported module binding conflicts with containing module");
             const auto& target = *units[selected];
+            if (imported.selected_function) {
+                // Java selects public free functions directly, whether or not
+                // the target file wraps them in a module declaration.
+                const auto family = target.functions.find(imported.selected_module);
+                const bool exported = family != target.functions.end() &&
+                    std::any_of(family->second.begin(), family->second.end(),
+                        [](const auto& slot) { return slot.second; });
+                if (!exported)
+                    fail(current, "unknown or private imported function '" + imported.selected_module + "'");
+                if (!current.function_imports.emplace(imported.local_name,
+                        std::make_pair(selected, imported.selected_module)).second)
+                    fail(current, "duplicate imported function binding '" + imported.local_name + "'");
+                continue;
+            }
             if (imported.selected_class) {
                 const auto cls = target.class_exports.find(imported.selected_module);
                 if (cls == target.class_exports.end() || !cls->second)
@@ -351,6 +366,13 @@ private:
             const auto binding = unit.dependencies.find(expr->name.substr(0, dot));
             if (binding == unit.dependencies.end()) fail(unit, "unknown native module binding");
             target = units[binding->second].get(); member = expr->name.substr(dot + 1); external = true;
+        } else if (!unit.functions.count(member)) {
+            const auto imported = unit.function_imports.find(member);
+            if (imported != unit.function_imports.end()) {
+                target = units[imported->second.first].get();
+                member = imported->second.second;
+                external = true;
+            }
         }
         const auto function = target->functions.find(member);
         if (function == target->functions.end() || !function->second.count(expr->arguments.size()))
@@ -399,6 +421,8 @@ private:
     }
     void qualify_function(const Unit& unit, Function& fn) {
         binding_name(unit, fn.name);
+        if (unit.function_imports.count(fn.name))
+            fail(unit, "native imported function binding cannot be redefined: '" + fn.name + "'");
         if (!fn.return_class.empty()) fn.return_class = class_type(unit, fn.return_class);
         if (!fn.method_owner.empty()) fn.method_owner = class_type(unit, fn.method_owner);
         for (auto& parameter : fn.parameters) {

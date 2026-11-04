@@ -269,6 +269,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
             return;
+        case Expression::Kind::ToText:
         case Expression::Kind::Console:
             check_value(*expr.left, locals, functions);
             return;
@@ -471,6 +472,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
         case Expression::Kind::ArrayCall:
+        case Expression::Kind::ToText:
         case Expression::Kind::Console:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
     }
@@ -484,6 +486,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
                                    const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::String:
+        case Expression::Kind::ToText:
         case Expression::Kind::Console:
             reject(expr, "native caught throw cannot own string region effects");
         case Expression::Kind::Floating:
@@ -876,6 +879,7 @@ void validate_i64_ownership(Program& program) {
         std::unordered_set<std::string> root_names;
         for (const auto& item : locals) root_names.insert(item.first);
         std::unordered_map<std::string, unsigned> iteration_loans;
+        std::vector<Locals> loop_entrances;
         std::function<void(const Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
@@ -907,13 +911,31 @@ void validate_i64_ownership(Program& program) {
                 if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
                 auto writable = [&]() {
                     const auto& target = state.at(stmt.receiver);
-                    return target.assignable && !target.heap_owned && !target.int_array && target.class_name.empty() &&
+                    // Rebinding an immutable leaf record copies fields into the
+                    // slot, so no owner is retired and no alias can observe it.
+                    const bool replaceable = target.class_name.empty() ||
+                        (target.class_array_fields.empty() && target.mutable_paths.empty() &&
+                         !layouts.at(target.class_name).owns_arrays);
+                    return target.assignable && !target.heap_owned && !target.int_array && replaceable &&
                         target.shared_loans == 0 && !target.exclusive_loan;
                 };
                 if (!writable()) throw std::runtime_error("assignment requires an unloaned mutable scalar slot");
                 check_value(*stmt.expression, state, functions);
                 if (!writable()) throw std::runtime_error("assignment cannot publish through an active loan");
                 state.at(stmt.receiver).moved = false;
+                return;
+            }
+            if (stmt.kind == Statement::Kind::Break || stmt.kind == Statement::Kind::Continue) {
+                // Both jumps land on the loop's own edges, so outer owners and
+                // loans must already match the state at loop entry.
+                if (loop_entrances.empty()) throw std::runtime_error("break/continue requires an enclosing loop");
+                Locals outer;
+                for (const auto& entry : loop_entrances.back()) {
+                    const auto found = state.find(entry.first);
+                    if (found != state.end()) outer.emplace(entry.first, found->second);
+                }
+                if (!same_affine_state(loop_entrances.back(), outer))
+                    throw std::runtime_error("ownership violation: break/continue must preserve outer owners and loans");
                 return;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
@@ -947,7 +969,9 @@ void validate_i64_ownership(Program& program) {
                 Locals body = entrance;
                 check_value(*stmt.condition, body, functions);
                 if (!same_affine_state(entrance, body)) throw std::runtime_error("index condition must preserve ownership");
+                loop_entrances.push_back(entrance);
                 scoped_effects(stmt.then_statements, body);
+                loop_entrances.pop_back();
                 check_value(*stmt.loop_step, body, functions);
                 if (!same_affine_state(entrance, body))
                     throw std::runtime_error("ownership violation: index back-edge must preserve outer owners and loans");
@@ -964,7 +988,9 @@ void validate_i64_ownership(Program& program) {
                 const auto& iterator = *stmt.branch_local;
                 if (!body.emplace(iterator.name, scoped_entry(iterator)).second)
                     throw std::runtime_error("native for-of element shadows live owner");
+                loop_entrances.push_back(entrance);
                 scoped_effects(stmt.then_statements, body);
+                loop_entrances.pop_back();
                 body.erase(iterator.name);
                 if (!same_affine_state(entrance, body))
                     throw std::runtime_error("ownership violation: for-of back-edge must preserve outer owners and loans");

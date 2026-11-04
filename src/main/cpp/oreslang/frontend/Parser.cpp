@@ -496,6 +496,7 @@ std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     result->floating = source.floating;
     result->boolean = source.boolean;
     result->resolved_type = source.resolved_type;
+    result->widen_to_f64 = source.widen_to_f64;
     result->resolved_class = source.resolved_class;
     result->name = source.name;
     result->argument_names = source.argument_names;
@@ -592,25 +593,39 @@ public:
             advance();
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
-            ModuleImport imported;
-            imported.offset = token_.offset;
-            imported.selected_class = accept("class");
-            if (!imported.selected_class) require("module");
-            imported.selected_module = identifier();
-            imported.local_name = accept("as") ? identifier() : imported.selected_module;
-            if (!module_names_.insert(imported.local_name).second)
-                fail("duplicate imported module binding '" + imported.local_name + "'");
+            const std::size_t import_offset = token_.offset;
+            const bool selected_class = accept("class");
+            const bool selected_function = !selected_class &&
+                (accept("fnc") || accept("routine"));
+            if (!selected_class && !selected_function) require("module");
+            // `import class A, B from` / `import fnc f, g from` select several
+            // names from one unit. A module selection stays single-valued.
+            std::vector<ModuleImport> selections;
+            do {
+                ModuleImport imported;
+                imported.offset = import_offset;
+                imported.selected_class = selected_class;
+                imported.selected_function = selected_function;
+                imported.selected_module = identifier();
+                imported.local_name = accept("as") ? identifier() : imported.selected_module;
+                if (!selected_function && !module_names_.insert(imported.local_name).second)
+                    fail("duplicate imported module binding '" + imported.local_name + "'");
+                selections.push_back(std::move(imported));
+            } while ((selected_class || selected_function) && accept(","));
             require("from");
             if (token_.kind != Kind::String) fail("native module import requires a quoted source path");
-            imported.path = std::string(token_.text);
-            if (imported.path.empty() || imported.path.size() > 4096)
+            const std::string import_path(token_.text);
+            if (import_path.empty() || import_path.size() > 4096)
                 fail("native import path must contain 1..4096 bytes");
-            for (unsigned char ch : imported.path)
+            for (unsigned char ch : import_path)
                 if (ch < 32 || ch == 127 || ch == '\\')
                     fail("native import path escapes/control characters unsupported");
             advance();
             require(";");
-            program.imports.push_back(std::move(imported));
+            for (auto& imported : selections) {
+                imported.path = import_path;
+                program.imports.push_back(std::move(imported));
+            }
         }
         if (accept("namespace")) {
             program.namespace_name = identifier();
@@ -667,6 +682,7 @@ public:
                 if (!defined_type_aliases_.empty() || !forwards_.empty())
                     fail("native module wrapper cannot import file-root forward aliases");
                 program.module = identifier();
+                own_module_ = program.module;
                 if (accept("conforms")) {
                     do program.conforms.push_back(identifier()); while (accept(","));
                 }
@@ -682,8 +698,14 @@ public:
             }
             break;
         }
-        while (token_.kind != Kind::End
-                && !(wrapped_module && token_.text == "end")) {
+        while (token_.kind != Kind::End) {
+            // Java admits file-level declarations after a module wrapper, so
+            // `define module m as ... end` may precede `pub routine main()`.
+            if (wrapped_module && token_.text == "end") {
+                advance();
+                wrapped_module = false;
+                continue;
+            }
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
             if (at_type_only_introducer()) {
@@ -757,6 +779,12 @@ public:
         }
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
+        for (const auto& member : own_module_calls_) {
+            const bool exported = std::any_of(program.functions.begin(), program.functions.end(),
+                [&](const Function& fn) { return fn.name == member && fn.exported; });
+            if (!exported)
+                fail("module-qualified call requires a public member: '" + member + "'");
+        }
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         validate_type_only_declarations(program);
         if (!program.namespace_name.empty() &&
@@ -1505,6 +1533,7 @@ private:
                 // capability, independent of whether the slot is final.
                 require("<");
                 if (accept("String") || accept("string")) field.array_element_type = ScalarType::String;
+                else if (accept_f64_type()) field.array_element_type = ScalarType::F64;
                 else if (!accept("int")) field.array_record_class = type_identifier();
                 require(">");
                 field.int_array = true;
@@ -1524,7 +1553,7 @@ private:
                     if (type_identifier() != field.array_record_class) fail("array field constructor type mismatch");
                 } else if (field.array_element_type == ScalarType::String) {
                     if (!accept("String")) require("string");
-                } else require("int");
+                } else if (field.array_element_type == ScalarType::F64) { if (!accept("f64")) require("float"); } else require("int");
                 require(">");
                 require("(");
                 const std::size_t initializer_end = token_.offset + token_.text.size();
@@ -1532,7 +1561,8 @@ private:
                 class_field_terminator(initializer_end);
             } else {
                 if (token_.text == "Array") fail("native Array<int> field requires mut referent capability");
-                if (token_.text != "Option" && token_.text != "Result" && token_.text != "int" && token_.text != "bool" && token_.text != "String" && token_.text != "string") {
+                if (token_.text != "Option" && token_.text != "Result" && token_.text != "int" && token_.text != "bool" &&
+                        token_.text != "f64" && token_.text != "float" && token_.text != "String" && token_.text != "string") {
                     if (!field.final_field || literal_const) fail("expected val or final for native nested class field");
                     field.class_name = type_identifier(); field.name = identifier();
                     if (!seen.insert(field.name).second) fail("duplicate class field '" + field.name + "'");
@@ -1541,6 +1571,7 @@ private:
                 }
                 if (token_.text == "Option" || token_.text == "Result") field.sum_type = type_identifier();
                 field.scalar_type = accept("bool") ? ScalarType::Bool :
+                    accept_f64_type() ? ScalarType::F64 :
                     (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (field.scalar_type == ScalarType::I64 && field.sum_type.empty()) require("int");
                 field.name = identifier();
@@ -1592,6 +1623,8 @@ private:
             field.initializer_expression = std::make_unique<Expression>();
             field.initializer_expression->kind = Expression::Kind::Variable;
             field.initializer_expression->name = field.name;
+            // The constructor parameter slot holds binary64 bits for a float field.
+            field.initializer_expression->resolved_type = field.scalar_type;
         }
         // Fieldless classes still have nominal identity and checked receiver loans.
         for (const auto& method : result.methods)
@@ -1937,7 +1970,7 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
-                } else if (accept("f64")) {
+                } else if (accept_f64_type()) {
                     if (parameter.mode != Parameter::Mode::Value)
                         fail("native f64 parameter must be passed by value, not borrow");
                     parameter.scalar_type = ScalarType::F64;
@@ -1980,7 +2013,7 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
-            } else if (accept("f64")) {
+            } else if (accept_f64_type()) {
                 value.return_type = ScalarType::F64;
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
@@ -2188,10 +2221,10 @@ private:
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "f64" || sum_first.text == "String" || sum_first.text == "string")) {
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "f64" || sum_first.text == "float" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
-                binding.scalar_type = accept("bool") ? ScalarType::Bool : accept("f64") ? ScalarType::F64 : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                binding.scalar_type = accept("bool") ? ScalarType::Bool : accept_f64_type() ? ScalarType::F64 : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
                 binding.name = identifier();
                 require("=");
@@ -2256,7 +2289,7 @@ private:
                     if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
                 } else if (binding.array_element_type == ScalarType::String) {
                     if (!accept("String")) require("string");
-                } else require("int");
+                } else if (binding.array_element_type == ScalarType::F64) { if (!accept("f64")) require("float"); } else require("int");
                 require(">"); require("("); require(")");
                 binding.int_array = binding.owner_mutable = true;
             } else if ((token_.text == "val" || token_.text == "const") &&
@@ -2320,7 +2353,7 @@ private:
                         if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
                     } else if (binding.array_element_type == ScalarType::String) {
                         if (!accept("String")) require("string");
-                    } else require("int");
+                    } else if (binding.array_element_type == ScalarType::F64) { if (!accept("f64")) require("float"); } else require("int");
                     require(">");
                     require("(");
                     require(")");
@@ -2339,6 +2372,16 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                    binding.assignable = true;
+                } else if (token_.text != "rt") {
+                    // `let T x = f(...)` holds an immutable record view.
+                    binding.initializer = expression();
+                    if (binding.initializer->kind != Expression::Kind::Call &&
+                            binding.initializer->kind != Expression::Kind::Conditional &&
+                            binding.initializer->kind != Expression::Kind::ArrayCall)
+                        fail("native class initializer requires new or immutable record value");
+                    binding.record_view = true;
+                    binding.assignable = true;
                 } else {
                     require("rt");
                     require("take");
@@ -2440,6 +2483,23 @@ private:
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> dispatch_statement;
         std::function<Statement()> foreach_statement;
+        std::function<Statement()> conditional_statement;
+        std::size_t loop_depth = 0;
+        std::size_t hidden_loop_counters = 0;
+        // Java: rt fail(message) is a catchable failure. Native admission (see
+        // validate) rejects programs where a handler or cleanup could observe it.
+        auto rt_fail_statement = [&]() {
+            Statement statement;
+            statement.kind = Statement::Kind::Call;
+            statement.offset = token_.offset;
+            require("fail");
+            auto failure = make_expression(Expression::Kind::Console, statement.offset);
+            failure->name = "fail";
+            require("("); failure->left = expression(); require(")");
+            require(";");
+            statement.expression = std::move(failure);
+            return statement;
+        };
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
@@ -2463,7 +2523,7 @@ private:
                 statement.branch_local = std::move(local); return statement;
             }
             auto type_name = [&]() -> std::string {
-                for (const auto* scalar : {"int", "bool", "f64", "string", "String"})
+                for (const auto* scalar : {"int", "bool", "f64", "float", "string", "String"})
                     if (accept(scalar)) return scalar;
                 return type_identifier();
             };
@@ -2473,7 +2533,7 @@ private:
             if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
             if (type == "Array") fail("ordered owning local requires scoped region/drop lowering");
             if (type == "int") local->scalar_type = ScalarType::I64;
-            else if (type == "f64") local->scalar_type = ScalarType::F64;
+            else if (type == "f64" || type == "float") local->scalar_type = ScalarType::F64;
             else if (type == "bool") local->scalar_type = ScalarType::Bool;
             else if (type == "String" || type == "string") local->scalar_type = ScalarType::String;
             else if (scalar_alias_targets_.count(type)) local->pending_type_alias = type;
@@ -2481,7 +2541,8 @@ private:
                 fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar branch local");
             else if (is_sum_name(type)) local->sum_type = type;
             else {
-                if (mutable_slot) fail("native branch-local class owner requires destructor/drop lowering");
+                // A `let` record slot is rebound by copying an immutable leaf
+                // record; the scalar checker rejects any other class.
                 local->class_name = type; local->record_view = true;
             }
             require("="); local->initializer = expression(); require(";");
@@ -2489,38 +2550,120 @@ private:
             statement.branch_local = std::move(local); return statement;
         };
         std::size_t statement_depth = 0;
-        foreach_statement = [&]() {
-            Lexer look = lexer_;
-            const auto open = look.next(), mode = look.next(), name = look.next(), of = look.next();
-            if (open.text == "(" && mode.text == "let" && name.text == "int") {
-                Statement loop; loop.kind = Statement::Kind::ForIndex; loop.offset = token_.offset;
-                require("for"); require("("); require("let"); require("int");
-                loop.branch_local = std::make_unique<LocalBinding>();
-                loop.branch_local->name = identifier(); loop.branch_local->offset = loop.offset;
-                loop.branch_local->owner_mutable = true; loop.branch_local->assignable = true;
-                require("="); loop.branch_local->initializer = expression(); require(";");
-                loop.condition = expression(); require(";");
-                if (identifier() != loop.branch_local->name) fail("native index loop must update its own counter");
-                require("="); loop.loop_step = expression(); require(")"); require("{");
-                loop.then_statements = branch_arm(false, false); require("}"); return loop;
-            }
-            if (open.text != "(" || (mode.text != "const" && mode.text != "val") ||
-                    name.kind != Kind::Identifier || of.text != "of")
-                fail("native realtime source loop requires verified LLVM continuation lowering");
-            Statement loop;
-            loop.kind = Statement::Kind::ForEach;
-            loop.offset = token_.offset;
-            require("for"); require("(");
-            if (!accept("const")) require("val");
+        // Java loop bodies are `do ... done` or `{ ... }`.
+        auto loop_body = [&]() {
+            ++loop_depth;
+            std::vector<Statement> body;
+            if (accept("do")) { body = branch_arm(false, false); require("done"); }
+            else { require("{"); body = branch_arm(false, false); require("}"); }
+            --loop_depth;
+            return body;
+        };
+        // `while c` and `loop` reuse the checked index-loop CFG with an
+        // unspellable counter, so no second back-edge analysis exists.
+        auto condition_loop = [&](std::unique_ptr<Expression> condition, std::size_t offset) {
+            Statement loop; loop.kind = Statement::Kind::ForIndex; loop.offset = offset;
             loop.branch_local = std::make_unique<LocalBinding>();
-            loop.branch_local->offset = token_.offset;
-            loop.branch_local->name = identifier();
-            require("of"); loop.expression = expression(); require(")"); require("{");
-            const auto receivers = class_receivers_;
-            class_receivers_.insert(loop.branch_local->name);
-            loop.then_statements = branch_arm(false, false);
-            class_receivers_ = receivers;
-            require("}"); return loop;
+            loop.branch_local->name = "$loop" + std::to_string(hidden_loop_counters++);
+            loop.branch_local->offset = offset;
+            loop.branch_local->owner_mutable = true; loop.branch_local->assignable = true;
+            loop.branch_local->initializer = make_expression(Expression::Kind::Integer, offset);
+            loop.condition = std::move(condition);
+            loop.loop_step = make_expression(Expression::Kind::Variable, offset);
+            loop.loop_step->name = loop.branch_local->name;
+            loop.then_statements = loop_body();
+            return loop;
+        };
+        auto while_statement = [&]() {
+            const auto offset = token_.offset;
+            require("while");
+            auto condition = expression();
+            return condition_loop(std::move(condition), offset);
+        };
+        auto loop_statement = [&]() {
+            const auto offset = token_.offset;
+            require("loop");
+            auto always = make_expression(Expression::Kind::Boolean, offset);
+            always->boolean = true;
+            return condition_loop(std::move(always), offset);
+        };
+        foreach_statement = [&]() {
+            const auto offset = token_.offset;
+            require("for");
+            const bool parenthesized = accept("(");
+            Lexer look = lexer_;
+            const auto second = look.next(), third = look.next();
+            const bool binding_keyword = token_.text == "const" || token_.text == "val" || token_.text == "let";
+            if (binding_keyword && second.kind == Kind::Identifier && third.text == "of") {
+                if (token_.text == "let")
+                    fail("native for-of requires a const or val binding");
+                advance();
+                Statement loop;
+                loop.kind = Statement::Kind::ForEach;
+                loop.offset = offset;
+                loop.branch_local = std::make_unique<LocalBinding>();
+                loop.branch_local->offset = token_.offset;
+                loop.branch_local->name = identifier();
+                require("of"); loop.expression = expression();
+                if (parenthesized) require(")");
+                const auto receivers = class_receivers_;
+                class_receivers_.insert(loop.branch_local->name);
+                loop.then_statements = loop_body();
+                class_receivers_ = receivers;
+                return loop;
+            }
+            // Indexed form, as in Java: `let i = 0`, `let int i = 0`, `int i = 0`.
+            const bool typed_counter = token_.text == "int";
+            if (!typed_counter && token_.text != "let")
+                fail("native index loop requires an int counter binding");
+            if (!typed_counter) advance();
+            accept("int");
+            Statement loop; loop.kind = Statement::Kind::ForIndex; loop.offset = offset;
+            loop.branch_local = std::make_unique<LocalBinding>();
+            loop.branch_local->name = identifier(); loop.branch_local->offset = offset;
+            loop.branch_local->owner_mutable = true; loop.branch_local->assignable = true;
+            require("="); loop.branch_local->initializer = expression(); require(";");
+            loop.condition = expression(); require(";");
+            if (identifier() != loop.branch_local->name) fail("native index loop must update its own counter");
+            if (token_.text == "+" || token_.text == "-") {
+                // `i++` and `i--` are the checked `i = i + 1` / `i = i - 1`.
+                const bool increment = token_.text == "+";
+                advance();
+                require(increment ? "+" : "-");
+                auto step = make_expression(increment ? Expression::Kind::Add : Expression::Kind::Subtract, offset);
+                step->left = make_expression(Expression::Kind::Variable, offset);
+                step->left->name = loop.branch_local->name;
+                step->right = make_expression(Expression::Kind::Integer, offset);
+                step->right->integer = 1;
+                loop.loop_step = std::move(step);
+            } else {
+                require("="); loop.loop_step = expression();
+            }
+            if (parenthesized) require(")");
+            loop.then_statements = loop_body();
+            return loop;
+        };
+        conditional_statement = [&]() {
+            Statement statement;
+            statement.offset = token_.offset;
+            statement.kind = Statement::Kind::Conditional;
+            statement.condition = expression();
+            const bool had_semicolon = accept(";");
+            const bool keyword_arm = accept("then") || accept("do");
+            if (had_semicolon && !keyword_arm) require("do");
+            if (keyword_arm) {
+                statement.then_statements = branch_arm(false, true);
+                if (accept("elif") || accept("elseif")) {
+                    statement.else_statements.push_back(conditional_statement());
+                    return statement; // the nested arm consumed the shared `fi`
+                }
+                if (accept("else")) statement.else_statements = branch_arm(false, true);
+            } else {
+                require("{"); statement.then_statements = branch_arm(false, false); require("}");
+                if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
+            }
+            require("fi");
+            return statement;
         };
         branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
@@ -2528,15 +2671,36 @@ private:
             struct Receivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> saved;
                 ~Receivers() { target = std::move(saved); } } receivers{class_receivers_, class_receivers_};
             std::vector<Statement> actions;
-            while (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif"))) {
-                if (token_.kind == Kind::End || actions.size() == 16)
-                    fail("native conditional arm limit exceeded (16)");
+            auto arm_ended = [&]() {
+                return token_.text == "}" || token_.text == "done" ||
+                    (then_scope && (token_.text == "fi" || token_.text == "else" ||
+                                    token_.text == "elif" || token_.text == "elseif"));
+            };
+            while (!arm_ended()) {
+                if (token_.kind == Kind::End || actions.size() == 64)
+                    fail("native conditional arm limit exceeded (64)");
                 if (token_.text == "for" && !finally_scope) {
                     actions.push_back(foreach_statement()); continue;
+                }
+                if (token_.text == "while" && !finally_scope) {
+                    actions.push_back(while_statement()); continue;
+                }
+                if (token_.text == "loop" && !finally_scope) {
+                    actions.push_back(loop_statement()); continue;
                 }
                 if (token_.text == "while" || token_.text == "for" ||
                         token_.text == "loop") {
                     fail("native realtime source loop requires verified LLVM continuation lowering");
+                }
+                if ((token_.text == "break" || token_.text == "continue") && !finally_scope) {
+                    if (loop_depth == 0) fail("break/continue requires an enclosing loop");
+                    Statement jump;
+                    jump.kind = token_.text == "break" ? Statement::Kind::Break : Statement::Kind::Continue;
+                    jump.offset = token_.offset;
+                    advance(); require(";");
+                    actions.push_back(std::move(jump));
+                    if (!arm_ended()) fail("native statement follows terminal break/continue");
+                    continue;
                 }
                 if (token_.text == "rt") {
                     advance();
@@ -2544,6 +2708,10 @@ private:
                         throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
+                    }
+                    if (token_.text == "fail" && !finally_scope) {
+                        actions.push_back(rt_fail_statement());
+                        continue;
                     }
                     fail("unsupported native runtime operation in conditional arm");
                 }
@@ -2554,20 +2722,13 @@ private:
                         continue;
                     }
                 }
+                if (token_.text == "if" && !finally_scope) {
+                    advance();
+                    actions.push_back(conditional_statement());
+                    continue;
+                }
                 Statement statement;
                 statement.offset = token_.offset;
-                if (token_.text == "if" && !finally_scope) {
-                    advance(); statement.kind = Statement::Kind::Conditional;
-                    statement.condition = expression();
-                    if (accept(";")) {
-                        if (!accept("then")) require("do"); statement.then_statements = branch_arm(false, true);
-                        if (accept("else")) statement.else_statements = branch_arm(false, true);
-                    } else {
-                        require("{"); statement.then_statements = branch_arm(false, false); require("}");
-                        if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
-                    }
-                    require("fi"); actions.push_back(std::move(statement)); continue;
-                }
                 if (finally_scope && (token_.text == "return" ||
                         token_.text == "break" || token_.text == "continue"))
                     fail("return/break/continue cannot escape finally; finally is cleanup-only");
@@ -2578,7 +2739,7 @@ private:
                     statement.kind = Statement::Kind::Return;
                     if (!value.returns_void) statement.expression = expression();
                     require(";"); actions.push_back(std::move(statement));
-                    if (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
+                    if (!arm_ended())
                         fail("native statement follows terminal return");
                     continue;
                 }
@@ -2725,7 +2886,11 @@ private:
         bool return_guards_started = false;
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
-        while (token_.text != "return") {
+        // Java: a void body may simply fall off its closing brace.
+        const auto implicit_void_end = [&]() {
+            return value.returns_void && !terminal_try_finally && token_.text == "}";
+        };
+        while (token_.text != "return" && !implicit_void_end()) {
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -2772,9 +2937,11 @@ private:
                     fail("native for-of cannot enter protected/return-guard scope");
                 value.statements.push_back(foreach_statement()); continue;
             }
-            if (token_.text == "while" || token_.text == "for" ||
-                    token_.text == "loop") {
-                fail("native realtime source loop requires verified LLVM continuation lowering");
+            if (token_.text == "while" || token_.text == "loop") {
+                if (terminal_try_finally || return_guards_started)
+                    fail("native loop cannot enter protected/return-guard scope");
+                value.statements.push_back(token_.text == "while" ? while_statement() : loop_statement());
+                continue;
             }
             if (token_.text == "try") {
                 if (terminal_try_finally || return_guards_started)
@@ -2884,15 +3051,22 @@ private:
             if (token_.text == "if") {
                 const auto offset = token_.offset;
                 require("if");
+                // Ordinary conditionals share one structured form so `else`,
+                // `elif` and void returns behave as in Java. Guard lowering
+                // remains only for protected and class-valued returns.
+                if (!terminal_try_finally && value.return_class.empty() && value.return_sum.empty() &&
+                        !return_guards_started) {
+                    if (++branch_count > 128) fail("native conditional CFG limit exceeded (128)");
+                    value.statements.push_back(conditional_statement());
+                    continue;
+                }
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                const bool then_form = accept(";");
-                if (then_form) {
-                    if (!accept("then")) require("do");
-                } else {
-                    require("{");
-                }
+                const bool had_semicolon = accept(";");
+                const bool then_form = accept("then") || accept("do");
+                if (had_semicolon && !then_form) require("do");
+                if (!then_form) require("{");
                 if (accept("return")) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
@@ -2925,8 +3099,8 @@ private:
                         fail("native terminal try supports only guarded return branches");
                     if (return_guards_started)
                         fail("native conditional statements cannot follow return guards");
-                    if (++branch_count > 8)
-                        fail("native conditional CFG limit exceeded (8)");
+                    if (++branch_count > 128)
+                        fail("native conditional CFG limit exceeded (128)");
                     Statement conditional;
                     conditional.kind = Statement::Kind::Conditional;
                     conditional.offset = offset;
@@ -3056,6 +3230,10 @@ private:
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
                 }
+                if (token_.text == "fail") {
+                    value.statements.push_back(rt_fail_statement());
+                    continue;
+                }
                 fail("native rt statement unsupported until suspension lowering");
             }
             Statement statement;
@@ -3100,6 +3278,10 @@ private:
             }
             require(";");
             value.statements.push_back(std::move(statement));
+        }
+        if (token_.text == "}") {
+            require("}");
+            return value;
         }
         require("return");
         if (!value.returns_void) {
@@ -3271,9 +3453,8 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Native division requires two explicitly typed f64 operands:
-            // int/int and mixed source expressions remain rejected by the
-            // scalar type passes (no implicit numeric conversions).
+            // Java: `/` is always real division, so the scalar passes widen
+            // int operands and type the result as float.
             const bool division = token_.text == "/";
             const bool remainder = token_.text == "%";
             const auto offset = token_.offset;
@@ -3294,9 +3475,8 @@ private:
                     right->kind = Expression::Kind::Integer;
                     right->integer = -magnitude; // magnitude fits signed i64
                 }
-                if (right->kind != Expression::Kind::Integer || right->integer == 0)
-                    fail("native remainder requires a nonzero signed integer literal divisor "
-                         "until typed zero-divisor effects are implemented");
+                // The scalar checker enforces the literal divisor rule once
+                // operand types distinguish int remainder from IEEE remainder.
             }
             auto expr = make_expression(remainder ? Expression::Kind::Remainder
                                                  : division ? Expression::Kind::Divide
@@ -3640,20 +3820,28 @@ private:
             if (accept("stdout")) require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
             expr->name = identifier();
-            if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
+            // Java spells the no-newline form stdout.write; print is the
+            // legacy native spelling. Both lower to the same reactor path.
+            if (expr->name != "print" && expr->name != "println" && expr->name != "write")
+                fail("unsupported native stdio operation");
+            auto console_operand = [&]() {
+                auto text = make_expression(Expression::Kind::ToText, token_.offset);
+                text->left = expression();
+                return text;
+            };
             // Java stdio.print/println concatenate arguments without an
             // inserted separator and append at most one newline. Lower all
             // string arguments to the existing checked string-concat AST so
             // evaluation order, type admission, effects and region ownership
             // are identical to ordinary string concatenation.
             require("(");
-            expr->left = expression();
+            expr->left = console_operand();
             std::size_t argc = 1;
             while (accept(",")) {
                 if (++argc > 32) fail("native stdio argument count exceeds 32");
                 auto joined = make_expression(Expression::Kind::Add, offset);
                 joined->left = std::move(expr->left);
-                joined->right = expression();
+                joined->right = console_operand();
                 expr->left = std::move(joined);
             }
             require(")");
@@ -3675,15 +3863,19 @@ private:
         if (token_.kind == Kind::Floating) {
             // Locale-independent, bounded, once-rounded IEEE binary64 input.
             // Preserve f64 identity throughout checking and LLVM lowering.
-            const std::string_view literal = token_.text;
-            if (literal.find('_') != std::string_view::npos)
-                fail("native f64 literal does not admit digit separators");
+            std::string literal(token_.text);
+            // Java's lexer admits digit separators in floating literals.
+            literal.erase(std::remove(literal.begin(), literal.end(), '_'), literal.end());
             double number = 0.0;
             const auto parsed = std::from_chars(literal.data(),
                 literal.data() + literal.size(), number, std::chars_format::general);
-            if (parsed.ec != std::errc{} ||
-                    parsed.ptr != literal.data() + literal.size())
-                fail("native f64 literal outside finite binary64 range or malformed");
+            if (parsed.ptr != literal.data() + literal.size())
+                fail("native f64 literal is malformed");
+            // Java rounds an out-of-range literal to infinity or zero.
+            if (parsed.ec == std::errc::result_out_of_range)
+                number = std::strtod(literal.c_str(), nullptr);
+            else if (parsed.ec != std::errc{})
+                fail("native f64 literal is malformed");
             auto expr = make_expression(Expression::Kind::Floating, offset);
             expr->floating = number;
             advance();
@@ -3745,6 +3937,11 @@ private:
         else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
+        else if (!own_module_.empty() && expr->name == own_module_ && accept(".")) {
+            // `m.f()` beside `define module m` names this unit's own member.
+            expr->name = identifier();
+            own_module_calls_.push_back(expr->name);
+        }
         if (generic_call_type_arguments_ahead()) {
             require("<");
             expr->type_arguments_present = true;
@@ -3901,8 +4098,12 @@ private:
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
 
+    // Java's `float` and `f64` denote the same IEEE binary64 primitive.
+    bool accept_f64_type() { return accept("f64") || accept("float"); }
+
     void array_element(LocalBinding& binding) {
         if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
+        else if (accept_f64_type()) binding.array_element_type = ScalarType::F64;
         else if (!accept("int")) binding.array_record_class = type_identifier();
     }
 
@@ -4109,6 +4310,7 @@ private:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
                 return;
+            case Expression::Kind::ToText:
             case Expression::Kind::Console:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
@@ -4269,6 +4471,28 @@ private:
         return type == ScalarType::F64 ? "f64" : type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
     }
 
+    // Java numeric join: int widens to float, nothing narrows implicitly.
+    static ScalarType join_numeric(const Expression& left_expr, ScalarType left,
+                                   const Expression& right_expr, ScalarType right,
+                                   std::string_view where, std::size_t offset) {
+        const auto numeric = [](ScalarType type) { return type == ScalarType::I64 || type == ScalarType::F64; };
+        if (!numeric(left) || !numeric(right))
+            throw std::runtime_error(std::string(where) + " requires int or f64, got " +
+                scalar_type_name(left) + " and " + scalar_type_name(right) +
+                " at byte " + std::to_string(offset));
+        if (left == right) return left;
+        (left == ScalarType::I64 ? left_expr : right_expr).widen_to_f64 = true;
+        return ScalarType::F64;
+    }
+
+    // Assignment-context widening: a declared float accepts an int value.
+    static bool scalar_assignable(const Expression& expr, ScalarType actual, ScalarType expected) {
+        if (actual == expected) return true;
+        if (expected != ScalarType::F64 || actual != ScalarType::I64) return false;
+        expr.widen_to_f64 = true;
+        return true;
+    }
+
     static ScalarType validate_scalar_expression(
             const Expression& expr,
             const std::unordered_map<std::string, ScalarType>& variables,
@@ -4295,6 +4519,10 @@ private:
             case Expression::Kind::Boolean:
                 return ScalarType::Bool;
             case Expression::Kind::String:
+                return expr.resolved_type = ScalarType::String;
+            case Expression::Kind::ToText:
+                // Java stdio accepts any scalar operand and prints its text.
+                (void)validate_scalar_expression(*expr.left, variables, functions, depth + 1);
                 return expr.resolved_type = ScalarType::String;
             case Expression::Kind::Console:
                 require_type(validate_scalar_expression(*expr.left, variables, functions, depth + 1), ScalarType::String, "stdio");
@@ -4381,7 +4609,7 @@ private:
                     const ScalarType actual = validate_scalar_expression(
                         *expr.arguments[i], variables, functions, depth + 1);
                     if (signature.parameter_is_scalar[slot] &&
-                            actual != signature.parameter_scalar_types[slot])
+                            !scalar_assignable(*expr.arguments[i], actual, signature.parameter_scalar_types[slot]))
                         throw std::runtime_error("argument '" + signature.parameters[slot] +
                             "' requires " + scalar_type_name(signature.parameter_scalar_types[slot]) +
                             ", got " + scalar_type_name(actual) + " at byte " +
@@ -4418,11 +4646,7 @@ private:
                 auto left = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
                 auto right = validate_scalar_expression(*expr.right, variables, functions, depth + 1);
                 if (left == ScalarType::String) require_type(right, ScalarType::String, "string concatenation");
-                else {
-                    if (left != ScalarType::I64 && left != ScalarType::F64)
-                        throw std::runtime_error("arithmetic requires int or f64");
-                    require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
-                }
+                else left = join_numeric(*expr.left, left, *expr.right, right, "arithmetic", expr.offset);
                 return expr.resolved_type = left;
             }
             case Expression::Kind::Subtract:
@@ -4433,16 +4657,17 @@ private:
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                if (expr.kind == Expression::Kind::Divide) {
-                    require_type(left, ScalarType::F64, "f64 division (int/int unsupported)");
-                    require_type(right, ScalarType::F64, "f64 division (no implicit int conversion)");
-                } else {
-                    if (left != ScalarType::I64 && (left != ScalarType::F64 ||
-                            expr.kind == Expression::Kind::Remainder))
-                        throw std::runtime_error("arithmetic requires int or f64 (remainder int only)");
-                    require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
+                ScalarType joined = join_numeric(*expr.left, left, *expr.right, right, "arithmetic", expr.offset);
+                // Java: `/` is real division even for int/int.
+                if (expr.kind == Expression::Kind::Divide && joined == ScalarType::I64) {
+                    expr.left->widen_to_f64 = expr.right->widen_to_f64 = true;
+                    joined = ScalarType::F64;
                 }
-                return expr.resolved_type = left;
+                if (expr.kind == Expression::Kind::Remainder && joined == ScalarType::I64 &&
+                        (expr.right->kind != Expression::Kind::Integer || expr.right->integer == 0))
+                    throw std::runtime_error("native remainder requires a nonzero signed integer literal divisor "
+                        "until typed zero-divisor effects are implemented at byte " + std::to_string(expr.offset));
+                return expr.resolved_type = joined;
             }
             case Expression::Kind::Less:
             case Expression::Kind::LessEqual:
@@ -4452,9 +4677,7 @@ private:
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                if (left != ScalarType::I64 && left != ScalarType::F64)
-                    throw std::runtime_error("ordered comparison requires int or f64");
-                require_type(right, left, "ordered comparison; implicit int/f64 conversion prohibited");
+                (void)join_numeric(*expr.left, left, *expr.right, right, "ordered comparison", expr.offset);
                 return expr.resolved_type = ScalarType::Bool;
             }
             case Expression::Kind::Equal:
@@ -4463,7 +4686,10 @@ private:
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                if (left != right)
+                const bool mixed_numeric = (left == ScalarType::I64 && right == ScalarType::F64) ||
+                    (left == ScalarType::F64 && right == ScalarType::I64);
+                if (mixed_numeric) (void)join_numeric(*expr.left, left, *expr.right, right, "equality", expr.offset);
+                else if (left != right)
                     throw std::runtime_error("equality operands require the same scalar type at byte " +
                         std::to_string(expr.offset));
                 return ScalarType::Bool;
@@ -4488,7 +4714,11 @@ private:
                     *expr.when_true, variables, functions, depth + 1);
                 ScalarType when_false = validate_scalar_expression(
                     *expr.when_false, variables, functions, depth + 1);
-                if (when_true != when_false)
+                if (when_true != when_false &&
+                        (when_true == ScalarType::I64 || when_true == ScalarType::F64) &&
+                        (when_false == ScalarType::I64 || when_false == ScalarType::F64))
+                    when_true = join_numeric(*expr.when_true, when_true, *expr.when_false, when_false, "ternary", expr.offset);
+                else if (when_true != when_false)
                     throw std::runtime_error("ternary arms require a common scalar type at byte " +
                         std::to_string(expr.offset));
                 return expr.resolved_type = when_true;
@@ -4584,11 +4814,6 @@ private:
         for (const auto& cls : program.classes) {
             if (cls.constructor_exported && !cls.exported)
                 throw std::runtime_error("public constructor requires a public class");
-            // Native struct fields are still i64 slots. Reject an f64 member
-            // before any constructor/store could accidentally reinterpret bits.
-            for (const auto& field : cls.fields)
-                if (field.scalar_type == ScalarType::F64)
-                    throw std::runtime_error("native f64 class field requires typed struct layout and borrow proof");
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
@@ -4648,50 +4873,24 @@ private:
                     std::any_of(fn.parameters.begin(), fn.parameters.end(),
                         [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
                 throw std::runtime_error("native main does not admit f64 process ABI");
-            if (!fn.method_owner.empty() &&
-                    (fn.return_type == ScalarType::F64 ||
-                        std::any_of(fn.parameters.begin(), fn.parameters.end(),
-                            [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
-                throw std::runtime_error("native f64 class method ABI not yet admitted");
             const bool has_f64_function_abi = fn.return_type == ScalarType::F64 ||
                 std::any_of(fn.parameters.begin(), fn.parameters.end(),
                     [](const Parameter& p) { return p.scalar_type == ScalarType::F64; });
             if (has_f64_function_abi) {
-                // First ABI slice is pure scalar: no owner/borrow/actor
-                // continuation or generic return may travel as an IEEE value.
-                if (!fn.generic_parameters.empty() || !fn.return_class.empty() ||
-                        !fn.return_sum.empty() || fn.has_declared_effects ||
+                // Doubles travel in LLVM double formals, which the generic i64
+                // slot, actor message and continuation ABIs cannot represent.
+                if (!fn.generic_parameters.empty() ||
                         !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
                         !fn.actor_field_writes.empty() || !fn.source_tasks.empty() ||
                         !fn.future_pipelines.empty() || !fn.ready_await_actor.empty() ||
                         !fn.done_await_actor.empty() || fn.scalar_while ||
                         fn.caught_throw_value || !fn.caught_throw_defers.empty())
-                    throw std::runtime_error("native f64 function ABI requires pure synchronous scalar frame");
+                    throw std::runtime_error("native f64 function ABI requires a synchronous non-generic frame");
                 for (const auto& param : fn.parameters)
-                    if (param.mode != Parameter::Mode::Value ||
-                            !param.class_name.empty() || !param.generic_type.empty() ||
-                            !param.sum_type.empty())
-                        throw std::runtime_error("native f64 function ABI forbids borrowed or owned parameters");
-                for (const auto& local : fn.locals)
-                    if (local.heap_owned || local.int_array || local.new_class ||
-                            local.move_class || local.record_view ||
-                            !local.class_name.empty() || !local.task_await_name.empty() ||
-                            !local.future_await_name.empty())
-                        throw std::runtime_error("native f64 function ABI forbids owned local storage");
-                std::function<bool(const Statement&)> scalar_statement =
-                    [&](const Statement& statement) {
-                        const bool supported = statement.kind == Statement::Kind::ScopedLocal ||
-                            statement.kind == Statement::Kind::ScalarWrite ||
-                            statement.kind == Statement::Kind::Conditional ||
-                            statement.kind == Statement::Kind::Return;
-                        return supported &&
-                            std::all_of(statement.then_statements.begin(),
-                                statement.then_statements.end(), scalar_statement) &&
-                            std::all_of(statement.else_statements.begin(),
-                                statement.else_statements.end(), scalar_statement);
-                    };
-                if (!std::all_of(fn.statements.begin(), fn.statements.end(), scalar_statement))
-                    throw std::runtime_error("native f64 function ABI requires scalar-only structured statements");
+                    if (param.scalar_type == ScalarType::F64 &&
+                            (param.mode != Parameter::Mode::Value || !param.class_name.empty() ||
+                             !param.generic_type.empty() || !param.sum_type.empty()))
+                        throw std::runtime_error("native f64 parameter must be passed by value");
             }
             NativeCallSignature signature;
             signature.generics = fn.generic_parameters;
@@ -5102,6 +5301,7 @@ private:
             using NameSet = std::unordered_set<std::string>;
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
+                if (stmt.kind == Statement::Kind::Break || stmt.kind == Statement::Kind::Continue) return;
                 if (stmt.kind == Statement::Kind::ForIndex) {
                     validate_expression(*stmt.branch_local->initializer, names, functions);
                     NameSet body = names;
@@ -5270,6 +5470,7 @@ private:
 
             std::function<void(const Statement&, TypeMap&)> check_statement_types;
             check_statement_types = [&](const Statement& stmt, TypeMap& env) {
+                if (stmt.kind == Statement::Kind::Break || stmt.kind == Statement::Kind::Continue) return;
                 auto scoped_type = [&](const LocalBinding& local, TypeMap& scope) {
                     scope.emplace(local.name, local.scalar_type);
                     if (local.int_array) scope.emplace(local.name + ".$element", local.array_element_type);
@@ -5338,6 +5539,11 @@ private:
                 }
                 if (stmt.kind == Statement::Kind::ScalarWrite) {
                     require_scalar(*stmt.expression, env.at(stmt.receiver), "native scalar assignment", env);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::Call && stmt.expression &&
+                        stmt.expression->kind == Expression::Kind::Console && stmt.expression->name == "fail") {
+                    require_scalar(*stmt.expression->left, ScalarType::String, "rt fail message", env);
                     return;
                 }
                 if (stmt.expression)
@@ -5753,6 +5959,8 @@ private:
     Lexer lexer_;
     Token token_;
     std::unordered_set<std::string> module_names_;
+    std::string own_module_;
+    std::vector<std::string> own_module_calls_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
     std::vector<Function> methods_;

@@ -22,7 +22,7 @@ Type declared_field_type(const ClassField& field) {
     if (!field.class_name.empty()) return {Kind::Class, field.class_name};
     if (!field.int_array) return scalar(field.scalar_type);
     return {Kind::Array, !field.array_record_class.empty() ? field.array_record_class :
-        field.array_element_type == ScalarType::String ? "String" : "int"};
+        field.array_element_type == ScalarType::String ? "String" : field.array_element_type == ScalarType::F64 ? "float" : "int"};
 }
 Type constructor_parameter_type(const ClassDecl& cls, std::size_t index) {
     const auto* field = constructor_field(cls, index);
@@ -40,11 +40,11 @@ Type result_type(const Function& fn) {
 }
 Type local_type(const LocalBinding& local) {
     if (!local.sum_type.empty()) return {Kind::Sum, local.sum_type};
-    if (local.int_array && local.array_element_type != ScalarType::I64 &&
+    if (local.int_array && local.array_element_type != ScalarType::I64 && local.array_element_type != ScalarType::F64 &&
             local.array_element_type != ScalarType::String)
         throw std::runtime_error("unsupported native array element type");
     if (local.int_array) return {Kind::Array, !local.array_record_class.empty() ? local.array_record_class :
-        local.array_element_type == ScalarType::String ? "String" : "int"};
+        local.array_element_type == ScalarType::String ? "String" : local.array_element_type == ScalarType::F64 ? "float" : "int"};
     return local.class_name.empty() ? scalar(local.scalar_type) : Type{Kind::Class, local.class_name};
 }
 [[noreturn]] void fail(std::size_t offset, const std::string& detail) {
@@ -52,6 +52,23 @@ Type local_type(const LocalBinding& local) {
 }
 void require(Type actual, Type expected, std::size_t offset, const std::string& detail) {
     if (!(actual == expected)) fail(offset, detail);
+}
+// Java assignment context: a declared float accepts an int, which widens.
+void assign(const Expression& value, Type actual, Type expected, std::size_t offset, const std::string& detail) {
+    if (expected.kind == Kind::F64 && actual.kind == Kind::Int) {
+        value.widen_to_f64 = true;
+        return;
+    }
+    require(actual, expected, offset, detail);
+}
+bool numeric(const Type& type) { return type.kind == Kind::Int || type.kind == Kind::F64; }
+// Java numeric join: mixed int/float operands evaluate as float.
+Type join(const Expression& left_expr, Type left, const Expression& right_expr, Type right,
+          std::size_t offset, const std::string& detail) {
+    if (!numeric(left) || !numeric(right)) fail(offset, detail);
+    if (left.kind == right.kind) return left;
+    (left.kind == Kind::Int ? left_expr : right_expr).widen_to_f64 = true;
+    return scalar(ScalarType::F64);
 }
 }
 void validate_native_scalar_types(const Program& program) {
@@ -104,8 +121,15 @@ void validate_native_scalar_types(const Program& program) {
             case E::Floating: return scalar(ScalarType::F64);
             case E::Boolean: return scalar(true);
             case E::String: return scalar(ScalarType::String);
+            case E::ToText: {
+                const auto operand = expression(*e.left, locals);
+                if (!numeric(operand) && operand.kind != Kind::Bool && operand.kind != Kind::String)
+                    fail(e.offset, "stdio prints only scalar values in the native subset");
+                return scalar(ScalarType::String);
+            }
             case E::Console:
-                require(expression(*e.left, locals), scalar(ScalarType::String), e.offset, "stdio requires string");
+                require(expression(*e.left, locals), scalar(ScalarType::String), e.offset,
+                        e.name == "fail" ? "rt fail message must be a String" : "stdio requires string");
                 return {Kind::Void, {}};
             case E::Variable: return locals.at(e.name);
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
@@ -122,15 +146,17 @@ void validate_native_scalar_types(const Program& program) {
                 return scalar(true);
             case E::Equal: case E::NotEqual: {
                 auto left = expression(*e.left, locals), right = expression(*e.right, locals);
-                if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool && left.kind != Kind::String && left.kind != Kind::F64)) fail(e.offset, "equality operand types");
+                if (numeric(left) && numeric(right)) {
+                    (void)join(*e.left, left, *e.right, right, e.offset, "equality operand types");
+                    return scalar(true);
+                }
+                if (!(left == right) || (left.kind != Kind::Bool && left.kind != Kind::String)) fail(e.offset, "equality operand types");
                 return scalar(true);
             }
             case E::Less: case E::LessEqual: case E::Greater: case E::GreaterEqual: {
                 const auto lhs = expression(*e.left, locals);
                 const auto rhs = expression(*e.right, locals);
-                require(lhs, rhs, e.offset, "ordered comparison operand types must match (no int/f64 conversion)");
-                if (lhs.kind != Kind::Int && lhs.kind != Kind::F64)
-                    fail(e.offset, "ordered comparison requires int or f64");
+                (void)join(*e.left, lhs, *e.right, rhs, e.offset, "ordered comparison requires int or f64");
                 return scalar(true);
             }
             case E::LogicalAnd: case E::LogicalOr: case E::LogicalXor:
@@ -144,32 +170,31 @@ void validate_native_scalar_types(const Program& program) {
                     require(lhs, rhs, e.offset, "conditional equality types");
                 }
                 auto lhs = expression(*e.when_true, locals), rhs = expression(*e.when_false, locals);
+                if (numeric(lhs) && numeric(rhs))
+                    return join(*e.when_true, lhs, *e.when_false, rhs, e.offset, "conditional arm types");
                 require(lhs, rhs, e.offset, "conditional arm types");
                 return lhs;
             }
             case E::Add: {
                 auto left = expression(*e.left, locals), right = expression(*e.right, locals);
-                require(left, right, e.offset, "addition operand types");
-                if (left.kind != Kind::Int && left.kind != Kind::String && left.kind != Kind::F64) fail(e.offset, "addition requires int, f64 or string");
-                return left;
+                if (left.kind == Kind::String && right.kind == Kind::String) return left;
+                return join(*e.left, left, *e.right, right, e.offset, "addition requires int, f64 or string");
             }
             case E::Subtract: case E::Multiply: case E::Divide: case E::Remainder: {
                 const auto lhs = expression(*e.left, locals);
                 const auto rhs = expression(*e.right, locals);
-                require(lhs, rhs, e.offset, "arithmetic operand types must match (no int/f64 conversion)");
-                if (e.kind == E::Divide) {
-                    if (lhs.kind != Kind::F64)
-                        fail(e.offset, "native division requires f64/f64 (int/int unsupported)");
-                } else if (lhs.kind != Kind::Int &&
-                           (lhs.kind != Kind::F64 || e.kind == E::Remainder)) {
-                    fail(e.offset, "arithmetic requires int or f64 (remainder int only)");
+                const Type joined = join(*e.left, lhs, *e.right, rhs, e.offset, "arithmetic requires int or f64");
+                // Java: `/` is real division, even for int/int.
+                if (e.kind == E::Divide && joined.kind == Kind::Int) {
+                    e.left->widen_to_f64 = e.right->widen_to_f64 = true;
+                    return scalar(ScalarType::F64);
                 }
-                return lhs;
+                return joined;
             }
             case E::ArrayCall: {
                 const auto owner = expression(*e.left, locals);
                 if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
-                const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
+                const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "float" ? scalar(ScalarType::F64) : owner.name == "int" ? scalar(false)
                     : Type{Kind::Class, immutable_record(owner.name).name};
                 for (std::size_t i = 0; i < e.arguments.size(); ++i) {
                     const bool index = (e.name == "get" || e.name == "set") && i == 0;
@@ -178,7 +203,7 @@ void validate_native_scalar_types(const Program& program) {
                             e.arguments[i]->kind != E::Call && e.arguments[i]->kind != E::Conditional &&
                             !(e.arguments[i]->kind == E::ArrayCall && e.arguments[i]->name == "get"))
                         fail(e.offset, "record arrays require a new immutable record or existing array element");
-                    require(expression(*e.arguments[i], locals), index ? scalar(false) : element,
+                    assign(*e.arguments[i], expression(*e.arguments[i], locals), index ? scalar(false) : element,
                             e.arguments[i]->offset, index ? "array index requires int" : "array element type mismatch");
                 }
                 return e.name == "get" ? element : scalar(false);
@@ -191,7 +216,7 @@ void validate_native_scalar_types(const Program& program) {
                         fail(e.offset, "owning return constructor requires explicit array arguments");
                 if (e.arguments.size() != cls.constructor_parameters.size()) fail(e.offset, "record constructor argument arity mismatch");
                 for (std::size_t i = 0; i < e.arguments.size(); ++i)
-                    require(expression(*e.arguments[i], locals), constructor_parameter_type(cls, i), e.offset, "record constructor argument type mismatch");
+                    assign(*e.arguments[i], expression(*e.arguments[i], locals), constructor_parameter_type(cls, i), e.offset, "record constructor argument type mismatch");
                 return {Kind::Class, cls.name};
             }
             case E::Call: {
@@ -203,7 +228,7 @@ void validate_native_scalar_types(const Program& program) {
                         slot = 0;
                         while (slot < fn.parameters.size() && fn.parameters[slot].name != e.argument_names[i]) ++slot;
                     }
-                    require(expression(*e.arguments[i], locals), parameter_type(fn.parameters.at(slot)),
+                    assign(*e.arguments[i], expression(*e.arguments[i], locals), parameter_type(fn.parameters.at(slot)),
                             e.arguments[i]->offset, "argument bool/int/nominal type differs from parameter");
                 }
                 return result_type(fn);
@@ -240,7 +265,7 @@ void validate_native_scalar_types(const Program& program) {
             parameters.emplace(cls.constructor_parameters[i], constructor_parameter_type(cls, i));
         for (const auto& field : cls.fields)
             if (field.initializer_expression)
-                require(expression(*field.initializer_expression, parameters), declared_field_type(field),
+                assign(*field.initializer_expression, expression(*field.initializer_expression, parameters), declared_field_type(field),
                         field.initializer_expression->offset, "class field initializer type");
     }
     std::function<void(const Function&, Locals)> function;
@@ -262,12 +287,12 @@ void validate_native_scalar_types(const Program& program) {
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
                     binding.initializer->kind == Expression::Kind::Console;
-                require(expression(*binding.initializer, locals), discarded_effect ? Type{Kind::Void, {}} : local_type(binding), binding.offset, "local initializer type");
+                assign(*binding.initializer, expression(*binding.initializer, locals), discarded_effect ? Type{Kind::Void, {}} : local_type(binding), binding.offset, "local initializer type");
             }
             for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
                 const auto& cls = *classes.at(binding.class_name);
                 const auto& arg = binding.constructor_arguments[i];
-                require(expression(*arg, locals), constructor_parameter_type(cls, i), arg->offset, "constructor parameter type mismatch");
+                assign(*arg, expression(*arg, locals), constructor_parameter_type(cls, i), arg->offset, "constructor parameter type mismatch");
             }
             locals.emplace(binding.name, local_type(binding));
         }
@@ -283,13 +308,13 @@ void validate_native_scalar_types(const Program& program) {
                     require(expression(*item.loop_step, body), scalar(false), item.offset, "index update requires int");
                     statements(item.then_statements, body);
                 } else if (item.kind == Statement::Kind::Return) {
-                    if (item.expression) require(expression(*item.expression, scope), result_type(fn), item.offset, "structured return type");
+                    if (item.expression) assign(*item.expression, expression(*item.expression, scope), result_type(fn), item.offset, "structured return type");
                     else if (!fn.returns_void) fail(item.offset, "non-void structured return requires value");
                 } else if (item.kind == Statement::Kind::ForEach) {
                     const auto source = expression(*item.expression, scope);
                     if (source.kind != Kind::Array) fail(item.offset, "for-of requires an array");
                     const auto& iterator = *item.branch_local;
-                    const Type element = source.name == "String" ? scalar(ScalarType::String) : source.name == "int" ? scalar(false)
+                    const Type element = source.name == "String" ? scalar(ScalarType::String) : source.name == "float" ? scalar(ScalarType::F64) : source.name == "int" ? scalar(false)
                         : Type{Kind::Class, immutable_record(source.name).name};
                     require(local_type(iterator), element, item.offset, "for-of element annotation");
                     Locals body = scope; body.emplace(iterator.name, element);
@@ -298,7 +323,7 @@ void validate_native_scalar_types(const Program& program) {
                     const auto& binding = *item.branch_local;
                     if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
                     if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
-                    if (binding.initializer) require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
+                    if (binding.initializer) assign(*binding.initializer, expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
                 } else if (item.kind == Statement::Kind::Conditional) {
                     if (item.condition) require(expression(*item.condition, scope), scalar(true), item.offset, "condition requires bool");
@@ -310,9 +335,10 @@ void validate_native_scalar_types(const Program& program) {
                     for (const auto& arg : item.array_commit_values)
                         require(expression(*arg, scope), scalar(false), arg->offset, "Array<int> fill requires int");
                 } else if (item.kind == Statement::Kind::ScalarWrite) {
-                    require(expression(*item.expression, scope), scope.at(item.receiver), item.offset, "scalar assignment type");
+                    if (scope.at(item.receiver).kind == Kind::Class) (void)immutable_record(scope.at(item.receiver).name);
+                    assign(*item.expression, expression(*item.expression, scope), scope.at(item.receiver), item.offset, "scalar assignment type");
                 } else if (!item.receiver.empty()) {
-                    require(expression(*item.expression, scope), field_type(scope.at(item.receiver), item.field, item.offset),
+                    assign(*item.expression, expression(*item.expression, scope), field_type(scope.at(item.receiver), item.field, item.offset),
                             item.offset, "field assignment type");
                 } else if (item.expression) expression(*item.expression, scope);
             }
@@ -325,9 +351,9 @@ void validate_native_scalar_types(const Program& program) {
         for (const auto& guard : fn.early_returns) {
             if (guard.condition) require(expression(*guard.condition, locals), scalar(true), guard.offset, "guard requires bool");
             else compare(*guard.lhs, *guard.rhs, locals);
-            require(expression(*guard.result, locals), result, guard.offset, "guarded return type");
+            assign(*guard.result, expression(*guard.result, locals), result, guard.offset, "guarded return type");
         }
-        if (fn.result) require(expression(*fn.result, locals), result, fn.offset, "return type");
+        if (fn.result) assign(*fn.result, expression(*fn.result, locals), result, fn.offset, "return type");
         for (const auto& send : fn.actor_sends)
             require(expression(*send.payload, locals), scalar(false), send.offset, "actor message requires int");
         for (const auto& write : fn.actor_field_writes)

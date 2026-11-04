@@ -9,11 +9,13 @@
 #include "NativeStringRegion.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -159,6 +161,77 @@ static String lookup(int64_t handle) {
     }
     return r->strings[handle - 1];
 }
+/* Exact, stable, freshly owned text of one scalar value. */
+static int64_t publish_text(const char *text, size_t size) {
+    if (atomic_load(&region.failed)) return 0;
+    if (size > BYTE_LIMIT - region.bytes) { atomic_store(&region.failed, 1); return 0; }
+    char *bytes = malloc(size ? size : 1);
+    if (!bytes) { atomic_store(&region.failed, 1); return 0; }
+    if (size) memcpy(bytes, text, size);
+    return publish((String){bytes, size, bytes});
+}
+int64_t ores_string_from_i64(int64_t value) {
+    char text[32];
+    const int size = snprintf(text, sizeof text, "%lld", (long long)value);
+    return publish_text(text, (size_t)size);
+}
+/* The shortest decimal that round-trips, at least two significant digits, as
+ * java.lang.Double.toString selects it. Writes `digits` without a decimal point
+ * and returns the decimal exponent of its first digit. Requires finite x > 0. */
+static int shortest_digits(double x, char digits[32]) {
+    const int power_of_two = frexp(x, &(int){0}) == 0.5;
+    for (int precision = 2; precision <= 17; ++precision) {
+        char text[64];
+        snprintf(text, sizeof text, "%.*e", precision - 1, x);
+        double parsed = strtod(text, NULL);
+        unsigned long long whole = 0;
+        const char *cursor = text;
+        for (; *cursor != 'e'; ++cursor)
+            if (*cursor != '.') whole = whole * 10 + (unsigned long long)(*cursor - '0');
+        int exponent = atoi(cursor + 1);
+        /* Above a power of two the rounding interval is twice as wide, so the
+         * next decimal up may round-trip when the nearest one, below x, cannot. */
+        if (parsed != x && power_of_two && parsed < x) {
+            snprintf(text, sizeof text, "%llue%d", whole + 1, exponent - (precision - 1));
+            if (strtod(text, NULL) == x) { ++whole; parsed = x; }
+        }
+        if (parsed != x && precision != 17) continue;
+        int size = snprintf(digits, 32, "%llu", whole);
+        exponent += size - precision; /* an increment may carry into a new digit */
+        while (size > 1 && digits[size - 1] == '0') digits[--size] = '\0';
+        return exponent;
+    }
+    abort(); /* 17 significant digits always round-trip binary64 */
+}
+int64_t ores_string_from_f64(double value) {
+    if (isnan(value)) return publish_text("NaN", 3);
+    if (isinf(value)) return value < 0 ? publish_text("-Infinity", 9) : publish_text("Infinity", 8);
+    if (value == 0.0) return signbit(value) ? publish_text("-0.0", 4) : publish_text("0.0", 3);
+    char digits[32], text[64];
+    const double magnitude = fabs(value);
+    const int exponent = shortest_digits(magnitude, digits);
+    const int count = (int)strlen(digits);
+    size_t at = 0;
+    if (value < 0) text[at++] = '-';
+    if (magnitude >= 1e-3 && magnitude < 1e7) {
+        if (exponent < 0) {
+            text[at++] = '0'; text[at++] = '.';
+            for (int i = -1; i > exponent; --i) text[at++] = '0';
+            for (int i = 0; i < count; ++i) text[at++] = digits[i];
+        } else {
+            for (int i = 0; i <= exponent; ++i) text[at++] = i < count ? digits[i] : '0';
+            text[at++] = '.';
+            if (count <= exponent + 1) text[at++] = '0';
+            for (int i = exponent + 1; i < count; ++i) text[at++] = digits[i];
+        }
+    } else {
+        text[at++] = digits[0]; text[at++] = '.';
+        if (count == 1) text[at++] = '0';
+        for (int i = 1; i < count; ++i) text[at++] = digits[i];
+        at += (size_t)snprintf(text + at, sizeof text - at, "E%d", exponent);
+    }
+    return publish_text(text, at);
+}
 int64_t ores_string_literal(const char *data, int64_t size) {
     if (size < 0 || (size && !data)) { atomic_store(&region.failed, 1); return 0; }
     return publish((String){data, (size_t)size, NULL});
@@ -208,4 +281,18 @@ int64_t ores_string_region_end(void) {
     for (size_t i = 0; i != r->count; ++i) free(r->strings[i].owned);
     free(r->strings); r->strings = NULL; r->active = 0;
     return atomic_load(&r->failed) ? 1 : 0;
+}
+/* An unhandled rt fail: flush admitted output, report, exit with failure status.
+ * Admission rejects programs with handlers or cleanup that Java would run. */
+void ores_rt_fail(int64_t handle) {
+    String message = lookup(handle);
+    char *copy = malloc(message.size ? message.size : 1);
+    size_t size = 0;
+    if (copy && message.size) { memcpy(copy, message.data, message.size); size = message.size; }
+    (void)ores_string_region_end();
+    static const char prefix[] = "oreslang: rt fail: ";
+    (void)!write(2, prefix, sizeof prefix - 1);
+    if (size) (void)!write(2, copy, size);
+    (void)!write(2, "\n", 1);
+    _exit(1);
 }

@@ -44,7 +44,8 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
+        ToText // Java stdio scalar-to-text boundary; left is the printed operand
     };
     Kind kind;
     std::size_t offset = 0;
@@ -52,6 +53,9 @@ struct Expression {
     double floating = 0.0; // typed source f64, never an i64 carrier
     bool boolean = false;
     mutable ScalarType resolved_type = ScalarType::I64;
+    // Set only by the scalar checkers when an int value reaches a float
+    // context (Java numeric widening). Lowered as an explicit sitofp.
+    mutable bool widen_to_f64 = false;
     mutable std::string resolved_class;
     std::string name;
     std::unique_ptr<Expression> left;
@@ -277,7 +281,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, Break, Continue };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -445,6 +449,7 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
+    bool selected_function = false; // import fnc name[, name] from path
     std::string selected_module;
     std::string local_name;
     std::string path;
