@@ -25,8 +25,9 @@ auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
 clang_path="$(command -v "$clang")" || { echo 'Install Clang or set CLANG.' >&2; exit 69; }
 # Compare identities, not just spellings: a symlink or hard link must not let
 # publication replace the source compiler or native toolchain executable.
-if [[ "$output_file" -ef "$source_file" || "$output_file" -ef "$compiler" || "$output_file" -ef "$clang_path" ]]; then
-  echo 'Output must not alias the source, Oreslang compiler or Clang.' >&2
+if [[ "$output_file" -ef "$source_file" || "$output_file" -ef "$compiler" ||
+      "$output_file" -ef "$clang_path" || "$output_file" -ef "$auditor" ]]; then
+  echo 'Output must not alias the source, Oreslang compiler, Clang or no-GC IR auditor.' >&2
   exit 64
 fi
 # Build beside the output so publication is atomic and errors preserve old output.
