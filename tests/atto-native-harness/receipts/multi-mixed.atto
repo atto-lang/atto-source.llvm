@@ -1,0 +1,20 @@
+// Ordered two-case guest: first assertion succeeds, second deliberately fails.
+// Native exit MUST be nonzero and summary must reflect both cases.
+pub routine main(): int {
+  val int actual_a = 40 + 2;
+  val int actual_b = 41;
+  if actual_a != 42; then
+    stdio.println("ORES_TEST|FAIL|llvm-native/multi-mixed/a|expected=42");
+    stdio.println("ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0");
+    return 1;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-native/multi-mixed/a|");
+  if actual_b != 42; then
+    stdio.println("ORES_TEST|FAIL|llvm-native/multi-mixed/b|expected=42");
+    stdio.println("ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0");
+    return 1;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-native/multi-mixed/b|");
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+  return 0;
+}
