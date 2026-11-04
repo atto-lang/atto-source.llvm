@@ -1,0 +1,52 @@
+// Corrupted/public M1 accounting must fail closed before overwriting summary.
+// This is source/guest regression, not an attestation against forged state.
+import module Ledger from "ores.std/testing/m1";
+import class TestCase from "ores.std/testing/m1";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase active = new TestCase();
+  let mut RunSummary summary = new RunSummary();
+  active.id = 1;
+  active.outcome = 0;
+  if Ledger.record(rt mut borrow suite, rt borrow active) != 0; then return 3; fi
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 0; then return 3; fi
+  if summary.total != 1 || summary.passed != 1 || suite.last_id != 1; then return 3; fi
+
+  // Every invalid state must fail without overwriting a previously valid result.
+  suite.passed = 2;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.passed = 1;
+  suite.last_id = 0;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.last_id = 1;
+  suite.total = -1;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.total = 1;
+  suite.filtered = -1;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.filtered = 1025;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.filtered = 0;
+  suite.total = 1025;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.total = 1;
+  suite.failed = -1;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.failed = 0;
+  suite.halted = 1;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.halted = 0;
+  if summary.total != 1 || summary.passed != 1 || summary.failed != 0 ||
+    summary.skipped != 0 || summary.filtered != 0; then return 3; fi
+  val int status = Ledger.finish(rt borrow suite, rt mut borrow summary);
+  if status != 0 || summary.total != 1 || summary.passed != 1 ||
+    summary.failed != 0 || summary.skipped != 0 || summary.filtered != 0; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/finish/invalid-state-rejected|");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0");
+  return status;
+}
