@@ -133,3 +133,17 @@ The focused LLVM workflow uses a **single** source-free gate, a real native
 compiler build, C++ import security checks, 48 potential guest executions
 (24 sources × two Clang optimization levels), and six potential negative
 compiler admissions. No cross-organization private source transfer is used.
+
+## Scoped guest-owned receipt smoke (not yet executed)
+
+Two additional `.atto` one-case guest suites now emit either `ORES_TEST|PASS`
+or `ORES_TEST|FAIL` plus their truthful final summary and native exit.
+LLVM-produced IR is audited by the mandatory no-GC checker, linked against
+the native string-region runtime, and executed with Clang O0/O2. Stdout is a
+pipe for the nonblocking reactor; host verification checks exact event bytes,
+ordering, summary and exit, with adversarial source-only mutations.
+
+This is four **potential** new native executions distinct from the 48 scalar
+runs. The native `ores.std/testing` TestCase/TestSuite library, full Java
+40-case parity, filtering, skip/fail-fast and nested suites remain unsupported.
+No parity claim is valid until an exact-head workflow records real steps.

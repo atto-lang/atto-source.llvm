@@ -9,6 +9,8 @@ on:
       - 'tests/project_root_import_test.cpp'
       - 'tests/atto-native-harness/**'
       - 'tests/atto_native_harness_parity.sh'
+      - 'tests/atto_native_guest_receipts.sh'
+      - 'tests/verify_atto_guest_receipts.py'
       - 'tests/test_atto_native_parity_manifest.sh'
       - 'tests/test_atto_native_workflow_contract.sh'
       - 'tests/cmake/AttoNativeHarnessParity.cmake'
@@ -88,6 +90,9 @@ jobs:
             | tee "$RUNNER_TEMP/atto-llvm-native-parity.txt"
           test "$(grep -c '^ATTO_LLVM_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 48
           test "$(grep -c '^ATTO_LLVM_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 3
+          test "$(grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|' "$RUNNER_TEMP/atto-llvm-native-parity.txt")" -eq 4
+          grep -Fqx 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=2|optimizations=2|native=4|testkit=NOT_IMPLEMENTED' \
+            "$RUNNER_TEMP/atto-llvm-native-parity.txt"
           grep -Fqx 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=24|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED' \
             "$RUNNER_TEMP/atto-llvm-native-parity.txt"
       - name: Assert unchanged source and exact head after execution

@@ -47,4 +47,5 @@ cp "$negatives" "$tmp/negative.tsv"
 if bash "$runner" --unknown-option > "$tmp/result.log" 2>&1; then
   fail 'unknown runner mode was accepted'
 fi
+python3 "$root/tests/verify_atto_guest_receipts.py" --self-test
 echo 'PASS: eight source-free AttoLang LLVM inventory admission mutations (NO_GUEST_EXECUTION)'
