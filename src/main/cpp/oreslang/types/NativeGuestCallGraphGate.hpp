@@ -119,7 +119,15 @@ inline void require_native_scalar_frame_subset(const Program& source) {
     }
     bool has_main = false;
     for (const auto& fn : source.functions) {
-        if (fn.name == "main" && fn.parameters.empty()) has_main = true;
+        if (fn.name == "main") {
+            if (!fn.parameters.empty() || has_main)
+                throw std::runtime_error(
+                    "native bounded recursion requires exactly one main/0 entry");
+            has_main = true;
+        }
+        if (fn.name.rfind("__atto_", 0) == 0)
+            throw std::runtime_error(
+                "native bounded recursion reserves compiler frame ABI names");
         if (fn.returns_void || fn.return_type != ScalarType::I64 ||
                 !fn.result || !fn.locals.empty() || !fn.statements.empty() ||
                 !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
