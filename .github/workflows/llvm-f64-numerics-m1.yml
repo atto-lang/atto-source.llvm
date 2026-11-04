@@ -21,6 +21,7 @@ concurrency:
 jobs:
   compiler-backed-f64:
     name: Native LLVM f64 source-to-IR-to-executable
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -81,9 +82,44 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build/f64-m1 \
+          ctest --test-dir build/f64-m1 --no-tests=error -N -R '^native_f64_scalar_e2e
+          echo "NATIVE_F64_EXECUTED_CANDIDATE_ONLY — full 16-case num.atto parity NOT_EXECUTED"
+
+      - name: Record post-test source identity and deny source mutation
+        if: always()
+        shell: bash
+        env:
+          REQUIRED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REQUIRED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          printf 'SOURCE_COMMIT_POST=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE_POST=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          if test -x build/f64-m1/oreslang-llvmc; then
+            sha256sum build/f64-m1/oreslang-llvmc
+          fi
+
+          ctest --test-dir build/f64-m1 --no-tests=error \
             --output-on-failure -V --timeout 240 \
-            -R '^native_f64_scalar_e2e$'
+            -R '^native_f64_scalar_e2e
+          echo "NATIVE_F64_EXECUTED_CANDIDATE_ONLY — full 16-case num.atto parity NOT_EXECUTED"
+
+      - name: Record post-test source identity and deny source mutation
+        if: always()
+        shell: bash
+        env:
+          REQUIRED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REQUIRED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          printf 'SOURCE_COMMIT_POST=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE_POST=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          if test -x build/f64-m1/oreslang-llvmc; then
+            sha256sum build/f64-m1/oreslang-llvmc
+          fi
+
           echo "NATIVE_F64_EXECUTED_CANDIDATE_ONLY — full 16-case num.atto parity NOT_EXECUTED"
 
       - name: Record post-test source identity and deny source mutation
