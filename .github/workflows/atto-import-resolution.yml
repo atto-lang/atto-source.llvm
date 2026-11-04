@@ -1,10 +1,16 @@
-name: Canonical AttoLang import admission (native unit)
+name: Canonical AttoLang import and native guest parity
 on:
+  push:
+    branches:
+      - feat/attolang-canonical-root-and-imports-20261103
   pull_request:
     paths:
+      - 'src/main/cpp/oreslang/main.cpp'
       - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/project_root_import_test.cpp'
+      - 'tests/native_module_imports.py'
+      - 'CMakeLists.txt'
       - '.github/workflows/atto-import-resolution.yml'
   workflow_dispatch:
 permissions:
@@ -14,19 +20,88 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Checkout exact head without retained GitHub credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Compile and execute project-root import security unit with GCC and Clang
+      - name: Verify exact head before compiling
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          echo "ATTO_LLVM_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_LLVM_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: GCC and Clang root import security unit (host-only)
         shell: bash
         run: |
           set -euo pipefail
           for compiler in g++ clang++; do
-            "${compiler}" -std=c++20 -O1 -Wall -Wextra -Werror \
-              -Isrc/main/cpp tests/project_root_import_test.cpp \
-              -o "/tmp/atto-root-import-${compiler}"
-            "/tmp/atto-root-import-${compiler}"
+            "${compiler}" -std=c++20 -O1 -Wall -Wextra -Wpedantic -Werror \
+              -UNDEBUG -Isrc/main/cpp tests/project_root_import_test.cpp \
+              -o "$RUNNER_TEMP/atto-root-import-${compiler}"
+            "$RUNNER_TEMP/atto-root-import-${compiler}"
           done
-      - name: Clarify verification scope
-        run: echo "HOST_UNIT_ONLY; no complete AttoLang guest compiler or broker was executed"
+          echo 'ATTO_LLVM_HOST_IMPORT_SECURITY=PASS; GUEST=NOT_EXECUTED'
+  compiler-backed-atto-native-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact head without retained GitHub credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head and tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          echo "ATTO_LLVM_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_LLVM_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          python3 -m py_compile tests/native_module_imports.py
+      - name: Provision native LLVM 19 CMake and Clang compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-19-dev clang-19 ninja-build
+          llvm-config-19 --version
+          clang-19 --version
+      - name: Build actual AttoLang LLVM compiler and native root-import unit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/atto-native-parity-build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DLLVM_DIR="$(llvm-config-19 --cmakedir)"
+          cmake --build "$RUNNER_TEMP/atto-native-parity-build" \
+            --target oreslang-llvmc oreslang-native-project-root-import-test --parallel 2
+          test -x "$RUNNER_TEMP/atto-native-parity-build/oreslang-llvmc"
+          echo 'ATTO_LLVM_REAL_COMPILER_BUILD=PASS'
+      - name: Execute linked native .atto program and malicious-source rejections
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "$RUNNER_TEMP/atto-native-parity-build" \
+            --output-on-failure --timeout 180 \
+            -R '^(native_project_root_import_security|native_source_module_graph_execution)$'
+          echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
+      - name: Recheck exact source head and tracked changes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          git diff --exit-code --
+          git diff --cached --exit-code --
+          echo 'ATTO_LLVM_SOURCE_IDENTITY_AFTER=PASS'
