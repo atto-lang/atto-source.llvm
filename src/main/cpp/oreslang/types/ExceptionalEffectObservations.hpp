@@ -106,9 +106,17 @@ inline ExceptionalEffectObservations observe_exceptional_effects(const Program& 
             return report;
         }
         report.scanned_edges += direct.calls.size();
+        constexpr std::uint32_t exception_bits =
+            static_cast<std::uint32_t>(FunctionEffect::Throw) |
+            static_cast<std::uint32_t>(FunctionEffect::Raise) |
+            static_cast<std::uint32_t>(FunctionEffect::Panic);
+        // A source `using` declaration is a stated upper bound, not a
+        // compiler-verified source of behavior or a proof of no effects.
         const bool unproved = direct.unsupported_runtime ||
             !direct.bounded_calls || !direct.bounded_cleanup ||
-            !fn.method_owner.empty();
+            !fn.method_owner.empty() ||
+            (fn.has_declared_effects &&
+             (fn.declared_effects.bits & exception_bits) != 0);
         FunctionEffects initial = direct.effects;
         if (unproved) initial.bits |= FunctionEffects::UnresolvedCallBit;
         report.functions.push_back(
