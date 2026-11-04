@@ -91,12 +91,14 @@ for pair in gcc:g++ clang:clang++; do
     -I"$ROOT/src/main/cpp" \
     -c "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
     -o "$OUT/native-scheduler-$CC.o"
-  "$CXX" -std=c++17 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
-    -I"$ROOT/src/main/cpp" \
-    "$ROOT/tests/native_request_data_mail_gate_v1_test.cpp" \
-    "$OUT/native-scheduler-$CC.o" \
-    -o "$OUT/native-request-data-mail-gate-$CXX"
-  "$OUT/native-request-data-mail-gate-$CXX"
+  for testfile in native_request_data_mail_gate_v1_test native_request_wake_origin_v1_test; do
+    "$CXX" -std=c++17 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+      -I"$ROOT/src/main/cpp" \
+      "$ROOT/tests/$testfile.cpp" \
+      "$OUT/native-scheduler-$CC.o" \
+      -o "$OUT/$testfile-$CXX"
+    "$OUT/$testfile-$CXX"
+  done
 done
 
 # Optional exact-source sanitizer matrix, enabled by the source-local workflow.
@@ -122,14 +124,16 @@ if [ "${ORES_SCOPED_LOCAL_RUN_SANITIZERS:-0}" = "1" ]; then
       -I"$ROOT/src/main/cpp" \
       -c "$ROOT/src/main/cpp/oreslang/runtime/NativeActorScheduler.c" \
       -o "$OUT/asan-native-scheduler-$CC.o"
-    "$CXX" -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
-      -fsanitize=address,undefined -fno-omit-frame-pointer \
-      -I"$ROOT/src/main/cpp" \
-      "$ROOT/tests/native_request_data_mail_gate_v1_test.cpp" \
-      "$OUT/asan-native-scheduler-$CC.o" \
-      -o "$OUT/asan-native-request-data-mail-$CXX"
-    ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
-      "$OUT/asan-native-request-data-mail-$CXX"
+    for testfile in native_request_data_mail_gate_v1_test native_request_wake_origin_v1_test; do
+      "$CXX" -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+        -fsanitize=address,undefined -fno-omit-frame-pointer \
+        -I"$ROOT/src/main/cpp" \
+        "$ROOT/tests/$testfile.cpp" \
+        "$OUT/asan-native-scheduler-$CC.o" \
+        -o "$OUT/asan-$testfile-$CXX"
+      ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
+        "$OUT/asan-$testfile-$CXX"
+    done
   done
   for CXX in g++ clang++; do
     if ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
