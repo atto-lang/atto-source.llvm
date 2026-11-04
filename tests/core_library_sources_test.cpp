@@ -1,6 +1,9 @@
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include <cassert>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 using oreslang::ActorDecl;
 using oreslang::Function;
@@ -99,6 +102,16 @@ int main() {
     assert(testing_scalar->source.find("pub fnc equal_int") != std::string_view::npos);
     assert(testing_scalar->source.find("pub fnc not_equal_int") != std::string_view::npos);
     assert(testing_scalar->source.find("pub fnc combine_status") != std::string_view::npos);
+#ifdef ATTO_SCALAR_SOURCE_PATH
+    // Reject drift between the checked-in AttoLang .atto source and the exact
+    // compiler-owned native module bytes. This is a host test, not a guest.
+    std::ifstream scalar_source(ATTO_SCALAR_SOURCE_PATH, std::ios::binary);
+    assert(scalar_source.good());
+    const std::string scalar_bytes(
+        (std::istreambuf_iterator<char>(scalar_source)),
+        std::istreambuf_iterator<char>());
+    assert(std::string_view(scalar_bytes) == testing_scalar->source);
+#endif
     assert(find_std_scalar_testing_source("ores.std/testing") == nullptr);
     assert(find_std_scalar_testing_source("ores.std/testing_scalar.ores") == nullptr);
     assert(find_core_library_source("ores.std/testing_scalar") == nullptr);
