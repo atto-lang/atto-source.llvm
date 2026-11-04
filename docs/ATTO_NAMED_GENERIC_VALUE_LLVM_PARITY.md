@@ -54,19 +54,24 @@ slot, never the original source index.
 The focused workflow `.github/workflows/named-call-exact-head.yml`
 checks the exact Git commit/tree, builds `oreslang-llvmc` and its Rust
 test harness, requires all named-call CTests in the inventory, and runs
-the same selected suite. Its newly authored 15 tests comprise:
+the same selected suite. Its newly authored 16 CTests comprise:
 
 - **5 positive native linked guest executions**: combined named generics
   + values, a direct-only routine, explicit inference hole, positional
   prefix, and reordered source-effect case (expected exits 42/42/42/42/12).
 - **1 real LLVM IR-order assertion**, checking `read_second` precedes
   `read_first` after named binding.
+- **1 combinatorial real native test** that generates and compiles all 36
+  `3! × 3!` named type-argument and runtime value-argument permutations,
+  links every emitted IR module with Clang, executes all binaries and asserts
+  that each returns exactly 42; a sum-only oracle is intentionally avoided.
 - **9 negative real-compiler source checks** requiring rejection/diagnostic
   before LLVM IR: bool/string type erasure, reordered bool actual,
   duplicated/unknown/ordered generic slots, value-slot collision,
   unknown value label, and uninferable hole.
 
-These 15 cases are additive to previously registered named-call and
+These 16 CTests (51 individual positive native guest executions when fully
+run) are additive to previously registered named-call and
 member-call tests. A test listing, authored test source, zero-step job, or
 host binder oracle does not establish execution. For promotion require
 exact-head source/tree attestation, nonzero executed job steps,
