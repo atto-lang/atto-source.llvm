@@ -44,7 +44,7 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field, ImportedMacro
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
@@ -71,6 +71,7 @@ struct Expression {
     mutable std::string sum_type;
     // Compiler-only invocation classification, never a runtime or LLVM ABI.
     bool imported_macro_const_argument = false;
+    bool imported_macro_pending = false;
 };
 
 struct Parameter {
