@@ -1,0 +1,5 @@
+// Positional prefix precedes named generic and runtime argument suffixes.
+fnc combine<A, B=int, C=A>(A first, B second): int {
+  return first + second;
+}
+pub fnc main(): int { return combine<int, C=int>(40, second: 2); }
