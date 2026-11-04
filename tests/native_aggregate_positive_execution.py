@@ -223,6 +223,21 @@ def verify_guest_process(name, result, expected_exit):
             repr((result.returncode, result.stdout, result.stderr)))
 
 
+def verify_fixture_registry(positives, negatives):
+    """Fail closed on incomplete, duplicate, or silently reduced guest coverage."""
+    positive_names = [name for name, _, _, _ in positives]
+    negative_names = [name for name, _, _ in negatives]
+    expected_exits = [status for _, _, _, status in positives]
+    # The native acceptance contract is an explicit seven-plus-seven matrix.
+    # Keep these checks in an independently callable preflight, exercised by
+    # the source-free unittest (no mock LLVM guest execution).
+    require(len(positive_names) == 7 and len(negative_names) == 7 and
+            len(set(positive_names + negative_names)) == 14 and
+            len(set(expected_exits)) == 7 and
+            all(type(exit_code) is int and 0 < exit_code < 128 for exit_code in expected_exits),
+            "aggregate executable acceptance requires seven distinct positives, exits and seven distinct negatives")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", type=Path, required=True)
@@ -234,17 +249,7 @@ def main():
     compiler, clang = args.compiler.resolve(), args.clang.resolve()
     compiler_digest, clang_digest = (
         sha256(compiler.read_bytes()), sha256(clang.read_bytes()))
-    positive_names = [name for name, _, _, _ in POSITIVE]
-    expected_exits = [status for _, _, _, status in POSITIVE]
-    negative_names = [name for name, _, _ in NEGATIVE]
-    # Pin the executable admission gate to the same 7+7 corpus as the
-    # independent source-free harness tests. An expanded registry must not be
-    # rejected by an obsolete 4+4 guard before the real compiler is invoked.
-    require(len(positive_names) == 7 and len(negative_names) == 7 and
-            len(set(positive_names + negative_names)) == 14 and
-            len(set(expected_exits)) == 7 and
-            all(type(exit_code) is int and 0 < exit_code < 128 for exit_code in expected_exits),
-            "aggregate executable acceptance requires seven distinct positives, exits and seven distinct negatives")
+    verify_fixture_registry(POSITIVE, NEGATIVE)
     observations = []
     with tempfile.TemporaryDirectory(prefix="oreslang-native-aggregate-") as tmp:
         root = Path(tmp)
