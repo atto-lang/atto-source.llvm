@@ -1,0 +1,9 @@
+pub fnc main(): int {
+    let Task<int> w = task {
+        TaskLocal<int, key=trace>.set(9);
+        TaskLocal<int, key=counter>.set(42);
+        return TaskLocal<int, key=counter>.get();
+    };
+    let int v = await w;
+    return v;
+}
