@@ -31,6 +31,10 @@ register_case() {
 positive() {
   local name="$1" source="$2" expected_exit="${3:-42}"
   register_case "$name"
+  [[ "${#source}" -le 8192 && "$expected_exit" =~ ^[0-9]+$ ]] ||
+    { echo "NATIVE_F64_BAD_POSITIVE_INPUT: $name" >&2; exit 1; }
+  (( 10#$expected_exit <= 255 )) ||
+    { echo "NATIVE_F64_EXIT_OUT_OF_RANGE: $name" >&2; exit 1; }
   printf '%s\n' "$source" > "$scratch/$name.atto"
   "$compiler" --target=host "$scratch/$name.atto" \
     > "$scratch/$name.ll" 2> "$scratch/$name.compiler.stderr" ||
@@ -38,6 +42,17 @@ positive() {
       cat "$scratch/$name.compiler.stderr" >&2; exit 1; }
   [[ -s "$scratch/$name.ll" && ! -s "$scratch/$name.compiler.stderr" ]] ||
     { echo "NATIVE_F64_COMPILER_IR_OR_DIAGNOSTIC: $name" >&2; exit 1; }
+  # Do not treat a source-blind constant integer main() as floating-point
+  # parity. Every f64 positive has at least one actual double-typed local.
+  # The pure integer control is the sole intentional exception.
+  grep -Eq '^define[[:space:]].*i32[[:space:]]+@main\\(' "$scratch/$name.ll" ||
+    { echo "NATIVE_F64_MISSING_NATIVE_MAIN: $name" >&2; exit 1; }
+  if [[ "$name" != integer_control ]]; then
+    grep -Eq '(alloca|load|store|fadd|fsub|fmul|fdiv|fcmp)[[:space:]].*double' "$scratch/$name.ll" ||
+      { echo "NATIVE_F64_NO_TYPED_DOUBLE_IR: $name" >&2; exit 1; }
+  fi
+  # Hash the exact source and compiler-produced IR; do not print source contents.
+  sha256sum "$scratch/$name.atto" "$scratch/$name.ll"
   # The same compiler-emitted IR must execute correctly with and without
   # Clang optimization. Both runs are authentic native guest executions,
   # never a host/reference calculation or an inferred pass from one binary.
@@ -48,8 +63,10 @@ positive() {
       > "$scratch/$name.O$opt.link.stdout" 2> "$scratch/$name.O$opt.link.stderr" ||
       { echo "NATIVE_F64_LINK_FAILED: $name O$opt" >&2
         cat "$scratch/$name.O$opt.link.stderr" >&2; exit 1; }
-    [[ -x "$image" && ! -s "$scratch/$name.O$opt.link.stderr" ]] ||
+    [[ -x "$image" && ! -s "$scratch/$name.O$opt.link.stderr" &&
+       ! -s "$scratch/$name.O$opt.link.stdout" ]] ||
       { echo "NATIVE_F64_LINK_DIAGNOSTIC: $name O$opt" >&2; exit 1; }
+    sha256sum "$image"
     rc=0
     "$image" > "$scratch/$name.O$opt.stdout" \
       2> "$scratch/$name.O$opt.stderr" || rc=$?
@@ -65,6 +82,9 @@ positive() {
 negative() {
   local name="$1" source="$2" expected_diagnostic="$3"
   register_case "$name"
+  [[ "${#source}" -le 8192 && "${#expected_diagnostic}" -gt 8 &&
+     "${#expected_diagnostic}" -le 300 ]] ||
+    { echo "NATIVE_F64_BAD_NEGATIVE_INPUT: $name" >&2; exit 1; }
   printf '%s\n' "$source" > "$scratch/$name.atto"
   local compile_rc=0
   "$compiler" --target=host "$scratch/$name.atto" \
