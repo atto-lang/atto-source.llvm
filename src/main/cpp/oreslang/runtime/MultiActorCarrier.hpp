@@ -29,7 +29,7 @@ public:
         std::int64_t payload = 0;
     };
     enum class Cause : std::uint8_t { initial, cpu_resume };
-    enum class Outcome : std::uint8_t { complete, cooperate };
+    enum class Outcome : std::uint8_t { complete, cooperate, stack_budget_exhausted };
     // Called only on this carrier's worker, once per bounded dispatch slice.
     // A live in-flight turn is never reentrant and must retain its own frame.
     using Slice = Outcome (*)(void*, Message, Cause, std::uint64_t fuel) noexcept;
@@ -45,6 +45,7 @@ public:
         std::uint64_t cancelled_active = 0;
         std::uint64_t abandoned = 0;
         std::uint64_t protocol_failures = 0;
+        std::uint64_t stack_budget_exhaustions = 0;
         std::uint64_t worker_thread_tag = 0;
     };
     struct ActorStats {
@@ -54,6 +55,7 @@ public:
         std::uint64_t cooperations = 0;
         bool retired = false;
         bool active = false;
+        bool stack_budget_exhausted = false;
     };
 
     // A weak lifetime handle never dereferences an already freed carrier.
@@ -94,6 +96,7 @@ private:
         std::size_t head = 0, size = 0;
         bool active = false, queued = false, cancel_requested = false;
         bool canceling = false, retired = false;
+        bool stack_budget_exhausted = false;
         Message current{};
         std::uint64_t accepted = 0, completed = 0, cooperations = 0;
     };

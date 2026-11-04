@@ -167,7 +167,8 @@ MultiActorCarrier::ActorStats MultiActorCarrier::actor_stats(ActorToken token) c
     const auto& actor = shared_->actors[token.slot - 1];
     if (actor.generation != token.generation) return {};
     return {actor.generation, actor.accepted, actor.completed,
-            actor.cooperations, actor.retired, actor.active};
+            actor.cooperations, actor.retired, actor.active,
+            actor.stack_budget_exhausted};
 }
 
 bool MultiActorCarrier::stopped() const noexcept {
@@ -286,6 +287,14 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
                 ++state->counters.protocol_failures;
                 actor.cancel_requested = true;
             }
+        } else if (outcome == Outcome::stack_budget_exhausted) {
+            // Explicit, early compiler-managed frame budget exhaustion.
+            // Do not commit the current turn, restart it, or stop the worker.
+            // Keep its active frame until worker-owned cancellation cleanup.
+            // Native faults, C++ exceptions and signals are NOT this status.
+            actor.stack_budget_exhausted = true;
+            ++state->counters.stack_budget_exhaustions;
+            actor.cancel_requested = true;
         } else {
             // A bogus callback result is a protocol failure even if a
             // cancellation raced it. Never silently accept invalid IR state.
