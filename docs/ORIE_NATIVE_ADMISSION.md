@@ -48,8 +48,8 @@ IEEE unordered-not-equal. No fast-math assumptions are introduced by this
 patch.
 
 `tests/native_f64_lexical_gate.sh`, now registered in CTest as
-`native_f64_scalar_e2e`, requires **twelve actually compiled/linked/executed
-guest programs** (eleven f64 checks and one signed-i64 control) to terminate
+`native_f64_scalar_e2e`, requires **19 compiled/linked/executed
+guest programs** (18 f64 checks and one signed-i64 control) to terminate
 with exit 42 and empty output. Twelve deliberately invalid source programs
 must fail with no LLVM IR, including int-to-f64 coercion, mixed arithmetic,
 mixed comparison, integer or mixed-type division, unsupported function f64
@@ -60,6 +60,8 @@ and positive infinity. Negative-source fixtures require the compiler's exact
 **source diagnostic exit code 1**, the `oreslang-llvmc:` diagnostic prefix
 and **zero IR**; a compiler crash, missing executable, signal or runner failure
 must never be accepted as a negative-test pass.
+
+Five additional M1 numerical scalar *prerequisite* guests cover negative-domain values, tiny and huge finite f64 magnitudes, finite multiplication overflow to positive infinity, and four-term scalar addition. They deliberately **do not** compile the real num.atto test harness, imported List<float> modules, Result payloads, or sqrt implementation; no 16-case numerical library parity may be inferred.
 
 These cases are **authored but not executed on an authorized LLVM runner**:
 no native f64 PASS, compiler parity or numerical correctness receipt
@@ -97,3 +99,7 @@ and [LLVM issue #428](https://github.com/ores-truffle-oreslang/oreslang-source.l
 **No compiled guest pass claimed:** the source organization's GitHub Actions
 are currently failing before execution (`steps=[]`). Keep this PR draft,
 and do not mirror private source outside the authorized security boundary.
+
+## Current canonical source integration hold
+
+This draft f64 branch predates merged LLVM `.atto` source/import PR #1312 and is not yet reconciled with current LLVM `main`. Its temporary scalar fixtures still use legacy `.ores` source filenames, which proves no canonical `.atto` F64 compiler admission. Rebase and semantically reconcile all parser, type-checker, ownership and backend hunks with merged `.atto` import security before running the newly authored positive/negative CTests. The complete seven-file 16-case `num.atto` guest remains NOT_EXECUTED on LLVM or Java.
