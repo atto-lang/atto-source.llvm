@@ -1,0 +1,67 @@
+name: Native pthread join carrier guard (host-only)
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.*"
+      - "src/main/cpp/oreslang/runtime/NativeThreadV1.h"
+      - "src/main/cpp/oreslang/runtime/NativeThreadV1.c"
+      - "src/main/cpp/oreslang/runtime/NativeThreadJoinCarrierGuardV1.h"
+      - "tests/native_thread_join_carrier_guard_v1_test.c"
+      - ".github/workflows/native-thread-join-carrier-guard-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-join-guard:
+    name: "carrier guard - ${{ matrix.cc }} / ${{ matrix.mode }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {cc: gcc, mode: optimized}
+          - {cc: clang, mode: optimized}
+          - {cc: gcc, mode: asan-ubsan}
+          - {cc: clang, mode: asan-ubsan}
+          - {cc: gcc, mode: tsan}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify exact native runtime and guard blob SHAs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "26908b0d9cf6bf5cbaab931313edd9b0e015bea8"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "0e3a22be541684e067e72d142ec523d8300d255a"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeThreadV1.c)" = "6d01bec02d52d7c48aa7507108655f287cd0e5e0"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeThreadV1.h)" = "17988cf14d66c8686fe26f1c802c9c8d14c1a9e6"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeThreadJoinCarrierGuardV1.h)" = "2bc79a7219c8654c09941bc0b389a0ea640650e0"
+          test "$(git hash-object tests/native_thread_join_carrier_guard_v1_test.c)" = "8d582d362e4202ecdd80790c5893ee98cdf0beaf"
+      - name: Run real two-scheduler blocking-join refusal
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          flags=(-O2 -UNDEBUG)
+          if [[ "$MODE" == asan-ubsan ]]; then
+            flags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -UNDEBUG)
+            export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
+            export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+          elif [[ "$MODE" == tsan ]]; then
+            flags=(-O1 -g -fno-omit-frame-pointer -fsanitize=thread -UNDEBUG)
+            export TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1"
+          fi
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp \
+            tests/native_thread_join_carrier_guard_v1_test.c \
+            src/main/cpp/oreslang/runtime/NativeThreadV1.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o "$tmp/guard"
+          "$tmp/guard"
+          printf 'NATIVE_JOIN_CARRIER_GUARD_HOST_ONLY_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
