@@ -88,7 +88,9 @@ jobs:
           cmake -S . -B "$RUNNER_TEMP/atto-native-parity-build" \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DLLVM_DIR="$(llvm-config-19 --cmakedir)"
+            -DLLVM_DIR="$(llvm-config-19 --cmakedir)" \
+            -DORE_RT_AOT_CLANG="$(command -v clang-19)" \
+            -DORE_RT_AOT_CXX="$(command -v clang++-19)"
           cmake --build "$RUNNER_TEMP/atto-native-parity-build" \
             --target oreslang-llvmc oreslang-native-project-root-import-test --parallel 2
           test -x "$RUNNER_TEMP/atto-native-parity-build/oreslang-llvmc"
