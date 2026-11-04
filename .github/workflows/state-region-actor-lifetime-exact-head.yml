@@ -172,6 +172,15 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          # Standard ubuntu-24.04 runners do not guarantee LLVM development
+          # headers. Install only when the CMake toolchain is absent; a
+          # package-install failure is runner setup, never a guest verdict.
+          if ! command -v llvm-config >/dev/null 2>&1 && \
+             ! command -v llvm-config-18 >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends llvm-18-dev clang-18
+          fi
           if command -v llvm-config >/dev/null 2>&1; then
             LLVM_CONFIG=llvm-config
           elif command -v llvm-config-18 >/dev/null 2>&1; then
@@ -226,6 +235,15 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          # Standard ubuntu-24.04 runners do not guarantee LLVM development
+          # headers. Install only when the CMake toolchain is absent; a
+          # package-install failure is runner setup, never a guest verdict.
+          if ! command -v llvm-config >/dev/null 2>&1 && \
+             ! command -v llvm-config-18 >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends llvm-18-dev clang-18
+          fi
           if command -v llvm-config >/dev/null 2>&1; then
             LLVM_CONFIG=llvm-config
           elif command -v llvm-config-18 >/dev/null 2>&1; then
@@ -439,6 +457,15 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           SRC_TREE="$(git rev-parse 'HEAD^{tree}')"
           test -n "$SRC_TREE"
+          # Standard ubuntu-24.04 runners do not guarantee LLVM development
+          # headers. Install only when the CMake toolchain is absent; a
+          # package-install failure is runner setup, never a guest verdict.
+          if ! command -v llvm-config >/dev/null 2>&1 && \
+             ! command -v llvm-config-18 >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends llvm-18-dev clang-18
+          fi
           if command -v llvm-config >/dev/null 2>&1; then
             LLVM_CONFIG=llvm-config
           elif command -v llvm-config-18 >/dev/null 2>&1; then
