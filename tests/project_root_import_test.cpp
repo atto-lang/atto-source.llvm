@@ -196,14 +196,35 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         write_text(dir/"lib.ores", "");
-        must_fail("ambiguous .atto/.ores siblings", "ambiguous native source import",
-                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("implicit import did not prefer canonical .atto over .ores");
         if (resolve(dir/"main.atto", "+/lib.atto") != fs::canonical(dir/"lib.atto")
                 || resolve(dir/"main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("explicit .atto/.ores suffix must disambiguate");
         write_text(dir/"upper.ATTO", "");
         if (resolve(dir/"main.atto", "+/upper.ATTO") != fs::canonical(dir/"upper.ATTO"))
             throw std::runtime_error("explicit case-insensitive .ATTO suffix must be admitted");
+    }
+    {
+        const auto dir = temp / "modern-directory-shadows-legacy";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.ores", "");
+        fs::create_directory(dir/"lib.atto");
+        must_fail("directory canonical leaf must never select legacy", "canonical .atto source entry",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        must_fail("explicit directory canonical leaf", "canonical .atto source entry",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib.atto"); });
+    }
+    {
+        const auto dir = temp / "modern-missing-legacy-fallback";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.ores", "");
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("missing canonical .atto must allow explicit migration fallback");
+        must_fail("explicit missing .atto cannot downgrade", "cannot resolve native project-root import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib.atto"); });
     }
     {
         const auto dir = temp / "modern-nested-boundary";
@@ -221,7 +242,7 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.ores", "");
         fs::create_symlink(dir/"absent.atto", dir/"lib.atto");
-        must_fail("dangling .atto conflicts with legacy sibling", "ambiguous native source import",
+        must_fail("dangling .atto must not downgrade to legacy sibling", "canonical .atto source entry",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
@@ -230,8 +251,8 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         fs::create_hard_link(dir/"lib.atto", dir/"lib.ores");
-        must_fail("hardlink .atto/.ores twins", "ambiguous native source import",
-                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("same-inode hardlink must prefer canonical .atto spelling");
     }
     {
         const auto dir = temp / "same-inode-symlink-twins";
@@ -239,8 +260,8 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(dir/"lib.atto", "");
         fs::create_symlink(dir/"lib.atto", dir/"lib.ores");
-        must_fail("symlink .atto/.ores twins", "ambiguous native source import",
-                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("legacy symlink shadow must not override canonical .atto");
     }
     {
         const auto dir = temp / "modern-symlink-escape";
@@ -248,7 +269,7 @@ int main() {
         write_text(dir/"main.atto", "");
         write_text(temp/"outside-modern.atto", "");
         fs::create_symlink(temp/"outside-modern.atto", dir/"lib.atto");
-        must_fail(".atto symlink target escape", "escapes physical package root",
+        must_fail(".atto symlink target escape", "canonical .atto source entry",
                   [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
 #endif
