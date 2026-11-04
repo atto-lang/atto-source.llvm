@@ -1,6 +1,7 @@
 // Host policy oracle for the canonical 45 authorization vectors ONLY.
 // Not an AttoLang guest executable or an acceptable guest-runtime report.
 #include "scoped_permission_policy.hpp"
+#include "scoped_permission_serialization.hpp"
 #include <charconv>
 #include <iostream>
 #include <stdexcept>
@@ -29,6 +30,16 @@ static unsigned parse_count(std::string_view s) {
 }
 int main(int argc, char** argv) {
     try {
+        if (argc > 1 && std::string_view(argv[1]) == "--deserialize") {
+            const std::vector<std::string> fields(argv + 2, argv + argc);
+            try {
+                (void)parse_serialized_scoped_policy(fields, ScopedPolicy{});
+                std::cout << "accept\n";
+            } catch (const std::exception&) {
+                std::cout << "reject\n";
+            }
+            return 0;
+        }
         if (argc < 6) throw std::invalid_argument("incomplete host-policy vector");
         const Permission kind = parse_kind(argv[1]);
         const std::string resource(argv[2]);

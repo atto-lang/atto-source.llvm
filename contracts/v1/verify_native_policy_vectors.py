@@ -2,8 +2,8 @@
 """Execute the canonical 45 authorization cases against the real C++ policy.
 
 HOST-policy evidence ONLY: this is NOT a compiled .atto guest, native AOT
-artifact, or admissible backend-runtime parity report. The seven serialized
-permission-policy cases remain unexecuted by this adapter.
+artifact, or admissible backend-runtime parity report. It tests both authorization and serialized policy admission,
+not compiled guest operations.
 """
 import argparse
 import hashlib
@@ -43,8 +43,17 @@ def main():
                 f"HOST_POLICY_VECTOR_FAILURE id={case['id']!r} "
                 f"exit={result.returncode} stdout={result.stdout[:80]!r} "
                 f"stderr={result.stderr[:160]!r}")
+    for case in deserialize:
+        cmd = [str(args.binary), "--deserialize", *case["argv"]]
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=5, check=False)
+        if result.returncode != 0 or result.stdout != case["expected"] + "\n":
+            raise AssertionError(
+                f"HOST_SERIALIZATION_VECTOR_FAILURE id={case['id']!r} "
+                f"exit={result.returncode} stdout={result.stdout[:80]!r} "
+                f"stderr={result.stderr[:160]!r}")
     print("HOST_SCOPED_POLICY_AUTHORIZATION_PASS 45/45")
-    print("SERIALIZATION_VECTORS_NOT_EXECUTED 7/7")
+    print("HOST_SCOPED_POLICY_SERIALIZATION_PASS 7/7")
     print("GUEST_RUNTIME_PARITY_NOT_VERIFIED")
 
 
