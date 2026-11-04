@@ -860,7 +860,7 @@ if(BUILD_TESTING)
     # by ORIE. Source -> IR -> native runtime link -> piped process execution.
     # Negative cases reject before IR; no host fallback is permitted.
     find_program(ORE_ORIE_STDOUT_BASH bash)
-    # Host-only negative mutation tests for the f64 source->IR->guest harness.
+    # Five host-only negative mutation tests for the f64 source->IR->guest harness.
     # These use fake compilers to prove forged IR and results fail closed;
     # NEVER count them as native guest or numerical parity evidence.
     if(ORE_ORIE_STDOUT_BASH)
