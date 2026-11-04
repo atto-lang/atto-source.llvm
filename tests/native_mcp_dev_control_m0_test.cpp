@@ -71,6 +71,23 @@ int main() {
     auto first=ledger->begin(host,principal,request);
     check(first.ok() && first.ticket.token);
     check(ledger->live(first.ticket,host));
+    // A live ticket must not inherit authority in a new boot with the
+    // same runtime generation; removing OS peer attestation must also deny.
+    {
+        auto rotated = host;
+        rotated.boot = "next-boot";
+        check(!ledger->live(first.ticket, rotated));
+        rotated = host;
+        rotated.peer_verified = false;
+        check(!ledger->live(first.ticket, rotated));
+        rotated = host;
+        rotated.enabled = false;
+        check(!ledger->live(first.ticket, rotated));
+        rotated = host;
+        rotated.generation = 4;
+        check(!ledger->live(first.ticket, rotated));
+        check(ledger->live(first.ticket,host));
+    }
     check(ledger->begin(host,principal,request).reason==Reason::replay);
     r=request; r.nonce="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     check(ledger->begin(host,principal,r).reason==Reason::duplicate_id);
