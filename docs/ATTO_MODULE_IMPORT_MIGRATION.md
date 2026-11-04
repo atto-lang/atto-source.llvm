@@ -48,6 +48,52 @@ nor proof that `oreslang-llvmc` executed the new source fixtures.
 Actual compiler/CTest and sanitizer receipts remain mandatory on the
 immutable PR head before any merge or cross-backend parity claim.
 
+## Canonical POSIX source admission hardening (2026-11-03)
+
+The LLVM frontend's source reader now routes `.atto` files and
+`.atto.pkg.toml` manifests through `PinnedAttoSourceOpen.hpp`. The POSIX
+reader opens each ancestor using `openat` with `O_DIRECTORY` and
+`O_NOFOLLOW`, then opens the leaf with `O_NOFOLLOW`. It checks the
+opened descriptor's regular-file status, byte budget and source identity
+through the existing `SourceInput.hpp` admission code. Import
+resolution now passes the **original `.atto.pkg.toml` basename** to the
+manifest read callback rather than the already-canonicalized pathname,
+so the reader cannot silently lose its no-follow admission policy. Legacy
+`.ores` files keep existing compatibility semantics; source extension
+detection remains case-insensitive for `.ATTO`.
+
+The module loader now keeps the canonical path used for module graph identity
+separate from the unresolved selected path used for source-byte admission.
+For both relative `./` and project-root `+/` imports, `.atto` bytes must
+be opened through the original selected path; otherwise canonicalization
+would erase a link injected between resolution and the eventual open.
+The project-root resolver exposes this original path through an optional
+out-parameter without changing the canonical identity returned to existing
+callers. A host test changes a valid imported source into a symlink *after*
+root resolution and requires the original read path to fail closed.
+
+This closes the previous race where a link could be inserted after a
+preflight `symlink_status` check but before the file descriptor opened.
+It does **not** make project-root resolution, nested-package detection,
+or a mutable file's complete contents an atomic filesystem snapshot:
+those broader guarantees still require reviewed provenance and source
+digest evidence.
+
+`tests/native_pinned_atto_source_open_test.cpp` exercises five allowed
+paths, five denied source/manifest alias paths, 1,000 reopened descriptors,
+and a post-open mutation that replaces the admitted pathname with a
+symlink while a pinned descriptor must still read the original bytes. The exact source blob was compiled and run locally against
+both GCC 14 and Clang 17 using ASan/UBSan and `-Werror`; those are
+**component-only local results**. CI now includes this dedicated source
+unit under GCC/Clang sanitizers and a CTest name
+`native_pinned_atto_source_path_admission`. A complete LLVM compiler
+build and `.atto` guest execution are separate gates.
+
+Shared Java/LLVM tests use exactly the same three `.atto` fixture
+Git blobs and require `main()` exit 42. This is a **planned compiler
+acceptance contract**, not demonstrated runtime parity until source-org
+CI runs execute nonzero steps.
+
 ## Private-source execution boundary
 
 Security incidents [platform-conformance #22](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22)

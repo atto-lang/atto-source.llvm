@@ -196,7 +196,10 @@ inline void validate_suffix(std::string_view suffix) {
 inline std::filesystem::path resolve_project_root_import(
         const std::filesystem::path& importing_source,
         std::string_view raw,
-        const std::function<std::string(const std::filesystem::path&)>& read_manifest) {
+        const std::function<std::string(const std::filesystem::path&)>& read_manifest,
+        // Optional exact unresolved source path for a descriptor-pinned read.
+        // The canonical return value remains the deduplicated unit identity.
+        std::filesystem::path* original_source_path = nullptr) {
     namespace fs = std::filesystem;
     using namespace project_root_import_detail;
 
@@ -239,9 +242,17 @@ inline std::filesystem::path resolve_project_root_import(
             if (physical_manifest.parent_path() != cursor)
                 throw std::runtime_error(
                     "native package manifest must reside within package directory");
-            // Reopen the already-canonical path so a manifest symlink swap after
-            // the locality check cannot redirect the bytes we validate.
-            validate_manifest(read_manifest(physical_manifest));
+            // For canonical .atto.pkg.toml, retain the ORIGINAL manifest
+            // basename when handing it to the source-reader callback. That
+            // reader pins every ancestor and the leaf using O_NOFOLLOW.
+            // Reading physical_manifest here would erase this security policy
+            // after canonical() and reintroduce a symlink-swap window.
+            //
+            // Preserve the legacy migration callback's historical physical
+            // pathname contract for .ores.pkg.toml only.
+            const auto& admitted_manifest =
+                manifest == atto_manifest ? manifest : physical_manifest;
+            validate_manifest(read_manifest(admitted_manifest));
             package_root = cursor;
             break;
         }
@@ -270,6 +281,10 @@ inline std::filesystem::path resolve_project_root_import(
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
     reject_nested_package(physical_root, target);
+    // Record the selected source pathname *before* canonical() erases
+    // potential symlink changes. The caller must read bytes through this
+    // path with O_NOFOLLOW on every component for canonical .atto inputs.
+    if (original_source_path != nullptr) *original_source_path = candidate;
     return target;
 }
 

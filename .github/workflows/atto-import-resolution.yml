@@ -6,9 +6,12 @@ on:
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/frontend/SourceInput.hpp'
+      - 'src/main/cpp/oreslang/frontend/PinnedAttoSourceOpen.hpp'
       - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/project_root_import_test.cpp'
+      - 'tests/native_pinned_atto_source_open_test.cpp'
       - 'tests/native_module_imports.py'
       - 'tests/fixtures/atto-native-parity/**'
       - 'CMakeLists.txt'
@@ -41,12 +44,33 @@ jobs:
         run: |
           set -euo pipefail
           for compiler in g++ clang++; do
-            "${compiler}" -std=c++20 -O1 -Wall -Wextra -Wpedantic -Werror \
+            # GCC 14 -O1 raises a spurious -Wmaybe-uninitialized in its own
+            # std::regex implementation with -Werror. Keep *all* warnings
+            # fatal and compile this host-only unit at -O0 for GCC; retain
+            # -O1 for Clang and the independent compiler-backed native gate.
+            optimize=-O1
+            if [[ "$compiler" == g++ ]]; then optimize=-O0; fi
+            "${compiler}" -std=c++20 "$optimize" -Wall -Wextra -Wpedantic -Werror \
               -UNDEBUG -Isrc/main/cpp tests/project_root_import_test.cpp \
               -o "$RUNNER_TEMP/atto-root-import-${compiler}"
             "$RUNNER_TEMP/atto-root-import-${compiler}"
           done
           echo 'ATTO_LLVM_HOST_IMPORT_SECURITY=PASS; GUEST=NOT_EXECUTED'
+      - name: GCC and Clang pinned canonical input ASan and UBSan regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            "${compiler}" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -Isrc/main/cpp/oreslang/frontend \
+              tests/native_pinned_atto_source_open_test.cpp \
+              -o "$RUNNER_TEMP/atto-pinned-input-${compiler}"
+            ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+              UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+              "$RUNNER_TEMP/atto-pinned-input-${compiler}"
+          done
+          echo 'ATTO_LLVM_PINNED_INPUT_HOST_SANITIZERS=PASS; GUEST=NOT_EXECUTED'
   compiler-backed-atto-native-guest:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -92,7 +116,7 @@ jobs:
             -DORE_RT_AOT_CLANG="$(command -v clang-19)" \
             -DORE_RT_AOT_CXX="$(command -v clang++-19)"
           cmake --build "$RUNNER_TEMP/atto-native-parity-build" \
-            --target oreslang-llvmc oreslang-native-project-root-import-test --parallel 2
+            --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-native-pinned-atto-source-open-test --parallel 2
           test -x "$RUNNER_TEMP/atto-native-parity-build/oreslang-llvmc"
           echo 'ATTO_LLVM_REAL_COMPILER_BUILD=PASS'
       - name: Execute linked native .atto program and malicious-source rejections
@@ -101,7 +125,20 @@ jobs:
           set -euo pipefail
           ctest --test-dir "$RUNNER_TEMP/atto-native-parity-build" \
             --output-on-failure --timeout 180 \
-            -R '^(native_project_root_import_security|native_source_module_graph_execution)$'
+            -R '^(native_project_root_import_security|native_source_module_graph_execution|native_pinned_atto_source_path_admission)
+          echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
+      - name: Recheck exact source head and tracked changes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          git diff --exit-code --
+          git diff --cached --exit-code --
+          echo 'ATTO_LLVM_SOURCE_IDENTITY_AFTER=PASS'
+
           echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
       - name: Recheck exact source head and tracked changes
         shell: bash

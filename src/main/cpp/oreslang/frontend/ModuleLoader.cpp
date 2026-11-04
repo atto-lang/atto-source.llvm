@@ -17,6 +17,8 @@ constexpr std::size_t max_bytes = 8u * 1024u * 1024u;
 constexpr std::size_t max_units = 128, max_depth = 32;
 struct Unit {
     fs::path path;
+    // Compiler-owned root-relative provenance; never a physical host path.
+    std::string logical_unit_id;
     SourceIdentity identity;
     Program program;
     std::string prefix;
@@ -48,15 +50,25 @@ public:
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
-        // Canonical Atto packages use project-root-relative source IDs.
-        // Legacy/rootless inputs keep their existing admission behavior.
-        if (project_root_import_detail::is_atto_source(fs::path(path))) {
-            fs::path cursor = fs::canonical(path).parent_path();
+        // Preserve the uncanonicalized input spelling through source admission:
+        // canonical() would otherwise erase symlink aliases before checking.
+        const fs::path entry_path = fs::absolute(path).lexically_normal();
+        if (project_root_import_detail::is_atto_source(entry_path)) {
+            project_root_import_detail::reject_atto_symlink_components(entry_path);
+            fs::path cursor = entry_path.parent_path();
             for (;;) {
                 if (project_root_import_detail::exists_marker(cursor / ".atto.pkg.toml") ||
-                    project_root_import_detail::exists_marker(cursor / ".ores.pkg.toml")) {
+                        project_root_import_detail::exists_marker(cursor / ".ores.pkg.toml")) {
                     logical_units = std::make_unique<frontend::HostLogicalUnitIds>(cursor);
-                    (void)logical_units->admit(fs::canonical(path));
+                    (void)logical_units->admit(entry_path);
+                    // Bind the selected project path to the descriptor already
+                    // read by the CLI, not a later filesystem alias.
+                    const auto candidate_path = entry_path.string();
+                    const auto after = capture_source_identity(
+                        candidate_path.c_str(), max_bytes,
+                        "native entry exceeds 8 MiB source read budget");
+                    if (!ores_source_identity_equal(identity, after))
+                        throw std::runtime_error("ATTO_UNIT_SOURCE_CHANGED: entry source identity changed");
                     break;
                 }
                 if (cursor == cursor.root_path()) break;
@@ -65,7 +77,7 @@ public:
                 cursor = parent;
             }
         }
-        visit(fs::canonical(path), std::move(text), identity, 0, false,
+        visit(fs::canonical(entry_path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
@@ -147,6 +159,8 @@ private:
             throw std::runtime_error(path.string() + ": native target admission unsupported: ores environment headers require compiler verification");
         const auto index = units.size();
         auto unit = std::make_unique<Unit>();
+        unit->logical_unit_id = logical_units && !compiler_owned_library
+            ? logical_units->admit(path) : path.generic_string();
         unit->path = std::move(path); unit->identity = identity;
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
         unit->compiler_owned_library = compiler_owned_library;
@@ -256,6 +270,11 @@ private:
                         "freestanding native imports require compiler-owned ores.core/* modules");
 
                 fs::path dependency;
+                // Resolve a stable canonical unit identity separately from the
+                // pathname handed to the descriptor-pinned source reader.
+                // canonical() erases leaf and ancestor symlink components and
+                // must never choose the pathname used for a .atto file open.
+                fs::path admission_path;
                 if (raw.rfind("+/", 0) == 0) {
                     try {
                         dependency = resolve_project_root_import(
@@ -271,7 +290,7 @@ private:
                                     nullptr, &expected_manifest);
                                 require_valid_source_utf8(bytes);
                                 return bytes;
-                            });
+                            }, &admission_path);
                     } catch (const std::exception& error) {
                         fail(current, error.what());
                     }
@@ -284,19 +303,21 @@ private:
                     if (project_root_import_detail::is_atto_source(dependency)) {
                         project_root_import_detail::reject_atto_symlink_components(dependency);
                     }
+                    admission_path = dependency;
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
                 }
 
-                // Enforce compiler-owned logical identity before parsing or linking.
+                // Use the unresolved, compiler-owned pathname. Resolving
+                // symlinks before admission would erase an unsafe alias.
                 if (logical_units)
-                    (void)logical_units->admit(dependency);
+                    (void)logical_units->admit(admission_path);
                 const auto known = paths.find(dependency.string());
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
                 if (selected == units.size()) {
-                    const auto dependency_path = dependency.string();
+                    const auto dependency_path = admission_path.string();
                     const auto expected_child_identity = capture_source_identity(
                         dependency_path.c_str(), max_bytes - read_bytes,
                         "native import graph exceeds 8 MiB source read budget");

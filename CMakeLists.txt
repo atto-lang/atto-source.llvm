@@ -785,8 +785,22 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-project-root-import-test)
     set_tests_properties(native_project_root_import_security PROPERTIES TIMEOUT 20)
 
-    # Host-only identity/admission layer for .atto module provenance.
-    # This is not linked macro lowering or executable guest parity.
+    # POSIX-only real fd-walk admission for canonical .atto/.atto.pkg.toml.
+    # This does NOT compile a guest: CTest proves source-input containment.
+    if(UNIX)
+        add_executable(oreslang-native-pinned-atto-source-open-test
+            tests/native_pinned_atto_source_open_test.cpp)
+        target_include_directories(oreslang-native-pinned-atto-source-open-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/frontend")
+        target_compile_options(oreslang-native-pinned-atto-source-open-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_pinned_atto_source_path_admission
+            COMMAND oreslang-native-pinned-atto-source-open-test)
+        set_tests_properties(native_pinned_atto_source_path_admission
+            PROPERTIES TIMEOUT 20)
+    endif()
+
+    # Host-only logical source-unit identity; real guest compilation is gated separately.
     if(UNIX)
         add_executable(oreslang-native-host-logical-unit-ids-test
             tests/native_host_logical_unit_ids_test.cpp)

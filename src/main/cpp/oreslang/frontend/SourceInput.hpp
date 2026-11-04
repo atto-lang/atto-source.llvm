@@ -1,4 +1,5 @@
 #pragma once
+#include "PinnedAttoSourceOpen.hpp"
 #include <array>
 #include <cerrno>
 #include <fstream>
@@ -81,7 +82,7 @@ inline bool ores_source_identity_equal(
 
 inline SourceIdentity capture_source_identity(
     const char* path, std::size_t limit, const char* overflow) {
-  const int fd = ::open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+  const int fd = ores_open_source_fd(path);
   if (fd < 0) throw std::runtime_error(std::string("cannot open source: ") + path);
   struct Close { int fd; ~Close() { ::close(fd); } } close{fd};
   struct stat info{};
@@ -131,7 +132,7 @@ inline std::string read_regular_source(
   std::array<char, 8192> buffer{};
   std::string text;
 #if defined(__unix__) || defined(__APPLE__)
-  const int fd = ::open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+  const int fd = ores_open_source_fd(path);
   if (fd < 0) throw std::runtime_error(std::string("cannot open source: ") + path);
   struct Close { int fd; ~Close() { ::close(fd); } } close{fd};
   struct stat info{};
