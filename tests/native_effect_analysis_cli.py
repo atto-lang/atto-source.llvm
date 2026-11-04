@@ -76,6 +76,48 @@ def main(compiler):
     assert caught.returncode == 2, (caught.returncode, caught.stderr)
     assert "status=inconclusive" in caught.stdout, caught.stdout
 
+    # A hidden exceptional operation inside a direct-call argument must
+    # not be laundered into a successful closed-effect receipt.
+    argument_effect = run(
+        compiler,
+        "fnc identity(int value): int { return value; }\n"
+        "pub fnc main(): int { return identity(1 + 2); }\n",
+        flags=("--analyze",),
+    )
+    assert argument_effect.returncode == 2, (
+        argument_effect.returncode, argument_effect.stdout, argument_effect.stderr
+    )
+    assert "status=inconclusive" in argument_effect.stdout
+    assert "status=known" not in argument_effect.stdout
+
+    # Transitive unknown observations must contaminate the callers too.
+    transitive_unknown = run(
+        compiler,
+        "fnc arithmetic(): int { return 1 + 2; }\n"
+        "pub fnc main(): int { return arithmetic(); }\n",
+        flags=("--analyze",),
+    )
+    assert transitive_unknown.returncode == 2, (
+        transitive_unknown.returncode, transitive_unknown.stdout,
+        transitive_unknown.stderr
+    )
+    assert "main/0\tstatus=inconclusive" in transitive_unknown.stdout
+    assert "arithmetic/0\tstatus=inconclusive" in transitive_unknown.stdout
+
+    # Duplicate and incompatible selectors are invocation errors (exit 2),
+    # never an advisory PASS, and must not emit even partial analysis records.
+    for options in [
+        ("--analyze", "--analyze"),
+        ("--analyze", "--rt-check"),
+        ("--analyze", "--constraint-descriptors"),
+        ("--analyze", "--target=wasm32"),
+    ]:
+        rejected = run(compiler, pure, flags=options)
+        assert rejected.returncode == 2, (
+            options, rejected.returncode, rejected.stdout, rejected.stderr
+        )
+        assert not rejected.stdout, (options, rejected.stdout)
+
     # Malformed source cannot be reported as admitted or effect-free.
     malformed = run(compiler, "pub fnc main(): int { return ; }\n",
                     flags=("--analyze",))
