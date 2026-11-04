@@ -31,20 +31,24 @@ fi
 umask 077
 build="$(mktemp -d)"
 trap 'rm -rf -- "$build"' EXIT
-source_file="tests/supervisor_control_turn_test.cpp"
 includes="-Isrc/main/cpp"
 
-# Compile *production* headers, execute native TURN/STOP receipt tests.
-clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
-  -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
-  "$includes" "$source_file" -o "$build/stop-asan-ubsan"
-ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-  "$build/stop-asan-ubsan"
+# Compile and execute both the production CONTROL lane and the separate
+# opt-in, typed source STOP-only policy against the actual native host runtime.
+for testcase in supervisor_control_turn_test native_supervisor_stop_only_source_test; do
+  source_file="tests/$testcase.cpp"
+  clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    "$includes" "$source_file" -o "$build/$testcase-asan-ubsan"
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+    "$build/$testcase-asan-ubsan"
 
-g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
-  "$includes" "$source_file" -o "$build/stop-gcc-o2"
-"$build/stop-gcc-o2"
+  g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+    "$includes" "$source_file" -o "$build/$testcase-gcc-o2"
+  "$build/$testcase-gcc-o2"
+  echo "SUPERVISOR_NATIVE_STOP_TEST=PASS case=$testcase"
+done
 
-# The two actual executable invocations must have completed successfully.
-echo "SUPERVISOR_NATIVE_STOP_EXACT_HEAD=PASS sha=$actual clang_asan_ubsan=PASS gcc_o2=PASS"
+# PASS only after all four production-header executables returned zero.
+echo "SUPERVISOR_NATIVE_STOP_EXACT_HEAD=PASS sha=$actual cases=2 clang_asan_ubsan=PASS gcc_o2=PASS"
