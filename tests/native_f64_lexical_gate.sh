@@ -287,4 +287,4 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
 
 [[ "$pass" -eq 25 && "$reject" -eq 16 && "$native_executions" -eq 50 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_CASES_PASS=25; NATIVE_F64_O0_O2_EXECUTIONS=50; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only; NOT full num.atto library execution)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=25; NATIVE_F64_O0_O2_EXECUTIONS=50; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only; NOT full num.atto library execution)"
