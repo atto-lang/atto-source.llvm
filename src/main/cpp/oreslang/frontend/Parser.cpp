@@ -822,43 +822,64 @@ private:
         if (result.capacity == 0 || result.capacity > 256)
             fail("production inverted capacity must be 1..256");
         require(")"); require(";");
+        std::unordered_set<std::string> snapshot_names;
         while (true) {
             if (token_.kind == Kind::End || result.operations.size() == 1024)
                 fail("production inverted main missing return or operation budget exceeded");
             InvertedSourceOperation op;
             if (accept("return")) {
-                if (identifier() != result.owner_name)
-                    fail("production inverted return must read the local owner");
-                require("."); require("get"); require("(");
-                op.kind = InvertedSourceOperation::Kind::ReturnRead;
-                op.index = inverted_source_index();
-                require(",");
-                op.field = identifier();
-                require(")"); require(";");
+                const auto target = identifier();
+                if (target == result.owner_name) {
+                    require("."); require("get"); require("(");
+                    op.kind = InvertedSourceOperation::Kind::ReturnRead;
+                    op.index = inverted_source_index();
+                    require(","); op.field = identifier(); require(")");
+                } else {
+                    if (!snapshot_names.count(target))
+                        fail("production inverted return requires declared snapshot");
+                    require(".");
+                    op.kind = InvertedSourceOperation::Kind::ReturnSnapshotRead;
+                    op.snapshot_name = target;
+                    op.field = identifier();
+                }
+                require(";");
                 result.operations.push_back(std::move(op));
                 require("}");
                 return result;
             }
-            if (identifier() != result.owner_name)
-                fail("production inverted operation must target the local owner");
-            require(".");
-            if (accept("push")) {
-                op.kind = InvertedSourceOperation::Kind::Push;
-                require("(");
-                op.values[0] = signed_integer_literal();
-                require(",");
-                op.values[1] = signed_integer_literal();
-                require(")");
-            } else if (accept("set")) {
-                op.kind = InvertedSourceOperation::Kind::WriteField;
-                require("("); op.index = inverted_source_index();
-                require(","); op.field = identifier(); require(",");
-                op.value = signed_integer_literal(); require(")");
-            } else if (accept("erase_swap")) {
-                op.kind = InvertedSourceOperation::Kind::EraseSwap;
-                require("("); op.index = inverted_source_index(); require(")");
+            if (accept("let")) {
+                op.kind = InvertedSourceOperation::Kind::Snapshot;
+                op.snapshot_name = identifier();
+                if (op.snapshot_name == result.owner_name ||
+                        !snapshot_names.insert(op.snapshot_name).second)
+                    fail("production inverted snapshot binding must be distinct");
+                require("=");
+                if (identifier() != result.owner_name)
+                    fail("production inverted snapshot must target the local owner");
+                require("."); require("snapshot"); require("(");
+                op.index = inverted_source_index(); require(")");
             } else {
-                fail("production inverted supports only push, set, erase_swap and terminal get");
+                if (identifier() != result.owner_name)
+                    fail("production inverted operation must target the local owner");
+                require(".");
+                if (accept("push")) {
+                    op.kind = InvertedSourceOperation::Kind::Push;
+                    require("(");
+                    op.values[0] = signed_integer_literal();
+                    require(",");
+                    op.values[1] = signed_integer_literal();
+                    require(")");
+                } else if (accept("set")) {
+                    op.kind = InvertedSourceOperation::Kind::WriteField;
+                    require("("); op.index = inverted_source_index();
+                    require(","); op.field = identifier(); require(",");
+                    op.value = signed_integer_literal(); require(")");
+                } else if (accept("erase_swap")) {
+                    op.kind = InvertedSourceOperation::Kind::EraseSwap;
+                    require("("); op.index = inverted_source_index(); require(")");
+                } else {
+                    fail("production inverted supports only push, set, erase_swap, local snapshot and terminal read");
+                }
             }
             require(";");
             result.operations.push_back(std::move(op));
