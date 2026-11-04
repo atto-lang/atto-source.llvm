@@ -144,7 +144,7 @@ bool reserved(std::string_view name) {
         "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
-        "finally", "end", "fi", "if", "do", "else", "then", "new",
+        "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
@@ -2553,6 +2553,32 @@ private:
                 }
                 Statement statement;
                 statement.offset = token_.offset;
+                if (token_.text == "guard" && !finally_scope) {
+                    const auto offset = token_.offset;
+                    require("guard");
+                    auto predicate = expression();
+                    while (accept(",")) {
+                        auto combined = make_expression(Expression::Kind::LogicalAnd, offset);
+                        combined->left = std::move(predicate);
+                        combined->right = expression();
+                        predicate = std::move(combined);
+                    }
+                    require("{");
+                    require("return");
+                    Statement terminal;
+                    terminal.kind = Statement::Kind::Return; terminal.offset = offset;
+                    if (!value.returns_void) terminal.expression = expression();
+                    require(";"); require("}");
+                    if (token_.text == "else" || token_.text == "fi")
+                        fail("AttoLang guard has no else or fi");
+                    Statement inverted;
+                    inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
+                    inverted.condition = make_expression(Expression::Kind::LogicalNot, offset);
+                    inverted.condition->left = std::move(predicate);
+                    inverted.then_statements.push_back(std::move(terminal));
+                    actions.push_back(std::move(inverted));
+                    continue;
+                }
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
@@ -2877,6 +2903,35 @@ private:
                     value.statements.push_back(dispatch_statement());
                     continue;
                 }
+            }
+            if (token_.text == "guard") {
+                if (return_guards_started)
+                    fail("native guard cannot follow legacy return guards");
+                const auto offset = token_.offset;
+                require("guard");
+                auto predicate = expression();
+                while (accept(",")) {
+                    auto combined = make_expression(Expression::Kind::LogicalAnd, offset);
+                    combined->left = std::move(predicate);
+                    combined->right = expression();
+                    predicate = std::move(combined);
+                }
+                require("{");
+                require("return");
+                if (++branch_count > 128) fail("native structured guard limit exceeded (128)");
+                Statement terminal;
+                terminal.kind = Statement::Kind::Return; terminal.offset = offset;
+                if (!value.returns_void) terminal.expression = expression();
+                require(";"); require("}");
+                if (token_.text == "else" || token_.text == "fi")
+                    fail("AttoLang guard has no else or fi");
+                Statement inverted;
+                inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
+                inverted.condition = make_expression(Expression::Kind::LogicalNot, offset);
+                inverted.condition->left = std::move(predicate);
+                inverted.then_statements.push_back(std::move(terminal));
+                value.statements.push_back(std::move(inverted));
+                continue;
             }
             if (token_.text == "if") {
                 const auto offset = token_.offset;
