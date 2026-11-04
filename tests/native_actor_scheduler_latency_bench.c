@@ -27,7 +27,9 @@
  * Usage: bench [--smoke] [--hops N] [--spin-ns N] [--cpus a,b] [--lock pi|throughput]
  * --smoke runs tiny iteration counts so CTest keeps the binary exercised.
  */
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include <pthread.h>
 #include <stdatomic.h>

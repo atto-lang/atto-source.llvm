@@ -58,7 +58,8 @@ static void require_guest_trap(int scenario) {
     int status = 0;
     CHECK(waitpid(pid, &status, 0) == pid);
     CHECK(WIFSIGNALED(status));
-    CHECK(WTERMSIG(status) == SIGILL);
+    /* llvm.trap is ud2 (SIGILL) on x86-64 and brk (SIGTRAP) on arm64. */
+    CHECK(WTERMSIG(status) == SIGILL || WTERMSIG(status) == SIGTRAP);
 }
 #endif
 
