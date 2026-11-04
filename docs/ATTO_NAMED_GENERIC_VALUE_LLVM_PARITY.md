@@ -69,8 +69,11 @@ project-root imports must reject with no LLVM IR; a same-suffix `.atto`
 symlink must compile, link, and execute a 42-exit native guest. The
 independent `native_project_root_import_security` header-level test also
 checks both source/target cross-suffix symlink directions and one positive
-same-suffix `.atto` import (five new assertions). These are **registered,
-not yet executed** until an authorized runner is admitted.
+same-suffix `.atto` import (five new assertions). The module-graph suite
+also rejects **four hard-link cross-dialect aliases**: both import orders
+across a shared `.atto`/`.ores` inode, and both self-import alias directions.
+A file's import dialect must never depend on visitation order. These are
+**registered, not yet executed** until an authorized runner is admitted.
 
 ## Executable evidence gates
 
