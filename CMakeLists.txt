@@ -391,8 +391,17 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_generic_source_execution.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
-            --clang "${ORE_SOURCE_I64_CLANG}")
+            --clang "${ORE_SOURCE_I64_CLANG}"
+            --clang-opt=-O0)
     set_tests_properties(native_atto_named_generic_value_source_execution
+        PROPERTIES TIMEOUT 240)
+    add_test(NAME native_atto_named_generic_value_source_execution_O2
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_generic_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}"
+            --clang-opt=-O2)
+    set_tests_properties(native_atto_named_generic_value_source_execution_O2
         PROPERTIES TIMEOUT 240)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
