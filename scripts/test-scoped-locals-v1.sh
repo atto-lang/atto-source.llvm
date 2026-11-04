@@ -3,6 +3,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
+
+# Required CI must not certify a partial matrix. Local developers may leave
+# this unset to run only the compilers installed on their workstation.
+if [ "${ORES_SCOPED_LOCAL_REQUIRE_FULL_MATRIX:-0}" = "1" ]; then
+  for compiler in gcc g++ clang clang++; do
+    if ! command -v "$compiler" >/dev/null 2>&1; then
+      echo "missing required native scoped-local compiler: $compiler" >&2
+      exit 1
+    fi
+  done
+fi
 found=0
 for CXX in g++ clang++; do
   if ! command -v "$CXX" >/dev/null 2>&1; then continue; fi
