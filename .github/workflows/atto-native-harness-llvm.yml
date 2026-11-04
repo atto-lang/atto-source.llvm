@@ -3,7 +3,14 @@
 name: AttoLang LLVM native harness executable parity (O0 O2)
 on:
   pull_request:
+    # Source-owner compiler, runtime, stdlib and build edits must run parity.
     paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'src/main/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'stdlib/**'
       - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
       - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
       - 'tests/core_library_sources_test.cpp'
