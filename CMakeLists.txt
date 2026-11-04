@@ -3627,7 +3627,15 @@ endif()
 # This invokes the production compiler, then links emitted IR into a host
 # executable using clang; an IR printout alone is not guest execution.
 if(BUILD_TESTING)
+    # General host configurations may omit Clang, but the dedicated
+    # executable-macro certification job MUST NOT silently skip native guests.
+    option(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT
+        "Fail configure when Clang is unavailable for compiled macro guests" OFF)
     find_program(ORE_NATIVE_MACRO_CLANG_EXECUTABLE NAMES clang)
+    if(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT AND NOT ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
+        message(FATAL_ERROR
+            "MACRO_LLVM_NOT_EXECUTED: strict native guest AOT gate needs clang")
+    endif()
     if(ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
         foreach(macro_case IN ITEMS const identity)
             set(macro_fixture
