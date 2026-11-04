@@ -1,11 +1,11 @@
 #pragma once
 
-// HOST ONLY: a native scheduler-authenticated request dispatch adapter.
-// Possession of a RequestContextLocalV1::Ptr or an ActorRef is NOT authority.
-// Only native execution claims on the actual owner pthread, original logical
-// request-mail provenance, and the live request incarnation may access locals.
-// AOT compiler lowering and a scheduler-minted opaque guest receipt remain
-// required before this bridge may authorize .atto guest execution.
+// HOST-ONLY native request origin adapter: source guest code cannot supply
+// current logical mail provenance. The scheduler creates the gate after
+// admitting ingress and provides a trusted, nonallocating current-mail reader.
+// A copied ActorRef, token string, or actor execution claim is not enough.
+// Production codegen, dispatch callback wiring, and guest AOT lowering remain
+// mandatory release gates; this header alone is not a tenant sandbox.
 
 #include "oreslang/runtime/NativeExecutionAuthority.h"
 #include "oreslang/runtime/RequestContextLocalV1.hpp"
@@ -18,27 +18,32 @@
 
 namespace oreslang::runtime {
 
-struct NativeRequestMailProofV1 {
-    OresExecutionClaim actor_turn{};
-    std::uint64_t original_mail_sequence = 0;
-};
+// Only a trusted native actor dispatcher may supply this function pointer
+// and the pinned context it reads. For ordinary user mail, it returns the
+// exact source-mail sequence. For a scheduler-approved SourceTask resume, it
+// returns that immutable original sequence. For a generic Future completion,
+// callback-only thread, detached Task, STOP cleanup, or unknown carrier it
+// MUST return std::nullopt. It must not inspect arbitrary guest arguments.
+using TrustedRequestMailReaderV1 =
+    std::optional<std::uint64_t> (*)(void*) noexcept;
 
-// Native-only adapter; the host must create this once at verified ingress,
-// passing the original delivered mail sequence, not a callback/guest-provided
-// string. The proof itself is not a bearer capability: copied claims are
-// rejected on foreign threads by NativeExecutionAuthority.
 class NativeRequestMailGateV1 final {
 public:
     NativeRequestMailGateV1(
             OresNativeExecutionAuthority& authority,
             RequestContextLocalV1::Ptr request,
             OresNativeActorRef actor,
-            std::uint64_t admitted_mail_sequence)
+            std::uint64_t admitted_mail_sequence,
+            TrustedRequestMailReaderV1 current_mail,
+            void* pinned_scheduler_context)
         : authority_(&authority), request_(std::move(request)),
-          actor_(actor), admitted_mail_sequence_(admitted_mail_sequence) {
+          actor_(actor), admitted_mail_sequence_(admitted_mail_sequence),
+          current_mail_(current_mail),
+          scheduler_context_(pinned_scheduler_context) {
         if (!request_ || !request_->identity().valid()
                 || !request_->belongs_to(actor_)
-                || actor_.generation == 0) {
+                || actor_.generation == 0 || !current_mail_
+                || !scheduler_context_) {
             throw std::invalid_argument("invalid native request-mail owner");
         }
     }
@@ -46,34 +51,35 @@ public:
     NativeRequestMailGateV1(const NativeRequestMailGateV1&) = delete;
     NativeRequestMailGateV1& operator=(const NativeRequestMailGateV1&) = delete;
 
-    bool authorized(const NativeRequestMailProofV1& current) const {
-        if (current.original_mail_sequence != admitted_mail_sequence_
-                || current.actor_turn.carrier == 0
-                || current.actor_turn.generation != actor_.generation)
+    bool authorized(const OresExecutionClaim& current) const {
+        if (!current.carrier || current.generation != actor_.generation)
             return false;
-        // Supervisor STOP revokes request access even while an already
-        // admitted cleanup turn still owns its physical native carrier.
-        // TaskCancellation remains the independent physical lifetime fence.
-        return ores_execution_owns_running(authority_, current.actor_turn)
+        // One mutex acquisition validates real physical owner and RUNNING
+        // phase. STOPPING cleanup may still hold the lease, but never a live
+        // RequestLocal grant. Native cancellation/physical pin is separate.
+        if (!ores_execution_owns_running(authority_, current)) return false;
+        const auto admitted = current_mail_(scheduler_context_);
+        return admitted.has_value()
+            && *admitted == admitted_mail_sequence_
             && request_->belongs_to(actor_) && request_->active();
     }
 
     template <typename T>
-    bool set(const NativeRequestMailProofV1& current,
+    bool set(const OresExecutionClaim& current,
              const RequestLocalKeyV1<T>& key, T value) {
         if (!authorized(current)) return false;
         return request_->set(key, std::move(value));
     }
 
     template <typename T>
-    std::optional<T> get_copy(const NativeRequestMailProofV1& current,
+    std::optional<T> get_copy(const OresExecutionClaim& current,
                               const RequestLocalKeyV1<T>& key) const {
         if (!authorized(current)) return std::nullopt;
         return request_->get_copy(key);
     }
 
     template <typename T>
-    bool remove(const NativeRequestMailProofV1& current,
+    bool remove(const OresExecutionClaim& current,
                 const RequestLocalKeyV1<T>& key) {
         if (!authorized(current)) return false;
         return request_->remove(key);
@@ -84,6 +90,8 @@ private:
     const RequestContextLocalV1::Ptr request_;
     const OresNativeActorRef actor_;
     const std::uint64_t admitted_mail_sequence_;
+    const TrustedRequestMailReaderV1 current_mail_;
+    void* const scheduler_context_;
 };
 
 } // namespace oreslang::runtime
