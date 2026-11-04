@@ -260,7 +260,8 @@ private:
                     if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
                     dependency = project_root_import_detail::resolve_native_source_suffix(
-                        current.path.parent_path() / fs::path(raw));
+                        current.path.parent_path() / fs::path(raw),
+                        project_root_import_detail::canonical_atto_importer(current.path));
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
