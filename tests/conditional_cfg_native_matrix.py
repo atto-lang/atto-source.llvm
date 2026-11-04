@@ -160,12 +160,58 @@ fnc bounded(int x): int {
 pub fnc main(): int { return bounded(3); }
 """
 
+
+POSITIVE["guard-multistatement-terminal"] = """
+fnc one(): int { return 1; }
+fnc bounded(int x): int {
+  guard x > 0 {
+    one();
+    return 42;
+  }
+  return 42;
+}
+pub fnc main(): int {
+  return bounded(-1);
+}
+"""
+
+POSITIVE["guard-nested-exhaustive-terminal"] = """
+fnc bounded(int x): int {
+  guard x > 0 {
+    if (x == 0) { return 42; } else { return 42; } fi
+  }
+  return 42;
+}
+pub fnc main(): int {
+  return bounded(-1);
+}
+"""
+
+NEGATIVE["guard-incomplete-nested-if"] = ("""
+pub fnc main(): int {
+  guard false {
+    if (true) { return 42; } fi
+  }
+  return 42;
+}
+""", "AttoLang guard failure block must terminate on every path")
+
+NEGATIVE["guard-terminal-call-only"] = ("""
+fnc noop(): void { return; }
+pub fnc main(): int {
+  guard false {
+    noop();
+  }
+  return 42;
+}
+""", "AttoLang guard failure block must terminate on every path")
+
 NEGATIVE["guard-missing-exit"] = ("""
 pub fnc main(): int {
   guard 1 > 0 { }
   return 42;
 }
-""", "expected 'return'")
+""", "AttoLang guard failure block must terminate on every path")
 
 NEGATIVE["guard-no-else"] = ("""
 pub fnc main(): int {
@@ -186,7 +232,7 @@ pub fnc main(): int {
   guard 1 > 0 { return 1; return 2; }
   return 42;
 }
-""", "expected '}'")
+""", "native statement follows terminal return")
 
 
 NEGATIVE["guard-option-narrowing-denied"] = ("""
@@ -208,7 +254,7 @@ fnc create(int n): Box {
 pub fnc main(): int {
   return 42;
 }
-""", "native guard class return requires ownership-aware exit lowering")
+""", "structured class return requires ownership-aware exit lowering")
 
 def execute(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=75)
