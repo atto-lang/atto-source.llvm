@@ -785,6 +785,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-project-root-import-test)
     set_tests_properties(native_project_root_import_security PROPERTIES TIMEOUT 20)
 
+    # Host-only identity/admission layer for .atto module provenance.
+    # This is not linked macro lowering or executable guest parity.
+    add_executable(oreslang-native-host-logical-unit-ids-test
+        tests/native_host_logical_unit_ids_test.cpp)
+    target_include_directories(oreslang-native-host-logical-unit-ids-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-host-logical-unit-ids-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_host_logical_unit_identity
+        COMMAND oreslang-native-host-logical-unit-ids-test)
+    set_tests_properties(native_atto_host_logical_unit_identity PROPERTIES TIMEOUT 20)
+
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
