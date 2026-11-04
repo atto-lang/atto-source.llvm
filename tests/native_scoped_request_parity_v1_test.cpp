@@ -24,11 +24,10 @@ void independent_requests_and_utf8_payload_budgets() {
     assert(left && right);
     RequestLocalKeyV1<std::string> text;
     RequestLocalKeyV1<int> counter;
-    assert(left->set(text, std::string(8192, 'x')));
-    assert(left->used_bytes() == 8192);
-    assert(!left->set(counter, 1));
-    assert(!left->set(text, std::string(8193, 'y')));
-    assert(left->get_copy(text) == std::string(8192, 'x'));
+    assert(left->set(text, std::string(1024, 'x')));
+    assert(left->used_bytes() == 1024);
+    assert(!left->set(text, std::string(1025, 'y')));
+    assert(left->get_copy(text) == std::string(1024, 'x'));
     assert(right->set(text, std::string("independent")));
     assert(right->get_copy(text) == std::string("independent"));
     assert(left->set(text, std::string("\xC3\xA9")));
@@ -49,6 +48,29 @@ void independent_requests_and_utf8_payload_budgets() {
     assert(right->used_bytes() == 0);
     left_cancel->retire();
     right_cancel->retire();
+}
+
+void exact_aggregate_budget_across_independent_slots() {
+    auto cancel = TaskCancellation::root();
+    auto request = RequestContextLocalV1::open(request_id(12), cancel);
+    assert(request);
+    RequestLocalKeyV1<std::string> names[8];
+    RequestLocalKeyV1<int> overflow;
+    for (auto& key : names)
+        assert(request->set(key, std::string(1024, 'b')));
+    assert(request->used_bytes() == 8192);
+    assert(!request->set(overflow, 1));
+    assert(!request->set(names[0], std::string(1025, 'c')));
+    assert(request->get_copy(names[0]) == std::string(1024, 'b'));
+    assert(request->set(names[0], std::string("short")));
+    assert(request->used_bytes() == 8192 - 1024 + 5);
+    assert(request->set(overflow, 1));
+    assert(request->used_bytes() == 8192 - 1024 + 5 + sizeof(int));
+    assert(request->remove(overflow));
+    assert(request->used_bytes() == 8192 - 1024 + 5);
+    assert(request->close());
+    assert(request->used_bytes() == 0);
+    cancel->retire();
 }
 
 void malformed_unicode_and_pointer_records_fail_closed() {
@@ -119,6 +141,7 @@ void physical_thread_migration_and_cancel_races() {
 
 int main() {
     independent_requests_and_utf8_payload_budgets();
+    exact_aggregate_budget_across_independent_slots();
     malformed_unicode_and_pointer_records_fail_closed();
     physical_thread_migration_and_cancel_races();
     std::puts("SCOPED_REQUEST_LOCAL_PARITY_HOST_ONLY_PASS");
