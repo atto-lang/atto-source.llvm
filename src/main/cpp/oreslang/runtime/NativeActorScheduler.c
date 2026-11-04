@@ -40,6 +40,7 @@ typedef struct {
 } WakeCredit;
 typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
+    uint64_t* mail_sequences; /* monotonic admission ordinal per ring entry */
     size_t head, tail, queued;
     unsigned active;
     pthread_t carrier_owner; /* owning physical worker while active */
@@ -84,6 +85,7 @@ struct OresNativeActorScheduler {
     pthread_cond_t drained;
     ActorLane* actors;
     uint64_t* slots;
+    uint64_t* sequence_slots;
     WakeCredit* wake_slots;
     pthread_t* threads;
     CarrierSlot* carrier_slots;
@@ -123,6 +125,7 @@ struct OresNativeActorScheduler {
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
+static _Thread_local uint64_t executing_data_mail_sequence;
 static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local OresNativeWakeTicket executing_wake;
 static _Thread_local int executing_wake_valid;
