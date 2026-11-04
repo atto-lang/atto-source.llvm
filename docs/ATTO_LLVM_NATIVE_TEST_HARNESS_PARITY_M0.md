@@ -37,7 +37,10 @@ A passing count from this subset must never be reported as the Java native
 - Checkout exact PR head, record complete tree SHA, reject modified tracked
   files before/after; no private cross-organization mirror.
 - Execute `bash tests/test_atto_native_parity_manifest.sh` and reject all
-  source-free inventory mutations. These checks never increment guest count.
+  source-free inventory mutations. The v1 positive and negative manifests are
+  pinned to their reviewed Git blob IDs so substituting a valid source, exit
+  status, or diagnostic cannot silently retain the 24/3 inventory counts.
+  The source-free checks never increment guest count.
 - Build **real** `oreslang-llvmc` via CMake; execute updated C++ project-root
   import security tests.
 - For each of 24 reviewed `.atto` sources, run the compiler twice to emit
@@ -128,6 +131,11 @@ the same ordered test IDs, exact error accounting, failure/skipped/filtered
 semantics and explicit nonzero exit for invalid suites. Private hosted CI jobs
 have experienced zero-step admission failures; check job steps before claiming
 any executable parity.
+
+The focused LLVM workflow includes changes to `src/main/**`, top-level
+CMake, nested CMake, scripts, stdlib and test files in its pull-request trigger;
+compiler-only changes must not evade the parity gate. Trigger coverage is
+checked by eight workflow-source mutations, not by actual GitHub event delivery.
 
 The focused LLVM workflow uses a **single** source-free gate, a real native
 compiler build, C++ import security checks, 48 potential guest executions
