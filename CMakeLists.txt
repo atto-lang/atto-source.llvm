@@ -785,6 +785,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-project-root-import-test)
     set_tests_properties(native_project_root_import_security PROPERTIES TIMEOUT 20)
 
+    # POSIX-only real fd-walk admission for canonical .atto/.atto.pkg.toml.
+    # This does NOT compile a guest: CTest proves source-input containment.
+    if(UNIX)
+        add_executable(oreslang-native-pinned-atto-source-open-test
+            tests/native_pinned_atto_source_open_test.cpp)
+        target_include_directories(oreslang-native-pinned-atto-source-open-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/frontend")
+        target_compile_options(oreslang-native-pinned-atto-source-open-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_pinned_atto_source_path_admission
+            COMMAND oreslang-native-pinned-atto-source-open-test)
+        set_tests_properties(native_pinned_atto_source_path_admission
+            PROPERTIES TIMEOUT 20)
+    endif()
+
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
