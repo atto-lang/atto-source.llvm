@@ -22,6 +22,12 @@ receipt_line="$(gate_line "printf 'ATTO_LLVM_NATIVE_HOST_OBSERVED|")"
 unique() { [[ "$(count "$1")" -eq 1 ]] || die "expected exactly one: $1"; }
 unique 'name: AttoLang LLVM native harness executable parity (O0 O2)'
 unique '  atto-native-executable:'
+unique "      - 'CMakeLists.txt'"
+unique "      - 'cmake/**'"
+unique "      - 'src/main/**'"
+unique "      - 'tests/**'"
+unique "      - 'scripts/**'"
+unique "      - 'stdlib/**'"
 unique 'Checkout exact source head without persistent credentials'
 unique 'Bind exact commit and tree'
 unique 'Verify source-free inventory and adversarial fixture mutations'
@@ -32,7 +38,7 @@ unique 'Execute 24 actual .atto guests at Clang O0 and O2'
 unique 'Assert unchanged source and exact head after execution'
 unique 'Preserve host-observed native evidence (not ORES_TEST guest receipts)'
 unique 'bash tests/atto_native_harness_parity.sh --run'
-unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=2|optimizations=2|native=4|testkit=NOT_IMPLEMENTED'
+unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=4|optimizations=2|native=8|testkit=NOT_IMPLEMENTED'
 unique "grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|'"
 unique "tests/atto_native_guest_receipts.sh"
 unique "tests/verify_atto_guest_receipts.py"
@@ -95,5 +101,13 @@ if [[ "$#" -eq 0 ]]; then
   if ATTO_NATIVE_HARNESS_SCRIPT="$tmp/mutated-harness.sh" bash "$0" "$workflow" >/dev/null 2>&1; then
     die 'source harness bypassed mandatory no-GC auditor'
   fi
+  grep -Fvx "      - 'src/main/**'" "$workflow" > "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'compiler-source change trigger removed without detection'
+  fi
+  grep -Fvx "      - 'CMakeLists.txt'" "$workflow" > "$tmp/fixture.yml"
+  if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
+    die 'top-level build change trigger removed without detection'
+  fi
 fi
-echo 'PASS LLVM canonical .atto workflow source-only admission (six adversarial mutations)'
+echo 'PASS LLVM canonical .atto workflow source-only admission (eight adversarial mutations)'
