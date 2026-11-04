@@ -878,6 +878,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::GlobalValue::InternalLinkage,
             llvm::ConstantInt::getFalse(context), "__atto_guest_exhausted");
         guest_frame_exhausted->setThreadLocal(true);
+
+        // Stable read-only out-of-band status ABI. A normal guest can return
+        // integer 75; actor adapters MUST check this flag rather than
+        // conflating a user value/OS status with resource exhaustion.
+        auto* read_status = llvm::Function::Create(
+            llvm::FunctionType::get(i32, false),
+            llvm::Function::ExternalLinkage,
+            "__atto_guest_frame_exhausted_status", module);
+        llvm::IRBuilder<> check(llvm::BasicBlock::Create(
+            context, "entry", read_status));
+        llvm::Value* exhausted = check.CreateLoad(
+            llvm::Type::getInt1Ty(context), guest_frame_exhausted);
+        check.CreateRet(check.CreateZExt(exhausted, i32));
     }
     llvm::Type* loan_ptr = native_pointer_type(context, i64);
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
