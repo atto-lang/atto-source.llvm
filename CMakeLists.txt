@@ -3688,11 +3688,41 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING AND ORE_CLANG)
+    # Known tracing-GC IR release screen, run by compile-aot.sh before Clang.
+    # The full linked-image and FFI proof is separate.
+    find_program(ORE_NO_GC_RUSTC rustc)
+    if(ORE_NO_GC_RUSTC)
+        set(ORE_NO_GC_IR_AUDIT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
+        add_custom_command(
+            OUTPUT "${ORE_NO_GC_IR_AUDIT}"
+            COMMAND "${ORE_NO_GC_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit_no_gc_ir.rs" -o "${ORE_NO_GC_IR_AUDIT}"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit_no_gc_ir.rs"
+            VERBATIM)
+        add_custom_target(oreslang-no-gc-ir-audit-build ALL DEPENDS "${ORE_NO_GC_IR_AUDIT}")
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests"
+            COMMAND "${ORE_NO_GC_RUSTC}" --edition=2021 -D warnings --test
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit_no_gc_ir.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit_no_gc_ir.rs"
+            VERBATIM)
+        add_custom_target(oreslang-no-gc-ir-audit-tests-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests")
+        add_test(NAME native_no_gc_ir_audit_unit
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests")
+    else()
+        add_test(NAME native_no_gc_ir_audit_unit COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
     add_test(NAME native_aot_driver
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-driver
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
     set_tests_properties(native_aot_driver PROPERTIES TIMEOUT 30)
+    if(ORE_NO_GC_RUSTC)
+        set_tests_properties(native_aot_driver PROPERTIES
+            ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${ORE_NO_GC_IR_AUDIT}")
+    endif()
 endif()
 
 # Compiler-side nominal enum signature policy (host-only). This does NOT
