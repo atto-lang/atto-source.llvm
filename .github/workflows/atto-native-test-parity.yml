@@ -53,7 +53,15 @@ jobs:
           set -euo pipefail
           ctest --test-dir build -N -R '^atto_(llvm|native)_' > atto-ctest-inventory.txt
           cat atto-ctest-inventory.txt
-          grep -Eq 'Total Tests: 4$' atto-ctest-inventory.txt
+          grep -Eq 'Total Tests: 5 atto-ctest-inventory.txt
+      - name: Compile, link and execute canonical .atto guests and negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure --timeout 180 \
+            -R '^atto_(llvm|native)_' 
+          echo "ATTO_LLVM_NATIVE_TEST_PARITY_EXECUTED=5"
+ atto-ctest-inventory.txt
       - name: Compile, link and execute canonical .atto guests and negative controls
         shell: bash
         run: |
