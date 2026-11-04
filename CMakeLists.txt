@@ -46,6 +46,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # P0 host logical-ID contract: runs actual project-root/alias filesystem tests,
+    # but is not proof of native guest macro expansion or Java backend parity.
+    add_executable(oreslang-native-logical-source-id-test
+        tests/native_logical_source_identity_test.cpp)
+    target_include_directories(oreslang-native-logical-source-id-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-logical-source-id-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_logical_source_unit_identity
+        COMMAND oreslang-native-logical-source-id-test)
+    set_tests_properties(native_logical_source_unit_identity PROPERTIES TIMEOUT 20)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
