@@ -286,11 +286,16 @@ private:
                 } else {
                     if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
+                    // Check root ownership *before* extensionless suffix
+                    // discovery (which stats .atto/.ores candidates). Outside
+                    // paths must be rejected regardless of whether they exist.
+                    const auto unresolved = current.path.parent_path() / fs::path(raw);
+                    frontend::logical_source_detail::checked_relative_source_path(
+                        unresolved, source_admission->root());
                     dependency = project_root_import_detail::resolve_native_source_suffix(
-                        current.path.parent_path() / fs::path(raw),
-                        project_root_import_detail::is_atto_source(current.path));
-                    // Inspect the original path spelling before canonicalization;
-                    // otherwise a within-root symlink becomes invisible to admission.
+                        unresolved, project_root_import_detail::is_atto_source(current.path));
+                    // Recheck the actual suffixed path and reject symlinks
+                    // before canonicalization discards the caller spelling.
                     frontend::logical_source_detail::no_symlink_components(
                         dependency, source_admission->root());
                     std::error_code error;
