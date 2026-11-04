@@ -1,0 +1,47 @@
+// Reversed/stale M2 test IDs must fail before any registered body executes.
+import module Run from "ores.std/testing/m2";
+import class RegisteredCase from "ores.std/testing/m2";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut RegisteredCase first = new RegisteredCase();
+  first.id = 2;
+  first.body_kind = 1;
+  first.actual = 42;
+  first.expected = 42;
+  let mut RegisteredCase second = new RegisteredCase();
+  second.id = 1;
+  second.body_kind = 1;
+  second.actual = 40 + 2;
+  second.expected = 42;
+  let mut RunSummary summary = new RunSummary();
+
+  if Run.run_pair(rt mut borrow suite, rt mut borrow first,
+                  rt mut borrow second, rt mut borrow summary) != -5; then return 3; fi
+  if suite.total != 0 || suite.last_id != 0 ||
+     first.invocations != 0 || second.invocations != 0 ||
+     first.visited != 0 || second.visited != 0; then return 3; fi
+
+  second.id = 3;
+  if Run.run_pair(rt mut borrow suite, rt mut borrow first,
+                  rt mut borrow second, rt mut borrow summary) != 0; then return 3; fi
+  if summary.total != 2 || summary.passed != 2 ||
+     summary.failed != 0 || summary.skipped != 0 || summary.filtered != 0 ||
+     suite.last_id != 3 || first.invocations != 1 ||
+     second.invocations != 1; then return 3; fi
+
+  let mut RegisteredCase stale = new RegisteredCase();
+  stale.id = 2;
+  stale.body_kind = 1;
+  stale.actual = 5;
+  stale.expected = 5;
+  if Run.run_one(rt mut borrow suite, rt mut borrow stale) != -4; then return 3; fi
+  if stale.invocations != 0 || stale.visited != 0 || suite.total != 2 ||
+     suite.last_id != 3; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m2/order/first|");
+  stdio.println("ORES_TEST|PASS|llvm-m2/order/second|");
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+  return 0;
+}

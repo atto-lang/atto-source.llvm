@@ -83,6 +83,9 @@ int main() {
     assert(m1->source.find("fnc should_run") != std::string_view::npos);
     assert(m1->source.find("fnc record") != std::string_view::npos);
     assert(m1->source.find("fnc finish") != std::string_view::npos);
+    assert(m1->source.find("Public mutable counters must be individually bounded") != std::string_view::npos);
+    assert(m1->source.find("AttoLang Boolean evaluation is eager") != std::string_view::npos);
+    assert(m1->source.find("Invalid ledger snapshots must never partially publish") != std::string_view::npos);
     assert(m1->source.find("pub let int last_id = 0;") != std::string_view::npos);
     assert(m1->source.find("candidate.id <= suite.last_id") != std::string_view::npos);
     assert(m1->source.find("suite.last_id = candidate.id;") != std::string_view::npos);
@@ -108,6 +111,7 @@ int main() {
     assert(m2->source.find("fnc invoke_scalar_body") != std::string_view::npos);
     assert(m2->source.find("fnc run_one") != std::string_view::npos);
     assert(m2->source.find("fnc run_pair") != std::string_view::npos);
+    assert(m2->source.find("Ledger.should_run(rt borrow suite, rt borrow snapshot)") != std::string_view::npos);
     assert(m2->source.find("candidate.id <= suite.last_id") != std::string_view::npos);
     assert(m2->source.find("first.id >= second.id") != std::string_view::npos);
     assert(m2->source.find("second.visited != 0") != std::string_view::npos);

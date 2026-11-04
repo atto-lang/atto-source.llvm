@@ -79,6 +79,18 @@ SUITES = {
     "m2-once": (
         b"ORES_TEST|PASS|llvm-m2/once/body|\n"
         b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
+    "m1-order-integrity": (
+        b"ORES_TEST|PASS|llvm-m1/order/first|\n"
+        b"ORES_TEST|SKIP|llvm-m1/order/skipped|test-fixture\n"
+        b"ORES_TEST|PASS|llvm-m1/order/last|\n"
+        b"ORES_TEST|SUMMARY|total=3|passed=2|failed=0|skipped=1|filtered=1\n", 0),
+    "m1-invalid-state": (
+        b"ORES_TEST|PASS|llvm-m1/state/invalid-recover|\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
+    "m2-order-preflight": (
+        b"ORES_TEST|PASS|llvm-m2/order/first|\n"
+        b"ORES_TEST|PASS|llvm-m2/order/second|\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0\n", 0),
     "bounded-pp": (
         b"ORES_TEST|PASS|llvm-native/bounded/first|\n"
         b"ORES_TEST|PASS|llvm-native/bounded/second|\n"

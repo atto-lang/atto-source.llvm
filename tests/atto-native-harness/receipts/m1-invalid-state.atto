@@ -1,0 +1,62 @@
+// Public mutable ledger counters must fail before test-body evaluation.
+import module Ledger from "ores.std/testing/m1";
+import module Dispatch from "ores.std/testing/m2";
+import class TestSuite from "ores.std/testing/m1";
+import class TestCase from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+import class RegisteredCase from "ores.std/testing/m2";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase scalar = new TestCase();
+  scalar.id = 1;
+  scalar.outcome = 0;
+  let mut RegisteredCase body = new RegisteredCase();
+  body.id = 1;
+  body.body_kind = 1;
+  body.actual = 42;
+  body.expected = 42;
+
+  suite.passed = -1;
+  if Ledger.should_run(rt borrow suite, rt borrow scalar); then return 3; fi
+  if Ledger.record(rt mut borrow suite, rt borrow scalar) != -1; then return 3; fi
+  if Dispatch.run_one(rt mut borrow suite, rt mut borrow body) != -1; then return 3; fi
+  if suite.passed != -1 || suite.total != 0 || suite.last_id != 0 ||
+     body.invocations != 0 || body.visited != 0; then return 3; fi
+
+  suite.passed = 1025;
+  if Ledger.should_run(rt borrow suite, rt borrow scalar); then return 3; fi
+  if Ledger.record(rt mut borrow suite, rt borrow scalar) != -1; then return 3; fi
+  if Dispatch.run_one(rt mut borrow suite, rt mut borrow body) != -1; then return 3; fi
+  if suite.passed != 1025 || suite.total != 0 ||
+     body.invocations != 0 || body.visited != 0; then return 3; fi
+
+  suite.passed = 1;
+  if Ledger.should_run(rt borrow suite, rt borrow scalar); then return 3; fi
+  if Ledger.record(rt mut borrow suite, rt borrow scalar) != -1; then return 3; fi
+  suite.passed = 0;
+  suite.total = -1;
+  if Ledger.record(rt mut borrow suite, rt borrow scalar) != -1; then return 3; fi
+  suite.total = 0;
+
+  let mut RunSummary summary = new RunSummary();
+  summary.total = 99;
+  summary.passed = 98;
+  suite.failed = 1025;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  if summary.total != 99 || summary.passed != 98; then return 3; fi
+
+  suite.failed = 0;
+  if !Ledger.should_run(rt borrow suite, rt borrow scalar); then return 3; fi
+  if Dispatch.run_one(rt mut borrow suite, rt mut borrow body) != 0; then return 3; fi
+  if suite.total != 1 || suite.passed != 1 || suite.last_id != 1 ||
+     body.invocations != 1 || body.visited != 1; then return 3; fi
+  val int status = Ledger.finish(rt borrow suite, rt mut borrow summary);
+  if status != 0 || summary.total != 1 || summary.passed != 1 ||
+     summary.failed != 0 || summary.skipped != 0 || summary.filtered != 0; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/state/invalid-recover|");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0");
+  return status;
+}

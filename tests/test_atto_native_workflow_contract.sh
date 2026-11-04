@@ -75,12 +75,12 @@ unique 'Execute 40 actual .atto guests at Clang O0 and O2'
 unique 'Assert unchanged source and exact head after execution'
 unique 'Preserve host-observed native evidence (not ORES_TEST guest receipts)'
 unique 'bash tests/atto_native_harness_parity.sh --run'
-unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=23|optimizations=2|native=46|testkit=PARTIAL_M2'
+unique 'ATTO_LLVM_GUEST_RECEIPT_SMOKE_EXECUTED|suites=26|optimizations=2|native=52|testkit=PARTIAL_M2'
 [[ "$(grep -Ec "^          test .*ATTO_LLVM_NATIVE_HOST_OBSERVED.*-eq 80$" "$workflow")" -eq 1 ]] ||
   die 'native scalar guest count is not 80'
 unique "grep -c '^ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED|'"
-[[ "$(grep -Ec "^          test .*ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED.*-eq 46$" "$workflow")" -eq 1 ]] ||
-  die 'expected exactly 46 compiled native guest receipt executions'
+[[ "$(grep -Ec "^          test .*ATTO_LLVM_GUEST_RECEIPT_HOST_OBSERVED.*-eq 52$" "$workflow")" -eq 1 ]] ||
+  die 'expected exactly 52 compiled native guest receipt executions'
 unique "tests/atto_native_guest_receipts.sh"
 unique "tests/verify_atto_guest_receipts.py"
 unique 'ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"'

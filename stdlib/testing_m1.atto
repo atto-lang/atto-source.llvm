@@ -33,14 +33,41 @@ define module testing_m1 as
   end
 
   pub fnc should_run(borrow TestSuite suite, borrow TestCase candidate): bool {
+    // AttoLang Boolean evaluation is eager: reject invalid counter bounds
+    // using control-flow BEFORE any potentially overflowing counter addition.
+    if suite.total < 0 || suite.total >= 1024 ||
+       suite.passed < 0 || suite.passed > 1024 ||
+       suite.failed < 0 || suite.failed > 1024 ||
+       suite.skipped < 0 || suite.skipped > 1024 ||
+       suite.filtered < 0 || suite.filtered > 1024 ||
+       suite.last_id < 0; then
+      return false;
+    fi
+    if suite.passed + suite.failed + suite.skipped > suite.total; then
+      return false;
+    fi
     return suite.halted == 0 && candidate.selected && !candidate.skipped &&
-      candidate.id > suite.last_id && suite.total < 1024;
+      candidate.id > suite.last_id && candidate.outcome >= 0 &&
+      candidate.outcome <= 1;
   }
 
   // 0 PASS, 1 FAIL, 2 SKIP, 3 FILTER, 4 NOT_RUN after fail-fast;
   // -1 invalid descriptor, -2 quota exceeded, -4 replayed/out-of-order ID.
   // Rejections are atomic, including the last admitted identity.
   pub fnc record(borrow mut TestSuite suite, borrow TestCase candidate): int {
+    // Public mutable counters must be individually bounded before addition.
+    // An invalid ledger cannot consume a case identity or mutate counters.
+    if suite.total < 0 || suite.total > 1024 ||
+       suite.passed < 0 || suite.passed > 1024 ||
+       suite.failed < 0 || suite.failed > 1024 ||
+       suite.skipped < 0 || suite.skipped > 1024 ||
+       suite.filtered < 0 || suite.filtered > 1024 ||
+       suite.last_id < 0 || suite.halted < 0 || suite.halted > 1; then
+      return -1;
+    fi
+    if suite.passed + suite.failed + suite.skipped > suite.total; then
+      return -1;
+    fi
     if suite.halted != 0; then
       return 4;
     fi
@@ -81,14 +108,27 @@ define module testing_m1 as
   // Returns nonzero on empty/skipped/filtered-only suites or any failure.
   // The caller must never treat a failed/empty summary as a green test run.
   pub fnc finish(borrow TestSuite suite, borrow mut RunSummary result): int {
+    // Invalid ledger snapshots must never partially publish RunSummary.
+    // Bounds are checked before any eager integer arithmetic can overflow.
+    if suite.total < 0 || suite.total > 1024 ||
+       suite.passed < 0 || suite.passed > 1024 ||
+       suite.failed < 0 || suite.failed > 1024 ||
+       suite.skipped < 0 || suite.skipped > 1024 ||
+       suite.filtered < 0 || suite.filtered > 1024 ||
+       suite.last_id < 0 || suite.halted < 0 || suite.halted > 1; then
+      return 2;
+    fi
+    if suite.total != suite.passed + suite.failed + suite.skipped; then
+      return 2;
+    fi
+    if suite.halted == 1 && (!suite.fail_fast || suite.failed == 0); then
+      return 2;
+    fi
     result.total = suite.total;
     result.passed = suite.passed;
     result.failed = suite.failed;
     result.skipped = suite.skipped;
     result.filtered = suite.filtered;
-    if result.total != result.passed + result.failed + result.skipped; then
-      return 2;
-    fi
     if result.passed + result.failed == 0; then
       return 1;
     fi

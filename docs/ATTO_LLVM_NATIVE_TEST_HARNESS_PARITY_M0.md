@@ -315,3 +315,7 @@ blob, patch or credentials were copied to that alternate organization.
 A source-bearing mirror requires explicit destination-scoped independent
 security signoff, disposition of existing incidents, protected-main controls
 and source/tree identity, provenance, retention and cleanup review.
+
+## Current rebased M1/M2 admission and overflow hardening (authored, unexecuted)
+
+Against the source-owned M1 identity-replay contract (`-4` for duplicate/out-of-order IDs), `should_run` and `record` reject malformed public counters before any mutation or registered-body dispatch; `finish` bounds every counter before evaluating potentially overflowing sums and before writing RunSummary, while preserving fail-fast state validation. M2 retains the stronger existing pair-ID/visited preflight and additionally refuses execution when the M1 ledger cannot admit a body. Three new `.atto` receipt fixtures test ordered identities, malformed state/recovery and M2 preflight without body invocations. Required focused gate: **80 scalar + 52 guest receipt = 132 O0/O2 native executions**, plus ten compiler-negative scenarios. These are requirements, not results. The independent funded alternate-org source-free canary passed 6/6 steps, but private source transfer is still not approved; compiler-backed execution remains `NOT_EXECUTED`.

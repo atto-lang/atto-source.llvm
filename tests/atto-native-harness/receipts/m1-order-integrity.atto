@@ -1,0 +1,69 @@
+// Duplicate, stale and skipped/filtered IDs must fence admission atomically.
+import module Run from "ores.std/testing/m1";
+import module Scalar from "ores.std/testing/scalar";
+import class TestCase from "ores.std/testing/m1";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase first = new TestCase();
+  first.id = 2;
+  first.outcome = Scalar.expect_equal_int(21 + 21, 42);
+  if !Run.should_run(rt borrow suite, rt borrow first); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow first) != 0; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/order/first|");
+
+  let mut TestCase repeat = new TestCase();
+  repeat.id = 2;
+  repeat.selected = false;
+  if Run.should_run(rt borrow suite, rt borrow repeat); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow repeat) != -4; then return 3; fi
+  repeat.id = 1;
+  if Run.record(rt mut borrow suite, rt borrow repeat) != -4; then return 3; fi
+  if suite.total != 1 || suite.passed != 1 || suite.filtered != 0 ||
+     suite.last_id != 2; then return 3; fi
+
+  let mut TestCase filtered = new TestCase();
+  filtered.id = 4;
+  filtered.selected = false;
+  if Run.record(rt mut borrow suite, rt borrow filtered) != 3; then return 3; fi
+  if suite.filtered != 1 || suite.total != 1 || suite.last_id != 4; then return 3; fi
+  filtered.selected = true;
+  if Run.record(rt mut borrow suite, rt borrow filtered) != -4; then return 3; fi
+  if suite.total != 1 || suite.filtered != 1; then return 3; fi
+
+  let mut TestCase skipped_case = new TestCase();
+  skipped_case.id = 5;
+  skipped_case.skipped = true;
+  if Run.should_run(rt borrow suite, rt borrow skipped_case); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow skipped_case) != 2; then return 3; fi
+  if suite.last_id != 5; then return 3; fi
+  stdio.println("ORES_TEST|SKIP|llvm-m1/order/skipped|test-fixture");
+
+  let mut TestCase last = new TestCase();
+  last.id = 6;
+  last.outcome = Scalar.expect_true(true);
+  if !Run.should_run(rt borrow suite, rt borrow last); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow last) != 0; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/order/last|");
+
+  // Broken counters must not partially overwrite an existing summary.
+  let mut RunSummary summary = new RunSummary();
+  summary.total = 91;
+  summary.passed = 92;
+  suite.total = 7;
+  if Run.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  if summary.total != 91 || summary.passed != 92; then return 3; fi
+  suite.total = 3;
+  suite.filtered = -1;
+  if Run.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  if summary.total != 91 || summary.passed != 92; then return 3; fi
+  suite.filtered = 1;
+  val int status = Run.finish(rt borrow suite, rt mut borrow summary);
+  if status != 0 || summary.total != 3 || summary.passed != 2 ||
+     summary.failed != 0 || summary.skipped != 1 || summary.filtered != 1 ||
+     suite.last_id != 6; then return 3; fi
+  stdio.println("ORES_TEST|SUMMARY|total=3|passed=2|failed=0|skipped=1|filtered=1");
+  return status;
+}
