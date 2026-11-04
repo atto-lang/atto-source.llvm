@@ -1200,6 +1200,11 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_atto_named_generic_value_source_order_guest
             named-generic-value-source-order.ores
             --run 12 --clang "${ORE_CLANG}")
+        add_test(NAME native_atto_named_generic_value_36_guest_matrix
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" named-generic-matrix
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+        set_tests_properties(native_atto_named_generic_value_36_guest_matrix
+            PROPERTIES TIMEOUT 180)
     endif()
     if(ORE_CLANG)
         oreslang_contract_test(native_named_call_reordered_guest named-call-reordered-main.ores
