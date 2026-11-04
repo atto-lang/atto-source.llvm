@@ -1,0 +1,2 @@
+import module Scalar from "std/testing_scalar";
+pub fnc main(): int { return Scalar.not_equal_int(41, 42); }

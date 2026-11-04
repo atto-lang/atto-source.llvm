@@ -1,0 +1,2 @@
+import module Scalar from "ores.std/testing_scalar.ores";
+pub fnc main(): int { return Scalar.equal_int(42, 42); }
