@@ -231,8 +231,19 @@ template <class T> using TaskLocalKeyV1 = LogicalLocalKeyV1<LocalDomainV1::Task,
 class PhysicalThreadLocalsV1 final {
     struct Slots {
         static constexpr std::size_t max_slots = 32;
+        bool closing = false;
         std::unordered_map<std::uint64_t,
                            std::shared_ptr<LocalCellBaseV1>> values;
+
+        ~Slots() {
+            // Destructors of guest-owned host values may reenter a TLS key
+            // on this SAME physical thread. Fence read/write/erase before
+            // dropping any cell and empty the table before its callbacks.
+            closing = true;
+            decltype(values) retiring;
+            retiring.swap(values);
+            retiring.clear();
+        }
     };
     static Slots& slots() {
         static thread_local Slots value;
@@ -248,8 +259,10 @@ public:
         Key(const Key&) = default;
         Key& operator=(const Key&) = delete;
         bool set(T value) const {
+            auto& state = slots();
+            if (state.closing) return false;
             auto incoming = std::make_shared<LocalCellV1<T>>(std::move(value));
-            auto& table = slots().values;
+            auto& table = state.values;
             auto found = table.find(id_);
             if (found == table.end()) {
                 if (table.size() >= Slots::max_slots) return false;
@@ -262,14 +275,18 @@ public:
             return true;
         }
         std::optional<T> get_copy() const {
-            const auto& table = slots().values;
+            const auto& state = slots();
+            if (state.closing) return std::nullopt;
+            const auto& table = state.values;
             auto found = table.find(id_);
             if (found == table.end()) return std::nullopt;
             auto pinned = found->second; // copy may reenter and erase this key
             return static_cast<const LocalCellV1<T>&>(*pinned).value;
         }
         bool erase() const {
-            auto& table = slots().values;
+            auto& state = slots();
+            if (state.closing) return false;
+            auto& table = state.values;
             auto found = table.find(id_);
             if (found == table.end()) return false;
             auto retired = std::move(found->second);
