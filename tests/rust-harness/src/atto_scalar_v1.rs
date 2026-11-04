@@ -5,7 +5,9 @@ use std::{
     fs,
     io::Write,
     path::{Component, Path},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 use crate::{require, TempDir};
 
@@ -163,6 +165,57 @@ fn checked_compiler(compiler: &Path) -> Result<(), String> {
         "missing or symlinked native LLVM compiler")
 }
 
+
+// Use disk-backed bounded capture for all source compiler, linker and guest
+// subprocesses. std::process::Command::output() can grow RAM unboundedly on
+// a malicious compiler; CTest's outer timeout is not a per-process budget.
+fn bounded_run(command: &mut Command, work: &Path, seconds: u64,
+               label: &str) -> Result<Output, String> {
+    const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
+    let stdout_path = work.join(".atto-bounded-stdout");
+    let stderr_path = work.join(".atto-bounded-stderr");
+    let stdout = fs::File::create(&stdout_path)
+        .map_err(|e| format!("{label}: create stdout capture: {e}"))?;
+    let stderr = fs::File::create(&stderr_path)
+        .map_err(|e| format!("{label}: create stderr capture: {e}"))?;
+    command.current_dir(work).stdin(Stdio::null())
+        .stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
+    let mut child = command.spawn()
+        .map_err(|e| format!("{label}: spawn native process: {e}"))?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()
+            .map_err(|e| format!("{label}: poll child: {e}"))? {
+            break status;
+        }
+        let out_size = fs::metadata(&stdout_path)
+            .map_err(|e| format!("{label}: inspect stdout: {e}"))?.len();
+        let err_size = fs::metadata(&stderr_path)
+            .map_err(|e| format!("{label}: inspect stderr: {e}"))?.len();
+        if out_size > MAX_OUTPUT || err_size > MAX_OUTPUT ||
+           started.elapsed() > Duration::from_secs(seconds) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&stdout_path);
+            let _ = fs::remove_file(&stderr_path);
+            return Err(format!("{label}: output budget or {seconds}s deadline exceeded"));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let stdout = fs::read(&stdout_path)
+        .map_err(|e| format!("{label}: read stdout: {e}"))?;
+    let stderr = fs::read(&stderr_path)
+        .map_err(|e| format!("{label}: read stderr: {e}"))?;
+    fs::remove_file(&stdout_path)
+        .map_err(|e| format!("{label}: cleanup stdout: {e}"))?;
+    fs::remove_file(&stderr_path)
+        .map_err(|e| format!("{label}: cleanup stderr: {e}"))?;
+    require(stdout.len() as u64 <= MAX_OUTPUT &&
+            stderr.len() as u64 <= MAX_OUTPUT,
+            format!("{label}: captured output exceeded 4MiB"))?;
+    Ok(Output { status, stdout, stderr })
+}
+
 pub fn removed_operators(compiler: &Path, root: &Path) -> Result<(), String> {
     source_only(root)?;
     checked_compiler(compiler)?;
@@ -170,9 +223,8 @@ pub fn removed_operators(compiler: &Path, root: &Path) -> Result<(), String> {
     for id in ["removed-modulo", "removed-caret", "removed-double-caret"] {
         let case = exact_case(id)?;
         let source = root.join(relative(case));
-        let result = Command::new(compiler).arg(source)
-            .current_dir(&temp.path).stdin(Stdio::null()).output()
-            .map_err(|e| format!("run native LLVM compiler: {e}"))?;
+        let result = bounded_run(Command::new(compiler).arg(source),
+            &temp.path, 20, "native rejected operator")?;
         require(result.status.code() == Some(1) && result.stdout.is_empty()
             && result.stderr.windows(b"ATTO_REMOVED_OPERATOR".len())
                 .any(|window| window == b"ATTO_REMOVED_OPERATOR")
@@ -196,9 +248,8 @@ pub fn guest(compiler: &Path, clang: &Path, root: &Path, id: &str) -> Result<(),
     let source = root.join(relative(case));
     let input = checked_bytes(root, &relative(case), case.blob, 8192)?;
     let temp = TempDir::new("atto-scalar-native-").map_err(|e| e.to_string())?;
-    let compiled = Command::new(compiler).arg(source)
-        .current_dir(&temp.path).stdin(Stdio::null()).output()
-        .map_err(|e| format!("{id}: invoke native compiler: {e}"))?;
+    let compiled = bounded_run(Command::new(compiler).arg(source),
+        &temp.path, 25, "native LLVM compiler")?;
     require(compiled.status.success() && compiled.stderr.is_empty()
         && compiled.stdout.starts_with(b"; ModuleID")
         && compiled.stdout.len() <= 8_388_608,
@@ -207,15 +258,12 @@ pub fn guest(compiler: &Path, clang: &Path, root: &Path, id: &str) -> Result<(),
     let ir = temp.path.join("guest.ll");
     let binary = temp.path.join("guest-native");
     fs::write(&ir, &compiled.stdout).map_err(|e| format!("write LLVM IR: {e}"))?;
-    let linked = Command::new(clang).arg("-x").arg("ir").arg(&ir)
-        .arg("-o").arg(&binary).current_dir(&temp.path)
-        .stdin(Stdio::null()).output()
-        .map_err(|e| format!("{id}: invoke actual Clang: {e}"))?;
+    let linked = bounded_run(Command::new(clang).arg("-x").arg("ir").arg(&ir)
+        .arg("-o").arg(&binary), &temp.path, 30, "native Clang linker")?;
     require(linked.status.success(),
         format!("{id}: native Clang link failure: {}", String::from_utf8_lossy(&linked.stderr)))?;
-    let native = Command::new(&binary).current_dir(&temp.path)
-        .stdin(Stdio::null()).output()
-        .map_err(|e| format!("{id}: execute LLVM-linked guest: {e}"))?;
+    let native = bounded_run(Command::new(&binary), &temp.path, 10,
+        "native LLVM-linked guest")?;
     require(native.status.code() == Some(expected)
         && native.stdout.is_empty() && native.stderr.is_empty(),
         format!("{id}: actual native exit {:?} stdout={} stderr={}, expected exit {expected}",
