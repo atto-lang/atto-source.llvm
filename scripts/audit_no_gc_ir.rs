@@ -221,8 +221,6 @@ mod tests {
         let reset = OpenOptions::new().write(true).open(&path).expect("reopen");
         reset.set_len(0).expect("truncate oversized test file");
         drop(reset);
-        fs::remove_file(&path).expect("remove test file");
-
         let dir = std::env::temp_dir();
         let result = audit_file(dir.to_str().expect("temp dir UTF-8"));
         assert!(result.is_err(), "directories must not be accepted as IR input");
@@ -245,6 +243,7 @@ mod tests {
             assert!(result.is_err(), "FIFO IR must be refused without blocking");
             fs::remove_file(fifo).expect("remove FIFO");
         }
+        fs::remove_file(&path).expect("remove test file");
     }
 
     #[test]
