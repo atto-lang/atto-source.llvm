@@ -3675,6 +3675,14 @@ if(BUILD_TESTING)
         set_tests_properties("native_macro_shared_${macro_case}_no_ir" PROPERTIES TIMEOUT 25)
     endforeach()
 
+    add_test(NAME native_macro_shared_template-twice-overflow-reject_no_ir
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/template-twice-overflow-reject.atto"
+            "-DDIAGNOSTIC=NATIVE_MACRO_CONST_OVERFLOW"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+    set_tests_properties(native_macro_shared_template-twice-overflow-reject_no_ir PROPERTIES TIMEOUT 25)
+
     if(ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
         foreach(macro_case IN ITEMS template-twice-42 template-twice-nested-42)
             add_test(NAME "native_macro_shared_${macro_case}_linked_guest_aot_42"
