@@ -128,18 +128,6 @@ pub fnc main(): int { return fixed<T=ArrayList<int>>(); }
     "overfull-named-value-call": ("""fnc add(int first, int second): int { return first + second; }
 pub fnc main(): int { return add(first: 19, second: 23, extra: 1); }
 """, "unknown function or wrong call arity"),
-    "unproven-named-array-get": ("""pub fnc main(): int {
-    let mut Array<int> values = new Array<int>();
-    values.add(42);
-    return values.get(index: 0);
-}
-""", "named native array/member arguments require checked lowering"),
-    "unproven-named-array-add": ("""pub fnc main(): int {
-    let mut Array<int> values = new Array<int>();
-    values.add(value: 42);
-    return values.get(0);
-}
-""", "named native array/member arguments require checked lowering"),
     "duplicate-named-array-set": ("""pub fnc main(): int {
     let mut Array<int> values = new Array<int>();
     values.set(index: 0, index: 1);
@@ -155,6 +143,65 @@ pub fnc main(): int { return add(first: 19, second: 23, extra: 1); }
     "case-sensitive-value-label": ("""fnc combine<T=int>(T first, T second): int { return first * 10 + second; }
 pub fnc main(): int { return combine<T=int>(First: 4, second: 2); }
 """, "unknown named argument"),
+    "array-unknown-named-get": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(42);
+  return values.get(offset: 0);
+}
+""", "unknown named native array argument 'offset'"),
+    "array-unknown-named-set": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(offset: 0, value: 42);
+  return 42;
+}
+""", "unknown named native array argument 'offset'"),
+    "array-case-sensitive-named-get": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(42);
+  return values.get(Index: 0);
+}
+""", "unknown named native array argument 'Index'"),
+    "array-positional-slot-collision": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(0, index: 1);
+  return 42;
+}
+""", "duplicate native array argument binding"),
+    "array-missing-named-set-slot": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(value: 42);
+  return 42;
+}
+""", "native Array method argument arity mismatch"),
+    "array-excess-named-set-slot": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(index: 0, value: 42, extra: 9);
+  return 42;
+}
+""", "native Array method argument arity mismatch"),
+    "array-wrong-named-value-type": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(value: true, index: 0);
+  return 42;
+}
+""", "native Array<int> arguments require int, got bool"),
+    "array-wrong-named-index-type": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.set(value: 42, index: true);
+  return 42;
+}
+""", "native Array<int> arguments require int, got bool"),
+    "array-nonarray-named-receiver": ("""fnc bad(int value): int {
+  return value.get(index: 0);
+}
+pub fnc main(): int { return bad(42); }
+""", "named native array/member arguments require checked receiver"),
 }
 
 _CASE_ID = re.compile(r"generics\.scalar\.[a-z0-9]+(?:-[a-z0-9]+)*\Z")
