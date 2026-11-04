@@ -48,6 +48,27 @@ SUITES = {
     "m1-invariants": (
         b"ORES_TEST|PASS|llvm-m1/contracts/atomic-recovery|\n"
         b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
+    "m2-pass": (
+        b"ORES_TEST|PASS|llvm-m2/dispatch/equality|\n"
+        b"ORES_TEST|PASS|llvm-m2/dispatch/less|\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0\n", 0),
+    "m2-fail-fast": (
+        b"ORES_TEST|FAIL|llvm-m2/fast/failing|expected=42\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0\n", 1),
+    "m2-filter-skip": (
+        b"ORES_TEST|SKIP|llvm-m2/selection/skipped|not-ready\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=0|failed=0|skipped=1|filtered=1\n", 1),
+    "m2-invalid-recover": (
+        b"ORES_TEST|PASS|llvm-m2/recovery/first|\n"
+        b"ORES_TEST|PASS|llvm-m2/recovery/second|\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0\n", 0),
+    "m2-duplicate-recover": (
+        b"ORES_TEST|PASS|llvm-m2/identity/first|\n"
+        b"ORES_TEST|PASS|llvm-m2/identity/second|\n"
+        b"ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0\n", 0),
+    "m2-once": (
+        b"ORES_TEST|PASS|llvm-m2/once/body|\n"
+        b"ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0\n", 0),
     "bounded-pp": (
         b"ORES_TEST|PASS|llvm-native/bounded/first|\n"
         b"ORES_TEST|PASS|llvm-native/bounded/second|\n"
@@ -139,6 +160,16 @@ def self_test() -> None:
                 valid.replace(b"|skipped=", b"|skipped=9", 1),
                 valid.replace(b"|filtered=", b"|filtered=9", 1),
             ]
+        if kind.startswith("m2-"):
+            variants += [
+                valid.replace(b"ORES_TEST|SUMMARY|", b"ORES_TEST|PASS|", 1),
+                valid.replace(b"|skipped=", b"|skipped=9", 1),
+                valid.replace(b"|filtered=", b"|filtered=9", 1),
+            ]
+            if b"|FAIL|" in valid:
+                variants.append(valid.replace(b"|FAIL|", b"|PASS|", 1))
+            if b"|SKIP|" in valid:
+                variants.append(valid.replace(b"|SKIP|", b"|PASS|", 1))
         if kind.startswith("multi-"):
             variants += [
                 valid.replace(b"ORES_TEST|PASS|llvm-native/multi/add|\n", b"", 1),
