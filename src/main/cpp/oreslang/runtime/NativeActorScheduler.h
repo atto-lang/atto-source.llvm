@@ -215,6 +215,13 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     OresNativeWakeOutcome outcome);
 int ores_native_actor_scheduler_is_current_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+/* Exact scheduler-issued WAKE ticket, READY outcome, current physical
+ * producer claim and RUNNING phase are all required. CANCELLED/FAILED wakes
+ * and STOPPING cleanup return 0. Does not confer request identity by itself:
+ * trusted source admission must snapshot the originating DATA-mail receipt
+ * into an owned continuation before suspension. */
+int ores_native_actor_scheduler_is_current_ready_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 size_t ores_native_actor_scheduler_outstanding_wake_loans(
     OresNativeActorScheduler* scheduler, OresNativeActorRef producer);
 uint64_t ores_native_actor_scheduler_wakes_completed(
