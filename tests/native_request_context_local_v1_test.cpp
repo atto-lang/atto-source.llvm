@@ -1,4 +1,4 @@
-#include "oreslang/runtime/RequestContextLocalV1.hpp"
+#include "oreslang/runtime/RequestLocalSchedulerTurnV1.hpp"
 
 #include <atomic>
 #include <cassert>
@@ -41,23 +41,37 @@ void on_actor_message(void* userdata, std::size_t actor_index,
     assert(ores_native_actor_scheduler_is_current_actor(
         s.scheduler, s.actor));
     assert(s.left->belongs_to(s.actor) && s.right->belongs_to(s.actor));
+    assert(request_local_current_actor_turn_v1(s.scheduler, s.actor, *s.left));
+    assert(request_local_current_actor_turn_v1(s.scheduler, s.actor, *s.right));
+    OresNativeActorRef other_generation = s.actor;
+    ++other_generation.generation;
+    assert(!request_local_current_actor_turn_v1(
+        s.scheduler, other_generation, *s.left));
     // Two overlapping requests have the SAME actor, but different local
     // storage. A physical TLS marker is intentionally shared across turns.
     if (payload == 1) {
         assert(test_native_tls_marker == 0);
         test_native_tls_marker = 41;
-        assert(s.left->set(s.trace, std::string("trace-left")));
+        assert(request_local_set_on_actor_turn_v1(
+            s.scheduler, s.actor, *s.left, s.trace,
+            std::string("trace-left")));
         assert(s.left->set(s.counter, 1));
     } else if (payload == 2) {
         assert(test_native_tls_marker == 41);
         assert(!s.right->get_copy(s.trace));
-        assert(s.right->set(s.trace, std::string("trace-right")));
+        assert(request_local_set_on_actor_turn_v1(
+            s.scheduler, s.actor, *s.right, s.trace,
+            std::string("trace-right")));
         assert(s.right->set(s.counter, 2));
     } else if (payload == 3) {
         assert(test_native_tls_marker == 41);
-        assert(s.left->get_copy(s.trace) == std::string("trace-left"));
+        assert(request_local_get_on_actor_turn_v1(
+            s.scheduler, s.actor, *s.left, s.trace) ==
+            std::string("trace-left"));
         assert(s.left->get_copy(s.counter) == 1);
-        assert(s.right->get_copy(s.trace) == std::string("trace-right"));
+        assert(request_local_get_on_actor_turn_v1(
+            s.scheduler, s.actor, *s.right, s.trace) ==
+            std::string("trace-right"));
     } else if (payload == 4) {
         assert(s.right->get_copy(s.trace) == std::string("trace-right"));
         assert(s.right->get_copy(s.counter) == 2);
@@ -99,6 +113,14 @@ void test_same_actor_two_simultaneous_requests() {
     assert(!s.left->belongs_to({s.actor.scheduler_domain,
                                 s.actor.actor_slot,
                                 s.actor.generation + 1}));
+    // Possessing a logical request pointer does not grant host-side
+    // scheduler authority to invoke the guest adapter from another thread.
+    assert(!request_local_current_actor_turn_v1(
+        s.scheduler, s.actor, *s.left));
+    assert(!request_local_set_on_actor_turn_v1(
+        s.scheduler, s.actor, *s.left, s.counter, 123));
+    assert(!request_local_get_on_actor_turn_v1(
+        s.scheduler, s.actor, *s.left, s.trace));
 
     deliver(s, 1);
     deliver(s, 2);
