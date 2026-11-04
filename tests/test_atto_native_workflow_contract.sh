@@ -28,7 +28,7 @@ unique 'Verify source-free inventory and adversarial fixture mutations'
 unique 'Build production LLVM AttoLang compiler and native security tests'
 unique 'Verify CTest source and compiler-backed registrations are separate'
 unique 'Execute native C++ import security tests'
-unique 'Execute 24 actual .atto guests at Clang O0 and O2'
+unique 'Execute 40 actual .atto guests at Clang O0 and O2'
 unique 'Assert unchanged source and exact head after execution'
 unique 'Preserve host-observed native evidence (not ORES_TEST guest receipts)'
 unique 'bash tests/atto_native_harness_parity.sh --run'
@@ -38,9 +38,13 @@ unique "tests/atto_native_guest_receipts.sh"
 unique "tests/verify_atto_guest_receipts.py"
 unique 'ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"'
 unique 'oreslang-no-gc-ir-audit-build'
+unique 'oreslang-core-library-sources-test'
+unique 'native_core_library_registry_provider_policy'
+unique 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
+unique 'tests/core_library_sources_test.cpp'
 unique 'oreslang-no-gc-ir-audit-tests-build'
 unique "ctest --test-dir build --output-on-failure --no-tests=error -R '^native_no_gc_ir_audit_unit$'"
-unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=24|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED"
+unique "ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=6|guest_receipt_protocol=UNSUPPORTED"
 unique 'atto_native_harness_compiler_guest_o0_o2'
 unique 'atto_native_harness_inventory_source_only'
 [[ "$(count 'native_project_root_import_security')" -eq 2 ]] || die 'expected one CTest inventory and one execution'
@@ -52,7 +56,7 @@ unique 'ctest --test-dir build -N'
   die 'wrong step count or duplicate workflow sections'
 [[ "$(grep -Ec '^    runs-on: ubuntu-24.04$' "$workflow")" -eq 1 ]] ||
   die 'missing or duplicated runner'
-[[ "$(grep -Ec '^      - name: Execute 24 actual' "$workflow")" -eq 1 ]] ||
+[[ "$(grep -Ec '^      - name: Execute 40 actual' "$workflow")" -eq 1 ]] ||
   die 'multiple native guest steps'
 [[ "$(grep -Ec '^      - name: Preserve host-observed' "$workflow")" -eq 1 ]] ||
   die 'multiple evidence publishers'
@@ -71,7 +75,7 @@ if [[ "$#" -eq 0 ]]; then
     die 'duplicate entire workflow accepted'
   fi
   cp "$workflow" "$tmp/fixture.yml"
-  sed -i '/^      - name: Execute 24 actual/d' "$tmp/fixture.yml"
+  sed -i '/^      - name: Execute 40 actual/d' "$tmp/fixture.yml"
   if bash "$0" "$tmp/fixture.yml" >/dev/null 2>&1; then
     die 'missing native guest runner step accepted'
   fi

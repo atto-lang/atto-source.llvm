@@ -147,3 +147,24 @@ This is four **potential** new native executions distinct from the 48 scalar
 runs. The native `ores.std/testing` TestCase/TestSuite library, full Java
 40-case parity, filtering, skip/fail-fast and nested suites remain unsupported.
 No parity claim is valid until an exact-head workflow records real steps.
+
+## Incremental pure hosted std.testing scalar admission — source-authored
+
+An explicitly scoped compiler-owned `ores.std/testing/scalar` module now
+provides eight pure scalar integer/bool assertion helpers. They return 0
+on success and 1 on mismatch; they are **not** Java `TestOutcome` objects.
+The canonical full `ores.std/testing` path remains rejected, and the
+scalar module is restricted to hosted targets, never freestanding.
+Canonical `.atto` and explicit legacy `.ores` aliases share one registry
+identity; user filesystem packages cannot shadow this path.
+
+Sixteen independent `.atto` regressions (eight successes and eight
+deliberate failures) expand 24 native scalar programs to **40** (80 O0/O2
+runs). Together with four guest-owned receipt smoke executions, exact-head
+acceptance requires **84 native runs** plus six compiler negatives.
+The focused workflow now builds/runs the C++ registry policy test.
+
+This is not Java's 40-case TestSuite parity: dynamic TestCase, TestSuite,
+ordered suite accounting, skip/filter/fail-fast and nested runners remain
+unsupported on LLVM. No execution pass is established until real runner
+steps and compiler/Clang execution logs exist.

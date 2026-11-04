@@ -32,6 +32,12 @@ int main() {
     assert(is_reserved_compiler_library_import("alloc/int_buffer"));
     assert(!is_reserved_alloc_import("./alloc/int_buffer"));
     assert(!is_reserved_compiler_library_import("ores.std/testing"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/scalar"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/scalar.atto"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/scalar.ores"));
+    assert(!is_reserved_compiler_library_import("ores.std/testing/scalar/../scalar"));
+    assert(!is_reserved_compiler_library_import("std/testing/scalar"));
+    assert(!is_reserved_compiler_library_import("ores.std/testing/scalar.js"));
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Core, CompilerLibraryTier::Core));
     assert(!compiler_library_dependency_allowed(
@@ -40,6 +46,28 @@ int main() {
         CompilerLibraryTier::Alloc, CompilerLibraryTier::Core));
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Alloc, CompilerLibraryTier::Alloc));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Core, CompilerLibraryTier::Std));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Alloc, CompilerLibraryTier::Std));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Std, CompilerLibraryTier::Core));
+
+    const auto* scalar = find_std_library_source("ores.std/testing/scalar");
+    assert(scalar != nullptr);
+    assert(scalar == find_std_library_source("ores.std/testing/scalar.atto"));
+    assert(scalar == find_std_library_source("ores.std/testing/scalar.ores"));
+    assert(scalar->tier == CompilerLibraryTier::Std);
+    assert(scalar->unit_id == "@ores.std/testing/scalar.atto");
+    assert(scalar->module_name == "testing_scalar");
+    assert(scalar->admitted_provider_bits == 0u);
+    assert(scalar->source.find("expect_equal_int") != std::string_view::npos);
+    assert(scalar->source.find("expect_range_int") != std::string_view::npos);
+    assert(scalar->source.find("stdio.") == std::string_view::npos);
+    assert(find_std_library_source("ores.std/testing") == nullptr);
+    assert(find_std_library_source("std/testing/scalar") == nullptr);
+    assert(find_std_library_source("ores.std/testing/scalar.js") == nullptr);
+    assert(find_core_library_source("ores.std/testing/scalar") == nullptr);
 
     const auto* numeric = find_core_library_source("ores.core/numeric");
     assert(numeric != nullptr);
