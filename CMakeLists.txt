@@ -1123,6 +1123,12 @@ if(BUILD_TESTING)
         atto-suspends-only-unlowered.atto --diagnostic "native suspends declaration requires suspension-aware")
     oreslang_contract_test(atto_critical_read_remains_unlowered
         atto-critical-read-unlowered.atto --diagnostic "native reader/writer critical declaration requires")
+    # General ownership checker, not a parser-only / arbitrary substring
+    # denial. Refuse manufactured aliases of owned Array and nominal class.
+    oreslang_contract_test(atto_share_move_only_array_rejected
+        atto-share-move-only-array.atto --diagnostic "E_SHARE_MOVE_ONLY")
+    oreslang_contract_test(atto_share_move_only_class_rejected
+        atto-share-move-only-class.atto --diagnostic "E_SHARE_MOVE_ONLY")
     oreslang_contract_test(atto_protected_state_requires_typed_lowering
         atto-protected-state-unlowered.atto --diagnostic "STATE_CONTAINER_BACKEND_UNSUPPORTED")
     # Copy scalars retain parity with Java rt share Copy semantics.
