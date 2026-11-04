@@ -41,8 +41,13 @@ for name, source, tag in (("M1", m1, "ATTO_M1"), ("M2", m2, "ATTO_M2")):
     embedded = text.split(start, 1)[1].split(end, 1)[0]
     if embedded != source.read_text():
         raise SystemExit("compiler-owned " + name + " source drift")
-    if embedded == embedded + "#mutated":
-        raise SystemExit("unreachable mutation control")
+    changed = embedded.replace("pub fnc ", "pub fnc mutation_", 1)
+    if changed == embedded or changed == source.read_text():
+        raise SystemExit("ineffective compiler-owned source mutation: " + name)
+    if name == "M2":
+        body = embedded.split("pub fnc run_one(", 1)[1]
+        if body.index("let mut TestCase snapshot") > body.index("if suite.halted"):
+            raise SystemExit("M2 class owner declared after control flow")
 PY
 
 unique 'stdlib/testing_m2.atto'
