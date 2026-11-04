@@ -2,7 +2,7 @@ name: LLVM actor pubsub exact-head native ABI and source rejection
 
 on:
   push:
-    branches: [feat/actor-pubsub-v1]
+    branches: [feat/actor-pubsub-v1, fix/pubsub-utf8-direct-host-admission-20261103]
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/runtime/NativeActorPubSub*'
@@ -21,6 +21,27 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
+      - name: Reject foreign or missing PR-head repository identity before checkout
+        shell: bash
+        env:
+          PR_HEAD_NAME: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_ID: ${{ github.event.pull_request.head.repo.id }}
+          BASE_ID: ${{ github.event.repository.id }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            if [[ -z "$PR_HEAD_NAME" || "$PR_HEAD_NAME" != "$GITHUB_REPOSITORY" ||
+                  ! "$PR_HEAD_ID" =~ ^[1-9][0-9]*$ ||
+                  ! "$BASE_ID" =~ ^[1-9][0-9]*$ ||
+                  "$PR_HEAD_ID" != "$BASE_ID" ]]; then
+              echo "LLVM_PUBSUB_EXTERNAL_PR_CHECKOUT_FORBIDDEN" >&2
+              exit 78
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
+            echo "LLVM_PUBSUB_UNSUPPORTED_EVENT_FORBIDDEN" >&2
+            exit 78
+          fi
+          echo "LLVM_PUBSUB_SOURCE_ORIGIN_VERIFIED=true"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
