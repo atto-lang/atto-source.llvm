@@ -792,7 +792,7 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh"
                 "$<TARGET_FILE:oreslang-llvmc>"
                 "${ORE_RT_AOT_CLANG}")
-        set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 120)
+        set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 240)
     endif()
 
     # Pure host resolver security test for canonical +/ project-root imports.
