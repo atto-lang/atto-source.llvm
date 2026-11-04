@@ -410,8 +410,10 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
-    # Exact compiler -> LLVM IR -> Clang native .atto positive plus denial
-    # of recursion with no emitted IR. Fail if the toolchain is missing.
+    # Actual .atto -> LLVM IR -> Clang native stack-budget execution:
+    # pure scalar recursive frames return status 75 (no host stack fault).
+    # Host-only actor recovery is a separate CTest and not guest parity.
+    # Fail if the required compiler/Clang toolchain is unavailable.
     add_test(NAME native_atto_stack_admission_and_shallow_process
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_call_stack_admission.py"
