@@ -26,7 +26,7 @@ STUB
 cat > "$work/emit-partial-on-failure" <<'STUB'
 #!/usr/bin/env bash
 source="${@: -1}"
-if [[ ! -f "$(dirname "$source")/math.atto" ]]; then
+if [[ ! -f "$(dirname "$source")/math.atto" && ! -f "$(dirname "$source")/math.ores" ]]; then
   printf 'define i32 @main() {\nentry:\n  ret i32 42\n}\n'
   echo "synthetic rejected import with invalid IR leakage" >&2
   exit 9
