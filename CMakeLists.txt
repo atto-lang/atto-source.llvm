@@ -57,6 +57,17 @@ if(BUILD_TESTING)
     add_test(NAME native_named_array_slot_binder_host_only
         COMMAND oreslang-native-named-array-slot-test)
     set_tests_properties(native_named_array_slot_binder_host_only PROPERTIES TIMEOUT 15)
+    # Exact production class-constructor named slot plan, without requiring
+    # source LLVM codegen for this small host-only contract check.
+    add_executable(oreslang-native-named-constructor-slot-test
+        tests/native_named_constructor_slot_binding_test.cpp)
+    target_include_directories(oreslang-native-named-constructor-slot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-named-constructor-slot-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_named_constructor_slot_binder_host_only
+        COMMAND oreslang-native-named-constructor-slot-test)
+    set_tests_properties(native_named_constructor_slot_binder_host_only PROPERTIES TIMEOUT 15)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
