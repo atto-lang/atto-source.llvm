@@ -60,9 +60,9 @@ https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/962.
 `.github/workflows/atto-lru-llvm-m0.yml` adds a focused **source-local**
 LLVM CI job that checks out the immutable PR head (not an automatically
 generated merge tree), checks the source/tree identity before build, installs
-LLVM and Clang, verifies all four pinned fixture Git blobs plus seven
+LLVM and Clang, verifies all eight pinned fixture Git blobs plus thirteen
 negative source/CTest mutations, builds the **actual** `oreslang-llvmc` binary,
-and verifies exactly five registered CTests. It runs the four real compiler
+and verifies exactly nine registered CTests. It runs the eight real compiler
 → LLVM IR → Clang → native guest programs, plus the source integrity check,
 and requires a CTest JUnit report with exactly five distinct, successful,
 non-skipped cases. A zero-test or unlaunched compiler cannot produce the
@@ -80,8 +80,30 @@ The current source organization has private Actions jobs ending with
 `steps=null`. Workflow YAML and test definitions alone do not change
 the evidence classification; the new job must actually execute nonempty
 steps on its exact head and pass before declaring even this *narrow*
-four-microtrace LLVM slice. The seven complete LRU cache fixtures and
+eight-microtrace LLVM slice. The seven complete LRU cache fixtures and
 Java/LLVM cross-backend parity remain separate unverified milestones.
+
+## CTest JUnit disabled/notrun receipt hardening
+
+A real local CTest 3.31 source-free probe confirmed that a disabled test may
+appear as `<testcase status="disabled">` without any nested `<skipped>`
+element. Checking only missing/failure/skipped children can therefore
+misclassify an unexecuted guest as successful.
+
+The workflow now invokes `tests/atto_lru_junit_gate.py` after CTest exits
+successfully. It requires a single CTest `testsuite`, exactly nine unique
+named cases, matching declared test counts, zero suite-level
+failures/errors/disabled/skipped, each case `status="run"`, and no case-level
+error/failure/skipped children. Missing, symlinked, empty or oversized
+reports are denied. A passing JUnit gate still requires independent
+compiler/toolchain provenance.
+
+`tests/test_atto_lru_junit_gate.py` has 13 source-free positive/negative
+cases, including genuine disabled/notrun semantic variants. All 13 passed
+in a local Python run with byte-identical Git blob IDs:
+verifier `36dd4a5da525f171241287dd005b2f76693d1905`,
+tests `4820300f20a81778cde7f02af5c5368a362f6307`.
+These tests do NOT compile or execute AttoLang programs.
 
 
 ## Additional native AoS / AoSoA microtraces
