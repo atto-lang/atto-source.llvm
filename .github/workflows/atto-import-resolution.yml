@@ -85,7 +85,14 @@ jobs:
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
             UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
             "$RUNNER_TEMP/atto-logical-unit-sanitizers"
-          echo 'ATTO_LLVM_LOGICAL_UNIT_HOST_ONLY_PASS=1; GUEST=NOT_EXECUTED'
+          clang++ -std=c++20 -O0 -g0 -Wall -Wextra -Wpedantic -Werror \
+            -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_atto_manifest_snapshot_test.cpp \
+            -o "$RUNNER_TEMP/atto-manifest-snapshot-sanitizers"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            "$RUNNER_TEMP/atto-manifest-snapshot-sanitizers"
+          echo 'ATTO_LLVM_LOGICAL_UNIT_HOST_ONLY_PASS=1; SNAPSHOT_SANITIZERS=PASS; GUEST=NOT_EXECUTED'
       - name: GCC and Clang pinned canonical input ASan and UBSan regression
         shell: bash
         run: |
