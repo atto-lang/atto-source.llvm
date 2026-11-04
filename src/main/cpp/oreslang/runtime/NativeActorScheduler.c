@@ -1481,6 +1481,27 @@ int ores_native_actor_scheduler_is_current_actor(
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
 }
+/* Original user DATA-mail sequence is available only while the authenticated
+ * actor callback is RUNNING on this scheduler's physical carrier. It is not
+ * available to CONTROL, WAKE, detached Tasks or external Future producers.
+ * The sequence was minted at mailbox admission, not recovered from payload. */
+int ores_native_actor_scheduler_current_data_mail_sequence(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        uint64_t* out_sequence) {
+    if (!s || !out_sequence || executing != s
+            || !executing_data_mail_sequence || !actor.scheduler_domain
+            || actor.scheduler_domain != executing_actor.scheduler_domain
+            || actor.actor_slot != executing_actor.actor_slot
+            || actor.generation != executing_actor.generation
+            || !executing_claim.carrier)
+        return 0;
+    if (!ores_execution_owns_running(
+            &s->actors[actor.actor_slot].authority, executing_claim))
+        return 0;
+    *out_sequence = executing_data_mail_sequence;
+    return 1;
+}
+
 int ores_native_actor_scheduler_current_execution_context(
         OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
     if (!s || !out || executing != s || !executing_context.id.runtime_domain
