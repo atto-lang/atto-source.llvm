@@ -856,6 +856,28 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_source_module_graph_execution PROPERTIES TIMEOUT 120)
 
+    # Canonical Oreslang stdio.stdout.println native guest contract used
+    # by ORIE. Source -> IR -> native runtime link -> piped process execution.
+    # Negative cases reject before IR; no host fallback is permitted.
+    find_program(ORE_ORIE_STDOUT_BASH bash)
+    if(ORE_ORIE_STDOUT_BASH AND ORE_RT_AOT_CLANG)
+        add_test(NAME native_orie_stdout_alias
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_orie_stdout_alias.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_RT_AOT_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_orie_stdout_alias PROPERTIES TIMEOUT 180)
+        # Native LLVM f64 scalar local/comparison/arithmetic guests (exit 42),
+        # plus negative no-coercion/no-IR source cases. No Array<f64> claim.
+        add_test(NAME native_f64_scalar_e2e
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_RT_AOT_CLANG}")
+        set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 240)
+    endif()
+
     # Pure host resolver security test for canonical +/ project-root imports.
     # This does not claim pkg:/bare-path resolution or full TOML semantics.
     add_executable(oreslang-native-project-root-import-test
