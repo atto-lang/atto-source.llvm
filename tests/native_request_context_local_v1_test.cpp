@@ -1,6 +1,12 @@
 #include "oreslang/runtime/RequestLocalSchedulerTurnV1.hpp"
 
 #include <atomic>
+#include <unordered_map>
+#include <variant>
+#include <tuple>
+#include <optional>
+#include <map>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -24,6 +30,20 @@ static_assert(!local_value_allowed_v1<int*>);
 static_assert(!local_value_allowed_v1<std::reference_wrapper<int>>);
 static_assert(!local_value_allowed_v1<std::string_view>);
 static_assert(!local_value_allowed_v1<std::initializer_list<int>>);
+static_assert(local_value_allowed_v1<std::optional<int>>);
+static_assert(local_value_allowed_v1<std::vector<std::string>>);
+static_assert(local_value_allowed_v1<std::tuple<int, std::string>>);
+static_assert(local_value_allowed_v1<std::map<int, std::string>>);
+static_assert(!local_value_allowed_v1<std::optional<std::string_view>>);
+static_assert(!local_value_allowed_v1<std::optional<int*>>);
+static_assert(!local_value_allowed_v1<std::pair<int, std::reference_wrapper<int>>>);
+static_assert(!local_value_allowed_v1<std::tuple<int, std::string_view>>);
+static_assert(!local_value_allowed_v1<std::array<int*, 3>>);
+static_assert(!local_value_allowed_v1<std::vector<std::optional<std::string_view>>>);
+static_assert(!local_value_allowed_v1<std::variant<int, std::string_view>>);
+static_assert(!local_value_allowed_v1<std::map<int, std::string_view>>);
+static_assert(!local_value_allowed_v1<std::unordered_map<int, std::string_view>>);
+
 #if __cplusplus >= 202002L
 static_assert(!local_value_allowed_v1<std::span<int>>);
 #endif
