@@ -263,6 +263,8 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
 }
 
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
+    if (expr.imported_macro_pending)
+        throw std::runtime_error("NATIVE_MACRO_UNEXPANDED: pending imported macro escaped ownership admission");
     switch (expr.kind) {
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
