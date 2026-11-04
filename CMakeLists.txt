@@ -719,6 +719,17 @@ if(BUILD_TESTING)
         set_tests_properties(atto_llvm_compiler_backed_source_fuzz
             PROPERTIES TIMEOUT 180 LABELS "atto;llvm;compiler-backed;source-mutation")
     endif()
+    # Unlike a source-free sanitizer canary, this builds LLVM IR from the
+    # canonical .atto actor fixture and links it to the REAL actor-owned heap.
+    # Native ASan/UBSan still does not certify trusted live --race coverage.
+    if(ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME atto_llvm_compiler_backed_actor_asan_ubsan
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" atto-actor-heap-asan
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(atto_llvm_compiler_backed_actor_asan_ubsan
+            PROPERTIES TIMEOUT 120 LABELS "atto;llvm;compiler-backed;asan;ubsan;actor")
+    endif()
     # Executable Oreslang method fixtures, using Rust-only tooling.
     if(ORE_CLANG)
         add_test(NAME native_inline_self_receiver_arity_aot
