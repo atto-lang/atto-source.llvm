@@ -60,14 +60,28 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.[ \t]*(?:root|"root"|'root')[ \t]*=).*$)ores");
     const std::regex root_assignment(
         R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=.*$)ores");
+    // The manifest parser intentionally supports only a narrow TOML subset.
+    // Reject nested root tables and project arrays-of-tables: otherwise a
+    // valid TOML project.root value is silently ignored, changing the
+    // package boundary trusted by +/ import resolution.
+    const std::regex project_root_table(
+        R"ores(^[ \t]*\[{1,2}[ \t]*(?:project|"project"|'project')[ \t]*\.[ \t]*(?:root|"root"|'root')[ \t]*\]{1,2}[ \t]*(?:#.*)?$)ores");
+    const std::regex project_array_table(
+        R"ores(^[ \t]*\[\[[ \t]*(?:project|"project"|'project')[ \t]*\]\][ \t]*(?:#.*)?$)ores");
 
     std::size_t version_count = 0;
+    std::size_t project_table_count = 0;
     bool in_root_section = true;
     bool in_project_section = false;
     std::istringstream lines(manifest_bytes);
     std::string line;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (std::regex_match(line, project_root_table) ||
+                std::regex_match(line, project_array_table))
+            throw std::runtime_error("native project.root requires full TOML parser");
+        if (std::regex_match(line, project_section) && ++project_table_count > 1)
+            throw std::runtime_error("native package manifest duplicate project table");
         if (std::regex_match(line, project_assignment) ||
                 (in_project_section && std::regex_match(line, root_assignment)))
             throw std::runtime_error("native project.root requires full TOML parser");
