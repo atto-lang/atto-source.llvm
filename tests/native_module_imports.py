@@ -122,13 +122,44 @@ def main():
         'main.ores': 'import module Math from "./math"; pub fnc main():int{return Math.identity<int>(42);}',
         'math.ores': 'define module Math as pub fnc identity<T>(T x):T{return x;} end',
     }, 42))
+    # The extensionless resolver follows the importing source's suffix.
+    # Use actual .atto compiler inputs and link+execute the native guest.
+    positives.append(('atto-named-generic-module', {
+        'main.atto': 'import module Math from "./math"; pub fnc main():int{return Math.add<B=int,A=int>(y:2,x:40);}',
+        'math.atto': 'define module Math as pub fnc add<A,B=int>(A x,B y):int{return x+y;} end',
+    }, 42))
+    positives.append(('atto-project-root', {
+        'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+        '.ores.pkg.toml': 'schema_version = "1"\n',
+        'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
+    positives.append(('atto-import-explicit-legacy', {
+        'main.atto': 'import module Lib from "./lib.ores"; pub fnc main():int{return Lib.answer();}',
+        'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
+    positives.append(('legacy-import-explicit-atto', {
+        'main.ores': 'import module Lib from "./lib.atto"; pub fnc main():int{return Lib.answer();}',
+        'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
+    positives.append(('atto-ambiguous-pair-chooses-atto', {
+        'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
+        'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        'lib.ores': 'define module Lib as pub fnc answer():int{return 99;} end',
+    }, 42))
+    positives.append(('legacy-ambiguous-pair-chooses-ores', {
+        'main.ores': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
+        'lib.atto': 'define module Lib as pub fnc answer():int{return 99;} end',
+        'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
+
     passed = compared = 0
     with tempfile.TemporaryDirectory(prefix='ores-native-imports-') as temporary:
         root = Path(temporary)
         for name, files, expected in positives:
             directory = root/name; directory.mkdir()
             for path, source in files.items(): (directory/path).write_text(source)
-            result = run([a.compiler, str(directory/'main.ores')])
+            entry = directory/('main.atto' if 'main.atto' in files else 'main.ores')
+            result = run([a.compiler, str(entry)])
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
@@ -140,8 +171,8 @@ def main():
             executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
             if executed.returncode != expected: raise AssertionError((name, executed.returncode, executed.stderr))
             for path in files: (directory/(path+'.hidden')).rename(directory/path)
-            if a.java_command and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
-                reference = run([*a.java_command, str(directory/'main.ores')])
+            if a.java_command and 'main.atto' not in files and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
+                reference = run([*a.java_command, str(entry)])
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
@@ -150,6 +181,24 @@ def main():
             (directory/'main.ores').write_text(main_source)
             (directory/'lib.ores').write_bytes(library_source if isinstance(library_source, bytes) else library_source.encode())
             result = run([a.compiler, str(directory/'main.ores')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        # Wrong suffix and missing implicit .atto are compiler rejects,
+        # not permissive fallbacks to an existing legacy source.
+        for name, raw, extra_files, diagnostic in (
+            ('atto-no-implicit-legacy', './lib', {'lib.ores': library}, 'cannot resolve native import'),
+            ('atto-reject-unknown-extension', './lib.txt', {'lib.txt': library}, 'must use .atto or .ores extension'),
+            ('atto-no-implicit-project-legacy', '+/lib',
+                {'.ores.pkg.toml': 'schema_version = "1"\\n', 'lib.ores': library},
+                'cannot resolve native project-root import'),
+        ):
+            directory = root/name; directory.mkdir()
+            (directory/'main.atto').write_text(
+                f'import module Lib from "{raw}"; pub fnc main():int{{return 0;}}')
+            for filename, text in extra_files.items():
+                (directory/filename).write_text(text)
+            result = run([a.compiler, str(directory/'main.atto')])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
             passed += 1
