@@ -343,6 +343,14 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_critical_suspends_v1_admission.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_critical_suspends_v1_source_admission PROPERTIES TIMEOUT 240)
+    # Independent stable diagnostic-code gate reconciled from PR #1290.
+    # Both targets execute the actual compiler binary, never a host parser mock.
+    add_test(NAME native_critical_suspends_modifier_codes
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_critical_suspends_modifiers.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_critical_suspends_modifier_codes
+        PROPERTIES TIMEOUT 150)
 
     add_test(NAME native_type_only_declaration_boundaries
         COMMAND "${Python3_EXECUTABLE}"
