@@ -69,6 +69,14 @@ def main():
     if not compiler.is_file():
         raise RuntimeError("native LLVM compiler binary is not a file")
 
+    fixtures = Path(__file__).resolve().parent / "fixtures"
+    fixture_negative = (fixtures / "critical-suspends-modifier-negative.atto").read_text(
+        encoding="utf-8")
+    fixture_positive = (fixtures / "critical-scalar-baseline.atto").read_text(
+        encoding="utf-8")
+    if "'critical suspends'" in fixture_negative:
+        raise AssertionError("negative fixture must contain source, not expected diagnostics")
+
     count = 0
     with tempfile.TemporaryDirectory(prefix="atto-llvm-critical-source-") as tmp:
         root = Path(tmp)
@@ -87,12 +95,26 @@ def main():
                 require_no_artifacts(case_dir, name, suffix)
                 count += 1
 
+            # The committed AttoLang modifier-negative fixture is evaluated
+            # under both extensions, so the native parser cannot pass just by
+            # rejecting an unfamiliar suffix.
+            fixture_dir = root / (suffix[1:] + "-fixture-negative")
+            fixture_dir.mkdir()
+            fixture_bad = compile_case(
+                compiler, fixture_negative, fixture_dir / ("case" + suffix))
+            if (fixture_bad.returncode != 1 or fixture_bad.stdout
+                    or "'critical suspends' is forbidden" not in fixture_bad.stderr):
+                raise AssertionError(
+                    f"{suffix} fixture: compiler did not reject invalid modifier")
+            require_no_artifacts(fixture_dir, "fixture negative", suffix)
+            count += 1
+
             # This is a supported scalar native-compiler path, not a guest
             # critical path. Comments may mention forbidden modifiers.
             positive_dir = root / (suffix[1:] + "-positive")
             positive_dir.mkdir()
             result = compile_case(compiler,
-                "pub fnc main(): int { return 7; } // critical suspends async",
+                fixture_positive + "\n// critical suspends async",
                 positive_dir / ("case" + suffix))
             if (result.returncode != 0 or "define" not in result.stdout
                     or "main" not in result.stdout):
