@@ -5,6 +5,7 @@
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {resolve} from 'node:path';
 
 const CORPUS_URL = new URL('../contracts/atto-parity-v1/js-checked-i64-candidates.json',import.meta.url);
 const CORPUS_SHA='5fd8ed522dfaaead8dc1b2d780159a4f156482124b7515d0a788245fc594ebc8';
@@ -101,7 +102,7 @@ function main(argv){
   const llvm=JSON.parse(readFileSync(argv[1],'utf8'));
   process.stdout.write(JSON.stringify(compareReceipts(js,llvm,JSON.parse(corpusBytes)),null,2)+'\n');
 }
-if(process.argv[1]&&fileURLToPath(import.meta.url)===fileURLToPath(new URL('file://'+process.argv[1]))){
+if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])){
   try{main(process.argv.slice(2));}catch(error){
     console.error('Fail-closed receipt comparison: '+error.message);
     process.exitCode=1;
