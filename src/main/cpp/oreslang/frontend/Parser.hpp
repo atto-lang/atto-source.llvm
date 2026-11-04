@@ -44,7 +44,7 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ImportedMacro, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
@@ -68,6 +68,8 @@ struct Expression {
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
+    // Compiler-only invocation classification, never a runtime or LLVM ABI.
+    bool imported_macro_const_argument = false;
     mutable std::string sum_type;
 };
 
@@ -444,10 +446,20 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
+    bool macro_namespace = false;
     std::string selected_module;
     std::string local_name;
     std::string path;
     std::size_t offset = 0;
+};
+
+// Only checked declarations recorded by the native typed-AST parser may
+// be imported. The source-unit owner's logical identity stays in ModuleLoader.
+struct NativeMacroDecl {
+    enum class Kind { ConstIntQuote, SyntaxExprIdentity, SyntaxExprLiteralTwice };
+    std::string name;
+    Kind kind = Kind::ConstIntQuote;
+    bool exported = false;
 };
 
 struct TypeConstraintDescriptor {
@@ -461,6 +473,8 @@ struct TypeConstraintDescriptor {
 
 struct Program {
     std::vector<ModuleImport> imports;
+    // Compile-time metadata is deliberately not moved into the linked guest.
+    std::vector<NativeMacroDecl> native_macros;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
     std::string namespace_name;
