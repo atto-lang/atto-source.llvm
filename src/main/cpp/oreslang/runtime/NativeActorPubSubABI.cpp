@@ -108,7 +108,7 @@ bool valid_topic_name(const char* name) noexcept {
     if (!name) return false;
     std::size_t length = 0;
     while (length <= 128 && name[length] != '\0') ++length;
-    return valid_portable_topic_name(std::string_view(name, length));
+    return oreslang::runtime::valid_portable_topic_name(std::string_view(name, length));
 }
 
 NativeActorPubSubAdmission<std::int64_t>::DeliveryPolicy policy(
