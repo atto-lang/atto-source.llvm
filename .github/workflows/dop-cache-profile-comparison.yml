@@ -1,0 +1,39 @@
+name: DOP cache profile comparability unit tests
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile_cache_locality.py'
+      - 'scripts/compare_dop_cache_profiles.py'
+      - 'scripts/test_profile_cache_locality.py'
+      - 'scripts/test_compare_dop_cache_profiles.py'
+      - 'tests/native_actor_shard_layout_bench.cpp'
+      - 'docs/DOP_PROFILE_COMPARABILITY_GATE_2026_11_01.md'
+      - '.github/workflows/dop-cache-profile-comparison.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare-cache-profiles:
+    # A source-only test does not authorize checking out a fork's private branch.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact cache-profile source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'Profile source head=%s tree=%s\n' \
+            "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
+      - name: Run actual profile parser and triplet rejection suites
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -v -s scripts -p 'test_*cache*py'
