@@ -39,6 +39,24 @@ class ThreeLayoutComparisonTests(unittest.TestCase):
         for k in self.paths:
             self.paths[k].write_text(json.dumps(self.reports[k]), encoding="utf-8")
 
+    def test_accepts_cmake_built_benchmark_and_rejects_unrelated_executable(self):
+        # CMake builds oreslang-native-actor-shard-bench, not the source file
+        # basename native_actor_shard_layout_bench. Real build outputs must
+        # pass the same exact-binary comparison contract as legacy paths.
+        canonical = "/build/oreslang-native-actor-shard-bench"
+        for layout in ("aos", "soa", "aosoa"):
+            self.reports[layout]["command"][0] = canonical
+        self.flush()
+        self.assertEqual(compare(self.paths)["workload_except_layout"][0], canonical)
+
+        # A different executable remains prohibited, even if all three
+        # reports use the same SHA and declare the same workload.
+        for layout in ("aos", "soa", "aosoa"):
+            self.reports[layout]["command"][0] = "/build/unrelated-benchmark"
+        self.flush()
+        with self.assertRaisesRegex(ValueError, "benchmark"):
+            compare(self.paths)
+
     def test_comparable_profiles(self):
         result = compare(self.paths)
         self.assertEqual(result["median_rates"]["aos"]["l1d_mpki"], 20)
