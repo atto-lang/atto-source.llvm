@@ -860,6 +860,16 @@ if(BUILD_TESTING)
     # by ORIE. Source -> IR -> native runtime link -> piped process execution.
     # Negative cases reject before IR; no host fallback is permitted.
     find_program(ORE_ORIE_STDOUT_BASH bash)
+    # Host-only negative mutation tests for the f64 source->IR->guest harness.
+    # These use fake compilers to prove forged IR and results fail closed;
+    # NEVER count them as native guest or numerical parity evidence.
+    if(ORE_ORIE_STDOUT_BASH)
+        add_test(NAME native_f64_harness_adversarial_host_only
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_gate_security_selftest.sh"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh")
+        set_tests_properties(native_f64_harness_adversarial_host_only PROPERTIES TIMEOUT 45)
+    endif()
     if(ORE_ORIE_STDOUT_BASH AND ORE_RT_AOT_CLANG)
         add_test(NAME native_orie_stdout_alias
             COMMAND "${ORE_ORIE_STDOUT_BASH}"
@@ -868,8 +878,10 @@ if(BUILD_TESTING)
                 "${ORE_RT_AOT_CLANG}"
                 "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(native_orie_stdout_alias PROPERTIES TIMEOUT 180)
-        # Native LLVM f64 scalar local/comparison/arithmetic guests (exit 42),
-        # plus negative no-coercion/no-IR source cases. No Array<f64> claim.
+        # Native LLVM f64 scalar guests, exact per-case exits at Clang O0/O2:
+        # 25 positive source programs -> 50 actual native executions, plus
+        # 16 negative compiler cases requiring precise diagnostics/zero IR.
+        # Not full List<float>/Result or the 16-case num.atto library suite.
         add_test(NAME native_f64_scalar_e2e
             COMMAND "${ORE_ORIE_STDOUT_BASH}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh"
