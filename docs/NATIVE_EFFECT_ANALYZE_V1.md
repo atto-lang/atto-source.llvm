@@ -1,6 +1,8 @@
 # Native LLVM `--analyze` v1 (restricted compiler evidence)
 
 Use `oreslang-llvmc --analyze source.atto` (legacy `.ores` accepted).
+This version accepts only the default host native subset, not Wasm/Cortex-M,
+hard-RT profiling, experimental ownership or compiler metadata/output modes.
 The compiler parses, resolves and attempts verified LLVM IR lowering for the
 native guest subset, then discards the IR and reports compiler-owned
 exception-effect observations. It does **not** run the guest, write the source,
@@ -9,15 +11,18 @@ new lexical scanner.
 
 - Exit 0: native source admitted and bounded AST call-effect observation
   finished. Warnings about optional exceptional annotations are advisory.
-- Exit 1: compiler parsing, checking or native-lowering failure.
+- Exit 1: compiler parsing, checking or native-lowering failure (without an
+  `ANALYZE ADVISORY` receipt).
 - Exit 2: unsupported/inconclusive effect closure (unresolved target, recursion,
   ambiguous overload identity, incomplete runtime/effect evidence, budgets,
   incompatible mode/invalid options).
 
 The emitted `ANALYZE ADVISORY` receipt is not a purity certificate.
 `throws`, `raises`, and `panics` are optional may-effects. This v1 only
-reports actual LLVM native AST exceptional-effect bits when the native compiler
-can admit the source. The broader syntax, types, effect propagation,
+reports LLVM native AST exceptional-effect observations when the native compiler
+can admit the source. The admitted caught-throw slice is noted as a locally
+handled control transfer, not falsely propagated as a possible escaping throw.
+Direct effects and escaping transitive bits are reported separately. The broader syntax, types, effect propagation,
 actor/supervisor unwinding and linked guest execution remain separately gated.
 Java/GraalVM currently has `--check` (semantic admission), **not** this
 `--analyze` protocol. Do not claim cross-backend parity from a v1 LLVM PASS.

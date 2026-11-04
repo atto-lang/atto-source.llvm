@@ -31,8 +31,10 @@ def verify():
         original = thrown.read_bytes()
         effect = run(args.compiler, "--analyze", thrown)
         assert effect.returncode == 0, (effect.returncode, effect.stdout, effect.stderr)
-        assert "EFFECT WARNING main: may throw" in effect.stdout, effect.stdout
-        assert "warnings=1" in effect.stdout, effect.stdout
+        assert "EFFECT NOTE main: local caught throw" in effect.stdout, effect.stdout
+        assert "warnings=0" in effect.stdout, effect.stdout
+        assert "handled_throws=1" in effect.stdout, effect.stdout
+        assert "escaping_transitive_bits=0" in effect.stdout, effect.stdout
         assert thrown.read_bytes() == original, "effect analysis modified its input"
         assert "define i64" not in effect.stdout, "LLVM IR leaked on analysis"
 
@@ -46,8 +48,10 @@ def verify():
         transitive_run = run(args.compiler, "--analyze", transitive)
         assert transitive_run.returncode == 0, (
             transitive_run.returncode, transitive_run.stdout, transitive_run.stderr)
-        assert "EFFECT WARNING caught: may throw" in transitive_run.stdout
-        assert "EFFECT WARNING main: may throw" in transitive_run.stdout
+        assert "EFFECT NOTE caught: local caught throw" in transitive_run.stdout
+        assert "EFFECT WARNING main:" not in transitive_run.stdout
+        assert "warnings=0" in transitive_run.stdout
+        assert "handled_throws=1" in transitive_run.stdout
 
         recursive = root / "recursive.atto"
         recursive.write_text(
@@ -67,6 +71,10 @@ def verify():
 
         duplicate = run(args.compiler, "--analyze", "--analyze", valid)
         assert duplicate.returncode == 2, (duplicate.returncode, duplicate.stderr)
+        wasm = run(args.compiler, "--analyze", "--target=wasm32", valid)
+        assert wasm.returncode == 2, (wasm.returncode, wasm.stderr)
+        assert "ANALYZE ADVISORY" not in wasm.stdout
+
         conflict = run(args.compiler, "--analyze", "--rt-check", valid)
         assert conflict.returncode == 2, (conflict.returncode, conflict.stderr)
         assert "ANALYZE ADVISORY" not in conflict.stdout, conflict.stdout

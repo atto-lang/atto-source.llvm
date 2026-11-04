@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -200,7 +201,8 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
  * full-language exception effects; unknown targets/recursive closure fail 2.
  * No guest code is executed and no generated IR is written.
  */
-static int run_native_effect_analysis(const oreslang::Program& program) {
+static int run_native_effect_analysis(const oreslang::Program& program,
+                                      std::ostream& output) {
     using namespace oreslang;
     namespace detail = oreslang::realtime_detail;
     if (!program.actors.empty() || !program.cooperative_loops.empty() ||
@@ -220,6 +222,13 @@ static int run_native_effect_analysis(const oreslang::Program& program) {
     std::unordered_map<std::string, std::size_t> indices;
     std::size_t edges = 0;
     for (const auto& function : program.functions) {
+        // Native class method invocations use receiver/owner identities; the
+        // current effect call walker has only name/arity keys. Do not map them
+        // onto free functions and accidentally certify the wrong call target.
+        if (!function.method_owner.empty()) {
+            std::cerr << "ANALYZE INCONCLUSIVE: class method target identity is not closed\n";
+            return 2;
+        }
         const std::string key = detail::function_key(function.name, function.parameters.size());
         if (!indices.emplace(key, rows.size()).second) {
             std::cerr << "ANALYZE INCONCLUSIVE: overloaded native callable identity is ambiguous\n";
@@ -252,6 +261,14 @@ static int run_native_effect_analysis(const oreslang::Program& program) {
         if (visited[index] == 2) return true;
         visited[index] = 1;
         FunctionEffects effects = rows[index].direct.effects;
+        if (rows[index].function->caught_throw_value) {
+            // The admitted native try/catch form consumes its one direct
+            // throw in the same invocation. The direct facts collector must
+            // still record the control transfer for strict hard-RT admission,
+            // but callers must not inherit a nonexistent escaping throw.
+            // The parser separately rejects nested/uncaught throw forms.
+            effects.bits &= ~static_cast<std::uint32_t>(FunctionEffect::Throw);
+        }
         for (const auto& call : rows[index].direct.calls) {
             const auto target = indices.find(call);
             if (target == indices.end()) {
@@ -278,7 +295,19 @@ static int run_native_effect_analysis(const oreslang::Program& program) {
 
     std::size_t warnings = 0;
     std::size_t shown = 0;
+    std::size_t handled_throws = 0;
     for (const auto& row : rows) {
+        if (row.function->caught_throw_value) {
+            ++handled_throws;
+            output << "EFFECT NOTE ";
+            print_safe_diagnostic(output, row.function->name, 120);
+            output << ": local caught throw; not an escaping may-throw effect\n";
+        }
+        output << "EFFECT OBSERVED ";
+        print_safe_diagnostic(output, row.function->name, 120);
+        output << "/" << row.function->parameters.size()
+               << " direct_bits=" << row.direct.effects.bits
+               << " escaping_transitive_bits=" << row.transitive.bits << '\n';
         for (const auto [bit, word] : {
             std::pair{FunctionEffect::Throw, "throw"},
             std::pair{FunctionEffect::Raise, "raise"},
@@ -287,16 +316,17 @@ static int run_native_effect_analysis(const oreslang::Program& program) {
                 continue;
             ++warnings;
             if (shown++ >= 100) continue;
-            std::cout << "EFFECT WARNING ";
-            print_safe_diagnostic(std::cout, row.function->name, 120);
-            std::cout << ": may " << word
+            output << "EFFECT WARNING ";
+            print_safe_diagnostic(output, row.function->name, 120);
+            output << ": may " << word
                       << "; declaration optional, not an effect-free certificate\n";
         }
     }
-    std::cout << "ANALYZE ADVISORY backend=llvm schema=1 scope=native-ast"
-              << " inspected=" << rows.size() << " warnings=" << warnings
-              << " shown=" << std::min(shown, std::size_t{100})
-              << "; no full-language effect, guest execution, or runtime proof\n";
+    output << "ANALYZE ADVISORY backend=llvm schema=1 scope=native-ast"
+           << " inspected=" << rows.size() << " warnings=" << warnings
+           << " handled_throws=" << handled_throws
+           << " shown=" << std::min(shown, std::size_t{100})
+           << "; no full-language effect, guest execution, or runtime proof\n";
     return 0;
 }
 
@@ -435,8 +465,10 @@ int main(int argc, char** argv) {
     // reporting/output modes to mutate files or imply a stronger qualification.
     if (analyze_effects && (rt_check_only || native_hard_rt_profile ||
         rt_report_seen || rt_entry_seen || constraint_descriptors_only ||
-        tree_shake || !tree_shake_roots.empty())) {
-        std::cerr << "--analyze is incompatible with RT reports and compiler output modes\n";
+        tree_shake || !tree_shake_roots.empty() ||
+        wasm32_target || cortex_m_target || experimental_owned_int ||
+        experimental_rt_scalar_loop || bounded_allocator_provider)) {
+        std::cerr << "--analyze currently requires the plain host native subset; incompatible options\n";
         return 2;
     }
     // Public library architecture has exactly two layers. For now the native
@@ -544,12 +576,17 @@ int main(int argc, char** argv) {
         source_namespace = ast.namespace_name;
 
         if (analyze_effects) {
-            // Run the real semantic/codegen admission path, but discard the
-            // generated module. This checks accepted native guest source
-            // without emitting IR, launching a guest or writing artifacts.
+            // Determine whether the whole AST effect graph is even closed
+            // before attempting native codegen. Buffer findings so an IR
+            // admission rejection can NEVER leave a success receipt behind.
+            std::ostringstream diagnostic_buffer;
+            const int result = run_native_effect_analysis(ast, diagnostic_buffer);
+            if (result != 0) return result;
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target, bounded_allocator_provider);
-            return run_native_effect_analysis(ast);
+            std::cout << diagnostic_buffer.str();
+            std::cout.flush();
+            return 0;
         }
 
         if (constraint_descriptors_only) {
