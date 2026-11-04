@@ -122,6 +122,41 @@ int main() {
                   [&] { (void)resolve(dir/"main.ores", "+/lib"); });
     }
     {
+        const auto dir = temp / "project-root-table-forms";
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        const std::string schema = "schema_version = \"1\"\n";
+        const std::string fixtures[] = {
+            "[project.root]\nnote = \"unsupported\"\n",
+            "[[project.root]]\nnote = \"unsupported\"\n",
+            "['project'.'root']\nnote = \"unsupported\"\n",
+            "[\"project\" . \"root\"] # nested\nnote = \"unsupported\"\n",
+            "[[project]]\nroot = \"src\"\n",
+            "[[\"project\"]]\nroot = \"src\"\n",
+            "[[ 'project' ]]\nroot = \"src\"\n",
+        };
+        for (std::size_t i = 0; i < sizeof(fixtures)/sizeof(fixtures[0]); ++i) {
+            write_text(dir/".ores.pkg.toml", schema + fixtures[i]);
+            must_fail("nested project root table " + std::to_string(i), "project.root",
+                      [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        }
+        // A duplicated TOML table declaration is invalid even when no
+        // root key is present. Accepting it can hide conflicting policy.
+        write_text(dir/".ores.pkg.toml",
+                   schema + "[project]\nname=\"first\"\n[project]\nname=\"second\"\n");
+        must_fail("duplicate project table", "duplicate project table",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "unrelated-root-table-allowed";
+        write_text(dir/".ores.pkg.toml",
+                   "schema_version = \"1\"\n[build]\nroot=\"src\"\n[project]\nname=\"demo\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("unrelated build.root table must not alter source-root admission");
+    }
+    {
         const auto dir = temp / "traversal";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
