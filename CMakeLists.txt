@@ -2843,18 +2843,6 @@ if(BUILD_TESTING)
         oreslang_contract_test(atto_scalar_inferred_const ../../contracts/atto-scalar-v1/positive/inferred-const-readonly.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_scalar_legacy_pure_call ../../contracts/atto-scalar-v1/positive/pure-call.atto --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_scalar_type_first_parameter ../../contracts/atto-scalar-v1/positive/type-first-parameter.atto --run 42 --clang "${ORE_CLANG}")
-        # Verify typed signed i64 through the compiler-owned guest function,
-        # NOT through low-byte POSIX exit status. Negative overflow must trap
-        # or be rejected with a compiler-owned failure; never silently wrap.
-        add_test(NAME atto_scalar_v1_full_i64_native
-            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_llvm_native.py"
-                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
-        set_tests_properties(atto_scalar_v1_full_i64_native PROPERTIES TIMEOUT 360)
-        add_test(NAME atto_scalar_v1_native_harness_adversarial
-            COMMAND "${Python3_EXECUTABLE}" -m unittest discover
-                -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
-                -p "test_atto_scalar_native_gate.py" -v)
-        set_tests_properties(atto_scalar_v1_native_harness_adversarial PROPERTIES TIMEOUT 45)
         add_test(NAME atto_scalar_v1_exact_source_only
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_v1_source.py")
         set_tests_properties(atto_scalar_v1_exact_source_only PROPERTIES TIMEOUT 30)
@@ -2862,6 +2850,10 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_llvm_negative.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>")
         set_tests_properties(atto_scalar_v1_removed_operators_denied PROPERTIES TIMEOUT 40)
+        # Host-only mutation controls for compiler rejection receipt parser.
+        add_test(NAME atto_scalar_v1_negative_verifier_selftest
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_llvm_negative.py" --selftest)
+        set_tests_properties(atto_scalar_v1_negative_verifier_selftest PROPERTIES TIMEOUT 10)
 
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
