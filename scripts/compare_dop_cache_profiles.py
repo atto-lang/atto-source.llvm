@@ -13,7 +13,7 @@ import re
 import statistics
 import stat
 
-from profile_cache_locality import EVENTS, rates
+from profile_cache_locality import EVENTS, rates, validate_event
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 LAYOUTS = ("aos", "soa", "aosoa")
@@ -106,8 +106,13 @@ def load_profile(path, layout):
             "missing or invalid binary size evidence")
     extras = report.get("hardware_l2_events")
     require(isinstance(extras, list) and len(extras) in (0, 2)
-            and all(isinstance(e, str) and e not in EVENTS for e in extras)
+            and all(isinstance(e, str) for e in extras)
             and len(set(extras)) == len(extras), "invalid explicit L2 event pair")
+    try:
+        for event in extras:
+            validate_event(event)
+    except ValueError as exc:
+        raise ValueError("invalid explicit L2 event pair: " + str(exc)) from exc
     events = list(EVENTS) + extras
     require(report.get("events") == events, "counter event set/order mismatch")
     host = report.get("host")
