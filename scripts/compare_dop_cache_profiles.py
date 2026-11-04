@@ -31,8 +31,9 @@ def read_bounded_report(path):
         flags |= os.O_NOFOLLOW
     fd = os.open(path, flags)
     with os.fdopen(fd, "rb") as stream:
-        require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode),
-                "profile input must be a regular file")
+        info = os.fstat(stream.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1,
+                "profile input must be a single-link regular file")
         payload = stream.read(MAX_PROFILE_BYTES + 1)
     require(0 < len(payload) <= MAX_PROFILE_BYTES,
             "profile input is empty or exceeds the 1 MiB evidence limit")
