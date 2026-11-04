@@ -216,6 +216,7 @@ def main():
     p.add_argument("--compiler", type=Path, required=True)
     p.add_argument("--clang", type=Path, required=True)
     args = p.parse_args()
+    require(not args.compiler.is_symlink(), "symlinked exact-head compiler")
     check(args.compiler.resolve(strict=True), args.clang.resolve(strict=True))
 
 

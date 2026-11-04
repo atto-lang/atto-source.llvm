@@ -29,8 +29,9 @@ def main():
         require(git_blob==digest,"unreviewed removed-operator fixture")
         r=subprocess.run([str(compiler),str(source)],stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=15)
-        require(r.returncode!=0 and r.stdout==b"" and r.stderr and
-                len(r.stderr)<=65536 and r.returncode>0,
+        require(r.returncode==1 and r.stdout==b"" and
+                b"ATTO_REMOVED_OPERATOR" in r.stderr and
+                len(r.stderr)<=65536,
                 "retired operator emitted IR or failed without diagnostic: "+label)
     print("ATTO_LLVM_REMOVED_OPERATORS_REJECTED:3")
 
