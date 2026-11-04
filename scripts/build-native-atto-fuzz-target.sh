@@ -45,7 +45,7 @@ bytes="$(wc -c < "$work/guest.ll")"
 (( bytes <= 2000000 )) ||
   { echo 'LLVM guest IR exceeds bounded size' >&2; exit 1; }
 "$auditor" "$work/guest.ll" >/dev/null
-count="$(grep -Ec '^define .*@fuzz_byte\(i64[[:space:]]' "$work/guest.ll" || true)"
+count="$(grep -Ec '^define (dso_local )?i64 @fuzz_byte\(i64[[:space:]][^,)]*\)[[:space:]]' "$work/guest.ll" || true)"
 [[ "$count" == 1 ]] ||
   { echo 'LLVM guest must define exactly one external fuzz_byte(i64) -> i64' >&2; exit 1; }
 if grep -Eq '^define .*@main\(' "$work/guest.ll"; then
