@@ -6,8 +6,6 @@
 pub routine main(): int {
   val Array<int> positions = new Array<int>();
   val Array<int> velocities = new Array<int>();
-  // Native LLVM currently requires lexical locals before statement effects.
-  let int checksum = 0;
   for (let int row = 0; row < 32768; row = row + 1) {
     positions.add(row);
     velocities.add(2);
@@ -17,6 +15,8 @@ pub routine main(): int {
       positions.set(row, positions.get(row) + velocities.get(row));
     }
   }
+  // Ordered lexical binding after an earlier effect must compile in LLVM.
+  let int checksum = 0;
   for (let int row = 0; row < 32768; row = row + 1) {
     checksum = checksum + positions.get(row);
   }
