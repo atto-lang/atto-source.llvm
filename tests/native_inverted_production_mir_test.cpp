@@ -4,6 +4,8 @@
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
 
 #include <cassert>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -163,6 +165,50 @@ int main() {
         forged.type_constraint_descriptors.push_back(std::move(descriptor));
         reject([&]{ (void)verify_production_inverted_i64(forged); },
                "requires one standalone local main");
+    }
+    // The LLVM emitter may be reused by the compiler for multiple units.
+    // Failed emission must not leak old SSA identifiers, argument cursors,
+    // output bytes or return values into subsequent native guest modules.
+    {
+        I64PairLlvmEmitter emitter(compiled.mir.capacity());
+        const auto first = emitter.build(compiled.mir, compiled.operands);
+        assert(first == ir);
+
+        auto missing = compiled.operands;
+        missing.rows.pop_back();
+        reject([&]{ (void)emitter.build(compiled.mir, missing); },
+               "missing MIR LLVM push operands");
+
+        const auto recovered = emitter.build(compiled.mir, compiled.operands);
+        assert(recovered == first);
+
+        auto changed = compiled.operands;
+        changed.writes[0] = 73;
+        const auto different = emitter.build(compiled.mir, changed);
+        assert(different != first);
+        assert(different.find("store i64 73, ptr") != std::string::npos);
+        assert(emitter.build(compiled.mir, compiled.operands) == first);
+    }
+    // Metadata may be supplied by a forged/deserialized Program rather than
+    // the production parser. Reject before any LLVM IR is emitted.
+    {
+        auto forged = make_source();
+        forged.inverted_main->owner_name.clear();
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "matching two-i64 schema");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[2].field = "unknown";
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "unknown");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[4].index =
+            static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) + 1u;
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "exceeds signed i64");
     }
     return 0;
 }
