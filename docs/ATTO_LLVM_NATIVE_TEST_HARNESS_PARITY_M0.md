@@ -37,7 +37,9 @@ A passing count from this subset must never be reported as the Java native
 - Checkout exact PR head, record complete tree SHA, reject modified tracked
   files before/after; no private cross-organization mirror.
 - Execute `bash tests/test_atto_native_parity_manifest.sh` and reject all
-  source-free inventory mutations. These checks never increment guest count.
+  source-free inventory mutations. Pin both reviewed manifest maps by Git blob
+  ID so a plausible source path, exit or diagnostic substitution cannot pass
+  using only row counts. These checks never increment guest count.
 - Build **real** `oreslang-llvmc` via CMake; execute updated C++ project-root
   import security tests.
 - For each of 24 reviewed `.atto` sources, run the compiler twice to emit
@@ -147,3 +149,24 @@ This is four **potential** new native executions distinct from the 48 scalar
 runs. The native `ores.std/testing` TestCase/TestSuite library, full Java
 40-case parity, filtering, skip/fail-fast and nested suites remain unsupported.
 No parity claim is valid until an exact-head workflow records real steps.
+
+
+### LLVM M0 multi-case receipt extension (same-repo draft)
+
+- Two additional independent `.atto` guests exercise **ordered two-case**
+  ORES_TEST output: `multi-pass` (2 PASS, summary passed=2, native exit 0)
+  and `multi-mixed` (1 PASS then 1 FAIL, truthful summary 1/1, exit 1).
+  Both use runtime checks rather than fixed shell-generated PASS records.
+- The native receipt gate now requires **four guest source programs × O0/O2**,
+  giving eight executed receipt guests, in addition to the original 48 scalar
+  native processes, for **56 required LLVM native executions** overall.
+- The verifier rejects extra/missing lines, wrong ordering, duplicate IDs,
+  inconsistent aggregate summaries, forged status and malformed bytes.
+  This is a deterministic, bounded fixed-corpus verifier, *not* a complete
+  test protocol parser, guest TestCase registration or Java TestKit parity.
+- The focused GitHub Actions PR trigger now covers every change under
+  `src/main/**`, `tests/**`, `scripts/**`, `stdlib/**`, CMake and this
+  workflow, including native compiler and runtime changes.
+- Run source-only verifier/mutation scripts and **real compiler/Clang/no-GC
+  audit/native O0/O2 guests** on an admitted original-organization runner
+  before claiming any LLVM guest parity; zero-step failures are NOT_EXECUTED.
