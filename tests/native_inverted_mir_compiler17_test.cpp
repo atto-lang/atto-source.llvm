@@ -78,6 +78,20 @@ int main() {
     const I64PairIrOperands next_inputs{{{9, 77}}, {}};
     const auto reference_ir = I64PairLlvmEmitter(2).build(next_module, next_inputs);
     assert(emitter.build(next_module, next_inputs) == reference_ir);
+    // Snapshot is a genuine detached value in the native reference, but this
+    // restricted guest emitter cannot materialize/return one. Do not silently
+    // discard checked MIR snapshot reads and claim guest parity.
+    LinearPlan snapshot_plan(layout, 2);
+    snapshot_plan.push(2);
+    snapshot_plan.snapshot(0);
+    snapshot_plan.read_runtime_checked(0, "x");
+    snapshot_plan.close();
+    const auto snapshot_mir = Module::lower(snapshot_plan);
+    reject([&] {
+        (void)emitter.build(snapshot_mir,
+                            I64PairIrOperands{{{9, 77}}, {}});
+    }, "snapshot value lowering not implemented");
+    assert(emitter.build(next_module, next_inputs) == reference_ir);
     // External open-owner MIR remains valid for other targets, but never
     // bypasses the standalone LLVM guest teardown gate.
     LinearPlan unclosed(layout, 2);
