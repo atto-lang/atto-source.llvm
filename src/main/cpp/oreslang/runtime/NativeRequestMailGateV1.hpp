@@ -54,8 +54,7 @@ public:
         // Supervisor STOP revokes request access even while an already
         // admitted cleanup turn still owns its physical native carrier.
         // TaskCancellation remains the independent physical lifetime fence.
-        return ores_execution_owns(authority_, current.actor_turn)
-            && ores_execution_phase(authority_) == ORES_EXEC_RUNNING
+        return ores_execution_owns_running(authority_, current.actor_turn)
             && request_->belongs_to(actor_) && request_->active();
     }
 
