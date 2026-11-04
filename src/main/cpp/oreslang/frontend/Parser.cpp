@@ -2075,12 +2075,43 @@ private:
             require("=");
             require("task");
             require("{");
+            if (token_.text == "TaskLocal") {
+                // Deliberately narrow first executable surface: a single
+                // compiler-known TaskLocal<int> scalar slot on a capture-free
+                // Task<int> producer. No key allocation or ambient actor TLS.
+                require("TaskLocal");
+                require("<");
+                require("int");
+                require(">");
+                require(".");
+                require("set");
+                require("(");
+                task.task_local_i64_initial = expression();
+                require(")");
+                require(";");
+                if (!native_capture_free_task_tree(*task.task_local_i64_initial))
+                    fail("TaskLocal<int> initial value must be capture-free scalar");
+            }
             require("return");
-            task.result = expression();
+            if (token_.text == "TaskLocal") {
+                require("TaskLocal");
+                require("<");
+                require("int");
+                require(">");
+                require(".");
+                require("get");
+                require("(");
+                require(")");
+                task.task_local_i64_return = true;
+                if (!task.task_local_i64_initial)
+                    fail("TaskLocal<int>.get requires a preceding TaskLocal<int>.set");
+            } else {
+                task.result = expression();
+            }
             require(";");
             require("}");
             require(";");
-            if (!native_capture_free_task_tree(*task.result))
+            if (task.result && !native_capture_free_task_tree(*task.result))
                 fail("native Task<int> v1 producer must be capture-free and scalar");
             value.source_tasks.push_back(std::move(task));
             return true;
@@ -4920,16 +4951,24 @@ private:
                     throw std::runtime_error(
                         "native Task<int> v1 requires one capture-free Task in synchronous zero-argument main");
                 const auto& task = fn.source_tasks.front();
-                if (!task.awaited || !task.result ||
-                        !native_capture_free_task_tree(*task.result))
+                if (!task.awaited ||
+                        (!task.result && !task.task_local_i64_return) ||
+                        (task.result && !native_capture_free_task_tree(*task.result)) ||
+                        (task.task_local_i64_initial &&
+                         !native_capture_free_task_tree(*task.task_local_i64_initial)))
                     throw std::runtime_error(
                         "native Task<int> v1 requires one consumed capture-free producer");
                 const std::unordered_map<std::string, ScalarType> empty_variables;
-                if (validate_scalar_expression(
-                        *task.result, empty_variables, functions) !=
-                        ScalarType::I64)
+                if (task.result &&
+                    validate_scalar_expression(
+                        *task.result, empty_variables, functions) != ScalarType::I64)
                     throw std::runtime_error(
                         "native Task<int> producer must return int");
+                if (task.task_local_i64_initial &&
+                    validate_scalar_expression(*task.task_local_i64_initial,
+                        empty_variables, functions) != ScalarType::I64)
+                    throw std::runtime_error(
+                        "TaskLocal<int>.set requires a scalar int value");
                 if (fn.locals.empty() ||
                         fn.locals.front().task_await_name != task.name)
                     throw std::runtime_error(
