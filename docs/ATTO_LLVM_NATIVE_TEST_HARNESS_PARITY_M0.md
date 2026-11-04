@@ -208,3 +208,33 @@ The focused runner now requires 40×2 = 80 native scalar executions plus 8×2 = 
 ### Atomic M1 state-container regression (authored)
 
 `m1-invariants.atto` tests invalid case identities, invalid outcomes, full selected-case quota, full filtered quota, and a halted suite. Every rejected call must return the specified code without mutating counters. It then restores valid state, records one genuine PASS and checks `RunSummary` and the native exit. Its O0/O2 gate adds two native executions, raising the authored total to **108** (80 scalar, 28 receipt) plus ten compiler-negative scenarios. The quota setup writes a test-owned mutable suite state directly and must not be mistaken for production admission or global isolation evidence.
+
+## M1 scoped native TestCase/TestSuite ledger — 2026-11-03
+
+The compiler now registers canonical `ores.std/testing/m1.atto`
+(and explicit `.ores` alias) from `stdlib/testing_m1.atto`. The
+source has three bounded scalar nominal classes: `TestCase` (integer
+identity, selected/skipped and outcome), `TestSuite` (counters and
+fail-fast state), and `RunSummary` (final counters). `should_run`
+and `record` distinguish PASS, FAIL, SKIP, FILTER and NOT_RUN
+without accepting invalid status or exceeding 1,024 admitted cases.
+`finish` rejects failed and no-executed suites.
+
+The native test matrix retains **40 scalar .atto programs × two optimization
+levels = 80** plus **13 receipt guest .atto programs × two = 26**.
+Total **106 required native executable runs**, plus **10 compiler-negative
+admission scenarios**, with exact source SHA/tree and no-GC IR audit.
+The five M1 fixtures execute scalar assertion helpers before recording
+results and verify actual selected/skipped/fail-fast counts prior to
+printing guest-owned `ORES_TEST` lines. The existing four original
+and four concurrent bounded-receipt fixtures remain intact.
+
+**Evidence boundary:** These are authored changes only until the focused
+source-org Actions workflow completes with nonempty runner steps and
+compiler/Clang/LLVM IR, guest stdout and exit evidence. Source-only
+receipt mutation tests and parser/YAML readbacks cannot count as native
+execution. `ores.std/testing` without the `/m1` suffix remains
+explicitly unsupported, because a full Java-equivalent `TestBody`
+callable, dynamic `TestSuite` dispatcher, arbitrary string IDs and
+canonical escaping, nested suite model and actor TestKit are outstanding.
+No private-source export or unreviewed cross-organization carrier is authorized.
