@@ -4,6 +4,8 @@ on:
     paths:
       - "src/main/cpp/oreslang/runtime/ScopedLocalStorageV1.hpp"
       - "tests/native_scoped_local_storage_v1_test.cpp"
+      - "src/main/cpp/oreslang/runtime/NativeActorLocalGateV1.hpp"
+      - "tests/native_actor_local_gate_v1_test.cpp"
       - "scripts/test-scoped-locals-v1.sh"
       - ".github/workflows/scoped-local-storage-v1.yml"
   workflow_dispatch:
