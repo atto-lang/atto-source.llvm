@@ -45,7 +45,7 @@ inline bool same_source_stamp(const SourceStamp& a, const SourceStamp& b) {
 
 inline void validate_logical_unit_id(const std::string& id) {
     if (id.empty() || id.size() > 4096 || id.front() == '/' || id.back() == '/' || id.find(':') != std::string::npos ||
-            id.find('\\\\') != std::string::npos)
+            id.find('\\') != std::string::npos)
         throw std::runtime_error("ATTO_UNIT_ID_INVALID: empty, absolute, drive or oversized identity");
     for (std::size_t p = 0; p < id.size();) {
         const auto c = static_cast<unsigned char>(id[p]);
