@@ -61,7 +61,9 @@ def main() -> int:
             "}\n",
             encoding="utf-8",
         )
-        files = [atto, ores, bad, *annotated, caught, possible_panic]
+        dash = root / "-dash.atto"
+        dash.write_text(valid, encoding="utf-8")
+        files = [atto, ores, bad, *annotated, caught, possible_panic, dash]
         hashes = {path.name: digest(path) for path in files}
         original_names = sorted(path.name for path in root.iterdir())
 
@@ -84,6 +86,15 @@ def main() -> int:
             assert "exception-effect analysis unsupported" in result.stderr, result.stderr
             assert "inconclusive" in result.stderr, result.stderr
             assert result.stdout == "", "analysis must never emit LLVM IR"
+        # The formatter passes leading-dash names as ./-dash.atto rather
+        # than allowing compiler option injection.
+        dash_result = run("--analyze", "./-dash.atto")
+        assert dash_result.returncode == 2, (
+            dash_result.returncode, dash_result.stderr
+        )
+        assert "effects inconclusive" in dash_result.stderr
+        assert dash_result.stdout == ""
+
         invalid = run("--analyze", str(bad))
         assert invalid.returncode == 1, (invalid.returncode, invalid.stderr)
         assert invalid.stdout == "", "invalid input must not emit LLVM IR"
