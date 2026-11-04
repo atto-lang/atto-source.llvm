@@ -5,7 +5,8 @@ emitter="$1"; clang="$2"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 "$emitter" positive "$scratch/positive.ll"
-for guard in 'icmp ult i64' 'icmp ne i64' 'load i1, ptr %alive' 'call void @llvm.trap()'; do
+for guard in 'icmp ult i64' 'icmp ne i64' 'load i1, ptr %alive' 'call void @llvm.trap()' \
+             'store volatile i1 false, ptr %alive' 'store volatile i64 0, ptr %length'; do
  if ! grep -Fq "$guard" "$scratch/positive.ll"; then
    echo "FAIL: checked MIR IR missing guard $guard"; exit 1
  fi
@@ -61,10 +62,10 @@ if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
         f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
     )
 PY
-for rejected in immutable missing-operand; do
+for rejected in immutable missing-operand open-owner; do
  if "$emitter" "$rejected" "$scratch/$rejected.ll" >/dev/null 2>&1; then
    echo "FAIL: MIR compiler admitted $rejected"; exit 1
  fi
  if [ -s "$scratch/$rejected.ll" ]; then echo "FAIL: emitted unsafe $rejected IR"; exit 1; fi
 done
-printf 'PASS: strict C++17 typed MIR -> real native LLVM IR (exit 42, owner close erasure, bounds trap, two rejects)\n'
+printf 'PASS: strict C++17 typed MIR -> real native LLVM IR (exit 42, owner close erasure, bounds trap, three rejects)\n'
