@@ -16,7 +16,13 @@ permissions: {}
 
 jobs:
   admission:
-    runs-on: ubuntu-24.04
+    # Source-free label differential: isolate runner-admission policy from
+    # compiler/test failures without any checkout, secrets or artifact writes.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-latest]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 5
     steps:
       - name: Prove runner admission without repository checkout
@@ -26,6 +32,7 @@ jobs:
           EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
           EXPECTED_RUN_ID: ${{ github.run_id }}
           EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+          EXPECTED_RUNNER_LABEL: ${{ matrix.runner }}
         run: |
           set -euo pipefail
           test -n "${RUNNER_NAME:-}"
@@ -36,6 +43,8 @@ jobs:
           [[ "$EXPECTED_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
           test "$GITHUB_RUN_ID" = "$EXPECTED_RUN_ID"
           test "$GITHUB_RUN_ATTEMPT" = "$EXPECTED_RUN_ATTEMPT"
+          test -n "$EXPECTED_RUNNER_LABEL"
+          echo "SOURCE_FREE_REQUESTED_LABEL=$EXPECTED_RUNNER_LABEL"
           printf 'SOURCE_FREE_RUNNER_CANARY=EXECUTED repository=%s repository_id=%s run_id=%s attempt=%s runner_name=%s runner_os=%s\n' \
             "$EXPECTED_REPOSITORY" "$EXPECTED_REPOSITORY_ID" "$EXPECTED_RUN_ID" \
             "$EXPECTED_RUN_ATTEMPT" "$RUNNER_NAME" "$RUNNER_OS"
