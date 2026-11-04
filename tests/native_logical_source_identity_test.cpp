@@ -119,6 +119,12 @@ int main() {
     rejects("directory symlink", "symlink alias", [&] {
         source.admit(shortcut_directory / "producer.atto", identity(producer));
     });
+    // An extensionless child still has to reject a symlinked ancestor
+    // before attempting .atto/.ores existence probes.
+    rejects("extensionless symlink ancestor preprobe", "symlink alias", [&] {
+        oreslang::frontend::logical_source_detail::no_symlink_components(
+            shortcut_directory / "producer", source.root());
+    });
 #endif
 
 #if !defined(_WIN32)
