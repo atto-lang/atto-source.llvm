@@ -143,6 +143,8 @@ def self_test() -> None:
                 valid.replace(b"total=2", b"total=1", 1),
             ]
         for index, sample in enumerate(variants):
+            if sample == valid:
+                raise RuntimeError(f"ineffective mutation: {kind}/{index}")
             require_rejection(verify(sample, kind, code), f"{kind}/mutation-{index}")
         for wrong in (-1, 2, 124, 137, 255, 1 if code == 0 else 0):
             require_rejection(verify(valid, kind, wrong), f"{kind}/exit-{wrong}")
