@@ -355,7 +355,8 @@ def main():
             if alias == 'symlink': target.symlink_to(source)
             else: os.link(source, target)
             result=run([a.compiler,str(source)])
-            if not result.returncode or result.stdout or 'cannot import itself' not in result.stderr:
+            diagnostic = 'hardlink' if alias == 'hardlink' else 'cannot import itself'
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((alias,result.stderr))
             passed+=1
         directory=root/'fifo'; directory.mkdir()
@@ -400,9 +401,31 @@ def main():
         os.link(directory/'lib.ores',directory/'other.ores')
         (directory/'main.ores').write_text('import module Lib as A from "./lib"; import module Lib as B from "./other"; pub fnc main():int{const a:int=A.value();const b:int=B.value();return a+b;}')
         result=run([a.compiler,str(directory/'main.ores')])
-        if result.returncode or (result.stdout.count('define i64 @__ores_module_1.value(') != 1 or result.stdout.count('define i64 @__ores_module_') != 1):
-            raise AssertionError(('hardlink identity not deduplicated',result.stderr))
+        if not result.returncode or result.stdout or 'hardlink' not in result.stderr:
+            raise AssertionError(('hardlink identity must reject alias', result.returncode, result.stdout[:150], result.stderr))
         passed+=1
+        # A standalone entry owns only its entry directory. A ../ escape must
+        # not become an implicit import root through host path resolution.
+        directory=root/'atto-projectless-escape'; directory.mkdir()
+        (directory/'main.atto').write_text(
+            'import module Outside from "../outside"; pub fnc main():int{return 0;}')
+        (root/'outside.atto').write_text('define module Outside as pub fnc value():int{return 42;} end')
+        result=run([a.compiler,str(directory/'main.atto')])
+        if not result.returncode or result.stdout or 'outside the admitted project root' not in result.stderr:
+            raise AssertionError(('projectless host escape', result.returncode, result.stdout[:150], result.stderr))
+        passed+=1
+        # A hardlink alias outside the graph is still ambiguous ownership.
+        if hasattr(os, 'link'):
+            directory=root/'atto-hardlink-outside-graph'; directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "./lib.atto"; pub fnc main():int{return Lib.answer();}')
+            (directory/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            os.link(directory/'lib.atto', root/'outside-graph-link.atto')
+            result=run([a.compiler,str(directory/'main.atto')])
+            if not result.returncode or result.stdout or 'hardlink' not in result.stderr:
+                raise AssertionError(('unseen hardlink alias', result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
         # Every unsupported target fails before emitting even a module header.
         for target in ('wasm32', 'thumbv7m-none-eabi'):
             result=run([a.compiler,'--target='+target,str(root/'private-helper/main.ores')])
