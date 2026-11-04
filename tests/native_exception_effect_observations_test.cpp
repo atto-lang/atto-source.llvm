@@ -178,6 +178,40 @@ void bounds_and_unmodeled_roots() {
     require(truncated.budget_exceeded && truncated.has_unknown(),
             "function count overflow fails closed");
 }
+void unmodeled_declaration_roots_fail_closed() {
+    Program p;
+    p.functions.push_back(function("main", value(1)));
+    const auto must_be_unknown = [&](const char* label) {
+        const auto report = observe_exceptional_effects(p);
+        require(report.unmodeled_program && report.has_unknown(), label);
+    };
+    p.sum_types.emplace_back();
+    must_be_unknown("sum type surface is not covered by function graph");
+    p.sum_types.clear();
+    p.type_only_declarations.emplace_back();
+    must_be_unknown("type declarations are not complete effect proof");
+    p.type_only_declarations.clear();
+    p.type_constraint_descriptors.emplace_back();
+    must_be_unknown("constraint metadata is not exceptional proof");
+    p.type_constraint_descriptors.clear();
+    p.contracts.emplace_back();
+    must_be_unknown("module contracts are not covered by effect walker");
+    p.contracts.clear();
+    p.conforms.emplace_back("UnverifiedInterface");
+    must_be_unknown("conformance declarations do not certify effect closure");
+}
+
+void standalone_generic_body_is_unknown() {
+    Program p;
+    auto fn = function("generic", value(7));
+    fn.generic_parameters.push_back({"T", ""});
+    p.functions.push_back(std::move(fn));
+    const auto report = observe_exceptional_effects(p);
+    const auto* row = report.find("generic/0");
+    require(row && row->unproved_direct && row->has_unknown_call(),
+            "uninstantiated generic body cannot claim complete effect closure");
+    require(report.has_unknown(), "unknown generic is reflected at program level");
+}
 } // namespace
 
 int main() {
@@ -188,5 +222,7 @@ int main() {
     declarations_do_not_invent_observed_effects();
     call_edge_budget_fails_closed();
     bounds_and_unmodeled_roots();
+    unmodeled_declaration_roots_fail_closed();
+    standalone_generic_body_is_unknown();
     return 0;
 }
