@@ -39,6 +39,14 @@ pub routine main(): int {
   suite.halted = 1;
   if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
   suite.halted = 0;
+  // A manufactured fail-fast failure without its halt fence must not pass.
+  suite.fail_fast = true;
+  suite.passed = 0;
+  suite.failed = 1;
+  if Ledger.finish(rt borrow suite, rt mut borrow summary) != 2; then return 3; fi
+  suite.failed = 0;
+  suite.passed = 1;
+  suite.fail_fast = false;
   if summary.total != 1 || summary.passed != 1 || summary.failed != 0 ||
     summary.skipped != 0 || summary.filtered != 0; then return 3; fi
   val int status = Ledger.finish(rt borrow suite, rt mut borrow summary);
