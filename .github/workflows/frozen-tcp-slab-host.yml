@@ -6,6 +6,9 @@ on:
       - 'tests/frozen_tcp_slab_test.cpp'
       - 'scripts/test-frozen-tcp-slab-host-sanitizers.sh'
       - '.github/workflows/frozen-tcp-slab-host.yml'
+      - 'src/main/cpp/oreslang/runtime/ActorSharedTcpPool.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorHttpAgent.hpp'
+      - 'tests/actor_shared_tcp_pool_test.cpp'
   workflow_dispatch:
 permissions:
   contents: read
