@@ -336,7 +336,7 @@ def main():
             (directory/'lib.ores').write_text(
                 'define module Lib as pub fnc answer():int{return 42;} end')
             result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
+            if not result.returncode or result.stdout or 'native source symlink alias denied' not in result.stderr:
                 raise AssertionError(('relative dangling canonical collision', result.returncode,
                                       result.stdout[:150], result.stderr))
             passed += 1
