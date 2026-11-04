@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 
 
@@ -555,7 +556,7 @@ def main():
             # Run in an isolated cwd so a rejected compiler cannot leave a
             # hidden .ll/.o/native executable and still claim zero-IR denial.
             compiler = os.path.abspath(a.compiler) if os.sep in a.compiler else (
-                __import__('shutil').which(a.compiler) or a.compiler)
+                shutil.which(a.compiler) or a.compiler)
             before = {p.name for p in directory.iterdir()}
             result = run([compiler, str(directory/'main.atto')], cwd=directory)
             artifacts = {p.name for p in directory.iterdir()} - before
