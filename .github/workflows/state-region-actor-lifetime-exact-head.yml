@@ -299,6 +299,16 @@ jobs:
           test ! -s "$UNFLAGGED"
           grep -Fq 'native sealed actor state requires --experimental-sealed-scalar-state' \
             "$RUNNER_TEMP/sealed-unflagged.err"
+          DUPLICATE="$RUNNER_TEMP/sealed-duplicate-option.ll"
+          if "$COMPILER" --experimental-sealed-scalar-state \
+              --experimental-sealed-scalar-state "$SEALED" \
+              > "$DUPLICATE" 2> "$RUNNER_TEMP/sealed-duplicate.err"; then
+            echo "duplicate experimental sealed state option was admitted" >&2
+            exit 1
+          fi
+          test ! -s "$DUPLICATE"
+          grep -Fq 'duplicate sealed scalar state option' \
+            "$RUNNER_TEMP/sealed-duplicate.err"
           "$COMPILER" --experimental-owned-int --experimental-sealed-scalar-state \
             "$SEALED" > "$SEALED_IR"
           test -s "$SEALED_IR"
