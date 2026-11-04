@@ -37,6 +37,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake clang llvm-dev
           clang --version
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Verify JS/LLVM receipt comparison controls (HOST-ONLY)
+        run: node --test tests/atto_js_llvm_receipt_comparison.test.mjs
       - name: Build the real LLVM source compiler
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -51,9 +56,6 @@ jobs:
           rm -f build/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json
           rm -f build/atto-checked-i64-native/llvm-checked-i64-native-receipt.json
           ctest --test-dir build --output-on-failure -R '^atto_(shared_scalar50|checked_i64)_'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '22'
       - name: Audit exact-head native guest receipts
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
