@@ -1118,6 +1118,10 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(atto_copyable_share_native_execution
             atto-copyable-share.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_copyable_copy_native_execution
+            atto-copyable-copy.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(atto_copyable_take_native_execution
+            atto-copyable-take.atto --run 42 --clang "${ORE_CLANG}")
     endif()
 
     oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
