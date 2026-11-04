@@ -8,7 +8,14 @@
 // tests/fixtures/native-aot-two-actor-owned-counter.atto.
 // There are no host replacements for these two generated functions.
 extern void oreslang_actor_Worker_init(OresActorI64Heap*, uint64_t, uint64_t);
-extern int64_t oreslang_actor_Worker_on_message(
+#if defined(ATTO_SEALED_STATE_GUEST)
+#define ATTO_ACTOR_HANDLER oreslang_actor_Worker_handle_state
+#define ATTO_ACTOR_PASS_RECEIPT "AOT_COMPILED_SEALED_TWO_ACTOR_OWNED_HEAPS_2009_TURNS_PASS"
+#else
+#define ATTO_ACTOR_HANDLER oreslang_actor_Worker_on_message
+#define ATTO_ACTOR_PASS_RECEIPT "AOT_COMPILED_TWO_ACTOR_OWNED_HEAPS_2009_TURNS_PASS"
+#endif
+extern int64_t ATTO_ACTOR_HANDLER(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 
 #define CHECK(test) do { \
@@ -29,7 +36,7 @@ static int64_t dispatch(
         OresActorI64Heap* heap, uint64_t actor, uint64_t generation,
         int64_t increment) {
     OresActorTurn turn = ores_actor_i64_heap_enter(heap, actor, generation);
-    const int64_t result = oreslang_actor_Worker_on_message(
+    const int64_t result = ATTO_ACTOR_HANDLER(
         heap, turn.domain, turn.epoch, increment);
     ores_actor_i64_heap_leave(heap, turn);
     return result;
@@ -148,6 +155,6 @@ int main(void) {
     CHECK(trace_domain_a != trace_domain_b);
     ores_actor_i64_heap_retire(b);
     CHECK(ores_actor_i64_heap_try_destroy(b) == 1);
-    puts("AOT_COMPILED_TWO_ACTOR_OWNED_HEAPS_2009_TURNS_PASS");
+    puts(ATTO_ACTOR_PASS_RECEIPT);
     return 0;
 }
