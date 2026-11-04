@@ -63,6 +63,18 @@ std::optional<T> actor_local_get_on_turn_v1(
     return scope.get_copy(stamp, key);
 }
 
+template <class T>
+bool actor_local_erase_on_turn_v1(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRef actor,
+    ActorLocalScopeV1& scope,
+    ExecutionStampV1 stamp,
+    const ActorLocalKeyV1<T>& key) {
+    if (!actor_local_current_turn_v1(scheduler, actor, stamp))
+        return false;
+    return scope.erase(stamp, key);
+}
+
 /*
  * Trusted CONTROL-plane retirement. Call only after the source actor has
  * stopped accepting messages. The generation-specific scheduler completion
