@@ -2863,6 +2863,12 @@ if(BUILD_TESTING)
                 -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                 -p "test_atto_scalar_native_gate.py" -v)
         set_tests_properties(atto_scalar_v1_native_harness_adversarial PROPERTIES TIMEOUT 45)
+        # Supplemental actual LLVM source grammar and ownership conformance:
+        # six compiler->Clang->native results and ten denied-source controls.
+        add_test(NAME atto_scalar_v1_edge_cases_native
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_scalar_llvm_edges.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+        set_tests_properties(atto_scalar_v1_edge_cases_native PROPERTIES TIMEOUT 300)
         add_test(NAME atto_scalar_v1_subprocess_harness_adversarial
             COMMAND "${Python3_EXECUTABLE}" -m unittest discover
                 -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
