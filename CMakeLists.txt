@@ -823,6 +823,17 @@ if(BUILD_TESTING)
         add_test(NAME native_atto_host_logical_unit_identity
             COMMAND oreslang-native-host-logical-unit-ids-test)
         set_tests_properties(native_atto_host_logical_unit_identity PROPERTIES TIMEOUT 20)
+
+        add_executable(oreslang-native-atto-manifest-snapshot-test
+            tests/native_atto_manifest_snapshot_test.cpp)
+        target_include_directories(oreslang-native-atto-manifest-snapshot-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-atto-manifest-snapshot-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_atto_manifest_snapshot_security
+            COMMAND oreslang-native-atto-manifest-snapshot-test)
+        set_tests_properties(native_atto_manifest_snapshot_security
+            PROPERTIES TIMEOUT 20)
     endif()
 
     function(oreslang_contract_test name fixture)
