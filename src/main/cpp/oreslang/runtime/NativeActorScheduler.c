@@ -128,6 +128,7 @@ static _Thread_local OresExecutionClaim executing_claim;
 static _Thread_local uint64_t executing_data_mail_sequence;
 static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local OresNativeWakeTicket executing_wake;
+static _Thread_local OresNativeWakeOutcome executing_wake_outcome;
 static _Thread_local int executing_wake_valid;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
@@ -559,14 +560,17 @@ static void* carrier(void* raw) {
             .continuation = {0, 0}
         };
         executing = s;
-        executing_wake_valid = kind == 1;
+        executing_wake_valid = kind == TURN_WAKE;
         executing_wake = wake_ticket;
+        executing_wake_outcome = kind == TURN_WAKE
+                ? wake_outcome : ORES_NATIVE_WAKE_FAILED;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (kind == 2) s->control_callback(s->context, i, payload);
         else if (kind == 1) s->wake_callback(s->context, i, wake_ticket, wake_outcome);
         else s->callback(s->context, i, payload);
         executing_wake_valid = 0;
         executing_wake = (OresNativeWakeTicket){0};
+        executing_wake_outcome = ORES_NATIVE_WAKE_FAILED;
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
         executing_data_mail_sequence = 0;
