@@ -50,7 +50,8 @@ for name, source, tag in (("M1", m1, "ATTO_M1"), ("M2", m2, "ATTO_M2")):
         for guard in ("suite.total < 0", "suite.filtered < 0",
                       "suite.total != suite.passed + suite.failed + suite.skipped",
                       "suite.total + suite.filtered > 0 && suite.last_id <= 0",
-                      "suite.halted != 0 && (!suite.fail_fast || suite.failed == 0)"):
+                      "suite.halted != 0 && (!suite.fail_fast || suite.failed != 1)",
+                      "suite.fail_fast && suite.failed > 0 && suite.halted == 0"):
             if guard not in finish or finish.index(guard) > require_before:
                 raise SystemExit("M1 RunSummary validation must precede output: " + guard)
         if embedded.count("suite.last_id = candidate.id;") != 2:
