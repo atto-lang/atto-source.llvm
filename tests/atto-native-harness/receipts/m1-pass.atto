@@ -1,0 +1,29 @@
+import module Run from "ores.std/testing/m1";
+import class TestCase from "ores.std/testing/m1.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1.ores";
+
+// The cases execute through compiler-owned M1 scalar TestCase/TestSuite ledger.
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase first = new TestCase();
+  first.id = 1;
+  first.outcome = 0;
+  if !Run.should_run(rt borrow suite, rt borrow first); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow first) != 0; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/basic/add|");
+  let mut TestCase second = new TestCase();
+  second.id = 2;
+  second.outcome = 0;
+  if !Run.should_run(rt borrow suite, rt borrow second); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow second) != 0; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/basic/subtract|");
+  let mut RunSummary summary = new RunSummary();
+  val int status = Run.finish(rt borrow suite, rt mut borrow summary);
+  if status != 0 || summary.total != 2 || summary.passed != 2 ||
+     summary.failed != 0 || summary.skipped != 0 || summary.filtered != 0; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+  return status;
+}
