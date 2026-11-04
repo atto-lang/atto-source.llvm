@@ -46,6 +46,21 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # SOURCE-FREE LLVM native metadata planner for recursively nested actor
+    # pipelines. This is not .atto parsing, LLVM guest execution, actor
+    # startup, message transport or supervision parity.
+    add_executable(oreslang-native-nested-actor-pipe-plan-test
+        tests/native_nested_actor_pipeline_plan_test.cpp)
+    target_include_directories(oreslang-native-nested-actor-pipe-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-nested-actor-pipe-plan-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-nested-actor-pipe-plan-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_nested_actor_pipe_plan_host_only
+        COMMAND oreslang-native-nested-actor-pipe-plan-test)
+    set_tests_properties(native_nested_actor_pipe_plan_host_only
+        PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
@@ -876,6 +891,13 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
                 ${ARGN})
     endfunction()
+
+    # A .atto guest fixture is NOT accepted as a working actor pipeline:
+    # LLVM must reject before emitting partial IR until typed nested graph
+    # lowering, supervisor scopes and transactional start are implemented.
+    oreslang_contract_test(native_nested_actor_pipe_guest_failclosed
+        nested-actor-pipe-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;

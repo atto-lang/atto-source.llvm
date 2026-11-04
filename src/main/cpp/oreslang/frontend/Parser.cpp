@@ -3707,6 +3707,23 @@ private:
             if (lookahead.next().text == "{")
                 fail("native execution task lowering unsupported: scheduler-owned Task/Future continuation required; no implicit inline execution");
         }
+        // The recursive factory API is a compiler-recognized actor intrinsic,
+        // never an ordinary scalar method or host reflection call. Until
+        // checked descriptor, move-only ownership, capacity reservations and
+        // transactional start are wired into LLVM IR, reject the actual
+        // token sequence before parsing/evaluating nested constructor args.
+        // Lexical lookahead skips comments and strings are distinct tokens,
+        // so incidental text cannot trigger this source admission guard.
+        if (token_.text == "Actor") {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "." &&
+                    lookahead.next().text == "pipe" &&
+                    lookahead.next().text == "(")
+                fail("NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED: typed actor "
+                     "descriptors, scoped supervision and transactional "
+                     "start require executable native lowering");
+        }
+
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
         if (token_.text == "ActorGroup" ||
