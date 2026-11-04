@@ -15,6 +15,9 @@ on:
       - 'tests/fixtures/native-aot-sealed-state-wasm-reject.atto'
       - 'tests/fixtures/native-aot-sealed-state-missing-critical-reject.atto'
       - 'tests/fixtures/native-aot-legacy-critical-reject.atto'
+      - 'tests/fixtures/native-aot-sealed-state-effectful-write-reject.atto'
+      - 'tests/fixtures/native-aot-sealed-state-effectful-return-reject.atto'
+      - 'tests/fixtures/native-aot-sealed-state-symbol-collision-reject.atto'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
@@ -298,7 +301,10 @@ jobs:
           done
           for entry in \
             "native-aot-sealed-state-missing-critical-reject.atto|native sealed actor state requires pub critical handle_state" \
-            "native-aot-legacy-critical-reject.atto|legacy native actor on_message cannot claim critical state ABI"; do
+            "native-aot-legacy-critical-reject.atto|legacy native actor on_message cannot claim critical state ABI" \
+            "native-aot-sealed-state-effectful-write-reject.atto|native sealed critical handler requires pure scalar state write" \
+            "native-aot-sealed-state-effectful-return-reject.atto|native sealed critical handler requires pure scalar return" \
+            "native-aot-sealed-state-symbol-collision-reject.atto|reserved native runtime ABI symbol"; do
             SRC_PATH="${entry%%|*}"
             DIAGNOSTIC="${entry#*|}"
             REJECTED="$RUNNER_TEMP/${SRC_PATH}.ll"
