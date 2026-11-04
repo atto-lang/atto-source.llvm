@@ -4,8 +4,10 @@ on:
     paths:
       - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/HostLogicalSourceUnitIds.hpp'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/project_root_import_test.cpp'
+      - 'tests/host_logical_source_unit_ids_test.cpp'
       - 'tests/native_module_imports.py'
       - 'tests/contract.py'
       - 'tests/fixtures/numerics-atto-main.atto'
@@ -53,6 +55,8 @@ jobs:
               -Isrc/main/cpp tests/project_root_import_test.cpp \
               -o "/tmp/atto-root-import-${compiler}"
             "/tmp/atto-root-import-${compiler}"
+            "${compiler}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG               -Isrc/main/cpp tests/host_logical_source_unit_ids_test.cpp               -o "/tmp/atto-host-logical-ids-${compiler}"
+            "/tmp/atto-host-logical-ids-${compiler}"
           done
       - name: Resolver ASan and UBSan
         shell: bash
@@ -65,12 +69,19 @@ jobs:
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
           UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
             /tmp/atto-root-import-sanitized
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fno-omit-frame-pointer -fsanitize=address,undefined \
+            -Isrc/main/cpp tests/host_logical_source_unit_ids_test.cpp \
+            -o /tmp/atto-host-logical-ids-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            /tmp/atto-host-logical-ids-sanitized
       - name: Build real LLVM compiler and import tests
         shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-native-host-logical-ids-test
       - name: Require exact import and canonical .atto CTest inventory
         shell: bash
         run: |
@@ -80,6 +91,7 @@ jobs:
           for name in \
             native_source_module_graph_execution \
             native_project_root_import_security \
+            native_host_logical_source_ids_security \
             numerics_atto_integer_guest \
             atto_shared_scalar_guest
           do
@@ -90,7 +102,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build \
-            -R '^(native_source_module_graph_execution|native_project_root_import_security|numerics_atto_integer_guest|atto_shared_scalar_guest)$' \
+            -R '^(native_source_module_graph_execution|native_project_root_import_security|native_host_logical_source_ids_security|numerics_atto_integer_guest|atto_shared_scalar_guest)$' \
             --output-on-failure --timeout 180
       - name: Reverify source identity after tests
         shell: bash
