@@ -980,15 +980,12 @@ void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* s) {
     unlock(s);
 }
 
-OresNativeActorRef ores_native_actor_scheduler_spawn(
-    OresNativeActorScheduler* s, size_t i) {
+/* Requires scheduler lock. No actor identity is consumed until the caller
+ * has completed any requested physical-carrier admission barrier. */
+static OresNativeActorRef spawn_locked(OresNativeActorScheduler* s, size_t i) {
     OresNativeActorRef missing = {0, 0, 0};
-    if (!s) return missing;
-    lock(s);
-    if (s->retired || i >= s->actor_count || s->actors[i].spawned) {
-        unlock(s);
+    if (s->retired || i >= s->actor_count || s->actors[i].spawned)
         return missing;
-    }
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
     a->generation = a->authority.generation;
@@ -998,7 +995,40 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
         (uint64_t)i,
         a->generation
     };
-    OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
+    return (OresNativeActorRef){s->domain, (uint64_t)i, a->generation};
+}
+
+OresNativeActorRef ores_native_actor_scheduler_spawn(
+    OresNativeActorScheduler* s, size_t i) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s) return missing;
+    lock(s);
+    OresNativeActorRef ref = spawn_locked(s, i);
+    unlock(s);
+    return ref;
+}
+
+/* Java/Graal parity opt-in. First actor of a domain acquires one native
+ * pthread and waits for that carrier's run-loop check-in BEFORE publishing
+ * an ActorRef. Further idle actors reuse the same worker. Real runnable
+ * pressure may grow the scheduler up to the configured worker_count.
+ * On pthread_create failure no actor slot/generation is consumed. */
+OresNativeActorRef ores_native_actor_scheduler_spawn_ready(
+    OresNativeActorScheduler* s, size_t i) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s || executing == s) return missing;
+    lock(s);
+    OresNativeActorRef ref = missing;
+    if (!s->retired && i < s->actor_count && !s->actors[i].spawned
+            && ensure_workers_locked(s, 1)) {
+        /* pthread_create success alone is insufficient: wait until the
+         * carrier has entered its actual scheduler loop. cond_wait releases
+         * the mutex to let the new worker register its receipt. */
+        while (s->carriers_checked_in < s->started_workers) {
+            if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
+        }
+        ref = spawn_locked(s, i);
+    }
     unlock(s);
     return ref;
 }
