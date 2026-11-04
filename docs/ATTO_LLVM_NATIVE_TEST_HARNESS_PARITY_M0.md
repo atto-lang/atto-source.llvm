@@ -168,3 +168,20 @@ This is not Java's 40-case TestSuite parity: dynamic TestCase, TestSuite,
 ordered suite accounting, skip/filter/fail-fast and nested runners remain
 unsupported on LLVM. No execution pass is established until real runner
 steps and compiler/Clang execution logs exist.
+
+
+### Hardened multi-case guest receipts (Nov 3 source changes)
+
+Native receipt probes now include two one-case and two two-case `.atto` programs.
+At O0 and O2 this adds **8 required guest processes**, separate from the
+40 canonical scalar cases × O0/O2 = **80 required native processes**;
+**88 total are required, not yet verified**. The two-case programs emit
+ordered PASS+PASS or PASS+FAIL followed by exactly one final SUMMARY and
+appropriate native exit status. They are scoped static smoke tests, not
+full `std/testing.atto` TestSuite registration or the Java 40-case receipt suite.
+
+The receipt verifier checks the *observed* native status and exact stream,
+uses descriptor-bound O_NOFOLLOW/O_NONBLOCK bounded reads, and cannot silently
+skip negative checks under Python optimization. The focused CI workflow was
+repaired to one ten-step job and source-only tests now parse all eight shell
+blocks with `bash -n`. Runner admission and independent review remain gates.
