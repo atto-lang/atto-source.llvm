@@ -123,9 +123,9 @@ jobs:
             test -s "$work/diagnostic"
           done
           {
-            printf 'pub routine main(): int {\\n  let int n = 0;\\n  n = n + 1;\\n'
-            for i in $(seq 0 64); do printf '  let int x%s = %s;\\n' "$i" "$i"; done
-            printf '  return n;\\n}\\n'
+            printf 'pub routine main(): int {\n  let int n = 0;\n  n = n + 1;\n'
+            for i in $(seq 0 64); do printf '  let int x%s = %s;\n' "$i" "$i"; done
+            printf '  return n;\n}\n'
           } > "$work/too-many.atto"
           if "$compiler" --target=host "$work/too-many.atto" >"$work/out.ll" 2>"$work/diagnostic"; then
             echo "LLVM accepted more than 64 ordered locals" >&2
