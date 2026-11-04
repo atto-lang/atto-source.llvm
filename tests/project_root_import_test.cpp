@@ -182,6 +182,54 @@ int main() {
     }
 #endif
     {
+        const auto dir = temp / "canonical-package-marker";
+        write_text(dir/".atto.pkg.toml",
+                   "schema_version = \"1\"\n[project]\nroot = \".\"\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"2\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("canonical .atto.pkg.toml must win legacy marker");
+    }
+    {
+        const auto dir = temp / "invalid-canonical-package";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"2\"\n");
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("malformed canonical package cannot downgrade", "schema_version",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "non-dot-project-root";
+        write_text(dir/".atto.pkg.toml",
+                   "schema_version = \"1\"\n[project]\nroot = \"../outside\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("project.root outside package", "requires full TOML parser",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "nested-canonical-marker";
+        write_text(dir/".atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"nested/.atto.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("canonical nested package crossing", "nested package boundary",
+                  [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
+    }
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "dangling-canonical-package-marker";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        fs::create_symlink("absent-manifest.toml", dir/".atto.pkg.toml");
+        must_fail("dangling canonical marker cannot downgrade", "canonical .atto.pkg.toml must be regular non-symlink",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+#endif
+    {
         const auto dir = temp / "modern-source";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"app/main.atto", "");
