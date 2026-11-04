@@ -1,0 +1,21 @@
+import module Run from "ores.std/testing/m1";
+import class TestCase from "ores.std/testing/m1.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1.ores";
+
+// Filtered-only suites must never produce a green test result.
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase excluded = new TestCase();
+  excluded.id = 1;
+  excluded.selected = false;
+  if Run.record(rt mut borrow suite, rt borrow excluded) != 3; then return 3; fi
+  let mut RunSummary summary = new RunSummary();
+  val int status = Run.finish(rt borrow suite, rt mut borrow summary);
+  if status != 1 || summary.total != 0 || summary.passed != 0 ||
+     summary.failed != 0 || summary.skipped != 0 || summary.filtered != 1; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|SUMMARY|total=0|passed=0|failed=0|skipped=0|filtered=1");
+  return status;
+}
