@@ -249,6 +249,16 @@ int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* sch
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Original DATA-mail admission sequence for the current authenticated
+ * physical actor carrier only. Returns 0 (without modifying *out_sequence)
+ * on any non-DATA, STOP, foreign actor/thread or nonexecuting context.
+ * The sequence is minted and stored alongside the DATA mailbox payload at
+ * successful admission; WAKE/SourceTask resume requires a separate issuance
+ * path and is intentionally unbound here. This is a trusted-host API, not
+ * a guest-callable source of HTTP request authority. */
+int ores_native_actor_scheduler_current_data_mail_sequence(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t* out_sequence);
 /* Logical execution identity for the current guest turn. The execution id is
  * not a heap id and is not a carrier/thread id. For actor turns the allocation
  * domain names the actor-owned domain independently. Returns zero outside an
