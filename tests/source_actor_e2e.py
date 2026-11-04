@@ -84,6 +84,10 @@ def main():
         ("source-actor-method-keyword.ores", 1, 2, 3),
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
+        # Canonical AttoLang extension goes through the same real native
+        # compiler, Clang link, actor scheduler, and physical STOP receipts.
+        # It is not critical-block guest lowering.
+        ("source-actor-send.atto", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-await-worker.ores", 1, 2, 3),
