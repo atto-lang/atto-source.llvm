@@ -3,6 +3,7 @@
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
+#include "oreslang/frontend/ProjectRootImport.hpp"
 #include "oreslang/frontend/LibraryProfile.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
@@ -394,6 +395,15 @@ int main(int argc, char** argv) {
         const char* source_overflow = cortex_m_target
             ? "cortex-m source exceeds 128 KiB limit"
             : "native source exceeds 8 MiB admission limit";
+        // Preserve the original user-supplied entry path for canonical
+        // .atto admission. ModuleLoader canonicalizes file identities later,
+        // which would otherwise erase symlinked leaf/parent components before
+        // the import resolver has a chance to inspect them.
+        if (oreslang::project_root_import_detail::is_atto_source(
+                std::filesystem::path(path))) {
+            oreslang::project_root_import_detail::reject_atto_symlink_components(
+                std::filesystem::path(path));
+        }
         const SourceIdentity expected_source_identity =
             capture_source_identity(path, kMaxSourceBytes, source_overflow);
         SourceIdentity source_identity;
