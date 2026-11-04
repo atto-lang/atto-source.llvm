@@ -111,13 +111,15 @@ with both Clang `-O0` and `-O2` and executes both binaries:
 | Canonical byte-identical scalar50 | 50 | 100 |
 | Checked-i64 values and overflows | 50 | 100 |
 | Equality true/false controls | 2 | 4 |
-| **Total** | **102** | **204** |
+| Unchanged original-source full-width i64 values | 37 | 74 |
+| **Total executions** | **139 case/mode groups** | **278** |
 
 An LLVM optimizer-dependent value difference, missing or non-signal overflow,
 missing O2 guest result or a dishonest process-count receipt fails the native
 gate. The workflow independently binds the two receipts to the source HEAD
-and Git tree, checks the built compiler SHA-256, recomputes all 100 original
-source hashes and the 37 generated full-width equality-wrapper hashes.
+and Git tree, checks the built compiler SHA-256, recomputes all 100 canonical source
+hashes and the 37 generated equality-wrapper hashes, then separately verifies
+37 **unchanged original-source** programs through their exported native i64 ABI.
 
 Run synthetic offline JS/LLVM comparison regressions with:
 
@@ -145,7 +147,43 @@ probes linked and ran with Clang 17 at both O0/O2: `INT64_MIN+0` returned 42
 and `INT64_MAX+1` trapped. These are host/toolchain probes only.
 
 The source-org GitHub Actions runner still fails at zero steps. Until an
-authorized source runner compiles and executes all **204** guest processes,
+authorized source runner compiles and executes all **278** guest processes,
 actual LLVM parity is **not verified**. A successful comparison report
 must only be promoted after independently authenticating both workflows'
 nonzero executed steps and exact input head/tree/compiler receipts.
+
+
+## M2 — execute unchanged full-width i64 AttoLang source directly
+
+The compiler source establishes this ABI: an exported
+`i64 @__oreslang_guest_main()` contains the native guest computation, while
+a separate `i32 @main()` adapts its result to the OS process-exit contract.
+The OS exit value cannot represent every signed-i64 result.
+
+The new `atto_i64_original_native_guest` CTest compiles the **complete,
+unmodified** JS/AttoLang source for each of the 37 successful full-width cases.
+It emits LLVM IR, compiles that IR to ELF object code with Clang at O0 and O2,
+uses `objcopy --redefine-sym main=atto_original_exit_wrapper` on the object
+to avoid a duplicate C `main`, and links against the fixed
+`tests/atto_i64_original_guest_probe.c`. The oracle calls the actual exported
+guest i64 function and compares the full signed result to a strictly parsed
+decimal CLI expectation. The AttoLang source is **never rewritten**.
+
+Each case must exit 42 at both optimization levels; wrong results return 43.
+Missing guest symbols, invalid expectations, linker failures, signals, timeouts,
+guest stdout/stderr, and changed compiler inputs all fail the native gate.
+A third native receipt records 37 original-source cases, **74 executions**,
+per-case source/IR hashes, toolchain hashes, HEAD/tree and O0/O2 results.
+The 13 checked-overflow programs remain in the direct native trap matrix.
+
+This gate is currently **Linux ELF only** and depends on source-local
+`oreslang-llvmc`, Clang and GNU/LLVM objcopy. A local *synthetic*,
+hand-authored LLVM IR object linked with objcopy and the C oracle: `INT64_MIN`
+matched the decimal expectation at O0/O2 (exit 42), and the deliberately
+wrong `INT64_MAX` expectation returned 43. That probes the calling method,
+**not** AttoLang compilation. All 278 compiler-generated native executions
+remain unverified until GitHub Actions runs real steps.
+
+All three LLVM receipts must be independently reconciled to one source
+HEAD/tree and matching compiler binary hashes. No stale or synthetic receipt
+is sufficient to claim verified backend parity.
