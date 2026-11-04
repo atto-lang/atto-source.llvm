@@ -1935,7 +1935,7 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
-                } else if (token_.text == "f64") {
+                } else if ((token_.text == "f64" || token_.text == "float")) {
                     fail("native f64 function parameter ABI not yet admitted; lexical f64 locals only");
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
                     // Deferred scalar aliases are admitted only after full resolution.
@@ -1976,7 +1976,7 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
-            } else if (token_.text == "f64") {
+            } else if ((token_.text == "f64" || token_.text == "float")) {
                 fail("native f64 return ABI not yet admitted; lexical f64 locals only");
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
@@ -2184,10 +2184,10 @@ private:
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "f64" || sum_first.text == "String" || sum_first.text == "string")) {
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "f64" || sum_first.text == "float" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
-                binding.scalar_type = accept("bool") ? ScalarType::Bool : accept("f64") ? ScalarType::F64 : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("f64") || accept("float")) ? ScalarType::F64 : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
                 binding.name = identifier();
                 require("=");
@@ -2467,7 +2467,7 @@ private:
             if (accept(":")) { local->name = first; type = type_name(); }
             else { type = first; local->name = identifier(); }
             if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
-            if (type == "f64") fail("native branch-local f64 storage requires scoped double lowering; unsupported");
+            if (type == "f64" || type == "float") fail("native branch-local f64 storage requires scoped double lowering; unsupported");
             if (type == "Array") fail("ordered owning local requires scoped region/drop lowering");
             if (type == "int") local->scalar_type = ScalarType::I64;
             else if (type == "bool") local->scalar_type = ScalarType::Bool;
