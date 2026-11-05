@@ -42,12 +42,25 @@ public:
             if (++visited > max_nodes)
                 throw std::runtime_error("scalar tail-position inspection budget exceeded");
             if (current->kind == Expression::Kind::Call) {
-                ++out.direct_return_sites;
-                // Arguments are evaluated before a tail transfer and are
-                // never themselves tail calls of the enclosing function.
+                // Until the native call ABI proves label/type-argument
+                // reordering and indirect target identity, only a resolved
+                // positional direct call is a structural candidate. This is
+                // intentionally stricter than legal source-level AttoLang.
+                if (!current->name.empty() &&
+                    !current->type_arguments_present &&
+                    current->type_arguments.empty() &&
+                    current->argument_names.empty())
+                    ++out.direct_return_sites;
+                // Arguments are evaluated before tail transfer and are never
+                // themselves tail calls of the enclosing function.
             } else if (current->kind == Expression::Kind::Conditional) {
                 if (!current->when_true || !current->when_false)
                     throw std::runtime_error("malformed conditional tail arms");
+                const bool direct_condition = static_cast<bool>(current->condition);
+                const bool pair_condition = current->condition_lhs &&
+                                            current->condition_rhs;
+                if (!direct_condition && !pair_condition)
+                    throw std::runtime_error("malformed conditional tail predicate");
                 ++out.conditional_arms;
                 pending.push_back(current->when_false.get());
                 pending.push_back(current->when_true.get());
