@@ -23,12 +23,13 @@ a sandbox or isolation boundary.
 
 `NativeActorScheduler.c` gives the pthread which just ran actor A
 one bounded opportunity to execute A's next ready DATA message without
-requiring a global round-robin hop. CONTROL is always scanned first.
-After two consecutive DATA turns on that carrier, the ordinary global
-round-robin cursor gets priority. The actor remains a generation-fenced
-logical identity; no heap ownership is attached to a pthread. This is
-a cache-warmth hint, **not hard CPU affinity** and not NUMA topology
-awareness. Other pthreads can run another turn when A's lane is inactive,
+going back through the ready queue. CONTROL and WAKE queues are always
+checked first. After two consecutive DATA turns on that carrier, the head
+of the FIFO DATA ready queue gets priority. The actor remains a
+generation-fenced logical identity; no heap ownership is attached to a
+pthread. This is a cache-warmth hint, not CPU affinity and not NUMA
+topology awareness. Hard carrier-to-CPU pinning is a separate, Linux-only
+bootstrap option; see [native scheduler latency](NATIVE_SCHEDULER_LATENCY.md). Other pthreads can run another turn when A's lane is inactive,
 but two may never enter A simultaneously.
 
 ## Evidence and future parity
