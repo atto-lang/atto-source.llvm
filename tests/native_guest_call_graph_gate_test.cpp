@@ -38,6 +38,35 @@ std::unique_ptr<oreslang::Expression> call(
 int main() {
     // Empty graph and bounded call chains are safe to admit.
     assert(Gate::require_bounded({}) == 0);
+    // Structural tail-position audit is NOT an LLVM musttail lowering proof.
+    // Only the returned call (or selected lazy conditional arm) counts.
+    using Probe = oreslang::NativeScalarTailPositionProbe;
+    auto direct_tail = call("target", 1);
+    assert(Probe::inspect(direct_tail.get()).direct_return_sites == 1);
+    auto arithmetic = std::make_unique<oreslang::Expression>();
+    arithmetic->kind = oreslang::Expression::Kind::Add;
+    arithmetic->left = call("target", 1);
+    arithmetic->right = std::make_unique<oreslang::Expression>();
+    arithmetic->right->kind = oreslang::Expression::Kind::Integer;
+    assert(Probe::inspect(arithmetic.get()).direct_return_sites == 0);
+    auto conditional = std::make_unique<oreslang::Expression>();
+    conditional->kind = oreslang::Expression::Kind::Conditional;
+    conditional->when_true = call("true_branch", 0);
+    conditional->when_false = std::make_unique<oreslang::Expression>();
+    conditional->when_false->kind = oreslang::Expression::Kind::Integer;
+    const auto conditional_sites = Probe::inspect(conditional.get());
+    assert(conditional_sites.direct_return_sites == 1);
+    assert(conditional_sites.conditional_arms == 1);
+    auto outer = call("outer", 1);
+    outer->arguments[0] = call("inner", 0);
+    assert(Probe::inspect(outer.get()).direct_return_sites == 1);
+    auto malformed = std::make_unique<oreslang::Expression>();
+    malformed->kind = oreslang::Expression::Kind::Conditional;
+    bool malformed_rejected = false;
+    try { (void)Probe::inspect(malformed.get()); }
+    catch (const std::runtime_error&) { malformed_rejected = true; }
+    assert(malformed_rejected);
+
     assert(Gate::require_bounded({{"main/0", {"helper/1"}},
                                   {"helper/1", {}}}) == 2);
     // The scanner follows nested conditionals and constructor fields.
