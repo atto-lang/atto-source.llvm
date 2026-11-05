@@ -52,5 +52,42 @@ class NumericEmbedIntegrityTest(unittest.TestCase):
                 numeric_gen.run(temp, check=True)
 
 
+    def test_hardlinked_source_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp = Path(td)
+            (temp / numeric_gen.SOURCE).parent.mkdir(parents=True)
+            source = temp / numeric_gen.SOURCE
+            source.write_bytes((ROOT / numeric_gen.SOURCE).read_bytes())
+            (temp / "second-link.atto").hardlink_to(source)
+            with self.assertRaisesRegex(ValueError, "exactly one hardlink"):
+                numeric_gen.run(temp, check=True)
+
+    def test_symlinked_output_parent_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp = Path(td)
+            source = temp / numeric_gen.SOURCE
+            source.parent.mkdir(parents=True)
+            source.write_bytes((ROOT / numeric_gen.SOURCE).read_bytes())
+            fake = temp / "real-frontend"
+            fake.mkdir()
+            target = temp / numeric_gen.OUTPUT
+            target.parent.parent.mkdir(parents=True, exist_ok=True)
+            target.parent.symlink_to(fake, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "symlinked source/output directory"):
+                numeric_gen.run(temp, check=False)
+
+    def test_atomic_write_produces_exact_bytes_without_temp_leftovers(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp = Path(td)
+            source = temp / numeric_gen.SOURCE
+            source.parent.mkdir(parents=True)
+            source.write_bytes((ROOT / numeric_gen.SOURCE).read_bytes())
+            self.assertEqual(0, numeric_gen.run(temp, check=False))
+            self.assertEqual(0, numeric_gen.run(temp, check=True))
+            expected = numeric_gen.render(source.read_bytes())
+            self.assertEqual(expected, (temp / numeric_gen.OUTPUT).read_bytes())
+            self.assertEqual([], list((temp / numeric_gen.OUTPUT).parent.glob(".atto-numeric-*")))
+
+
 if __name__ == "__main__":
     unittest.main()
