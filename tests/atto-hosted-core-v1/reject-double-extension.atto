@@ -1,0 +1,2 @@
+import module core from "ores.std/core.atto.ores";
+pub fnc main(): int { return 0; }

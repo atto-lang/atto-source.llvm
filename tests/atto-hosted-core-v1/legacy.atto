@@ -1,0 +1,2 @@
+import module core from "std/core.ores";
+pub fnc main(): int { return core.min_int(99, 42); }

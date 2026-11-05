@@ -1,0 +1,6 @@
+import module core as Canon from "ores.std/core";
+import module core as Legacy from "std/core.atto";
+import module core as Historical from "ores.std/core.ores";
+pub fnc main(): int {
+  return Canon.max_int(Legacy.min_int(42, 99), Historical.min_int(55, 42));
+}

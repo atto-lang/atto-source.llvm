@@ -1,0 +1,2 @@
+import module core from "std/core.java";
+pub fnc main(): int { return 0; }
