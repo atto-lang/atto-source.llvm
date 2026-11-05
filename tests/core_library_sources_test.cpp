@@ -58,6 +58,38 @@ int main() {
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Std, CompilerLibraryTier::Core));
 
+    // Hosted core is an explicitly whitelisted AttoLang source unit, not
+    // an ambient project import, and never acquires the freestanding tier.
+    const auto* hosted_core = find_std_library_source("ores.std/core.atto");
+    assert(hosted_core != nullptr);
+    assert(hosted_core == find_std_library_source("ores.std/core"));
+    assert(hosted_core == find_std_library_source("ores.std/core.ores"));
+    assert(hosted_core == find_std_library_source("std/core"));
+    assert(hosted_core == find_std_library_source("std/core.atto"));
+    assert(hosted_core == find_std_library_source("std/core.ores"));
+    assert(hosted_core == find_compiler_library_source("std/core.atto"));
+    assert(hosted_core->tier == CompilerLibraryTier::Std);
+    assert(hosted_core->canonical_import == "ores.std/core");
+    assert(hosted_core->module_name == "core");
+    assert(hosted_core->unit_id == "@std/core.ores");
+    assert(hosted_core->admitted_provider_bits == 0u);
+    assert(hosted_core->source.find("define module core as") != std::string_view::npos);
+    assert(hosted_core->source.find("pub fnc min_int") != std::string_view::npos);
+    assert(hosted_core->source.find("pub fnc max_int") != std::string_view::npos);
+    assert(hosted_core->source.find("pub fnc clamp_int") != std::string_view::npos);
+    assert(hosted_core->source.find("java:") == std::string_view::npos);
+    assert(hosted_core->source.find("do java") == std::string_view::npos);
+    assert(is_reserved_compiler_library_import("std/core.atto"));
+    assert(is_reserved_compiler_library_import("ores.std/core.ores"));
+    assert(find_std_library_source("ores.std/core.atto.ores") == nullptr);
+    assert(find_std_library_source("ores.std/core.ores.atto") == nullptr);
+    assert(find_std_library_source("std/core.java") == nullptr);
+    assert(find_std_library_source("ores.std/core/../core") == nullptr);
+    assert(find_std_library_source("ores.std/unknown") == nullptr);
+    assert(find_std_library_source("ores.std/assert.atto") == nullptr);
+    assert(find_core_library_source("ores.std/core") == nullptr);
+    assert(find_alloc_library_source("ores.std/core") == nullptr);
+
     const auto* scalar = find_std_library_source("ores.std/testing/scalar");
     assert(scalar != nullptr);
     assert(scalar == find_std_library_source("ores.std/testing/scalar.atto"));
