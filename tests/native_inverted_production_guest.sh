@@ -6,6 +6,7 @@ compiler="${1:?compiler}"
 clang="${2:?clang}"
 fixtures="${3:?fixtures}"
 auditor="${4:?mandatory source-built no-GC IR auditor}"
+contracts="${5:?canonical DOP fixture directory}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 if [[ ! -f "$auditor" || ! -x "$auditor" || -L "$auditor" ||
@@ -86,9 +87,32 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
     done
 done
 
+# Canonical cross-backend candidate: explicit row reuse after swap-delete.
+# This validates dense-index behavior only, not stale generation-fenced handles.
+if [[ ! -f "$contracts/swap-reuse.atto" ||
+      ! -f "$contracts/removed-index-trap.atto" ]]; then
+    echo "FAIL: canonical DOP v1 fixture corpus absent" >&2
+    exit 1
+fi
+"$compiler" "$contracts/swap-reuse.atto" > "$tmp/reuse.ll"
+audit_ir "$tmp/reuse.ll"
+for optimization in -O0 -O2; do
+    "$clang" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
+    set +e
+    "$tmp/reuse" >/dev/null 2>&1
+    actual=$?
+    set -e
+    if [[ "$actual" -ne 42 ]]; then
+        echo "FAIL: DOP swap-delete/reinsert $optimization exited $actual, expected 42" >&2
+        exit 1
+    fi
+done
+
 # A guest read past logical length is dynamically guarded, rather than
 # allowing an inbounds GEP from a capacity-only proof.
-"$compiler" "$fixtures/negative-two-column-out-of-bounds.atto" > "$tmp/bounds.ll"
+for bounds_source in "$fixtures/negative-two-column-out-of-bounds.atto" \
+                     "$contracts/removed-index-trap.atto"; do
+"$compiler" "$bounds_source" > "$tmp/bounds.ll"
 audit_ir "$tmp/bounds.ll"
 if ! grep -Fq 'call void @llvm.trap()' "$tmp/bounds.ll" ||
    ! grep -Fq 'icmp ult i64' "$tmp/bounds.ll"; then
@@ -118,6 +142,7 @@ if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
         f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
     )
 PY
+done
 done
 
 # All unsupported source must reject before emitting a single byte of IR.
@@ -197,4 +222,4 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 6 native exit-42 (O0/O2), 2 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 8 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'

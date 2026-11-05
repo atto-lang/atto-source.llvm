@@ -362,7 +362,8 @@ if(BUILD_TESTING)
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inverted_production_guest.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_INVERTED_PRODUCTION_CLANG}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inverted-i64"
-            "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
+            "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/dop-inverted-v1")
     set_tests_properties(native_inverted_production_source_to_native PROPERTIES TIMEOUT 180)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
