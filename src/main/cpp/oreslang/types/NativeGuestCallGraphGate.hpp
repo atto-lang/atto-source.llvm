@@ -14,6 +14,53 @@
 namespace oreslang {
 
 /**
+ * An intentionally narrow *candidate* probe: only an expression returned
+ * immediately from a function, or selected conditional arm, is a possible
+ * scalar tail transfer. A call buried in arithmetic or in another call's
+ * arguments is not in tail position.
+ *
+ * Finding a candidate never authorizes LLVM musttail. ABI equivalence,
+ * owned cleanup, EH continuations, scheduler safepoints and the existing
+ * native frame budget must be proved separately by the actual emitter.
+ */
+class NativeScalarTailPositionProbe final {
+public:
+    struct Candidates {
+        std::size_t direct_return_sites = 0;
+        std::size_t conditional_arms = 0;
+    };
+    static Candidates inspect(const Expression* returned) {
+        Candidates out;
+        if (!returned) return out;
+        std::vector<const Expression*> pending{returned};
+        constexpr std::size_t max_nodes = 4096;
+        std::size_t visited = 0;
+        while (!pending.empty()) {
+            const Expression* current = pending.back();
+            pending.pop_back();
+            if (!current) throw std::runtime_error("malformed scalar tail expression");
+            if (++visited > max_nodes)
+                throw std::runtime_error("scalar tail-position inspection budget exceeded");
+            if (current->kind == Expression::Kind::Call) {
+                ++out.direct_return_sites;
+                // Arguments are evaluated before a tail transfer and are
+                // never themselves tail calls of the enclosing function.
+            } else if (current->kind == Expression::Kind::Conditional) {
+                if (!current->when_true || !current->when_false)
+                    throw std::runtime_error("malformed conditional tail arms");
+                ++out.conditional_arms;
+                pending.push_back(current->when_false.get());
+                pending.push_back(current->when_true.get());
+            }
+            // Everything else, especially addition, logical operators and
+            // nested argument expression calls, is non-tail at this root.
+        }
+        return out;
+    }
+};
+
+
+/**
  * Temporary native fail-closed admission until compiler-managed bounded
  * guest frames exist. An OS carrier stack is NOT an actor's allocation heap.
  *
