@@ -90,12 +90,28 @@ inline void validate_manifest(const std::string& manifest_bytes) {
 }
 
 /**
- * Resolve only the two admitted native source extensions. Extensionless
- * extensionless imports are intentionally ambiguous if both canonical .atto
- * and legacy .ores names exist. Migration must never silently select one twin.
- * Inspect directory entries (not only target existence), so dangling symlinks
- * and same-inode aliases still count as conflicting source names.
+ * Java-compatible native source extension policy:
+ *   - explicit .atto / .ores stays authoritative;
+ *   - implicit imports select an existing .atto entry before legacy .ores;
+ *   - a nonregular/dangling/symlinked .atto entry NEVER triggers .ores fallback.
+ *
+ * This is a lexical leaf-admission check, not a descriptor-pinned security
+ * boundary against concurrent filesystem mutation. The loader must keep its
+ * source-identity and descriptor checks; separately harden no-follow opens.
  */
+inline void require_regular_atto_leaf_if_present(const fs::path& path) {
+    std::error_code error;
+    const auto status = fs::symlink_status(path, error);
+    if (error) {
+        if (error == std::errc::no_such_file_or_directory) return;
+        throw std::runtime_error("cannot safely inspect canonical .atto source entry");
+    }
+    if (status.type() == fs::file_type::not_found) return;
+    if (status.type() != fs::file_type::regular)
+        throw std::runtime_error(
+            "canonical .atto source entry must be a regular non-symlink file");
+}
+
 inline fs::path resolve_native_source_suffix(fs::path candidate) {
     auto extension = candidate.extension().string();
     for (char& value : extension)
@@ -104,21 +120,20 @@ inline fs::path resolve_native_source_suffix(fs::path candidate) {
         if (extension != ".atto" && extension != ".ores")
             throw std::runtime_error(
                 "native module source must use .atto or legacy .ores extension");
+        if (extension == ".atto") require_regular_atto_leaf_if_present(candidate);
         return candidate;
     }
     fs::path modern = candidate;
     modern += ".atto";
     fs::path legacy = candidate;
     legacy += ".ores";
-    const bool has_modern = exists_marker(modern);
-    const bool has_legacy = exists_marker(legacy);
-    if (has_modern && has_legacy)
-        throw std::runtime_error(
-            "ambiguous native source import: both .atto and .ores exist; use explicit extension");
-    if (has_modern) return modern;
-    if (has_legacy) return legacy;
-    // Allow the caller's canonical-resolution path to produce its normal
-    // missing-file diagnostic. Never search unrelated extension types.
+    if (exists_marker(modern)) {
+        require_regular_atto_leaf_if_present(modern);
+        return modern;
+    }
+    if (exists_marker(legacy)) return legacy;
+    // Let canonical admission report the missing source. Never search other
+    // file types, and never downgrade an existing (even invalid) .atto entry.
     return modern;
 }
 

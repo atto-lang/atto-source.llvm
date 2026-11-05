@@ -46,6 +46,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Fail-closed host-level type resolver checks; these do not claim guest
+    # Option/Result/trap native parity without compiler-backed .ores execution.
+    add_executable(oreslang-native-sum-payload-admission-test
+        tests/native_sum_payload_admission_test.cpp)
+    target_include_directories(oreslang-native-sum-payload-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-sum-payload-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_sum_payload_type_admission
+        COMMAND oreslang-native-sum-payload-admission-test)
+    set_tests_properties(native_sum_payload_type_admission PROPERTIES TIMEOUT 20)
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
@@ -888,6 +899,41 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
                 ${ARGN})
     endfunction()
+
+    # Durable M0 language declarations are compiler-metadata only in Java.
+    # LLVM does not have the history/manifest/replay ABI, so native compilation
+    # must fail with the same explicit capability marker for all introducers.
+    # These invoke the real oreslang-llvmc; they cannot be green on a parser mock.
+    oreslang_contract_test(native_durable_m0_activity_failclosed
+        durable-m0-activity-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_workflow_failclosed
+        durable-m0-workflow-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_public_activity_failclosed
+        durable-m0-public-activity-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_public_workflow_failclosed
+        durable-m0-public-workflow-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_durable_m0_nested_comment_failclosed
+        durable-m0-comment-gap-reject.atto --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    # A durable declaration in comments must not poison an ordinary scalar guest.
+    oreslang_contract_test(native_durable_m0_comment_nontrigger
+        durable-m0-quoted-comments-native.atto --ir "ret i64 42")
+
+    add_test(NAME native_durable_m0_shared_corpus_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture "${CMAKE_CURRENT_SOURCE_DIR}/contracts/durable-m0/v1/checkout.atto"
+            --diagnostic "DURABLE_M0_BACKEND_UNSUPPORTED")
+    set_tests_properties(native_durable_m0_shared_corpus_failclosed
+        PROPERTIES TIMEOUT 30)
+
+    # Same 1,671-byte canonical manifest reference checked in .NET/Wasm and
+    # platform conformance. This does NOT imply LLVM emitted the manifest.
+    add_test(NAME native_durable_m0_manifest_v1_reference_bytes
+        COMMAND "${CMAKE_COMMAND}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/durable-m0/v1/verify-manifest.cmake")
+    set_tests_properties(native_durable_m0_manifest_v1_reference_bytes
+        PROPERTIES TIMEOUT 15)
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
@@ -3001,6 +3047,18 @@ if(BUILD_TESTING)
         oreslang_contract_test(attoxp_counter_guest_reset attoxp-counter-reset.atto --run 0 --clang "${ORE_CLANG}")
         oreslang_contract_test(attoxp_counter_guest_decrement attoxp-counter-decrement.atto --run 41 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
+        # Same byte-exact scalar corpus in LLVM, .NET and Wasm. These are
+        # genuine LLVM compiler/Clang/OS guest tests, not UI/FFI parity.
+        # Host integrity only; compile/link/run evidence comes from guest CTests below.
+        add_test(NAME attoxp_scalar_shared_source_pins
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/attoxp_scalar_manifest_test.py")
+        set_tests_properties(attoxp_scalar_shared_source_pins PROPERTIES TIMEOUT 15)
+        oreslang_contract_test(attoxp_scalar_guest_answer42 ../../contracts/attoxp-scalar-v1/answer-42.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_scalar_guest_decrement41 ../../contracts/attoxp-scalar-v1/decrement-41.atto --run 41 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_scalar_guest_reset0 ../../contracts/attoxp-scalar-v1/reset-zero.atto --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_scalar_guest_multiply42 ../../contracts/attoxp-scalar-v1/multiply-42.atto --run 42 --clang "${ORE_CLANG}")
+
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")
