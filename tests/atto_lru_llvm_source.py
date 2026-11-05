@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 
@@ -44,8 +46,19 @@ def verify(root: Path, check_cmake: bool = True) -> None:
             current = current / component
             require(not current.is_symlink(), "symlinked LLVM LRU source: " + name)
         require(current.is_file(), "missing LLVM LRU source: " + name)
-        raw = current.read_bytes()
-        require(0 < len(raw) < 8192 and blob(raw) == expected_blob,
+        # Read at most one fixture-sized buffer from a nofollow descriptor.
+        # A size check after Path.read_bytes() would allocate unbounded input.
+        fd = os.open(current, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            details = os.fstat(fd)
+            require(stat.S_ISREG(details.st_mode) and 0 < details.st_size < 8192,
+                    "unreviewed LLVM LRU source: " + name)
+            raw = os.read(fd, 8192)
+            require(len(raw) == details.st_size and os.read(fd, 1) == b"",
+                    "unreviewed LLVM LRU source: " + name)
+        finally:
+            os.close(fd)
+        require(blob(raw) == expected_blob,
                 "unreviewed LLVM LRU source: " + name)
         text = raw.decode("utf-8")
         executable = "\n".join(
@@ -104,6 +117,18 @@ def main() -> None:
             else:
                 raise RuntimeError("LLVM source mutation was accepted: " + name)
             path.write_bytes(original)
+        # An oversized fixture must be rejected before an unbounded read.
+        oversized = dst / PREFIX / "probe-wrap.atto"
+        original_oversized = oversized.read_bytes()
+        oversized.write_bytes(b"x" * (1024 * 1024))
+        try:
+            verify(dst, check_cmake=False)
+        except RuntimeError as exc:
+            require("unreviewed LLVM LRU source" in str(exc),
+                    "oversized fixture rejected for wrong reason")
+        else:
+            raise RuntimeError("oversized LLVM fixture was admitted")
+        oversized.write_bytes(original_oversized)
         # An extra canonical or case-variant guest source fails before linking.
         extra = dst / PREFIX / "unreviewed.atto"
         extra.write_text("pub fnc main(): int { return 0; }\n", encoding="utf-8")
@@ -163,7 +188,7 @@ def main() -> None:
                     "missing runtime rejected for wrong reason")
         else:
             raise RuntimeError("missing native array runtime was accepted")
-    print("ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=8 mutations_rejected=13 "
+    print("ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=8 mutations_rejected=14 "
           "native_compiler_guest=NOT_EXECUTED")
 
 if __name__ == "__main__":
