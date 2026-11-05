@@ -17,27 +17,27 @@ import tempfile
 FIXTURES = {
     "src/int_linked_queue.ores": (
         "2a250d3d8721ecd0817dce6c3adc50b5dfe7f52f",
-        "oreslang-llvmc: expected '{' at byte 1113 [file: int_linked_queue.ores]",
+        "oreslang-llvmc: native sum class/compound payload requires ownership and lifetime lowering at byte 2630 [file: int_linked_queue.ores]",
     ),
     "tests/smoke.ores": (
         "55c417dde5210dc71666b256d7ee90bce9f812f2",
-        "oreslang-llvmc: expected 'from' at byte 183 [file: smoke.ores]",
+        "oreslang-llvmc: {ROOT}/src/int_linked_queue.ores: native sum class/compound payload requires ownership and lifetime lowering at byte 2630 [file: smoke.ores]",
     ),
     "tests/stress.ores": (
         "90759f6cc630c8c5f6ce2cfdd662211cdffad813",
-        "oreslang-llvmc: expected '{' at byte 283 [file: stress.ores]",
+        "oreslang-llvmc: {ROOT}/src/int_linked_queue.ores: native sum class/compound payload requires ownership and lifetime lowering at byte 2630 [file: stress.ores]",
     ),
     "tests/edge_cases.ores": (
         "3ef072c04f4176e3d786c447790c6fb254e6b04b",
-        "oreslang-llvmc: expected '{' at byte 245 [file: edge_cases.ores]",
+        "oreslang-llvmc: expected non-keyword identifier at byte 1739 [file: edge_cases.ores]",
     ),
     "tests/instances.ores": (
         "6bcc4396862b6f87412e6a78a4fea31be2f37df8",
-        "oreslang-llvmc: expected '{' at byte 359 [file: instances.ores]",
+        "oreslang-llvmc: expected 'new' at byte 678 [file: instances.ores]",
     ),
     "tests/relink_matrix.ores": (
         "52b40ceac8a9f8dd948ee93093e7b33583e3bf36",
-        "oreslang-llvmc: expected '{' at byte 229 [file: relink_matrix.ores]",
+        "oreslang-llvmc: {ROOT}/src/int_linked_queue.ores: native sum class/compound payload requires ownership and lifetime lowering at byte 2630 [file: relink_matrix.ores]",
     ),
 }
 
@@ -132,7 +132,9 @@ def main():
             [str(compiler), str((args.fixture_root / relative).resolve())],
             capture_output=True, timeout=30, check=False,
         )
-        verify_rejection(relative, result, diagnostic)
+        verify_rejection(
+            relative, result,
+            diagnostic.replace("{ROOT}", str(args.fixture_root.resolve())))
         print(f"PASS: specific parser boundary rejects {relative} without IR",
               flush=True)
     print("PASS: six Git-pinned queue fixtures fail closed (not native parity)",

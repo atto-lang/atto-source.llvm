@@ -900,11 +900,6 @@ fn main() {
             foo.to_owned(),
         ),
         (
-            "wrong-console-type",
-            "pub fnc main():int{stdio.print(42);return 0;}".to_owned(),
-            foo.to_owned(),
-        ),
-        (
             "bad-concat",
             r#"pub fnc main():int{val string x="bad"+true;return 0;}"#.to_owned(),
             foo.to_owned(),

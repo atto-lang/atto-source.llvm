@@ -83,7 +83,7 @@ def main():
         'local-int-as-bool': 'native scalar local initializer requires bool, got int',
         'local-bool-as-int': 'native scalar local initializer requires int, got bool',
         'truthy-int': 'native guarded return condition requires bool, got int',
-        'bool-arithmetic': 'arithmetic requires int, got bool',
+        'bool-arithmetic': 'arithmetic requires int or f64, got bool',
         'negated-bool': "unary '-' requires int, got bool",
         'not-integer': "logical '!' requires bool, got int",
         'argument': "argument 'flag' requires bool, got int",
