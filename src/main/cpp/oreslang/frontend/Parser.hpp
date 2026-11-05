@@ -69,6 +69,9 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    // Compiler-only invocation classification, never a runtime or LLVM ABI.
+    bool imported_macro_const_argument = false;
+    bool imported_macro_pending = false;
 };
 
 struct Parameter {
@@ -448,6 +451,16 @@ struct ModuleImport {
     std::string local_name;
     std::string path;
     std::size_t offset = 0;
+    bool macro_namespace = false;
+};
+
+// Only checked declarations recorded by the native typed-AST parser may
+// be imported. The source-unit owner's logical identity stays in ModuleLoader.
+struct NativeMacroDecl {
+    enum class Kind { ConstIntQuote, SyntaxExprIdentity, SyntaxExprLiteralTwice };
+    std::string name;
+    Kind kind = Kind::ConstIntQuote;
+    bool exported = false;
 };
 
 struct TypeConstraintDescriptor {
@@ -473,6 +486,8 @@ struct Program {
     std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
+    // Compile-time metadata is deliberately not moved into the linked guest.
+    std::vector<NativeMacroDecl> native_macros;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and

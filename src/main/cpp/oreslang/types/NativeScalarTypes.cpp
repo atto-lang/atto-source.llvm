@@ -79,6 +79,8 @@ void validate_native_scalar_types(const Program& program) {
     };
     std::function<Type(const Expression&, const Locals&)> expression;
     expression = [&](const Expression& e, const Locals& locals) -> Type {
+        if (e.imported_macro_pending)
+            fail(e.offset, "NATIVE_MACRO_UNEXPANDED: pending imported macro escaped static linking");
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {

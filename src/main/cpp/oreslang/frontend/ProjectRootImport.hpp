@@ -40,7 +40,8 @@ inline void reject_nested_package(const fs::path& root, const fs::path& path) {
     for (fs::path parent = path.parent_path(); parent != root; parent = parent.parent_path()) {
         if (parent.empty() || parent == parent.root_path())
             throw std::runtime_error("native project-root import escapes physical package root");
-        if (exists_marker(parent / ".ores.pkg.toml"))
+        if (exists_marker(parent / ".atto.pkg.toml") ||
+            exists_marker(parent / ".ores.pkg.toml"))
             throw std::runtime_error("native project-root import crosses nested package boundary");
     }
 }
@@ -60,7 +61,11 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.[ \t]*(?:root|"root"|'root')[ \t]*=).*$)ores");
     const std::regex root_assignment(
         R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=.*$)ores");
+    const std::regex default_root_assignment(
+        R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=[ \t]*"\."[ \t]*(?:#.*)?$)ores");
 
+    std::size_t project_root_count = 0;
+    bool saw_project_section = false;
     std::size_t version_count = 0;
     bool in_root_section = true;
     bool in_project_section = false;
@@ -68,14 +73,21 @@ inline void validate_manifest(const std::string& manifest_bytes) {
     std::string line;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (std::regex_match(line, project_assignment) ||
-                (in_project_section && std::regex_match(line, root_assignment)))
+        if (std::regex_match(line, project_assignment))
             throw std::runtime_error("native project.root requires full TOML parser");
+        if (in_project_section && std::regex_match(line, root_assignment)) {
+            if (!std::regex_match(line, default_root_assignment) ||
+                    ++project_root_count > 1)
+                throw std::runtime_error("native project.root requires full TOML parser");
+        }
 
         const auto first = line.find_first_not_of(" \t");
         if (first != std::string::npos && line[first] == '[') {
             in_root_section = false;
             in_project_section = std::regex_match(line, project_section);
+            if (in_project_section && saw_project_section)
+                throw std::runtime_error("duplicate [project] table requires full TOML parser");
+            saw_project_section = saw_project_section || in_project_section;
         }
         if (in_root_section && std::regex_match(line, version_key)) {
             if (!std::regex_match(line, version))
@@ -90,13 +102,39 @@ inline void validate_manifest(const std::string& manifest_bytes) {
 }
 
 /**
- * Resolve only the two admitted native source extensions. Extensionless
- * extensionless imports are intentionally ambiguous if both canonical .atto
- * and legacy .ores names exist. Migration must never silently select one twin.
- * Inspect directory entries (not only target existence), so dangling symlinks
- * and same-inode aliases still count as conflicting source names.
+ * Resolve only the two admitted native source extensions. Canonical .atto
+ * importers select .atto exclusively for extensionless imports. Legacy .ores
+ * importers retain ambiguity rejection for .atto/.ores twins until conformance
+ * migration policy is settled. Inspect directory entries (not only target
+ * existence), including dangling symlinks and same-inode aliases.
  */
-inline fs::path resolve_native_source_suffix(fs::path candidate) {
+inline bool is_atto_source(const fs::path& candidate) {
+    auto suffix = candidate.extension().string();
+    for (char& value : suffix)
+        value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
+    return suffix == ".atto";
+}
+
+// A lexical no-follow check before canonical() discards path components.
+// Descriptor-pinned reads are still required against concurrent mutations.
+inline void reject_atto_symlink_components(const fs::path& candidate) {
+    auto current = fs::absolute(candidate).lexically_normal();
+    for (;;) {
+        std::error_code error;
+        const auto info = fs::symlink_status(current, error);
+        if (!error && fs::is_symlink(info))
+            throw std::runtime_error("symlinked AttoLang source path is not allowed");
+        if (error && error != std::errc::no_such_file_or_directory)
+            throw std::runtime_error("cannot inspect AttoLang source path");
+        if (current == current.root_path()) break;
+        const auto parent = current.parent_path();
+        if (parent.empty() || parent == current) break;
+        current = parent;
+    }
+}
+
+inline fs::path resolve_native_source_suffix(
+        fs::path candidate, bool canonical_atto_importer = false) {
     auto extension = candidate.extension().string();
     for (char& value : extension)
         value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
@@ -110,8 +148,14 @@ inline fs::path resolve_native_source_suffix(fs::path candidate) {
     modern += ".atto";
     fs::path legacy = candidate;
     legacy += ".ores";
+    // Canonical .atto importers never need to probe for a legacy sibling:
+    // selection is unconditional, including when that sibling is missing,
+    // symlinked, unreadable, or otherwise attacker-controlled.
+    if (canonical_atto_importer) return modern;
     const bool has_modern = exists_marker(modern);
     const bool has_legacy = exists_marker(legacy);
+    // Legacy importers retain the ambiguity rejection until the shared
+    // migration policy is ratified; no implicit downgrade for .atto.
     if (has_modern && has_legacy)
         throw std::runtime_error(
             "ambiguous native source import: both .atto and .ores exist; use explicit extension");
@@ -125,6 +169,8 @@ inline fs::path resolve_native_source_suffix(fs::path candidate) {
 inline void enforce_relative_import_package_boundary(
         const fs::path& importing_source, const fs::path& dependency) {
     std::error_code error;
+    if (is_atto_source(importing_source))
+        reject_atto_symlink_components(importing_source);
     const auto source = fs::canonical(importing_source, error);
     if (error)
         throw std::runtime_error("cannot resolve native importing source");
@@ -132,8 +178,17 @@ inline void enforce_relative_import_package_boundary(
     fs::path cursor = source.parent_path();
     fs::path package_root;
     for (;;) {
-        const fs::path manifest = cursor / ".ores.pkg.toml";
+        const fs::path atto_manifest = cursor / ".atto.pkg.toml";
+        const fs::path legacy_manifest = cursor / ".ores.pkg.toml";
+        const fs::path manifest = exists_marker(atto_manifest)
+            ? atto_manifest : legacy_manifest;
         if (exists_marker(manifest)) {
+            if (manifest == atto_manifest) {
+                std::error_code symlink_error;
+                if (fs::is_symlink(fs::symlink_status(manifest, symlink_error)) ||
+                        symlink_error)
+                    throw std::runtime_error("canonical .atto.pkg.toml manifest cannot be a symlink");
+            }
             std::error_code regular_error;
             if (!fs::is_regular_file(manifest, regular_error) || regular_error)
                 throw std::runtime_error("native package manifest must be a regular file");
@@ -201,6 +256,8 @@ inline std::filesystem::path resolve_project_root_import(
         throw std::runtime_error("native project-root resolver requires +/ import");
 
     std::error_code error;
+    if (is_atto_source(importing_source))
+        reject_atto_symlink_components(importing_source);
     const auto source = fs::canonical(importing_source, error);
     if (error)
         throw std::runtime_error("cannot resolve native importing source");
@@ -208,8 +265,17 @@ inline std::filesystem::path resolve_project_root_import(
     fs::path cursor = source.parent_path();
     fs::path package_root;
     for (;;) {
-        const fs::path manifest = cursor / ".ores.pkg.toml";
+        const fs::path atto_manifest = cursor / ".atto.pkg.toml";
+        const fs::path legacy_manifest = cursor / ".ores.pkg.toml";
+        const fs::path manifest = exists_marker(atto_manifest)
+            ? atto_manifest : legacy_manifest;
         if (exists_marker(manifest)) {
+            if (manifest == atto_manifest) {
+                std::error_code symlink_error;
+                if (fs::is_symlink(fs::symlink_status(manifest, symlink_error)) ||
+                        symlink_error)
+                    throw std::runtime_error("canonical .atto.pkg.toml manifest cannot be a symlink");
+            }
             std::error_code regular_error;
             if (!fs::is_regular_file(manifest, regular_error) || regular_error)
                 throw std::runtime_error("native package manifest must be a regular file");
@@ -231,12 +297,14 @@ inline std::filesystem::path resolve_project_root_import(
         cursor = parent;
     }
     if (package_root.empty())
-        throw std::runtime_error("native +/ imports require nearest .ores.pkg.toml");
+        throw std::runtime_error("native +/ imports require nearest .ores.pkg.toml or .atto.pkg.toml");
 
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
     fs::path candidate = package_root / fs::path(std::string(suffix));
-    candidate = resolve_native_source_suffix(candidate);
+    candidate = resolve_native_source_suffix(candidate, is_atto_source(source));
+    if (is_atto_source(candidate))
+        reject_atto_symlink_components(candidate);
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)

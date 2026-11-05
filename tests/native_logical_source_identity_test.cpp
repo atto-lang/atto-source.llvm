@@ -82,6 +82,22 @@ int main() {
     });
     validate_logical_id("project/emoji-\xF0\x9F\x99\x82.atto");
 
+    // Root admission must be a no-I/O lexical check before extensionless
+    // suffix discovery: missing and existing external targets are equivalent.
+    using oreslang::frontend::logical_source_detail::checked_relative_source_path;
+    if (checked_relative_source_path(project / "lib/producer", project) !=
+            fs::path("lib/producer"))
+        throw std::runtime_error("valid lexical relative path changed");
+    rejects("external exists pre-probe", "outside the admitted project root", [&] {
+        checked_relative_source_path(project / "../outside.atto", project);
+    });
+    rejects("external missing pre-probe", "outside the admitted project root", [&] {
+        checked_relative_source_path(project / "../never-created.atto", project);
+    });
+    rejects("external root itself", "outside the admitted project root", [&] {
+        checked_relative_source_path(project, project);
+    });
+
     // A second build can use the same relocatable source ID from a different
     // project path, without sharing any registry state.
     const auto second = temp / "another";
@@ -102,6 +118,12 @@ int main() {
     fs::create_directory_symlink(project / "lib", shortcut_directory);
     rejects("directory symlink", "symlink alias", [&] {
         source.admit(shortcut_directory / "producer.atto", identity(producer));
+    });
+    // An extensionless child still has to reject a symlinked ancestor
+    // before attempting .atto/.ores existence probes.
+    rejects("extensionless symlink ancestor preprobe", "symlink alias", [&] {
+        oreslang::frontend::logical_source_detail::no_symlink_components(
+            shortcut_directory / "producer", source.root());
     });
 #endif
 

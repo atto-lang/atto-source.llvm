@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 
 
@@ -119,6 +120,48 @@ def main():
             'base.atto': 'define module Base as pub fnc answer():int{return 21;} end',
         }, 42),
     ])
+    positives.extend([
+        ('atto-linked-public-const-macro', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.literal!(const 40 + 2);}',
+            'producer.atto': 'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
+        }, 42),
+    ])
+    # Two-file imported Syntax<Expr> expansion must remain compile-time only.
+    # The single-use path forwards caller AST once; repeated unquote is only
+    # allowed for a checked, closed integer literal (no duplicated effects).
+    positives.extend([
+        ('atto-linked-public-syntax-identity', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.identity!(syntax expr 42);}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+        }, 42),
+        ('atto-linked-public-syntax-identity-call', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc forty():int{return 40;} pub fnc main():int{return lib.identity!(syntax expr forty()+2);}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+        }, 42),
+        ('atto-linked-public-syntax-twice', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.twice!(syntax expr 21);}',
+            'producer.atto': 'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+        }, 42),
+        ('atto-linked-public-syntax-nested', {
+            'main.atto': 'import * as lib from "./producer.atto"; pub fnc main():int{return lib.identity!(syntax expr lib.twice!(syntax expr 21));}',
+            'producer.atto': 'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; } define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+        }, 42),
+    ])
+    # Match Java's portable MAX_EXPANSIONS=128 with an executed native
+    # 128-call boundary, not merely a checked constant in compiler source.
+    def imported_identity_quota_program(count):
+        declarations = ''.join(
+            f'val quota_{i}:int=lib.identity!(syntax expr 1);'
+            for i in range(count))
+        return ('import * as lib from "./producer.atto"; '
+                'pub fnc main():int{' + declarations + 'return 42;}')
+
+    identity_producer = (
+        'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }')
+    positives.append(('atto-linked-public-syntax-budget-exactly-128', {
+        'main.atto': imported_identity_quota_program(128),
+        'producer.atto': identity_producer,
+    }, 42))
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -182,18 +225,20 @@ def main():
             for path in files: (directory/path).rename(directory/(path+'.hidden'))
             executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
             if executed.returncode != expected: raise AssertionError((name, executed.returncode, executed.stderr))
+            if name.startswith('atto-linked-public-') and (executed.stdout or executed.stderr):
+                raise AssertionError((name, 'unexpected native guest output', executed.stdout, executed.stderr))
             for path in files: (directory/(path+'.hidden')).rename(directory/path)
             if a.java_command and entry == 'main.ores' and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
                 reference = run([*a.java_command, str(directory/entry)])
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
-        # Extensionless migration twins are ambiguous by policy. They must
-        # fail before LLVM IR is emitted; explicit suffixes remain selectable.
+        # Canonical .atto importers select only .atto, even with a legacy
+        # sibling. Prove it with the real compiler, Clang, and executed guest.
         for name, main_source, project_root in (
-            ('atto-relative-ambiguous-twins',
+            ('atto-relative-canonical-twins',
              'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}', False),
-            ('atto-root-ambiguous-twins',
+            ('atto-root-canonical-twins',
              'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}', True),
         ):
             directory = root/name; directory.mkdir()
@@ -201,11 +246,24 @@ def main():
             (directory/'lib.atto').write_text('define module Lib as pub fnc answer():int{return 42;} end')
             (directory/'lib.ores').write_text('define module Lib as pub fnc answer():int{return 7;} end')
             if project_root:
-                (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+                (directory/'.atto.pkg.toml').write_text(
+                    'schema_version = "1"\n[project]\nroot = "."\n')
             result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
-                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            if result.returncode: raise AssertionError((name, result.stderr))
+            (directory/'guest.ll').write_text(result.stdout)
+            built = run([a.clang, str(directory/'guest.ll'), '-O2', '-o', str(directory/'guest')])
+            if built.returncode or run([str(directory/'guest')], env={'PATH':'/nonexistent'}).returncode != 42:
+                raise AssertionError((name, 'canonical importer failed real guest 42', built.stderr))
             passed += 1
+        directory = root/'atto-no-implicit-legacy-fallback'; directory.mkdir()
+        (directory/'main.atto').write_text(
+            'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}')
+        (directory/'lib.ores').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        result = run([a.compiler, str(directory/'main.atto')])
+        if not result.returncode or result.stdout or 'cannot resolve native import' not in result.stderr:
+            raise AssertionError(('implicit legacy fallback admitted', result.returncode, result.stdout[:150], result.stderr))
+        passed += 1
         # Project-root security failures must be compiler failures too, not
         # only host-resolver unit failures. Every case requires zero IR.
         directory = root/'atto-root-nested-package-boundary'; directory.mkdir()
@@ -231,7 +289,7 @@ def main():
             (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
             (directory/'lib.atto').symlink_to(outside)
             result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'escapes physical package root' not in result.stderr:
+            if not result.returncode or result.stdout or 'symlinked AttoLang source path' not in result.stderr:
                 raise AssertionError(('atto project-root symlink escape', result.returncode,
                                       result.stdout[:150], result.stderr))
             passed += 1
@@ -244,7 +302,7 @@ def main():
                 'define module Lib as pub fnc answer():int{return 42;} end')
             os.link(directory/'lib.atto', directory/'lib.ores')
             result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
+            if not result.returncode or result.stdout or 'hardlink' not in result.stderr:
                 raise AssertionError(('atto hardlink twin ambiguity', result.returncode,
                                       result.stdout[:150], result.stderr))
             passed += 1
@@ -317,7 +375,7 @@ def main():
             (directory/'lib.ores').write_text(
                 'define module Lib as pub fnc answer():int{return 42;} end')
             result = run([a.compiler, str(directory/'main.atto')])
-            if not result.returncode or result.stdout or 'ambiguous native source import' not in result.stderr:
+            if not result.returncode or result.stdout or 'native source symlink alias denied' not in result.stderr:
                 raise AssertionError(('relative dangling canonical collision', result.returncode,
                                       result.stdout[:150], result.stderr))
             passed += 1
@@ -414,6 +472,47 @@ def main():
         if not result.returncode or result.stdout or 'outside the admitted project root' not in result.stderr:
             raise AssertionError(('projectless host escape', result.returncode, result.stdout[:150], result.stderr))
         passed+=1
+        # Lexical admission must happen BEFORE extensionless suffix probes.
+        # A present vs missing outside target must not change the compiler's
+        # diagnostic category or permit even a partial LLVM IR module.
+        for outside_exists in (False, True):
+            name = 'atto-preprobe-outside-existing' if outside_exists else 'atto-preprobe-outside-absent'
+            directory = root/name; directory.mkdir()
+            owned = directory/'owned'; owned.mkdir()
+            (owned/'main.atto').write_text(
+                'import module Outside from "../../forbidden"; '
+                'pub fnc main():int{return 0;}')
+            if outside_exists:
+                (root/'forbidden.atto').write_text(
+                    'define module Outside as pub fnc answer():int{return 42;} end')
+            else:
+                (root/'forbidden.atto').unlink(missing_ok=True)
+            result = run([a.compiler, str(owned/'main.atto')])
+            if result.returncode == 0 or result.stdout or (
+                'outside the admitted project root' not in result.stderr):
+                raise AssertionError((name, 'preprobe source ownership failure',
+                                      result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+
+        # A lexically in-root extensionless path may still traverse a
+        # symlinked ancestor. Reject it BEFORE querying .atto/.ores children,
+        # even if the symlink points at an existing outside producer.
+        if hasattr(os, 'symlink'):
+            directory = root/'atto-preprobe-symlink-ancestor'; directory.mkdir()
+            outside = directory/'outside'; outside.mkdir()
+            (outside/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            owned = directory/'owned'; owned.mkdir()
+            (owned/'main.ores').write_text(
+                'import module Lib from "./alias/lib"; '
+                'pub fnc main():int{return 0;}')
+            (owned/'alias').symlink_to(outside, target_is_directory=True)
+            result = run([a.compiler, str(owned/'main.ores')])
+            if not result.returncode or result.stdout or 'native source symlink alias denied' not in result.stderr:
+                raise AssertionError(('preprobe symlinked ancestor',
+                                      result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+
         # A hardlink alias outside the graph is still ambiguous ownership.
         if hasattr(os, 'link'):
             directory=root/'atto-hardlink-outside-graph'; directory.mkdir()
@@ -426,20 +525,107 @@ def main():
             if not result.returncode or result.stdout or 'hardlink' not in result.stderr:
                 raise AssertionError(('unseen hardlink alias', result.returncode, result.stdout[:150], result.stderr))
             passed+=1
-        # Java's linked source-macro positive remains explicitly unsupported
-        # on this native frontend. Never mistake a successful source import
-        # or runtime symbol for compile-time macro expansion.
-        directory=root/'atto-imported-macro-must-reject'; directory.mkdir()
+        # True imported macro semantics: only checked, public producer AST
+        # declarations from the admitted logical source-unit graph may expand.
+        macro_cases = [
+            ('private-export',
+             'define macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
+             'return lib.literal!(const 40 + 2);',
+             'NATIVE_MACRO_PRIVATE'),
+            ('unclosed-const',
+             'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
+             'val n:int=42; return lib.literal!(const n);',
+             'NATIVE_MACRO_CONST_UNCLOSED'),
+            ('overflow',
+             'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }',
+             'return lib.literal!(const 9223372036854775807 + 1);',
+             'NATIVE_MACRO_CONST_OVERFLOW'),
+            ('unsupported-template',
+             'define pub macro literal(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+             'return lib.literal!(const 42);',
+             'NATIVE_MACRO_EXPANDER_REQUIRED'),
+            ('unsupported-signature',
+             'define pub macro literal(Syntax<Other> value) -> Syntax<Expr> { return value; }',
+             'return lib.literal!(const 42);',
+             'NATIVE_MACRO_EXPANDER_REQUIRED'),
+            ('runtime-star-namespace',
+             'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); } pub fnc attack():int{return 7;}',
+             'return lib.literal!(const 42);',
+             'native macro namespace requires a standalone macro-only'),
+        ]
+        for name, producer, body, diagnostic in macro_cases:
+            directory = root / ('atto-linked-macro-' + name); directory.mkdir()
+            (directory/'producer.atto').write_text(producer)
+            (directory/'main.atto').write_text(
+                'import * as lib from "./producer.atto"; '
+                'pub fnc main():int{' + body + '}')
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        # Imported syntax forms preserve the local typed-AST safety floor.
+        syntax_negative_cases = [
+            ('twice-runtime-call',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc effect():int{return 21;} pub fnc main():int{return lib.twice!(syntax expr effect());}',
+             'repeated unquote requires a closed integer literal'),
+            ('twice-variable',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc main():int{val value:int=21;return lib.twice!(syntax expr value);}',
+             'repeated unquote requires a closed integer literal'),
+            ('twice-overflow',
+             'define pub macro twice(Syntax<Expr> value) -> Syntax<Expr> { return quote(unquote(value) + unquote(value)); }',
+             'pub fnc main():int{return lib.twice!(syntax expr 4611686018427387904);}',
+             'NATIVE_MACRO_CONST_OVERFLOW'),
+            ('identity-wrong-argument-kind',
+             'define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }',
+             'pub fnc main():int{return lib.identity!(const 42);}',
+             'NATIVE_MACRO_EXPANDER_REQUIRED'),
+        ]
+        for name, producer, consumer, diagnostic in syntax_negative_cases:
+            directory = root / ('atto-linked-syntax-' + name); directory.mkdir()
+            (directory/'producer.atto').write_text(producer)
+            (directory/'main.atto').write_text(
+                'import * as lib from "./producer.atto"; ' + consumer)
+            # Run in an isolated cwd so a rejected compiler cannot leave a
+            # hidden .ll/.o/native executable and still claim zero-IR denial.
+            compiler = os.path.abspath(shutil.which(a.compiler) or a.compiler)
+            before = {p.name for p in directory.iterdir()}
+            result = run([compiler, str(directory/'main.atto')], cwd=directory)
+            artifacts = {p.name for p in directory.iterdir()} - before
+            if not result.returncode or result.stdout or diagnostic not in result.stderr or artifacts:
+                raise AssertionError((name, result.returncode,
+                                      result.stdout[:150], result.stderr,
+                                      'unexpected compiler artifacts', sorted(artifacts)))
+            passed += 1
+
+        # The first expansion beyond the shared portable limit must fail
+        # before writing LLVM IR, object files or a native executable.
+        directory = root/'atto-linked-syntax-budget-129'; directory.mkdir()
+        (directory/'producer.atto').write_text(identity_producer)
+        (directory/'main.atto').write_text(imported_identity_quota_program(129))
+        compiler = os.path.abspath(shutil.which(a.compiler) or a.compiler)
+        before = {p.name for p in directory.iterdir()}
+        result = run([compiler, str(directory/'main.atto')], cwd=directory)
+        artifacts = {p.name for p in directory.iterdir()} - before
+        if (not result.returncode or result.stdout
+                or 'NATIVE_MACRO_BUDGET' not in result.stderr or artifacts):
+            raise AssertionError(('imported syntax expansion budget 129',
+                                  result.returncode, result.stdout[:150],
+                                  result.stderr, sorted(artifacts)))
+        passed += 1
+
+        # A normal module import cannot forge compile-time macro provenance.
+        directory=root/'atto-linked-macro-forged-module-alias'; directory.mkdir()
         (directory/'producer.atto').write_text(
             'define pub macro literal(Const<int> value) -> Syntax<Expr> { return quote(value); }')
-        (directory/'consumer.atto').write_text(
-            'import * as lib from "./producer.atto"; '
-            'pub fnc main() -> int { return lib.literal!(const 40 + 2); }')
-        result=run([a.compiler,str(directory/'consumer.atto')])
-        if not result.returncode or result.stdout:
-            raise AssertionError(('unsupported imported macro must reject without IR',
-                                  result.returncode, result.stdout[:150], result.stderr))
-        passed+=1
+        (directory/'main.atto').write_text(
+            'import module Lib as lib from "./producer.atto"; '
+            'pub fnc main():int{return lib.literal!(const 42);}')
+        result=run([a.compiler, str(directory/'main.atto')])
+        if not result.returncode or result.stdout or 'does not declare selected module' not in result.stderr:
+            raise AssertionError(('forged macro import alias', result.returncode, result.stdout[:150], result.stderr))
+        passed += 1
         # Every unsupported target fails before emitting even a module header.
         for target in ('wasm32', 'thumbv7m-none-eabi'):
             result=run([a.compiler,'--target='+target,str(root/'private-helper/main.ores')])

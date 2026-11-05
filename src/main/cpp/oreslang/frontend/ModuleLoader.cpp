@@ -28,6 +28,8 @@ struct Unit {
     frontend::CoreClosureRequirements core_closure{};
     bool core_closure_complete = false;
     std::unordered_map<std::string, std::size_t> dependencies;
+    // Only namespace-star imports may provide compiler-time macro authority.
+    std::unordered_set<std::string> macro_namespace_bindings;
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
@@ -38,6 +40,7 @@ struct Unit {
 class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
+    std::size_t imported_macro_expansions = 0;
     std::unordered_map<std::string, std::size_t> paths;
     std::unique_ptr<frontend::NativeLogicalSourceAdmission> source_admission;
     bool owned, scalar_loop, host;
@@ -283,10 +286,20 @@ private:
                 } else {
                     if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
+                    // Check root ownership *before* extensionless suffix
+                    // discovery (which stats .atto/.ores candidates). Outside
+                    // paths must be rejected regardless of whether they exist.
+                    const auto unresolved = current.path.parent_path() / fs::path(raw);
+                    // Reject symlinked ancestor directories too, before
+                    // resolve_native_source_suffix probes either file name.
+                    // The lexical gate alone cannot stop an in-root alias
+                    // directory redirecting exists_marker() outside the root.
+                    frontend::logical_source_detail::no_symlink_components(
+                        unresolved, source_admission->root());
                     dependency = project_root_import_detail::resolve_native_source_suffix(
-                        current.path.parent_path() / fs::path(raw));
-                    // Inspect the original path spelling before canonicalization;
-                    // otherwise a within-root symlink becomes invisible to admission.
+                        unresolved, project_root_import_detail::is_atto_source(current.path));
+                    // Recheck the actual suffixed path and reject symlinks
+                    // before canonicalization discards the caller spelling.
                     frontend::logical_source_detail::no_symlink_components(
                         dependency, source_admission->root());
                     std::error_code error;
@@ -347,12 +360,27 @@ private:
             if (imported.local_name == current.program.module)
                 fail(current, "native imported module binding conflicts with containing module");
             const auto& target = *units[selected];
-            if (imported.selected_class) {
+            if (imported.macro_namespace) {
+                // v1 import * is NOT a runtime wildcard import. It only
+                // admits public, statically checked macro declarations from
+                // a single project-owned .atto producer with no runtime ABI.
+                if (target.compiler_owned_library || target.logical_source_id.empty() ||
+                    target.path.extension() != ".atto" ||
+                    target.program.native_macros.empty() ||
+                    !target.program.imports.empty() ||
+                    !target.program.functions.empty() || !target.program.classes.empty() ||
+                    !target.program.actors.empty() || !target.program.generators.empty() ||
+                    !target.program.type_only_declarations.empty() ||
+                    !target.program.module.empty())
+                    fail(current, "native macro namespace requires a standalone macro-only .atto source");
+                current.macro_namespace_bindings.insert(imported.local_name);
+            } else if (imported.selected_class) {
                 const auto cls = target.class_exports.find(imported.selected_module);
                 if (cls == target.class_exports.end() || !cls->second)
                     fail(current, "unknown or private imported class '" + imported.selected_module + "'");
                 current.class_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
-            } else if (target.program.module != imported.selected_module)
+            } else if (!imported.macro_namespace &&
+                       target.program.module != imported.selected_module)
                 fail(current, "imported file does not declare selected module '" + imported.selected_module + "'");
             if (!imported.selected_class)
                 current.dependencies.emplace(imported.local_name, selected);
@@ -371,12 +399,122 @@ private:
         if (unit.dependencies.count(name) || unit.class_imports.count(name))
             fail(unit, "native module import binding cannot be shadowed: '" + name + "'");
     }
+    static std::int64_t imported_macro_const(const Unit& unit, const Expression& node,
+                                             std::size_t depth, std::size_t& visited) {
+        if (++visited > 512 || depth > 64)
+            fail(unit, "NATIVE_MACRO_BUDGET: imported const AST exceeds 512 nodes or 64 depth");
+        using K = Expression::Kind;
+        if (node.kind == K::Integer) return node.integer;
+        std::int64_t a = 0, b = 0, out = 0;
+        if (node.kind == K::Negate && node.left) {
+            a = imported_macro_const(unit, *node.left, depth + 1, visited);
+            if (__builtin_sub_overflow(std::int64_t{0}, a, &out))
+                fail(unit, "NATIVE_MACRO_CONST_OVERFLOW: imported macro arithmetic overflow");
+            return out;
+        }
+        if ((node.kind == K::Add || node.kind == K::Subtract ||
+             node.kind == K::Multiply) && node.left && node.right) {
+            a = imported_macro_const(unit, *node.left, depth + 1, visited);
+            b = imported_macro_const(unit, *node.right, depth + 1, visited);
+            const bool overflow = node.kind == K::Add
+                ? __builtin_add_overflow(a, b, &out)
+                : node.kind == K::Subtract
+                ? __builtin_sub_overflow(a, b, &out)
+                : __builtin_mul_overflow(a, b, &out);
+            if (overflow)
+                fail(unit, "NATIVE_MACRO_CONST_OVERFLOW: imported macro arithmetic overflow");
+            return out;
+        }
+        fail(unit, "NATIVE_MACRO_CONST_UNCLOSED: imported Const<int> must be closed typed integer AST");
+    }
+
+    void expand_imported_macro(const Unit& unit, Expression& expr) {
+        const auto dot = expr.name.find('.');
+        if (dot == std::string::npos || expr.name.find('.', dot + 1) != std::string::npos)
+            fail(unit, "NATIVE_MACRO_EXPANDER_REQUIRED: imported macro needs exact namespace.member");
+        const auto alias = expr.name.substr(0, dot);
+        if (!unit.macro_namespace_bindings.count(alias))
+            fail(unit, "NATIVE_MACRO_PROVENANCE: source is not an admitted macro namespace import");
+        const auto binding = unit.dependencies.find(alias);
+        if (binding == unit.dependencies.end())
+            fail(unit, "NATIVE_MACRO_PROVENANCE: imported macro has no bound source owner");
+        const auto& producer = *units[binding->second];
+        if (producer.compiler_owned_library || producer.logical_source_id.empty() ||
+            !producer.identity.valid || !unit.identity.valid)
+            fail(unit, "NATIVE_MACRO_PROVENANCE: imported macro lacks verified source owner");
+        const auto name = expr.name.substr(dot + 1);
+        const NativeMacroDecl* exported = nullptr;
+        for (const auto& declaration : producer.program.native_macros) {
+            if (declaration.name == name) { exported = &declaration; break; }
+        }
+        if (!exported || !exported->exported)
+            fail(unit, "NATIVE_MACRO_PRIVATE: unknown or private imported macro");
+        const auto kind = exported->kind;
+        const bool const_quote = kind == NativeMacroDecl::Kind::ConstIntQuote;
+        const bool syntax_identity = kind == NativeMacroDecl::Kind::SyntaxExprIdentity;
+        const bool syntax_twice = kind == NativeMacroDecl::Kind::SyntaxExprLiteralTwice;
+        if ((!const_quote && !syntax_identity && !syntax_twice) ||
+            expr.imported_macro_const_argument != const_quote ||
+            expr.arguments.size() != 1 || !expr.arguments[0])
+            fail(unit, "NATIVE_MACRO_EXPANDER_REQUIRED: imported macro signature/argument unsupported");
+        if (++imported_macro_expansions > 128)
+            fail(unit, "NATIVE_MACRO_BUDGET: imported expansion count exceeds 128");
+        if (syntax_identity) {
+            // Move the original caller AST exactly once: no duplicated
+            // effects, mutable loans, captures, or additional evaluation.
+            // Subexpressions were already qualified before this call.
+            auto forwarded = std::move(expr.arguments.front());
+            expr = std::move(*forwarded);
+            return;
+        }
+        if (syntax_twice) {
+            // Conservative typed-template parity with the local expander:
+            // the duplicated slot must be a single closed i64 literal. A
+            // variable, call, borrow, or effectful expression must never be
+            // evaluated twice by source expansion.
+            if (expr.arguments.front()->kind != Expression::Kind::Integer)
+                fail(unit, "NATIVE_MACRO_EXPANDER_REQUIRED: repeated unquote requires a closed integer literal");
+            const auto value = expr.arguments.front()->integer;
+            std::int64_t checked_sum = 0;
+            if (__builtin_add_overflow(value, value, &checked_sum))
+                fail(unit, "NATIVE_MACRO_CONST_OVERFLOW: repeated imported literal exceeds signed i64");
+            const auto location = expr.arguments.front()->offset;
+            auto first = std::make_unique<Expression>();
+            first->kind = Expression::Kind::Integer;
+            first->integer = value;
+            first->offset = location;
+            auto second = std::make_unique<Expression>();
+            second->kind = Expression::Kind::Integer;
+            second->integer = value;
+            second->offset = location;
+            expr.kind = Expression::Kind::Add;
+            expr.left = std::move(first);
+            expr.right = std::move(second);
+        } else {
+            std::size_t visited = 0;
+            const auto constant = imported_macro_const(unit, *expr.arguments[0], 0, visited);
+            // The single typed literal is a fresh AST result and retains no
+            // generated identifier, host path or runtime macro invocation.
+            expr.kind = Expression::Kind::Integer;
+            expr.integer = constant;
+        }
+        expr.name.clear();
+        expr.arguments.clear();
+        expr.argument_names.clear();
+        expr.imported_macro_const_argument = false;
+        expr.imported_macro_pending = false;
+    }
+
     void expression(const Unit& unit, Expression* expr) {
         if (!expr) return;
         expression(unit, expr->left.get()); expression(unit, expr->right.get());
         expression(unit, expr->condition.get()); expression(unit, expr->condition_lhs.get()); expression(unit, expr->condition_rhs.get());
         expression(unit, expr->when_true.get()); expression(unit, expr->when_false.get());
         for (auto& arg : expr->arguments) expression(unit, arg.get());
+        if (expr->imported_macro_pending) {
+            expand_imported_macro(unit, *expr);
+            return;
+        }
         if (expr->kind == Expression::Kind::RecordConstruct) {
             expr->name = class_type(unit, expr->name, true);
             return;
@@ -387,6 +525,8 @@ private:
         std::string member = expr->name;
         bool external = false;
         if (dot != std::string::npos) {
+            if (unit.macro_namespace_bindings.count(expr->name.substr(0, dot)))
+                fail(unit, "NATIVE_MACRO_PROVENANCE: macro namespace cannot expose runtime functions");
             const auto binding = unit.dependencies.find(expr->name.substr(0, dot));
             if (binding == unit.dependencies.end()) fail(unit, "unknown native module binding");
             target = units[binding->second].get(); member = expr->name.substr(dot + 1); external = true;
