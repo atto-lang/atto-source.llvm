@@ -7,6 +7,7 @@ on:
       - 'tests/test_atto_lru_workflow_contract.py'
       - 'tests/atto_lru_junit_gate.py'
       - 'tests/test_atto_lru_junit_gate.py'
+      - 'tests/test_atto_lru_ctest_path.py'
       - 'tests/contract.py'
       - 'src/main/cpp/oreslang/**'
       - 'CMakeLists.txt'
@@ -59,6 +60,7 @@ jobs:
           python3 tests/atto_lru_llvm_source.py | tee /tmp/atto-lru-source-only.log
           python3 -m unittest discover -s tests -p 'test_atto_lru_workflow_contract.py' -v
           python3 -m unittest discover -s tests -p 'test_atto_lru_junit_gate.py' -v
+          python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_path.py' -v
           grep -Fx 'ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=4 mutations_rejected=7 native_compiler_guest=NOT_EXECUTED' /tmp/atto-lru-source-only.log
 
       - name: Build actual oreslang-llvmc from exact HEAD
@@ -97,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build/atto-lru --output-on-failure -V --timeout 120 \
-            --output-junit build/atto-lru/lru-ctest.xml \
+            --output-junit lru-ctest.xml \
             -R '^atto_lru_(hash_quotient|probe_wrap|slot_recycle|recency_touch|micro_source_inventory)$' \
             | tee build/atto-lru/lru-native-execution.log
           python3 tests/atto_lru_junit_gate.py build/atto-lru/lru-ctest.xml
