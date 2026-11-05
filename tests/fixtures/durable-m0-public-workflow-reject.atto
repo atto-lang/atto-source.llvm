@@ -1,0 +1,3 @@
+define pub workflow PublicCheckout as
+    run(int id) -> int { return id; }
+end
