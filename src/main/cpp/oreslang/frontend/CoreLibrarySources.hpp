@@ -510,7 +510,8 @@ end
         raw == "ores.std/testing/scalar.atto" ||
         raw == "ores.std/testing/scalar.ores")
         return &kScalarTesting;
-    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
+    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.atto" ||
+        raw == "ores.core/numeric.ores")
         return &kNumeric;
     if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
         return &kIntBuffer;
