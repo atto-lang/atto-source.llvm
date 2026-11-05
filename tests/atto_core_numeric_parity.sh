@@ -19,6 +19,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 command -v python3 >/dev/null || die "Python3 required for canonical numeric embed verification"
 python3 "$root/scripts/generate_atto_numeric_embed.py" --check >/dev/null || die "numeric .atto embed differs from compiler literal"
+python3 -m unittest discover -s "$root/tests" -p "test_atto_numeric_embed.py" -q || die "numeric source-derived embed adversarial tests failed"
 for name in canonical legacy mixed reject-double-extension reject-host-override; do
   [[ -f "$suite/$name.atto" && ! -L "$suite/$name.atto" ]] || die "missing fixture $name"
 done
