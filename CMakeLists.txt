@@ -2989,6 +2989,9 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/attoxp_counter_llvm_negative.py"
               --compiler "$<TARGET_FILE:oreslang-llvmc>")
         set_tests_properties(attoxp_counter_llvm_negative PROPERTIES TIMEOUT 30)
+        add_test(NAME attoxp_counter_negative_capture_budget
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_attoxp_counter_llvm_negative.py")
+        set_tests_properties(attoxp_counter_negative_capture_budget PROPERTIES TIMEOUT 15)
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")
