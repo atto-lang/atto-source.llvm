@@ -133,7 +133,13 @@ int main() {
 
     const auto* numeric = find_core_library_source("ores.core/numeric");
     assert(numeric != nullptr);
+    assert(numeric == find_core_library_source("ores.core/numeric.atto"));
     assert(numeric == find_core_library_source("ores.core/numeric.ores"));
+    assert(numeric == find_compiler_library_source("ores.core/numeric.atto"));
+    assert(find_core_library_source("ores.core/numeric.atto.ores") == nullptr);
+    assert(find_core_library_source("ores.core/numeric.ores.atto") == nullptr);
+    assert(find_core_library_source("ores.core/numeric.java") == nullptr);
+    assert(find_std_library_source("ores.core/numeric.atto") == nullptr);
     assert(numeric->tier == CompilerLibraryTier::Core);
     assert(numeric->module_name == "numeric");
     assert(numeric->unit_id == "@ores.core/numeric.ores");
