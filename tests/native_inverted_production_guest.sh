@@ -22,7 +22,22 @@ else
     echo 'FAIL: no SHA-256 utility available for native IR verification' >&2
     exit 1
 fi
-auditor_sha="$("${digest_tool[@]}" "$auditor" | cut -d' ' -f1)"
+# Check both digest-command success and strict 64-digit SHA-256 encoding.
+# A failed command piped into 'cut' used to hide the checksum failure.
+hash_file() {
+    local source="${1:?source path required}" output digest
+    if ! output="$("${digest_tool[@]}" -- "$source")"; then
+        echo "FAIL: SHA-256 utility could not read checked artifact" >&2
+        return 1
+    fi
+    digest="${output%% *}"
+    if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "FAIL: malformed SHA-256 digest" >&2
+        return 1
+    fi
+    printf '%s\n' "$digest"
+}
+auditor_sha="$(hash_file "$auditor")" || exit 1
 printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' \
     > "$tmp/expected-audit-success"
 audit_ir() {
@@ -32,16 +47,16 @@ audit_ir() {
         echo "FAIL: missing or auditor-aliased inverted guest IR" >&2
         exit 1
     fi
-    before="$("${digest_tool[@]}" "$ir" | cut -d' ' -f1)"
+    before="$(hash_file "$ir")"
     if ! "$auditor" "$ir" > "$tmp/audit.stdout" 2> "$tmp/audit.stderr"; then
         echo "FAIL: mandatory no-GC IR auditor rejected inverted guest" >&2
         cat "$tmp/audit.stderr" >&2
         exit 1
     fi
-    after="$("${digest_tool[@]}" "$ir" | cut -d' ' -f1)"
+    after="$(hash_file "$ir")"
     if ! cmp -s "$tmp/expected-audit-success" "$tmp/audit.stdout" ||
        [[ -s "$tmp/audit.stderr" || "$before" != "$after" ||
-          "$("${digest_tool[@]}" "$auditor" | cut -d' ' -f1)" != "$auditor_sha" ]]; then
+          "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
         echo "FAIL: forged, mutated or contaminated inverted no-GC IR audit" >&2
         exit 1
     fi
@@ -58,7 +73,7 @@ if [[ -s "$tmp/gc.stdout" ]] ||
     echo "FAIL: no-GC rejection lacked the compiler-owned diagnostic" >&2
     exit 1
 fi
-if [[ "$("${digest_tool[@]}" "$auditor" | cut -d' ' -f1)" != "$auditor_sha" ]]; then
+if [[ "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
     echo "FAIL: auditor mutated during known-GC negative" >&2
     exit 1
 fi
