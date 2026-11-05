@@ -8,6 +8,8 @@ on:
       - 'tests/atto_lru_junit_gate.py'
       - 'tests/test_atto_lru_junit_gate.py'
       - 'tests/test_atto_lru_ctest_path.py'
+      - 'tests/atto_lru_ctest_admission.py'
+      - 'tests/test_atto_lru_ctest_admission.py'
       - 'tests/contract.py'
       - 'src/main/cpp/oreslang/**'
       - 'CMakeLists.txt'
@@ -61,6 +63,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_atto_lru_workflow_contract.py' -v
           python3 -m unittest discover -s tests -p 'test_atto_lru_junit_gate.py' -v
           python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_path.py' -v
+          python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_admission.py' -v
           grep -Fx 'ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=4 mutations_rejected=7 native_compiler_guest=NOT_EXECUTED' /tmp/atto-lru-source-only.log
 
       - name: Build actual oreslang-llvmc from exact HEAD
@@ -82,6 +85,9 @@ jobs:
           set -euo pipefail
           ctest --test-dir build/atto-lru -N > build/atto-lru/lru-ctest-inventory.txt
           cat build/atto-lru/lru-ctest-inventory.txt
+          ctest --test-dir build/atto-lru --show-only=json-v1 > build/atto-lru/lru-ctest-json.json
+          python3 tests/atto_lru_ctest_admission.py \
+            build/atto-lru/lru-ctest-json.json --root "$PWD" --build "$PWD/build/atto-lru"
           for test_name in atto_lru_hash_quotient atto_lru_probe_wrap \
               atto_lru_slot_recycle atto_lru_recency_touch \
               atto_lru_micro_source_inventory; do
@@ -126,6 +132,7 @@ jobs:
           name: atto-llvm-lru-m0-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             build/atto-lru/lru-ctest-inventory.txt
+            build/atto-lru/lru-ctest-json.json
             build/atto-lru/lru-ctest.xml
             build/atto-lru/lru-native-execution.log
             build/atto-lru/compiler-toolchain.sha256

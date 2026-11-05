@@ -15,19 +15,25 @@ REQUIRED=(
     "      - 'tests/atto_lru_junit_gate.py'",
     "      - 'tests/test_atto_lru_junit_gate.py'",
     "      - 'tests/test_atto_lru_ctest_path.py'",
+    "      - 'tests/atto_lru_ctest_admission.py'",
+    "      - 'tests/test_atto_lru_ctest_admission.py'",
     "      - 'tests/contract.py'",
     "python3 tests/atto_lru_llvm_source.py",
     "cmake --build build/atto-lru --parallel 2 --target oreslang-llvmc",
     "sha256sum -c build/atto-lru/compiler-toolchain.sha256",
     "ctest --test-dir build/atto-lru -N",
+    "ctest --test-dir build/atto-lru --show-only=json-v1",
+    "python3 tests/atto_lru_ctest_admission.py",
     "atto_lru_hash_quotient atto_lru_probe_wrap",
     "atto_lru_slot_recycle atto_lru_recency_touch",
     "--output-junit lru-ctest.xml",
     "python3 tests/atto_lru_junit_gate.py build/atto-lru/lru-ctest.xml",
     "python3 -m unittest discover -s tests -p 'test_atto_lru_junit_gate.py' -v",
     "python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_path.py' -v",
+    "python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_admission.py' -v",
 
     "git diff --quiet --exit-code",
+    "            build/atto-lru/lru-ctest-json.json",
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
 )
 FORBIDDEN=(
@@ -101,6 +107,24 @@ class WorkflowAdmission(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing"):
             verify(self.source.replace("python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_path.py' -v",
                                        "echo bypassed"))
+
+    def test_ctest_json_property_gate_must_run(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            verify(self.source.replace(
+                "python3 tests/atto_lru_ctest_admission.py",
+                "echo 'CTest properties unverified'"))
+
+    def test_json_inventory_must_be_generated(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            verify(self.source.replace(
+                "ctest --test-dir build/atto-lru --show-only=json-v1",
+                "echo 'skip CTest inventory'"))
+
+    def test_admission_tests_change_must_trigger_ci(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            verify(self.source.replace(
+                "      - 'tests/test_atto_lru_ctest_admission.py'",
+                "      - 'tests/other.py'"))
 
     def test_failure_bypass_rejected(self):
         with self.assertRaisesRegex(ValueError, "bypass"):
