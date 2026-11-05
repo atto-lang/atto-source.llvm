@@ -2617,7 +2617,8 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-float")
-        set_tests_properties(native_float_ml PROPERTIES TIMEOUT 240)
+        set_tests_properties(native_float_ml PROPERTIES TIMEOUT 240
+            ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
     else()
         add_test(NAME native_float_ml COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
