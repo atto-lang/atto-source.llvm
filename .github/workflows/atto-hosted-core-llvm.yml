@@ -4,11 +4,13 @@ name: AttoLang LLVM canonical hosted core O0 O2 parity
 on:
   pull_request:
     paths:
-      - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
-      - 'tests/core_library_sources_test.cpp'
-      - 'stdlib/core.atto'
-      - 'tests/atto_hosted_core_parity.sh'
-      - 'tests/atto-hosted-core-v1/**'
+      # Compiler/runtime-only changes must never silently skip native parity.
+      - 'src/main/**'
+      - 'stdlib/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'scripts/**'
+      - 'tests/**'
       - '.github/workflows/atto-hosted-core-llvm.yml'
   workflow_dispatch:
 permissions:
