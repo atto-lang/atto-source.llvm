@@ -285,11 +285,11 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | 1000 tenants, 100,000 **compiled `.atto`** actors, one process | 300,000 correct turns, 0.4-1.4 s including startup | macOS, Linux |
 | Whole `.atto` programs run in a VM | `main` starts workers of 2 types, 23 sends arrive in order (a worker traps otherwise, and a misordered program does trap), all stop and are released. 200 rounds | macOS, Linux, x86_64 under QEMU |
 | 1000 tenants each run that program | To completion in one process, 45-130 ms natively | macOS, Linux, x86_64 under QEMU |
-| Actors message actors in source | Head to middle to sink: 10 messages in order through each stage (the sink traps otherwise), then all stop in turn. 100 rounds | macOS, Linux |
-| Shutdown drains a whole pipeline | 40 messages in flight down three stages, including actors whose first turn comes during the drain | macOS, Linux |
-| A failed turn sent nothing | Its child never hears of it, and is not spawned twice. **Control** that sends straight away: the message escapes, and the child traps too | macOS, Linux |
-| Commit is all or nothing | Three sends to a mailbox with room for two: none go. Unknown target: none go, and state does not move | macOS, Linux |
-| A tenant cannot overflow the host's stack by nesting | A chain 25,000 actors deep, stopped from the front | macOS, Linux |
+| Actors message actors in source | Head to middle to sink: 10 messages in order through each stage (the sink traps otherwise), then all stop in turn. 100 rounds | macOS, Linux, x86_64 under QEMU |
+| Shutdown drains a whole pipeline | 40 messages in flight down three stages, including actors whose first turn comes during the drain | macOS, Linux, x86_64 under QEMU |
+| A failed turn sent nothing | Its child never hears of it, and is not spawned twice. **Control** that sends straight away: the message escapes, and the child traps too | macOS, Linux, x86_64 under QEMU |
+| Commit is all or nothing | Three sends to a mailbox with room for two: none go. Unknown target: none go, and state does not move | macOS, Linux, x86_64 under QEMU |
+| A tenant cannot overflow the host's stack by nesting | A chain 25,000 actors deep, stopped from the front | macOS, Linux, x86_64 under QEMU |
 | Wrong uses of references | 13 refused by the compiler, with no IR emitted | Linux |
 | A failed actor restarts alone | From its last finished turn, with queued mail in order and siblings unaffected: trap, stack overflow and CPU deadline, in test guests and real `.atto` | macOS, Linux, x86_64 under QEMU |
 | A spinning actor does not stop its siblings | 2000 sibling turns complete alongside it in one VM | macOS, Linux, x86_64 under QEMU |
@@ -303,7 +303,7 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Hostile Wasm stays in its cage | 64 attacks in each mode, including host pointer halves and maximum displacement: 12 in its own memory, 52 stopped, 0 left. Guard mode: all 52 fault inside its own cage | macOS, Linux |
 | Admission refuses hostile modules | 29 hand-written cases, 0 accepted | macOS, Linux |
 | Mutated modules cannot crash the pipeline | 1000 mutations: 995 refused, 5 accepted, 0 crashed | Linux |
-| Mutants that pass admission stay in the cage when run | 7,699 code mutations biased to memory and call instructions, in a module that imports the host calls: 400 accepted, half in each mode, and all 400 run with hostile inputs. No process death, no fault outside the cage, witness tenant unaffected | Linux |
+| Mutants that pass admission stay in the cage when run | 7,895 code mutations biased to memory and call instructions, in a module that imports the host calls: 400 accepted, half in each mode, and all 400 run with hostile inputs. No process death, no fault outside the cage, witness tenant unaffected | Linux |
 | Hostile host calls cannot fault the host | 640,000 random boundary-biased calls in 400 VMs, under ASan+UBSan, with a witness tenant unaffected | Linux |
 | Heap free reuses memory, tolerates abuse | 100,000 alloc/free cycles on a 64 KiB heap; poisoned free lists, double and wild frees | macOS, Linux |
 | Loader admits exact bytes only | Wrong digest, tampered copy, symlink, directory all refused; 200 reloads | macOS, Linux |
@@ -315,11 +315,11 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | ASan+UBSan on host | Clean, core and lowered, 39 + 19 cases | Linux |
 | TSan on host | No races in 39 cases and in real programs, including pipelines, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
 | Host built with gcc | 39 + 19 cases | Linux |
-| Existing wasm32 and rejection tests | 171 of 172 pass. `native_exit_reject_unsupported_async_root` fails the same way without this change | Linux |
+| The compiler's whole suite, against `main` | 725 tests on an idle 14-vCPU Linux VM with g++ and LLVM 19: the same 13 do not pass on `main` at `2bc5b2c45` and on this branch, and none only here. A `-Werror=misleading-indentation` in `Parser.cpp` stops the full build on both | Linux |
 | Wasmtime targeted kill | 6 spinning tenants ended one at a time, none early, worst about 2 ms | macOS |
 | Wasmtime: 1000 Stores | 200,000 turns at about 1.3M/s, contained faults and memory bomb | macOS |
 | .NET hosts 1000 VMs through the loader | 30,000 correct turns under CoreCLR JIT and NativeAOT, while the CLR forced 706 and 981 GCs and caught 1.4M and 2.0M null faults; wrong digest refused | Linux |
-| x86_64 under emulation | 37 of 37 core cases, 16 of 16 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
+| x86_64 under emulation | 39 of 39 core cases, 19 of 19 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
 | Real x86_64 hardware, other kernels, PKU | **Not run** | |
 | Wasmtime on Linux, .NET on macOS | **Not run** | |
 | GitHub Actions | **Not run**: source-org jobs fail to start on billing, and `.github/workflows/tenant-vm.yml` is ready for when that is resolved. Private source was deliberately not mirrored to another org | |
