@@ -426,7 +426,7 @@ void atto_runaway_source_ends_only_its_turn() {
     auto sa = host.spawn_actor(s.handle, 0);
     auto ra = host.spawn_actor(r.handle, 0);
     std::int64_t expected = 0;
-    for (int round = 0; round < 8; ++round) { // the limit on restarts in a row is 8
+    for (int round = 0; round < 3; ++round) { // the budget is 3 restarts in a window
         const auto spun = host.call(sa.actor, one(1)).get();
         CHECK_STATUS(spun.status, Status::ActorRestarted);
         const auto recursed = host.call(ra.actor, one(1)).get();
@@ -435,11 +435,16 @@ void atto_runaway_source_ends_only_its_turn() {
         expected += 1;
         CHECK(word(host.call(b.actor, one(1)).get().payload) == expected);
     }
-    // That was the last one allowed in a row. The next ends the VM, and only that one.
-    CHECK_STATUS(host.call(sa.actor, one(1)).get().status, Status::TenantFailed);
-    const VmTerminal terminal = host.wait_closed(s.handle);
-    CHECK(terminal.phase == Phase::Failed);
-    CHECK(terminal.actor_restarts == 8);
+    // That spent the budget. The next failure ends that actor, and its VM goes on.
+    // Which reason depends on the toolchain: clang may compile this recursion to a loop or to a trap.
+    const auto ended = host.call(sa.actor, one(1)).get();
+    CHECK_STATUS(ended.status, Status::ActorTerminated);
+    CHECK(ended.failure == FailReason::Trap || ended.failure == FailReason::TurnDeadline);
+    CHECK_STATUS(host.call(sa.actor, one(1)).get().status, Status::ActorTerminated);
+    const VmSnapshot snapshot = host.snapshot(s.handle);
+    CHECK(snapshot.phase == Phase::Running);
+    CHECK(snapshot.actor_restarts == 3);
+    CHECK(snapshot.actors_terminated == 1);
     CHECK(host.snapshot(r.handle).phase == Phase::Running);
     CHECK(word(host.call(b.actor, one(1)).get().payload) == expected + 1);
     CHECK(host.stats().wild_accesses == 0);
@@ -471,7 +476,8 @@ void atto_kills_never_tear_stored_state() {
     if (!pair.module) return;
     TenantVmHost host;
     VmSpec s = spec("pair", pair, 1);
-    s.limits.max_consecutive_restarts = 1000000;
+    s.limits.restart_budget = 1000000;
+    s.limits.restart_backoff_ms = 0;
     auto v = host.open(s);
     REQUIRE_OK(v);
     auto a = host.spawn_actor(v.handle, 0);
