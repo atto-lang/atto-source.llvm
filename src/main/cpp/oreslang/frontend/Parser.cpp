@@ -3952,24 +3952,27 @@ private:
             // legacy native spelling. Both lower to the same reactor path.
             if (expr->name != "print" && expr->name != "println" && expr->name != "write")
                 fail("unsupported native stdio operation");
-            auto console_operand = [&]() {
-                auto text = make_expression(Expression::Kind::ToText, token_.offset);
-                text->left = expression();
-                return text;
-            };
             // Java stdio.print/println concatenate arguments without an
             // inserted separator and append at most one newline. Lower all
             // string arguments to the existing checked string-concat AST so
             // evaluation order, type admission, effects and region ownership
             // are identical to ordinary string concatenation.
             require("(");
-            expr->left = console_operand();
+            const std::size_t operand_offset = token_.offset;
+            expr->left = expression();
+            // A lone operand prints any scalar, as on Java. The native-only
+            // variadic form stays strings-only: Java rejects it outright.
+            if (token_.text != ",") {
+                auto text = make_expression(Expression::Kind::ToText, operand_offset);
+                text->left = std::move(expr->left);
+                expr->left = std::move(text);
+            }
             std::size_t argc = 1;
             while (accept(",")) {
                 if (++argc > 32) fail("native stdio argument count exceeds 32");
                 auto joined = make_expression(Expression::Kind::Add, offset);
                 joined->left = std::move(expr->left);
-                joined->right = console_operand();
+                joined->right = expression();
                 expr->left = std::move(joined);
             }
             require(")");
@@ -4756,7 +4759,7 @@ private:
                 ScalarType operand = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 if (operand != ScalarType::I64 && operand != ScalarType::F64)
-                    throw std::runtime_error("unary '-' requires int or f64");
+                    throw std::runtime_error("native scalar type mismatch: unary '-' requires int or f64");
                 return expr.resolved_type = operand;
             }
             case Expression::Kind::LogicalNot: {

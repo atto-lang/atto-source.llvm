@@ -878,7 +878,8 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:oreslang-llvmc>"
                 "${ORE_RT_AOT_CLANG}"
                 "${CMAKE_CURRENT_SOURCE_DIR}")
-        set_tests_properties(native_orie_stdout_alias PROPERTIES TIMEOUT 180)
+        set_tests_properties(native_orie_stdout_alias PROPERTIES TIMEOUT 180
+            ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
         # Native LLVM f64 scalar local/comparison/arithmetic guests (exit 42),
         # plus negative no-coercion/no-IR source cases. No Array<f64> claim.
         add_test(NAME native_f64_scalar_e2e
