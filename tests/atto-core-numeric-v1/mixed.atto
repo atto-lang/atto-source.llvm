@@ -1,0 +1,6 @@
+import module numeric as Current from "ores.core/numeric.atto";
+import module numeric as Legacy from "ores.core/numeric.ores";
+import module numeric as Default from "ores.core/numeric";
+pub fnc main(): int {
+  return Current.min_int(Legacy.max_int(42, Default.min_int(99, 42)), 55);
+}

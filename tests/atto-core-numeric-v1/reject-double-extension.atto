@@ -1,0 +1,2 @@
+import module numeric from "ores.core/numeric.atto.ores";
+pub fnc main(): int { return 0; }
