@@ -1,6 +1,6 @@
 #pragma once
 /*
- * Guest ABI v4 for code running inside an in-process tenant VM.
+ * Guest ABI v5 for code running inside an in-process tenant VM.
  *
  * Graal isolates work because guest code is produced by a trusted compiler and can only
  * name memory relative to its isolate's heap base. This is the same contract:
@@ -25,7 +25,7 @@
 extern "C" {
 #endif
 
-#define ORES_VM_GUEST_ABI_VERSION 4u
+#define ORES_VM_GUEST_ABI_VERSION 5u
 
 /* The only form a guest memory access may take. */
 #define ORES_VM_AT(type, cage, offset) \
@@ -33,6 +33,11 @@ extern "C" {
 
 /* Host calls. Offsets are validated by the host; a bad one returns failure. The caller
  * is implied by the current turn, so no authority token crosses this boundary. */
+typedef struct {
+    uint64_t target;
+    int64_t value; /* delivered as these 8 bytes */
+} OresVmSend;
+
 typedef struct {
     uint32_t abi_version;
     /* Allocate from this actor's heap. 0 when its budget is spent. */
@@ -43,10 +48,16 @@ typedef struct {
     /* Copy [offset, offset+length) to an actor in THIS VM. 1 if admitted. Other tenants'
      * actors cannot be named: a reference only resolves within the caller's VM. */
     int (*send)(uint64_t target, uint32_t offset, uint32_t length);
-    /* New actor in this VM. 0 when refused. */
+    /* New actor in this VM, owned by the caller: it is stopped after the caller ends. 0 when refused. */
     uint64_t (*spawn)(uint32_t kind);
     /* Its queued mail still runs, then it ends. Also accepts this actor's own reference. 1 if accepted. */
     int (*stop)(uint64_t target);
+    /* Makes a turn's effects happen together. Admits all of these sends or none, and if it admits
+     * them adds 1 to the version word: the first 4 bytes of stored state, which must already hold what
+     * that version means. Nothing can stop the turn after it returns 1, so a kill cannot report
+     * failure for a turn whose effects stayed. It must be the last thing a turn does, because
+     * after it faults are no longer contained. 0 means nothing happened, and the turn goes on. */
+    int (*commit)(const OresVmSend* sends, uint32_t count);
     /* Ends this VM. Does not return. For checks in lowered code (Wasm `unreachable`). */
     void (*trap)(void);
 } OresVmHostApi;
@@ -73,7 +84,8 @@ typedef struct {
     uint32_t instance_bytes;
     /* What survives a restart: this many bytes right after `instance`, also outside the cage. A
      * restart clears the actor's region and instance, and the guest loads its state back from here.
-     * A kill can land anywhere, so the guest must commit to it in a way a kill cannot tear. */
+     * A kill can land anywhere, so the guest must commit to it in a way a kill cannot tear: see commit.
+     * The first 4 bytes are a version, 0 until anything is committed. */
     uint32_t stored_bytes;
     uint32_t flags;
 } OresVmGuestKind;

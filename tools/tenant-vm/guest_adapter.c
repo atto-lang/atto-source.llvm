@@ -23,6 +23,9 @@ struct w2c_env {
     wasm_rt_memory_t* memory;
     uint8_t* send_buffer;  /* the last 8 bytes of this actor's scratch */
     uint32_t send_offset;
+    OresVmSend* outbox;    /* this turn's, on the carrier's stack */
+    uint32_t outbox_count;
+    uint32_t outbox_capacity;
 };
 
 typedef struct {
@@ -83,6 +86,17 @@ void w2c_env_oreslang_vm_send(struct w2c_env* env, uint64_t target, uint64_t mes
     memcpy(env->send_buffer, &message, sizeof message);
     if (!__atomic_load_n(&g_host, __ATOMIC_RELAXED)->send(target, env->send_offset, sizeof message)) wasm_rt_trap(WASM_RT_TRAP_OOB);
 }
+/* From a handler: held until the turn commits, so a turn that fails has sent nothing. */
+void w2c_env_oreslang_vm_send_on_commit(struct w2c_env* env, uint64_t target, uint64_t message) {
+#if defined(ORES_VM_TEST_EAGER_SEND) /* the bug this prevents, so a test can show it can tell */
+    w2c_env_oreslang_vm_send(env, target, message);
+#else
+    if (env->outbox_count >= env->outbox_capacity) wasm_rt_trap(WASM_RT_TRAP_OOB);
+    env->outbox[env->outbox_count].target = target;
+    env->outbox[env->outbox_count].value = (int64_t)message;
+    ++env->outbox_count;
+#endif
+}
 void w2c_env_oreslang_vm_stop(struct w2c_env* env, uint64_t target) {
     (void)env;
     if (!__atomic_load_n(&g_host, __ATOMIC_RELAXED)->stop(target)) wasm_rt_trap(WASM_RT_TRAP_OOB);
@@ -108,9 +122,9 @@ static Blob* enter(const OresVmHostApi* host, void* raw, uint8_t* cage, uint32_t
 
 #if defined(ORES_VM_SOURCE_ACTOR)
 /* What a restarted actor gets back: its fields as of its last turn that finished. A kill can land
- * anywhere, so a turn writes the slot not in use, then flips `version` with one store. Whatever
- * happens, the slot it names is complete. Version 0 means nothing is committed yet. */
-enum { STORED_FIELDS = 16 };
+ * anywhere, so a turn writes the slot not in use, then the host adds 1 to `version` as it admits the
+ * turn's sends. Whatever happens, the slot version names is complete. 0 means nothing is committed. */
+enum { STORED_FIELDS = 16, OUTBOX_SENDS = 32 };
 typedef struct {
     uint32_t version;
     uint32_t reserved;
@@ -132,14 +146,14 @@ typedef struct {
 #else
 #define ORES_VM_COMMIT_FAULT_POINT(message, i) do {} while (0)
 #endif
-#if defined(ORES_VM_TEST_UNSAFE_COMMIT)
-#define ORES_VM_COMMIT_SLOT(version) 1u
-#else
-#define ORES_VM_COMMIT_SLOT(version) (version)
-#endif
-
 /* Compiled actors take and return one i64 today. kinds.inc lists one line per actor type. */
-#define ORES_VM_ACTOR(index, init, on_message, fields, field_get, field_set)                                          \
+#if defined(ORES_VM_TEST_UNSAFE_COMMIT) /* writes over the slot in use, so a fault there tears it */
+#define ORES_VM_COMMIT_WRITE(stored, version, next, i, field) \
+    do { (stored)->slots[(version) & 1][i] = (field); (stored)->slots[(next) & 1][i] = (field); } while (0)
+#else
+#define ORES_VM_COMMIT_WRITE(stored, version, next, i, field) ((stored)->slots[(next) & 1][i] = (field))
+#endif
+#define ORES_VM_ACTOR(index, init, on_message, fields, field_get, field_set, resume)                                  \
     static int64_t actor_turn_##index(const OresVmHostApi* host, void* raw, uint8_t* cage, uint64_t self, uint32_t state, \
                                       uint32_t input, uint32_t input_length, uint32_t output, uint32_t capacity) {      \
         (void)self;                                                                                                   \
@@ -148,27 +162,37 @@ typedef struct {
         const uint32_t count = fields(&blob->instance);                                                               \
         if (count > STORED_FIELDS) wasm_rt_trap(WASM_RT_TRAP_OOB);                                                    \
         if (!blob->ready) {                                                                                           \
-            init(&blob->instance);                                                                                    \
             const uint32_t version = __atomic_load_n(&stored->version, __ATOMIC_ACQUIRE);                             \
             if (version) {                                                                                            \
+                resume(&blob->instance); /* not init: its children exist, and are in these fields */                  \
                 for (uint32_t i = 0; i < count; ++i)                                                                  \
                     field_set(&blob->instance, i, (uint64_t)stored->slots[version & 1][i]);                           \
+            } else {                                                                                                  \
+                init(&blob->instance);                                                                                \
+                for (uint32_t i = 0; i < count; ++i)                                                                  \
+                    stored->slots[1][i] = (int64_t)field_get(&blob->instance, i);                                     \
+                __atomic_store_n(&stored->version, 1u, __ATOMIC_RELEASE);                                             \
             }                                                                                                         \
             blob->ready = 1;                                                                                          \
         }                                                                                                             \
+        OresVmSend outbox[OUTBOX_SENDS];                                                                              \
+        blob->env.outbox = outbox;                                                                                    \
+        blob->env.outbox_count = 0;                                                                                   \
+        blob->env.outbox_capacity = OUTBOX_SENDS;                                                                     \
         int64_t message;                                                                                              \
         if (input_length != sizeof message) return -2;                                                                \
         if (capacity < sizeof message) return -3;                                                                     \
         memcpy(&message, cage + input, sizeof message);                                                               \
         const int64_t reply = (int64_t)on_message(&blob->instance, (uint64_t)message);                                \
-        const uint32_t next = __atomic_load_n(&stored->version, __ATOMIC_RELAXED) + 1;                                \
-        const uint32_t committed = ORES_VM_COMMIT_SLOT(next ? next : 2);                                              \
+        const uint32_t version = __atomic_load_n(&stored->version, __ATOMIC_RELAXED);                                 \
+        const uint32_t next = version + 1 ? version + 1 : 2;                                                          \
         for (uint32_t i = 0; i < count; ++i) {                                                                        \
-            stored->slots[committed & 1][i] = (int64_t)field_get(&blob->instance, i);                                 \
+            const int64_t field = (int64_t)field_get(&blob->instance, i);                                             \
+            ORES_VM_COMMIT_WRITE(stored, version, next, i, field);                                                    \
             ORES_VM_COMMIT_FAULT_POINT(message, i);                                                                   \
         }                                                                                                             \
-        __atomic_store_n(&stored->version, committed, __ATOMIC_RELEASE);                                              \
         memcpy(cage + output, &reply, sizeof reply);                                                                  \
+        if (!host->commit(outbox, blob->env.outbox_count)) wasm_rt_trap(WASM_RT_TRAP_OOB);                            \
         return sizeof reply;                                                                                          \
     }
 /* The program's main: runs once, in a turn of its own kind, and replies with its result. It is not
@@ -189,7 +213,7 @@ typedef struct {
 #include "kinds.inc"
 #undef ORES_VM_ACTOR
 #undef ORES_VM_MAIN
-#define ORES_VM_ACTOR(index, init, on_message, fields, field_get, field_set) \
+#define ORES_VM_ACTOR(index, init, on_message, fields, field_get, field_set, resume) \
     {actor_turn_##index, ORES_VM_MEMORY_BYTES, 0, ORES_VM_SCRATCH_BYTES, sizeof(Blob), sizeof(Stored), ORES_VM_ACTOR_FLAGS},
 #define ORES_VM_MAIN(index, entry) {main_turn, ORES_VM_MEMORY_BYTES, 0, ORES_VM_SCRATCH_BYTES, sizeof(Blob), 0, 0},
 static const OresVmGuestKind kinds[] = {

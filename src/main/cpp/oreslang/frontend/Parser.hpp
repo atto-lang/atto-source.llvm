@@ -111,6 +111,8 @@ struct LocalBinding {
     // binding receives the result of exactly one scheduler-owned Future await.
     std::string future_await_name;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
+    // Actor fields only: spawned when the actor starts, and owned by it. Never a scalar value.
+    std::string actor_ref_type;
 };
 
 struct ClassField {
@@ -260,6 +262,7 @@ struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
     std::size_t offset = 0;
+    std::size_t after_writes = 0; // in a handler: field writes that precede it in source order
 };
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.

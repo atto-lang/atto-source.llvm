@@ -58,6 +58,7 @@ HOST_IMPORTS = {
     "oreslang_vm_spawn": ((0x7E,), (0x7E,)),
     "oreslang_vm_send": ((0x7E, 0x7E), ()),
     "oreslang_vm_stop": ((0x7E,), ()),
+    "oreslang_vm_send_on_commit": ((0x7E, 0x7E), ()),
 }
 
 # The only proposals lowered code may use. Each wabt release turns more on by default (memory64,
@@ -309,7 +310,7 @@ def to_wasm(args, work, memory_bytes):
     return wasm
 
 
-ACTOR_EXPORTS = ("init", "on_message", "fields", "field_get", "field_set")
+ACTOR_EXPORTS = ("init", "on_message", "fields", "field_get", "field_set", "resume")
 
 
 def source_kinds(ir):

@@ -1321,10 +1321,39 @@ private:
             advance();
             field.name = identifier();
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
-            require(":");
-            require("int");
-            require("=");
-            field.initializer = expression();
+            // A child this actor owns: spawned when it starts, and stopped after it ends.
+            bool child = false;
+            std::string declared_child;
+            if (accept(":")) {
+                if (accept("ActorRef")) {
+                    require("<");
+                    declared_child = identifier();
+                    require(">");
+                    child = true;
+                } else {
+                    require("int");
+                }
+                require("=");
+            } else {
+                require("=");
+                child = true;
+            }
+            if (child || token_.text == "spawn") {
+                if (field.field_mutable) fail("actor child reference must be const");
+                require("spawn");
+                field.actor_ref_type = identifier();
+                require("(");
+                require(")");
+                if (!declared_child.empty() && declared_child != field.actor_ref_type)
+                    fail("ActorRef<T> type mismatch with spawned actor");
+                // Other passes see a field with an int initializer. It is never read as one:
+                // validation keeps the name out of expressions, and code generation spawns.
+                field.initializer = std::make_unique<Expression>();
+                field.initializer->kind = Expression::Kind::Integer;
+                field.initializer->offset = field.offset;
+            } else {
+                field.initializer = expression();
+            }
             require(";");
             actor.fields.push_back(std::move(field));
         }
@@ -1405,6 +1434,21 @@ private:
             ActorFieldWrite write;
             write.offset = token_.offset;
             write.field = identifier();
+            if (accept(".")) {
+                // Sent when this turn commits, along with its field writes, or not at all.
+                require("send");
+                require("(");
+                ActorSend send;
+                send.offset = write.offset;
+                send.reference = write.field;
+                send.after_writes = method.actor_field_writes.size();
+                send.payload = expression();
+                require(")");
+                require(";");
+                method.actor_sends.push_back(std::move(send));
+                method.actor_actions.push_back({ActorAction::Kind::Send, method.actor_sends.size() - 1});
+                continue;
+            }
             require("=");
             write.expression = expression();
             require(";");
@@ -4755,8 +4799,14 @@ private:
             std::unordered_set<std::string> fields;
             std::unordered_set<std::string> mutables;
             const std::unordered_set<std::string> empty;
+            std::unordered_set<std::string> children;
             for (const auto& field : actor.fields) {
                 validate_expression(*field.initializer, empty, {});
+                if (!field.actor_ref_type.empty()) { // a reference, so it can never be read as a value
+                    if (!children.insert(field.name).second)
+                        throw std::runtime_error("duplicate actor field '" + field.name + "'");
+                    continue;
+                }
                 if (!fields.insert(field.name).second)
                     throw std::runtime_error("duplicate actor field '" + field.name + "'");
                 if (field.field_mutable) mutables.insert(field.name);
@@ -4784,10 +4834,35 @@ private:
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
                 validate_expression(*write.expression, fields, functions);
             }
+            for (const auto& send : method.actor_sends) {
+                if (!children.count(send.reference))
+                    throw std::runtime_error("actor send requires a child reference field, got '" + send.reference + "'");
+                validate_expression(*send.payload, fields, functions);
+            }
             validate_expression(*method.result, fields, functions);
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
                 throw std::runtime_error("conflicting generated actor symbol");
+        }
+        // Children form a tree. A type that spawns itself, however indirectly, would spawn until it hit
+        // its quota the moment it started, so that is refused here, along with unknown types.
+        {
+            std::unordered_map<std::string, int> visiting;
+            std::function<void(const ActorDecl&)> walk = [&](const ActorDecl& actor) {
+                int& state = visiting[actor.name];
+                if (state == 2) return;
+                if (state == 1) throw std::runtime_error("actor child references form a cycle through '" + actor.name + "'");
+                state = 1;
+                for (const auto& field : actor.fields) {
+                    if (field.actor_ref_type.empty()) continue;
+                    const auto child = actor_types.find(field.actor_ref_type);
+                    if (child == actor_types.end())
+                        throw std::runtime_error("unknown actor type '" + field.actor_ref_type + "'");
+                    walk(*child->second);
+                }
+                visiting[actor.name] = 2;
+            };
+            for (const auto& actor : program.actors) walk(actor);
         }
         // Same-file contracts are compile-time structural checks. Requiring
         // matching *public* members prevents accidental admission through

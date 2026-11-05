@@ -68,7 +68,7 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     set(ATTO_DEFINITION "")
     if(TENANT_VM_WASM_LD AND (TENANT_VM_ATTO_COMPILER OR TENANT_VM_ATTO_IR_DIR))
         set(ATTO_DEFINITION TENANT_VM_HAVE_ATTO)
-        foreach(fixture counter doubler spin recurse work fleet misordered pair)
+        foreach(fixture counter doubler spin recurse work fleet misordered pair pipeline atomic)
             if(TENANT_VM_ATTO_COMPILER)
                 set(input "${CMAKE_CURRENT_LIST_DIR}/lowered/atto/${fixture}.atto")
             else()
@@ -80,6 +80,11 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
             endif()
             lower_guest(atto_${fixture} "${input}" ${compiler_args}
                 --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}")
+            if(fixture STREQUAL "atomic")
+                lower_guest(atto_atomic_eager "${input}" ${compiler_args}
+                    --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
+                    --test-define ORES_VM_TEST_EAGER_SEND=1)
+            endif()
             if(fixture STREQUAL "pair")
                 lower_guest(atto_pair_fault "${input}" ${compiler_args}
                     --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
@@ -109,6 +114,10 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     endif()
     add_test(NAME tenant_vm_lowered_test COMMAND tenant_vm_lowered_test "${GEN}")
     set_tests_properties(tenant_vm_lowered_test PROPERTIES TIMEOUT 300)
+    if(TENANT_VM_ATTO_COMPILER)
+        add_test(NAME tenant_vm_source_contract_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/lowered/source_contract_test.py" "${TENANT_VM_ATTO_COMPILER}")
+    endif()
     add_test(NAME tenant_vm_admission_test COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/lowered/admission_test.py"
         "${LOWER}" --wat2wasm "${WAT2WASM}" --runner "$<TARGET_FILE:tenant_vm_lowered_test>" --hostile "${HOSTILE}"
         --lowered-root "${GEN}" ${LOWER_ARGS})

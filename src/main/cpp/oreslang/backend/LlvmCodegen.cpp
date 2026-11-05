@@ -671,6 +671,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Native scheduler, ActorRef, suspension and supervisor APIs remain gated.
     if (tenant_vm_guest && !wasm32_target)
         throw std::runtime_error("the tenant VM guest ABI requires --target=wasm32");
+    if (!tenant_vm_guest) {
+        for (const auto& actor : source.actors) {
+            const bool child = std::any_of(actor.fields.begin(), actor.fields.end(),
+                [](const LocalBinding& f) { return !f.actor_ref_type.empty(); });
+            if (child || !actor.on_message.actor_sends.empty())
+                throw std::runtime_error("actor child references and handler sends require --target=wasm32 --guest-abi=tenant-vm");
+        }
+    }
     if (wasm32_target) {
         // The tenant VM ABI has one Wasm instance per actor, as this one does, and a kind per actor
         // type, so a module can hold several. Its host carries spawn, send and stop.
@@ -962,6 +970,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
+    llvm::FunctionCallee sourceSendOnCommit;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
@@ -973,6 +982,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         sourceSpawn = module.getOrInsertFunction("oreslang_vm_spawn", llvm::FunctionType::get(i64, {i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_vm_send", llvm::FunctionType::get(voidTy, {i64, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_vm_stop", llvm::FunctionType::get(voidTy, {i64}, false));
+        sourceSendOnCommit = module.getOrInsertFunction("oreslang_vm_send_on_commit", llvm::FunctionType::get(voidTy, {i64, i64}, false));
     }
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -2845,8 +2855,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         const std::unordered_map<std::string, llvm::Value*> noStorage;
         const std::unordered_map<std::string, llvm::Function*> noFunctions;
         for (std::size_t i = 0; i < actor.fields.size(); ++i) {
-            auto* initial = lower(*actor.fields[i].initializer, init, i64,
-                noStorage, noStorage, noFunctions);
+            llvm::Value* initial;
+            if (!actor.fields[i].actor_ref_type.empty()) {
+                const auto kind = std::find_if(source.actors.begin(), source.actors.end(), [&](const ActorDecl& a) {
+                    return a.name == actor.fields[i].actor_ref_type; }) - source.actors.begin();
+                initial = init.CreateCall(sourceSpawn, {llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(kind))});
+            } else {
+                initial = lower(*actor.fields[i].initializer, init, i64, noStorage, noStorage, noFunctions);
+            }
             init.CreateStore(initial, globals[i]);
         }
         init.CreateStore(one, lifecycle);
@@ -2866,6 +2882,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             b.CreateStore(b.CreateLoad(i64, globals[i]), slot);
             values.emplace(actor.fields[i].name, slot);
         }
+        // Sends and writes interleave in source order, so a payload sees the writes before it.
+        std::size_t writes_done = 0;
+        const auto emit_sends = [&] {
+            for (const auto& send : actor.on_message.actor_sends) {
+                if (send.after_writes != writes_done) continue;
+                auto* payload = lower(*send.payload, b, i64, values, emptyFields, declarations);
+                b.CreateCall(sourceSendOnCommit, {b.CreateLoad(i64, values.at(send.reference)), payload});
+            }
+        };
+        emit_sends();
         for (const auto& write : actor.on_message.actor_field_writes) {
             auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
                 [&](const LocalBinding& f) { return f.name == write.field; });
@@ -2873,6 +2899,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 throw std::runtime_error("invalid wasm32 actor field write");
             auto* value = lower(*write.expression, b, i64, values, emptyFields, declarations);
             b.CreateStore(value, values.at(write.field));
+            ++writes_done;
+            emit_sends();
         }
         auto* value = lower(*actor.on_message.result, b, i64, values,
             emptyFields, declarations);
@@ -2911,6 +2939,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     }
                 }
             };
+            // A restart takes this path instead of init, whose initializers have run, and whose
+            // children still exist. Field values come from stored state straight after.
+            auto* resume = llvm::Function::Create(llvm::FunctionType::get(voidTy, {}, false),
+                llvm::Function::ExternalLinkage, export_prefix + "resume", module);
+            llvm::IRBuilder<> resuming(llvm::BasicBlock::Create(context, "entry", resume));
+            guard(resuming, resume, zero);
+            resuming.CreateStore(one, lifecycle);
+            resuming.CreateRetVoid();
             accessor("field_get", llvm::FunctionType::get(i64, {i32Ty}, false), false);
             accessor("field_set", llvm::FunctionType::get(voidTy, {i32Ty, i64}, false), true);
         }

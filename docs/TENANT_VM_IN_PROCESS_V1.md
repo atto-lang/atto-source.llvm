@@ -124,10 +124,32 @@ flag the browser ABI is unchanged, and `spawn`, `send` and `stop` are still refu
 
 | | |
 |---|---|
-| Works | Several `define actor` types with 1 to 16 integer fields; `on_message(int): int`; a `main` that spawns, sends and stops; checked arithmetic that traps; calls to top-level functions, including recursion and `if` |
-| Refused by the compiler | `await`, tasks, `while` and locals in a handler, class-array fields, heap-owned regions |
-| Language limit, on every backend | `ActorRef` lives only in `main`, so actors cannot message each other, and nothing reads a reply to a `send` |
-| Message ABI | One `i64` in, one `i64` out |
+| Works | Several `define actor` types with 1 to 16 fields; `on_message(int): int`; a `main` that spawns, sends and stops; **actors that own child actors and send to them**; checked arithmetic that traps; calls to top-level functions, including recursion and `if` |
+| Refused by the compiler | `await`, tasks, `while` and locals in a handler, class-array fields, heap-owned regions, references used as values |
+| Message ABI | One `i64` in, one `i64` out. Nothing reads the reply to a `send` |
+
+**Actors messaging actors.** This reuses syntax the language already has, in new places:
+
+```
+define actor Stage as {
+  const next: ActorRef<Sink> = spawn Sink();   // or: const next = spawn Sink();
+  let forwarded: int = 0;
+  pub fnc on_message(int n): int {
+    next.send(n);
+    forwarded = forwarded + 1;
+    return forwarded;
+  }
+}
+```
+
+An actor owns the children in its fields, which are spawned when it starts. References form a tree: one can
+be sent to, and nothing else. It cannot go into arithmetic, a message or a reply, and a type that spawns
+itself, however indirectly, is refused. Stopping an actor stops its children once it has finished, so a
+chain drains from the front. Shutting a VM down finishes all admitted work, including what it sends on.
+
+**This is not ratified language.** The spec calls actor pipeline syntax illustrative, and Java and the other
+backends do not have this. So it is refused without `--guest-abi=tenant-vm`, and a reference cannot yet be
+handed to another actor, so two siblings cannot talk directly, and a child cannot answer its parent.
 
 **Kinds.** Each actor type is a kind, in source order, and `main` is the last one: the manifest records
 them. A host runs a program by spawning the `main` kind and calling it once. A second call is a typed
@@ -137,13 +159,16 @@ guest error.
 module may import, and admission checks each signature, since C linking would not notice a wrong one.
 References are `i64`, and resolve only inside the caller's VM.
 
-**A refused operation ends the VM.** Source has no way to see that a `spawn` or `send` was refused, say
+**A refused operation fails, loudly.** Source has no way to see that a `spawn` or `send` was refused, say
 because a mailbox is full. A turn cannot block, and carrying on would turn a lost message into a wrong
-answer that looks fine. So a program sending faster than its workers drain needs a larger
-`mailbox_capacity`. Whether it should wait instead is a question for the restart and pipeline work.
+answer that looks fine. In `main` that ends the VM. In a handler the turn fails and the actor restarts, so
+the message that caused it is lost and counted. **There is no backpressure:** a stage sending faster than
+the next one drains will fail repeatedly once a mailbox fills, until `max_consecutive_restarts` ends the VM.
+The spec says `send` must report admission as a `Result`, and that is not done.
 
-Two compiler changes, both only reachable on wasm32: a handler can call functions, where it used to fail
-with an internal `unordered_map::at` error, and the flag above.
+Compiler changes: a wasm32 handler can call functions, where it used to fail with an internal
+`unordered_map::at` error; the flag above; and the parser accepts child fields and handler sends, which
+every other path then refuses.
 
 ## Restart
 
@@ -168,24 +193,29 @@ that failed is not retried, since it would most likely fail again. A caller gets
 the reason. A `send` has no caller, so the VM counts it in `mail_lost`, and a VM that stops cleanly still
 reports `actor_restarts` and `mail_lost`, so a run with failures cannot look like a clean finish.
 
+**A turn commits as a whole.** Sends in a handler are held until the turn ends. Then one host call admits all
+of them or none, and flips the version word, with no kill able to land in between. So a failed turn changed
+no state and sent nothing, and a turn reported as failed really did not happen. One control build that
+sends straight away shows the difference: the failed turn's message reaches the next actor.
+
 **Stored state.** It is host memory outside the cage, so a guest cannot write to it except by finishing a
-turn. A turn writes its fields to the slot not in use, then flips a version word with one store, so a kill
-at any point leaves a complete commit. `atto_a_fault_in_a_commit_cannot_tear_state` faults exactly in a
+turn. A turn writes its fields to the slot not in use before the flip, so a kill at any point leaves a
+complete commit. A restart restores child references from here and does not spawn again. `atto_a_fault_in_a_commit_cannot_tear_state` faults exactly in a
 commit, and a control build without the flip does tear, which shows the test can tell.
 
-Two limits on what this means today:
+Limits on what this means today:
 
 - State is fields only. It survives a restart, not the VM or the process. That is the part of "somewhere
   like an ETS table" this needs now, and nothing here is durable across a crash of the process.
-- A kill after the commit but before the reply reports a failed turn whose effect did stay. A caller who
-  retries could apply it twice.
+- Delivery is at most once. A message whose turn fails is not retried, so it is gone, and counted.
 
 **Waiting on a decision:**
 
 - `max_consecutive_restarts` defaults to 8, and a successful turn resets it. Something has to end a crash
   loop, but this number and "fail the VM" are proposals, not agreed behaviour.
-- No pipeline semantics exist here. Source has no way to read a reply, so a pipeline cannot yet be written.
-- Holding a turn's sends until it commits does not arise yet, since handlers cannot send.
+- Holding a turn's sends until it commits was a proposal. It is implemented, because the alternative lets a
+  failed turn's message escape, but it has not been agreed.
+- Stages fail rather than wait when a mailbox is full. See above.
 - `ACTOR_RUNTIME_RESILIENCE_V1` section 9 forbids carrying mail over, and the decision was to do so. It
   still needs amending.
 
@@ -255,6 +285,12 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | 1000 tenants, 100,000 **compiled `.atto`** actors, one process | 300,000 correct turns, 0.4-1.4 s including startup | macOS, Linux |
 | Whole `.atto` programs run in a VM | `main` starts workers of 2 types, 23 sends arrive in order (a worker traps otherwise, and a misordered program does trap), all stop and are released. 200 rounds | macOS, Linux, x86_64 under QEMU |
 | 1000 tenants each run that program | To completion in one process, 45-130 ms natively | macOS, Linux, x86_64 under QEMU |
+| Actors message actors in source | Head to middle to sink: 10 messages in order through each stage (the sink traps otherwise), then all stop in turn. 100 rounds | macOS, Linux |
+| Shutdown drains a whole pipeline | 40 messages in flight down three stages, including actors whose first turn comes during the drain | macOS, Linux |
+| A failed turn sent nothing | Its child never hears of it, and is not spawned twice. **Control** that sends straight away: the message escapes, and the child traps too | macOS, Linux |
+| Commit is all or nothing | Three sends to a mailbox with room for two: none go. Unknown target: none go, and state does not move | macOS, Linux |
+| A tenant cannot overflow the host's stack by nesting | A chain 25,000 actors deep, stopped from the front | macOS, Linux |
+| Wrong uses of references | 13 refused by the compiler, with no IR emitted | Linux |
 | A failed actor restarts alone | From its last finished turn, with queued mail in order and siblings unaffected: trap, stack overflow and CPU deadline, in test guests and real `.atto` | macOS, Linux, x86_64 under QEMU |
 | A spinning actor does not stop its siblings | 2000 sibling turns complete alongside it in one VM | macOS, Linux, x86_64 under QEMU |
 | Kills cannot tear stored state | Deterministic fault in a commit keeps fields consistent; **control** without the flip tears. Also 300 kills at random points | macOS, Linux, x86_64 under QEMU |
@@ -276,9 +312,9 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Mail quota holds | Per VM and host; a dead VM returns all of it | macOS, Linux |
 | 1000 VMs, 100,000 test actors | About 20 ms to create, 300,000 turns in 0.5-0.7 s; RSS +100 MiB on Linux, +440 MiB on macOS (larger pages) | macOS, Linux |
 | Kill spinning code without cooperation | Under 1 ms | macOS, Linux |
-| ASan+UBSan on host | Clean, core and lowered, 37 + 16 cases | Linux |
-| TSan on host | No races in 37 cases and in real spawn, send, stop and restart programs, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
-| Host built with gcc | 37 + 16 cases | Linux |
+| ASan+UBSan on host | Clean, core and lowered, 39 + 19 cases | Linux |
+| TSan on host | No races in 39 cases and in real programs, including pipelines, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
+| Host built with gcc | 39 + 19 cases | Linux |
 | Existing wasm32 and rejection tests | 171 of 172 pass. `native_exit_reject_unsupported_async_root` fails the same way without this change | Linux |
 | Wasmtime targeted kill | 6 spinning tenants ended one at a time, none early, worst about 2 ms | macOS |
 | Wasmtime: 1000 Stores | 200,000 turns at about 1.3M/s, contained faults and memory bomb | macOS |
@@ -341,8 +377,8 @@ targeted Wasmtime kill, actor restart, and the audit, which found what most need
 
 1. **Restart decisions.** See [Restart](#restart): the crash-loop limit, what a pipeline does when a stage
    fails, and amending `ACTOR_RUNTIME_RESILIENCE_V1` section 9, which forbids carrying mail over.
-2. **Actor-to-actor messaging, loops and locals in handlers, richer messages.** Language and compiler work,
-   on every backend. The host calls this needs already exist.
+2. **Language decisions on messaging.** Ratify or replace the child-field syntax across backends. `send`
+   reporting admission and backpressure. Passing references between actors. Replies.
 3. **Reconcile with the process-worker direction and `tenant-isolation-v1.json`.** A decision, not code.
 4. **Durable heap for real programs.** `alloc` and `free` exist with size classes, and memory persists.
    Nothing compiled calls them yet, nothing suspends across `await`, and zero-GC for real programs
