@@ -182,6 +182,7 @@ void faults_end_only_that_vm() {
         {"write-past-committed", KIND_MEMORY, words({MEM_WRITE_OFFSET, 0x70000000, 1}), FailReason::MemoryFault, 2000},
         {"farthest-possible-access", KIND_MEMORY, words({MEM_FARTHEST_ACCESS, 0, 0}), FailReason::MemoryFault, 2000},
         {"stack-overflow", KIND_FAULT, words({FAULT_STACK}), FailReason::StackOverflow, 2000},
+        {"stack-overflow-in-host-calls", KIND_FAULT, words({FAULT_STACK_IN_HOST_CALLS}), FailReason::StackOverflow, 20000},
         {"trap-instruction", KIND_FAULT, words({FAULT_TRAP}), FailReason::Trap, 2000},
 #if !defined(TENANT_VM_TSAN_BUILD) // TSan defers async signals to its next interceptor, which a pure spin never reaches
         {"spin-no-checks", KIND_FAULT, words({FAULT_SPIN}), FailReason::TurnDeadline, 100},

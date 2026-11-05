@@ -98,7 +98,7 @@ struct HostLimits {
     std::uint32_t max_vms = 1000;
     std::uint32_t carriers = 8;
     std::uint64_t max_admitted_heap_bytes = std::uint64_t{1} << 40;
-    std::size_t carrier_stack_bytes = std::size_t{8} << 20;
+    std::size_t carrier_stack_bytes = std::size_t{8} << 20; // at least 512 KiB; host calls reserve 256 KiB of it
     std::uint64_t max_queued_bytes = std::uint64_t{4} << 30; // mail across all VMs
     // A fault outside any cage means the boundary itself failed: lowered code broke the
     // addressing rule, so memory safety of every tenant is in doubt. Stop rather than continue.

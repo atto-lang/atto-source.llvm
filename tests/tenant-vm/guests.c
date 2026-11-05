@@ -55,6 +55,14 @@ static int recurse(int n) {
     frame[0] = (char)n;
     return recurse(n + 1) + frame[0];
 }
+/* A host call at every depth, so that one of them is what reaches the end of the stack. */
+static int recurse_in_host_calls(const OresVmHostApi* h, int n) {
+    volatile char frame[64];
+    frame[0] = (char)n;
+    const uint64_t actor = h->spawn(KIND_FAULT);
+    if (actor) (void)h->stop(actor);
+    return recurse_in_host_calls(h, n + 1) + frame[0];
+}
 static int64_t fault(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64_t self, uint32_t state, uint32_t in,
                      uint32_t in_len, uint32_t out, uint32_t cap) {
     (void)inst;
@@ -65,6 +73,7 @@ static int64_t fault(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64_t
         case FAULT_SPIN: for (;;) {} /* no calls and no checks */
         case FAULT_SPIN_IN_HOST_CALLS: for (;;) (void)h->alloc(1, 1);
         case FAULT_STACK: return recurse(0);
+        case FAULT_STACK_IN_HOST_CALLS: return recurse_in_host_calls(h, 0);
         case FAULT_TRAP: __builtin_trap();
         case FAULT_DIVIDE: WRITE_I64(cage, out, 1 / zero); return 8;
         case FAULT_SLEEPLESS_BRIEFLY: { volatile uint64_t i = 0; while (i < 20000000u) i = i + 1; return 0; }

@@ -206,6 +206,30 @@ void attack_matrix(const char* library, bool bounded) {
     }
 }
 
+// A hostile module can recurse until a host call is what crosses the end of the stack. The host
+// is not in guest mode at that point, so without a check on entry the fault ends the process.
+void overflow_in_a_host_call_costs_one_vm() {
+    const LoadedGuest guest = load("hostile_bounds");
+    if (!guest.module) return;
+    HostLimits limits;
+    limits.carriers = 2;
+    limits.carrier_stack_bytes = std::size_t{1} << 20; // fewer levels, each paying for a spawn
+    TenantVmHost host(limits);
+    auto witness = host.open(spec("witness", guest));
+    REQUIRE_OK(witness);
+    auto witness_actor = host.spawn_actor(witness.handle, 0);
+    REQUIRE_OK(witness_actor);
+    for (int round = 0; round < 3; ++round) {
+        auto v = host.open(spec("recursing", guest, 20000));
+        REQUIRE_OK(v);
+        auto a = host.spawn_actor(v.handle, 0);
+        REQUIRE_OK(a);
+        CHECK_STATUS(host.call(a.actor, msg(OP_RECURSE_IN_HOST_CALLS, 0)).get().status, Status::TenantFailed);
+        CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::StackOverflow);
+        CHECK(word(host.call(witness_actor.actor, msg(OP_ADD, 1)).get().payload) == round + 1);
+    }
+}
+
 // Bounds checks also keep actors of one tenant apart. Without them they share a cage, which
 // is not a boundary this design promises, and is the reason bounds are the default.
 void actors_of_one_tenant() {
@@ -684,6 +708,7 @@ int run_accepted_guest(const std::string& name) {
 
 struct Case { const char* name; void (*run)(); };
 const Case cases[] = {
+    {"overflow_in_a_host_call_costs_one_vm", overflow_in_a_host_call_costs_one_vm},
     {"attack_matrix_bounds", [] { attack_matrix("hostile_bounds", true); }},
     {"attack_matrix_guard_pages_alone", [] { attack_matrix("hostile_guard", false); }},
     {"actors_of_one_tenant", actors_of_one_tenant},
