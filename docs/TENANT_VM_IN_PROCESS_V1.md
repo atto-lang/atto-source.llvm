@@ -184,14 +184,25 @@ Two limits on what this means today:
 - A kill after the commit but before the reply reports a failed turn whose effect did stay. A caller who
   retries could apply it twice.
 
-**Waiting on a decision:**
+**A crash loop ends the actor, not the VM.** An actor may have `restart_budget` restarts in
+`restart_window_ms`, by default 3 in 10 seconds. Stored state can be what causes the crash, so reloading
+it could otherwise loop forever. A turn that works does not refill the budget; only time does. Between
+tries the actor waits `restart_backoff_ms`, by default 10 ms, doubling with each failure in the window,
+and its mail waits with it. These numbers are starting values, not measurements.
 
-- `max_consecutive_restarts` defaults to 8, and a successful turn resets it. Something has to end a crash
-  loop, but this number and "fail the VM" are proposals, not agreed behaviour.
-- No pipeline semantics exist here. Source has no way to read a reply, so a pipeline cannot yet be written.
-- Holding a turn's sends until it commits does not arise yet, since handlers cannot send.
-- `ACTOR_RUNTIME_RESILIENCE_V1` section 9 forbids carrying mail over, and the decision was to do so. It
-  still needs amending.
+One more failure ends that actor. The failed call and each queued call get `ActorTerminated`, and queued
+sends count in `mail_abandoned`. Its memory and quota go back to the VM, and later calls get
+`ActorTerminated`. The rest of the VM goes on. `actors_terminated` and `mail_abandoned` are reported even
+when the VM stops cleanly.
+
+**Not built yet:**
+
+- No pipeline semantics exist here, because source has no way to read a reply and handlers cannot send.
+  The agreed rules are in `ACTOR_RUNTIME_RESILIENCE_V1`: a pipeline stops once a stage ends, and the rest
+  of the tenant keeps running.
+- A turn's sends must be held until it commits, so that a restart cannot resend them. This does not arise
+  yet: restartable kinds are source actors, and their handlers cannot send. It must land with handler sends.
+- A failed actor reports through the VM's counters and the failed call. There is no supervisor to tell yet.
 
 ## Backends
 
@@ -345,16 +356,15 @@ If the compiler cannot be built here, `-DTENANT_VM_ATTO_IR_DIR=` takes IR it emi
 In priority order. Done since the first version: `.atto` to a VM, code loading, host-call coverage, the
 targeted Wasmtime kill, actor restart, and the audit, which found what most needed doing first.
 
-1. **Restart decisions.** See [Restart](#restart): the crash-loop limit, what a pipeline does when a stage
-   fails, and amending `ACTOR_RUNTIME_RESILIENCE_V1` section 9, which forbids carrying mail over.
-2. **Actor-to-actor messaging, loops and locals in handlers, richer messages.** Language and compiler work,
-   on every backend. The host calls this needs already exist.
-3. **Reconcile with the process-worker direction and `tenant-isolation-v1.json`.** A decision, not code.
-4. **Durable heap for real programs.** `alloc` and `free` exist with size classes, and memory persists.
+1. **Actor-to-actor messaging, loops and locals in handlers, richer messages.** Language and compiler work,
+   on every backend. The host calls this needs already exist. Handler sends must commit with the turn, and
+   pipeline failure can then be built. See [Restart](#restart).
+2. **Reconcile with the process-worker direction and `tenant-isolation-v1.json`.** A decision, not code.
+3. **Durable heap for real programs.** `alloc` and `free` exist with size classes, and memory persists.
    Nothing compiled calls them yet, nothing suspends across `await`, and zero-GC for real programs
    depends on borrow-checker lowering to them.
-5. **Run it in CI and on real x86_64.** See Evidence.
-6. **GraalVM.** One Engine per tenant is not started.
-7. **Wire the Wasmtime and .NET spikes into their hosts.** They are spikes in their own repositories.
-8. **Very short turns on oversubscribed hosts.** Decide whether the cliff above matters before sharding the queue.
-9. **Hardening.** Sandbox the lowering tools. Timing-attack testing. PKU on x86. Multi-kind modules.
+4. **Run it in CI and on real x86_64.** See Evidence.
+5. **GraalVM.** One Engine per tenant is not started.
+6. **Wire the Wasmtime and .NET spikes into their hosts.** They are spikes in their own repositories.
+7. **Very short turns on oversubscribed hosts.** Decide whether the cliff above matters before sharding the queue.
+8. **Hardening.** Sandbox the lowering tools. Timing-attack testing. PKU on x86. Multi-kind modules.
