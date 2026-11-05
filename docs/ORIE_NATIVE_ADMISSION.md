@@ -1,3 +1,5 @@
+> **Superseded:** the implicit-conversion and class-field limits described here no longer apply. See [native floating point](NATIVE_FLOAT.md).
+
 # Native ORIE compiler admission — staged source change
 
 This source-local patch is a **draft**, not a native execution or `f64`

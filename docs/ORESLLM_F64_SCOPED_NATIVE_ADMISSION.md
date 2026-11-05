@@ -1,3 +1,5 @@
+> **Superseded:** the implicit-conversion and class-field limits described here no longer apply. See [native floating point](NATIVE_FLOAT.md).
+
 # OresLLM LLVM FP64 scoped-value milestone (draft)
 
 This change is stacked on draft [LLVM PR #1236](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1236) and is **NOT** a verified native compiler pass, OresLLM training implementation, or backend parity certificate. Never merge this stack ahead of the independently verified base.

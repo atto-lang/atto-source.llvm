@@ -292,10 +292,13 @@ A native executable regression fixture lives at
 existing integer-only subset (forward function call and signed i64 addition)
 and must return exit code 42.
 
-This is source-extension admission only. LLVM currently does **not** lower
-floating-point values, floating division, contiguous numerical arrays, or
-tensor kernels. The numerical-library fixtures using `float`, `List<float>`,
-dot products, reductions and matrix multiplication remain unsupported here
-and must fail closed rather than silently map to i64. See the existing
-`native_float_division_unavailable` contract. Java/LLVM numerical parity is
-not claimed by this fixture.
+This is source-extension admission only.
+
+## Native floating point
+
+`float`/`f64` values, Java numeric widening, real division, float class fields,
+`Array<float>`, `Option<float>` and `Result<float, E>` now compile and execute.
+Scalar ML guests that train with analytic gradients run natively and match Java
+stdout byte for byte. `List<float>`, lambdas, `f32`, `decimal` and tensor kernels
+remain unsupported and fail closed. See [native floating point](docs/NATIVE_FLOAT.md)
+for semantics, limits and the known divergences from Java.

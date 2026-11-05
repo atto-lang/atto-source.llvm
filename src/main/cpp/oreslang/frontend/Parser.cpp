@@ -2693,7 +2693,10 @@ private:
         guard_failure_exits = [&](const std::vector<Statement>& body) -> bool {
             if (body.empty()) return false;
             const Statement& last = body.back();
-            if (last.kind == Statement::Kind::Return) return true;
+            if (last.kind == Statement::Kind::Return || last.kind == Statement::Kind::Break ||
+                    last.kind == Statement::Kind::Continue) return true;
+            if (last.kind == Statement::Kind::Call && last.expression &&
+                    last.expression->kind == Expression::Kind::Console && last.expression->name == "fail") return true;
             if (last.kind == Statement::Kind::Conditional) {
                 return !last.then_statements.empty() && !last.else_statements.empty()
                     && guard_failure_exits(last.then_statements)

@@ -73,7 +73,13 @@ Retain explicit source/version receipts. Follow Java enum AST issue
 and native ADT issue [#314](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/314)
 before claiming general enum/Option/Result parity.
 
-## Numeric division fail-closed parity boundary
+## Numeric division parity
+
+Native `/` now follows Java: real division, `int / int` included. The history below
+describes the earlier fail-closed boundary. Current semantics, limits and known
+divergences are in [native floating point](NATIVE_FLOAT.md).
+
+### Earlier fail-closed boundary
 
 Java source revision `4fc9148` defines `int / int` with a `float`
 result (the real guest runtime evaluates it as `Double`), so LLVM's
