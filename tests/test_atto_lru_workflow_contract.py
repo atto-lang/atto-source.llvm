@@ -47,6 +47,7 @@ def verify(source: str) -> None:
         "github.event.pull_request.head.sha || github.sha": 3,
         "python3 tests/atto_lru_llvm_source.py": 2,
         "git diff --quiet --exit-code": 2,
+        "            build/atto-lru/lru-ctest-json.json": 2,
         'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"': 2,
     }
     if any(source.count(token)!=counts.get(token,1) for token in REQUIRED):
