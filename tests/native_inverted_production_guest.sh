@@ -13,7 +13,15 @@ if [[ ! -f "$auditor" || ! -x "$auditor" || -L "$auditor" ||
     echo "FAIL: missing or unsafe source-built no-GC IR auditor" >&2
     exit 1
 fi
-auditor_sha="$(sha256sum "$auditor" | cut -d' ' -f1)"
+if command -v sha256sum >/dev/null 2>&1; then
+    digest_tool=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+    digest_tool=(shasum -a 256)
+else
+    echo 'FAIL: no SHA-256 utility available for native IR verification' >&2
+    exit 1
+fi
+auditor_sha="$("${digest_tool[@]}" "$auditor" | cut -d' ' -f1)"
 printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' \
     > "$tmp/expected-audit-success"
 audit_ir() {
@@ -23,16 +31,16 @@ audit_ir() {
         echo "FAIL: missing or auditor-aliased inverted guest IR" >&2
         exit 1
     fi
-    before="$(sha256sum "$ir" | cut -d' ' -f1)"
+    before="$("${digest_tool[@]}" "$ir" | cut -d' ' -f1)"
     if ! "$auditor" "$ir" > "$tmp/audit.stdout" 2> "$tmp/audit.stderr"; then
         echo "FAIL: mandatory no-GC IR auditor rejected inverted guest" >&2
         cat "$tmp/audit.stderr" >&2
         exit 1
     fi
-    after="$(sha256sum "$ir" | cut -d' ' -f1)"
+    after="$("${digest_tool[@]}" "$ir" | cut -d' ' -f1)"
     if ! cmp -s "$tmp/expected-audit-success" "$tmp/audit.stdout" ||
        [[ -s "$tmp/audit.stderr" || "$before" != "$after" ||
-          "$(sha256sum "$auditor" | cut -d' ' -f1)" != "$auditor_sha" ]]; then
+          "$("${digest_tool[@]}" "$auditor" | cut -d' ' -f1)" != "$auditor_sha" ]]; then
         echo "FAIL: forged, mutated or contaminated inverted no-GC IR audit" >&2
         exit 1
     fi
@@ -49,7 +57,7 @@ if [[ -s "$tmp/gc.stdout" ]] ||
     echo "FAIL: no-GC rejection lacked the compiler-owned diagnostic" >&2
     exit 1
 fi
-if [[ "$(sha256sum "$auditor" | cut -d' ' -f1)" != "$auditor_sha" ]]; then
+if [[ "$("${digest_tool[@]}" "$auditor" | cut -d' ' -f1)" != "$auditor_sha" ]]; then
     echo "FAIL: auditor mutated during known-GC negative" >&2
     exit 1
 fi
