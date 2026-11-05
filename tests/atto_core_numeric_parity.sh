@@ -2,7 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 suite="$root/tests/atto-core-numeric-v1"
-header="$root/src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp"
+header="$root/src/main/cpp/oreslang/frontend/GeneratedNumericAtto.inc"
 source="$root/stdlib/numeric.atto"
 compiler="$root/build/oreslang-llvmc"
 auditor="$root/build/oreslang-no-gc-ir-audit"
@@ -17,8 +17,8 @@ expected="5ced991f1d49b3c2a60fdd72b9003c0a4d18cd72"
 test "$(git hash-object -- "$source")" = "$expected" || die "Java canonical blob hash mismatch"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
-awk '/^R"ORES_CORE\(/ {copy=1;next} copy && /^\)ORES_CORE";/ {done=1;exit} copy {print} END {if (!done) exit 9}' "$header" > "$tmp/embedded.atto" || die "embedded numeric source missing"
-cmp -s "$source" "$tmp/embedded.atto" || die "embedded compiler source differs from canonical .atto"
+command -v python3 >/dev/null || die "Python3 required for canonical numeric embed verification"
+python3 "$root/scripts/generate_atto_numeric_embed.py" --check >/dev/null || die "numeric .atto embed differs from compiler literal"
 for name in canonical legacy mixed reject-double-extension reject-host-override; do
   [[ -f "$suite/$name.atto" && ! -L "$suite/$name.atto" ]] || die "missing fixture $name"
 done
@@ -64,6 +64,6 @@ for name in reject-double-extension reject-host-override; do
   printf 'ATTO_LLVM_NUMERIC_NEGATIVE_HOST_OBSERVED|%s|rejected=1|partial_ir=0\n' "$name" >> "$receipts"
 done
 test "$(git hash-object -- "$source")" = "$expected" || die "source drift during execution"
-cmp -s "$source" "$tmp/embedded.atto" || die "embedded-source drift during execution"
+python3 "$root/scripts/generate_atto_numeric_embed.py" --check >/dev/null || die "generated numeric embed drift during execution"
 cat "$receipts"
 echo "ATTO_LLVM_NUMERIC_GUEST_PARITY_EXECUTED|positive=3|optimizations=2|native=6|negative=2|source_blob=$expected"
