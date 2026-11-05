@@ -20,6 +20,9 @@ trap 'rm -rf -- "$tmp"' EXIT
 command -v python3 >/dev/null || die "Python3 required for canonical numeric embed verification"
 python3 "$root/scripts/generate_atto_numeric_embed.py" --check >/dev/null || die "numeric .atto embed differs from compiler literal"
 python3 -m unittest discover -s "$root/tests" -p "test_atto_numeric_embed.py" -q || die "numeric source-derived embed adversarial tests failed"
+command -v c++ >/dev/null || die "C++17 compiler required for derived-literal syntax test"
+c++ -std=c++17 -Wall -Wextra -Werror -I"$root/src/main/cpp" "$root/tests/atto_numeric_embed_cpp17_probe.cpp" -o "$tmp/atto-embed-cpp17" || die "generated .atto C++17 include failed to compile"
+"$tmp/atto-embed-cpp17" || die "generated .atto C++17 include probe failed"
 for name in canonical legacy mixed reject-double-extension reject-host-override; do
   [[ -f "$suite/$name.atto" && ! -L "$suite/$name.atto" ]] || die "missing fixture $name"
 done
