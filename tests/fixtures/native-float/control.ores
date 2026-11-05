@@ -45,4 +45,23 @@ pub routine main(): void {
     done
   }
   stdio.stdout.println(odd_total);
+
+  // Jumps must close array owners scoped inside the iteration.
+  val Array<int> values = new Array<int>();
+  for int n = 0; n < 6; n++ do
+    values.add(n);
+  done
+  let int seen = 0;
+  for const v of values do
+    if v == 1 then continue; fi
+    if v == 4 then break; fi
+    let mut Array<int> scratch = new Array<int>();
+    scratch.add(v);
+    if v == 3 then
+      seen = seen + 100;
+      break;
+    fi
+    seen = seen + scratch.get(0);
+  done
+  stdio.stdout.println(seen);
 }

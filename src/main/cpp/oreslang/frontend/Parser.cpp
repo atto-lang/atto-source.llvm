@@ -2383,7 +2383,7 @@ private:
                     if (binding.initializer->kind != Expression::Kind::Call &&
                             binding.initializer->kind != Expression::Kind::Conditional &&
                             binding.initializer->kind != Expression::Kind::ArrayCall)
-                        fail("native class initializer requires new or immutable record value");
+                        fail("expected 'rt' take, new or an immutable record value");
                     binding.record_view = true;
                     binding.assignable = true;
                 } else {
@@ -4494,7 +4494,7 @@ private:
                                    std::string_view where, std::size_t offset) {
         const auto numeric = [](ScalarType type) { return type == ScalarType::I64 || type == ScalarType::F64; };
         if (!numeric(left) || !numeric(right))
-            throw std::runtime_error(std::string(where) + " requires int or f64, got " +
+            throw std::runtime_error("native scalar type mismatch: " + std::string(where) + " requires int or f64, got " +
                 scalar_type_name(left) + " and " + scalar_type_name(right) +
                 " at byte " + std::to_string(offset));
         if (left == right) return left;

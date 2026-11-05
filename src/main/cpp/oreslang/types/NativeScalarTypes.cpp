@@ -321,7 +321,12 @@ void validate_native_scalar_types(const Program& program) {
                     statements(item.then_statements, body);
                 } else if (item.kind == Statement::Kind::ScopedLocal) {
                     const auto& binding = *item.branch_local;
-                    if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
+                    if (!binding.class_name.empty()) {
+                        if (binding.assignable && (!classes.count(binding.class_name) || owns_arrays(binding.class_name) ||
+                                !layouts.mutable_paths(binding.class_name).empty()))
+                            fail(binding.offset, "native branch-local class owner requires destructor/drop lowering");
+                        (void)immutable_record(binding.class_name);
+                    }
                     if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
                     if (binding.initializer) assign(*binding.initializer, expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
