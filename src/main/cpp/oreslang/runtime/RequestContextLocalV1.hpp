@@ -203,6 +203,10 @@ public:
     }
 
 private:
+    // Cross-actor handoff links a recipient's derived context to this
+    // request's cancellation (never the reverse) and needs read access.
+    friend class RequestContextHandoffTableV1;
+
     RequestContextLocalV1(RequestIdentityV1 identity,
                           TaskCancellation::Ptr cancellation)
         : identity_(identity), cancellation_(std::move(cancellation)) {}

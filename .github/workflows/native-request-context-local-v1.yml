@@ -6,6 +6,8 @@ on:
       - "src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp"
       - "src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp"
       - "tests/native_request_context_local_v1_test.cpp"
+      - "src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp"
+      - "tests/native_request_context_handoff_v1_test.cpp"
       - ".github/workflows/native-request-context-local-v1.yml"
   workflow_dispatch:
 permissions:
@@ -36,13 +38,15 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "865cb7011c54d506a782c319d88b91d74625c22e"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "8fdfc22ea14b751d477fabebd9b86ee4ff1dfea2"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
-          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "13870dcb11f32768ae1c8a6982410f7da34c1089"
+          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "39c1c043de30f0b75aafa8d61cc21a1bc66f3cbd"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "48125664994126787a0dcc27fdc9923189e37fcc"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "76f8160873c6af0df0dbb13741183600c16550bf"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "9cf2a76ac30fd0d9b8620facfb1b887475ee1e90"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "dd7250cff4ab0a1f4c598e264b9786d5635f6b4b"
+          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e44887a5fc125cd64961065bc172f84dd487c436"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -69,4 +73,8 @@ jobs:
             -Isrc/main/cpp tests/native_request_context_local_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-context"
           "$tmp/request-context"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_context_handoff_v1_test.cpp \
+            "$tmp/scheduler.o" -o "$tmp/request-handoff"
+          "$tmp/request-handoff"
           printf 'REQUEST_CONTEXT_LOCAL_EXACT_SOURCE_HOST_PASS compiler=%s mode=%s\n' "$CC" "$MODE"

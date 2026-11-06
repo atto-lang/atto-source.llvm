@@ -238,3 +238,63 @@ for a guest-visible ActorLocal capability; guest exposure remains blocked.
 All new exact-source tests remain NOT_EXECUTED until real GitHub Actions runner
 admission (or an independently authorized source carrier) permits them to run
 with nonzero steps. No cross-organization private LLVM Git tree mirror occurred.
+
+## 2026-11-06: first local execution of the local-storage gates, and cross-actor RequestLocal handoff
+
+### Local execution (macOS arm64, Homebrew LLVM 21, Apple clang 21)
+
+The previously **authored, not executed** gates were built with CMake and run
+with CTest. This is real local execution evidence, not CI evidence.
+
+| CTest | Result |
+| --- | --- |
+| `native_source_task_i64_shared_scheduler_runtime` | pass |
+| `native_source_task_i64_compiled_execution` | pass |
+| `native_tasklocal_i64_compiled_guest` (2 compiled `.atto` programs exit 42, 14 rejected with no IR) | pass after fix below |
+| `native_request_context_local_host_only` | pass after fix below |
+| `native_local_context_domains_host_only` | pass |
+| `native_actorlocal_authenticated_scheduler_turn` | pass |
+| `native_request_context_cross_actor_handoff` (new) | pass |
+
+The host tests above also passed under Clang ASan+UBSan and TSan.
+
+Two defects found only by executing:
+1. `native_request_context_local_v1_test.cpp` did not compile: `ReentrantRequestDrop`
+   declared its move constructor twice. Kept one, and it now clears the moved-from
+   callback with `std::exchange` (a moved-from `std::function` is not guaranteed empty).
+2. Two negative guest fixtures (`tasklocal-named-ffi-shadow`, `tasklocal-abi-shadow`)
+   were correctly rejected, but by the older general check
+   ("reserved native runtime ABI symbol") that runs before the TaskLocal-specific one.
+   The harness now expects the diagnostic that actually fires. Rejection and
+   no-IR behaviour were already correct.
+
+LLVM 22 does not build this compiler (`Intrinsic::getDeclaration` removed); use LLVM 21.
+
+### Cross-actor RequestLocal handoff (`RequestContextHandoffV1.hpp`)
+
+When actor A handles request R and delegates work to actor B by mailbox, B must
+not share A's `RequestContextLocalV1`. Only DATA crosses the mailbox:
+
+- On A's authenticated turn, `seal()` copies **explicitly selected** keys into an
+  owned snapshot in a bounded host table and returns a `u64` ticket
+  `{slot:16, generation:48}`, which is the mailbox payload.
+- On B's authenticated turn, `redeem()` requires the scheduler's current actor
+  to equal the sealed recipient incarnation, consumes the ticket once, and builds
+  a **new** context bound to B, filled with copies.
+- R's cancellation flows to B's copy (one-way link). B cancelling its copy does
+  not touch R. Writes after seal are invisible to the other side.
+- Forged, replayed, stale-generation, off-turn and misdirected tickets are
+  rejected. A misdirected redeem does not burn the ticket.
+- `revoke_recipient()` drops envelopes for an ended actor incarnation;
+  `sweep()` drops envelopes for cancelled/finished requests (held weakly, so a
+  pending envelope never keeps a request alive).
+- ActorLocal and ThreadLocal have no handoff API by design.
+
+Tests use the real native scheduler with three actors (A, B, and an
+interceptor C). Mutation check: removing the recipient check, one-shot
+consumption, turn authentication, or the cancellation link, or burning on a
+misdirected redeem, each fails the suite.
+
+Still open: request identity is still host-supplied (not from authenticated
+HTTP ingress), the compiler does not yet lower any guest `RequestLocal` or
+handoff syntax, and other backends have no equivalent yet.

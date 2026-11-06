@@ -172,9 +172,9 @@ fn main() {
         Some("reserves key name default"));
     reject(&compiler, &dir.0, "tasklocal-named-ffi-shadow.atto",
         "fnc oreslang_source_task_local_i64_get_keyed(): int { return 7; }\npub fnc main(): int { return oreslang_source_task_local_i64_get_keyed(); }\n",
-        Some("reserved TaskLocal runtime ABI"));
+        Some("reserved native runtime ABI symbol"));
     reject(&compiler, &dir.0, "tasklocal-abi-shadow.atto",
         "fnc oreslang_source_task_local_i64_get(): int { return 7; }\npub fnc main(): int { return oreslang_source_task_local_i64_get(); }\n",
-        Some("reserved TaskLocal runtime ABI"));
+        Some("reserved native runtime ABI symbol"));
     println!("TASKLOCAL_I64_COMPILER_GUEST_PASS: 2 compiled binaries and 14 rejected fixtures");
 }

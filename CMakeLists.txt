@@ -4835,4 +4835,20 @@ if(BUILD_TESTING AND UNIX)
         COMMAND oreslang-actorlocal-current-turn-v1-test)
     set_tests_properties(native_actorlocal_authenticated_scheduler_turn
         PROPERTIES TIMEOUT 35)
+
+    # RequestLocal handoff across actors via real scheduler mailbox tickets.
+    add_executable(oreslang-request-context-handoff-v1-test
+        tests/native_request_context_handoff_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-request-context-handoff-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-request-context-handoff-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-request-context-handoff-v1-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-request-context-handoff-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_request_context_cross_actor_handoff
+        COMMAND oreslang-request-context-handoff-v1-test)
+    set_tests_properties(native_request_context_cross_actor_handoff
+        PROPERTIES TIMEOUT 60)
 endif()
