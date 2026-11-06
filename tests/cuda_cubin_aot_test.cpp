@@ -13,9 +13,11 @@ struct Mock final : Driver {
     unsigned sm=80;
     int loaded=0, uninstalled=0, launched=0, created=0, recorded=0, destroyed=0;
     int query=600;
-    bool fail_symbol=false, fail_unload=false;
+    bool fail_symbol=false, fail_unload=false, fail_load=false;
     unsigned current_sm() override {return sm;}
-    int load_cubin(Handle* out,const unsigned char*) override {++loaded;*out=reinterpret_cast<Handle>(1);return 0;}
+    int load_cubin(Handle* out,const unsigned char*) override {
+        ++loaded;*out=reinterpret_cast<Handle>(1);return fail_load?1:0;
+    }
     int get_function(Handle* out,Handle,const char* name) override {
         if(fail_symbol || std::string(name)!="saxpy")return 1;
         *out=reinterpret_cast<Handle>(2);return 0;
@@ -84,6 +86,11 @@ int main() {
         Mock api;api.fail_symbol=true;
         rejected([&]{Kernel kernel(api,good,"saxpy",limits);});
         assert(api.uninstalled==1);
+    }
+    {
+        Mock api;api.fail_load=true;
+        rejected([&]{Kernel kernel(api,good,"saxpy",limits);});
+        assert(api.loaded==1 && api.uninstalled==1);
     }
     for(unsigned i=0;i<64;++i) {
         auto broken=bytes;
