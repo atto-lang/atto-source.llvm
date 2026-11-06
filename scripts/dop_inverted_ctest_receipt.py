@@ -50,10 +50,15 @@ def check_ctest_junit(xml_path):
     names = [case.get("name") for case in cases]
     if len(cases) != len(EXPECTED_TESTS) or set(names) != EXPECTED_TESTS:
         raise InvalidEvidence("missing, duplicate or unexpected CTest case")
-    for name, expected in (("tests", 4), ("failures", 0), ("errors", 0), ("skipped", 0)):
+    # CTest's own --output-junit emits tests/failures/skipped but omits errors
+    # when the count is zero; an explicit nonzero errors attribute is denied.
+    for name, expected in (("tests", 4), ("failures", 0), ("skipped", 0)):
         raw = suite.get(name)
         if raw is None or not raw.isascii() or not raw.isdecimal() or int(raw) != expected:
             raise InvalidEvidence(f"contradictory or absent CTest {name} count")
+    errors = suite.get("errors", "0")
+    if not errors.isascii() or not errors.isdecimal() or int(errors) != 0:
+        raise InvalidEvidence("CTest reported errors")
     for case in cases:
         if case.get("status", "run") not in ("run", "passed"):
             raise InvalidEvidence("CTest case was not executed")
