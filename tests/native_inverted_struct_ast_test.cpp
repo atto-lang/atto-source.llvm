@@ -5,6 +5,7 @@
 #include "oreslang/types/InvertedSchemaMirAdmission.hpp"
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -116,6 +117,46 @@ fnc main(): int {
           ir.find("store volatile i1 false, ptr %alive") != std::string::npos &&
           ir.find("call void @llvm.trap()") != std::string::npos,
           "production verified MIR failed to emit checked native IR");
+
+    // Independently reject deliberately malformed in-memory AST objects.
+    // Parser acceptance is not proof that a host/FFI or a future compiler
+    // transform cannot corrupt the input to the production HIR/MIR verifier.
+    // Re-verify before IR emission; never use a stale parser-side admission.
+    const auto mutate_and_verify = [&](const auto& mutation) {
+        auto forged = live;
+        mutation(*forged.inverted_main);
+        (void)dop::mir::verify_production_inverted_i64(forged);
+    };
+    rejects([&] {
+        mutate_and_verify([](auto& main) { main.schema_name = "WrongNominal"; });
+    }, "matching two-i64 schema");
+    rejects([&] {
+        mutate_and_verify([](auto& main) { main.owner_name.clear(); });
+    }, "matching two-i64 schema");
+    rejects([&] {
+        mutate_and_verify([](auto& main) { main.capacity = 0; });
+    }, "capacity/operation budget exceeded");
+    rejects([&] {
+        mutate_and_verify([](auto& main) { main.operations[0].field = "x"; });
+    }, "invalid inverted push source metadata");
+    rejects([&] {
+        mutate_and_verify([](auto& main) { main.operations[2].field = "id"; });
+    }, "immutable inverted field cannot be written");
+    rejects([&] {
+        mutate_and_verify([](auto& main) { main.operations[4].value = 1; });
+    }, "invalid inverted return source metadata");
+    rejects([&] {
+        mutate_and_verify([](auto& main) {
+            main.operations.push_back(main.operations.front());
+        });
+    }, "terminal read must be last");
+    if (sizeof(std::size_t) >= sizeof(std::uint64_t)) {
+        rejects([&] {
+            mutate_and_verify([](auto& main) {
+                main.operations[2].index = std::numeric_limits<std::size_t>::max();
+            });
+        }, "row index exceeds signed i64");
+    }
 
     rejects([] {
         (void)parse_program(R"ores(
