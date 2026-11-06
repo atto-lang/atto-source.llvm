@@ -452,6 +452,53 @@ void actor_churn_reuses_slots_and_scrubs_memory() {
     CHECK(snapshot.committed_bytes <= start_committed + (std::uint64_t{2} << 20)); // no growth from churn
 }
 
+// Native host-side proof of tenant memory-budget recycling, not compiled
+// AttoLang guest zero-GC or untrusted code isolation. Exercise one tenant
+// for >100 reincarnations while a second tenant stays alive.
+void tenant_recycling_restores_heap_quota_and_fences_aliases() {
+    HostLimits limits;
+    limits.max_vms = 2;
+    limits.max_admitted_heap_bytes = std::uint64_t{128} << 20;
+    TenantVmHost host(limits);
+    auto survivor = host.open(spec("healthy"));
+    REQUIRE_OK(survivor);
+    auto survivor_actor = host.spawn_actor(survivor.handle, KIND_MEMORY);
+    REQUIRE_OK(survivor_actor);
+    constexpr std::int64_t kSentinel = 0x5EC12E7;
+    CHECK_STATUS(host.call(survivor_actor.actor, words({MEM_WRITE_STATE, kSentinel, 0})).get().status, Status::Ok);
+    const auto retained_heap_charge = host.stats().admitted_heap_bytes;
+    CHECK(retained_heap_charge != 0);
+    std::uint64_t previous_generation = 0;
+    VmActor stale_actor;
+    bool have_stale = false;
+    for (int round = 0; round < 128; ++round) {
+        auto cycle = host.open(spec("churn"));
+        REQUIRE_OK(cycle);
+        CHECK(cycle.handle.generation() > previous_generation);
+        previous_generation = cycle.handle.generation();
+        auto current = host.spawn_actor(cycle.handle, KIND_MEMORY);
+        REQUIRE_OK(current);
+        CHECK_EQ(word(host.call(current.actor, words({MEM_READ_STATE, 0, 0})).get().payload), 0);
+        CHECK_STATUS(host.call(current.actor, words({MEM_WRITE_STATE, kSentinel + round, 0})).get().status, Status::Ok);
+        CHECK_EQ(word(host.call(current.actor, words({MEM_READ_STATE, 0, 0})).get().payload), kSentinel + round);
+        if (have_stale)
+            CHECK_STATUS(host.call(stale_actor, words({MEM_READ_STATE, 0, 0})).get().status, Status::StaleHandle);
+        stale_actor = current.actor;
+        have_stale = true;
+        CHECK_STATUS(host.kill(cycle.handle), Status::Ok);
+        host.wait_closed(cycle.handle); // physical unmap/retirement must precede quota return
+        CHECK_STATUS(host.call(current.actor, words({MEM_READ_STATE, 0, 0})).get().status, Status::StaleHandle);
+        CHECK_EQ(host.stats().live_vms, std::size_t{1});
+        CHECK_EQ(host.stats().admitted_heap_bytes, retained_heap_charge);
+        CHECK_EQ(word(host.call(survivor_actor.actor, words({MEM_READ_STATE, 0, 0})).get().payload), kSentinel);
+    }
+    CHECK_EQ(host.stats().live_vms, std::size_t{1});
+    CHECK_STATUS(host.kill(survivor.handle), Status::Ok);
+    host.wait_closed(survivor.handle);
+    CHECK_EQ(host.stats().admitted_heap_bytes, std::uint64_t{0});
+    CHECK_EQ(host.stats().live_vms, std::size_t{0});
+}
+
 void guests_can_spawn_within_their_vm() {
     TenantVmHost host;
     auto s = spec("spawning");
@@ -1387,6 +1434,7 @@ const Case cases[] = {
     {"memory_is_bounded_per_vm", memory_is_bounded_per_vm},
     {"cpu_budget_is_enforced", cpu_budget_is_enforced},
     {"actor_churn_reuses_slots_and_scrubs_memory", actor_churn_reuses_slots_and_scrubs_memory},
+    {"tenant_recycling_restores_heap_quota_and_fences_aliases", tenant_recycling_restores_heap_quota_and_fences_aliases},
     {"guests_can_spawn_within_their_vm", guests_can_spawn_within_their_vm},
     {"shutdown_drains_then_retires", shutdown_drains_then_retires},
     {"authority_is_bound_to_host_and_generation", authority_is_bound_to_host_and_generation},
