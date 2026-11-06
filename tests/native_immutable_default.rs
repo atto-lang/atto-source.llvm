@@ -109,6 +109,7 @@ fn run() -> Result<(), String> {
         ("readonly-result", "int x = 7; return x + 1;", 8),
         ("bool-readonly", "bool flag = true; return 7;", 7),
         ("const-dependency", "const x = 7; const y = x + 1; return y;", 8),
+        ("runtime-const-from-readonly", "int x = 7; const y = x + 1; return y;", 8),
         ("let-rebinding-control", "let int x = 7; x = 8; return x;", 8),
     ];
     let negatives: &[(&str, &str)] = &[
