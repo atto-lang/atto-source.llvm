@@ -257,8 +257,8 @@ private:
                 } catch (const std::exception& error) {
                     fail(current, error.what());
                 }
-                if (resolved_raw.starts_with("https://") ||
-                        resolved_raw.starts_with("http://"))
+                if (resolved_raw.rfind("https://", 0) == 0 ||
+                        resolved_raw.rfind("http://", 0) == 0)
                     fail(current, "remote imports require locked Zed URL admission (not implemented)");
                 fs::path dependency;
                 if (resolved_raw.rfind("+/", 0) == 0) {
