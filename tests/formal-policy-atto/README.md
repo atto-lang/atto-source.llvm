@@ -41,7 +41,8 @@ The workflow `.github/workflows/atto-formal-policy-native-guest.yml`
 retains a machine-readable receipt with the exact source head/tree, guest
 source Git blobs, compiled native binary SHA256 hashes, compiler and
 IR-auditor hashes, run ID/attempt and guest exit status. Negative-case source blobs,
-compiler exit statuses, and count are also retained. All six negative cases
+compiler exit statuses, compiler-diagnostic SHA-256 digests, the exact
+harness Git blob, and case count are also retained. All six negative cases
 must be rejected; a legacy grammar accepted by the compiler is a real failure. A workflow with
 `jobs=[]` or `steps=[]` is runner admission failure, not proof; no
 backend is marked verified merely because fixture files exist.
