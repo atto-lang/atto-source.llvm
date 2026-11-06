@@ -263,6 +263,11 @@ inline std::filesystem::path resolve_project_root_import(
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
     reject_nested_package(physical_root, target);
+    // A canonical path may still identify a directory or other non-file.
+    // Never hand it to the native source loader as an executable import.
+    std::error_code leaf_error;
+    if (!fs::is_regular_file(target, leaf_error) || leaf_error)
+        throw std::runtime_error("native project-root import source must be a regular file");
     return target;
 }
 
