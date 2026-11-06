@@ -69,7 +69,7 @@ if(BUILD_TESTING)
     add_test(NAME cuda_cubin_driver_context_gate_host_only
         COMMAND oreslang-cuda-cubin-driver-smoke-test)
     set_tests_properties(cuda_cubin_driver_context_gate_host_only
-        PROPERTIES TIMEOUT 20)
+        PROPERTIES TIMEOUT 20 SKIP_RETURN_CODE 77)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
