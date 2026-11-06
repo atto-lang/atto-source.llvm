@@ -98,7 +98,7 @@ for name, wanted in expected.items():
     data = path.read_bytes()
     if len(data) > 65536:
         raise SystemExit(f"FAIL: oversize canonical DOP fixture {name}")
-    blob = hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\\0" + data).hexdigest()
+    blob = hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
     if blob != wanted:
         raise SystemExit(f"FAIL: canonical DOP fixture changed {name}: {blob}")
 print("DOP_CANONICAL_SOURCE_BLOBS_MATCHED=2")
