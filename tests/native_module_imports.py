@@ -216,6 +216,7 @@ def main():
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
+        (root / 'lib.atto').write_text('define module Lib as pub fnc answer():int{return 42;} end')
         # Negative compiler graph cases must emit no LLVM IR, never an
         # apparently successful package graph or partially linked source.
         for label, specifier, variables, expected in [
@@ -227,13 +228,14 @@ def main():
             ('too-large', '${repo}/lib', {'repo': 'x' * 4097}, 'invalid import environment variable value'),
             ('root-traversal-variable', '+/${MODULE}', {'MODULE': '../outside'}, 'empty/dot/traversal'),
             ('env-outside-package-denied', '${repo}/lib', {'repo': str(root)}, 'escapes physical package root'),
-            ('env-missing-manifest-denied', '${repo}/lib', {'repo': str(root / 'env-negative-env-missing-manifest-denied')}, 'escapes physical package root'),
+            ('env-missing-manifest-denied', '${repo}/lib', {'repo': str(root / 'env-negative-env-missing-manifest-denied')}, 'absolute import requires nearest .ores.pkg.toml'),
             ('unbraced-dollar-not-alias', '$repo/lib', {'repo': str(root)}, 'native imports require'),
             ('remote-not-verified', 'https://example.test/lib.atto', {}, 'remote imports require locked'),
         ]:
             directory = root / ('env-negative-' + label)
             directory.mkdir()
-            (directory / '.ores.pkg.toml').write_text('schema_version = "1"\n')
+            if label != 'env-missing-manifest-denied':
+                (directory / '.ores.pkg.toml').write_text('schema_version = "1"\n')
             (directory / 'main.atto').write_text(
                 'import module Lib from "' + specifier + '"; pub fnc main():int{return 0;}')
             (directory / 'lib.atto').write_text(
