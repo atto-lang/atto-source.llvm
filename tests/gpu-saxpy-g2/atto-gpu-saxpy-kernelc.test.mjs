@@ -19,7 +19,8 @@ function run(input) {
     const result = spawnSync(compiler, [atto, cl], {encoding: 'utf8', timeout: 15000});
     const artifact = existsSync(cl) ? readFileSync(cl, 'utf8') : null;
     const device = artifact === null ? null : spawnSync(clang, ['-x','cl','-cl-std=CL1.2','-fsyntax-only',cl], {encoding:'utf8',timeout:15000});
-    return {result, artifact, device};
+    const spir = artifact === null ? null : spawnSync(clang, ['-target','spir64-unknown-unknown','-x','cl','-cl-std=CL1.2','-S','-emit-llvm','-o','-',cl], {encoding:'utf8', timeout:15000});
+    return {result, artifact, device, spir};
   } finally {
     rmSync(folder, {recursive:true, force:true});
   }
@@ -32,13 +33,17 @@ const positives = [
   ['optional final return', source.replace('    return;\n}', '}')],
 ];
 for (const [name, code] of positives) test(`G2 positive: ${name}`, () => {
-  const {result, artifact, device} = run(code);
+  const {result, artifact, device, spir} = run(code);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /G2_SOURCE_TO_OPENCL_C_ONLY/);
   assert.match(artifact, /__kernel void attolang_saxpy_v1/);
   assert.match(artifact, /if \(i >= n\) return;/);
   assert.equal(device.status, 0, device.stderr);
   assert.equal(device.stdout, '');
+  assert.equal(spir.status, 0, spir.stderr);
+  assert.match(spir.stdout, /target triple = \"spir64-unknown-unknown\"/);
+  assert.match(spir.stdout, /spir_kernel void @attolang_saxpy_v1/);
+  assert.match(spir.stdout, /get_global_id/);
 });
 
 const cases = [
