@@ -17,6 +17,7 @@ execute_process(COMMAND "${G1_LLC}" -march=nvptx64 -mcpu=sm_50 -O0
     -filetype=asm -o "${ptx}" "${source}"
     RESULT_VARIABLE llc_rc OUTPUT_VARIABLE llc_out ERROR_VARIABLE llc_err)
 if(NOT llc_rc EQUAL 0 OR NOT EXISTS "${ptx}")
+    file(REMOVE "${ptx}")
     message(FATAL_ERROR "GPU-G1-PTX-003: llc NVPTX lowering failed: ${llc_err}")
 endif()
 file(READ "${ptx}" ptx_contents)
