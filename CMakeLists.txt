@@ -736,6 +736,18 @@ if(BUILD_TESTING)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_parity_syntax.cmake")
         set_tests_properties(native_atto_parity_syntax PROPERTIES TIMEOUT 240)
     endif()
+    # Host runtime libc imports must stay in HostRuntimeLibcSymbols.hpp so a
+    # guest function of that name is emitted under a compiler-owned symbol.
+    find_program(ORE_NM NAMES llvm-nm llvm-nm-19 llvm-nm-18 nm)
+    if(ORE_CLANG AND ORE_NM)
+        add_test(NAME native_runtime_libc_symbol_guard
+            COMMAND "${CMAKE_COMMAND}"
+                "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DCLANG=${ORE_CLANG}" "-DNM=${ORE_NM}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_runtime_libc_symbol_guard.cmake")
+        set_tests_properties(native_runtime_libc_symbol_guard PROPERTIES TIMEOUT 120)
+    endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)

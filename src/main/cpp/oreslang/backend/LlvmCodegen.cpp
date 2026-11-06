@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/HostRuntimeLibcSymbols.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -1066,7 +1067,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             ? "oreslang_cortexm_bootstrap"
             : (native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
-            : (source.module.empty() ? fn.name : source.module + "." + fn.name));
+            // A host guest function named like a libc symbol the native runtime
+            // imports (or in the `_`-prefixed compiler/libc namespace) would
+            // replace it at link time; emit a compiler-owned symbol instead.
+            : (native_main && source.module.empty() &&
+                    (is_host_runtime_libc_symbol(fn.name) || fn.name.rfind("_", 0) == 0)
+            ? "__ores_guest." + fn.name
+            : (source.module.empty() ? fn.name : source.module + "." + fn.name)));
         // Overloaded source selectors erase the hidden receiver. Keep the
         // internal ABI parameter list and lookup count unchanged.
         const std::size_t source_arity = native_source_value_arity(
@@ -1094,12 +1101,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            // Host executables reach guest code only through the generated main, so
-            // guest functions stay internal there: an external guest `write`, `read`
-            // or `poll` would otherwise replace the libc symbol for the native
-            // runtime at link time. Wasm and Cortex-M guests keep external symbols
-            // because their platform harnesses call them.
-            (fn.native_internal || fn.async_source_i64 || (!wasm32_target && !cortex_m_target))
+            (fn.native_internal || fn.async_source_i64)
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);

@@ -19,13 +19,25 @@ the Java reference's existing rules.
 - **Panic output is no longer lost.** Native console output is asynchronous (a
   writer thread drains a queue, per the no-blocking-I/O rule). A failed
   `unwrap`/`expect` previously aborted before the queue drained, so text
-  printed just before the panic vanished. `ores_string_panic_flush` now drains
-  it first.
+  printed just before the panic vanished. `ores_string_panic` now drains it
+  first, then writes the `expect` message to stderr. The drain has one 1 s
+  budget, so a stdout nobody reads cannot stall a panic for 5 s per line.
+- **Guest names no longer hijack libc.** A host guest function named like a
+  libc symbol the native runtime imports (`write`, `read`, `poll`, `malloc`, ...)
+  was emitted under that name and replaced libc for the runtime at link time (a
+  guest `write` made the console writer thread call it and trap). Such
+  functions, and any `_`-prefixed one, are now emitted as `__ores_guest.<name>`.
+  Calls resolve by source name, so behaviour is unchanged. The list lives in
+  `HostRuntimeLibcSymbols.hpp`; CTest `native_runtime_libc_symbol_guard`
+  recompiles the runtimes and fails if they import a libc symbol not on it.
+  Wasm/Cortex-M exports and all other host symbols are unchanged.
 - `expect` requires a **string literal** message and prints only that message;
   Java also appends `: <payload>`. Exit status is `abort()` (134), not Java's
   panic status. Both differences only affect the failure path.
-- `import fnc` rejects private or unknown names, a name that collides with a
-  local function or another import, and `as` on a multi-name list. Import
+- `import fnc` also accepts Java's `import fnc {a, b} from …`. It rejects
+  private or unknown names, a name that collides with a local function, another
+  function import or a module import (in either order), empty braces, `as` on a
+  multi-name list, and parameters or locals that shadow an imported function. Import
   cycles between files work because a file's functions are registered before
   its own imports are followed.
 - Arity diagnostics now say which error occurred, keeping the old prefix:
@@ -38,9 +50,12 @@ the Java reference's existing rules.
 ## Evidence
 
 `native_atto_parity_syntax` (CTest, `tests/atto_parity_syntax.cmake`) compiles
-and runs five `.atto` guests under `tests/fixtures/atto_parity_syntax/` with the
-real `compile-aot.sh` pipeline and checks exact stdout and exit status. It also
-runs nine fail-closed compiler rejections with exact diagnostics.
+and runs six `.atto` guests under `tests/fixtures/atto_parity_syntax/` with the
+real `compile-aot.sh` pipeline and checks exact stdout and exit status. One
+guest defines its own `write` and must still panic cleanly; panic cases also
+check stderr. It runs fifteen fail-closed compiler rejections with exact
+diagnostics. `native_string_region_lifetime_and_budgets` covers the pre-panic
+drain, exact `INT64_MIN`/bool text, and the bounded drain.
 
 Against the shared 49-case corpus, LLVM moves from 9 runtime matches and 0
 classified rejections to 13 runtime matches and 6 classified rejections
