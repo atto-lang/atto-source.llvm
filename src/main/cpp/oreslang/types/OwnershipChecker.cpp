@@ -1052,6 +1052,9 @@ void validate_i64_ownership(Program& program) {
                     check_call(call, state, functions);
                 } else if (call.kind == Expression::Kind::Console) {
                     check_value(call, state, functions);
+                } else if (call.kind == Expression::Kind::SumAccess && (call.name == "expect" || call.name == "unwrap")) {
+                    // Discarded panic-on-absent extraction, e.g. `failure.expect("msg");`.
+                    check_value(call, state, functions);
                 } else {
                     throw std::runtime_error("invalid native call statement");
                 }

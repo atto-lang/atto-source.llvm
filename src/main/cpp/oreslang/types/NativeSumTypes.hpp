@@ -95,8 +95,13 @@ inline void resolve_native_sums(Program& program) {
                 const bool query = option ? e.name == "is_some" || e.name == "is_none" : e.name == "is_ok" || e.name == "is_err";
                 const bool unwrap = e.name == "unwrap";
                 const bool fallback = e.name == "unwrap_or";
-                if ((!query && !unwrap && !fallback) || e.arguments.size() != (fallback ? 1u : 0u))
+                // expect(msg) is unwrap with a caller message (Java: panic "msg: <payload>").
+                // The native slice prints a literal message only, so require a literal.
+                const bool expect = e.name == "expect";
+                if ((!query && !unwrap && !fallback && !expect) || e.arguments.size() != (fallback || expect ? 1u : 0u))
                     throw std::runtime_error("unsupported native sum method or arity '" + e.name + "'");
+                if (expect && e.arguments[0]->kind != E::String)
+                    throw std::runtime_error("native Option/Result.expect requires a string literal message");
                 e.kind = E::SumAccess; e.sum_type = owner.sum;
                 e.resolved_type = query ? ScalarType::Bool : type.value_type;
                 return {e.resolved_type};

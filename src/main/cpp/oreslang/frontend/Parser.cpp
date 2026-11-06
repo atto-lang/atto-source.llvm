@@ -596,6 +596,41 @@ public:
             advance();
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
+            if (accept("fnc")) {
+                // Java-compatible named function import: `import fnc a, b from "p";`
+                // or `import fnc a as b from "p";`. One import record per name;
+                // the module loader binds each to the target file's pub function.
+                std::vector<ModuleImport> selected;
+                const std::size_t offset = token_.offset;
+                do {
+                    ModuleImport imported;
+                    imported.offset = offset;
+                    imported.selected_function = true;
+                    imported.selected_module = identifier();
+                    imported.local_name = imported.selected_module;
+                    selected.push_back(std::move(imported));
+                } while (accept(","));
+                if (accept("as")) {
+                    if (selected.size() != 1) fail("named import aliases require exactly one selected name");
+                    selected.front().local_name = identifier();
+                }
+                require("from");
+                if (token_.kind != Kind::String) fail("native function import requires a quoted source path");
+                const std::string path(token_.text);
+                if (path.empty() || path.size() > 4096) fail("native import path must contain 1..4096 bytes");
+                for (unsigned char ch : path)
+                    if (ch < 32 || ch == 127 || ch == '\\')
+                        fail("native import path escapes/control characters unsupported");
+                advance();
+                require(";");
+                for (auto& imported : selected) {
+                    if (module_names_.count(imported.local_name) || !function_import_names_.insert(imported.local_name).second)
+                        fail("duplicate imported function binding '" + imported.local_name + "'");
+                    imported.path = path;
+                    program.imports.push_back(std::move(imported));
+                }
+                continue;
+            }
             ModuleImport imported;
             imported.offset = token_.offset;
             imported.selected_class = accept("class");
@@ -2556,8 +2591,8 @@ private:
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
-                    if (accept(";")) {
-                        if (!accept("then")) require("do"); statement.then_statements = branch_arm(false, true);
+                    if (accept_keyword_if_header()) {
+                        statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
@@ -2884,12 +2919,8 @@ private:
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                const bool then_form = accept(";");
-                if (then_form) {
-                    if (!accept("then")) require("do");
-                } else {
-                    require("{");
-                }
+                const bool then_form = accept_keyword_if_header();
+                if (!then_form) require("{");
                 if (accept("return")) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
@@ -3638,7 +3669,24 @@ private:
         if (accept("stdio")) {
             require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
+            // String unless the native type checker proves an int/bool argument.
+            expr->resolved_type = ScalarType::String;
             expr->name = identifier();
+            if (expr->name == "stdout") {
+                // Java stdio.stdout.write/println take exactly one argument and
+                // render it like stdio.print/println; write adds no newline.
+                // Lower onto the same Console node so output is byte-identical.
+                require(".");
+                const std::string member = identifier();
+                if (member == "write") expr->name = "print";
+                else if (member == "println") expr->name = "println";
+                else fail("unsupported native stdio.stdout operation");
+                require("(");
+                expr->left = expression();
+                if (token_.text == ",") fail("stdio.stdout." + member + " takes exactly one argument");
+                require(")");
+                return expr;
+            }
             if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
             // Java stdio.print/println concatenate arguments without an
             // inserted separator and append at most one newline. Lower all
@@ -3849,6 +3897,16 @@ private:
         if (token_.text != text) return false;
         advance();
         return true;
+    }
+
+    // Keyword-delimited `if` header after the condition, matching the Java
+    // reference: the `;` is optional, `then` is canonical and `do` is the
+    // deprecated spelling. Returns false when the caller must parse a `{` block.
+    bool accept_keyword_if_header() {
+        const bool semicolon = accept(";");
+        if (accept("then") || accept("do")) return true;
+        if (semicolon) require("then");
+        return false;
     }
 
     // Consult a copy of the scanner rather than merging arithmetic tokens.
@@ -4119,7 +4177,8 @@ private:
                 if (found == functions.end() ||
                     found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
-                                             + expr.name + "' at byte "
+                                             + expr.name + (found == functions.end() ? "': unknown function" : "': call arity mismatch")
+                                             + " at byte "
                                              + std::to_string(expr.offset));
                 }
                 if (!expr.argument_names.empty() &&
@@ -4274,9 +4333,14 @@ private:
                 return ScalarType::Bool;
             case Expression::Kind::String:
                 return expr.resolved_type = ScalarType::String;
-            case Expression::Kind::Console:
-                require_type(validate_scalar_expression(*expr.left, variables, functions, depth + 1), ScalarType::String, "stdio");
+            case Expression::Kind::Console: {
+                // String, int or bool; int/bool are rendered as text by codegen.
+                const ScalarType argument = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
+                if (argument != ScalarType::I64 && argument != ScalarType::Bool)
+                    require_type(argument, ScalarType::String, "stdio");
+                expr.resolved_type = argument;
                 return ScalarType::I64;
+            }
             case Expression::Kind::Variable: {
                 const auto found = variables.find(expr.name);
                 // Non-scalar class/array/actor names are rejected by ownership
@@ -4324,7 +4388,7 @@ private:
                 if (family == functions.end() ||
                         !family->second.count(expr.arguments.size()))
                     throw std::runtime_error("unknown function or wrong call arity '" +
-                        expr.name + "' at byte " + std::to_string(expr.offset));
+                        expr.name + (family == functions.end() ? "': unknown function" : "': call arity mismatch") + " at byte " + std::to_string(expr.offset));
                 const auto& signature = family->second.at(expr.arguments.size());
                 if (signature.async_source_i64)
                     throw std::runtime_error(
@@ -5658,6 +5722,7 @@ private:
     Lexer lexer_;
     Token token_;
     std::unordered_set<std::string> module_names_;
+    std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
     std::vector<Function> methods_;
