@@ -72,6 +72,42 @@ inline std::string expand_static_import_path(
             throw std::invalid_argument(
                 "expanded import specifier contains control characters or display-spoofing characters");
     }
+    // Environment values are OS bytes on native platforms. A malformed UTF-8
+    // byte sequence must never become a different filesystem identity from
+    // Java's Unicode string representation or leak through source receipts.
+    for (std::size_t i = 0; i < output.size();) {
+        const auto first = static_cast<unsigned char>(output[i]);
+        if (first < 0x80) {
+            ++i;
+            continue;
+        }
+        std::size_t continuation = 0;
+        unsigned char second_min = 0x80;
+        unsigned char second_max = 0xBF;
+        if (first >= 0xC2 && first <= 0xDF) continuation = 1;
+        else if (first >= 0xE0 && first <= 0xEF) {
+            continuation = 2;
+            if (first == 0xE0) second_min = 0xA0;
+            if (first == 0xED) second_max = 0x9F;
+        } else if (first >= 0xF0 && first <= 0xF4) {
+            continuation = 3;
+            if (first == 0xF0) second_min = 0x90;
+            if (first == 0xF4) second_max = 0x8F;
+        } else {
+            throw std::invalid_argument("expanded import specifier is not valid UTF-8");
+        }
+        if (continuation >= output.size() - i)
+            throw std::invalid_argument("expanded import specifier is not valid UTF-8");
+        const auto second = static_cast<unsigned char>(output[i + 1]);
+        if (second < second_min || second > second_max)
+            throw std::invalid_argument("expanded import specifier is not valid UTF-8");
+        for (std::size_t k = 2; k <= continuation; ++k) {
+            const auto ch = static_cast<unsigned char>(output[i + k]);
+            if (ch < 0x80 || ch > 0xBF)
+                throw std::invalid_argument("expanded import specifier is not valid UTF-8");
+        }
+        i += continuation + 1;
+    }
     return output;
 }
 
