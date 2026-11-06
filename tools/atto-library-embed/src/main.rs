@@ -2,7 +2,6 @@
 //! --check never rewrites; --write is explicit. Source Git blob IDs are pinned.
 //! No source-to-source interpretation or guest execution occurs here.
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
