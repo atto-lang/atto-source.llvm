@@ -46,6 +46,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # AttoLang native launch spelling: exact compiler-backed scalar control and
+    # fail-closed GPU admission, not executed kernels or hardware parity.
+    add_test(NAME native_atto_gpu_explicit_launch_source_admission
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-launch-admission"
+            "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_explicit_launch_admission.cmake")
+    set_tests_properties(native_atto_gpu_explicit_launch_source_admission
+        PROPERTIES TIMEOUT 75)
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
