@@ -78,6 +78,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--clang", required=True)
+    parser.add_argument("--auditor", required=True)
     parser.add_argument("--root", required=True)
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
@@ -99,7 +100,7 @@ def main():
         for name, expected in NEGATIVE:
             source = fixtures / name
             result = execute([str(compiler), str(source)])
-            assert result.returncode != 0 and result.returncode != 2, (
+            assert result.returncode != 0, (
                 name, result.returncode, result.stderr)
             assert expected in result.stderr, (name, expected, result.stderr)
             assert not result.stdout.strip(), (name, "compiler emitted IR on rejection")
@@ -123,6 +124,8 @@ def main():
 
             ir_path = workspace / (name + ".ll")
             ir_path.write_text(ir, encoding="utf-8")
+            audit = execute([args.auditor, str(ir_path)])
+            assert audit.returncode == 0, (name, "no-GC IR auditor rejected source guest", audit.stderr)
             binary = workspace / (name + ".guest")
             opts = (["-O1", "-g", "-fno-omit-frame-pointer",
                      "-fsanitize=address,undefined"] if args.sanitize else ["-O1"])
