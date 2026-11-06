@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/AttoGpuSaxpyV1.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -211,6 +212,7 @@ int main(int argc, char** argv) {
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool emit_opencl_gpu_v1 = false;
     std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -287,6 +289,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg == "--emit-opencl-gpu-v1") {
+            if (emit_opencl_gpu_v1) { std::cerr << "duplicate gpu emit option\n"; return 2; }
+            emit_opencl_gpu_v1 = true;
         } else if (arg == "--tree-shake") {
             if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
             tree_shake = true;
@@ -318,6 +323,17 @@ int main(int argc, char** argv) {
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    // Keep source-to-device artifact emission independent of host/wasm/AOT
+    // compilation flags. It does not authorize GPU dispatch or a CPU fallback.
+    if (emit_opencl_gpu_v1 && (
+            target_seen || profile_seen || library_profile_seen ||
+            allocator_provider_seen || experimental_owned_int ||
+            experimental_rt_scalar_loop || tree_shake ||
+            !tree_shake_roots.empty() || constraint_descriptors_only ||
+            rt_check_only || rt_entry_seen || rt_report_seen)) {
+        std::cerr << "gpu source artifact mode cannot combine with host target/profile options\n";
+        return 2;
     }
     // Public library architecture has exactly two layers. For now the native
     // backend only certifies the freestanding core profile on targets whose ABI
@@ -382,7 +398,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--emit-opencl-gpu-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -401,6 +417,20 @@ int main(int argc, char** argv) {
             path, kMaxSourceBytes, source_overflow,
             &source_identity, &expected_source_identity);
         require_valid_source_utf8(text);
+        if (emit_opencl_gpu_v1) {
+            const std::string_view source_name(path);
+            if (source_name.size() < 5 ||
+                source_name.substr(source_name.size() - 5) != ".atto")
+                throw std::runtime_error("GPU source compiler requires a .atto input");
+            const auto device = oreslang::gpu_source_v1::compile_saxpy(text);
+            // Emission is a compiler artifact only. Provider-authenticated
+            // device allocation, checked launch and quiescent fence are still
+            // mandatory before physical execution can be claimed.
+            std::cout << device.device_source;
+            std::cout.flush();
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
+        }
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
         // constraints before parsing or emitting LLVM IR.
