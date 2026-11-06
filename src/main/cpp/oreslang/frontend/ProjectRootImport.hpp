@@ -45,7 +45,16 @@ inline void reject_nested_package(const fs::path& root, const fs::path& path) {
     }
 }
 
-inline void validate_manifest(const std::string& manifest_bytes) {
+struct ManifestLayout {
+    // A constrained subset of TOML is admitted for native source identity:
+    // a plain quoted [project].root plus either schema_version = "1" or
+    // Zed's [package].name. Unsupported / ambiguous authority fails closed.
+    fs::path configured_root = ".";
+};
+
+inline ManifestLayout validate_manifest(const std::string& manifest_bytes) {
+    if (manifest_bytes.size() > 64u * 1024u)
+        throw std::runtime_error("native package manifest exceeds 64 KiB");
     if (manifest_bytes.find("\"\"\"") != std::string::npos ||
             manifest_bytes.find("'''") != std::string::npos)
         throw std::runtime_error("native package manifest multiline TOML requires full parser");
@@ -55,38 +64,77 @@ inline void validate_manifest(const std::string& manifest_bytes) {
     const std::regex version_key(
         R"ores(^[ \t]*(?:schema_version|"schema_version"|'schema_version')[ \t]*=.*$)ores");
     const std::regex project_section(
-        R"ores(^[ \t]*\[[ \t]*(?:project|"project"|'project')[ \t]*\][ \t]*(?:#.*)?$)ores");
+        R"ores(^[ \t]*\[[ \t]*project[ \t]*\][ \t]*(?:#.*)?$)ores");
+    const std::regex package_section(
+        R"ores(^[ \t]*\[[ \t]*package[ \t]*\][ \t]*(?:#.*)?$)ores");
     const std::regex project_assignment(
         R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.[ \t]*(?:root|"root"|'root')[ \t]*=).*$)ores");
     const std::regex root_assignment(
         R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=.*$)ores");
+    const std::regex plain_root(
+        R"ores(^[ \t]*root[ \t]*=[ \t]*"([A-Za-z0-9_./-]+)"[ \t]*(?:#.*)?$)ores");
+    const std::regex name_assignment(
+        R"ores(^[ \t]*(?:name|"name"|'name')[ \t]*=.*$)ores");
+    const std::regex plain_name(
+        R"ores(^[ \t]*name[ \t]*=[ \t]*(['"])([a-z0-9][a-z0-9-]*)\1[ \t]*(?:#.*)?$)ores");
 
     std::size_t version_count = 0;
-    bool in_root_section = true;
+    std::size_t name_count = 0;
+    std::size_t root_count = 0;
+    bool at_top_level = true;
     bool in_project_section = false;
+    bool in_package_section = false;
+    ManifestLayout layout;
     std::istringstream lines(manifest_bytes);
     std::string line;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (std::regex_match(line, project_assignment) ||
-                (in_project_section && std::regex_match(line, root_assignment)))
+        if (std::regex_match(line, project_assignment))
             throw std::runtime_error("native project.root requires full TOML parser");
+        if (in_project_section && std::regex_match(line, root_assignment)) {
+            std::smatch match;
+            if (!std::regex_match(line, match, plain_root) || ++root_count != 1)
+                throw std::runtime_error("native project.root must be one plain quoted relative path");
+            const std::string root = match[1].str();
+            if (root != ".") {
+                if (!root.empty() && root.front() == '/')
+                    throw std::runtime_error("native project.root cannot be absolute");
+                std::size_t begin = 0;
+                while (begin <= root.size()) {
+                    const auto slash = root.find('/', begin);
+                    const auto end = slash == std::string::npos ? root.size() : slash;
+                    const auto component = root.substr(begin, end - begin);
+                    if (component.empty() || component == "." || component == "..")
+                        throw std::runtime_error("native project.root rejects dot/traversal components");
+                    if (slash == std::string::npos) break;
+                    begin = slash + 1;
+                }
+            }
+            layout.configured_root = fs::path(root);
+        }
+        if (in_package_section && std::regex_match(line, name_assignment)) {
+            std::smatch match;
+            if (!std::regex_match(line, match, plain_name) || ++name_count != 1)
+                throw std::runtime_error("native Zed [package].name requires a safe single identity");
+        }
 
         const auto first = line.find_first_not_of(" \t");
         if (first != std::string::npos && line[first] == '[') {
-            in_root_section = false;
+            at_top_level = false;
             in_project_section = std::regex_match(line, project_section);
+            in_package_section = std::regex_match(line, package_section);
         }
-        if (in_root_section && std::regex_match(line, version_key)) {
+        if (at_top_level && std::regex_match(line, version_key)) {
             if (!std::regex_match(line, version))
                 throw std::runtime_error(
                     "native project-root import requires schema_version = \"1\"");
             ++version_count;
         }
     }
-    if (version_count != 1)
+    if (version_count != 1 && !(version_count == 0 && name_count == 1))
         throw std::runtime_error(
-            "native project-root import requires schema_version = \"1\"");
+            "native project-root import requires schema_version = \"1\" or Zed [package].name");
+    return layout;
 }
 
 /**
@@ -228,6 +276,7 @@ inline std::filesystem::path resolve_project_root_import(
 
     fs::path cursor = source.parent_path();
     fs::path package_root;
+    fs::path configured_root = ".";
     for (;;) {
         const fs::path manifest = cursor / ".ores.pkg.toml";
         if (exists_marker(manifest)) {
@@ -242,7 +291,8 @@ inline std::filesystem::path resolve_project_root_import(
                     "native package manifest must reside within package directory");
             // Reopen the already-canonical path so a manifest symlink swap after
             // the locality check cannot redirect the bytes we validate.
-            validate_manifest(read_manifest(physical_manifest));
+            const auto layout = validate_manifest(read_manifest(physical_manifest));
+            configured_root = layout.configured_root;
             package_root = cursor;
             break;
         }
@@ -256,19 +306,28 @@ inline std::filesystem::path resolve_project_root_import(
 
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
-    fs::path candidate = package_root / fs::path(std::string(suffix));
-    candidate = resolve_native_source_suffix(candidate);
-
-    const auto physical_root = fs::canonical(package_root, error);
+    const fs::path source_root_spelled = package_root / configured_root;
+    const fs::path source_root = fs::canonical(source_root_spelled, error);
+    if (error)
+        throw std::runtime_error("cannot resolve configured native project.root");
+    const fs::path physical_root = fs::canonical(package_root, error);
     if (error)
         throw std::runtime_error("cannot resolve native package root");
+    if (source_root != physical_root &&
+            !strict_descendant(physical_root, source_root))
+        throw std::runtime_error("configured native project.root escapes package root");
 
-    reject_nested_package(package_root, candidate);
+    fs::path candidate = source_root_spelled / fs::path(std::string(suffix));
+    candidate = resolve_native_source_suffix(candidate);
+    reject_nested_package(physical_root, source_root == physical_root ? candidate : source_root);
+    reject_nested_package(physical_root, candidate);
 
     const auto target = fs::canonical(candidate, error);
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
     reject_nested_package(physical_root, target);
+    if (!strict_descendant(source_root, target))
+        throw std::runtime_error("native project-root import escapes configured project.root");
     return target;
 }
 
