@@ -8,7 +8,8 @@ int main() {
         oreslang::cuda_aot::SystemDriver api;
         std::cout << "cuda-driver-context-observed:sm=" << api.current_sm() << '\n';
     } catch (const std::exception&) {
-        std::cout << "cuda-driver-not-admitted:no-trusted-context\n";
+        std::cout << "cuda-driver-not-admitted:NOT_EXECUTED:no-trusted-context\n";
+        return 77;
     }
     return 0;
 }
