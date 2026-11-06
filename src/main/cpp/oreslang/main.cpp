@@ -417,6 +417,12 @@ int main(int argc, char** argv) {
             path, kMaxSourceBytes, source_overflow,
             &source_identity, &expected_source_identity);
         require_valid_source_utf8(text);
+        // Target/capability directives are lexical comments in the native
+        // subset. Reject rather than silently discard unverified portability
+        // constraints before parsing or emitting LLVM IR.
+        if (text.find("// ores:") != std::string::npos) {
+            throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
+        }
         if (emit_opencl_gpu_v1) {
             const std::string_view source_name(path);
             if (source_name.size() < 5 ||
@@ -430,12 +436,6 @@ int main(int argc, char** argv) {
             std::cout.flush();
             if (coreLog) coreLog->dump(stderr);
             return 0;
-        }
-        // Target/capability directives are lexical comments in the native
-        // subset. Reject rather than silently discard unverified portability
-        // constraints before parsing or emitting LLVM IR.
-        if (text.find("// ores:") != std::string::npos) {
-            throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
