@@ -44,6 +44,16 @@ def main(compiler):
         assert "status=known" in result.stdout, result.stdout
         assert "known_effects=none" in result.stdout, result.stdout
 
+    # Early budget exits are inconclusive, not failures, so they must still
+    # print a versioned record for callers that require one before trusting 2.
+    many = "".join(f"fnc f{i}(): int {{ return {i}; }}\n" for i in range(4097))
+    budget = run(compiler, many + "pub fnc main(): int { return 0; }\n",
+                 flags=("--analyze",))
+    assert budget.returncode == 2, (budget.returncode, budget.stderr[-400:])
+    assert "ORES-ANALYZE-V0\tstatus=inconclusive\treason=function-budget" in budget.stdout, (
+        budget.stdout[-400:]
+    )
+
     # A real, admitted native source with a closed direct call chain:
     chain = (
         "fnc helper(): int { return 7; }\n"

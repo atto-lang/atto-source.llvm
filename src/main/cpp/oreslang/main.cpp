@@ -298,6 +298,7 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
         !ast.cooperative_loops.empty() || !ast.generators.empty() ||
         !ast.contracts.empty() || !ast.conforms.empty();
     if (ast.functions.size() > oreslang::realtime_detail::kMaxRealtimeFunctions) {
+        std::cout << "ORES-ANALYZE-V0\tstatus=inconclusive\treason=function-budget\n" << std::flush;
         std::cerr << "oreslang-llvmc: analysis v0 inconclusive; function budget exceeded\n";
         return 2;
     }
@@ -305,6 +306,7 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
     for (const auto& fn : ast.functions) {
         const auto key = function_key(fn.name, fn.parameters.size());
         if (rows.count(key)) {
+            std::cout << "ORES-ANALYZE-V0\tstatus=inconclusive\treason=ambiguous-callable\n" << std::flush;
             std::cerr << "oreslang-llvmc: analysis v0 inconclusive; ambiguous callable identity\n";
             return 2;
         }
@@ -323,6 +325,7 @@ static int print_native_analysis_v0(const oreslang::Program& ast) {
             const auto facts =
                 oreslang::realtime_detail::direct_facts(fn, remaining, &ast);
             if (facts.call_budget_exceeded) {
+                std::cout << "ORES-ANALYZE-V0\tstatus=inconclusive\treason=call-graph-budget\n" << std::flush;
                 std::cerr << "oreslang-llvmc: analysis v0 inconclusive; call graph budget exceeded\n";
                 return 2;
             }
