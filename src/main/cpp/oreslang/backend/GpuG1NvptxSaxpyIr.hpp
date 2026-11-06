@@ -68,7 +68,6 @@ entry:
   %base = mul i64 %bid64, %bd64
   %index = add i64 %base, %tid64
   %in_bounds = icmp ult i64 %index, %n
-
   br i1 %in_bounds, label %body, label %exit
 body:
   %xp = getelementptr float, ptr addrspace(1) %x, i64 %index
