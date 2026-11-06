@@ -244,6 +244,9 @@ def main():
             ('env-missing-manifest-denied', '${repo}/lib', {'repo': str(root / 'env-negative-env-missing-manifest-denied')}, 'absolute import requires nearest .ores.pkg.toml'),
             ('unbraced-dollar-not-alias', '$repo/lib', {'repo': str(root)}, 'native imports require'),
             ('remote-not-verified', 'https://example.test/lib.atto', {}, 'remote imports require locked'),
+            ('file-uri-not-source', 'file:///tmp/lib.atto', {}, 'unsupported import URI scheme'),
+            ('interpolated-java-uri-not-source', '${repo}/lib',
+             {'repo': 'java:java.lang.Runtime'}, 'unsupported import URI scheme'),
         ]:
             directory = root / ('env-negative-' + label)
             directory.mkdir()
