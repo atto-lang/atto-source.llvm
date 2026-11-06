@@ -128,6 +128,7 @@ public:
 
     void complete_current() { if (last_) last_->status = EventStatus::Complete; }
     void fail_current() { if (last_) last_->status = EventStatus::Failed; }
+    void lose_device() { if (last_) last_->status = EventStatus::DeviceLost; }
 
     bool pending_ = false;
     bool fail_launch_ = false;
@@ -251,6 +252,72 @@ int main() {
         p.recover_after_quiescence(*op);
         check(op->state() == S::Failed && api.event_releases_ == 1 &&
               api.buffer_releases_ == 3, "recover after trusted queue finish");
+    }
+
+    // Cancellation during a pending kernel retains all inputs and output
+    // until its exact native event completes; no download is submitted.
+    {
+        FakeGpu api;
+        api.pending_ = false;
+        auto p = provider(api);
+        auto op = p.prepare(kSource, {2.0f}, {3.0f}, 4.0f);
+        check(p.poll(*op) == S::UploadX, "kernel cancellation upload X");
+        check(p.poll(*op) == S::UploadY, "kernel cancellation upload Y");
+        api.pending_ = true;
+        check(p.poll(*op) == S::Kernel, "kernel cancellation launch");
+        p.request_cancel(*op);
+        check(p.poll(*op) == S::Kernel && api.buffer_releases_ == 0,
+              "pending kernel cannot retire buffers");
+        api.complete_current();
+        check(p.poll(*op) == S::Cancelled && api.downloads_ == 0
+              && api.buffer_releases_ == 3, "kernel completion permits cancel");
+    }
+
+    // Physical device loss never authorizes release before trusted
+    // queue-quiescence proof, even when cancellation was also requested.
+    {
+        FakeGpu api;
+        api.pending_ = true;
+        auto p = provider(api);
+        auto op = p.prepare(kSource, {1.0f}, {2.0f}, 3.0f);
+        check(p.poll(*op) == S::UploadX, "device-loss upload");
+        p.request_cancel(*op);
+        api.lose_device();
+        check(p.poll(*op) == S::Quarantined, "device loss quarantines");
+        check(api.buffer_releases_ == 0, "no device loss speculative retirement");
+        reject([&] { p.recover_after_quiescence(*op); });
+        api.allow_quiescence_ = true;
+        p.recover_after_quiescence(*op);
+        check(op->state() == S::Cancelled && !p.busy(),
+              "device-loss cancellation needs proven quiescence");
+    }
+
+    // Shutdown must not treat an incomplete event as a completion. Only
+    // explicit out-of-band clFinish-like proof can retire staged input.
+    {
+        FakeGpu api;
+        api.pending_ = true;
+        auto p = provider(api);
+        auto op = p.prepare(kSource, {1.0f}, {2.0f}, 3.0f);
+        check(p.poll(*op) == S::UploadX, "shutdown pending upload");
+        reject([&] { p.shutdown_after_quiescence(*op); });
+        check(api.buffer_releases_ == 0 && p.busy(),
+              "unproved shutdown leaves buffers pinned");
+        api.allow_quiescence_ = true;
+        p.shutdown_after_quiescence(*op);
+        check(op->state() == S::Cancelled && api.buffer_releases_ == 3,
+              "trusted shutdown cleans all three physical buffers");
+    }
+
+    // Foreign-operation polling cannot consume another provider's event.
+    {
+        FakeGpu api;
+        auto first = provider(api);
+        auto second = provider(api);
+        auto op = first.prepare(kSource, {1.0f}, {2.0f}, 3.0f);
+        reject([&] { (void)second.poll(*op); });
+        check(first.busy(), "foreign poll must not steal ownership");
+        run_to_terminal(first, *op);
     }
 
     // Release error is retryable; do not unlock quota early.
