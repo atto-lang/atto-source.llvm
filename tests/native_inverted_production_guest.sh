@@ -139,7 +139,8 @@ import sys
 path = Path(sys.argv[1])
 if path.is_symlink() or not path.is_file() or not os.access(path, os.X_OK):
     raise SystemExit("FAIL: expected a regular executable native guest image")
-magic = path.read_bytes()[:4]
+with path.open('rb') as native_image:
+    magic = native_image.read(4)
 formats = {
     bytes.fromhex("7f454c46"),  # ELF
     bytes.fromhex("cffaedfe"), bytes.fromhex("feedfacf"),  # Mach-O
