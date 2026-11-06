@@ -209,6 +209,15 @@ def main():
             "unknown compiler-owned ores.core module",
         )
 
+        atto_std = root / "atto-std.atto"
+        atto_std.write_text(
+            'import module files from "atto.std/fs"; '
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
+        require_rejected(
+            run([args.compiler, str(atto_std)]),
+            "native atto.std package resolution remains unsupported",
+        )
+
         std_source = root / "std.ores"
         std_source.write_text(
             'import module testing from "ores.std/testing"; '

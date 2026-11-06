@@ -59,12 +59,14 @@ inline bool is_reserved_core_import(std::string_view raw) noexcept {
 }
 
 inline bool is_reserved_std_import(std::string_view raw) noexcept {
-    return raw == "ores.std" || raw.rfind("ores.std/", 0) == 0 ||
+    return raw == "atto.std" || raw.rfind("atto.std/", 0) == 0 ||
+        raw == "ores.std" || raw.rfind("ores.std/", 0) == 0 ||
         raw == "std" || raw.rfind("std/", 0) == 0;
 }
 
 inline bool is_reserved_alloc_import(std::string_view raw) noexcept {
-    return raw == "alloc" || raw.rfind("alloc/", 0) == 0;
+    return raw == "atto.alloc" || raw.rfind("atto.alloc/", 0) == 0 ||
+        raw == "alloc" || raw.rfind("alloc/", 0) == 0;
 }
 
 inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
@@ -128,7 +130,7 @@ end
     };
 
     static constexpr std::string_view kIntBufferSource =
-R"ORES_ALLOC(// Compiler-owned alloc tier source.
+R"ORES_ALLOC(// Compiler-owned AttoLang atto.alloc tier source.
 // This module requires an allocator provider but no OS, filesystem, network,
 // process, actor scheduler, or ambient project dependency.
 
@@ -145,19 +147,19 @@ end
 )ORES_ALLOC";
     static constexpr CoreLibrarySource kIntBuffer{
         CompilerLibraryTier::Alloc,
-        "alloc/int_buffer",
+        "atto.alloc/int_buffer",
         "int_buffer",
-        "@alloc/int_buffer.atto",
+        "@atto.alloc/int_buffer.atto",
         kIntBufferSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
     static constexpr std::string_view kIntBufferBundleSource =
-R"ORES_ALLOC(// Compiler-owned alloc tier transitive-closure probe.
+R"ORES_ALLOC(// Compiler-owned AttoLang atto.alloc transitive-closure probe.
 // The local body is allocation-free, but linking this module brings in the
 // allocator-bearing int_buffer dependency and therefore requires Allocator.
 
-import module int_buffer from "alloc/int_buffer";
+import module int_buffer from "atto.alloc/int_buffer";
 
 define module int_buffer_bundle as
 
@@ -169,9 +171,9 @@ end
 )ORES_ALLOC";
     static constexpr CoreLibrarySource kIntBufferBundle{
         CompilerLibraryTier::Alloc,
-        "alloc/int_buffer_bundle",
+        "atto.alloc/int_buffer_bundle",
         "int_buffer_bundle",
-        "@alloc/int_buffer_bundle.atto",
+        "@atto.alloc/int_buffer_bundle.atto",
         kIntBufferBundleSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
@@ -181,10 +183,16 @@ end
             raw == "ores.core/numeric" || raw == "ores.core/numeric.atto" ||
             raw == "ores.core/numeric.ores")
         return &kNumeric;
-    if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.atto" ||
+    if (raw == "atto.alloc/int_buffer" ||
+            raw == "atto.alloc/int_buffer.atto" ||
+            raw == "atto.alloc/int_buffer.ores" ||
+            raw == "alloc/int_buffer" || raw == "alloc/int_buffer.atto" ||
             raw == "alloc/int_buffer.ores")
         return &kIntBuffer;
-    if (raw == "alloc/int_buffer_bundle" ||
+    if (raw == "atto.alloc/int_buffer_bundle" ||
+            raw == "atto.alloc/int_buffer_bundle.atto" ||
+            raw == "atto.alloc/int_buffer_bundle.ores" ||
+            raw == "alloc/int_buffer_bundle" ||
             raw == "alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
