@@ -70,7 +70,7 @@ inline std::string expand_static_import_path(
                  (next == 0x81 && third >= 0xA6 && third <= 0xA9));
         if (c < 32 || c == 127 || c1 || arabic_letter_mark || bidi_and_separator)
             throw std::invalid_argument(
-                "expanded import specifier contains control or display-spoofing characters");
+                "expanded import specifier contains control characters or display-spoofing characters");
     }
     return output;
 }
