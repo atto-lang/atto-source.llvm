@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -97,6 +98,13 @@ public:
         if (*reinterpret_cast<const unsigned char*>(&byte_order) != 1 ||
             sizeof(float) != 4 || !std::numeric_limits<float>::is_iec559)
             throw std::runtime_error("SAXPY requires little-endian IEEE binary32");
+    }
+
+    // Never drop DMA staging or physical handles while the GPU could touch
+    // them. An unrecovered live operation is fatal rather than UAF. Production
+    // hosts must drain or prove quiescence before destroying the provider.
+    ~SaxpyProvider() noexcept {
+        if (busy()) std::terminate();
     }
 
     // Must be invoked from trusted host CONTROL, not an actor carrier:
@@ -256,6 +264,26 @@ public:
             op.event_ = nullptr;
         }
         finish(op, op.cancel_requested_ ? State::Cancelled : State::Failed);
+    }
+
+    // Blocking trusted shutdown gate for an operation that is still pending
+    // (including a timeout). This must never run on an actor carrier.
+    // No terminal success is claimed from clFinish alone.
+    void shutdown_after_quiescence(Operation& op) {
+        std::lock_guard<std::mutex> guard(lock_);
+        verify_owner(op);
+        if (terminal(op.state_)) return;
+        if (op.state_ == State::ReleasePending) {
+            release_resources(op);
+            return;
+        }
+        if (!hardware_.base().prove_device_loss_quiescence())
+            throw std::logic_error("SAXPY physical queue not quiescent");
+        if (op.event_) {
+            hardware_.base().release_event(op.event_);
+            op.event_ = nullptr;
+        }
+        finish(op, State::Cancelled);
     }
 
     // Retry partial release without ever reusing a quarantined buffer.
