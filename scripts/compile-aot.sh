@@ -63,7 +63,7 @@ if grep -Eq 'declare .*@oreslang_source_task_(start_i64|await_i64|runtime_shutdo
   runtime_sources+=("$rt/SourceTaskRuntime.c")
   scheduler_source="$rt/NativeActorScheduler.c"
   scheduler_linked=0
-  for runtime_source in "\${runtime_sources[@]}"; do
+  for runtime_source in "${runtime_sources[@]}"; do
     if [[ "$runtime_source" == "$scheduler_source" ]]; then
       scheduler_linked=1
       break

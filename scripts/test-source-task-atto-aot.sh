@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Exact-head real .atto Task<int> -> IR -> native AOT O0/O2.
 set -euo pipefail
-root="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")/.." && pwd -P)"
-: "\${EXPECTED_HEAD:?Pin the exact LLVM source commit}"
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+: "${EXPECTED_HEAD:?Pin the exact LLVM source commit}"
 [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]] || exit 64
 [[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_HEAD" ]] || { echo 'wrong source HEAD' >&2; exit 78; }
-compiler="\${ORESLANG_LLVMC:-$root/build/oreslang-llvmc}"
-auditor="\${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
+compiler="${ORESLANG_LLVMC:-$root/build/oreslang-llvmc}"
+auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
 [[ -x "$compiler" && -x "$auditor" ]] || { echo 'Build compiler and no-GC IR auditor first' >&2; exit 69; }
 command -v clang >/dev/null || { echo 'Clang missing' >&2; exit 69; }
 command -v timeout >/dev/null || { echo 'timeout missing' >&2; exit 69; }
 source="$root/tests/fixtures/source-task-i64-await.atto"
 legacy="$root/tests/fixtures/source-task-i64-await.ores"
 cmp -s "$source" "$legacy" || { echo 'Task source changed from canonical test fixture' >&2; exit 78; }
-tmp="$(mktemp -d "\${TMPDIR:-/tmp}/atto-task-llvm.XXXXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/atto-task-llvm.XXXXXXXX")"
 trap 'rm -rf -- "$tmp"' EXIT
 cp -- "$source" "$tmp/pristine.atto"
 fixture_sha="$(sha256sum "$source" | cut -d' ' -f1)"
