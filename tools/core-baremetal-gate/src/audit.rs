@@ -227,6 +227,21 @@ declare void @"ores_actor_send"(ptr)
     }
 
     #[test]
+    fn mutation_detection_rejects_unknown_backend_helper_not_just_known_host_calls() {
+        let snippet = "declare i64 @atto_backend_injected_helper(i64)\n";
+        assert_eq!(ir_external_declarations(snippet),
+            vec!["atto_backend_injected_helper"]);
+        let object = [sym('U', "atto_backend_injected_helper"),sym('T', "atto_backend_injected_probe")];
+        let denied = audit_guest_object(&object);
+        assert_eq!(denied.len(),1);
+        assert!(denied[0].contains("outside the ores.core freestanding support ABI"));
+        // A new helper that happens to begin with __aeabi_ is not automatically
+        // a supported RTABI helper; support ABI is an exact allowlist.
+        let prefixed = [sym('U', "__aeabi_surprise_helper")];
+        assert_eq!(audit_guest_object(&prefixed).len(),1);
+    }
+
+    #[test]
     fn nm_parsing_handles_undefined_and_defined_rows() {
         let out = "guest.o:\n         U memcpy\n00000038 T sum\n\n";
         assert_eq!(parse_nm(out), vec![sym('U', "memcpy"), sym('T', "sum")]);
