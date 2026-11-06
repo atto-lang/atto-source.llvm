@@ -78,6 +78,56 @@ if [[ "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
     exit 1
 fi
 
+# Immutable cross-backend source contract. Validate raw Git blobs rather
+# than comment text or the compiler's claimed source identity.
+# The same two blob IDs are pinned in Java and platform conformance.
+check_contract_fixtures() {
+    python3 - "$contracts" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+expected = {
+    "swap-reuse.atto": "8f5599a9e0b11ded2929110b4936441fceb2ef21",
+    "removed-index-trap.atto": "c3c87cfd2515707932734e183bb5768436526a96",
+}
+for name, wanted in expected.items():
+    path = root / name
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"FAIL: missing or linked canonical DOP fixture {name}")
+    data = path.read_bytes()
+    if len(data) > 65536:
+        raise SystemExit(f"FAIL: oversize canonical DOP fixture {name}")
+    blob = hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\\0" + data).hexdigest()
+    if blob != wanted:
+        raise SystemExit(f"FAIL: canonical DOP fixture changed {name}: {blob}")
+print("DOP_CANONICAL_SOURCE_BLOBS_MATCHED=2")
+PY
+}
+# A shell script that exits 42 must never satisfy a native-guest success.
+# These magic bytes are a minimal executable-format screen, NOT proof of
+# compiler identity, linked allocator closure, or native isolation.
+check_native_image() {
+    python3 - "$1" <<'PY'
+import os
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+if path.is_symlink() or not path.is_file() or not os.access(path, os.X_OK):
+    raise SystemExit("FAIL: expected a regular executable native guest image")
+magic = path.read_bytes()[:4]
+formats = {
+    bytes.fromhex("7f454c46"),  # ELF
+    bytes.fromhex("cffaedfe"), bytes.fromhex("feedfacf"),  # Mach-O
+    bytes.fromhex("cefaedfe"), bytes.fromhex("feedface"),  # 32-bit Mach-O
+    bytes.fromhex("cafebabe"), bytes.fromhex("bebafeca"),  # fat Mach-O
+}
+if magic not in formats:
+    raise SystemExit(f"FAIL: guest image is not ELF/Mach-O: {magic.hex()}")
+PY
+}
+check_contract_fixtures
+
 for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto; do
     "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
     audit_ir "$tmp/guest.ll"
@@ -91,6 +141,7 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
     done
     for optimization in -O0 -O2; do
         "$clang" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
+        check_native_image "$tmp/guest"
         set +e
         "$tmp/guest" >/dev/null 2>&1
         actual=$?
@@ -113,6 +164,7 @@ fi
 audit_ir "$tmp/reuse.ll"
 for optimization in -O0 -O2; do
     "$clang" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
+    check_native_image "$tmp/reuse"
     set +e
     "$tmp/reuse" >/dev/null 2>&1
     actual=$?
@@ -138,6 +190,7 @@ fi
 # be forged by a normal return. Python checks SIGILL/SIGTRAP termination.
 for optimization in -O0 -O2; do
     "$clang" "$optimization" -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
+    check_native_image "$tmp/bounds"
     python3 - "$tmp/bounds" <<'PY'
 import resource
 import signal
@@ -237,4 +290,5 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
+check_contract_fixtures
 printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 8 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
