@@ -46,6 +46,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only typed GPU IR v1: checks ordered ABI arguments, device effects,
+    # queue scope, byte extents and mutable-loan aliasing. No physical dispatch.
+    add_executable(oreslang-native-gpu-typed-launch-ir-test
+        tests/gpu_typed_launch_ir_test.cpp)
+    target_include_directories(oreslang-native-gpu-typed-launch-ir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-typed-launch-ir-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-typed-launch-ir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_typed_launch_host_only
+        COMMAND oreslang-native-gpu-typed-launch-ir-test)
+    set_tests_properties(native_atto_gpu_typed_launch_host_only
+        PROPERTIES TIMEOUT 30)
+
     # AttoLang native launch spelling: exact compiler-backed scalar control and
     # fail-closed GPU admission, not executed kernels or hardware parity.
     add_test(NAME native_atto_gpu_explicit_launch_source_admission
