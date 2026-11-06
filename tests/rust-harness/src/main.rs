@@ -381,6 +381,33 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
                 format!("{label}: artifact identical to baseline despite distinct guest return"))?;
         }
     }
+    // Source actors through the same driver: the IR declares the native actor
+    // runtime, so the driver must link the scheduler/VM/actor heap itself.
+    // Two distinct returns prove the exit code comes from the guest.
+    let actor_source = temp.path.join("actor.atto");
+    for (label, done_await, expected_exit) in [("actor-ready", false, 44), ("actor-done", true, 45)] {
+        let program = format!(
+            "define actor Worker as {{\n  let total: int = 0;\n  pub fnc on_message(int n): int {{\n    total = total + n;\n    return total;\n  }}\n}}\n\
+             pub fnc main(): int {{\n  const worker: ActorRef<Worker> = spawn Worker();\n{}  stop worker;\n{}  return {expected_exit};\n}}\n",
+            if done_await { "" } else {
+                "  const Future<void> ready = worker.get_ready();\n  await ready;\n  worker.send(1);\n  worker.send(2);\n"
+            },
+            if done_await { "  await worker.get_done();\n" } else { "" });
+        fs::write(&actor_source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
+        let built = Command::new(driver)
+            .arg(&actor_source).arg(&output)
+            .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+            .output().map_err(|e| format!("{label}: AOT driver: {e}"))?;
+        require(built.status.success(),
+            format!("{label}: actor runtime link failed: {}", stderr(&built)))?;
+        let executed = Command::new(&output)
+            .env_clear().env("PATH", "/nonexistent")
+            .output().map_err(|e| format!("{label}: native entrypoint: {e}"))?;
+        require(executed.status.code() == Some(expected_exit),
+            format!("{label}: native actor guest returned {:?} instead of {expected_exit}: {}",
+                executed.status.code(), stderr(&executed)))?;
+    }
+
     // Rebuild the original image before negative cases: they must preserve
     // exactly these published bytes and never publish a partial executable.
     fs::write(&source, "fnc main(): int { return 42; }\n")

@@ -53,7 +53,19 @@ inline void resolve_native_sums(Program& program) {
             if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err"))
                 throw std::runtime_error("native sum constructor variant does not match declared sum type");
             if (e.arguments.size() != (e.name == "None" ? 0u : 1u)) throw std::runtime_error("native sum constructor payload arity mismatch");
-            for (auto& arg : e.arguments) expression(*arg, env, {});
+            // A scalar Result/Option must never carry an untyped or differently
+            // typed payload. In particular, Err(7) is not Err<String>, and a
+            // nominal/nested sum cannot be laundered into an i64 slot. The
+            // current native runtime only owns scalar sum payloads; richer
+            // generic/owned payloads require an independently verified ABI.
+            for (auto& arg : e.arguments) {
+                const Hint payload = expression(*arg, env, {});
+                const ScalarType required = e.name == "Err" ? type.error_type : type.value_type;
+                if (!payload.sum.empty() || !payload.cls.empty() || payload.array)
+                    throw std::runtime_error("native sum compound payload requires ownership/lifetime ABI");
+                if (payload.scalar != required)
+                    throw std::runtime_error("native sum constructor payload type does not match declared variant");
+            }
             e.sum_type = selected; return {ScalarType::I64, selected};
         }
         if (e.kind == E::Variable) return env.count(e.name) ? env.at(e.name) : Hint{};
@@ -88,7 +100,9 @@ inline void resolve_native_sums(Program& program) {
         }
         if (e.kind == E::ArrayCall || e.kind == E::SumAccess) {
             const auto owner = expression(*e.left, env, {});
-            for (auto& arg : e.arguments) expression(*arg, env, {});
+            std::vector<Hint> argument_types;
+            argument_types.reserve(e.arguments.size());
+            for (auto& arg : e.arguments) argument_types.push_back(expression(*arg, env, {}));
             if (!owner.sum.empty()) {
                 const NativeSumType type = native_sum(program, owner.sum);
                 const bool option = type.kind == NativeSumType::Kind::Option;
@@ -102,6 +116,12 @@ inline void resolve_native_sums(Program& program) {
                     throw std::runtime_error("unsupported native sum method or arity '" + e.name + "'");
                 if (expect && e.arguments[0]->kind != E::String)
                     throw std::runtime_error("native Option/Result.expect requires a string literal message");
+                if (fallback) {
+                    const auto& default_value = argument_types.front();
+                    if (!default_value.sum.empty() || !default_value.cls.empty() ||
+                            default_value.array || default_value.scalar != type.value_type)
+                        throw std::runtime_error("native sum unwrap_or fallback type does not match payload");
+                }
                 e.kind = E::SumAccess; e.sum_type = owner.sum;
                 e.resolved_type = query ? ScalarType::Bool : type.value_type;
                 return {e.resolved_type};
