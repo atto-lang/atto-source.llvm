@@ -138,7 +138,8 @@ inline fs::path resolve_native_source_suffix(fs::path candidate) {
 }
 
 inline void enforce_relative_import_package_boundary(
-        const fs::path& importing_source, const fs::path& dependency) {
+        const fs::path& importing_source, const fs::path& dependency,
+        bool require_package_manifest = false) {
     std::error_code error;
     const auto source = fs::canonical(importing_source, error);
     if (error)
@@ -166,9 +167,14 @@ inline void enforce_relative_import_package_boundary(
         if (parent.empty() || parent == cursor) break;
         cursor = parent;
     }
-    // Preserve package-less legacy relative imports. Once a package manifest
-    // exists, however, relative ../ must not become a package-boundary bypass.
-    if (package_root.empty()) return;
+    // Legacy ./ and ../ imports may remain package-less. Expanded absolute
+    // environment imports, however, require a real package boundary so an
+    // untrusted process variable cannot redirect the compiler anywhere.
+    if (package_root.empty()) {
+        if (require_package_manifest)
+            throw std::runtime_error("absolute import requires nearest .ores.pkg.toml");
+        return;
+    }
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)
