@@ -10,6 +10,8 @@ on:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/types/NativeOwnershipJoin.hpp'
+      - 'tests/native_ownership_join_test.cpp'
       - 'tests/fixtures/atto-*.atto'
       - 'CMakeLists.txt'
       - '.github/workflows/atto-critical-ownership-llvm-parity.yml'
@@ -53,6 +55,198 @@ jobs:
           cmake --build build --parallel 2 --target oreslang-llvmc
           test -s build/oreslang-llvmc
           sha256sum build/oreslang-llvmc
+      - name: Execute production ownership CFG join metadata gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel 2 --target oreslang-native-ownership-join-test
+          ctest --test-dir build -N -R '^native_ownership_affine_join_complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 17 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 17:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=17')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ \
+            | grep -Eq 'Test +#[0-9]+: native_ownership_affine_join_complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 17 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 17:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=17')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+
+          ctest --test-dir build -R '^native_ownership_affine_join_complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 17 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 17:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=17')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ \
+            --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-join.xml
+          test -s /tmp/atto-ownership-join.xml
+          echo "ATTO_LLVM_JOIN_PROOF=HOST_CPP17_EXECUTED"
+
       - name: Prove seventeen scoped CTest cases are registered
         shell: bash
         run: |
