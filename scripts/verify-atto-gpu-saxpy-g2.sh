@@ -47,5 +47,10 @@ ATTO_GPU_CLANG="$opencl_compiler" \
   node --test tests/gpu-saxpy-g2/atto-gpu-saxpy-kernelc.test.mjs
 "$work/atto-gpu-saxpy-kernelc" tests/gpu-saxpy-g2/saxpy.atto "$work/kernel.cl"
 "$opencl_compiler" -x cl -cl-std=CL1.2 -fsyntax-only "$work/kernel.cl"
+"$opencl_compiler" -target spir64-unknown-unknown -x cl -cl-std=CL1.2 -S -emit-llvm -o "$work/kernel.spir64.ll" "$work/kernel.cl"
+grep -q 'target triple = "spir64-unknown-unknown"' "$work/kernel.spir64.ll"
+grep -q 'spir_kernel void @attolang_saxpy_v1' "$work/kernel.spir64.ll"
+printf 'target_ir_class SPIR64_LLVM_IR_ONLY\n'
 printf 'device_artifact_sha256 %s\n' "$(sha256sum "$work/kernel.cl" | cut -d' ' -f1)"
+printf 'spir64_ir_sha256 %s\n' "$(sha256sum "$work/kernel.spir64.ll" | cut -d' ' -f1)"
 printf 'GPU_G2_PASS: bounded .atto device source compiled; NO physical GPU and NO host launch executed\n'
