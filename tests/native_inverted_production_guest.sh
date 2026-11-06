@@ -114,6 +114,7 @@ PY
 }
 
 for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto; do
+    case_fixture_sha="$(hash_file "$fixtures/$fixture")" || exit 1
     "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
     audit_ir "$tmp/guest.ll"
     for required in '; typed MIR, experimental local i64 pair LLVM IR' \
@@ -127,9 +128,13 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
     for optimization in -O0 -O2; do
         "$clang" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
         expect_native_exit_42 "$tmp/guest" "$fixture" "$optimization"
-        printf 'DOP_NATIVE_CASE=%s OPT=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
-            "$fixture" "$optimization" "$(hash_file "$tmp/guest.ll")" \
-            "$(hash_file "$tmp/guest")"
+        if [[ "$(hash_file "$fixtures/$fixture")" != "$case_fixture_sha" ]]; then
+            echo "FAIL: source fixture changed during native execution: $fixture" >&2
+            exit 1
+        fi
+        printf 'DOP_NATIVE_CASE=%s OPT=%s SOURCE_SHA256=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
+            "$fixture" "$optimization" "$case_fixture_sha" \
+            "$(hash_file "$tmp/guest.ll")" "$(hash_file "$tmp/guest")"
     done
 done
 
@@ -147,9 +152,9 @@ audit_ir "$tmp/reuse.ll"
 for optimization in -O0 -O2; do
     "$clang" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
     expect_native_exit_42 "$tmp/reuse" "swap-reuse.atto" "$optimization"
-    printf 'DOP_NATIVE_CASE=%s OPT=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
-        swap-reuse.atto "$optimization" "$(hash_file "$tmp/reuse.ll")" \
-        "$(hash_file "$tmp/reuse")"
+    printf 'DOP_NATIVE_CASE=%s OPT=%s SOURCE_SHA256=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
+        swap-reuse.atto "$optimization" "$swap_fixture_sha" \
+        "$(hash_file "$tmp/reuse.ll")" "$(hash_file "$tmp/reuse")"
 done
 
 # A guest read past logical length is dynamically guarded, rather than
