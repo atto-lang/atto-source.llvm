@@ -71,7 +71,8 @@ function(reject_case name text needle)
   file(WRITE "${dir}/main.atto" "${text}")
   file(WRITE "${dir}/lib.atto"
     "pub fnc shown(int x): int { return x; }\nfnc hidden(int x): int { return x; }\n")
-  execute_process(COMMAND "${BUILD}/oreslang-llvmc" "${dir}/main.atto"
+  # Extra arguments after `needle` are compiler flags (e.g. a freestanding target).
+  execute_process(COMMAND "${BUILD}/oreslang-llvmc" ${ARGN} "${dir}/main.atto"
     RESULT_VARIABLE status OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr)
   if(status EQUAL 0 OR NOT stdout STREQUAL "")
     fail_case("${name}: compiler admitted invalid source")
@@ -92,6 +93,7 @@ run_case(expect_ok "${fixtures}/expect_ok.atto" 42)
 run_case(expect_err "${fixtures}/expect_err.atto" nonzero)
 run_case(expect_guest_write "${fixtures}/expect_guest_write.atto" nonzero)
 run_case(import_fnc "${fixtures}/import_fnc/main.atto" 0)
+run_case(import_core_fnc "${fixtures}/import_core_fnc.atto" 42)
 
 reject_case(import_private_fnc
   "import fnc hidden from \"./lib\";\nfnc main(): int { return hidden(1); }\n"
@@ -138,6 +140,18 @@ reject_case(stdout_unknown_member
 reject_case(if_semicolon_requires_then
   "fnc main(): int {\n  if 1 == 1; return 1; fi\n  return 0;\n}\n"
   "expected 'then'")
+
+reject_case(freestanding_relative_fnc_import
+  "import fnc shown from \"./lib\";\npub fnc f(int x): int { return shown(x); }\n"
+  "freestanding native imports require compiler-owned ores.core/* modules"
+  --target=thumbv7m-none-eabi --library-profile=core)
+reject_case(freestanding_alloc_fnc_without_provider
+  "import fnc sum_pair from \"alloc/int_buffer\";\npub fnc f(int x): int { return sum_pair(x, 1); }\n"
+  "requires an explicit allocator provider"
+  --target=thumbv7m-none-eabi --library-profile=core)
+reject_case(std_fnc_import
+  "import fnc check from \"ores.std/testing\";\nfnc main(): int { return 0; }\n"
+  "native ores.std package resolution remains unsupported")
 
 if(failures GREATER 0)
   message(FATAL_ERROR "atto parity syntax: ${failures} failure(s)")

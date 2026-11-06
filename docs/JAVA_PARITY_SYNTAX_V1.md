@@ -22,6 +22,8 @@ the Java reference's existing rules.
   printed just before the panic vanished. `ores_string_panic` now drains it
   first, then writes the `expect` message to stderr. The drain has one 1 s
   budget, so a stdout nobody reads cannot stall a panic for 5 s per line.
+  The console region is thread-local, so only output queued by the panicking
+  thread is drained (the host native string slice runs on the main thread).
 - **Guest names no longer hijack libc.** A host guest function named like a
   libc symbol the native runtime imports (`write`, `read`, `poll`, `malloc`, ...)
   was emitted under that name and replaced libc for the runtime at link time (a
@@ -50,10 +52,11 @@ the Java reference's existing rules.
 ## Evidence
 
 `native_atto_parity_syntax` (CTest, `tests/atto_parity_syntax.cmake`) compiles
-and runs six `.atto` guests under `tests/fixtures/atto_parity_syntax/` with the
+and runs seven `.atto` guests under `tests/fixtures/atto_parity_syntax/` with the
 real `compile-aot.sh` pipeline and checks exact stdout and exit status. One
 guest defines its own `write` and must still panic cleanly; panic cases also
-check stderr. It runs fifteen fail-closed compiler rejections with exact
+check stderr. It runs eighteen fail-closed compiler rejections (including freestanding
+`import fnc` of relative, ungranted `alloc/*` and `ores.std` sources) with exact
 diagnostics. `native_string_region_lifetime_and_budgets` covers the pre-panic
 drain, exact `INT64_MIN`/bool text, and the bounded drain.
 

@@ -1,0 +1,6 @@
+// Named function import from the compiler-owned ores.core registry.
+import fnc clamp_int, max_int from "ores.core/numeric";
+
+fnc main(): int {
+  return clamp_int(max_int(50, 7), 0, 42);
+}
