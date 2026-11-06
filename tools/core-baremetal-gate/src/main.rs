@@ -1,6 +1,6 @@
-//! Bare-metal `ores.core` gate.
+//! Bare-metal `atto.core` gate.
 //!
-//! Compiles an `ores.core`-only Oreslang program for `thumbv7m-none-eabi`,
+//! Compiles an `atto.core`-only AttoLang `.atto` program for `thumbv7m-none-eabi`,
 //! links it with a tiny platform startup into a static image that has no
 //! libc, compiler-rt, allocator, RTOS or actor runtime, audits the result,
 //! and boots it on QEMU's Cortex-M3 board. It also proves the checks are not
@@ -158,7 +158,7 @@ impl Gate {
 
     /// Oreslang source -> LLVM IR -> ARM object, with IR and object audits.
     fn compile_guest(&mut self) -> GateResult<PathBuf> {
-        let source = self.fixtures.join("app.ores");
+        let source = self.fixtures.join("app.atto");
         let out = exec(
             Command::new(&self.tools.compiler)
                 .arg(format!("--target={TARGET}"))
@@ -166,7 +166,7 @@ impl Gate {
                 .arg(&source),
             None,
         )?;
-        require(out.status == Some(0), || format!("ores.core guest failed to compile:\n{}", out.stderr))?;
+        require(out.status == Some(0), || format!("atto.core guest failed to compile:\n{}", out.stderr))?;
         let ir = out.stdout;
         require(ir.contains(&format!("target triple = \"{TARGET}\"")), || {
             "guest IR lacks the thumbv7m-none-eabi triple".into()
@@ -174,9 +174,9 @@ impl Gate {
         require(!ir.contains("@main("), || "guest IR defines a hosted main entry point".into())?;
         let externals = audit::ir_external_declarations(&ir);
         require(externals.is_empty(), || {
-            format!("ores.core guest IR declares external functions: {externals:?}")
+            format!("atto.core guest IR declares external functions: {externals:?}")
         })?;
-        self.pass("ores.core guest compiles to IR with no external declarations");
+        self.pass("atto.core .atto guest compiles to IR with no external declarations");
 
         let ir_path = self.work.join("guest.ll");
         write(&ir_path, &ir)?;
@@ -262,7 +262,7 @@ impl Gate {
         require(out.status == Some(0) && console.contains(PASS_LINE), || {
             format!("bare-metal run did not pass (status {:?}):\n{}{}", out.status, out.stdout, out.stderr)
         })?;
-        self.pass("QEMU Cortex-M3 boots the ores.core image: 6 result vectors incl. entry(5) == 42");
+        self.pass("QEMU Cortex-M3 boots the atto.core .atto image: 6 result vectors incl. entry(5) == 42");
         Ok(())
     }
 
@@ -282,15 +282,33 @@ impl Gate {
     fn compiler_rejections(&mut self) -> GateResult<()> {
         let cases: &[(&str, &str, &str, &str)] = &[
             (
-                "ores.std import under the core profile",
+                "atto.std import under the core profile",
+                "core",
+                "import module testing from \"atto.std/testing\";\npub fnc p(int x): int { return x; }\n",
+                "atto.std",
+            ),
+            (
+                "legacy ores.std import under the core profile",
                 "core",
                 "import module testing from \"ores.std/testing\";\npub fnc p(int x): int { return x; }\n",
                 "ores.std",
             ),
             (
+                "unknown atto.core import",
+                "core",
+                "import module missing from \"atto.core/missing\";\npub fnc p(int x): int { return x; }\n",
+                "unknown compiler-owned atto.core module",
+            ),
+            (
+                "path traversal inside atto.core import",
+                "core",
+                "import module numeric from \"atto.core/../numeric\";\npub fnc p(int x): int { return x; }\n",
+                "unknown compiler-owned atto.core module",
+            ),
+            (
                 "transitive allocator requirement without a granted provider",
                 "core",
-                "import module b from \"alloc/int_buffer_bundle\";\npub fnc p(int x): int { return b.marker(); }\n",
+                "import module b from \"atto.alloc/int_buffer_bundle\";\npub fnc p(int x): int { return b.marker(); }\n",
                 "allocator",
             ),
             (
@@ -307,11 +325,11 @@ impl Gate {
             ),
         ];
         write(
-            &self.work.join("local.ores"),
+            &self.work.join("local.atto"),
             "define module local as\n  pub fnc answer(int x): int { return x; }\nend\n",
         )?;
         for (index, (label, profile, text, needle)) in cases.iter().enumerate() {
-            let source = self.work.join(format!("reject_{index}.ores"));
+            let source = self.work.join(format!("reject_{index}.atto"));
             write(&source, text)?;
             let out = exec(
                 Command::new(&self.tools.compiler)
