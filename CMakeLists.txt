@@ -44,8 +44,35 @@ add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
+# GPU-G1 bootstrap compiler is a self-contained C++17 narrow device source
+# compiler, not the native scalar compiler or a physical GPU provider.
+add_executable(oreslang-gpu-g1-ir
+    src/main/cpp/oreslang/gpu/atto_gpu_g1_ir.cpp)
+target_include_directories(oreslang-gpu-g1-ir PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+target_compile_options(oreslang-gpu-g1-ir PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(oreslang-gpu-g1-source-test
+        tests/gpu_g1_saxpy_nvvm_test.cpp)
+    target_include_directories(oreslang-gpu-g1-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-source-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_atto_gpu_g1_source_to_nvvm_host_only
+        COMMAND oreslang-gpu-g1-source-test)
+    set_tests_properties(native_atto_gpu_g1_source_to_nvvm_host_only
+        PROPERTIES TIMEOUT 30)
+    add_test(NAME native_atto_gpu_g1_cli_admission
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-gpu-g1-ir>"
+            "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu_g1_saxpy_kernel.atto"
+            "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-g1-cli"
+            "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g1_source_cli.cmake")
+    set_tests_properties(native_atto_gpu_g1_cli_admission
+        PROPERTIES TIMEOUT 60)
     # AttoLang native launch spelling: exact compiler-backed scalar control and
     # fail-closed GPU admission, not executed kernels or hardware parity.
     add_test(NAME native_atto_gpu_explicit_launch_source_admission
