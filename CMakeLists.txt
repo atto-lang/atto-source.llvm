@@ -56,6 +56,19 @@ if(BUILD_TESTING)
     set_tests_properties(native_atto_gpu_explicit_launch_source_admission
         PROPERTIES TIMEOUT 75)
 
+    # Standalone native geometry model: a host-only checked-arithmetic test,
+    # not a physical device launch or kernel execution claim.
+    add_executable(oreslang-native-gpu-launch-geometry-test
+        tests/gpu_explicit_launch_geometry_test.cpp)
+    target_include_directories(oreslang-native-gpu-launch-geometry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-gpu-launch-geometry-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_launch_geometry_host_only
+        COMMAND oreslang-native-gpu-launch-geometry-test)
+    set_tests_properties(native_atto_gpu_launch_geometry_host_only
+        PROPERTIES TIMEOUT 20)
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
