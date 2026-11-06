@@ -1,0 +1,14 @@
+// Negative: host I/O must not run in a SIMT device function.
+compute fnc saxpy(
+  x: DeviceRead<f32>,
+  y: DeviceRead<f32>,
+  out: DeviceWrite<f32>,
+  alpha: f32,
+  n: u64
+) device {
+  const i = gpu.global_id.x;
+  if i < n {
+    print(i);
+    out[i] = alpha * x[i] + y[i];
+  }
+}
