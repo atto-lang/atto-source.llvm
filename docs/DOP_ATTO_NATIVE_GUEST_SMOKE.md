@@ -61,6 +61,28 @@ resource limit, crash, wrong checksum or nonzero exit is a **failure**.
 It must not be replaced by an AST parser, source-text oracle, JavaScript,
 or handwritten C++ kernel and declared guest parity.
 
+## Exact-head receipt-step contract
+
+The source-local `.github/workflows/dop-atto-soa-native.yml` job now
+exposes **three distinct actual GitHub Actions steps** with identifiers matching
+the portable DOP v1 receipt validator in platform-conformance #466:
+
+- `checkout-head`: verifies Git commit/tree and clean checkout.
+- `compile-guest`: pins the exact `.atto` fixture Git blob
+  `aedc778e3e8dd2940600f047540c159b0129830a`, invokes the real
+  `oreslang-llvmc`/IR auditor/Clang path and hashes the produced binary.
+- `execute-guest`: checks the pinned native binary hash, executes the
+  generated binary under a timeout and checks the hash again, then rechecks
+  the source tree. The guest checks the expected numerical checksum and
+  exits zero only when the runtime result matches.
+
+The existing complete `scripts/verify-dop-atto-aot.sh` step remains a
+separate second full pipeline check. All actions are *authored but not
+executed* until the private source-org runners admit a job. A receipt must
+also independently match the recorded GitHub run, job ID, runner ID,
+timestamps and actual step identities; writing a JSON receipt alone is
+not evidence.
+
 ## Important limitations
 
 The first guest program uses two independently allocated primitive columns;
