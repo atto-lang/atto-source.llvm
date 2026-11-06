@@ -189,18 +189,19 @@ llvm::Value* lower(const Expression& expr,
             auto* value = builder.CreateCall(moves->record_get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
             if (!fallback) {
                 builder.SetInsertPoint(absent);
-                auto flush = function->getParent()->getOrInsertFunction("ores_string_panic_flush",
-                    llvm::FunctionType::get(builder.getVoidTy(), false));
-                builder.CreateCall(flush);
+                // Drain queued console output, then write the expect message (a literal,
+                // enforced by the sum resolver) to stderr; unwrap passes no message.
+                // Java appends ": <payload>"; this slice does not.
+                llvm::Value* text = llvm::ConstantPointerNull::get(builder.getPtrTy());
+                std::size_t size = 0;
                 if (expect) {
-                    // Literal message (enforced by the sum resolver) to stderr, then the
-                    // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
                     const std::string message = expr.arguments[0]->name + "\n";
-                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
-                    auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
-                        i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
-                    builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
+                    text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    size = message.size();
                 }
+                auto panic_output = function->getParent()->getOrInsertFunction("ores_string_panic",
+                    llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy(), i64}, false));
+                builder.CreateCall(panic_output, {text, llvm::ConstantInt::get(i64, size)});
                 auto panic = function->getParent()->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
                 builder.CreateCall(panic); builder.CreateUnreachable(); builder.SetInsertPoint(present); return value;
             }
@@ -1093,7 +1094,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            (fn.native_internal || fn.async_source_i64)
+            // Host executables reach guest code only through the generated main, so
+            // guest functions stay internal there: an external guest `write`, `read`
+            // or `poll` would otherwise replace the libc symbol for the native
+            // runtime at link time. Wasm and Cortex-M guests keep external symbols
+            // because their platform harnesses call them.
+            (fn.native_internal || fn.async_source_i64 || (!wasm32_target && !cortex_m_target))
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);

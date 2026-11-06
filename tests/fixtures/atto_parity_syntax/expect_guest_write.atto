@@ -1,0 +1,11 @@
+// A guest function named `write` must not capture the panic message path:
+// expect writes its message through a compiler-owned runtime symbol.
+fnc write(int a, int b, int c): int {
+  return a + b + c;
+}
+
+fnc main(): int {
+  stdio.stdout.println(write(1, 2, 3));
+  val Result<int, String> bad = Err("e");
+  return bad.expect("guest write untouched");
+}

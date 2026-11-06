@@ -602,6 +602,8 @@ public:
                 // the module loader binds each to the target file's pub function.
                 std::vector<ModuleImport> selected;
                 const std::size_t offset = token_.offset;
+                const bool braced = accept("{");  // Java also accepts `import fnc {a, b} from`
+                if (braced && token_.text == "}") fail("import selection cannot be empty");
                 do {
                     ModuleImport imported;
                     imported.offset = offset;
@@ -610,6 +612,7 @@ public:
                     imported.local_name = imported.selected_module;
                     selected.push_back(std::move(imported));
                 } while (accept(","));
+                if (braced) require("}");
                 if (accept("as")) {
                     if (selected.size() != 1) fail("named import aliases require exactly one selected name");
                     selected.front().local_name = identifier();
@@ -637,7 +640,7 @@ public:
             if (!imported.selected_class) require("module");
             imported.selected_module = identifier();
             imported.local_name = accept("as") ? identifier() : imported.selected_module;
-            if (!module_names_.insert(imported.local_name).second)
+            if (function_import_names_.count(imported.local_name) || !module_names_.insert(imported.local_name).second)
                 fail("duplicate imported module binding '" + imported.local_name + "'");
             require("from");
             if (token_.kind != Kind::String) fail("native module import requires a quoted source path");

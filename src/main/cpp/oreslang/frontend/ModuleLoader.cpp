@@ -343,7 +343,9 @@ private:
         return index;
     }
     static void binding_name(const Unit& unit, const std::string& name) {
-        if (unit.dependencies.count(name) || unit.class_imports.count(name) || unit.function_imports.count(name))
+        if (unit.function_imports.count(name))
+            fail(unit, "native imported function binding cannot be shadowed: '" + name + "'");
+        if (unit.dependencies.count(name) || unit.class_imports.count(name))
             fail(unit, "native module import binding cannot be shadowed: '" + name + "'");
     }
     void expression(const Unit& unit, Expression* expr) {

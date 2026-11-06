@@ -22,6 +22,7 @@ endfunction()
 
 # name: case id; source: .atto entry; expected_exit: exact status or "nonzero".
 function(run_case name source expected_exit)
+  set(case_start ${failures})
   get_filename_component(base "${source}" NAME_WE)
   get_filename_component(dir "${source}" DIRECTORY)
   set(binary "${work}/${name}")
@@ -41,6 +42,15 @@ function(run_case name source expected_exit)
   if(NOT stdout STREQUAL expected)
     fail_case("${name}: stdout mismatch\n--- expected\n${expected}--- actual\n${stdout}--- stderr\n${stderr}")
   endif()
+  # Optional <base>.stderr: text the run's stderr must contain (panic messages).
+  if(EXISTS "${dir}/${base}.stderr")
+    file(READ "${dir}/${base}.stderr" expected_stderr)
+    string(FIND "${stderr}" "${expected_stderr}" at)
+    if(at EQUAL -1)
+      fail_case("${name}: stderr lacks '${expected_stderr}', got: ${stderr}")
+    endif()
+  endif()
+  set(before )
   if(expected_exit STREQUAL "nonzero")
     if(status EQUAL 0)
       fail_case("${name}: expected a nonzero (panic) exit, got 0")
@@ -49,7 +59,9 @@ function(run_case name source expected_exit)
     fail_case("${name}: exit ${status}, expected ${expected_exit}; stderr: ${stderr}")
   endif()
   set(failures ${failures} PARENT_SCOPE)
-  message(STATUS "PASS ${name}")
+  if(failures EQUAL case_start)
+    message(STATUS "PASS ${name}")
+  endif()
 endfunction()
 
 # Negative case: compiler must reject `text` with a diagnostic containing `needle`.
@@ -78,6 +90,7 @@ run_case(if_then "${fixtures}/if_then.atto" 0)
 run_case(stdout_write "${fixtures}/stdout_write.atto" 0)
 run_case(expect_ok "${fixtures}/expect_ok.atto" 42)
 run_case(expect_err "${fixtures}/expect_err.atto" nonzero)
+run_case(expect_guest_write "${fixtures}/expect_guest_write.atto" nonzero)
 run_case(import_fnc "${fixtures}/import_fnc/main.atto" 0)
 
 reject_case(import_private_fnc
@@ -95,6 +108,24 @@ reject_case(import_fnc_duplicate
 reject_case(import_fnc_list_alias
   "import fnc shown, hidden as both from \"./lib\";\nfnc main(): int { return 0; }\n"
   "named import aliases require exactly one selected name")
+reject_case(import_module_after_fnc
+  "import fnc shown from \"./lib\";\nimport module shown from \"./lib\";\nfnc main(): int { return 0; }\n"
+  "duplicate imported module binding 'shown'")
+reject_case(import_fnc_after_module
+  "import module lib from \"./lib\";\nimport fnc lib from \"./lib\";\nfnc main(): int { return 0; }\n"
+  "duplicate imported function binding 'lib'")
+reject_case(import_fnc_empty_braces
+  "import fnc {} from \"./lib\";\nfnc main(): int { return 0; }\n"
+  "import selection cannot be empty")
+reject_case(import_fnc_unclosed_braces
+  "import fnc {shown from \"./lib\";\nfnc main(): int { return 0; }\n"
+  "expected '}'")
+reject_case(import_fnc_parameter_shadow
+  "import fnc shown from \"./lib\";\nfnc g(int shown): int { return shown; }\nfnc main(): int { return g(1); }\n"
+  "native imported function binding cannot be shadowed: 'shown'")
+reject_case(guest_runtime_symbol
+  "fnc ores_string_panic(int x): int { return x; }\nfnc main(): void {\n  stdio.println(\"x\");\n  return;\n}\n"
+  "reserved native string runtime symbol collision")
 reject_case(expect_non_literal
   "fnc main(): int {\n  val Result<int, String> r = Ok(1);\n  val String m = \"x\";\n  return r.expect(m);\n}\n"
   "expect requires a string literal message")

@@ -4,6 +4,28 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
+#include <time.h>
+
+static long long now_ms(void) {
+    struct timespec t;
+    assert(clock_gettime(CLOCK_MONOTONIC, &t) == 0);
+    return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static void read_exact(int fd, const char *expected) {
+    size_t size = strlen(expected), got = 0;
+    char bytes[256];
+    assert(size < sizeof bytes);
+    while (got < size) {
+        ssize_t count = read(fd, bytes + got, size - got);
+        assert(count > 0);
+        got += (size_t)count;
+    }
+    assert(memcmp(bytes, expected, size) == 0);
+}
+
+static char big[1 << 20];
 
 int main(void) {
     for (unsigned iteration = 0; iteration != 1000; ++iteration) {
@@ -80,6 +102,37 @@ int main(void) {
     close(file);
     assert(ores_string_region_begin(1) == 1); /* strict NIO: no regular-file fallback */
     assert(dup2(saved, STDOUT_FILENO) == STDOUT_FILENO);
+
+    /* A panic drains output queued before it, and int/bool text is exact. */
+    assert(pipe(output) == 0);
+    assert(dup2(output[1], STDOUT_FILENO) == STDOUT_FILENO);
+    close(output[1]);
+    assert(ores_string_region_begin(1) == 0);
+    assert(ores_string_print(ores_string_from_i64(INT64_MIN), 1) == 0);
+    assert(ores_string_print(ores_string_from_i64(0), 0) == 0);
+    assert(ores_string_print(ores_string_from_bool(1), 0) == 0);
+    assert(ores_string_print(ores_string_from_bool(0), 1) == 0);
+    ores_string_panic(NULL, 0);
+    assert(dup2(saved, STDOUT_FILENO) == STDOUT_FILENO);
+    read_exact(output[0], "-9223372036854775808\n0truefalse\n");
+    assert(ores_string_region_end() == 0);
+    close(output[0]);
+
+    /* A stdout nobody reads cannot stall a panic past its 1 s drain budget
+     * (the per-write timeout alone would wait 5 s). */
+    assert(pipe(output) == 0);
+    assert(dup2(output[1], STDOUT_FILENO) == STDOUT_FILENO);
+    close(output[1]);
+    memset(big, 'x', sizeof big);
+    assert(ores_string_region_begin(1) == 0);
+    assert(ores_string_print(ores_string_literal(big, (int64_t)sizeof big), 0) == 0);
+    const long long started = now_ms();
+    ores_string_panic("", 0);
+    const long long elapsed = now_ms() - started;
+    assert(dup2(saved, STDOUT_FILENO) == STDOUT_FILENO);
+    assert(elapsed < 3000);
+    assert(ores_string_region_end() == 1); /* undrained output is reported */
+    close(output[0]);
     close(saved);
     return 0;
 }

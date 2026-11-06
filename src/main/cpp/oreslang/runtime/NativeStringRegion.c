@@ -31,6 +31,8 @@ typedef struct {
     Output output[OUTPUT_SLOTS];
     _Atomic size_t head, tail;
     _Atomic int failed, done;
+    /* Nonzero while a panic drains output: absolute CLOCK_MONOTONIC ms deadline. */
+    _Atomic int64_t panic_deadline;
 } Region;
 static _Thread_local Region region;
 
@@ -49,6 +51,8 @@ static int write_ready(Region *r, const char *data, size_t size) {
         if (written >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) return 0;
         const int64_t now = milliseconds();
         if (now < 0 || now - start >= 5000) return 0;
+        const int64_t deadline = atomic_load(&r->panic_deadline);
+        if (deadline && now >= deadline) return 0;
         struct pollfd descriptor = {r->fd, POLLOUT, 0};
         int result = poll(&descriptor, 1, 100);
         if (result < 0 && errno != EINTR) return 0;
@@ -212,16 +216,30 @@ int64_t ores_string_print(int64_t handle, int64_t newline) {
     wake_writer(r);
     return 0;
 }
+enum { PANIC_DRAIN_MS = 1000 };
 /* A failed unwrap/expect aborts without reaching region_end, which would
  * otherwise drop output still queued for the writer thread. Drain it first so
- * text printed before the panic is not lost (Java flushes stdout per write). */
-void ores_string_panic_flush(void) {
+ * text printed before the panic is not lost (Java flushes stdout per write),
+ * then write the message to stderr. The drain shares one 1 s budget, so a
+ * stdout nobody reads cannot stall the panic for 5 s per queued line.
+ * The message goes through this compiler-owned symbol rather than libc
+ * write(), so a guest function named `write` cannot capture it. */
+void ores_string_panic(const char *message, int64_t size) {
     Region *r = &region;
-    if (!r->active || !r->console) return;
-    atomic_store_explicit(&r->done, 1, memory_order_release);
-    wake_writer(r);
-    (void)pthread_join(r->writer, NULL);
-    r->console = 0;
+    if (r->active && r->console) {
+        const int64_t now = milliseconds();
+        atomic_store(&r->panic_deadline, now < 0 ? 1 : now + PANIC_DRAIN_MS);
+        atomic_store_explicit(&r->done, 1, memory_order_release);
+        wake_writer(r);
+        (void)pthread_join(r->writer, NULL);
+        r->console = 0;
+    }
+    while (message && size > 0) {
+        ssize_t written = write(STDERR_FILENO, message, (size_t)size);
+        if (written > 0) { message += written; size -= written; continue; }
+        if (written < 0 && errno == EINTR) continue;
+        break;
+    }
 }
 int64_t ores_string_region_end(void) {
     Region *r = &region;
