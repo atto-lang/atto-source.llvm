@@ -170,7 +170,7 @@ inline SourceCheckedLaunch verify(const Request& input) {
     std::int64_t logical = 0;
     if (const auto* p = std::get_if<Physical>(&input.geometry)) {
         physical = validate_launch(p->grid, p->block, input.shared_bytes, input.provider_limits);
-        logical = physical.total_logical_threads;
+        logical = physical.total_dispatched_lanes;
     } else {
         const auto& logical_geometry = std::get<Logical>(input.geometry);
         const auto plan = validate_logical_launch(logical_geometry.over, logical_geometry.group,
