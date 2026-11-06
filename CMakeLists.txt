@@ -75,6 +75,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-atto-saxpy-three-buffer-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-atto-saxpy-three-buffer-test PRIVATE Threads::Threads)
     add_test(NAME atto_gpu_saxpy_three_buffer_state_machine
         COMMAND oreslang-atto-saxpy-three-buffer-test)
     set_tests_properties(atto_gpu_saxpy_three_buffer_state_machine PROPERTIES TIMEOUT 30)
@@ -86,7 +87,7 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-atto-saxpy-physical-probe PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     target_link_libraries(oreslang-atto-saxpy-physical-probe PRIVATE
-        ${CMAKE_DL_LIBS})
+        Threads::Threads ${CMAKE_DL_LIBS})
     option(ATTO_REQUIRE_PHYSICAL_GPU
         "Require a real GPU to execute AttoLang SAXPY; absent GPU must fail" OFF)
     if(ATTO_REQUIRE_PHYSICAL_GPU)
