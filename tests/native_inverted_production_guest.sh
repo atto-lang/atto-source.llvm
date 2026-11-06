@@ -37,10 +37,9 @@ hash_file() {
     fi
     printf '%s\n' "$digest"
 }
-# Preserve executable identity throughout the real compiler -> native gate.
-# This is an in-job toolchain fingerprint, not an exact-PR-head receipt.
+# Identity checks complement, but do not replace, exact source HEAD/tree CI.
 if [[ ! -f "$compiler" || ! -x "$compiler" ]]; then
-    echo 'FAIL: missing source-built DOP compiler executable' >&2
+    echo 'FAIL: missing source-built inverted compiler executable' >&2
     exit 1
 fi
 if ! clang_path="$(command -v "$clang")" || [[ ! -f "$clang_path" || ! -x "$clang_path" ]]; then
@@ -50,28 +49,6 @@ fi
 compiler_sha="$(hash_file "$compiler")" || exit 1
 clang_sha="$(hash_file "$clang_path")" || exit 1
 auditor_sha="$(hash_file "$auditor")" || exit 1
-
-# Positive exit status alone is not a bounded guest test. Watch every native
-# process and reject signal exits, timeouts and launch failures distinctly.
-run_guest_42() {
-    local program="${1:?native guest path required}"
-    python3 - "$program" <<'PY'
-import resource
-import subprocess
-import sys
-
-resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-try:
-    child = subprocess.run(
-        [sys.argv[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        timeout=15, check=False
-    )
-except (OSError, subprocess.TimeoutExpired) as exc:
-    raise SystemExit(f"FAIL: native inverted guest did not complete: {exc}")
-if child.returncode != 42:
-    raise SystemExit(f"FAIL: native inverted guest returned {child.returncode}, expected 42")
-PY
-}
 printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' \
     > "$tmp/expected-audit-success"
 audit_ir() {
@@ -112,7 +89,31 @@ if [[ "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
     exit 1
 fi
 
-for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto; do
+# Run the produced binary as a real bounded process. A nonzero exit,
+# crash, timeout or failure to spawn is a hard failure, never a skip.
+expect_native_exit_42() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import resource
+import subprocess
+import sys
+
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+try:
+    result = subprocess.run(
+        [sys.argv[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=15, check=False
+    )
+except (OSError, subprocess.TimeoutExpired) as exc:
+    raise SystemExit(f"FAIL: production native {sys.argv[2]} {sys.argv[3]} did not complete: {exc}")
+if result.returncode != 42:
+    raise SystemExit(
+        f"FAIL: production native {sys.argv[2]} {sys.argv[3]} exited "
+        f"{result.returncode}, expected 42"
+    )
+PY
+}
+
+for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto; do
     "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
     audit_ir "$tmp/guest.ll"
     for required in '; typed MIR, experimental local i64 pair LLVM IR' \
@@ -125,7 +126,7 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
     done
     for optimization in -O0 -O2; do
         "$clang" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
-        run_guest_42 "$tmp/guest"
+        expect_native_exit_42 "$tmp/guest" "$fixture" "$optimization"
         printf 'DOP_NATIVE_CASE=%s OPT=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
             "$fixture" "$optimization" "$(hash_file "$tmp/guest.ll")" \
             "$(hash_file "$tmp/guest")"
@@ -145,7 +146,7 @@ trap_fixture_sha="$(hash_file "$contracts/removed-index-trap.atto")" || exit 1
 audit_ir "$tmp/reuse.ll"
 for optimization in -O0 -O2; do
     "$clang" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
-    run_guest_42 "$tmp/reuse"
+    expect_native_exit_42 "$tmp/reuse" "swap-reuse.atto" "$optimization"
     printf 'DOP_NATIVE_CASE=%s OPT=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
         swap-reuse.atto "$optimization" "$(hash_file "$tmp/reuse.ll")" \
         "$(hash_file "$tmp/reuse")"
@@ -265,15 +266,15 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
-# Fail closed if compiler/toolchain/contract fixture bytes changed in flight.
+# Deny in-job mutation of compiler, Clang, auditor and canonical contract files.
 if [[ "$(hash_file "$compiler")" != "$compiler_sha" ||
       "$(hash_file "$clang_path")" != "$clang_sha" ||
       "$(hash_file "$auditor")" != "$auditor_sha" ||
       "$(hash_file "$contracts/swap-reuse.atto")" != "$swap_fixture_sha" ||
       "$(hash_file "$contracts/removed-index-trap.atto")" != "$trap_fixture_sha" ]]; then
-    echo 'FAIL: inverted native toolchain or canonical fixture identity changed during validation' >&2
+    echo 'FAIL: inverted native toolchain or canonical fixture changed during gate' >&2
     exit 1
 fi
 printf 'DOP_SOURCE_COMPILER_SHA256=%s\nDOP_CLANG_SHA256=%s\nDOP_IR_AUDITOR_SHA256=%s\nDOP_SWAP_FIXTURE_SHA256=%s\nDOP_TRAP_FIXTURE_SHA256=%s\n' \
     "$compiler_sha" "$clang_sha" "$auditor_sha" "$swap_fixture_sha" "$trap_fixture_sha"
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 8 bounded native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 10 bounded native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
