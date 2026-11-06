@@ -224,6 +224,56 @@ jobs:
           test "$(git rev-parse --verify HEAD)" = "$DOP_CHECKOUT_HEAD"
           test "$(git rev-parse --verify HEAD^{tree})" = "$DOP_CHECKOUT_TREE"
           test -z "$(git status --porcelain --untracked-files=all)"
+      - name: execute-poisoned-guest
+        shell: bash
+        env:
+          CLANG: clang
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          source='examples/dop-cache/soa-int-update.atto'
+          compiler="$RUNNER_TEMP/dop-atto-build/oreslang-llvmc"
+          auditor="$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit"
+          clang_bin="$(command -v clang)"
+          test "$(git hash-object "$source")" = 'aedc778e3e8dd2940600f047540c159b0129830a'
+          test -f "$source" && test ! -L "$source"
+          test -x "$compiler" && test -x "$auditor" && test -x "$clang_bin"
+          sha256sum "$source" "$compiler" "$auditor" "$clang_bin" > "$work/inputs.sha256"
+          # Poison exactly the checksum guard; no shell-side oracle or source edit.
+          python3 - "$source" "$work/poisoned.atto" <<'PY'
+          from pathlib import Path
+          import sys
+          raw = Path(sys.argv[1]).read_bytes()
+          needle = b'checksum == 537509888'
+          assert raw.count(needle) == 1, 'missing/nonunique canonical checksum guard'
+          changed = raw.replace(needle, b'checksum == 537509889')
+          assert changed != raw and len(changed) == len(raw)
+          Path(sys.argv[2]).write_bytes(changed)
+          PY
+          # This is an ACTUAL .atto compiler/LLVM IR/Clang execution, not a
+          # host reference checksum. Successful compile is mandatory.
+          timeout --signal=TERM --kill-after=3s 180s \
+            env ORESLANG_LLVMC="$compiler" ORES_NO_GC_IR_AUDIT="$auditor" \
+            CLANG="$clang_bin" bash scripts/compile-aot.sh \
+            "$work/poisoned.atto" "$work/poisoned"
+          test -f "$work/poisoned" && test -x "$work/poisoned"
+          sha256sum "$work/poisoned" > "$work/poisoned.sha256"
+          set +e
+          timeout --signal=TERM --kill-after=3s 40s "$work/poisoned"
+          status=$?
+          set -e
+          if [[ "$status" -ne 1 ]]; then
+            echo "Poisoned actual native .atto guest must exit 1; observed $status" >&2
+            exit 1
+          fi
+          sha256sum -c "$work/poisoned.sha256"
+          sha256sum -c "$work/inputs.sha256"
+          test "$(git rev-parse --verify HEAD)" = "$DOP_CHECKOUT_HEAD"
+          test "$(git rev-parse --verify HEAD^{tree})" = "$DOP_CHECKOUT_TREE"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'DOP_NATIVE_NEGATIVE_GUEST_REAL_EXIT_1 head=%s guest_sha256=%s\n' \
+            "$DOP_CHECKOUT_HEAD" "$(sha256sum "$work/poisoned" | awk '{print $1}')"
       - name: Compile and execute real .atto guest AOT
         shell: bash
         env:
