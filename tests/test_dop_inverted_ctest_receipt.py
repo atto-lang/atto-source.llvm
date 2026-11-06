@@ -62,6 +62,11 @@ class StrictCtTests(unittest.TestCase):
         root.set("failures", "1")
         self.deny(root)
 
+    def test_explicit_error_count_rejected(self):
+        root = valid_xml()
+        root.set("errors", "1")
+        self.deny(root)
+
     def test_summary_omission_rejected(self):
         root = valid_xml()
         del root.attrib["skipped"]
