@@ -3,8 +3,12 @@
 This lane **compiles real .atto source** with `build/oreslang-llvmc`,
 passes emitted LLVM IR through the no-tracing-GC auditor and Clang at
 both O0 and O2, executes the resulting eight native binaries, and rejects
-a malformed source that references an undeclared function with **no IR
-output**. There is no host-model fallback and no permissive "skip if
+six malformed sources at the real compiler boundary with **no IR output**.
+The negative set includes undeclared function and value references, forbidden
+legacy `async` and both orders of `critical` + `suspends` function modifiers,
+and implicit string-to-integer conversion. Each negative is pinned by a Git blob,
+requires a normal nonzero compiler exit and diagnostic (not a crash), and is
+recorded in the receipt. There is no host-model fallback and no permissive "skip if
 unavailable".
 
 The four independent *pure predicates* correspond to:
@@ -36,7 +40,9 @@ bash scripts/test-formal-policy-atto-native.sh
 The workflow `.github/workflows/atto-formal-policy-native-guest.yml`
 retains a machine-readable receipt with the exact source head/tree, guest
 source Git blobs, compiled native binary SHA256 hashes, compiler and
-IR-auditor hashes, run ID/attempt and guest exit status. A workflow with
+IR-auditor hashes, run ID/attempt and guest exit status. Negative-case source blobs,
+compiler exit statuses, and count are also retained. All six negative cases
+must be rejected; a legacy grammar accepted by the compiler is a real failure. A workflow with
 `jobs=[]` or `steps=[]` is runner admission failure, not proof; no
 backend is marked verified merely because fixture files exist.
 
