@@ -39,7 +39,7 @@ static Request request() {
          buffer("out",1,0,1024,Access::Write), ScalarU64{256}},
         {"tenant-1", "gpu-1", "queue-1", 4},
         Physical{{1,1,1},{256,1,1}}, 0,
-        {{65535,65535,65535}, {1024,1024,64}, 1024, 49152}, 8192
+        {{65535,65535,65535}, {1024,1024,64}, 1024, 49152}, 8192, 8192
     };
 }
 static bool independent_alias_oracle(const std::vector<Argument>& a) {
@@ -94,6 +94,8 @@ int main() {
     reject("GPU-LAUNCH-006", [&] { (void)verify(invalid); });
     invalid=base; invalid.max_referenced_bytes=3071;
     reject("GPU-LAUNCH-005", [&] { (void)verify(invalid); });
+    invalid=base; invalid.max_total_dispatched_lanes=255;
+    reject("GPU-LAUNCH-003", [&] { (void)verify(invalid); });
     invalid=base; invalid.geometry=Physical{{0,1,1},{256,1,1}};
     reject("GPU-LAUNCH-003", [&] { (void)verify(invalid); });
     invalid=base; invalid.geometry=Physical{{1,1,1},{0,1,1}};
@@ -105,6 +107,8 @@ int main() {
     auto padded=verify(invalid);
     check(padded.logical_work_items==257);
     check(padded.physical.total_dispatched_lanes==512);
+    invalid.max_total_dispatched_lanes=511;
+    reject("GPU-LAUNCH-003", [&] { (void)verify(invalid); });
 
     // Independent quadratic overlap oracle vs sorted verifier. Use only
     // well-formed, in-quota scoped F32 views to isolate alias reasoning.
