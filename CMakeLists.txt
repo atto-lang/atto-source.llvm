@@ -1217,6 +1217,10 @@ if(BUILD_TESTING)
         atto-share-move-only-class.atto --diagnostic "E_SHARE_MOVE_ONLY")
     oreslang_contract_test(atto_protected_state_requires_typed_lowering
         atto-protected-state-unlowered.atto --diagnostic "STATE_CONTAINER_BACKEND_UNSUPPORTED")
+    # Outer rt take must not silently skip source-place invalidation when
+    # the operand is a runtime-selected conditional expression.
+    oreslang_contract_test(atto_take_conditional_untracked_rejected
+        atto-take-conditional-untracked.atto --diagnostic "E_TAKE_UNTRACKED_SELECT")
     # Copy scalars retain parity with Java rt share Copy semantics.
     # Require real compiler IR, Clang link and native process exit.
     if(ORE_CLANG)
