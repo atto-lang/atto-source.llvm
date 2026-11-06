@@ -119,6 +119,25 @@ def main():
             'base.atto': 'define module Base as pub fnc answer():int{return 21;} end',
         }, 42),
     ])
+    # These are native .atto executable guest cases: "repo" is an actual
+    # environment variable, unrelated to the independent +/ root operator.
+    positives.extend([
+        ('atto-env-absolute-repo', {
+            'main.atto': 'import module Lib from "${repo}/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-env-project-root-component', {
+            'main.atto': 'import module Lib from "+/${MODULE}"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-env-multiple-variables', {
+            'main.atto': 'import module Lib from "${repo}/${MODULE}"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+    ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -171,7 +190,10 @@ def main():
             directory = root/name; directory.mkdir()
             for path, source in files.items(): (directory/path).write_text(source)
             entry = 'main.atto' if 'main.atto' in files else 'main.ores'
-            result = run([a.compiler, str(directory/entry)])
+            compiler_env = os.environ.copy()
+            if name.startswith('atto-env-'):
+                compiler_env.update({'repo': str(directory), 'MODULE': 'lib'})
+            result = run([a.compiler, str(directory/entry)], env=compiler_env)
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
@@ -188,6 +210,34 @@ def main():
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
+        # Negative compiler graph cases must emit no LLVM IR, never an
+        # apparently successful package graph or partially linked source.
+        for label, specifier, variables, expected in [
+            ('missing-variable', '${ATTO_MISSING_TEST_997}/lib', {}, 'missing or empty import environment variable'),
+            ('empty-variable', '${repo}/lib', {'repo': ''}, 'missing or empty import environment variable'),
+            ('invalid-name', '${bad-name}/lib', {}, 'invalid ${NAME} import variable name'),
+            ('nested-variable', '${repo}/lib', {'repo': '${OTHER}'}, 'invalid import environment variable value'),
+            ('control-byte', '${repo}/lib', {'repo': 'bad\npath'}, 'control characters'),
+            ('too-large', '${repo}/lib', {'repo': 'x' * 4097}, 'invalid import environment variable value'),
+            ('root-traversal-variable', '+/${MODULE}', {'MODULE': '../outside'}, 'empty/dot/traversal'),
+            ('unbraced-dollar-not-alias', '$repo/lib', {'repo': str(root)}, 'native imports require'),
+            ('remote-not-verified', 'https://example.test/lib.atto', {}, 'remote imports require locked'),
+        ]:
+            directory = root / ('env-negative-' + label)
+            directory.mkdir()
+            (directory / '.ores.pkg.toml').write_text('schema_version = "1"\n')
+            (directory / 'main.atto').write_text(
+                'import module Lib from "' + specifier + '"; pub fnc main():int{return 0;}')
+            (directory / 'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            env = os.environ.copy()
+            env.pop('ATTO_MISSING_TEST_997', None)
+            env.update(variables)
+            result = run([a.compiler, str(directory / 'main.atto')], env=env)
+            if result.returncode == 0 or result.stdout or expected not in result.stderr:
+                raise AssertionError((label, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+
         # Extensionless migration twins are ambiguous by policy. They must
         # fail before LLVM IR is emitted; explicit suffixes remain selectable.
         for name, main_source, project_root in (
