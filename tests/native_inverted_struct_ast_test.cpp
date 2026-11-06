@@ -84,7 +84,7 @@ end
 
     // The real production lexer recognizes the first executable two-column
     // subset and constructs a typed source operation sequence (no adapter).
-    auto live = parse_program(R"ores(
+    const auto live_source = R"ores(
 define inverted struct Position as
     let x: int;
     id: int;
@@ -97,7 +97,8 @@ fnc main(): int {
     rows.erase_swap(0);
     return rows.get(0, x);
 }
-)ores");
+)ores";
+    auto live = parse_program(live_source);
     check(live.functions.empty() && live.inverted_main.has_value(),
           "production parsed inverted main not preserved");
     check(live.inverted_main->schema_name == "Position" &&
@@ -123,7 +124,7 @@ fnc main(): int {
     // transform cannot corrupt the input to the production HIR/MIR verifier.
     // Re-verify before IR emission; never use a stale parser-side admission.
     const auto mutate_and_verify = [&](const auto& mutation) {
-        auto forged = live;
+        auto forged = parse_program(live_source);
         mutation(*forged.inverted_main);
         (void)dop::mir::verify_production_inverted_i64(forged);
     };
