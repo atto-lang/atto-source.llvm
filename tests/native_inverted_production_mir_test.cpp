@@ -274,5 +274,39 @@ int main() {
         reject([&]{ (void)verify_production_inverted_i64(forged); },
                "exceeds signed i64");
     }
+    // The public external-MIR verifier is an independent trust boundary:
+    // metadata from a forged or deserialized module cannot omit Close,
+    // even if the originating source HIR builder would always emit it.
+    {
+        const auto& verified = compiled.mir;
+        auto missing_close = verified.instructions();
+        INVERTED_REQUIRE(!missing_close.empty());
+        INVERTED_REQUIRE(missing_close.back().kind == OpKind::Close);
+        missing_close.pop_back();
+        reject([&] {
+            (void)Module::verify_external(
+                verified.layout(), verified.capacity(), missing_close);
+        }, "missing terminal close");
+
+        auto allocation_only = verified.instructions();
+        allocation_only.resize(1);
+        reject([&] {
+            (void)Module::verify_external(
+                verified.layout(), verified.capacity(), allocation_only);
+        }, "missing terminal close");
+
+        // The builder is also checked instead of being a special trusted
+        // escape path through Module::lower().
+        oreslang::dop::hir::LinearPlan unfinished(verified.layout(), verified.capacity());
+        unfinished.push(2);
+        reject([&] { (void)Module::lower(unfinished); },
+               "missing terminal close");
+
+        // The valid production module still lowers and emits identically.
+        const auto accepted = Module::verify_external(
+            verified.layout(), verified.capacity(), verified.instructions());
+        INVERTED_REQUIRE(emit_native_i64_pair_ir(
+            accepted, compiled.operands) == ir);
+    }
     return 0;
 }
