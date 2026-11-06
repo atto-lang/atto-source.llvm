@@ -137,6 +137,12 @@ def main():
             '.ores.pkg.toml': 'schema_version = "1"\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
+        ('atto-root-and-env-independent-graph', {
+            'main.atto': 'import module Root from "+/root"; import module Env from "${repo}/env"; pub fnc main():int{return Root.answer()+Env.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'root.atto': 'define module Root as pub fnc answer():int{return 19;} end',
+            'env.atto': 'define module Env as pub fnc answer():int{return 23;} end',
+        }, 42),
     ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
@@ -220,6 +226,8 @@ def main():
             ('control-byte', '${repo}/lib', {'repo': 'bad\npath'}, 'control characters'),
             ('too-large', '${repo}/lib', {'repo': 'x' * 4097}, 'invalid import environment variable value'),
             ('root-traversal-variable', '+/${MODULE}', {'MODULE': '../outside'}, 'empty/dot/traversal'),
+            ('env-outside-package-denied', '${repo}/lib', {'repo': str(root)}, 'escapes physical package root'),
+            ('env-missing-manifest-denied', '${repo}/lib', {'repo': str(root / 'env-negative-env-missing-manifest-denied')}, 'escapes physical package root'),
             ('unbraced-dollar-not-alias', '$repo/lib', {'repo': str(root)}, 'native imports require'),
             ('remote-not-verified', 'https://example.test/lib.atto', {}, 'remote imports require locked'),
         ]:
