@@ -1,0 +1,41 @@
+name: AttoLang GPU typed IR host-only evidence
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/GpuTypedLaunchIr.hpp'
+      - 'src/main/cpp/oreslang/runtime/GpuLaunchGeometry.hpp'
+      - 'tests/gpu_typed_launch_ir_test.cpp'
+      - 'scripts/verify-gpu-typed-ir.sh'
+      - '.github/workflows/gpu-typed-ir.yml'
+      - 'CMakeLists.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  host-typed-ir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout immutable PR source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Compile and test typed IR against the exact checkout
+        shell: bash
+        env:
+          GPU_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bash scripts/verify-gpu-typed-ir.sh | tee "$RUNNER_TEMP/gpu-typed-ir-host-only-receipt.txt"
+
+      - name: Upload non-promoting typed IR host receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-typed-ir-host-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gpu-typed-ir-host-only-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7
