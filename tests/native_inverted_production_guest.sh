@@ -37,7 +37,41 @@ hash_file() {
     fi
     printf '%s\n' "$digest"
 }
+# Preserve executable identity throughout the real compiler -> native gate.
+# This is an in-job toolchain fingerprint, not an exact-PR-head receipt.
+if [[ ! -f "$compiler" || ! -x "$compiler" ]]; then
+    echo 'FAIL: missing source-built DOP compiler executable' >&2
+    exit 1
+fi
+if ! clang_path="$(command -v "$clang")" || [[ ! -f "$clang_path" || ! -x "$clang_path" ]]; then
+    echo 'FAIL: missing executable Clang toolchain' >&2
+    exit 1
+fi
+compiler_sha="$(hash_file "$compiler")" || exit 1
+clang_sha="$(hash_file "$clang_path")" || exit 1
 auditor_sha="$(hash_file "$auditor")" || exit 1
+
+# Positive exit status alone is not a bounded guest test. Watch every native
+# process and reject signal exits, timeouts and launch failures distinctly.
+run_guest_42() {
+    local program="${1:?native guest path required}"
+    python3 - "$program" <<'PY'
+import resource
+import subprocess
+import sys
+
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+try:
+    child = subprocess.run(
+        [sys.argv[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=15, check=False
+    )
+except (OSError, subprocess.TimeoutExpired) as exc:
+    raise SystemExit(f"FAIL: native inverted guest did not complete: {exc}")
+if child.returncode != 42:
+    raise SystemExit(f"FAIL: native inverted guest returned {child.returncode}, expected 42")
+PY
+}
 printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' \
     > "$tmp/expected-audit-success"
 audit_ir() {
@@ -91,14 +125,10 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
     done
     for optimization in -O0 -O2; do
         "$clang" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
-        set +e
-        "$tmp/guest" >/dev/null 2>&1
-        actual=$?
-        set -e
-        if [ "$actual" -ne 42 ]; then
-            echo "FAIL: production native $fixture $optimization exited $actual, expected 42" >&2
-            exit 1
-        fi
+        run_guest_42 "$tmp/guest"
+        printf 'DOP_NATIVE_CASE=%s OPT=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
+            "$fixture" "$optimization" "$(hash_file "$tmp/guest.ll")" \
+            "$(hash_file "$tmp/guest")"
     done
 done
 
@@ -109,18 +139,16 @@ if [[ ! -f "$contracts/swap-reuse.atto" ||
     echo "FAIL: canonical DOP v1 fixture corpus absent" >&2
     exit 1
 fi
+swap_fixture_sha="$(hash_file "$contracts/swap-reuse.atto")" || exit 1
+trap_fixture_sha="$(hash_file "$contracts/removed-index-trap.atto")" || exit 1
 "$compiler" "$contracts/swap-reuse.atto" > "$tmp/reuse.ll"
 audit_ir "$tmp/reuse.ll"
 for optimization in -O0 -O2; do
     "$clang" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
-    set +e
-    "$tmp/reuse" >/dev/null 2>&1
-    actual=$?
-    set -e
-    if [[ "$actual" -ne 42 ]]; then
-        echo "FAIL: DOP swap-delete/reinsert $optimization exited $actual, expected 42" >&2
-        exit 1
-    fi
+    run_guest_42 "$tmp/reuse"
+    printf 'DOP_NATIVE_CASE=%s OPT=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
+        swap-reuse.atto "$optimization" "$(hash_file "$tmp/reuse.ll")" \
+        "$(hash_file "$tmp/reuse")"
 done
 
 # A guest read past logical length is dynamically guarded, rather than
@@ -237,4 +265,15 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 8 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+# Fail closed if compiler/toolchain/contract fixture bytes changed in flight.
+if [[ "$(hash_file "$compiler")" != "$compiler_sha" ||
+      "$(hash_file "$clang_path")" != "$clang_sha" ||
+      "$(hash_file "$auditor")" != "$auditor_sha" ||
+      "$(hash_file "$contracts/swap-reuse.atto")" != "$swap_fixture_sha" ||
+      "$(hash_file "$contracts/removed-index-trap.atto")" != "$trap_fixture_sha" ]]; then
+    echo 'FAIL: inverted native toolchain or canonical fixture identity changed during validation' >&2
+    exit 1
+fi
+printf 'DOP_SOURCE_COMPILER_SHA256=%s\nDOP_CLANG_SHA256=%s\nDOP_IR_AUDITOR_SHA256=%s\nDOP_SWAP_FIXTURE_SHA256=%s\nDOP_TRAP_FIXTURE_SHA256=%s\n' \
+    "$compiler_sha" "$clang_sha" "$auditor_sha" "$swap_fixture_sha" "$trap_fixture_sha"
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 8 bounded native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
