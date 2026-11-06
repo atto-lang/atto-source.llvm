@@ -63,6 +63,7 @@ if(BUILD_TESTING)
             "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
             "-DPOSITIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-f32.atto"
             "-DNEGATIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-host-effect-reject.atto"
+            "-DDIRECTIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-unverified-target-reject.atto"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify-atto-gpu-saxpy-v1.cmake")
     set_tests_properties(atto_gpu_saxpy_opencl_compiler_v1 PROPERTIES TIMEOUT 60)
     # Fail-closed host-level type resolver checks; these do not claim guest
