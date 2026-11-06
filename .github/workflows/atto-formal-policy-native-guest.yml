@@ -67,6 +67,8 @@ jobs:
               and .negativeCount == 6
               and (.negativeCompilerRejections | length == 6)
               and (.negativeCompilerRejections | all(.compilerExitStatus > 0 and .compilerExitStatus < 128))
+              and (.scriptGitBlob | test("^[0-9a-f]{40}$"))
+              and (.negativeCompilerRejections | all(.diagnosticSha256 | test("^[0-9a-f]{64}$")))
               and (.nativeGuestExecutions | all(.guestExitStatus == 0))' \
             "$ATTO_POLICY_RECEIPT"
       - name: Retain exact-head compiler, native output and negative-compile receipt
