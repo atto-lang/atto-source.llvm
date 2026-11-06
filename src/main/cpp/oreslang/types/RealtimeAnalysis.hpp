@@ -135,7 +135,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             add_effect(facts, FunctionEffect::Alloc); facts.unsupported_runtime = true; break;
         case Expression::Kind::SumAccess:
             add_effect(facts, FunctionEffect::StateRead); facts.unsupported_runtime = true;
-            if (expr->name == "unwrap") add_effect(facts, FunctionEffect::Panic);
+            if (expr->name == "unwrap" || expr->name == "expect") add_effect(facts, FunctionEffect::Panic);
             break;
         case Expression::Kind::String:
             add_effect(facts, FunctionEffect::Alloc);
