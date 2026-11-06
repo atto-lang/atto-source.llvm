@@ -8,6 +8,7 @@
 using oreslang::gpu::Dim3;
 using oreslang::gpu::Limits;
 using oreslang::gpu::validate_launch;
+using oreslang::gpu::validate_logical_launch;
 
 static int checked = 0;
 static void verify(bool ok) {
@@ -39,6 +40,26 @@ int main() {
     rejects([&] { (void)validate_launch({maximum, 2, 1}, {1, 1, 1}, 0, huge); });
     rejects([&] { (void)validate_launch({maximum, 1, 1}, {2, 1, 1}, 0, huge); });
     verify(validate_launch({maximum, maximum, 0}, {2, 1, 1}, 0, huge).empty_launch);
+    const auto logical = validate_logical_launch({1000, 1, 1},
+                                                   {256, 1, 1}, 0, caps);
+    verify(logical.logical_work_items == 1000 && logical.physical.grid.x == 4
+           && logical.physical.total_logical_threads == 1024);
+    const auto logical2d = validate_logical_launch({35, 17, 1},
+                                                    {16, 16, 1}, 0, caps);
+    verify(logical2d.logical_work_items == 595
+           && logical2d.physical.grid.x == 3
+           && logical2d.physical.grid.y == 2
+           && logical2d.physical.total_logical_threads == 1536);
+    const auto logical_zero = validate_logical_launch({0, 65535, 65535},
+                                                       {1, 1, 1}, 0, caps);
+    verify(logical_zero.logical_work_items == 0
+           && logical_zero.physical.empty_launch);
+    rejects([&] { (void)validate_logical_launch({8, 1, 1},
+                                                  {0, 1, 1}, 0, caps); });
+    rejects([&] { (void)validate_logical_launch({8, 1, 1},
+                                                  {1, 1, 1}, 49153, caps); });
+    rejects([&] { (void)validate_logical_launch({maximum, 1, 1},
+                                                  {2, 1, 1}, 0, huge); });
     std::cout << "PASS " << checked << " native host-only GPU geometry assertions\n";
     return 0;
 }
