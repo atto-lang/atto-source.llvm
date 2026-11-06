@@ -57,6 +57,11 @@ int main() {
     denied("${repo}/foo", {{"repo", "a\tpath"}});
     denied("${repo}/foo", {{"repo", std::string("a\0b", 3)}});
     denied("${repo}/foo", {{"repo", std::string("\xC2\x85", 2)}});
+    denied("${repo}/foo", {{"repo", std::string("\xE2\x80\xAE", 3)}});
+    denied("${repo}/foo", {{"repo", std::string("\xE2\x80\xA8", 3)}});
+    denied("${repo}/foo", {{"repo", std::string("\xE2\x81\xA6", 3)}});
+    denied("${repo}/foo", {{"repo", std::string("\xD8\x9C", 2)}});
+    equal("${repo}/cafe", {{"repo", "/work/caf\xC3\xA9"}}, "/work/caf\xC3\xA9/cafe");
     denied("${repo}/foo", {{"repo", std::string(4097, 'x')}});
     denied("${repo}/foo", {{"repo", std::string(2049, 'x') + std::string(2049, 'x')}});
     denied(std::string(4097, 'x'), {});
