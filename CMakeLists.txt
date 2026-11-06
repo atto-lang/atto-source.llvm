@@ -46,6 +46,33 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # G1 typed-device-IR prototype only: NOT parsed .atto guest, PTX, or GPU
+    # execution. Keep independent of the native host scalar compiler.
+    add_executable(oreslang-gpu-g1-typed-saxpy-ir-test
+        tests/gpu_g1_nvptx_saxpy_ir_test.cpp)
+    target_include_directories(oreslang-gpu-g1-typed-saxpy-ir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-typed-saxpy-ir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_typed_nvptx_saxpy_ir_host_only
+        COMMAND oreslang-gpu-g1-typed-saxpy-ir-test)
+    set_tests_properties(native_gpu_g1_typed_nvptx_saxpy_ir_host_only
+        PROPERTIES TIMEOUT 20)
+
+    # Actual LLVM IR parser and deliberately broken-SSA mutation, never
+    # conflated with PTX generation or a physical CUDA launch.
+    find_program(ATTO_GPU_G1_CLANG NAMES
+        clang-21 clang-20 clang-19 clang-18 clang-17 clang)
+    if(ATTO_GPU_G1_CLANG)
+        add_test(NAME native_gpu_g1_llvm_ir_parse_and_mutation_host_only
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
+                "-DG1_CLANG=${ATTO_GPU_G1_CLANG}"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-ir-proof"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_llvm_ir_verify.cmake")
+        set_tests_properties(native_gpu_g1_llvm_ir_parse_and_mutation_host_only
+            PROPERTIES TIMEOUT 30)
+    endif()
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
