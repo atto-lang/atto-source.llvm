@@ -45,16 +45,48 @@ for name in "${cases[@]}"; do
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$opt" "$pinned_blob" "$binary_sha" "$status" >> "$case_file"
   done
 done
-bad="tests/formal-policy-atto/negative/undeclared-authority.atto"
-[[ "$(git -C "$root" hash-object "$root/$bad")" == "$(git -C "$root" rev-parse "HEAD:$bad")" ]] || exit 78
-if "$compiler" --target=host "$root/$bad" > "$work/forbidden.ll" 2> "$work/forbidden.stderr"; then
-  echo "Compiler improperly accepted undeclared authority" >&2
-  exit 1
-fi
-[[ ! -s "$work/forbidden.ll" && -s "$work/forbidden.stderr" ]] || {
-  echo "Negative source emitted IR or no error diagnostic" >&2
-  exit 1
-}
+# Reject independent effect/type/resolution mutations through the real compiler.
+# Require a normal nonzero compile error, not a crash, missing compiler or
+# emitted LLVM IR. Each fixture is checked against its exact Git blob.
+negative_file="$work/negative-results.tsv"
+: > "$negative_file"
+negative_cases=(
+  undeclared-authority
+  legacy-async-modifier
+  critical-suspends-modifier
+  suspends-critical-modifier
+  unbound-value
+  implicit-string-to-int
+)
+for name in "${negative_cases[@]}"; do
+  bad="tests/formal-policy-atto/negative/$name.atto"
+  source_blob="$(git -C "$root" rev-parse "HEAD:$bad")"
+  [[ "$(git -C "$root" hash-object "$root/$bad")" == "$source_blob" ]] || {
+    echo "Negative source blob does not match exact head: $bad" >&2
+    exit 78
+  }
+  stderr="$work/$name.stderr"
+  output="$work/$name.ll"
+  if "$compiler" --target=host "$root/$bad" > "$output" 2> "$stderr"; then
+    echo "Compiler improperly accepted forbidden source: $name" >&2
+    exit 1
+  else
+    status=$?
+  fi
+  [[ "$status" -gt 0 && "$status" -lt 128 ]] || {
+    echo "Compiler crashed or was unavailable for negative case: $name (exit=$status)" >&2
+    exit 1
+  }
+  [[ ! -s "$output" && -s "$stderr" ]] || {
+    echo "Negative source emitted IR or lacked a diagnostic: $name" >&2
+    exit 1
+  }
+  grep -Eiq '(error|failed|invalid|unsupported|unknown|undeclared|unrecognized)' "$stderr" || {
+    echo "Negative source had no recognizable error diagnostic: $name" >&2
+    exit 1
+  }
+  printf '%s\t%s\t%s\n' "$name" "$source_blob" "$status" >> "$negative_file"
+done
 
 mkdir -p "$(dirname "$ATTO_POLICY_RECEIPT")"
 source_tree="$(git -C "$root" rev-parse 'HEAD^{tree}')"
@@ -67,6 +99,7 @@ jq -Rn \
   --arg auditorSha256 "$auditor_sha" \
   --arg runId "${GITHUB_RUN_ID:-local}" \
   --arg runAttempt "${GITHUB_RUN_ATTEMPT:-0}" \
+  --rawfile negativeRows "$negative_file" \
   '[inputs | select(length > 0) | split("\t") | {
       fixture: .[0], optimization: (.[1]|tonumber),
       sourceGitBlob: .[2], executableSha256: .[3],
@@ -79,12 +112,19 @@ jq -Rn \
       runId: $runId, runAttempt: ($runAttempt|tonumber),
       nativeGuestExecutions: ., nativeGuestCount: length,
       rejectedUndeclaredSymbol: true,
+      negativeCompilerRejections: ($negativeRows | split("\\n") | map(select(length > 0)) |
+        map(split("\\t") | {
+          fixture: .[0], sourceGitBlob: .[1], compilerExitStatus: (.[2] | tonumber)
+        })),
+      negativeCount: ($negativeRows | split("\\n") | map(select(length > 0)) | length),
       guestScope: "pure scalar predicates; not actor, network, or persistence parity"
     }' "$case_file" > "$ATTO_POLICY_RECEIPT"
 jq -e '.schema == "atto-native-policy-guest-receipt/v1"
   and .nativeGuestCount == 8
   and (.nativeGuestExecutions | all(.guestExitStatus == 0))
   and .rejectedUndeclaredSymbol == true
+  and .negativeCount == 6
+  and (.negativeCompilerRejections | all(.compilerExitStatus > 0 and .compilerExitStatus < 128))
   and .sourceHead != ""
   and .compilerSha256 != ""' "$ATTO_POLICY_RECEIPT" >/dev/null
-echo "ATTO_NATIVE_GUEST_EXECUTION_PASS cases=8 negative_compile=1"
+echo "ATTO_NATIVE_GUEST_EXECUTION_PASS cases=8 negative_compile=6"
