@@ -44,7 +44,7 @@ jobs:
           set -euo pipefail
           bash scripts/test-source-task-atto-aot.sh | tee build/task-v1-guest.log
           test "$(grep -c '^TASK_I64_ATTO_GUEST_PASS|' build/task-v1-guest.log)" = 2
-          test "$(grep -c '^TASK_I64_ATTO_NEGATIVE_PASS|' build/task-v1-guest.log)" = 1
+          test "$(grep -c '^TASK_I64_ATTO_NEGATIVE_PASS|' build/task-v1-guest.log)" = 4
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

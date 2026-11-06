@@ -36,15 +36,23 @@ for level in 0 2; do
       "$EXPECTED_HEAD" "$level" "$compiler_sha" "$fixture_sha" "$(sha256sum "$executable" | cut -d' ' -f1)"
 done
 unset ORESLANG_LLVM_AOT_OPT_LEVEL
-cat > "$tmp/missing-await.atto" <<'SOURCE'
-pub fnc main(): int {
-  let Task<int> w = task { return 41; };
-  return 0;
-}
-SOURCE
-if "$root/scripts/compile-aot.sh" "$tmp/missing-await.atto" "$tmp/negative" > "$tmp/negative.out" 2> "$tmp/negative.err"; then
-  echo 'Invalid Task source admitted' >&2; exit 1
-fi
-grep -Fq 'must be awaited exactly once' "$tmp/negative.err" || { cat "$tmp/negative.err" >&2; exit 1; }
-[[ ! -e "$tmp/negative" ]] || { echo 'Invalid source published an executable' >&2; exit 1; }
-printf 'TASK_I64_ATTO_NEGATIVE_PASS|head=%s|no_artifact=yes\n' "$EXPECTED_HEAD"
+# Compiler-semantic source rejections from the existing native source Task E2E corpus.
+# Each must fail before a guest artifact is published. Never launch these.
+for name in missing-await double-await producer-call second-task; do
+  path="$root/tests/fixtures/task-v1-negative/$name.atto"
+  [[ -f "$path" && ! -L "$path" ]] || { echo "Missing negative fixture: $name" >&2; exit 78; }
+  [[ "$(git -C "$root" rev-parse "HEAD:tests/fixtures/task-v1-negative/$name.atto")" == "$(git hash-object --no-filters "$path")" ]] || { echo "Negative fixture differs from HEAD: $name" >&2; exit 78; }
+  case "$name" in
+    missing-await) expected="must be awaited exactly once" ;;
+    double-await) expected="requires await to immediately consume" ;;
+    producer-call) expected="producer must be capture-free and scalar" ;;
+    second-task) expected="supports exactly one source Task" ;;
+  esac
+  artifact="$tmp/rejected-$name"
+  code=0
+  timeout 30s "$root/scripts/compile-aot.sh" "$path" "$artifact" > "$tmp/negative-$name.out" 2> "$tmp/negative-$name.err" || code=$?
+  [[ "$code" != 0 && "$code" != 124 ]] || { echo "Unsafe Task admission succeeded or timed out: $name" >&2; exit 1; }
+  grep -Fq "$expected" "$tmp/negative-$name.err" || { echo "Wrong compiler diagnostic for $name" >&2; cat "$tmp/negative-$name.err" >&2; exit 1; }
+  [[ ! -e "$artifact" ]] || { echo "Invalid Task source published native guest: $name" >&2; exit 1; }
+  printf 'TASK_I64_ATTO_NEGATIVE_PASS|head=%s|case=%s|no_artifact=yes\n' "$EXPECTED_HEAD" "$name"
+done
