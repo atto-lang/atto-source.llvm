@@ -1,0 +1,8 @@
+// EXPECT_COMPILE_ERROR: E_TAKE_UNTRACKED_SELECT
+// The outer rt take must not appear to transfer one of two still-live
+// named owners; the chosen source place has no tracked invalidation.
+pub fnc main(): int {
+  let int first = 40;
+  let int second = 42;
+  return rt take (true ? first : second);
+}
