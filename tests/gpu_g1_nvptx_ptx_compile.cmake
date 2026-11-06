@@ -1,0 +1,30 @@
+# Actual llc NVPTX translation probe; NOT a physical GPU execution receipt.
+foreach(key IN ITEMS G1_EMITTER G1_LLC G1_WORK)
+    if(NOT DEFINED ${key} OR "${${key}}" STREQUAL "")
+        message(FATAL_ERROR "GPU-G1-PTX-001: missing ${key}")
+    endif()
+endforeach()
+file(MAKE_DIRECTORY "${G1_WORK}")
+set(source "${G1_WORK}/gpu-g1-saxpy.ll")
+set(ptx "${G1_WORK}/gpu-g1-saxpy.ptx")
+file(REMOVE "${source}" "${ptx}")
+execute_process(COMMAND "${G1_EMITTER}" --emit-llvm-ir OUTPUT_FILE "${source}"
+    RESULT_VARIABLE emit_rc ERROR_VARIABLE emit_err)
+if(NOT emit_rc EQUAL 0 OR NOT EXISTS "${source}")
+    message(FATAL_ERROR "GPU-G1-PTX-002: typed IR was not produced: ${emit_err}")
+endif()
+execute_process(COMMAND "${G1_LLC}" -march=nvptx64 -mcpu=sm_50 -O0
+    -filetype=asm -o "${ptx}" "${source}"
+    RESULT_VARIABLE llc_rc OUTPUT_VARIABLE llc_out ERROR_VARIABLE llc_err)
+if(NOT llc_rc EQUAL 0 OR NOT EXISTS "${ptx}")
+    message(FATAL_ERROR "GPU-G1-PTX-003: llc NVPTX lowering failed: ${llc_err}")
+endif()
+file(READ "${ptx}" ptx_contents)
+if(NOT ptx_contents MATCHES "\\.entry[ \\t\\r\\n]+atto_g1_saxpy_f32" OR
+   NOT ptx_contents MATCHES "\\.address_size[ \\t]+64")
+    file(REMOVE "${ptx}")
+    message(FATAL_ERROR "GPU-G1-PTX-004: PTX kernel entry/address contract missing")
+endif()
+file(SHA256 "${source}" ir_sha256)
+file(SHA256 "${ptx}" ptx_sha256)
+message(STATUS "GPU_G1_PTX_TRANSLATION_PASS IR_SHA256=${ir_sha256} PTX_SHA256=${ptx_sha256} (NO_DEVICE_EXECUTION)")
