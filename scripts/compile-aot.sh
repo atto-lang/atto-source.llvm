@@ -56,6 +56,23 @@ if grep -Eq 'declare .*@(oreslang_source_actor_|ores_actor_)' "$work/program.ll"
     "$rt/NativeExecutionContextStore.c" "$rt/NativeContinuationStore.c"
     "$rt/NativeAwaitTraceBridge.c" "$rt/NativeLogicalTrace.c")
 fi
+# Native source Task<int> has a runtime ABI even when there is no actor import.
+# Link it on the normal AOT path, not only the bespoke source Task test.
+if grep -Eq 'declare .*@oreslang_source_task_(start_i64|await_i64|runtime_shutdown)' "$work/program.ll"; then
+  rt="$root/src/main/cpp/oreslang/runtime"
+  runtime_sources+=("$rt/SourceTaskRuntime.c")
+  scheduler_source="$rt/NativeActorScheduler.c"
+  scheduler_linked=0
+  for runtime_source in "\${runtime_sources[@]}"; do
+    if [[ "$runtime_source" == "$scheduler_source" ]]; then
+      scheduler_linked=1
+      break
+    fi
+  done
+  if [[ "$scheduler_linked" == 0 ]]; then
+    runtime_sources+=("$scheduler_source")
+  fi
+fi
 if (( ${#runtime_sources[@]} )); then
   "$clang" "-O${opt_level}" -x ir "$work/program.ll" -x c -std=c11 \
     -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
