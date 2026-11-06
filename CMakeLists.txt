@@ -46,6 +46,30 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Native CUDA CUBIN AOT admission only: host tests with a fake driver,
+    # not evidence of physical-GPU execution or AttoLang guest lowering.
+    add_executable(oreslang-cuda-cubin-aot-test tests/cuda_cubin_aot_test.cpp)
+    target_include_directories(oreslang-cuda-cubin-aot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-cuda-cubin-aot-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME cuda_cubin_aot_nojit_admission_host_only
+        COMMAND oreslang-cuda-cubin-aot-test)
+    set_tests_properties(cuda_cubin_aot_nojit_admission_host_only
+        PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-cuda-cubin-driver-smoke-test
+        tests/cuda_cubin_system_smoke_test.cpp)
+    target_include_directories(oreslang-cuda-cubin-driver-smoke-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-cuda-cubin-driver-smoke-test PRIVATE
+        ${CMAKE_DL_LIBS})
+    target_compile_options(oreslang-cuda-cubin-driver-smoke-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME cuda_cubin_driver_context_gate_host_only
+        COMMAND oreslang-cuda-cubin-driver-smoke-test)
+    set_tests_properties(cuda_cubin_driver_context_gate_host_only
+        PROPERTIES TIMEOUT 20)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
