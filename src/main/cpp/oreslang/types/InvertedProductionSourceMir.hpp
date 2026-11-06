@@ -18,8 +18,8 @@ struct VerifiedInvertedSourceI64 {
     I64PairIrOperands operands;
 };
 
-inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
-        const Program& program) {
+inline VerifiedInvertedSourceI64 verify_production_inverted_scalar_pair(
+        const Program& program, bool bool_first) {
     if (!program.inverted_main || program.inverted_structs.size() != 1 ||
             !program.functions.empty() || !program.classes.empty() ||
             !program.actors.empty() || !program.imports.empty() ||
@@ -37,9 +37,11 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
     if (schema.name() != source.schema_name ||
             source.owner_name.empty() ||
             schema.columns() != 2 ||
-            schema.column(0).type != InvertedScalarKind::I64 ||
+            schema.column(0).type != (bool_first ? InvertedScalarKind::Bool : InvertedScalarKind::I64) ||
             schema.column(1).type != InvertedScalarKind::I64)
-        throw std::invalid_argument("production inverted source requires matching two-i64 schema");
+        throw std::invalid_argument(bool_first
+            ? "production inverted source requires matching bool/i64 schema"
+            : "production inverted source requires matching two-i64 schema");
     if (source.capacity == 0 || source.capacity > 256 ||
             source.operations.empty() || source.operations.size() > 1024)
         throw std::invalid_argument("production inverted source capacity/operation budget exceeded");
@@ -61,12 +63,17 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
                 if (!operation.field.empty() || operation.index != 0 ||
                         operation.value != 0)
                     throw std::invalid_argument("invalid inverted push source metadata");
+                if (bool_first && operation.values[0] != 0 && operation.values[0] != 1)
+                    throw std::invalid_argument("noncanonical inverted bool push literal");
                 plan.push(2);
                 operands.rows.push_back(operation.values);
                 break;
             case InvertedSourceOperation::Kind::WriteField:
                 if (operation.values != std::array<std::int64_t, 2>{})
                     throw std::invalid_argument("invalid inverted write source metadata");
+                if (bool_first && operation.field == schema.column(0).name &&
+                        operation.value != 0 && operation.value != 1)
+                    throw std::invalid_argument("noncanonical inverted bool write literal");
                 plan.write_runtime_checked(operation.index, operation.field);
                 operands.writes.push_back(operation.value);
                 break;
@@ -82,6 +89,9 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
                     throw std::invalid_argument("invalid inverted return source metadata");
                 if (i + 1 != source.operations.size())
                     throw std::logic_error("production inverted terminal read must be last");
+                if (bool_first && operation.field == schema.column(0).name)
+                    throw std::invalid_argument(
+                        "production inverted main int return cannot read bool field");
                 plan.read_runtime_checked(operation.index, operation.field);
                 // The local owner dies before function return. MIR close
                 // revokes and scrubs every stack column after the read.
@@ -95,6 +105,16 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
     if (!returned)
         throw std::logic_error("production inverted main requires terminal field return");
     return VerifiedInvertedSourceI64{Module::lower(plan), std::move(operands)};
+}
+
+inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
+        const Program& program) {
+    return verify_production_inverted_scalar_pair(program, false);
+}
+
+inline VerifiedInvertedSourceI64 verify_production_inverted_bool_i64(
+        const Program& program) {
+    return verify_production_inverted_scalar_pair(program, true);
 }
 
 } // namespace oreslang::dop::mir
