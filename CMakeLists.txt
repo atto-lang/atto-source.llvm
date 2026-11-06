@@ -59,6 +59,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_g1_typed_nvptx_saxpy_ir_host_only
         PROPERTIES TIMEOUT 20)
 
+    # Actual NVPTX llc translation, not a physical device or .atto guest test.
+    find_program(ATTO_GPU_G1_LLC NAMES llc-21 llc-20 llc-19 llc-18 llc-17 llc)
+    if(ATTO_GPU_G1_LLC)
+        add_test(NAME native_gpu_g1_llc_ptx_no_device_claim
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
+                "-DG1_LLC=${ATTO_GPU_G1_LLC}"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-ptx-proof"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_ptx_compile.cmake")
+        set_tests_properties(native_gpu_g1_llc_ptx_no_device_claim PROPERTIES TIMEOUT 30)
+    endif()
+
     # Actual LLVM IR parser and deliberately broken-SSA mutation, never
     # conflated with PTX generation or a physical CUDA launch.
     find_program(ATTO_GPU_G1_CLANG NAMES
