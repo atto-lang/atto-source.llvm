@@ -3731,6 +3731,21 @@ private:
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
 
+        // The new AttoLang spelling is contextual; launch(x) remains a
+        // legitimate ordinary callable. A new `launch kernel(...) on gpu`
+        // must fail before native scalar IR emission until the typed launch
+        // AST, ownership/fence proof and physical provider have landed.
+        // Do not reinterpret it as a host function or CUDA chevron call.
+        if (token_.text == "launch" &&
+                peek_next().kind == Kind::Identifier) {
+            throw std::runtime_error(
+                    "GPU-LAUNCH-008: explicit AttoLang GPU launch requires "
+                    "validated grid/block/device/queue effects, owned device "
+                    "loans, fence quiescence and physical GPU lowering; "
+                    "no implicit CPU fallback at byte " +
+                    std::to_string(token_.offset));
+        }
+
         // nb is a nonblocking channel/select modifier. It is never permission
         // for suspension inside an otherwise synchronous match/switch.
         if (token_.text == "nb") {
