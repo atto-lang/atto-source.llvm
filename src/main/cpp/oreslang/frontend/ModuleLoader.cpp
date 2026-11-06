@@ -1,6 +1,8 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
+#include "oreslang/frontend/ImportPathVariables.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -37,6 +39,9 @@ class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
+    // Environment values are snapshotted on first use for the duration of
+    // this compiler invocation; source import resolution never runs a shell.
+    std::unordered_map<std::string, std::optional<std::string>> import_environment;
     bool owned, scalar_loop, host;
     std::uint32_t root_provider_bits = 0;
 public:
@@ -236,11 +241,30 @@ private:
                     fail(current,
                         "freestanding native imports require compiler-owned ores.core/* modules");
 
+                std::string resolved_raw;
+                try {
+                    resolved_raw = frontend::expand_static_import_path(
+                        raw, [&](std::string_view name) -> std::optional<std::string> {
+                            const std::string key(name);
+                            if (const auto found = import_environment.find(key);
+                                    found != import_environment.end())
+                                return found->second;
+                            std::optional<std::string> value;
+                            if (const char* current = std::getenv(key.c_str()))
+                                value = std::string(current);
+                            return import_environment.emplace(key, std::move(value)).first->second;
+                        });
+                } catch (const std::exception& error) {
+                    fail(current, error.what());
+                }
+                if (resolved_raw.starts_with("https://") ||
+                        resolved_raw.starts_with("http://"))
+                    fail(current, "remote imports require locked Zed URL admission (not implemented)");
                 fs::path dependency;
-                if (raw.rfind("+/", 0) == 0) {
+                if (resolved_raw.rfind("+/", 0) == 0) {
                     try {
                         dependency = resolve_project_root_import(
-                            current.path, raw,
+                            current.path, resolved_raw,
                             [](const fs::path& manifest) {
                                 const auto manifest_path = manifest.string();
                                 const auto expected_manifest = capture_source_identity(
@@ -257,16 +281,22 @@ private:
                         fail(current, error.what());
                     }
                 } else {
-                    if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
-                        fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
+                    const fs::path source_path(resolved_raw);
+                    const bool absolute_from_env = source_path.is_absolute();
+                    if (!absolute_from_env &&
+                            resolved_raw.rfind("./", 0) != 0 &&
+                            resolved_raw.rfind("../", 0) != 0)
+                        fail(current, "native imports require relative ./ or ../, project-root +/, or an expanded absolute ${NAME} path");
+                    if (absolute_from_env && raw.find("${") == std::string::npos)
+                        fail(current, "native absolute imports require explicit ${NAME} interpolation");
                     dependency = project_root_import_detail::resolve_native_source_suffix(
-                        current.path.parent_path() / fs::path(raw));
+                        absolute_from_env ? source_path : current.path.parent_path() / source_path);
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
                     try {
                         project_root_import_detail::enforce_relative_import_package_boundary(
-                            current.path, dependency);
+                            current.path, dependency, absolute_from_env);
                     } catch (const std::exception& boundary_error) {
                         fail(current, boundary_error.what());
                     }
