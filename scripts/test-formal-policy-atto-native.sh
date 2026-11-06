@@ -112,11 +112,11 @@ jq -Rn \
       runId: $runId, runAttempt: ($runAttempt|tonumber),
       nativeGuestExecutions: ., nativeGuestCount: length,
       rejectedUndeclaredSymbol: true,
-      negativeCompilerRejections: ($negativeRows | split("\\n") | map(select(length > 0)) |
-        map(split("\\t") | {
+      negativeCompilerRejections: ($negativeRows | split("\n") | map(select(length > 0)) |
+        map(split("\t") | {
           fixture: .[0], sourceGitBlob: .[1], compilerExitStatus: (.[2] | tonumber)
         })),
-      negativeCount: ($negativeRows | split("\\n") | map(select(length > 0)) | length),
+      negativeCount: ($negativeRows | split("\n") | map(select(length > 0)) | length),
       guestScope: "pure scalar predicates; not actor, network, or persistence parity"
     }' "$case_file" > "$ATTO_POLICY_RECEIPT"
 jq -e '.schema == "atto-native-policy-guest-receipt/v1"
