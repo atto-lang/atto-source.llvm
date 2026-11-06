@@ -81,7 +81,7 @@ class Parser {
         const std::vector<std::string> values{scale_, x_, y_, output_, n_, index_};
         for (std::size_t i = 0; i < values.size(); ++i)
             for (std::size_t j = i + 1; j < values.size(); ++j)
-                if (values[i] == values[j]) fail("device bindings must be distinct", peek().at);
+                if (values[i] == values[j]) fail("device bindings must be distinct", tokens_.back().at);
     }
 public:
     explicit Parser(std::string_view source) : tokens_(lex(source)) {}
