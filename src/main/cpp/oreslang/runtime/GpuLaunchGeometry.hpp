@@ -81,4 +81,34 @@ inline LaunchPlan validate_launch(Dim3 grid, Dim3 block,
     return {grid, block, shared_bytes, groups, threads, total, empty};
 }
 
+// The logical extent is not overwritten by physical grid derivation: later
+// device lowering must prove padded-tail memory safety and barrier convergence.
+struct LogicalLaunchPlan {
+    Dim3 over;
+    Dim3 group;
+    std::int64_t logical_work_items;
+    LaunchPlan physical;
+};
+
+inline std::int64_t ceil_div_nonnegative(std::int64_t extent, std::int64_t group) {
+    if (group <= 0)
+        throw std::invalid_argument("GPU-LAUNCH-003: group dimensions must be positive");
+    // No (extent + group - 1): this would overflow valid 64-bit extents.
+    return extent / group + (extent % group == 0 ? 0 : 1);
+}
+
+inline LogicalLaunchPlan validate_logical_launch(Dim3 over, Dim3 group,
+                                                 std::int64_t shared_bytes,
+                                                 const Limits& limits) {
+    const Dim3 grid{ceil_div_nonnegative(over.x, group.x),
+                    ceil_div_nonnegative(over.y, group.y),
+                    ceil_div_nonnegative(over.z, group.z)};
+    const auto physical = validate_launch(grid, group, shared_bytes, limits);
+    const bool empty = over.x == 0 || over.y == 0 || over.z == 0;
+    const auto logical_items = empty ? std::int64_t{0}
+            : checked_product(checked_product(over.x, over.y, "logical"),
+                              over.z, "logical");
+    return {over, group, logical_items, physical};
+}
+
 } // namespace oreslang::gpu
