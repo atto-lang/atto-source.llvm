@@ -1,0 +1,14 @@
+// Production-compiler guest: the immutable second column must move with the
+// last row on swap-delete. This is a dense index, not a stable RowHandle.
+define inverted struct Sample as
+    let x: int;
+    id: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Sample>.with_capacity(3);
+    rows.push(5, 17);
+    rows.push(9, 42);
+    rows.erase_swap(0);
+    return rows.get(0, id);
+}
