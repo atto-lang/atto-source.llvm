@@ -43,7 +43,7 @@ struct LaunchPlan {
     std::int64_t shared_bytes;
     std::int64_t total_groups;
     std::int64_t threads_per_group;
-    std::int64_t total_logical_threads;
+    std::int64_t total_dispatched_lanes;
     bool empty_launch;
 };
 
@@ -57,10 +57,14 @@ inline std::int64_t checked_product(std::int64_t a, std::int64_t b,
 
 // Limits must originate from an authenticated provider, not an untrusted guest
 // descriptor. This verifier does not dispatch and must not mint fence tickets.
-inline LaunchPlan validate_launch(Dim3 grid, Dim3 block,
-                                  std::int64_t shared_bytes, const Limits& limits) {
+inline LaunchPlan validate_launch_internal(Dim3 grid, Dim3 block,
+                                           std::int64_t shared_bytes,
+                                           const Limits& limits,
+                                           bool allow_empty_logical_grid) {
     if (block.x == 0 || block.y == 0 || block.z == 0)
         throw std::invalid_argument("GPU-LAUNCH-003: block dimensions must be positive");
+    if (!allow_empty_logical_grid && (grid.x == 0 || grid.y == 0 || grid.z == 0))
+        throw std::invalid_argument("GPU-LAUNCH-003: physical grid dimensions must be positive");
     if (grid.x > limits.max_grid.x || grid.y > limits.max_grid.y ||
         grid.z > limits.max_grid.z || block.x > limits.max_block.x ||
         block.y > limits.max_block.y || block.z > limits.max_block.z)
@@ -79,6 +83,13 @@ inline LaunchPlan validate_launch(Dim3 grid, Dim3 block,
         checked_product(grid.x, grid.y, "grid"), grid.z, "grid");
     const auto total = checked_product(groups, threads, "total launch");
     return {grid, block, shared_bytes, groups, threads, total, empty};
+}
+
+// Exact physical geometry cannot have zero axes. An empty logical extent
+// uses a separate quiescent internal plan and must never be enqueued.
+inline LaunchPlan validate_launch(Dim3 grid, Dim3 block,
+                                  std::int64_t shared_bytes, const Limits& limits) {
+    return validate_launch_internal(grid, block, shared_bytes, limits, false);
 }
 
 // The logical extent is not overwritten by physical grid derivation: later
@@ -103,7 +114,7 @@ inline LogicalLaunchPlan validate_logical_launch(Dim3 over, Dim3 group,
     const Dim3 grid{ceil_div_nonnegative(over.x, group.x),
                     ceil_div_nonnegative(over.y, group.y),
                     ceil_div_nonnegative(over.z, group.z)};
-    const auto physical = validate_launch(grid, group, shared_bytes, limits);
+    const auto physical = validate_launch_internal(grid, group, shared_bytes, limits, true);
     const bool empty = over.x == 0 || over.y == 0 || over.z == 0;
     const auto logical_items = empty ? std::int64_t{0}
             : checked_product(checked_product(over.x, over.y, "logical"),
