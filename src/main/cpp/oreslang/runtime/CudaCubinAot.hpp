@@ -115,8 +115,16 @@ public:
             throw std::invalid_argument("missing GPU kernel or resource limits");
         if (cubin_sm(image) != driver_.current_sm())
             throw std::invalid_argument("CUBIN requires an exact device SM for strict AOT");
-        if (driver_.load_cubin(&module_, image.bytes) != 0 || !module_)
+        const int load_status = driver_.load_cubin(&module_, image.bytes);
+        if (load_status != 0 || !module_) {
+            // Even a failed third-party driver may leave a module handle.
+            // Do not silently lose its ownership on constructor failure.
+            if (module_) {
+                if (driver_.unload(module_) != 0) std::terminate();
+                module_ = nullptr;
+            }
             throw std::runtime_error("CUDA driver rejected precompiled cubin");
+        }
         try {
             if (driver_.get_function(&function_, module_, name) != 0 || !function_)
                 throw std::runtime_error("GPU kernel symbol is unavailable");
