@@ -55,7 +55,7 @@ the Java reference's existing rules.
 and runs seven `.atto` guests under `tests/fixtures/atto_parity_syntax/` with the
 real `compile-aot.sh` pipeline and checks exact stdout and exit status. One
 guest defines its own `write` and must still panic cleanly; panic cases also
-check stderr. It runs eighteen fail-closed compiler rejections (including freestanding
+check stderr. It runs seventeen fail-closed compiler rejections (including freestanding
 `import fnc` of relative, ungranted `alloc/*` and `ores.std` sources) with exact
 diagnostics. `native_string_region_lifetime_and_budgets` covers the pre-panic
 drain, exact `INT64_MIN`/bool text, and the bounded drain.
