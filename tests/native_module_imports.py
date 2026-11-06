@@ -137,11 +137,21 @@ def main():
             '.ores.pkg.toml': 'schema_version = "1"\n',
             'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
-        ('atto-root-and-env-independent-graph', {
+        ('atto-env-root-and-env-independent-graph', {
             'main.atto': 'import module Root from "+/root"; import module Env from "${repo}/env"; pub fnc main():int{return Root.answer()+Env.answer();}',
             '.ores.pkg.toml': 'schema_version = "1"\n',
             'root.atto': 'define module Root as pub fnc answer():int{return 19;} end',
             'env.atto': 'define module Env as pub fnc answer():int{return 23;} end',
+        }, 42),
+        ('atto-zed-package-marker-root-guest', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': '[package]\nname = "consumer"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-manifest-configured-project-root-guest', {
+            'application/main.atto': 'import module Lib from "+/src/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n[project]\nroot = "application"\n',
+            'application/src/lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
         }, 42),
     ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
@@ -194,8 +204,11 @@ def main():
         root = Path(temporary)
         for name, files, expected in positives:
             directory = root/name; directory.mkdir()
-            for path, source in files.items(): (directory/path).write_text(source)
-            entry = 'main.atto' if 'main.atto' in files else 'main.ores'
+            for path, source in files.items():
+                (directory/path).parent.mkdir(parents=True, exist_ok=True)
+                (directory/path).write_text(source)
+            entry = ('application/main.atto' if 'application/main.atto' in files
+                     else ('main.atto' if 'main.atto' in files else 'main.ores'))
             compiler_env = os.environ.copy()
             if name.startswith('atto-env-'):
                 compiler_env.update({'repo': str(directory), 'MODULE': 'lib'})
