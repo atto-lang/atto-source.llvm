@@ -60,6 +60,7 @@ struct Request {
     std::int64_t shared_bytes;
     Limits provider_limits;
     std::int64_t max_referenced_bytes;
+    std::int64_t max_total_dispatched_lanes;
 };
 
 struct SourceCheckedLaunch {
@@ -94,6 +95,8 @@ inline SourceCheckedLaunch verify(const Request& input) {
         deny("GPU-LAUNCH-001", "invalid GPU kernel signature or argument arity");
     if (input.max_referenced_bytes <= 0)
         deny("GPU-LAUNCH-005", "invalid referenced-byte budget");
+    if (input.max_total_dispatched_lanes <= 0)
+        deny("GPU-LAUNCH-003", "invalid tenant dispatched-lane quota");
 
     bool reads = false, writes_any = false;
     for (Effect e : k.effects) {
@@ -178,6 +181,9 @@ inline SourceCheckedLaunch verify(const Request& input) {
         physical = plan.physical;
         logical = plan.logical_work_items;
     }
+    // Count padded lanes, not semantic work-items, against the tenant quota.
+    if (physical.total_dispatched_lanes > input.max_total_dispatched_lanes)
+        deny("GPU-LAUNCH-003", "total dispatched lanes exceed tenant quota");
     return {k.symbol, physical, logical, buffer_count};
 }
 
