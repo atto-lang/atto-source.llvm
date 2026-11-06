@@ -1070,8 +1070,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             // A host guest function named like a libc symbol the native runtime
             // imports (or in the `_`-prefixed compiler/libc namespace) would
             // replace it at link time; emit a compiler-owned symbol instead.
+            // Dotted names are compiler-qualified (`__ores_module_N.f`) and exempt.
             : (native_main && source.module.empty() &&
-                    (is_host_runtime_libc_symbol(fn.name) || fn.name.rfind("_", 0) == 0)
+                    (is_host_runtime_libc_symbol(fn.name) ||
+                     (fn.name.rfind("_", 0) == 0 && fn.name.find('.') == std::string::npos))
             ? "__ores_guest." + fn.name
             : (source.module.empty() ? fn.name : source.module + "." + fn.name)));
         // Overloaded source selectors erase the hidden receiver. Keep the
