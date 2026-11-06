@@ -4,6 +4,7 @@
 #include "oreslang/runtime/OpenClProvider.hpp"
 
 #include <cmath>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -48,7 +49,7 @@ public:
     public:
         Operation(const Operation&) = delete;
         Operation& operator=(const Operation&) = delete;
-        State state() const noexcept { return state_; }
+        State state() const noexcept { return state_.load(); }
         std::uint64_t rows() const noexcept { return rows_; }
         std::uint64_t bytes_per_buffer() const noexcept { return bytes_; }
         std::vector<float> result() const {
@@ -75,7 +76,7 @@ public:
         Api::Handle program_ = nullptr;
         Api::Handle x_device_ = nullptr, y_device_ = nullptr, out_device_ = nullptr;
         Api::Handle event_ = nullptr;
-        State state_ = State::Reserved;
+        std::atomic<State> state_{State::Reserved};
         State release_result_ = State::Failed;
         bool cancel_requested_ = false;
     };
@@ -165,7 +166,13 @@ public:
             return op.state_;
         }
         if (op.event_) {
-            const auto status = hardware_.base().poll_event(op.event_);
+            EventStatus status;
+            try {
+                status = hardware_.base().poll_event(op.event_);
+            } catch (...) {
+                op.state_ = State::Quarantined;
+                throw;
+            }
             if (status == EventStatus::Pending) return op.state_;
             if (status != EventStatus::Complete) {
                 op.state_ = State::Quarantined;
