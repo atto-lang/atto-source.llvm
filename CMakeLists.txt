@@ -60,7 +60,11 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 
     # Actual NVPTX llc translation, not a physical device or .atto guest test.
+    option(ATTO_GPU_G1_REQUIRE_NVPTX "Require an installed NVPTX-capable llc" OFF)
     find_program(ATTO_GPU_G1_LLC NAMES llc-21 llc-20 llc-19 llc-18 llc-17 llc)
+    if(ATTO_GPU_G1_REQUIRE_NVPTX AND NOT ATTO_GPU_G1_LLC)
+        message(FATAL_ERROR "GPU-G1-PTX-001: real llc is required")
+    endif()
     if(ATTO_GPU_G1_LLC)
         add_test(NAME native_gpu_g1_llc_ptx_no_device_claim
             COMMAND "${CMAKE_COMMAND}"
