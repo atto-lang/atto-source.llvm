@@ -9,6 +9,12 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 [[ "$(git -C "$root" rev-parse HEAD)" == "$ATTO_POLICY_EXPECTED_HEAD" ]] || {
   echo "Compiler source head changed" >&2; exit 78;
 }
+script_path="scripts/test-formal-policy-atto-native.sh"
+script_blob="$(git -C "$root" rev-parse "HEAD:$script_path")"
+[[ "$(git -C "$root" hash-object "$root/$script_path")" == "$script_blob" ]] || {
+  echo "Execution harness does not match exact source head" >&2
+  exit 78
+}
 command -v jq >/dev/null || { echo "jq required" >&2; exit 69; }
 command -v sha256sum >/dev/null || { echo "sha256sum required" >&2; exit 69; }
 compiler="${ORESLANG_LLVMC:-$root/build/oreslang-llvmc}"
@@ -85,7 +91,8 @@ for name in "${negative_cases[@]}"; do
     echo "Negative source had no recognizable error diagnostic: $name" >&2
     exit 1
   }
-  printf '%s\t%s\t%s\n' "$name" "$source_blob" "$status" >> "$negative_file"
+  diagnostic_sha="$(sha256sum "$stderr" | cut -d' ' -f1)"
+  printf '%s\t%s\t%s\t%s\n' "$name" "$source_blob" "$status" "$diagnostic_sha" >> "$negative_file"
 done
 
 mkdir -p "$(dirname "$ATTO_POLICY_RECEIPT")"
@@ -95,6 +102,7 @@ auditor_sha="$(sha256sum "$auditor" | cut -d' ' -f1)"
 jq -Rn \
   --arg sourceHead "$ATTO_POLICY_EXPECTED_HEAD" \
   --arg sourceTree "$source_tree" \
+  --arg scriptGitBlob "$script_blob" \
   --arg compilerSha256 "$compiler_sha" \
   --arg auditorSha256 "$auditor_sha" \
   --arg runId "${GITHUB_RUN_ID:-local}" \
@@ -108,13 +116,15 @@ jq -Rn \
       schema: "atto-native-policy-guest-receipt/v1",
       backend: "llvm-native",
       sourceHead: $sourceHead, sourceTree: $sourceTree,
+      scriptGitBlob: $scriptGitBlob,
       compilerSha256: $compilerSha256, auditorSha256: $auditorSha256,
       runId: $runId, runAttempt: ($runAttempt|tonumber),
       nativeGuestExecutions: ., nativeGuestCount: length,
       rejectedUndeclaredSymbol: true,
       negativeCompilerRejections: ($negativeRows | split("\n") | map(select(length > 0)) |
         map(split("\t") | {
-          fixture: .[0], sourceGitBlob: .[1], compilerExitStatus: (.[2] | tonumber)
+          fixture: .[0], sourceGitBlob: .[1], compilerExitStatus: (.[2] | tonumber),
+          diagnosticSha256: .[3]
         })),
       negativeCount: ($negativeRows | split("\n") | map(select(length > 0)) | length),
       guestScope: "pure scalar predicates; not actor, network, or persistence parity"
@@ -125,6 +135,8 @@ jq -e '.schema == "atto-native-policy-guest-receipt/v1"
   and .rejectedUndeclaredSymbol == true
   and .negativeCount == 6
   and (.negativeCompilerRejections | all(.compilerExitStatus > 0 and .compilerExitStatus < 128))
+  and (.negativeCompilerRejections | all(.diagnosticSha256 | test("^[0-9a-f]{64}$")))
+  and (.scriptGitBlob | test("^[0-9a-f]{40}$"))
   and .sourceHead != ""
   and .compilerSha256 != ""' "$ATTO_POLICY_RECEIPT" >/dev/null
 echo "ATTO_NATIVE_GUEST_EXECUTION_PASS cases=8 negative_compile=6"
