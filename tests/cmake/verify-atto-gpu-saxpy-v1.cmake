@@ -1,4 +1,4 @@
-if(NOT DEFINED COMPILER OR NOT DEFINED POSITIVE OR NOT DEFINED NEGATIVE)
+if(NOT DEFINED COMPILER OR NOT DEFINED POSITIVE OR NOT DEFINED NEGATIVE OR NOT DEFINED DIRECTIVE)
   message(FATAL_ERROR "GPU v1 CLI gate requires compiler and both fixtures")
 endif()
 execute_process(
@@ -31,5 +31,19 @@ execute_process(
   ERROR_VARIABLE ordinary_diagnostic TIMEOUT 30)
 if("${ordinary_status}" STREQUAL "0" OR NOT "${ordinary_ir}" STREQUAL "")
   message(FATAL_ERROR "Normal LLVM scalar mode must not silently admit GPU source")
+endif()
+execute_process(
+  COMMAND "${COMPILER}" --emit-opencl-gpu-v1 "${DIRECTIVE}"
+  RESULT_VARIABLE directive_status OUTPUT_VARIABLE directive_output
+  ERROR_VARIABLE directive_error TIMEOUT 30)
+if("${directive_status}" STREQUAL "0" OR NOT "${directive_output}" STREQUAL "")
+  message(FATAL_ERROR "Unverified GPU target directive must reject with no artifact")
+endif()
+execute_process(
+  COMMAND "${COMPILER}" --emit-opencl-gpu-v1 --target=wasm32 "${POSITIVE}"
+  RESULT_VARIABLE mixed_status OUTPUT_VARIABLE mixed_artifact
+  ERROR_VARIABLE mixed_error TIMEOUT 30)
+if("${mixed_status}" STREQUAL "0" OR NOT "${mixed_artifact}" STREQUAL "")
+  message(FATAL_ERROR "GPU artifact mode must reject incompatible target flags")
 endif()
 message(STATUS "Atto GPU SAXPY source compiler CLI: positive artifact and negative gates passed; no physical GPU dispatch")
