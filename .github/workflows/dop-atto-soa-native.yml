@@ -24,7 +24,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify exact source head and tree
+      - name: checkout-head
         shell: bash
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -196,6 +196,34 @@ jobs:
           rc=$?
           set -e
           test "$rc" -eq 69
+      # These names are the literal GitHub step identities admitted by
+      # platform-conformance's DOP guest receipt contract.
+      - name: compile-guest
+        shell: bash
+        env:
+          CLANG: clang
+        run: |
+          set -euo pipefail
+          test "$(git hash-object examples/dop-cache/soa-int-update.atto)" = "aedc778e3e8dd2940600f047540c159b0129830a"
+          mkdir -p "$RUNNER_TEMP/dop-native-guest"
+          ORESLANG_LLVMC="$RUNNER_TEMP/dop-atto-build/oreslang-llvmc" \
+            ORES_NO_GC_IR_AUDIT="$RUNNER_TEMP/dop-atto-build/oreslang-no-gc-ir-audit" \
+            bash scripts/compile-aot.sh examples/dop-cache/soa-int-update.atto \
+              "$RUNNER_TEMP/dop-native-guest/guest"
+          test -x "$RUNNER_TEMP/dop-native-guest/guest"
+          sha256sum "$RUNNER_TEMP/dop-native-guest/guest" > "$RUNNER_TEMP/dop-native-guest/guest.sha256"
+          test "$(git rev-parse --verify HEAD)" = "$DOP_CHECKOUT_HEAD"
+          test "$(git rev-parse --verify HEAD^{tree})" = "$DOP_CHECKOUT_TREE"
+      - name: execute-guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ( cd "$RUNNER_TEMP/dop-native-guest" && sha256sum -c guest.sha256 )
+          timeout --signal=TERM --kill-after=3s 40s "$RUNNER_TEMP/dop-native-guest/guest"
+          ( cd "$RUNNER_TEMP/dop-native-guest" && sha256sum -c guest.sha256 )
+          test "$(git rev-parse --verify HEAD)" = "$DOP_CHECKOUT_HEAD"
+          test "$(git rev-parse --verify HEAD^{tree})" = "$DOP_CHECKOUT_TREE"
+          test -z "$(git status --porcelain --untracked-files=all)"
       - name: Compile and execute real .atto guest AOT
         shell: bash
         env:
