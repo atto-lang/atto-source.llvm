@@ -3,12 +3,19 @@
 // This does not replace production Parser.cpp or executable native guest tests.
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
 
-#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+// Do not rely on -UNDEBUG from CMake: this test is also compiled directly,
+// under Release/NDEBUG and on toolchains that do not support -UNDEBUG.
+// Security and MIR integrity checks must evaluate on every build.
+#define INVERTED_REQUIRE(condition) do { \
+    if (!(condition)) \
+        throw std::runtime_error("inverted production MIR invariant failed: " #condition); \
+} while (false)
 
 namespace {
 using oreslang::InvertedSourceOperation;
@@ -57,22 +64,34 @@ template<class F> void reject(F&& fn, const char* expected) {
 int main() {
     using namespace oreslang::dop::mir;
     using oreslang::dop::hir::OpKind;
+    // Mutation sentinel: even under -DNDEBUG a failed invariant must throw.
+    // Do not use a debug-only assertion to test the sentinel.
+    bool failed_invariant_observed = false;
+    try { INVERTED_REQUIRE(false); }
+    catch (const std::runtime_error& e) {
+        failed_invariant_observed =
+            std::string(e.what()).find("inverted production MIR invariant failed: false") !=
+            std::string::npos;
+    }
+    if (!failed_invariant_observed)
+        throw std::runtime_error("Release/NDEBUG suppressed inverted MIR checks");
+
     const auto valid = make_source();
     const auto compiled = verify_production_inverted_i64(valid);
     const auto& ops = compiled.mir.instructions();
-    assert(ops.size() == 7);
-    assert(ops.front().kind == OpKind::Allocate);
-    assert(ops[1].kind == OpKind::Push && ops[2].kind == OpKind::Push);
-    assert(ops[3].kind == OpKind::WriteField);
-    assert(ops[4].kind == OpKind::EraseSwap);
-    assert(ops[5].kind == OpKind::ReadField);
-    assert(ops[6].kind == OpKind::Close);
-    assert(compiled.operands.rows.size() == 2 &&
+    INVERTED_REQUIRE(ops.size() == 7);
+    INVERTED_REQUIRE(ops.front().kind == OpKind::Allocate);
+    INVERTED_REQUIRE(ops[1].kind == OpKind::Push && ops[2].kind == OpKind::Push);
+    INVERTED_REQUIRE(ops[3].kind == OpKind::WriteField);
+    INVERTED_REQUIRE(ops[4].kind == OpKind::EraseSwap);
+    INVERTED_REQUIRE(ops[5].kind == OpKind::ReadField);
+    INVERTED_REQUIRE(ops[6].kind == OpKind::Close);
+    INVERTED_REQUIRE(compiled.operands.rows.size() == 2 &&
            compiled.operands.writes.size() == 1);
     const auto ir = emit_native_i64_pair_ir(compiled.mir, compiled.operands);
-    assert(ir.find("define i32 @main()") != std::string::npos);
-    assert(ir.find("icmp ult i64") != std::string::npos);
-    assert(ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
+    INVERTED_REQUIRE(ir.find("define i32 @main()") != std::string::npos);
+    INVERTED_REQUIRE(ir.find("icmp ult i64") != std::string::npos);
+    INVERTED_REQUIRE(ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
 
     {
         auto forged = make_source();
@@ -172,7 +191,7 @@ int main() {
     {
         I64PairLlvmEmitter emitter(compiled.mir.capacity());
         const auto first = emitter.build(compiled.mir, compiled.operands);
-        assert(first == ir);
+        INVERTED_REQUIRE(first == ir);
 
         auto missing = compiled.operands;
         missing.rows.pop_back();
@@ -180,14 +199,14 @@ int main() {
                "missing MIR LLVM push operands");
 
         const auto recovered = emitter.build(compiled.mir, compiled.operands);
-        assert(recovered == first);
+        INVERTED_REQUIRE(recovered == first);
 
         auto changed = compiled.operands;
         changed.writes[0] = 73;
         const auto different = emitter.build(compiled.mir, changed);
-        assert(different != first);
-        assert(different.find("store i64 73, ptr") != std::string::npos);
-        assert(emitter.build(compiled.mir, compiled.operands) == first);
+        INVERTED_REQUIRE(different != first);
+        INVERTED_REQUIRE(different.find("store i64 73, ptr") != std::string::npos);
+        INVERTED_REQUIRE(emitter.build(compiled.mir, compiled.operands) == first);
     }
     // A verified linear MIR is not automatically a valid executable main.
     // No read (or a read followed by mutation) must not silently return 0
@@ -202,7 +221,7 @@ int main() {
                    "MIR LLVM requires terminal field read before close");
             // A failed verification must not poison reuse of the compiler
             // emitter on a previously valid verified source.
-            assert(emitter.build(compiled.mir, compiled.operands) == ir);
+            INVERTED_REQUIRE(emitter.build(compiled.mir, compiled.operands) == ir);
         };
 
         LinearPlan no_read(layout, 3);
