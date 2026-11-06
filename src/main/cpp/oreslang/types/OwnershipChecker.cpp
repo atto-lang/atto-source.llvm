@@ -334,6 +334,15 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Take: {
+            // A ternary selects a source place at runtime. The native checker
+            // compares branch states but does not invalidate either selected
+            // binding when the outer Take wraps that expression. Do not turn
+            // a conditional copy into an apparent ownership transfer.
+            if (!expr.left)
+                reject(expr, "native rt take requires an operand");
+            if (expr.left->kind == Expression::Kind::Conditional)
+                reject(expr, "E_TAKE_UNTRACKED_SELECT: rt take of a conditional "
+                             "requires a tracked source place; bind the result first");
             // The bounded class subset has only trivially destructible i64
             // fields. Lowering a field take as a load is valid only because
             // checker state invalidates that place until an explicit write.
