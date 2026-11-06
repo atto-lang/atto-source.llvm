@@ -46,6 +46,25 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Atto-native SAXPY source admission and OpenCL C compiler artifact.
+    # These are real host/compiler checks, never a device-dispatch claim.
+    add_executable(oreslang-atto-gpu-saxpy-source-v1-test
+        tests/atto_gpu_saxpy_source_v1_test.cpp)
+    target_include_directories(oreslang-atto-gpu-saxpy-source-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-atto-gpu-saxpy-source-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME atto_gpu_saxpy_source_v1
+        COMMAND oreslang-atto-gpu-saxpy-source-v1-test)
+    set_tests_properties(atto_gpu_saxpy_source_v1 PROPERTIES TIMEOUT 20)
+
+    add_test(NAME atto_gpu_saxpy_opencl_compiler_v1
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DPOSITIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-f32.atto"
+            "-DNEGATIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-host-effect-reject.atto"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify-atto-gpu-saxpy-v1.cmake")
+    set_tests_properties(atto_gpu_saxpy_opencl_compiler_v1 PROPERTIES TIMEOUT 60)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
