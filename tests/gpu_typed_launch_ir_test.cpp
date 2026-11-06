@@ -59,7 +59,7 @@ int main() {
     const auto base=request();
     auto ok=verify(base);
     check(ok.kernel_symbol=="saxpy");
-    check(ok.physical.total_logical_threads==256);
+    check(ok.physical.total_dispatched_lanes==256);
     check(ok.logical_work_items==256);
     check(ok.buffer_count==3);
     check(!ok.executable());
@@ -104,7 +104,7 @@ int main() {
     invalid=base; invalid.geometry=Logical{{257,1,1},{256,1,1}};
     auto padded=verify(invalid);
     check(padded.logical_work_items==257);
-    check(padded.physical.total_logical_threads==512);
+    check(padded.physical.total_dispatched_lanes==512);
 
     // Independent quadratic overlap oracle vs sorted verifier. Use only
     // well-formed, in-quota scoped F32 views to isolate alias reasoning.
