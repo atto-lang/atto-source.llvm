@@ -141,6 +141,11 @@ class Module final {
                 default: throw std::logic_error("unknown inverted MIR instruction");
             }
         }
+        // Deserialized or externally supplied MIR must not borrow the HIR
+        // builder's lifecycle guarantees. Without terminal Close, an owner
+        // could escape verification with live columns and unreclaimed data.
+        if (!closed)
+            throw std::logic_error("inverted MIR missing terminal close");
     }
 public:
     static Module lower(const LinearPlan& source) {
