@@ -66,6 +66,36 @@ if(BUILD_TESTING)
             "-DDIRECTIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-unverified-target-reject.atto"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify-atto-gpu-saxpy-v1.cmake")
     set_tests_properties(atto_gpu_saxpy_opencl_compiler_v1 PROPERTIES TIMEOUT 60)
+    # Three-buffer Atto SAXPY native host lifecycle and physical GPU oracle.
+    # A hardware run is only registered when explicitly required, and no GPU
+    # must be a failed/not-executed test rather than a green skipped probe.
+    add_executable(oreslang-atto-saxpy-three-buffer-test
+        tests/opencl_saxpy_three_buffer_test.cpp)
+    target_include_directories(oreslang-atto-saxpy-three-buffer-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-atto-saxpy-three-buffer-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME atto_gpu_saxpy_three_buffer_state_machine
+        COMMAND oreslang-atto-saxpy-three-buffer-test)
+    set_tests_properties(atto_gpu_saxpy_three_buffer_state_machine PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-atto-saxpy-physical-probe
+        tests/opencl_saxpy_physical_probe.cpp)
+    target_include_directories(oreslang-atto-saxpy-physical-probe PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-atto-saxpy-physical-probe PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-atto-saxpy-physical-probe PRIVATE
+        ${CMAKE_DL_LIBS})
+    option(ATTO_REQUIRE_PHYSICAL_GPU
+        "Require a real GPU to execute AttoLang SAXPY; absent GPU must fail" OFF)
+    if(ATTO_REQUIRE_PHYSICAL_GPU)
+        add_test(NAME atto_gpu_saxpy_physical_required
+            COMMAND oreslang-atto-saxpy-physical-probe
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-f32.atto")
+        set_tests_properties(atto_gpu_saxpy_physical_required PROPERTIES TIMEOUT 90)
+    endif()
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
