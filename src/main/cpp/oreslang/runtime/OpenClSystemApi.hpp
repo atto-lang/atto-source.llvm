@@ -1,9 +1,11 @@
 #pragma once
 
 #include "oreslang/runtime/OpenClProvider.hpp"
+#include "oreslang/runtime/AttoSaxpyProvider.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -19,7 +21,7 @@
 
 namespace oreslang::opencl {
 
-class SystemApi final : public Api {
+class SystemApi final : public Api, public SaxpyHardware {
     using cl_char = std::int8_t;
     using cl_int = std::int32_t;
     using cl_uint = std::uint32_t;
@@ -143,6 +145,11 @@ public:
     }
 
     const std::string& device_name() const noexcept {
+        return device_name_;
+    }
+
+    Api& base() noexcept override { return *this; }
+    const std::string& physical_device_name() const noexcept override {
         return device_name_;
     }
 
@@ -312,6 +319,43 @@ public:
         require_success(status, "clEnqueueNDRangeKernel");
         if (!raw)
             throw std::runtime_error("OpenCL kernel returned null event");
+        event->event = raw;
+        apply_flush_result(*event);
+        return event.release();
+    }
+
+    Handle enqueue_saxpy(
+            Handle program,
+            Handle x, Handle y, Handle output,
+            float alpha, std::uint64_t rows) override {
+        auto* prepared = require_handle<Prepared>(program, "SAXPY program");
+        auto x_mem = reinterpret_cast<cl_mem>(x);
+        auto y_mem = reinterpret_cast<cl_mem>(y);
+        auto out_mem = reinterpret_cast<cl_mem>(output);
+        if (!x_mem || !y_mem || !out_mem ||
+            x_mem == y_mem || x_mem == out_mem || y_mem == out_mem ||
+            !std::isfinite(alpha) || rows == 0)
+            throw std::invalid_argument("invalid three-buffer OpenCL SAXPY submission");
+        const cl_ulong n = rows;
+        const std::size_t global[] = {checked_size(rows)};
+        require_success(dispatch_.set_kernel_arg(
+            prepared->kernel, 0, sizeof(x_mem), &x_mem), "clSetKernelArg(saxpy-x)");
+        require_success(dispatch_.set_kernel_arg(
+            prepared->kernel, 1, sizeof(y_mem), &y_mem), "clSetKernelArg(saxpy-y)");
+        require_success(dispatch_.set_kernel_arg(
+            prepared->kernel, 2, sizeof(out_mem), &out_mem), "clSetKernelArg(saxpy-out)");
+        require_success(dispatch_.set_kernel_arg(
+            prepared->kernel, 3, sizeof(alpha), &alpha), "clSetKernelArg(saxpy-alpha)");
+        require_success(dispatch_.set_kernel_arg(
+            prepared->kernel, 4, sizeof(n), &n), "clSetKernelArg(saxpy-n)");
+        auto event = std::make_unique<Event>();
+        cl_event raw = nullptr;
+        const auto status = dispatch_.enqueue_ndrange_kernel(
+            queue_, prepared->kernel, 1, nullptr, global,
+            nullptr, 0, nullptr, &raw);
+        require_success(status, "clEnqueueNDRangeKernel(SAXPY)");
+        if (!raw)
+            throw std::runtime_error("OpenCL SAXPY enqueue lacked native event");
         event->event = raw;
         apply_flush_result(*event);
         return event.release();
