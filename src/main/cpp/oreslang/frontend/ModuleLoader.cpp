@@ -260,6 +260,23 @@ private:
                 if (resolved_raw.rfind("https://", 0) == 0 ||
                         resolved_raw.rfind("http://", 0) == 0)
                     fail(current, "remote imports require locked Zed URL admission (not implemented)");
+                // A compiler env variable cannot silently smuggle file://,
+                // java:, ftp:, or another URI scheme into a local import.
+                const auto colon = resolved_raw.find(':');
+                if (colon != std::string::npos && colon > 0) {
+                    const auto first = static_cast<unsigned char>(resolved_raw[0]);
+                    bool scheme = (first >= 'a' && first <= 'z') ||
+                                  (first >= 'A' && first <= 'Z');
+                    for (std::size_t i = 1; scheme && i < colon; ++i) {
+                        const auto ch = static_cast<unsigned char>(resolved_raw[i]);
+                        scheme = (ch >= 'a' && ch <= 'z') ||
+                                 (ch >= 'A' && ch <= 'Z') ||
+                                 (ch >= '0' && ch <= '9') ||
+                                 ch == '+' || ch == '.' || ch == '-';
+                    }
+                    if (scheme)
+                        fail(current, "unsupported import URI scheme");
+                }
                 fs::path dependency;
                 if (resolved_raw.rfind("+/", 0) == 0) {
                     try {
