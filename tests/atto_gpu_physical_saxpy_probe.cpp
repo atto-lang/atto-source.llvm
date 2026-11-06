@@ -71,6 +71,7 @@ public:
     I (*release_kernel)(Kernel) = nullptr;
     I (*release_program)(Program) = nullptr;
     I (*release_queue)(Queue) = nullptr;
+    I (*finish_queue)(Queue) = nullptr;
     I (*release_context)(Context) = nullptr;
 
     OpenCl() {
@@ -98,6 +99,7 @@ public:
         LOAD(release_kernel, "clReleaseKernel");
         LOAD(release_program, "clReleaseProgram");
         LOAD(release_queue, "clReleaseCommandQueue");
+        LOAD(finish_queue, "clFinish");
         LOAD(release_context, "clReleaseContext");
 #undef LOAD
     }
@@ -130,9 +132,10 @@ struct Handles {
     Event fence = nullptr;
     explicit Handles(OpenCl& a) : api(a) {}
     ~Handles() {
-        // A returned kernel event is the physical quiescence witness. If an
-        // exception fires after enqueue, wait before reclaiming device buffers.
-        if (fence && api.wait_events(1,&fence) != OK) {
+        // A returned kernel event witnesses kernel completion; clFinish also
+        // fences pre-kernel uploads and post-kernel reads on failure paths.
+        if ((fence && api.wait_events(1,&fence) != OK) ||
+            (queue && api.finish_queue(queue) != OK)) {
             // Do not deallocate GPU memory while a possibly live kernel can
             // still read or write it; the process must quarantine and exit.
             std::cerr << "GPU_G3_QUARANTINED: device event not quiescent\n";
