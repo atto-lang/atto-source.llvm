@@ -73,6 +73,31 @@ if(BUILD_TESTING)
             "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g1_source_cli.cmake")
     set_tests_properties(native_atto_gpu_g1_cli_admission
         PROPERTIES TIMEOUT 60)
+    # An installed NVPTX-capable LLVM llc creates *real PTX* from the source
+    # compiler IR; the lane remains OFFLINE and cannot imply CUDA execution.
+    find_program(ATTO_GPU_G1_LLC NAMES llc llc-20 llc-19 llc-18 llc-17
+        HINTS "${LLVM_TOOLS_BINARY_DIR}")
+    if(ATTO_GPU_G1_LLC)
+        execute_process(COMMAND "${ATTO_GPU_G1_LLC}" --version
+            RESULT_VARIABLE nvptx_tool_status
+            OUTPUT_VARIABLE nvptx_tool_info ERROR_QUIET TIMEOUT 10)
+        string(TOLOWER "${nvptx_tool_info}" nvptx_tool_lower)
+        if(nvptx_tool_status EQUAL 0 AND nvptx_tool_lower MATCHES "nvptx")
+            add_test(NAME native_atto_gpu_g1_offline_ptx_no_device
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DCOMPILER=$<TARGET_FILE:oreslang-gpu-g1-ir>"
+                    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu_g1_saxpy_kernel.atto"
+                    "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-g1-ptx"
+                    "-DLLC=${ATTO_GPU_G1_LLC}"
+                    "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g1_ptx_offline.cmake")
+            set_tests_properties(native_atto_gpu_g1_offline_ptx_no_device
+                PROPERTIES TIMEOUT 75)
+        else()
+            message(STATUS "AttoLang GPU-G1 offline PTX gate NOT EXECUTED: llc lacks NVPTX target")
+        endif()
+    else()
+        message(STATUS "AttoLang GPU-G1 offline PTX gate NOT EXECUTED: no llc found")
+    endif()
     # AttoLang native launch spelling: exact compiler-backed scalar control and
     # fail-closed GPU admission, not executed kernels or hardware parity.
     add_test(NAME native_atto_gpu_explicit_launch_source_admission
