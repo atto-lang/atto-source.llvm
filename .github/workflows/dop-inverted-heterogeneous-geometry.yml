@@ -1,0 +1,82 @@
+name: AttoLang inverted heterogeneous SoA HIR geometry
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/types/InvertedPhysicalSoA.hpp'
+      - 'src/main/cpp/oreslang/types/InvertedTypedPlan.hpp'
+      - 'tests/inverted_physical_soa_layout_test.cpp'
+      - 'tests/inverted_heterogeneous_hir_layout_test.cpp'
+      - '.github/workflows/dop-inverted-heterogeneous-geometry.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checked-physical-soa:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: \${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_REPO: \${{ github.event.pull_request.head.repo.full_name || github.repository }}
+    steps:
+      - name: Deny unauthorized foreign source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPO" = "$GITHUB_REPOSITORY"
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Checkout immutable PR head, not synthetic merge commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: \${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Bind executed source head, tree and committed blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "INVERTED_SOURCE_HEAD=$EXPECTED_SHA"
+          echo "INVERTED_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+          for file in src/main/cpp/oreslang/types/InvertedPhysicalSoA.hpp \
+                      src/main/cpp/oreslang/types/InvertedTypedPlan.hpp \
+                      tests/inverted_physical_soa_layout_test.cpp \
+                      tests/inverted_heterogeneous_hir_layout_test.cpp; do
+            test "$(git hash-object "$file")" = "$(git rev-parse "HEAD:$file")"
+            echo "INVERTED_SOURCE_BLOB=$file:$(git rev-parse "HEAD:$file")"
+          done
+      - name: Compile and execute Release/NDEBUG physical and compiler-HIR checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          for compiler in g++ clang++; do
+            command -v "$compiler"
+            for entry in inverted_physical_soa_layout_test \
+                         inverted_heterogeneous_hir_layout_test; do
+              "$compiler" -std=c++17 -DNDEBUG -O2 -Wall -Wextra -Wpedantic -Werror \
+                -I src/main/cpp "tests/$entry.cpp" -o "$scratch/$entry"
+              "$scratch/$entry" | tee "$scratch/$entry.out"
+              grep -Eq '^INVERTED_(PHYSICAL_SOA|HETEROGENEOUS_HIR)_HOST_PASS' \
+                "$scratch/$entry.out"
+            done
+          done
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Compile and execute Clang ASan and UBSan negative safety matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          for entry in inverted_physical_soa_layout_test \
+                       inverted_heterogeneous_hir_layout_test; do
+            clang++ -std=c++17 -DNDEBUG -O1 -g -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -I src/main/cpp "tests/$entry.cpp" -o "$scratch/$entry"
+            "$scratch/$entry"
+          done
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
