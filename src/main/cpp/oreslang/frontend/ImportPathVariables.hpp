@@ -57,11 +57,20 @@ inline std::string expand_static_import_path(
     // codepoints. Reject before any filesystem lookup or diagnostic printing.
     for (std::size_t i = 0; i < output.size(); ++i) {
         const auto c = static_cast<unsigned char>(output[i]);
-        if (c < 32 || c == 127 ||
-                (c == 0xC2 && i + 1 < output.size() &&
-                 static_cast<unsigned char>(output[i + 1]) >= 0x80 &&
-                 static_cast<unsigned char>(output[i + 1]) <= 0x9F))
-            throw std::invalid_argument("expanded import specifier contains control characters");
+        const auto next = i + 1 < output.size()
+                ? static_cast<unsigned char>(output[i + 1]) : 0;
+        const auto third = i + 2 < output.size()
+                ? static_cast<unsigned char>(output[i + 2]) : 0;
+        const bool c1 = c == 0xC2 && next >= 0x80 && next <= 0x9F;
+        const bool arabic_letter_mark = c == 0xD8 && next == 0x9C;
+        const bool bidi_and_separator = c == 0xE2 &&
+                ((next == 0x80 &&
+                  (third == 0x8E || third == 0x8F ||
+                   (third >= 0xA8 && third <= 0xAE))) ||
+                 (next == 0x81 && third >= 0xA6 && third <= 0xA9));
+        if (c < 32 || c == 127 || c1 || arabic_letter_mark || bidi_and_separator)
+            throw std::invalid_argument(
+                "expanded import specifier contains control or display-spoofing characters");
     }
     return output;
 }
