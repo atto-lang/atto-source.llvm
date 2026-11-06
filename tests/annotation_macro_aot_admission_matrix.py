@@ -145,8 +145,8 @@ def rejected_compiler_outcome(result, emitted, label):
         errors.append(label + ": missing compiler rejection diagnostic")
     if re.search(
         r"segmentation fault|internal compiler error|assertion failed|"
-        r"stack backtrace|panicked at|traceback \\(most recent call last\\)|"
-        r"fatal signal|bus error", result.stderr, re.IGNORECASE
+        r"stack backtrace|panicked at|traceback|fatal signal|"
+        r"bus error", result.stderr, re.IGNORECASE
     ):
         errors.append(label + ": compiler crash is not a semantic rejection")
     return errors
