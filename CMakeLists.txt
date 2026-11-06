@@ -46,6 +46,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Compiler import-string boundary; host-only tests must not be reported as
+    # guest linking parity. Native source execution is separately gated by
+    # the native_module_imports compiler + clang + guest executable harness.
+    add_executable(oreslang-native-import-path-variables-test
+        tests/import_path_variables_test.cpp)
+    target_include_directories(oreslang-native-import-path-variables-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-import-path-variables-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_import_path_variables_host_only
+        COMMAND oreslang-native-import-path-variables-test)
+    set_tests_properties(native_import_path_variables_host_only PROPERTIES TIMEOUT 15)
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
