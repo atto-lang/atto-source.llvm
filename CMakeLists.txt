@@ -71,6 +71,41 @@ if(BUILD_TESTING)
         set_tests_properties(native_gpu_g1_llc_ptx_no_device_claim PROPERTIES TIMEOUT 30)
     endif()
 
+    # This lane is STRICTLY OPT-IN. It cannot skip or pass on hosts without
+    # CUDA Driver API, an NVPTX-capable llc, actual GPU hardware and exact head.
+    option(ATTO_GPU_G1_REQUIRE_PHYSICAL "Require physical CUDA G1 proof; fail rather than skip" OFF)
+    set(ATTO_GPU_G1_EXACT_HEAD_SHA "" CACHE STRING
+        "Immutable PR head SHA required for physical CUDA G1 evidence")
+    if(ATTO_GPU_G1_REQUIRE_PHYSICAL)
+        if(NOT ATTO_GPU_G1_LLC)
+            message(FATAL_ERROR "GPU-G1-HW: real NVPTX llc is required")
+        endif()
+        if(ATTO_GPU_G1_EXACT_HEAD_SHA STREQUAL "")
+            message(FATAL_ERROR "GPU-G1-HW: exact PR head SHA must be supplied")
+        endif()
+        find_package(Git REQUIRED)
+        find_package(CUDAToolkit REQUIRED)
+        add_executable(oreslang-gpu-g1-cuda-physical-probe
+            tests/gpu_g1_cuda_physical_probe.cpp)
+        target_link_libraries(oreslang-gpu-g1-cuda-physical-probe PRIVATE
+            CUDA::cuda_driver)
+        target_compile_options(oreslang-gpu-g1-cuda-physical-probe PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_gpu_g1_physical_cuda_hardware_required
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_GIT=${GIT_EXECUTABLE}"
+                "-DG1_REPO=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DG1_HEAD=${ATTO_GPU_G1_EXACT_HEAD_SHA}"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
+                "-DG1_LLC=${ATTO_GPU_G1_LLC}"
+                "-DG1_PROBE=$<TARGET_FILE:oreslang-gpu-g1-cuda-physical-probe>"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-physical-proof"
+                "-DG1_PTX_GATE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_ptx_compile.cmake"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_cuda_hardware_required.cmake")
+        set_tests_properties(native_gpu_g1_physical_cuda_hardware_required
+            PROPERTIES TIMEOUT 90 LABELS "physical-gpu;requires-nvidia;not-atto-guest")
+    endif()
+
     # Actual LLVM IR parser and deliberately broken-SSA mutation, never
     # conflated with PTX generation or a physical CUDA launch.
     find_program(ATTO_GPU_G1_CLANG NAMES
