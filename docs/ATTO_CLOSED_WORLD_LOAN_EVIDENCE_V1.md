@@ -21,3 +21,7 @@ The original 30 C++ last-use cases have been reconciled with required explicit w
 ## Next compiler work
 
 Generate the complete tokenized use-def stream from typed SSA; fence opaque call/capture/exception/cancellation edges; emit actual writes for restored fields; prove ActorRef/tenant/suspension generation ownership. General NLL through branch/loop joins remains unimplemented.
+
+## Ticket/loan identity-domain follow-up (stacked draft)
+
+`Reinitialize.write_id` cannot alias any lexical explicit/derived loan origin or any entry loan ID. The preflight checks unreachable blocks as well. Six new host C++ cases are registered as a tenth focused native CTest. These tests are **authored but NOT_EXECUTED** and cannot authenticate a real MIR field write, complete SSA uses or guest NLL parity.

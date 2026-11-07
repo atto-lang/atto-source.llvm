@@ -160,6 +160,16 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_opaque_loan_metadata_10
         COMMAND oreslang-native-ownership-opaque-loan-metadata-10-test)
 
+    # Host-only cross-namespace origin collision fence; not guest SSA.
+    add_executable(oreslang-native-loan-write-domain-6-test
+        tests/native_ownership_loan_write_domain_6_test.cpp)
+    target_include_directories(oreslang-native-loan-write-domain-6-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-loan-write-domain-6-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_loan_write_domain_6
+        COMMAND oreslang-native-loan-write-domain-6-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
