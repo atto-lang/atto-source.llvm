@@ -77,6 +77,15 @@ int main() {
                 "healthy sibling frame operations failed");
         require(healthy.retire_quiesced(), "healthy sibling failed retirement");
 
+        // Byte quota must fail independently from the number-of-frames cap.
+        ActorFrameArena<3, 8> byte_budget;
+        require(byte_budget.enter(42), "byte-budget admission failed");
+        auto almost_full = byte_budget.push(6);
+        require(almost_full && !byte_budget.push(3) && byte_budget.poisoned(),
+                "actor byte budget was bypassed below frame-count cap");
+        require(byte_budget.cancel_active() && byte_budget.retire_quiesced(),
+                "byte-budget poisoning left actor storage alive");
+
         ActorFrameArena<2, 16> invalid_order;
         require(invalid_order.enter(7), "non-LIFO setup failed");
         auto one = invalid_order.push(8);
