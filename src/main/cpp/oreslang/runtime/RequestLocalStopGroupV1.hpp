@@ -11,8 +11,8 @@
 //
 // Linearization: seal request registration, close all pinned request stores
 // (each close serializes with its pending set/erase under the store mutex),
-// wait until pinned operations quiesce, then seal the scheduler mailbox
-// and await actor DONE OUTSIDE carrier threads.
+// then seal the scheduler mailbox, wait for pinned operations to quiesce,
+// and finally await actor DONE OUTSIDE carrier threads.
 // No guest values/destructors run under this group's registry lock.
 // "STOP completed" is never reported until actor DONE is observed.
 
@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace oreslang::runtime {
@@ -49,15 +50,18 @@ public:
     }
 
 private:
-    // CONTROL-plane close barrier: new admission is sealed, and every pinned
-    // copy/mutation must quiesce before STOP returns. Never invoke on carrier.
-    bool seal_and_revoke() {
+    // Control-only: seal registration and close all pinned request stores.
+    // Return strong refs to the caller so they remain alive while STOP is
+    // signaled and while any prior in-flight operations drain. Never wait
+    // for a task's completion before sending the STOP signal.
+    std::optional<std::vector<RequestContextLocalV1::Ptr>>
+    seal_and_revoke() {
         std::vector<RequestContextLocalV1::Ptr> pinned;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (sealed_) return false;
-            // Allocation may fail; do not publish a sealed state until the
-            // complete recipient snapshot can be recorded.
+            if (sealed_) return std::nullopt;
+            // Allocation may fail: publish a sealed state only after the
+            // complete snapshot buffer is ready.
             pinned.reserve(registered_.size());
             sealed_ = true;
             for (const auto& weak : registered_)
@@ -66,13 +70,7 @@ private:
             registered_.clear();
         }
         for (const auto& request : pinned) request->close();
-        // A value-copy may still be running outside the scope mutex with a
-        // pinned cell. STOP may not publish DONE or reclaim that actor heap
-        // until those earlier accepted operations have all released.
-        // This host bridge rejects carrier callers before calling us.
-        for (const auto& request : pinned)
-            if (!request->wait_closed_quiescent()) return false;
-        return true;
+        return pinned;
     }
 
 public:
@@ -87,9 +85,17 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             if (completed_) return false;
         }
-        if (!seal_and_revoke()) return false;
+        auto pinned = seal_and_revoke();
+        if (!pinned) return false;
+        // After all stores are closed, STOP may be published immediately.
+        // Do not await pinned copies before issuing this scheduler signal.
         if (!ores_native_actor_scheduler_stop_sealed(scheduler_, actor_))
             return false;
+        // A pre-STOP copy/mutation may retain a pinned cell. The CONTROL
+        // caller alone waits for these leases and the actor DONE barrier;
+        // no guest destructor runs under the registry/store/graph mutex.
+        for (const auto& request : *pinned)
+            if (!request->wait_closed_quiescent()) return false;
         if (!ores_native_actor_scheduler_wait_done(scheduler_, actor_))
             return false;
         std::lock_guard<std::mutex> lock(mutex_);
