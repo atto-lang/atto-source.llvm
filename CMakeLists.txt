@@ -4831,6 +4831,22 @@ if(BUILD_TESTING)
     add_test(NAME native_local_context_domains_host_only
         COMMAND oreslang-local-context-domains-v1-test)
     set_tests_properties(native_local_context_domains_host_only PROPERTIES TIMEOUT 35)
+
+    # The merged #1391 ScopedLocalStorageV1 remains canonical; the older
+    # LocalContextDomainsV1 compatibility substrate must coexist without
+    # C++ alias collisions or implicit key identity conversion.
+    add_executable(oreslang-scoped-local-coexistence-v1-test
+        tests/native_scoped_local_coexistence_v1_test.cpp)
+    target_include_directories(oreslang-scoped-local-coexistence-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-scoped-local-coexistence-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-scoped-local-coexistence-v1-test PRIVATE
+        "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-scoped-local-coexistence-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_scoped_local_canonical_legacy_coexistence
+        COMMAND oreslang-scoped-local-coexistence-v1-test)
+    set_tests_properties(native_scoped_local_canonical_legacy_coexistence
+        PROPERTIES TIMEOUT 35)
 endif()
 
 
