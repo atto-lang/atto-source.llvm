@@ -139,11 +139,11 @@ int main() {
         }
         for(unsigned i=0;i<10;i++) {
             const std::string tag="native.snapshot."+std::to_string(i);
-            probe([&,i,&tag]{
+            probe([&,i]{
                       loads[i]->setMetadata(tag,llvm::MDNode::get(
                           ctx,{llvm::MDString::get(ctx,"tag"+std::to_string(i))}));
                   },
-                  [&,i,&tag]{loads[i]->setMetadata(tag,nullptr);},
+                  [&,i]{loads[i]->setMetadata(tag,nullptr);},
                   "metadata-only change invalidates old ownership receipt");
         }
         for(unsigned i=0;i<10;i++) {
