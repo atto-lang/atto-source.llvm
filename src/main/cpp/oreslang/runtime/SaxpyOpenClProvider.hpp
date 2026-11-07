@@ -75,6 +75,12 @@ public:
         std::uint64_t allocation_generation() const noexcept {
             return generation_;
         }
+        // Count native events whose trusted completion status was observed
+        // AND whose event handle was successfully released. Not a guessed
+        // number of stages or a queued-command counter.
+        std::uint32_t completed_events() const noexcept {
+            return completed_events_.load(std::memory_order_acquire);
+        }
         std::vector<float> result() const {
             if (state() != State::Succeeded)
                 throw std::logic_error("SAXPY output unavailable before authenticated completion");
@@ -103,6 +109,7 @@ public:
         Api::Handle event_ = nullptr;
         std::atomic<State> state_{State::Quarantined};
         std::atomic<bool> cancellation_{false};
+        std::atomic<std::uint32_t> completed_events_{0};
         bool attempted_enqueue_ = false;
         bool quiescent_ = false;
         State terminal_after_cleanup_ = State::Failed;
@@ -277,6 +284,7 @@ public:
         try {
             api_.release_event(operation.event_);
             operation.event_ = nullptr;
+            operation.completed_events_.fetch_add(1, std::memory_order_release);
         } catch (...) {
             operation.terminal_after_cleanup_ = State::Failed;
             operation.set_state(State::ReleaseFailed);
@@ -322,6 +330,8 @@ public:
                 operation.set_state(State::Download);
                 break;
             case State::Download:
+                if (operation.completed_events() != 4)
+                    throw std::logic_error("SAXPY success requires four native device events");
                 // Terminal output was already written to the stable staging
                 // buffer before event status reached Complete.
                 operation.quiescent_ = true;
