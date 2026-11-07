@@ -59,3 +59,9 @@ If a compiler/sanitizer is unavailable, report that lane as **NOT_EXECUTED/UNSUP
 3. Actual compiler-produced `.atto` TaskLocal binaries: two positives returning 42 and 14 semantic negatives, with independently read-back run/job/artifact receipts.
 4. Trusted scheduler authority binding, actor/task generation fencing, tenant/isolate identity, and logical cleanup safety.
 5. Independent ORESoftware review; no self-approval; keep #1521 and #1389 draft until all merge gates are satisfied.
+
+## M7 verification hardening (November 7, 2026)
+
+- The native negative mutation witness now demands **SIGABRT exit 134** and a source-file assertion diagnostic mentioning `!returned`; arbitrary nonzero exits, segfaults, and unrelated log messages are refused. An isolated local GCC/Clang assertion probe confirmed the expected exit/diagnostic shape. This is a probe, **not** an execution of the private LLVM runtime.
+- The host workflow now also triggers on edits to this verifier, and SHA-pins the verifier's exact Git blob `f12cc91d8423d3861c39eabc05fb289143930f02` in addition to the mutation witness blob `0d256fe89fd963e520226f7207f434b9e6477be7`. The verifier's source-blobs allowlist has been updated to require that stricter witness.
+- The local verifier is still **non-promoting**. Native host execution must be accompanied by fresh, authorized, independent head/tree review; full source-owned Actions and compiler-backed `.atto` guest execution remain separate mandatory release gates. Do not use a local receipt to override a zero-step hosted workflow.
