@@ -36,6 +36,8 @@ jobs:
           printf 'GPU_G1_HEAD=%s\nGPU_G1_TREE=%s\n' "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})"
           sha256sum src/main/cpp/oreslang/backend/GpuG1AttoSaxpySource.hpp \
             tests/gpu_g1_typed_frontend_matrix_test.cpp tests/fixtures/gpu-g1-saxpy.atto
+          sha256sum src/main/cpp/oreslang/backend/GpuG1SaxpyLaunchAdmission.hpp \
+            tests/gpu_g1_resident_budget_test.cpp
       - name: Compile and execute typed frontend source tests
         shell: bash
         run: |
@@ -50,8 +52,12 @@ jobs:
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
             -I src/main/cpp tests/gpu_g1_atto_saxpy_cli.cpp \
             -o /tmp/gpu-g1-proof/source-compiler
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -I src/main/cpp tests/gpu_g1_resident_budget_test.cpp \
+            -o /tmp/gpu-g1-proof/resident-budget
           /tmp/gpu-g1-proof/typed-frontend
           /tmp/gpu-g1-proof/source-admission
+          /tmp/gpu-g1-proof/resident-budget
           /tmp/gpu-g1-proof/source-compiler tests/fixtures/gpu-g1-saxpy.atto \
             > /tmp/gpu-g1-proof/source.ll
           clang -x ir -S -emit-llvm -Wno-override-module \
