@@ -103,3 +103,57 @@ fold expression during implementation and passed after parenthesization.
 The isolated probe is **not** execution of the full GitHub source tree or
 combined runtime tests. Current changed header/test blobs and linked guest
 are pending stepful execution; retain draft and zero backend-parity claim.
+
+
+## November 7 P0 scheduler-origin integration — authored, NOT_EXECUTED
+
+The exact #1391 host scheduler provenance implementation was ported to this
+draft **without** importing the competing ScopedLocalStorageV1 API:
+- \`NativeActorScheduler.c\` blob \`5e2a2cc4522ac14305b11e3c0c3490ac748910a1\`
+  mints a nonzero per-actor DATA-mail sequence at successful queue admission,
+  carries it in preallocated ring slots, clears physical TLS on exit, and
+  associates wake credits with the originating DATA-mail sequence.
+- \`NativeActorScheduler.h\` blob \`5f80e91ae45f3f82659abb36f1170a7873c96d53\`
+  exposes host-only \`current_data_mail_sequence\`,
+  \`current_data_issued_wake\`, and \`is_current_ready_wake\`.
+- \`NativeExecutionAuthority.h\` blob
+  \`cfd0e7f1d8fbd125a0ca20c7907432fc0407635c\` requires
+  exact physical carrier, claim sequence, actor generation and RUNNING
+  (not STOPPING) phase to authorize the request-origin path.
+- \`RequestContextLocalV1.hpp\` retains #1389's isolated request object,
+  owned values, cancellation callbacks and cross-actor handoff compatibility.
+  It now adds one-shot \`bind_original_mail_once\` plus 1 KiB per-value and
+  8 KiB aggregate **measured** quotas. Strict UTF-8 and known dynamic STL
+  denials are reused from the existing single \`LocalPayloadBudgetV1.hpp\`.
+- \`NativeRequestDataMailGateV1.hpp\` authenticates the **current** DATA
+  sequence at construction, BEFORE binding the first mail, thereby denying
+  off-turn/wrong-sequence poisoning. Its getters recheck after copying.
+  \`NativeRequestWakeGateV1.hpp\` only allows a scheduler-issued READY
+  wake for the exact original DATA-mail reservation; CANCELLED/FAILED,
+  stale/replayed tickets or foreign callbacks cannot gain its authority.
+- Ported original-mail, two-request DATA, and READY-vs-CANCELLED WAKE native
+  tests; corrected the source branch's contradictory assertion that the
+  untouched second request must be both empty and nonempty after a wake.
+  Added \`native_scoped_locals_45_case_matrix.cpp\`: **45 named host assertions**
+  covering actor/task identities, explicit child snapshot copies, physical
+  TLS isolation, per-request quotas, malformed Unicode, and teardown.
+- New \`native-scoped-locals-mail-reconcile-v1.yml\` pins the Git blobs and
+  builds those four binaries for GCC/Clang optimized, ASan/UBSan and TSan.
+  The existing RequestLocal workflow's old hash pins were updated and
+  TaskLocal compiler/guest workflow now triggers on scheduler changes.
+
+**Unresolved security boundary:** \`RequestLocalSchedulerTurnV1.hpp\` and
+\`RequestContextHandoffV1.hpp\` remain legacy HOST-ONLY adapters that do not
+yet enforce original-mail provenance for every operation. They MUST NOT be
+lowered into the guest ABI or treated as equivalent to the new DATA/READY
+gates. Refactoring their APIs and tests requires a separate semantic change.
+Per-tenant/isolate authority is host metadata until scheduler-/compiler-issued
+tenant and ownership descriptors are proven. A host \`get_copy\` may retain an
+already-pinned snapshot through a racing close; only the privileged gate's
+post-copy reauthorization is suitable for prospective guest use.
+
+**Gate still open:** These are newly authored source and CI matrices, not
+native or guest results. Hosted jobs with \`runner_id=0\` and \`steps=[]\`
+remain runner-admission failures. Do not promote drafts, merge #1391, claim
+compiler-backed .atto parity, or mirror private source before independent
+review, explicit source-transfer authorization and real exact-head receipts.
