@@ -243,14 +243,14 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-node-identity-85-test)
     # Complete *only for the whitelisted straight-line class field source*
     # sublanguage; host-only trace/CFG proof, never an LLVM guest receipt.
-    add_executable(oreslang-native-straight-line-mir-32-test
-        tests/native_straight_line_mir_32_test.cpp)
-    target_include_directories(oreslang-native-straight-line-mir-32-test PRIVATE
+    add_executable(oreslang-native-straight-line-mir-58-test
+        tests/native_straight_line_mir_58_test.cpp)
+    target_include_directories(oreslang-native-straight-line-mir-58-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_compile_options(oreslang-native-straight-line-mir-32-test PRIVATE
+    target_compile_options(oreslang-native-straight-line-mir-58-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
-    add_test(NAME native_ownership_straight_line_source_mir_32
-        COMMAND oreslang-native-straight-line-mir-32-test)
+    add_test(NAME native_ownership_straight_line_source_mir_58
+        COMMAND oreslang-native-straight-line-mir-58-test)
 
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch

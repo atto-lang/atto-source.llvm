@@ -94,6 +94,14 @@ struct Fixture {
             program,program.functions.front());
     }
 };
+void add_scalar_write(Fixture& f) {
+    Statement write;
+    write.kind=Statement::Kind::ScalarWrite;
+    write.receiver="former";
+    write.expression=expr(Kind::Integer);
+    write.offset=61;
+    f.function().statements.push_back(std::move(write));
+}
 bool denied(const std::function<void()>& run) {
     try {run();}
     catch(const std::runtime_error& e) {
@@ -134,16 +142,42 @@ int main() {
         check(denied([]{ Fixture f; f.write().compiler_checked_field_reinitialization=false; (void)f.trace(); }), "source reinit marker cleared after sealing rejected", n);
         check(denied([]{ Fixture f; f.write().compiler_source_node_id=19; (void)f.trace(); }), "new source node identity after sealing rejected", n);
         check(denied([]{ oreslang::ownership::Graph g; g.entry.emplace("pair.left", oreslang::ownership::PlaceState(oreslang::ownership::kOwned,1,false,{0})); g.blocks.resize(1); g.blocks[0].operations.emplace_back(Op::WriteOwned,"pair.left"); (void)oreslang::ownership::verify(g); }), "ordinary field write cannot overlap shared loan", n);
-        check([]{ Fixture f; f.function().result=expr(Kind::Call,"dynamic"); return !f.trace().has_value(); }(), "unsupported function call in result returns unproved", n);
-        check([]{ Fixture f; f.function().result=expr(Kind::Conditional); return !f.trace().has_value(); }(), "unsupported conditional return returns unproved", n);
-        check([]{ Fixture f; f.function().result=expr(Kind::Borrow); return !f.trace().has_value(); }(), "unsupported borrow expression returns unproved", n);
-        check([]{ Fixture f; f.function().actor_stops.push_back("worker"); return !f.trace().has_value(); }(), "unsupported actor-owned operations return unproved", n);
-        check([]{ Fixture f; oreslang::Parameter arg; arg.name="param"; f.function().parameters.push_back(std::move(arg)); return !f.trace().has_value(); }(), "unsupported function parameters return unproved", n);
-        check([]{ Fixture f; f.function().early_returns.emplace_back(); return !f.trace().has_value(); }(), "unsupported return guard returns unproved", n);
-        check([]{ Fixture f; f.program.classes.front().fields.front().int_array=true; Fixture g; g.program.classes.front().fields.front().initializer_expression.reset(); return !f.trace().has_value() && !g.trace().has_value(); }(), "array field or absent constructor initializer returns unproved", n);
-        check([]{ Fixture f; f.function().result.reset(); return !f.trace().has_value(); }(), "unsupported missing source return returns unproved", n);
-        if(n!=32) throw std::runtime_error("source MIR test count changed");
-        std::cout<<"PASS 32/32 compiler-source straight-line MIR host cases "
+        check([]{ Fixture f(true,false); f.function().result=expr(Kind::Call,"dynamic"); f.seal(); return !f.trace().has_value(); }(), "unsupported function call in result returns unproved", n);
+        check([]{ Fixture f(true,false); f.function().result=expr(Kind::Conditional); f.seal(); return !f.trace().has_value(); }(), "unsupported conditional return returns unproved", n);
+        check([]{ Fixture f(true,false); f.function().result=expr(Kind::Borrow); f.seal(); return !f.trace().has_value(); }(), "unsupported borrow expression returns unproved", n);
+        check([]{ Fixture f(true,false); f.function().actor_stops.push_back("worker"); f.seal(); return !f.trace().has_value(); }(), "unsupported actor-owned operations return unproved", n);
+        check([]{ Fixture f(true,false); oreslang::Parameter arg; arg.name="param"; f.function().parameters.push_back(std::move(arg)); f.seal(); return !f.trace().has_value(); }(), "unsupported function parameters return unproved", n);
+        check([]{ Fixture f(true,false); f.function().early_returns.emplace_back(); f.seal(); return !f.trace().has_value(); }(), "unsupported return guard returns unproved", n);
+        check([]{ Fixture f(true,false); f.program.classes.front().fields.front().int_array=true; f.seal(); Fixture g(true,false); g.program.classes.front().fields.front().initializer_expression.reset(); g.seal(); return !f.trace().has_value() && !g.trace().has_value(); }(), "array field or absent constructor initializer returns unproved", n);
+        check([]{ Fixture f(true,false); f.function().result.reset(); f.seal(); return !f.trace().has_value(); }(), "unsupported missing source return returns unproved", n);
+        check(denied([]{ Fixture f; ++f.program.classes.front().fields.front().initializer_expression->integer; (void)f.trace(); }), "post-seal class initializer value rewrite denied", n);
+        check(denied([]{ Fixture f; std::swap(f.program.classes.front().fields[0],f.program.classes.front().fields[1]); (void)f.trace(); }), "post-seal constructor field declaration reordered denied", n);
+        check(denied([]{ Fixture f; f.program.classes.front().fields.front().scalar_type=oreslang::ScalarType::String; (void)f.trace(); }), "post-seal field semantic type changed denied", n);
+        check(denied([]{ Fixture f; f.program.classes.front().fields.front().final_field=true; (void)f.trace(); }), "post-seal class field mutability rewritten denied", n);
+        check(denied([]{ Fixture f; f.former().initializer=expr(Kind::Integer); (void)f.trace(); }), "post-seal local init rewired denied", n);
+        check(denied([]{ Fixture f; f.write().expression=expr(Kind::Integer); (void)f.trace(); }), "post-seal source statement RHS rewritten denied", n);
+        check(denied([]{ Fixture f; f.function().result=expr(Kind::Integer); (void)f.trace(); }), "post-seal return expression rewritten denied", n);
+        check(denied([]{ Fixture f; f.former().name="surprise"; (void)f.trace(); }), "post-seal lexical name changed denied", n);
+        check(denied([]{ Fixture f; f.former().assignable=true; (void)f.trace(); }), "post-seal lexical mutability changed denied", n);
+        check(denied([]{ Fixture f; f.function().locals.front().owner_mutable=false; (void)f.trace(); }), "post-seal class mutability changed denied", n);
+        check(denied([]{ Fixture f; LocalBinding local; local.name="new_slot"; local.initializer=expr(Kind::Integer); f.function().locals.push_back(std::move(local)); (void)f.trace(); }), "post-seal extra local owner denied", n);
+        check(denied([]{ Fixture f; ClassDecl cls; cls.name="Foreign"; f.program.classes.push_back(std::move(cls)); (void)f.trace(); }), "post-seal extra class declaration denied", n);
+        check(denied([]{ Fixture f; f.function().compiler_straight_line_effect_fingerprint=0; (void)f.trace(); }), "source effect shape fingerprint removed denied", n);
+        check(denied([]{ Fixture f; f.function().compiler_straight_line_effect_fingerprint=42; (void)f.trace(); }), "source effect shape fingerprint substituted denied", n);
+        check(denied([]{ Fixture f(true,false); f.function().compiler_straight_line_effect_fingerprint=123; f.seal(); }), "source effect fingerprint preassigned before seal denied", n);
+        check(denied([]{ Fixture f; f.function().result=expr(Kind::Integer); oreslang::source_identity::prune_and_reseal_validated_functions(f.program,{1}); }), "source effect mutation before trusted tree-shake rejected", n);
+        check([]{ Fixture f(true,false); f.program.classes.front().fields.front().scalar_type=oreslang::ScalarType::String; f.seal(); return !f.trace().has_value(); }(), "String class field handle not complete", n);
+        check([]{ Fixture f(true,false); f.former().scalar_type=oreslang::ScalarType::String; f.seal(); return !f.trace().has_value(); }(), "String scalar local handle not complete", n);
+        check([]{ Fixture f(true,false); f.function().return_type=oreslang::ScalarType::String; f.seal(); return !f.trace().has_value(); }(), "String return handle not complete", n);
+        check([]{ Fixture f(true,false); f.program.classes.front().fields.front().final_field=true; f.seal(); return !f.trace().has_value(); }(), "final class field excluded from subset", n);
+        check([]{ Fixture f(true,false); f.function().locals.front().owner_mutable=false; f.seal(); return !f.trace().has_value(); }(), "immutable class referent cannot carry direct field write", n);
+        check([]{ Fixture f(true,false); add_scalar_write(f); f.seal(); return !f.trace().has_value(); }(), "non-assignable scalar lexical slot cannot be written", n);
+        check([]{ Fixture f(true,false); f.former().assignable=true; add_scalar_write(f); f.seal(); auto t=f.trace(); return t && t->supported_source_effects_complete && t->steps[6].operation.kind==Op::WriteOwned && t->steps[6].operation.place=="former"; }(), "assignable scalar slot emits WriteOwned", n);
+        check([]{ Fixture f; auto previous=f.function().compiler_straight_line_effect_fingerprint; oreslang::source_identity::prune_and_reseal_validated_functions(f.program,{1}); auto t=f.trace(); return t && previous==f.function().compiler_straight_line_effect_fingerprint && t->supported_source_effects_complete; }(), "trusted tree shake reissues source shape epoch", n);
+        check([]{ Fixture f; auto a=f.function().compiler_straight_line_effect_fingerprint; oreslang::source_identity::validate_program_identity(f.program); return a!=0 && a==f.function().compiler_straight_line_effect_fingerprint && f.trace().has_value(); }(), "same source shape remains stable across validation", n);
+        check([]{ Fixture f; auto t=f.trace(); return t && !t->full_loan_use_coverage && !t->guest_verified && !t->optimized_code_verified; }(), "scoped trace remains nonpromoting after shape fence", n);
+        if(n!=58) throw std::runtime_error("source MIR test count changed");
+        std::cout<<"PASS 58/58 compiler-source straight-line MIR and shape-fence host cases "
                     "(NOT LLVM GUEST PROOF)\n";
         return 0;
     } catch(const std::exception& error) {

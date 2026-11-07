@@ -54,6 +54,9 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
         throw std::runtime_error(
             "ownership violation: MIR source function is not from sealed Program");
 
+    if (function.return_type == ScalarType::String ||
+            function.compiler_straight_line_effect_fingerprint == 0)
+        return std::nullopt;
     if (!function.parameters.empty() || !function.early_returns.empty() ||
             !function.actor_spawns.empty() || !function.actor_actions.empty() ||
             !function.actor_sends.empty() || !function.actor_stops.empty() ||
@@ -74,9 +77,12 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
     trace.graph.blocks.resize(1);
     std::map<std::string, std::set<std::string>> class_fields;
     std::set<std::string> names;
+    std::set<std::string> mutable_class_owners;
+    std::set<std::string> assignable_scalar_slots;
     std::size_t modeled_fields = 0;
     for (const auto& local : function.locals) {
         if (local.name.empty() || !names.insert(local.name).second ||
+                local.scalar_type == ScalarType::String ||
                 local.heap_owned || local.int_array || local.record_view ||
                 local.move_class || !local.task_await_name.empty() ||
                 !local.future_await_name.empty() ||
@@ -85,6 +91,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
         if (!local.class_name.empty()) {
             if (!local.new_class || local.initializer)
                 return std::nullopt;
+            if (local.owner_mutable)
+                mutable_class_owners.insert(local.name);
             const auto cls = std::find_if(program.classes.begin(),
                 program.classes.end(), [&](const ClassDecl& c) {
                     return c.name == local.class_name;
@@ -96,7 +104,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
             for (const auto& field : cls->fields) {
                 if (field.name.empty() || field.name.find('.') != std::string::npos ||
                         field.int_array || !field.class_name.empty() ||
-                        field.constructor_argument ||
+                        field.scalar_type == ScalarType::String ||
+                        field.final_field || field.constructor_argument ||
                         !field.initializer_expression ||
                         (field.initializer_expression->kind != Expression::Kind::Integer &&
                          field.initializer_expression->kind != Expression::Kind::Boolean) ||
@@ -111,6 +120,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
         } else {
             if (local.new_class || !local.initializer)
                 return std::nullopt;
+            if (local.assignable)
+                assignable_scalar_slots.insert(local.name);
             trace.graph.entry.emplace(
                 local.name, ownership::PlaceState(ownership::kUninitialized));
         }
@@ -230,6 +241,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
                 SourcePhase::Statement, i, node, 0))
             return std::nullopt;
         if (stmt.kind == Statement::Kind::ScalarWrite) {
+            if (!assignable_scalar_slots.count(stmt.receiver))
+                return std::nullopt;
             if (checked.count(i) ||
                     !record(ownership::Operation::Kind::WriteOwned,
                         stmt.receiver, SourcePhase::Statement, i, node, stmt.offset))
@@ -237,6 +250,7 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
             continue;
         }
         if (!class_fields.count(stmt.receiver) ||
+                !mutable_class_owners.count(stmt.receiver) ||
                 !class_fields.at(stmt.receiver).count(stmt.field))
             return std::nullopt;
         const std::string place = stmt.receiver + "." + stmt.field;

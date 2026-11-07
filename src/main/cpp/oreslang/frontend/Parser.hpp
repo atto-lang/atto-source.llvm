@@ -400,6 +400,9 @@ struct Function {
     std::string compiler_source_sealed_name;
     std::vector<CheckedSourceReinitializeOperation>
         compiler_checked_reinitialize_operations;
+    // In-process, compiler-minted fingerprint of only the candidate
+    // straight-line source/effect shape. Zero means unsealed or unsupported.
+    std::uint64_t compiler_straight_line_effect_fingerprint = 0;
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */

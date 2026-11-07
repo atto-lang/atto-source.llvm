@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/SourceMirEffectShape.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -50,7 +51,8 @@ inline void seal_validated_program(Program& program) {
     };
     for (const auto& function : program.functions) {
         if (function.compiler_source_function_id ||
-                !function.compiler_source_sealed_name.empty())
+                !function.compiler_source_sealed_name.empty() ||
+                function.compiler_straight_line_effect_fingerprint != 0)
             throw std::runtime_error(
                 "ownership violation: preassigned source function identity");
         if (function.compiler_checked_reinitialize_operations.size() > 4096)
@@ -129,6 +131,8 @@ inline void seal_validated_program(Program& program) {
                     !seen_effects.count(i))
                 throw std::runtime_error(
                     "ownership violation: reinit marker absent from checker operation inventory");
+        function.compiler_straight_line_effect_fingerprint =
+            straight_line_effect_shape(program, function).value_or(0);
     }
     // Publish only after all identities have been minted. A truncated tail
     // could otherwise preserve a valid 1..N prefix of node identities.
@@ -215,6 +219,10 @@ inline void validate_program_identity(const Program& program) {
                     !checked_effects.count(i))
                 throw std::runtime_error(
                     "ownership violation: source reinit marker lacks checker operation");
+        if (function.compiler_straight_line_effect_fingerprint !=
+                straight_line_effect_shape(program, function).value_or(0))
+            throw std::runtime_error(
+                "ownership violation: validated straight-line source shape changed");
     }
     if (expected_node != program.compiler_source_node_count)
         throw std::runtime_error(
@@ -264,6 +272,7 @@ inline void prune_and_reseal_validated_functions(
         for (auto& function : program.functions) {
             function.compiler_source_function_id = 0;
             function.compiler_source_sealed_name.clear();
+            function.compiler_straight_line_effect_fingerprint = 0;
             for (auto& effect : function.compiler_checked_reinitialize_operations)
                 effect.sealed_write_id = 0;
             for (auto& stmt : function.statements) reset_tree(reset_tree, stmt);
