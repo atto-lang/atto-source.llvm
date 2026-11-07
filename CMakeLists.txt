@@ -142,11 +142,43 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_g1_event_provider_fake_host_only
         PROPERTIES TIMEOUT 20 LABELS "host-only;fake-driver;gpu-event;negative-mutation")
 
+    # Exact compiler-produced PTX digest admission: HOST_ONLY, not device proof.
+    # OpenSSL is optional for other LLVM builds, but the exact-head G1 CI job
+    # compiles this test explicitly and fails closed if libcrypto is missing.
+    find_package(OpenSSL QUIET COMPONENTS Crypto)
+    if(OpenSSL_FOUND)
+        add_executable(oreslang-gpu-g1-verified-ptx-host-test
+            tests/gpu_g1_verified_ptx_test.cpp)
+        target_include_directories(oreslang-gpu-g1-verified-ptx-host-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-gpu-g1-verified-ptx-host-test PRIVATE OpenSSL::Crypto)
+        target_compile_options(oreslang-gpu-g1-verified-ptx-host-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_gpu_g1_verified_ptx_hash_mutation_host_only
+            COMMAND oreslang-gpu-g1-verified-ptx-host-test)
+        set_tests_properties(native_gpu_g1_verified_ptx_hash_mutation_host_only
+            PROPERTIES TIMEOUT 20 LABELS "host-only;gpu-ptx;negative-mutation")
+    else()
+        message(STATUS "GPU G1 PTX hash tests NOT_EXECUTED: OpenSSL Crypto missing")
+    endif()
+
     # Deliberately opt-in SDK compatibility check; no real GPU needed.
     # NOT a physical execution or source-backed .atto compiler parity result.
     option(ATTO_GPU_G1_CHECK_CUDA_SDK "Build G1 CUDA Driver API adapter with an installed CUDA SDK" OFF)
     if(ATTO_GPU_G1_CHECK_CUDA_SDK)
         find_package(CUDAToolkit REQUIRED)
+        find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+        add_executable(oreslang-gpu-g1-cuda-module-compile-test
+            tests/gpu_g1_cuda_module_compile_test.cpp)
+        target_include_directories(oreslang-gpu-g1-cuda-module-compile-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-gpu-g1-cuda-module-compile-test PRIVATE CUDA::cuda_driver OpenSSL::Crypto)
+        target_compile_options(oreslang-gpu-g1-cuda-module-compile-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_gpu_g1_cuda_module_sdk_compile_only
+            COMMAND oreslang-gpu-g1-cuda-module-compile-test)
+        set_tests_properties(native_gpu_g1_cuda_module_sdk_compile_only
+            PROPERTIES TIMEOUT 20 LABELS "cuda-sdk;compile-only;no-device")
         add_executable(oreslang-gpu-g1-cuda-adapter-compile-test
             tests/gpu_g1_cuda_adapter_compile_test.cpp)
         target_include_directories(oreslang-gpu-g1-cuda-adapter-compile-test PRIVATE
