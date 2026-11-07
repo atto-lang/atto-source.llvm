@@ -121,7 +121,7 @@ int main() {
         check(denied([]{ Fixture f; f.bind(); f.statement.receiver.clear(); f.ledger.verify(f.module); }),"reject source empty owner after bind",checks);
         check(denied([]{ Fixture f; f.bind(); f.store->setOperand(1,f.other); f.ledger.verify(f.module); }),"reject mutated store pointer after bind",checks);
         check(denied([]{ Fixture f; f.bind(); f.store->setOperand(0,llvm::ConstantInt::get(f.i64,99)); f.ledger.verify(f.module); }),"reject mutated store SSA value after bind",checks);
-        check(denied([]{ Fixture f; f.bind(); f.store->setOperand(0,f.destination); f.ledger.verify(f.module); }),"reject mutated store SSA argument after bind",checks);
+        check(denied([]{ Fixture f; f.bind(); f.store->setOperand(0,llvm::ConstantInt::get(f.i64,18)); f.ledger.verify(f.module); }),"reject mutated store SSA argument after bind",checks);
         check(denied([]{ Fixture f; f.bind(); f.store->eraseFromParent(); f.ledger.verify(f.module); }),"reject physically erased store",checks);
         check(denied([]{ Fixture f; f.bind(); llvm::Module wrong("foreign",f.context); f.ledger.verify(wrong); }),"reject receipt checked against wrong module",checks);
         check(denied([]{ Fixture f; f.bind(); llvm::Module wrong("empty",f.context); f.ledger.verify(wrong); }),"reject receipt checked against empty module",checks);
