@@ -128,6 +128,49 @@ public:
         return true;
     }
 
+    // Nonblocking CONTROL reactor phase 1. A STOP has already been
+    // published under scheduler authority. Close admission and move all
+    // request values to deferred host cleanup without waiting for a pinned
+    // copy or for scheduler DONE. Never call on a carrier.
+    bool begin_external_cleanup_without_wait() {
+        if (!scheduler_ ||
+            ores_native_actor_scheduler_is_any_current_carrier_v1() ||
+            !ores_native_actor_scheduler_is_stopping_v1(scheduler_, actor_))
+            return false;
+        auto pinned = seal_and_revoke();
+        if (!pinned) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        external_pinned_ = std::move(*pinned);
+        external_started_ = true;
+        return true;
+    }
+
+    // Nonblocking CONTROL reactor phase 2. A stalled pinned copy on actor A
+    // must not prevent actor B's independent DONE/quiescence from being
+    // observed. The vector snapshot pins request lifetimes across polling.
+    bool poll_external_cleanup_finished() {
+        if (!scheduler_ ||
+            ores_native_actor_scheduler_is_any_current_carrier_v1())
+            return false;
+        std::vector<RequestContextLocalV1::Ptr> pinned;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!external_started_) return false;
+            if (completed_) return true;
+            pinned = external_pinned_;
+        }
+        for (const auto& request : pinned)
+            if (!request->closed_and_quiescent_now()) return false;
+        if (!ores_native_actor_scheduler_poll_done(scheduler_, actor_))
+            return false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            completed_ = true;
+            external_pinned_.clear();
+        }
+        return true;
+    }
+
     bool sealed() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return sealed_;
@@ -144,6 +187,8 @@ private:
     mutable std::mutex mutex_;
     bool sealed_ = false;
     bool completed_ = false;
+    bool external_started_ = false;
+    std::vector<RequestContextLocalV1::Ptr> external_pinned_;
     std::vector<std::weak_ptr<RequestContextLocalV1>> registered_;
 };
 
