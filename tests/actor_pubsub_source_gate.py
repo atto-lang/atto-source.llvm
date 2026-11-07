@@ -30,7 +30,7 @@ def verify_canonical_source(root: pathlib.Path) -> None:
     if not data or len(data) > 131072:
         raise AssertionError("canonical .atto source missing or unexpectedly large")
     digest = hashlib.sha1(b"blob " + str(len(data)).encode("ascii")
-                          + b"\\0" + data).hexdigest()
+                          + b"\0" + data).hexdigest()
     if digest != CANONICAL_GIT_BLOB:
         raise AssertionError("canonical .atto source differs from pinned formal PR #579 Git blob")
 
@@ -56,34 +56,34 @@ def verify_compiler_rejections(root: pathlib.Path, compiler: str) -> int:
              for suffix in (".ores", ".atto")]
     names.append(CANONICAL_ATTO)
     for name in names:
-            source = root / "contracts" / "v1" / "fixtures" / name
-            run = subprocess.run(
-                [compiler, str(source)],
-                cwd=root,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=20,
-                check=False,
+        source = root / "contracts" / "v1" / "fixtures" / name
+        run = subprocess.run(
+            [compiler, str(source)],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+            check=False,
+        )
+        # A zero exit, signal crash or any emitted stdout disqualifies a
+        # fail-closed compiler-negative test.
+        if run.returncode <= 0:
+            raise AssertionError(
+                f"{name}: unsupported source accepted or compiler crashed "
+                f"(status {run.returncode})"
             )
-            # A zero exit, signal crash or any emitted stdout disqualifies a
-            # fail-closed compiler-negative test.
-            if run.returncode <= 0:
-                raise AssertionError(
-                    f"{name}: unsupported source accepted or compiler crashed "
-                    f"(status {run.returncode})"
-                )
-            if run.stdout:
-                raise AssertionError(
-                    f"{name}: rejected guest produced stdout/IR "
-                    f"({len(run.stdout)} bytes)"
-                )
-            if DIAGNOSTIC not in run.stderr:
-                raise AssertionError(
-                    f"{name}: not an ActorGroup/Topic parser rejection: "
-                    f"{run.stderr[:800]!r}"
-                )
-            count += 1
+        if run.stdout:
+            raise AssertionError(
+                f"{name}: rejected guest produced stdout/IR "
+                f"({len(run.stdout)} bytes)"
+            )
+        if DIAGNOSTIC not in run.stderr:
+            raise AssertionError(
+                f"{name}: not an ActorGroup/Topic parser rejection: "
+                f"{run.stderr[:800]!r}"
+            )
+        count += 1
     return count
 
 
