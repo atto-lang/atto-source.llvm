@@ -278,5 +278,55 @@ fnc main(): int {
     rejects([] {
         (void)parse_program("fnc main(): int { return 1.5; }");
     }, "native floating-point/decimal literal unsupported");
+
+    // Full production source parser (not synthetic MIR operands) must retain
+    // comparison type, literal and both integer branches after checked read.
+    const auto f64_comparison = parse_program(R"atto(
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(2);
+    rows.push(7, true, 1.5);
+    rows.push(19, false, 3.75);
+    rows.erase_swap(0);
+    return rows.get(0, energy) == 3.75 ? 42 : 7;
+}
+)atto");
+    check(f64_comparison.inverted_main.has_value() &&
+          f64_comparison.inverted_main->operations.back().kind ==
+              InvertedSourceOperation::Kind::ReturnCompareF64 &&
+          f64_comparison.inverted_main->operations.back().equal_result == 42 &&
+          f64_comparison.inverted_main->operations.back().unequal_result == 7,
+          "typed source f64 equality and return branches not retained");
+    const auto f64_verified = dop::mir::verify_production_inverted_mixed(f64_comparison);
+    const auto f64_ir = dop::mir::emit_mixed_source_ir(f64_verified);
+    check(f64_ir.find(" = load double, ptr ") != std::string::npos &&
+          f64_ir.find(" = fcmp oeq double ") != std::string::npos &&
+          f64_ir.find(" = select i1 ") != std::string::npos,
+          "native compiler failed to lower f64 runtime comparison");
+
+    rejects([] {
+        (void)parse_program(R"atto(
+define inverted struct P as x: int; active: bool; f: f64; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(7, true, 3.75);
+    return rows.get(0, f);
+}
+)atto");
+    }, "requires explicit f64 equality");
+    rejects([] {
+        (void)parse_program(R"atto(
+define inverted struct P as x: int; active: bool; f: f64; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(7, true, 3.75);
+    return rows.get(0, f) == 3 ? 42 : 7;
+}
+)atto");
+    }, "mixed inverted f64 column requires a real literal");
     return 0;
 }
