@@ -1,0 +1,32 @@
+cmake_minimum_required(VERSION 3.20)
+# Temporary *carrier-only* build description. Every compiler implementation
+# translation unit and project header is the exact Git blob from source PR #1490.
+# This is a minimal reconstruction of its oreslang-llvmc target, NOT a full-tree
+# mirror, not the source repository's complete CMake build and not production.
+project(atto_llvm_verified_source_subset LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(LLVM CONFIG REQUIRED)
+if(LLVM_VERSION_MAJOR LESS 18)
+  message(FATAL_ERROR "LLVM18_OR_NEWER_REQUIRED_FOR_COMPILER_GUEST_TEST")
+endif()
+message(STATUS "Compiling exact-origin oreslang-llvmc sources against LLVM ${LLVM_PACKAGE_VERSION}")
+add_executable(oreslang-llvmc
+  src/main/cpp/oreslang/main.cpp
+  src/main/cpp/oreslang/frontend/Parser.cpp
+  src/main/cpp/oreslang/frontend/ModuleLoader.cpp
+  src/main/cpp/oreslang/frontend/MethodResolver.cpp
+  src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+  src/main/cpp/oreslang/types/OwnershipChecker.cpp
+  src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+  src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
+)
+target_include_directories(oreslang-llvmc PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+  "${LLVM_INCLUDE_DIRS}"
+)
+add_definitions(${LLVM_DEFINITIONS})
+llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
+target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
