@@ -159,11 +159,11 @@ jobs:
         run: |
           set -euo pipefail
           # Both tests must have been registered at CMake configure time.
-          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_17_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
-          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_17_mutations$' /tmp/atto-mir-fixture-inventory.txt
+          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_19_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_19_mutations$' /tmp/atto-mir-fixture-inventory.txt
           grep -Eq 'Test +#[0-9]+: atto_ownership_place_mir_real_compiler_50$' /tmp/atto-mir-fixture-inventory.txt
           # The manifest unit suite cannot replace compiler execution.
-          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_17_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_19_mutations$' --timeout 90
           ctest --test-dir build -V -R '^atto_ownership_place_mir_real_compiler_50$' \
             --output-junit /tmp/atto-real-compiler-50.xml --timeout 1000 | tee /tmp/atto-real-compiler-50.log
           grep -Fq 'ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-real-compiler-50.log
