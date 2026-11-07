@@ -145,7 +145,7 @@ public:
                 return original_mail_sequence_ == admitted_mail;
             };
             return !scheduler ? commit()
-                : ores_native_actor_scheduler_commit_if_running_v1(
+                : ores_native_actor_scheduler_commit_if_live_v1(
                     scheduler, identity_.actor,
                     [](void* ptr) -> int {
                         return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
@@ -224,7 +224,7 @@ public:
                 // scheduler STOP/retire holds the same lifecycle mutex.
                 // Compiler/guest APIs must always supply the scheduler.
                 return !scheduler ? commit()
-                    : ores_native_actor_scheduler_commit_if_running_v1(
+                    : ores_native_actor_scheduler_commit_if_live_v1(
                         scheduler, identity_.actor,
                         [](void* ptr) -> int {
                             return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
@@ -294,7 +294,7 @@ public:
                     return true;
                 };
                 return !scheduler ? commit()
-                    : ores_native_actor_scheduler_commit_if_running_v1(
+                    : ores_native_actor_scheduler_commit_if_live_v1(
                         scheduler, identity_.actor,
                         [](void* ptr) -> int {
                             return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
