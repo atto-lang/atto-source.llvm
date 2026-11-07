@@ -892,6 +892,19 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(
         &instance->processed, 1, memory_order_release);
+    /* A guest scalar frame quota/fuel/tag violation is isolated to the
+     * offending actor. Seal its future DATA after this physically completed
+     * callback; the carrier and all sibling actor lanes remain alive. */
+    if (atomic_load_explicit(&instance->frame_vm_error,
+            memory_order_acquire) != ORES_SCALAR_OK) {
+        int expected = 0;
+        if (atomic_compare_exchange_strong_explicit(
+                &instance->stop_requested, &expected, 1,
+                memory_order_acq_rel, memory_order_acquire)) {
+            ensure(ores_native_vm_stop_sealed(
+                group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+        }
+    }
 }
 
 static void open_group_locked(void) {
@@ -1239,12 +1252,17 @@ void oreslang_source_actor_request_stop(void* opaque) {
      */
     group_lock();
     int expected = 0;
-    ensure(atomic_compare_exchange_strong_explicit(
+    const int won_request = atomic_compare_exchange_strong_explicit(
         &instance->stop_requested,
         &expected,
         1,
         memory_order_acq_rel,
-        memory_order_acquire));
+        memory_order_acquire);
+    /* Automatic fail-stop is the one authorized source of a previously
+     * requested stop. Manual double-stop remains a hard protocol failure. */
+    ensure(won_request || (expected == 1 &&
+        atomic_load_explicit(&instance->frame_vm_error,
+            memory_order_acquire) != ORES_SCALAR_OK));
 
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
@@ -1254,8 +1272,9 @@ void oreslang_source_actor_request_stop(void* opaque) {
      * future DATA and abandon queued DATA, while an already-active turn is
      * allowed to cross its physical execution boundary.
      */
-    ensure(ores_native_vm_stop_sealed(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    if (won_request)
+        ensure(ores_native_vm_stop_sealed(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
     group_unlock();
 }
 
@@ -1326,6 +1345,17 @@ void oreslang_source_actor_join_done(void* opaque) {
         (unsigned long long)instance->id,
         (unsigned long long)instance->frame_high_water,
         (unsigned long long)instance->frame_slot_calls);
+    fprintf(stderr,
+        "SOURCE_ACTOR_SCALAR_VM_VERIFIED actor=%llu steps=%llu tail_calls=%llu non_tail_calls=%llu error=%d\n",
+        (unsigned long long)instance->id,
+        (unsigned long long)atomic_load_explicit(
+            &instance->frame_vm_steps, memory_order_acquire),
+        (unsigned long long)atomic_load_explicit(
+            &instance->frame_vm_tail_calls, memory_order_acquire),
+        (unsigned long long)atomic_load_explicit(
+            &instance->frame_vm_non_tail_calls, memory_order_acquire),
+        atomic_load_explicit(&instance->frame_vm_error,
+            memory_order_acquire));
     fprintf(stderr,
         "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d released=1 ready=%d accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
         atomic_load_explicit(
