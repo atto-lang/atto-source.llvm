@@ -287,3 +287,55 @@ Tenant/isolate provenance, guest-safe owned value descriptors, full native
 sanitizer executions and compiled .atto parity also remain open.
 Zero-step hosted workflows are runner-admission failures, NOT passing
 or failing native/guest evidence.
+
+## Automatic generation-fenced STOP cleanup registry (2026-11-07)
+
+NativeActorScheduler has one optional trusted-host STOP observer per exact
+actor generation. Ordinary STOP, sealed STOP, and whole-runtime retirement
+publish the notice once, under the scheduler lifecycle mutex. The observer
+is strictly one lock-free atomic flag store: no allocation, mutex, guest
+destructor, scheduler reentry, condvar notification or carrier blocking.
+Unregister arbitrates with any in-flight callback under that mutex.
+Scheduler try_destroy now denies destruction while a STOP observer remains
+registered, preventing a registry's borrowed observer pointer from becoming
+dangling while its scheduler is freed.
+
+NativeRequestLifecycleRegistryV1 is a host-only registry with ONE CONTROL
+worker per scheduler. Trusted ingress must attach the actor incarnation
+before accepting request-local contexts. Preferred open_registered factory
+fails closed unless the exact actor incarnation accepts registration.
+The worker scans notified entries on a bounded interval, closes registered
+scopes, then polls request-operation quiescence and actor DONE without a
+blocking wait on any one actor. This lets a stopped sibling actor finish
+cleanup while another stopped actor has an outstanding pinned value copy.
+Only the CONTROL worker performs request closure and value destruction.
+Custom host destructors can still block this single worker; a production
+runtime must enforce destructor/resource budgets and bounded cleanup
+concurrency per actor/tenant before guest ABI exposure.
+
+The registry MUST outlive all actor generations attached to it and the
+native scheduler MUST outlive the registry. Registry destruction unregisters
+all observers before joining its CONTROL worker, fencing late callbacks.
+Registered request ownership is currently weak; callers must retain strong
+request lifetimes during operations. Synchronous native STOP callers remain
+nonblocking with respect to request cleanup, and carrier callbacks only
+perform the one atomic notification.
+
+Evidence authored: 42 named host lifecycle-registry cases including
+simultaneous STOP with actor A's read paused and actor B reclaimed,
+17 native C scheduler notice cases, and a deliberate negative mutation
+that suppresses both STOP observer invocations and requires the C test to
+reject the altered scheduler. The earlier 49 actor lifecycle, 38 STOP/cancel
+and 45 scoped-local named cases remain. Total named assertions across those
+four suites and the new C suite: 191 (42 + 17 + 49 + 38 + 45).
+All updated sources are Git-blob-pinned in the RequestLocal workflow and
+native-scoped integration workflow where referenced. These are authored
+host checks only: actual hosted GCC/Clang, sanitizer and compiled .atto
+receipts remain NOT_EXECUTED while Actions runners fail admission.
+
+Remaining holds: trusted tenant/isolate/request issuer and guest ownership
+descriptors; automatic registration of every derived/handoff request at
+the right native embedding sites; lifetime-bound cleanup for custom host
+values and actors hot-upgraded/supervisor-restarted outside this registry;
+full native/guest execution evidence and independent approval. The registry
+is not itself proof of full language or backend parity.
