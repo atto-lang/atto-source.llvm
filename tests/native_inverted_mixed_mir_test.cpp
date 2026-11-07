@@ -136,6 +136,18 @@ int main() {
                 "legacy scalar metadata");
     }
     {
+        auto bad=make_source();
+        bad.inverted_main->operations[3].mixed_values[0]=bit(true);
+        rejects([&]{ (void)verify_production_inverted_mixed(bad); },
+                "invalid mixed inverted erase metadata");
+    }
+    {
+        auto bad=make_source();
+        bad.inverted_main->operations[4].mixed_value=f64(6.5);
+        rejects([&]{ (void)verify_production_inverted_mixed(bad); },
+                "invalid mixed inverted return metadata");
+    }
+    {
         auto bad=make_source(); bad.inverted_main->capacity=257;
         rejects([&]{ (void)verify_production_inverted_mixed(bad); },
                 "capacity/operation budget");
