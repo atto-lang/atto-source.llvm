@@ -528,6 +528,267 @@ int main() {
     }
 #endif
 
+
+    // Deterministic three-buffer allocation failure matrix. Every failed
+    // pre-enqueue reservation releases only acquired handles, holds no quota,
+    // and uses a fresh monotonically increasing generation when retried.
+    for (std::uint32_t fail_at = 1; fail_at <= 3; ++fail_at) {
+        FakeApi api;
+        api.fail_alloc_at = fail_at;
+        auto provider = make_provider(api);
+        reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
+        check(provider.closed_for_release() &&
+              provider.usage().resident_bytes == 0 &&
+              provider.usage().queue_slots == 0 &&
+              api.released_buffers == fail_at - 1 &&
+              api.released_programs == 1 && api.enqueued == 0,
+              "allocation rollback must release only acquired handles");
+        auto retry = provider.begin(artifact, x, y, 2.0f);
+        check(retry->allocation_generation() == 2,
+              "failed allocation consumes nonrecyclable generation");
+        finish(provider, *retry);
+        check(retry->state() == SaxpyProvider::State::Succeeded &&
+              retry->completed_events() == 4, "post-allocation retry completes");
+    }
+    {
+        FakeApi api;
+        api.fail_prepare_once = true;
+        auto provider = make_provider(api);
+        reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
+        check(provider.closed_for_release() &&
+              api.released_buffers == 0 && api.enqueued == 0,
+              "failed program compilation cannot allocate physical buffers");
+        auto retry = provider.begin(artifact, x, y, 2.0f);
+        check(retry->allocation_generation() == 2,
+              "failed program compilation fences generation");
+        finish(provider, *retry);
+        check(retry->state() == SaxpyProvider::State::Succeeded,
+              "retry after prepare failure");
+    }
+    {
+        FakeApi api;
+        api.fail_alloc_once = true;
+        api.fail_release_program_once = true;
+        auto provider = make_provider(api);
+        reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
+        check(!provider.closed_for_release() &&
+              provider.usage().queue_slots == 1,
+              "pre-enqueue cleanup failure retains exact quota");
+        reject([&] { provider.close(); });
+        provider.retry_release();
+        check(provider.closed_for_release() &&
+              provider.usage().resident_bytes == 0 &&
+              api.released_programs == 1,
+              "release retry after pre-enqueue exception");
+    }
+
+    // Fault injection at all four command stages and both event failure
+    // surfaces. No stage is permitted to fabricate completed device events.
+    // Ambiguous enqueue or event-status failures retain all three allocations
+    // until the actual queue-quiescence API confirms physical retirement.
+    for (int mode = 0; mode < 10; ++mode) {
+        FakeApi api;
+        switch (mode) {
+        case 0: api.throw_upload_at = 1; break;
+        case 1: api.null_upload_at = 1; break;
+        case 2: api.throw_upload_at = 2; break;
+        case 3: api.null_upload_at = 2; break;
+        case 4: api.throw_during_kernel_enqueue = true; break;
+        case 5: api.null_kernel_event = true; break;
+        case 6: api.throw_during_download = true; break;
+        case 7: api.null_download_event = true; break;
+        case 8: api.throw_poll_event_once = true; break;
+        case 9: api.failed_event_once = true; break;
+        }
+        auto provider = make_provider(api);
+        std::shared_ptr<SaxpyProvider::Operation> op;
+        if (mode <= 1) {
+            reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
+        } else {
+            op = provider.begin(artifact, x, y, 2.0f);
+            check(op->state() == SaxpyProvider::State::UploadX,
+                  "initial X-upload stage admitted");
+            const int polls = (mode == 8 || mode == 9) ? 1 :
+                              (mode == 2 || mode == 3) ? 1 :
+                              (mode == 4 || mode == 5) ? 2 : 3;
+            for (int i = 0; i < polls; ++i)
+                (void)provider.poll(*op);
+            check(op->state() == SaxpyProvider::State::Quarantined,
+                  "failure at every device stage quarantines resources");
+        }
+        check(!provider.closed_for_release() &&
+              provider.usage().resident_bytes == 48 &&
+              provider.usage().queue_slots == 1 &&
+              api.released_buffers == 0,
+              "ambiguous failure cannot free pinned resident bytes");
+        reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
+        reject([&] { provider.recover_quarantined(); });
+        api.physical_quiescent = true;
+        provider.recover_quarantined();
+        check(provider.closed_for_release() &&
+              provider.usage().resident_bytes == 0 &&
+              api.released_buffers == 3 && api.released_programs == 1 &&
+              api.live_events.empty() && api.live_buffers.empty(),
+              "authenticated quiescence retires each failed stage exactly once");
+        if (op) {
+            check(op->state() == SaxpyProvider::State::Failed,
+                  "unverified execution never exposes GPU success");
+            reject([&] { (void)op->result(); });
+        }
+    }
+
+    // Cancellation matrix: cancel in-flight X upload, Y upload, kernel and
+    // download. Exactly the currently submitted event completes and no
+    // subsequent stage is enqueued. In particular, completed download after
+    // cancel must not publish a result.
+    for (int stage = 0; stage < 4; ++stage) {
+        FakeApi api;
+        auto provider = make_provider(api);
+        auto op = provider.begin(artifact, x, y, 2.0f);
+        for (int i = 0; i < stage; ++i)
+            (void)provider.poll(*op);
+        api.auto_complete = false;
+        provider.request_cancel(*op);
+        check(provider.poll(*op) == op->state() &&
+              provider.usage().resident_bytes == 48 &&
+              api.released_buffers == 0,
+              "pending cancellation preserves device memory");
+        api.auto_complete = true;
+        check(provider.poll(*op) == SaxpyProvider::State::Cancelled &&
+              op->completed_events() == static_cast<std::uint32_t>(stage + 1) &&
+              api.enqueued == static_cast<std::uint32_t>(stage + 1) &&
+              api.released_events == static_cast<std::uint32_t>(stage + 1) &&
+              api.released_buffers == 3 && provider.closed_for_release(),
+              "cancellation at each stage waits for its exact native event");
+        reject([&] { (void)op->result(); });
+        reject([&] { (void)provider.poll(*op); });
+    }
+
+    // Foreign operations, even from a provider with the same apparent
+    // tenant/device/queue identifiers, must never authenticate as ours.
+    {
+        FakeApi first_api, second_api;
+        auto first = make_provider(first_api);
+        auto second = make_provider(second_api);
+        auto first_op = first.begin(artifact, x, y, 2.0f);
+        auto second_op = second.begin(artifact, x, y, 2.0f);
+        reject([&] { (void)first.poll(*second_op); });
+        reject([&] { first.request_cancel(*second_op); });
+        reject([&] { (void)second.poll(*first_op); });
+        finish(first, *first_op);
+        finish(second, *second_op);
+        check(first_op->completed_events() == 4 &&
+              second_op->completed_events() == 4,
+              "foreign-ticket rejection does not corrupt native queues");
+    }
+
+    // Simultaneous queue admissions: at most one operation is allowed to
+    // hold this provider's physical buffers and mutable kernel arguments.
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        FakeApi api;
+        auto provider = make_provider(api);
+        std::array<std::shared_ptr<SaxpyProvider::Operation>, 8> ops{};
+        std::atomic<unsigned> admitted{0};
+        std::array<std::thread, 8> workers;
+        for (std::size_t i = 0; i < workers.size(); ++i) {
+            workers[i] = std::thread([&, i] {
+                try {
+                    ops[i] = provider.begin(artifact, x, y, 2.0f);
+                    admitted.fetch_add(1, std::memory_order_relaxed);
+                } catch (const std::logic_error&) {
+                    // Queue admission loser: this must not mutate any
+                    // physical handle or stage transition.
+                }
+            });
+        }
+        for (auto& worker : workers) worker.join();
+        check(admitted.load(std::memory_order_relaxed) == 1 &&
+              api.live_buffers.size() == 3 && api.live_events.size() == 1 &&
+              provider.usage().queue_slots == 1,
+              "exactly one GPU queue admission winner under contention");
+        for (auto& op : ops) {
+            if (!op) continue;
+            finish(provider, *op);
+            check(op->state() == SaxpyProvider::State::Succeeded &&
+                  op->completed_events() == 4,
+                  "winning GPU operation completed and retired");
+        }
+        check(provider.closed_for_release() &&
+              api.live_buffers.empty() && api.live_events.empty(),
+              "concurrent losers cannot strand resource quota");
+    }
+
+    // Repeated concurrent cancellation and event polling converge without
+    // a double terminal commit or a device operation after cancellation.
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        FakeApi api;
+        api.auto_complete = false;
+        auto provider = make_provider(api);
+        auto op = provider.begin(artifact, x, y, 2.0f);
+        std::array<std::thread, 8> cancellers;
+        for (auto& thread : cancellers)
+            thread = std::thread([&] { provider.request_cancel(*op); });
+        for (int poll = 0; poll < 8; ++poll)
+            check(provider.poll(*op) == SaxpyProvider::State::UploadX,
+                  "uncompleted native event may not advance");
+        for (auto& thread : cancellers) thread.join();
+        api.auto_complete = true;
+        check(provider.poll(*op) == SaxpyProvider::State::Cancelled &&
+              op->completed_events() == 1 &&
+              api.enqueued == 1 && api.released_buffers == 3,
+              "racing cancellations exactly-once terminal after native event");
+    }
+
+    // Deterministic f32 property vectors: preserve source-derived element
+    // counts and per-element math without aliasing output to either input.
+    for (std::size_t n : {1u, 2u, 3u, 7u, 31u, 63u, 127u, 256u, 1024u}) {
+        FakeApi api;
+        auto provider = make_provider(api, 3 * 4096, 3 * 4096);
+        std::vector<float> vx(n), vy(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            vx[i] = static_cast<float>(i % 97) / 8.0f - 3.0f;
+            vy[i] = static_cast<float>(i % 31) / 16.0f - 1.0f;
+        }
+        auto op = provider.begin(artifact, vx, vy, -2.5f);
+        finish(provider, *op);
+        const auto out = op->result();
+        check(out.size() == n && op->completed_events() == 4,
+              "all vector lengths must execute exactly four device stages");
+        for (std::size_t i = 0; i < n; ++i) {
+            volatile float product = -2.5f * vx[i];
+            const float expected = product + vy[i];
+            check(out[i] == expected, "deterministic SIMD lane parity");
+        }
+        check(provider.usage().resident_bytes == 0 &&
+              api.released_buffers == 3, "all vector sizes release quotas");
+    }
+
+    // Mutate each device artifact authority field independently; reject
+    // before compiling or allocating any program or physical buffer.
+    {
+        FakeApi api;
+        auto provider = make_provider(api);
+        for (unsigned which = 0; which < 5; ++which) {
+            auto forged = artifact;
+            switch (which) {
+            case 0: forged.kernel_name += "_untrusted"; break;
+            case 1: forged.device_source += "\nunsafe"; break;
+            case 2: ++forged.abi_version; break;
+            case 3: --forged.required_address_bits; break;
+            case 4: forged.requires_f32 = false; break;
+            }
+            reject([&] { (void)provider.begin(forged, x, y, 2.0f); });
+        }
+        reject([&] { (void)provider.begin(
+            artifact, std::vector<float>(1025, 1.0f),
+            std::vector<float>(1025, 2.0f), 2.0f); });
+        reject([&] { (void)provider.begin(
+            artifact, x, y, std::numeric_limits<float>::quiet_NaN()); });
+        check(provider.closed_for_release() &&
+              api.enqueued == 0 && api.allocation_count == 0,
+              "mutated artifact/type/length must fail before physical effects");
+    }
+
     std::cout << "SAXPY three-buffer OpenCL provider host reference tests passed"
               << " (no hardware execution claimed)\n";
     return 0;
