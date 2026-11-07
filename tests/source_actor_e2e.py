@@ -33,6 +33,11 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(start, start + processed):
             value = 2 * (value + n)
         return value
+    if name in {"atto-actor-scalar-tail100k.atto",
+                "atto-actor-scalar-nontail-overflow.atto"}:
+        return 0
+    if name == "atto-actor-scalar-mutual-tail.atto":
+        return 1 if processed else 0
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -95,11 +100,18 @@ def main():
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("atto-actor-frame-two-heaps.atto", 2, 4, None),
+        ("atto-actor-scalar-tail100k.atto", 1, 1, 0),
+        ("atto-actor-scalar-nontail-overflow.atto", 1, 1, 0),
+        ("atto-actor-scalar-mutual-tail.atto", 1, 1, 1),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "atto-actor-scalar-unsafe-nested-call-reject.atto":
+            "native actor typed scalar frame admission: actor callback may only directly return pure unary fnc(message)",
+        "atto-actor-scalar-abi-shadow-reject.atto":
+            "reserved native actor runtime symbol collision",
         "atto-actor-frame-internal-symbol-reject.atto":
             "reserved native actor runtime symbol collision",
         "atto-actor-heap-internal-symbol-reject.atto":
@@ -181,6 +193,24 @@ def main():
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
+            m3 = name in {
+                "atto-actor-scalar-tail100k.atto",
+                "atto-actor-scalar-nontail-overflow.atto",
+                "atto-actor-scalar-mutual-tail.atto",
+            }
+            if m3:
+                vm_calls = [line for line in guest.stdout.splitlines()
+                            if "call i32 @oreslang_source_actor_scalar_vm_execute(" in line]
+                assert len(vm_calls) == 1, (name, vm_calls)
+                assert "oreslang.actor.scalar.m3.program.Worker" in guest.stdout
+                assert "oreslang.actor.scalar.m3.instructions.Worker" in guest.stdout
+                callback = guest.stdout.split(
+                    "define i64 @oreslang_actor_Worker_on_message", 1)
+                assert len(callback) == 2, (name, "no compiled callback")
+                callback_body = callback[1].split("\n}", 1)[0]
+                assert "oreslang_source_actor_scalar_vm_execute" in callback_body
+                for native in ("tail", "depth", "even", "odd"):
+                    assert "call i64 @" + native + "(" not in callback_body
             # An LLVM declaration alone does not establish real actor-frame
             # lowering: require actual call sites emitted by the frontend.
             frame_calls = [line for line in guest.stdout.splitlines()
@@ -274,6 +304,27 @@ def main():
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            scalar_lines = [line for line in executed.stderr.splitlines()
+                            if line.startswith("SOURCE_ACTOR_SCALAR_VM_VERIFIED ")]
+            assert len(scalar_lines) == actors, (name, scalar_lines)
+            scalar_records = []
+            for line in scalar_lines:
+                record = {}
+                for part in line.split()[1:]:
+                    key, separator, value = part.partition("=")
+                    assert separator and value.isdecimal(), (name, line)
+                    assert key in {"actor", "steps", "tail_calls",
+                                   "non_tail_calls", "error"} and key not in record, (
+                        name, line)
+                    record[key] = int(value)
+                assert set(record) == {"actor", "steps", "tail_calls",
+                                       "non_tail_calls", "error"}, (name, line)
+                scalar_records.append(record)
+            if not m3:
+                assert all(r["steps"] == 0 and r["tail_calls"] == 0
+                           and r["non_tail_calls"] == 0 and r["error"] == 0
+                           for r in scalar_records), (name, scalar_records)
+
             frames = [line for line in executed.stderr.splitlines()
                       if line.startswith("SOURCE_ACTOR_FRAME_RETIRE_VERIFIED ")]
             assert len(frames) == actors, (name, frames)
@@ -303,6 +354,21 @@ def main():
             for i, receipt in enumerate(receipts):
                 accepted = receipt["accepted"]
                 processed = receipt["processed"]
+                if m3:
+                    expected_error = (1 if name ==
+                        "atto-actor-scalar-nontail-overflow.atto"
+                        and processed else 0)
+                    assert scalar_records[i]["error"] == expected_error, (
+                        name, i, scalar_records[i])
+                    if processed:
+                        assert scalar_records[i]["steps"] > 0
+                        if name in {"atto-actor-scalar-tail100k.atto",
+                                    "atto-actor-scalar-mutual-tail.atto"}:
+                            assert scalar_records[i]["tail_calls"] >= 100000, (
+                                name, scalar_records[i])
+                        if name == "atto-actor-scalar-nontail-overflow.atto":
+                            assert scalar_records[i]["non_tail_calls"] >= 63, (
+                                name, scalar_records[i])
                 if processed:
                     assert frame_records[i]["high_water"] >= 2, (name, i)
                     assert frame_records[i]["slot_calls"] >= 2 * processed, (
