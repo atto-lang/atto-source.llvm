@@ -631,7 +631,13 @@ int main() {
         t.fn();
         std::printf("%s %s\n", failures == before ? "PASS" : "FAIL", t.name);
     }
+    if (registry_handoff_cases != 30) {
+        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=30\n",
+                     registry_handoff_cases);
+        ++failures;
+    }
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
+    std::puts("HANDOFF_REGISTRY_30_HOST_CASES_PASS");
     std::printf("REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS\n");
     return 0;
 }
