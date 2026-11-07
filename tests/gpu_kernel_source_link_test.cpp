@@ -80,7 +80,7 @@ int main() {
         const auto link = source_link::link({sig}, launch());
         check(link.kernel_shape.parameters.back() == typed_ir::Parameter::I64,
               "signed int source signature preserved");
-        const typed_ir::Limits caps{{65535,65535,65535}, {1024,1024,64},
+        const Limits caps{{65535,65535,65535}, {1024,1024,64},
                                     1024,49152};
         typed_ir::Request req{
             {"signed", {typed_ir::Parameter::I64}, {}, true},
