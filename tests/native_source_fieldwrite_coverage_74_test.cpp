@@ -234,8 +234,16 @@ int main() {
         check([]{ Fixture f; f.bind_primary(); f.program.functions.emplace_back(); auto map=f.function_map(); return map.size()==2 && map.begin()->second!=std::next(map.begin())->second && f.ledger.verify_source_coverage(f.program,f.module,map).direct_source_writes_complete; }(), "independent second native function with zero writes is allowed", n);
         check([]{ Fixture f; f.bind_primary(); (void)f.another(); return f.complete(); }(), "plain untagged housekeeping store remains admissible", n);
         check([]{ Fixture f; f.bind_primary(); auto* helper=llvm::Function::Create(llvm::FunctionType::get(f.builder.getVoidTy(),false),llvm::Function::ExternalLinkage,"internal_helper",f.module); llvm::IRBuilder<> b(llvm::BasicBlock::Create(f.context,"entry",helper)); auto* slot=b.CreateAlloca(b.getInt64Ty()); b.CreateStore(llvm::ConstantInt::get(b.getInt64Ty(),0),slot); b.CreateRetVoid(); return f.complete(); }(), "separate runtime LLVM helper untagged store remains admissible", n);
-        if(n != 66) throw std::runtime_error("wrong test inventory");
-        std::cout<<"PASS 66/66 direct source FieldWrite completeness cases "
+        check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.clear(); f.cover(); }), "reject deleted source Program after binding", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.source_function->statements.clear(); f.cover(); }), "reject deleted source Statement after binding", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.source_function->statements.erase(f.source_function->statements.begin()); f.cover(); }), "reject erased source Statement after binding", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.clear(); f.program.functions.emplace_back(); f.cover(); }), "reject replaced source Function after binding", n);
+        check(denied([]{ Fixture f; f.bind_primary(); {Statement temp{}; temp.kind=Statement::Kind::FieldWrite; temp.receiver="owner"; temp.field="z"; f.bind(temp,f.another()); } f.cover(); }), "reject stale temporary source Statement after scope end", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.clear(); f.store->setMetadata("atto.ownership.field_write.source.v1",f.store->getMetadata("atto.ownership.field_write.source.v1")); f.cover(); }), "reject cleared source function plus remaining LLVM tag", n);
+        check([]{ Fixture f; f.bind_primary(); auto& wrapper=f.wrapper(); auto& yes=f.child(wrapper,true,"y"); auto& no=f.child(wrapper,false,"z"); f.bind(yes,f.another()); f.bind(no,f.another()); return f.complete() && f.ledger.size()==3; }(), "accept both conditional branches fully covered", n);
+        check([]{ Fixture f; f.bind_primary(); auto& action=f.add(*f.source_function); auto& caught=f.caught(); f.bind(action,f.another()); f.bind(caught,f.another()); return f.complete() && f.ledger.size()==3; }(), "accept independent direct and caught cleanup field", n);
+        if(n != 74) throw std::runtime_error("wrong test inventory");
+        std::cout<<"PASS 74/74 direct source FieldWrite completeness cases "
                     "(REAL LLVM IR HOST TEST; NOT NLL/GUEST VERIFIED)\n";
         return 0;
     } catch(const std::exception& error) {

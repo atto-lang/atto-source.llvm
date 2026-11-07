@@ -139,3 +139,27 @@ fixtures remain a separate gate. No compiler-backed guest or hosted test
 success is claimed until nonzero Actions runner steps exist. General LoanId,
 Reinitialize.write_id, optimized-code, cancellation and guest correctness
 remain unproven and all broad proof flags stay false.
+
+## Fail-closed source pointer lifetime fence (2026-11-07)
+
+A security review found that verify_source_coverage previously invoked
+the ledger's verify(module) before enumerating the current source AST.
+Since verify(module) dereferences FieldWriteSite.source, a deleted or
+replaced Program/Statement could cause a dangling source pointer read.
+The production verifier now inventories the current live AST first, then
+checks saved identities by pointer comparison only against that inventory,
+and cross-checks the independent source-to-native declaration registry.
+Only once identities are established does it inspect stored source fields
+and emitted LLVM instructions. The StoreInst membership scan similarly
+precedes use of store operands. This ordering is a lifetime safety fence,
+not a solution to ABA pointer-address reuse: the compiler must preserve
+stable, immutable AST nodes during codegen and cannot claim general NLL.
+
+The native host-LLVM regression test expands to 74 authored assertions:
+60 negative mutations and 14 positive/nonpromoting controls. New cases
+delete/replace source nodes after binding and cover multiple branch and
+caught-cleanup field stores. The focused source coverage CTest is renamed
+to end in _74. The workflow still requires exactly 15 native CTests and
+a separately checked 50-program compiler/Clang guest matrix.
+All native tests remain AUTHORED / NOT_EXECUTED until actual runner admission.
+Ownership completeness, optimized code and guest proof flags remain false.

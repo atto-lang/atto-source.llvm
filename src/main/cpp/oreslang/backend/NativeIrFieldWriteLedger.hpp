@@ -203,7 +203,12 @@ public:
             const Program& source, const llvm::Module& module,
             const std::map<const Function*, const llvm::Function*>&
                 independent_function_declarations) const {
-        auto result = verify(module); // check actual live StoreInst first
+        // First enumerate the currently live AST and verify all saved
+        // source pointers by identity *without dereferencing them*. A Program
+        // or Statement can have been erased/replaced after emission; calling
+        // verify(module) first would dereference an untrusted stale pointer.
+        // The production Program remains immutable during lowering, but the
+        // verifier must reject stale evidence safely even under mutations.
         // The declaration registry is built independently from source
         // Program functions in production codegen, not the store ledger.
         // Do not confuse an arbitrary LLVM function with the correct
@@ -258,6 +263,9 @@ public:
                 "ownership violation: omitted or invented source field-write emission");
         std::set<const Statement*> matched;
         for (const auto& site : sites_) {
+            // These are pointer comparisons only. Do not dereference source,
+            // store or function pointers until the corresponding independent
+            // inventories have established that the objects are still live.
             const auto found = expected.find(site.source);
             const auto declaration = found != expected.end()
                 ? independent_function_declarations.find(found->second)
@@ -266,7 +274,6 @@ public:
                     declaration == independent_function_declarations.end() ||
                     !site.emitted_function ||
                     site.emitted_function != declaration->second ||
-                    site.store->getFunction() != site.emitted_function ||
                     !matched.insert(site.source).second)
                 throw std::runtime_error(
                     "ownership violation: source field-write/function not bound to emitted store");
@@ -274,6 +281,13 @@ public:
         if (matched.size() != expected.size())
             throw std::runtime_error(
                 "ownership violation: incomplete compiler source field-write inventory");
+        // Source pointers are live here. verify() independently checks actual
+        // StoreInst membership in the Module before reading StoreInst fields.
+        auto result = verify(module);
+        for (const auto& site : sites_)
+            if (site.store->getFunction() != site.emitted_function)
+                throw std::runtime_error(
+                    "ownership violation: source field-write emitted in wrong LLVM function");
         // Zero expected writes is a vacuous match, not positive evidence
         // of any source field-write instruction being linked to a store.
         result.direct_source_writes_complete = !expected.empty();
