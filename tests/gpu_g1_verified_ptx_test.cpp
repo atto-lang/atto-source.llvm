@@ -1,6 +1,9 @@
 #include "oreslang/backend/GpuG1VerifiedPtx.hpp"
 #include <openssl/evp.h>
 #include <array>
+#include <atomic>
+#include <thread>
+#include <vector>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -64,6 +67,28 @@ int main(){
   reject([&]{GpuG1VerifiedPtxModule<FakeLoader> m(ld,code,original);});
   check(ld.load==1&&ld.unload==1);
  }
- check(loader.load==2);
+ // A live kernel token must fence a concurrent unload attempt. Minting and
+ // closing are serialized by the module's own lock, not by caller timing.
+ {GpuG1VerifiedPtxModule<FakeLoader> m(loader,code,original);
+  std::atomic<unsigned> holders{0};std::atomic<bool> release{false};
+  std::atomic<unsigned> wrong{0};std::vector<std::thread> tasks;
+  for(unsigned j=0;j<16;++j) tasks.emplace_back([&]{
+      auto token=m.token();holders.fetch_add(1,std::memory_order_release);
+      while(!release.load(std::memory_order_acquire))std::this_thread::yield();
+      if(token.kernel()!=73)wrong.fetch_add(1);
+  });
+  while(holders.load(std::memory_order_acquire)!=16)std::this_thread::yield();
+  check(holders==16);
+  reject([&]{m.close_after_quiescence(busy);});
+  release.store(true,std::memory_order_release);
+  for(auto& t:tasks)t.join();
+  check(wrong==0);
+  loader.fail_unload=true;
+  reject([&]{m.close_after_quiescence(busy);});
+  loader.fail_unload=false;
+  m.close_after_quiescence(busy);
+  check(loader.unload>=3);
+ }
+ check(loader.load==3);
  std::cout<<"PASS "<<count<<" host-only verified PTX gate and mutation assertions\n";
 }
