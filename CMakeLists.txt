@@ -71,6 +71,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_g1_structural_buffer_loan_host_only
         PROPERTIES TIMEOUT 20)
 
+    # Independent source-free identity mutation tests for the physical
+    # receipt script: no actual PTX or CUDA claims are permitted here.
+    if(UNIX)
+        find_program(ATTO_GPU_G1_GIT NAMES git)
+        if(ATTO_GPU_G1_GIT)
+            add_test(NAME native_gpu_g1_receipt_toctou_negative_host_only
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DG1_NEGATIVE_GIT=${ATTO_GPU_G1_GIT}"
+                    "-DG1_NEGATIVE_GATE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_cuda_hardware_required.cmake"
+                    "-DG1_NEGATIVE_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-receipt-negative"
+                    "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_receipt_toctou_negative.cmake")
+            set_tests_properties(native_gpu_g1_receipt_toctou_negative_host_only
+                PROPERTIES TIMEOUT 30 LABELS "host-only;negative-mutation;not-device-evidence")
+        endif()
+    endif()
+
     # Actual NVPTX llc translation, not a physical device or .atto guest test.
     option(ATTO_GPU_G1_REQUIRE_NVPTX "Require an installed NVPTX-capable llc" OFF)
     find_program(ATTO_GPU_G1_LLC NAMES llc-21 llc-20 llc-19 llc-18 llc-17 llc)
