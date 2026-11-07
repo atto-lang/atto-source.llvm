@@ -71,6 +71,17 @@ audit_ir() {
         echo "FAIL: forged, mutated or contaminated inverted no-GC IR audit" >&2
         exit 1
     fi
+    # Return the exact SHA inspected by the auditor, not a later unrelated
+    # snapshot from after Clang or after native execution.
+    printf '%s\n' "$before"
+}
+
+require_digest() {
+    local file="${1:?checked file}" expected="${2:?expected sha}" label="${3:?label}"
+    if [[ "$(hash_file "$file")" != "$expected" ]]; then
+        echo "FAIL: $label changed after audited/compiled identity capture" >&2
+        exit 1
+    fi
 }
 # The real auditor must deny a tracing-GC symbol before any native guest
 # compilation; a stand-in that always prints SUCCESS cannot qualify parity.
@@ -116,7 +127,7 @@ PY
 for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto; do
     case_fixture_sha="$(hash_file "$fixtures/$fixture")" || exit 1
     "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
-    audit_ir "$tmp/guest.ll"
+    guest_ir_sha="$(audit_ir "$tmp/guest.ll")" || exit 1
     for required in '; typed MIR, experimental local i64 pair LLVM IR' \
         'load i1, ptr %alive' 'icmp ult i64' \
         'store volatile i1 false, ptr %alive' 'store volatile i64 0'; do
@@ -126,15 +137,19 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
         fi
     done
     for optimization in -O0 -O2; do
+        require_digest "$tmp/guest.ll" "$guest_ir_sha" "audited guest IR before clang"
         "$clang" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
+        require_digest "$tmp/guest.ll" "$guest_ir_sha" "audited guest IR after clang"
+        guest_binary_sha="$(hash_file "$tmp/guest")" || exit 1
         expect_native_exit_42 "$tmp/guest" "$fixture" "$optimization"
+        require_digest "$tmp/guest" "$guest_binary_sha" "executed guest image"
         if [[ "$(hash_file "$fixtures/$fixture")" != "$case_fixture_sha" ]]; then
             echo "FAIL: source fixture changed during native execution: $fixture" >&2
             exit 1
         fi
         printf 'DOP_NATIVE_CASE=%s OPT=%s SOURCE_SHA256=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
             "$fixture" "$optimization" "$case_fixture_sha" \
-            "$(hash_file "$tmp/guest.ll")" "$(hash_file "$tmp/guest")"
+            "$guest_ir_sha" "$guest_binary_sha"
     done
 done
 
@@ -156,17 +171,21 @@ trap_fixture_sha="$(hash_file "$contracts/removed-index-trap.atto")" || exit 1
 for canonical in swap-reuse.atto column-write-42.atto; do
     canonical_sha="$(hash_file "$contracts/$canonical")" || exit 1
     "$compiler" "$contracts/$canonical" > "$tmp/canonical.ll"
-    audit_ir "$tmp/canonical.ll"
+    canonical_ir_sha="$(audit_ir "$tmp/canonical.ll")" || exit 1
     for optimization in -O0 -O2; do
+        require_digest "$tmp/canonical.ll" "$canonical_ir_sha" "canonical IR before clang"
         "$clang" "$optimization" -x ir "$tmp/canonical.ll" -o "$tmp/canonical"
+        require_digest "$tmp/canonical.ll" "$canonical_ir_sha" "canonical IR after clang"
+        canonical_binary_sha="$(hash_file "$tmp/canonical")" || exit 1
         expect_native_exit_42 "$tmp/canonical" "$canonical" "$optimization"
+        require_digest "$tmp/canonical" "$canonical_binary_sha" "executed canonical guest"
         if [[ "$(hash_file "$contracts/$canonical")" != "$canonical_sha" ]]; then
             echo "FAIL: canonical source changed during native test" >&2
             exit 1
         fi
         printf 'DOP_NATIVE_CASE=%s OPT=%s SOURCE_SHA256=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
             "$canonical" "$optimization" "$canonical_sha" \
-            "$(hash_file "$tmp/canonical.ll")" "$(hash_file "$tmp/canonical")"
+            "$canonical_ir_sha" "$canonical_binary_sha"
     done
 done
 
@@ -175,7 +194,7 @@ done
 for bounds_source in "$fixtures/negative-two-column-out-of-bounds.atto" \
                      "$contracts/removed-index-trap.atto"; do
 "$compiler" "$bounds_source" > "$tmp/bounds.ll"
-audit_ir "$tmp/bounds.ll"
+bounds_ir_sha="$(audit_ir "$tmp/bounds.ll")" || exit 1
 if ! grep -Fq 'call void @llvm.trap()' "$tmp/bounds.ll" ||
    ! grep -Fq 'icmp ult i64' "$tmp/bounds.ll"; then
     echo "FAIL: production bounds guest emitted no guarded trap" >&2
@@ -184,7 +203,10 @@ fi
 # Real signal evidence at both optimization levels; shell exit 132/133 can
 # be forged by a normal return. Python checks SIGILL/SIGTRAP termination.
 for optimization in -O0 -O2; do
+    require_digest "$tmp/bounds.ll" "$bounds_ir_sha" "audited bounds IR before clang"
     "$clang" "$optimization" -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
+    require_digest "$tmp/bounds.ll" "$bounds_ir_sha" "audited bounds IR after clang"
+    bounds_binary_sha="$(hash_file "$tmp/bounds")" || exit 1
     python3 - "$tmp/bounds" <<'PY'
 import resource
 import signal
@@ -204,6 +226,9 @@ if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
         f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
     )
 PY
+    require_digest "$tmp/bounds" "$bounds_binary_sha" "executed bounds guest"
+    printf 'DOP_BOUNDS_CASE=%s OPT=%s IR_SHA256=%s BINARY_SHA256=%s SIGNAL=VERIFIED_SIGILL_OR_SIGTRAP\n' \
+        "${bounds_source##*/}" "$optimization" "$bounds_ir_sha" "$bounds_binary_sha"
 done
 done
 
