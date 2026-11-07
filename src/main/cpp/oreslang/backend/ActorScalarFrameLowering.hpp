@@ -124,14 +124,13 @@ struct Builder {
             || !fn.parameters[0].class_name.empty()
             || !fn.parameters[0].sum_type.empty()
             || !fn.parameters[0].generic_type.empty()
-            || !fn.statements.empty() && fn.statements.size() > 8
+            || fn.statements.size() > 8
             || fn.locals.size() > ORES_SCALAR_MAX_LOCAL_SLOTS
             || !fn.actor_spawns.empty() || !fn.actor_sends.empty()
             || !fn.actor_stops.empty() || !fn.actor_actions.empty()
             || !fn.actor_field_writes.empty() || !fn.source_tasks.empty()
             || !fn.future_pipelines.empty() || !fn.ready_await_actor.empty()
-            || !fn.done_await_actor.empty() || !fn.early_returns.empty() &&
-                fn.early_returns.size() > 8
+            || !fn.done_await_actor.empty() || fn.early_returns.size() > 8
             || fn.caught_throw_value || !fn.caught_throw_defers.empty()
             || !fn.result)
             deny("function graph is not a closed pure unary integer fnc subset");
@@ -302,7 +301,9 @@ compile_actor_scalar_graph(const Program& program, const ActorDecl& actor) {
         handler.result->kind != Expression::Kind::Call ||
         handler.result->arguments.size() != 1 ||
         handler.result->type_arguments_present ||
-        !handler.result->argument_names.empty() ||
+        (!handler.result->argument_names.empty() &&
+            (handler.result->argument_names.size() != 1 ||
+             !handler.result->argument_names[0].empty())) ||
         !handler.locals.empty() || !handler.actor_field_writes.empty() ||
         !handler.result->arguments[0] ||
         handler.result->arguments[0]->kind != Expression::Kind::Variable ||
