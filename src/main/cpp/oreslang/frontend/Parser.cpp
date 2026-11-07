@@ -5086,13 +5086,8 @@ private:
             // Parameter types, borrow modes and returns cannot select a slot.
             if (fn.name == "main" && functions.count("main"))
                 throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
-            // A guest f64 function is legal, but the OS process entry ABI
-            // remains an explicitly integer status. The generated C main
-            // must never treat an IEEE double as a signed exit code.
-            if (fn.name == "main" && (fn.return_type == ScalarType::F64 ||
-                    std::any_of(fn.parameters.begin(), fn.parameters.end(),
-                        [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
-                throw std::runtime_error("native main does not admit f64 process ABI");
+            // Target-aware compiler validation protects the actual process
+            // or wasm32 Core scalar entry ABI after source resolution.
             const bool has_f64_function_abi = fn.return_type == ScalarType::F64 ||
                 std::any_of(fn.parameters.begin(), fn.parameters.end(),
                     [](const Parameter& p) { return p.scalar_type == ScalarType::F64; });

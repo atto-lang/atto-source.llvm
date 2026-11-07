@@ -85,3 +85,12 @@ not part of CTest.
 No exact-head compiler, native guest or Java/LLVM comparison has executed in
 the current CI environment. The local compiler-native tests and matching
 Java semantics must be run on an approved runner before this draft is certified.
+
+## Target-specific wasm32 Core f64 entry ABI
+
+Native host `main` still cannot return f64. Only the explicit
+`--target=wasm32 --wasm-core-abi=f64` combination may admit zero-argument
+`main(): f64` and emit a `double @main()` IR entry. Ordinary wasm32
+compilation remains i64-only by default; the f64 flag is rejected on native
+and Cortex-M targets. The compiler driver and LLVM codegen enforce the same
+gate. This is not equivalent to an executed guest parity certificate.

@@ -808,7 +808,8 @@ llvm::Value* lower_unwidened(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
-                                  bool bounded_allocator_provider) {
+                                  bool bounded_allocator_provider,
+                                  bool wasm_core_f64_entry) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -824,6 +825,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
     }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    if (wasm_core_f64_entry && !wasm32_target)
+        throw std::runtime_error("wasm Core f64 entry requires wasm32 target");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -878,11 +881,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
-    if (main_it != source.functions.end() &&
-            (main_it->return_type == ScalarType::F64 ||
-                std::any_of(main_it->parameters.begin(), main_it->parameters.end(),
-                    [](const Parameter& p) { return p.scalar_type == ScalarType::F64; })))
-        throw std::runtime_error("native main does not admit f64 process ABI");
+    if (main_it != source.functions.end()) {
+        const bool returns_f64 = main_it->return_type == ScalarType::F64;
+        const bool f64_param = std::any_of(main_it->parameters.begin(), main_it->parameters.end(),
+            [](const Parameter& p) { return p.scalar_type == ScalarType::F64; });
+        if (f64_param || (returns_f64 && !wasm_core_f64_entry))
+            throw std::runtime_error("native main does not admit f64 process ABI");
+        if (wasm_core_f64_entry && (!returns_f64 || main_it->returns_void ||
+                !main_it->parameters.empty() || !main_it->return_class.empty() ||
+                !main_it->return_sum.empty()))
+            throw std::runtime_error("wasm Core f64 entry requires exact main(): f64");
+    } else if (wasm_core_f64_entry) {
+        throw std::runtime_error("wasm Core f64 entry requires exact main(): f64");
+    }
     bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false, record_arrays = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
