@@ -8,24 +8,41 @@ string(LENGTH "${G1_HEAD}" head_len)
 if(NOT head_len EQUAL 40 OR G1_HEAD MATCHES "[^0-9a-f]")
     message(FATAL_ERROR "GPU-G1-HW-002: exact 40-hex source head required")
 endif()
-execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" rev-parse HEAD
-    OUTPUT_VARIABLE actual_head OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_VARIABLE git_err RESULT_VARIABLE git_rc)
-if(NOT git_rc EQUAL 0 OR NOT actual_head STREQUAL G1_HEAD)
-    message(FATAL_ERROR "GPU-G1-HW-003: checkout differs from expected immutable PR head")
-endif()
-execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" status --porcelain --untracked-files=no
-    OUTPUT_VARIABLE dirty OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE dirty_rc)
-if(NOT dirty_rc EQUAL 0 OR NOT dirty STREQUAL "")
-    message(FATAL_ERROR "GPU-G1-HW-004: tracked source modifications invalidate the receipt")
-endif()
-execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" rev-parse HEAD^{tree}
-    OUTPUT_VARIABLE source_tree OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE tree_rc)
-if(NOT tree_rc EQUAL 0)
-    message(FATAL_ERROR "GPU-G1-HW-005: cannot bind source tree")
-endif()
+# All executable/file identities are provenance, not an attestation of a
+# trusted runner. Never report a local script run as independently certified.
+foreach(binary IN ITEMS G1_GIT G1_EMITTER G1_LLC G1_PROBE G1_PTX_GATE)
+    if(NOT EXISTS "${${binary}}" OR IS_DIRECTORY "${${binary}}")
+        message(FATAL_ERROR "GPU-G1-HW-008: executable or gate missing: ${binary}")
+    endif()
+endforeach()
+file(SHA256 "${G1_EMITTER}" emitter_sha)
+file(SHA256 "${G1_LLC}" llc_sha)
+file(SHA256 "${G1_PROBE}" probe_sha)
+file(SHA256 "${G1_PTX_GATE}" ptx_gate_sha)
+
+function(g1_require_immutable_checkout phase)
+    execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" rev-parse HEAD
+        OUTPUT_VARIABLE actual_head OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_VARIABLE git_err RESULT_VARIABLE git_rc)
+    if(NOT git_rc EQUAL 0 OR NOT actual_head STREQUAL G1_HEAD)
+        message(FATAL_ERROR "GPU-G1-HW-003: source head changed at ${phase}")
+    endif()
+    execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" status --porcelain --untracked-files=normal
+        OUTPUT_VARIABLE dirty OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE dirty_rc)
+    if(NOT dirty_rc EQUAL 0 OR NOT dirty STREQUAL "")
+        message(FATAL_ERROR "GPU-G1-HW-004: dirty tracked/untracked source at ${phase}")
+    endif()
+    execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" rev-parse HEAD^{tree}
+        OUTPUT_VARIABLE tree OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE tree_rc)
+    if(NOT tree_rc EQUAL 0 OR NOT tree MATCHES "^[0-9a-f]{40}$")
+        message(FATAL_ERROR "GPU-G1-HW-005: invalid Git tree identity at ${phase}")
+    endif()
+    set(source_tree "${tree}" PARENT_SCOPE)
+    set(actual_head "${actual_head}" PARENT_SCOPE)
+endfunction()
+g1_require_immutable_checkout("pre-PTX")
 execute_process(COMMAND "${CMAKE_COMMAND}"
     "-DG1_EMITTER=${G1_EMITTER}" "-DG1_LLC=${G1_LLC}"
     "-DG1_WORK=${G1_WORK}" -P "${G1_PTX_GATE}"
@@ -39,10 +56,12 @@ if(NOT EXISTS "${ptx}")
 endif()
 file(SHA256 "${ptx}" ptx_sha)
 file(SHA256 "${G1_WORK}/gpu-g1-saxpy.ll" ir_sha)
+g1_require_immutable_checkout("post-PTX")
 execute_process(COMMAND "${G1_PROBE}" "${ptx}"
     RESULT_VARIABLE device_rc OUTPUT_VARIABLE device_log ERROR_VARIABLE device_err)
 if(NOT device_rc EQUAL 0 OR NOT device_log MATCHES "GPU_G1_PHYSICAL_PASS 6/6")
     message(FATAL_ERROR "GPU-G1-HW-007: physical CUDA execution unavailable or incorrect: ${device_err}")
 endif()
+g1_require_immutable_checkout("post-CUDA")
 message(STATUS "${device_log}")
-message(STATUS "GPU_G1_DEVICE_RECEIPT source_head=${actual_head} source_tree=${source_tree} ir_sha256=${ir_sha} ptx_sha256=${ptx_sha} class=PHYSICAL_PTX_TYPED_IR_ONLY_NOT_ATTO_GUEST")
+message(STATUS "GPU_G1_DEVICE_RECEIPT source_head=${actual_head} source_tree=${source_tree} ir_sha256=${ir_sha} ptx_sha256=${ptx_sha} emitter_sha256=${emitter_sha} llc_sha256=${llc_sha} probe_sha256=${probe_sha} gate_sha256=${ptx_gate_sha} class=PHYSICAL_PTX_TYPED_IR_ONLY_NOT_ATTO_GUEST runner_trust=EXTERNAL_REVIEW_REQUIRED")
