@@ -32,8 +32,8 @@ bool terminal(oreslang::opencl::SaxpyProvider::State state) {
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 2 && argc != 3) {
-            std::cerr << "usage: opencl-saxpy-gpu-probe <source.atto> [compiler-device.cl]\n";
+        if (argc != 3) {
+            std::cerr << "usage: opencl-saxpy-gpu-probe <source.atto> <compiler-device.cl>\n";
             return 2;
         }
         std::ifstream source(argv[1], std::ios::binary);
@@ -46,10 +46,9 @@ int main(int argc, char** argv) {
         const std::string text((std::istreambuf_iterator<char>(source)),
                                std::istreambuf_iterator<char>());
         const auto kernel = oreslang::gpu_source_v1::compile_saxpy(text);
-        // The standalone strict hardware gate supplies a device artifact
-        // emitted by oreslang-llvmc. CTest may call this probe directly for
-        // explicit SKIP/physical-device enumeration; never conflate the two.
-        if (argc == 3) {
+        // Every hardware test binds this source to OpenCL code emitted by
+        // oreslang-llvmc. Direct calls cannot omit that evidence.
+        {
             std::ifstream emitted(argv[2], std::ios::binary);
             if (!emitted)
                 throw std::runtime_error("compiler-emitted OpenCL artifact unreadable");
