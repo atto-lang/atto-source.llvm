@@ -51,6 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/atto-gpu-saxpy-host
+          bash -n scripts/verify-atto-gpu-saxpy-hardware.sh
           clang++ --version
           clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
             -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
