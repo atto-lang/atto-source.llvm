@@ -647,9 +647,29 @@ public:
                 throw std::runtime_error("GPU-KERNEL-006: kernel lexical resource quota exceeded");
             const auto word = token_.text;
             if (word == "(" && priorKind == Kind::Identifier
-                    && prior1 != "if"
-                    && !(prior1 == "global_id"
-                         && prior2 == "." && prior3 == "gpu")) {
+                    && prior1 == "global_id"
+                    && prior2 == "." && prior3 == "gpu") {
+                // Narrow lexical admission: a single literal 0, 1 or 2,
+                // never a dynamic axis or a multi-argument host call. This
+                // remains source-only; the typed device builtin is not emitted.
+                advance();
+                if (token_.kind != Kind::Integer ||
+                    (token_.text != "0" && token_.text != "1" &&
+                     token_.text != "2")) {
+                    throw std::runtime_error(
+                        "GPU-KERNEL-006: gpu.global_id axis must be literal 0, 1 or 2");
+                }
+                advance();
+                if (token_.text != ")")
+                    throw std::runtime_error(
+                        "GPU-KERNEL-006: gpu.global_id requires one static axis");
+                advance();
+                prior1 = prior2 = prior3 = std::string_view{};
+                priorKind = Kind::End;
+                continue;
+            }
+            if (word == "(" && priorKind == Kind::Identifier
+                    && prior1 != "if") {
                 throw std::runtime_error(
                     "GPU-KERNEL-006: host/dynamic calls and unknown device intrinsics "
                     "are forbidden before typed device call resolution");
