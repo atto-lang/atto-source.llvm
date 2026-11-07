@@ -54,7 +54,7 @@ if grep -Eq 'llvm\.gcroot|llvm\.experimental\.gc\.statepoint|gc "' "$tmp/actor.l
 fi
 # A helper call reading mutable actor state outside the parameter-only
 # M3 bytecode contract must fail before LLVM IR can be published.
-sed 's/total = fib(n);/total = fib(total);/' "$source_file" > "$tmp/invalid-field.atto"
+sed 's/total = score(n);/total = score(total);/' "$source_file" > "$tmp/invalid-field.atto"
 if "$compiler" --experimental-actor-guest-stackless "$tmp/invalid-field.atto" \
     > "$tmp/invalid-field.ll" 2> "$tmp/invalid-field.err"; then
   echo "FAIL: actor state leaked into M3 scalar helper bytecode" >&2
