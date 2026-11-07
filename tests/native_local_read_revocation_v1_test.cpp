@@ -29,12 +29,15 @@ struct CloseOnCopy {
 struct PauseOnCopy {
     std::shared_ptr<std::atomic<bool>> entered;
     std::shared_ptr<std::atomic<bool>> release;
+    int payload = 7;
     PauseOnCopy(std::shared_ptr<std::atomic<bool>> a,
-                std::shared_ptr<std::atomic<bool>> b)
-        : entered(std::move(a)), release(std::move(b)) {}
+                std::shared_ptr<std::atomic<bool>> b,
+                int value = 7)
+        : entered(std::move(a)), release(std::move(b)), payload(value) {}
     PauseOnCopy(PauseOnCopy&&) noexcept = default;
     PauseOnCopy(const PauseOnCopy& other)
-        : entered(other.entered), release(other.release) {
+        : entered(other.entered), release(other.release),
+          payload(other.payload) {
         entered->store(true, std::memory_order_release);
         while (!release->load(std::memory_order_acquire))
             std::this_thread::yield();
@@ -100,6 +103,43 @@ void concurrent_close_during_copy_denied() {
     }
 }
 
+// Unlike close(), erase/replacement of a key does not revoke the logical
+// scope. A reader may legitimately observe the previous pinned cell (the
+// read linearizes when that cell is pinned), while the next read sees the
+// replacement. The old cell must remain alive throughout its host copy.
+void concurrent_replacement_preserves_pinned_snapshot() {
+    auto entered = std::make_shared<std::atomic<bool>>(false);
+    auto release = std::make_shared<std::atomic<bool>>(false);
+    for (int i = 0; i < 24; ++i) {
+        auto scope = TaskLocalScopeV1::open(parent_id);
+        assert(scope);
+        TaskLocalKeyV1<PauseOnCopy> key;
+        assert(scope->set(parent_id, key, PauseOnCopy(entered, release, 7)));
+        entered->store(false, std::memory_order_release);
+        release->store(false, std::memory_order_release);
+        std::atomic<int> observed{-1};
+        std::thread reader([&] {
+            auto snapshot = scope->get_copy(parent_id, key);
+            observed.store(snapshot ? snapshot->payload : -1,
+                           std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(8);
+        while (!entered->load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        assert(entered->load(std::memory_order_acquire));
+        assert(scope->erase(parent_id, key));
+        assert(scope->set(parent_id, key, PauseOnCopy(entered, release, 99)));
+        release->store(true, std::memory_order_release);
+        reader.join();
+        assert(observed.load(std::memory_order_acquire) == 7);
+        auto updated = scope->get_copy(parent_id, key);
+        assert(updated && updated->payload == 99);
+        assert(scope->close());
+    }
+}
+
 void stable_snapshot_still_works() {
     auto scope = TaskLocalScopeV1::open(parent_id);
     TaskLocalKeyV1<int> key;
@@ -115,6 +155,7 @@ int main() {
     actor_reentrant_close_denies_snapshot();
     task_parent_cancel_during_child_copy_denied();
     concurrent_close_during_copy_denied();
+    concurrent_replacement_preserves_pinned_snapshot();
     stable_snapshot_still_works();
     std::puts("LOCAL_CONTEXT_READ_REVOCATION_HOST_PASS");
 }
