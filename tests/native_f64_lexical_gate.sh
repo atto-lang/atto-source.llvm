@@ -290,16 +290,16 @@ negative f64_abi_borrow_parameter 'fnc unproven(borrow f64 value): f64 {
   return value;
 }
 pub fnc main(): int { return 42; }' 'native f64 parameter must be passed by value'
-positive widen_call_argument 'fnc pass_through(f64 value): f64 {
+positive f64_literal_call_argument 'fnc pass_through(f64 value): f64 {
   return value;
 }
 pub fnc main(): int {
-  val f64 result = pass_through(42);
+  val f64 result = pass_through(42.0);
   if result == 42.0; then return 42; fi
   return 86;
 }'
-positive widen_function_return 'fnc widened(f64 value): f64 {
-  return 42;
+positive f64_literal_function_return 'fnc widened(f64 value): f64 {
+  return 42.0;
 }
 pub fnc main(): int {
   if widened(1.0) == 42.0; then return 42; fi
@@ -310,20 +310,20 @@ pub fnc main(): int {
   val int result = wrong(42.0);
   return result;
 }' "argument 'value' requires int, got f64"
-# Java widens int to float at bindings, operands, comparisons and returns.
-positive widen_int_binding 'pub fnc main(): int {
-  val f64 value = 1;
+# Canonical language does not implicitly widen int to float.
+positive f64_literal_binding 'pub fnc main(): int {
+  val f64 value = 1.0;
   if value == 1.0; then return 42; fi
   return 86;
 }'
-positive widen_mixed_add 'pub fnc main(): int {
-  val f64 value = 0.5 + 1;
+positive same_type_f64_add 'pub fnc main(): int {
+  val f64 value = 0.5 + 1.0;
   if value == 1.5; then return 42; fi
   return 86;
 }'
-positive widen_mixed_compare 'pub fnc main(): int {
+positive same_type_f64_compare 'pub fnc main(): int {
   val f64 value = 0.5;
-  if value < 1; then return 42; fi
+  if value < 1.0; then return 42; fi
   return 86;
 }'
 negative f64_to_integer_return 'pub fnc main(): int {
@@ -347,8 +347,8 @@ negative int_division 'pub fnc main(): int {
   val int value = 7 / 2;
   return value;
 }' 'native scalar local initializer requires int, got f64'
-positive widen_mixed_division 'pub fnc main(): int {
-  val f64 value = 7.0 / 2;
+positive same_type_f64_division 'pub fnc main(): int {
+  val f64 value = 7.0 / 2.0;
   if value == 3.5; then return 42; fi
   return 86;
 }'
@@ -367,25 +367,25 @@ pub fnc main(): int {
   val f64 y = offset(bias: true, x: 42.0);
   return 42;
 }' "argument 'bias' requires f64, got bool"
-positive widen_guarded_return 'fnc guarded(f64 x): f64 {
-  if x > 0.0; then return 42; fi
+positive f64_literal_guarded_return 'fnc guarded(f64 x): f64 {
+  if x > 0.0; then return 42.0; fi
   return 42.0;
 }
 pub fnc main(): int {
   if guarded(1.0) == 42.0; then return 42; fi
   return 86;
 }'
-positive widen_scoped_initializer 'pub fnc main(): int {
+positive f64_literal_scoped_initializer 'pub fnc main(): int {
   if true; then
-    val f64 value = 1;
+    val f64 value = 1.0;
     return 42;
   fi
   return 86;
 }'
-positive widen_scoped_assignment 'pub fnc main(): int {
+positive f64_literal_scoped_assignment 'pub fnc main(): int {
   if true; then
     let f64 value = 1.5;
-    value = 2;
+    value = 2.0;
     if value == 2.0; then return 42; fi
   fi
   return 86;
@@ -395,6 +395,32 @@ positive widen_scoped_assignment 'pub fnc main(): int {
 negative removed_percent 'pub fnc main(): int { return 5 % 3; }' 'removed AttoLang source operator'
 negative removed_double_caret 'pub fnc main(): int { return true ^^ false; }' 'removed AttoLang source operator'
 negative removed_single_caret 'pub fnc main(): int { return 5 ^ 3; }' 'removed AttoLang source operator'
-[[ "$pass" -eq 42 && "$reject" -eq 14 ]] ||
+# Source must fail before IR whenever a numeric conversion is implicit.
+negative implicit_f64_binding 'pub fnc main(): int {
+  val f64 value = 1;
+  return 42;
+}' 'requires f64, got int'
+negative implicit_f64_argument 'fnc consume(f64 input): f64 { return input; }
+pub fnc main(): int { val f64 y = consume(1); return 42; }' 'requires f64, got int'
+negative implicit_f64_return 'fnc produce(): f64 { return 1; }
+pub fnc main(): int { return 42; }' 'requires f64, got int'
+negative implicit_f64_mixed_add 'pub fnc main(): int {
+  val f64 value = 1.0 + 2;
+  return 42;
+}' 'requires explicit numeric conversion'
+negative implicit_f64_mixed_equality 'pub fnc main(): int {
+  val bool value = 1 == 1.0;
+  return 42;
+}' 'requires explicit numeric conversion'
+negative implicit_f64_mixed_ternary 'pub fnc main(): int {
+  val f64 value = true ? 1 : 2.0;
+  return 42;
+}' 'requires explicit numeric conversion'
+negative implicit_f64_assignment 'pub fnc main(): int {
+  let f64 value = 1.0;
+  value = 2;
+  return 42;
+}' 'requires f64, got int'
+[[ "$pass" -eq 42 && "$reject" -eq 21 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=42; NEGATIVE_NO_IR_PASS=14"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=42; NEGATIVE_NO_IR_PASS=21"

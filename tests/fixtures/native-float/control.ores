@@ -24,7 +24,7 @@ fnc newton_sqrt(float v): float {
 
 pub routine main(): void {
   stdio.stdout.println(classify(-2.5));
-  stdio.stdout.println(classify(0));
+  stdio.stdout.println(classify(0.0));
   stdio.stdout.println(classify(0.25));
   stdio.stdout.println(newton_sqrt(2.0));
   stdio.stdout.println(newton_sqrt(1.0e10));

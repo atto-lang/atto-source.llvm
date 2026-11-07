@@ -108,6 +108,10 @@ fn main() {
         ("removed_percent", "let int a = 7; let int b = 2; stdio.stdout.println(a % b);", "removed AttoLang source operator"),
         ("removed_double_caret", "stdio.stdout.println(true ^^ false);", "removed AttoLang source operator"),
         ("removed_single_caret", "stdio.stdout.println(5 ^ 3);", "removed AttoLang source operator"),
+        ("implicit_float_binding", "val float x = 1; stdio.stdout.println(x);", "requires f64, got int"),
+        ("mixed_numeric_arithmetic", "stdio.stdout.println(1.0 + 1);", "requires explicit numeric conversion"),
+        ("mixed_numeric_equality", "stdio.stdout.println(1 == 1.0);", "requires explicit numeric conversion"),
+        ("mixed_numeric_ternary", "val float x = true ? 1 : 2.0; stdio.stdout.println(x);", "requires explicit numeric conversion"),
     ] {
         tools.reject(id, &main_with(body), diagnostic);
     }

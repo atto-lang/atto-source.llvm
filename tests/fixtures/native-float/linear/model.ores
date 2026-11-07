@@ -20,11 +20,11 @@ define module model as
   }
 
   pub fnc grad_w(borrow Params p, borrow Sample s): float {
-    return 2 * (predict(rt borrow p, s.x) - s.y) * s.x;
+    return 2.0 * (predict(rt borrow p, s.x) - s.y) * s.x;
   }
 
   pub fnc grad_b(borrow Params p, borrow Sample s): float {
-    return 2 * (predict(rt borrow p, s.x) - s.y);
+    return 2.0 * (predict(rt borrow p, s.x) - s.y);
   }
 
   pub fnc apply(borrow Params p, float gw, float gb, float rate): Params {

@@ -8,17 +8,18 @@ and method values, `Array<float>`, `Option<float>`, `Result<float, E>`.
 
 | Source | Behavior |
 |---|---|
-| `val float x = 1;`, float parameter, field, return or element given an int | Widens with `sitofp` |
-| `1 + 2.5`, `x < 1`, `c ? 1 : 2.5` | The int operand widens; the result is float |
+| `val float x = 1;`, float parameter, field, return or element given an int | Rejected: no implicit conversion |
+| `1 + 2.5`, `x < 1`, `c ? 1 : 2.5` | Rejected: mixed numeric operands require explicit conversion |
 | `1 / 2` | Real division, `0.5`. `1 / 0` is `Infinity`; the result never assigns to `int` |
 | `5.5 % 2`, `5 % 3`, `^`, `^^` | Removed source operators; lexical error before IR |
-| `2 == 2.0` | Exact: `2^53 + 1` does not equal the double it rounds to |
+| `2 == 2.0` | Rejected: mixed int/f64 equality |
 | `1.0e400`, `1.0e-400`, `1_000.5` | Infinity, zero and `1000.5`, as Java's lexer rounds them |
 | `<`, `==` with NaN or signed zero | IEEE `fcmp`. See the divergence below |
 | `println(x)`, `write(x)` | `java.lang.Double.toString` text: `1.0E10`, `9.9E-4`, `-0.0`, `NaN` |
 
-Nothing narrows implicitly. `val int x = 1.5` and `val int x = 1 / 2` are compile
-errors on both backends.
+No numeric type converts implicitly. `val float x = 1`, `val int x = 1.5`
+and `val int x = 1 / 2` are rejected. Integer `/` itself is defined as
+real division; its result is not an implicit assignment conversion.
 
 Storage is the checked static type. Stack slots and call ABIs use LLVM `double`.
 Record, array and sum slots are 8-byte cells that hold raw binary64 bits, and every
@@ -65,11 +66,10 @@ has fully evaluated. Classes with mutable fields or arrays stay non-replaceable.
    `NaN > 1.0` and `-0.0 < 0.0` are `true`. Its `NaN == NaN` depends on object
    identity. LLVM follows IEEE. Java PR #1033, open, hardens toward IEEE, and the
    OresLLM guests assume it, so this is treated as a Java bug.
-2. **An int in a float slot.** Java leaves the runtime `Long` in place:
-   `val float w = 3; println(w)` prints `3`, and `true ? 1 : 2.5` prints `1`. LLVM
-   prints `3.0` and `1.0`. Arithmetic that mixes in a real double agrees on both.
-3. **Very large exact comparison.** Java compares `int == float` through
-   `Double.toString`, so `2^62 == 2^62.0` is `false` there. LLVM compares exactly.
+2. **Java legacy numeric admission.** The native compiler rejects mixed numeric
+   assignments/expressions now; Java may need independent tightening to match.
+3. **Mixed int/f64 equality.** Rejected on LLVM pending a canonical explicit
+   conversion contract; Java historically used a divergent comparison.
 
 ## Evidence
 
@@ -80,12 +80,8 @@ cases. `Double.toString` formatting was separately compared with the JVM over
 2,000,000 values, including subnormals and exact powers of two; that comparison is
 not part of CTest.
 
-## Review blocker — implicit numeric conversions
+## Remaining verification gate
 
-The current draft still permits implicit `int`→`float` conversion in the
-parser and scalar type checker. This contradicts the canonical AttoLang
-contract and is **NOT_CERTIFIED**. The remaining migration must reject those
-coercions in bindings, arguments, fields, arrays, returns, conditional arms,
-comparisons and mixed arithmetic, while rewriting training guests to use
-approved explicit conversions or same-type constants. No native numeric
-parity is claimed pending an independently reviewed compiler-backed run.
+No exact-head compiler, native guest or Java/LLVM comparison has executed in
+the current CI environment. The local compiler-native tests and matching
+Java semantics must be run on an approved runner before this draft is certified.
