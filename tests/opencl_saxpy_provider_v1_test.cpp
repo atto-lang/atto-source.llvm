@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -47,6 +48,10 @@ struct FakeApi final : SaxpyApi {
     bool physical_quiescent = false;
     bool fail_alloc_once = false;
     bool fail_release_event_once = false;
+    bool fail_release_buffer_once = false;
+    bool alias_third_allocation = false;
+    std::uint32_t allocation_count = 0;
+    Buffer* second_allocation = nullptr;
     bool throw_during_kernel_enqueue = false;
     bool return_null_upload_event = false;
     bool device_lost = false;
@@ -69,6 +74,9 @@ struct FakeApi final : SaxpyApi {
         ++released_programs;
     }
     Handle allocate(std::uint64_t bytes) override {
+        ++allocation_count;
+        if (alias_third_allocation && allocation_count == 3)
+            return second_allocation; // invalid driver provenance injection
         if (fail_alloc_once) {
             fail_alloc_once = false;
             throw std::runtime_error("injected allocation failure");
@@ -76,9 +84,14 @@ struct FakeApi final : SaxpyApi {
         auto* buffer = new Buffer{std::vector<unsigned char>(
             static_cast<std::size_t>(bytes), 0)};
         live_buffers.insert(buffer);
+        if (allocation_count == 2) second_allocation = buffer;
         return buffer;
     }
     void release_buffer(Handle handle) override {
+        if (fail_release_buffer_once) {
+            fail_release_buffer_once = false;
+            throw std::runtime_error("injected physical memory release failure");
+        }
         auto* buffer = static_cast<Buffer*>(handle);
         if (!live_buffers.erase(buffer))
             throw std::logic_error("double release or foreign physical buffer");
@@ -323,6 +336,78 @@ int main() {
         check(op->state() == SaxpyProvider::State::Failed &&
               provider.closed_for_release() && api.released_buffers == 3,
               "retry safely retires exact physical handles");
+    }
+
+    // A driver may return null after submitting a command; the command
+    // remains quarantined until an authenticated queue finish.
+    {
+        FakeApi api;
+        api.return_null_upload_event = true;
+        auto provider = make_provider(api);
+        reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
+        check(!provider.closed_for_release() && api.released_buffers == 0 &&
+              provider.usage().resident_bytes == 48,
+              "null native event is ambiguous hardware submission");
+        reject([&] { provider.recover_quarantined(); });
+        api.physical_quiescent = true;
+        provider.recover_quarantined();
+        check(provider.closed_for_release() && api.released_buffers == 3,
+              "only trusted clFinish may release lost-event buffers");
+    }
+
+    // A malformed adapter may return the same physical allocation twice.
+    // Reject it before enqueue; recover safely without double-release.
+    {
+        FakeApi api;
+        api.alias_third_allocation = true;
+        auto provider = make_provider(api);
+        reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
+        check(api.enqueued == 0 && api.released_buffers == 0,
+              "aliased physical buffers quarantined before submission");
+        api.physical_quiescent = true;
+        provider.recover_quarantined();
+        check(api.released_buffers == 2 && provider.closed_for_release(),
+              "aliased physical handle must never release twice");
+    }
+
+    // A failed final physical release is retryable, without publishing the
+    // output until all native handles have really been retired.
+    {
+        FakeApi api;
+        api.fail_release_buffer_once = true;
+        auto provider = make_provider(api);
+        auto op = provider.begin(artifact, x, y, 2.0f);
+        finish(provider, *op);
+        check(op->state() == SaxpyProvider::State::ReleaseFailed &&
+              provider.usage().resident_bytes == 48,
+              "release failure retains three-buffer quota");
+        reject([&] { (void)op->result(); });
+        provider.retry_release();
+        check(op->state() == SaxpyProvider::State::Succeeded &&
+              op->result() == std::vector<float>({7, 10, 13, 16}) &&
+              provider.closed_for_release(),
+              "retry completes original device result only after physical release");
+    }
+
+    // Cancellation during kernel execution must not enqueue a download
+    // until the actual kernel event is acknowledged.
+    {
+        FakeApi api;
+        auto provider = make_provider(api);
+        auto op = provider.begin(artifact, x, y, 2.0f);
+        check(provider.poll(*op) == SaxpyProvider::State::UploadY,
+              "upload X complete");
+        check(provider.poll(*op) == SaxpyProvider::State::Kernel,
+              "upload Y complete");
+        api.auto_complete = false;
+        provider.request_cancel(*op);
+        check(provider.poll(*op) == SaxpyProvider::State::Kernel &&
+              api.released_buffers == 0,
+              "pending device kernel holds all three buffers");
+        api.auto_complete = true;
+        check(provider.poll(*op) == SaxpyProvider::State::Cancelled &&
+              api.enqueued == 3 && api.released_buffers == 3,
+              "kernel cancellation drains without launching download");
     }
 
     // Forged/unsupported device sources, zeros, nonfinite values and
