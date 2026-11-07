@@ -49,9 +49,10 @@ using State = std::map<std::string, PlaceState>;
 
 struct Operation {
     enum class Kind {
-        Initialize, Read, Move, Drop, DropIfOwned,
+        Initialize, Reinitialize, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
-        ReleaseShared, ReleaseExclusive
+        UseSharedLoan, UseExclusiveLoan, ReleaseShared, ReleaseExclusive,
+        Suspend
     };
     Kind kind;
     std::string place;
@@ -119,6 +120,15 @@ inline void require_owned(const std::string& key, const PlaceState& value) {
 inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
+    if (op.kind == Operation::Kind::Suspend) {
+        // A carrier/task suspension cannot carry an unproved lexical loan
+        // across resumed execution. Future ownership-safe suspension must
+        // identify a surviving owner/region in typed MIR, not skip this gate.
+        for (const auto& item : state)
+            if (item.second.shared_loans || item.second.exclusive_loan)
+                violation(item.first, "unproven loan survives suspension");
+        return;
+    }
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -152,6 +162,15 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
         case Operation::Kind::Initialize:
             if (value.possible != kUninitialized || value.shared_loans || value.exclusive_loan)
                 violation(op.place, "initializing a live or ambiguous owner");
+            value.possible = kOwned;
+            return;
+        case Operation::Kind::Reinitialize:
+            // One explicitly moved field may be restored. Do not promote
+            // MaybeMoved/unknown branch joins to definitely initialized.
+            // Constructor lowering must still produce the field write.
+            if (value.possible != kMoved || value.shared_loans ||
+                    value.exclusive_loan)
+                violation(op.place, "reinitialization requires a definitely moved, unborrowed place");
             value.possible = kOwned;
             return;
         case Operation::Kind::Read:
@@ -196,6 +215,16 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             value.exclusive_loan = true;
             value.exclusive_loan_id = op.loan_id.value_or(site_id);
             return;
+        case Operation::Kind::UseSharedLoan:
+            if (!op.loan_id || !*op.loan_id || value.possible != kOwned ||
+                    !value.shared_loan_ids.count(*op.loan_id))
+                violation(op.place, "shared loan use lacks live compiler provenance");
+            return;
+        case Operation::Kind::UseExclusiveLoan:
+            if (!op.loan_id || !*op.loan_id || value.possible != kOwned ||
+                    !value.exclusive_loan || value.exclusive_loan_id != op.loan_id)
+                violation(op.place, "exclusive loan use lacks live compiler provenance");
+            return;
         case Operation::Kind::ReleaseShared: {
             if (!value.shared_loans) violation(op.place, "unmatched shared loan release");
             if (!op.loan_id && value.shared_loan_ids.size() != 1)
@@ -215,6 +244,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
+        case Operation::Kind::Suspend:
             break;
     }
     violation(op.place, "invalid CFG operation");
