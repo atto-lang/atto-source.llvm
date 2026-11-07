@@ -86,12 +86,18 @@ public:
         Module module;
         Kernel kernel;
         bool loaded;
+        Loader* loader;
     };
     class KernelToken final {
         friend class GpuG1VerifiedPtxModule;
         std::shared_ptr<State> state_;
         explicit KernelToken(std::shared_ptr<State> state):state_(std::move(state)){}
     public:
+        const Loader& owning_loader() const {
+            if (!state_ || !state_->loaded || !state_->loader)
+                throw std::invalid_argument("GPU-G1-MODULE-005: stale loader token");
+            return *state_->loader;
+        }
         Kernel kernel() const {
             if (!state_ || !state_->loaded)
                 throw std::invalid_argument("GPU-G1-MODULE-005: stale kernel token");
@@ -107,7 +113,7 @@ public:
         Module m = loader_.load_ptx(terminated);
         try {
             Kernel k = loader_.resolve_kernel(m, GpuG1PtxGate::sole_entry);
-            state_ = std::make_shared<State>(State{m,k,true});
+            state_ = std::make_shared<State>(State{m,k,true,&loader_});
         } catch (...) {
             try { loader_.unload_module(m); }
             catch (...) { /* fail-closed: caller must quarantine CUDA context */ }
