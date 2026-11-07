@@ -39,7 +39,8 @@ class NativeRequestLifecycleRegistryV1 final {
         const OresNativeActorRef actor;
         RequestLocalStopGroupV1 group;
         std::atomic<bool> notified{false};
-        std::atomic<bool> processed{false};
+        std::atomic<bool> claimed{false};
+        std::atomic<bool> finished{false};
         std::atomic<bool> cleaned{false};
     };
 
@@ -122,7 +123,7 @@ public:
             if (same_actor(entry->actor, actor)) {
                 const Entry* target = entry.get();
                 return changed_.wait_for(lock, timeout, [&] {
-                    return target->processed.load(std::memory_order_acquire);
+                    return target->finished.load(std::memory_order_acquire);
                 }) && target->cleaned.load(std::memory_order_acquire);
             }
         return false;
@@ -155,8 +156,8 @@ private:
                 changed_.wait_for(lock, std::chrono::milliseconds(10));
                 for (const auto& entry : entries_)
                     if (entry->notified.load(std::memory_order_acquire) &&
-                        !entry->processed.load(std::memory_order_relaxed)) {
-                        entry->processed.store(true, std::memory_order_relaxed);
+                        !entry->claimed.load(std::memory_order_relaxed)) {
+                        entry->claimed.store(true, std::memory_order_relaxed);
                         selected = entry.get();
                         break;
                     }
@@ -170,6 +171,7 @@ private:
                 success = false; // never terminate the CONTROL worker
             }
             selected->cleaned.store(success, std::memory_order_release);
+            selected->finished.store(true, std::memory_order_release);
             changed_.notify_all();
         }
     }
