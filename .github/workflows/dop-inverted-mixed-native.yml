@@ -5,6 +5,7 @@ on:
     branches:
       - hardening/dop-heterogeneous-physical-soa-v1-20261106
       - feature/dop-mixed-scalar-guest-v1-20261106
+      - reconcile/dop-mixed-two-three-scalar-20261106
       - parity/inverted-production-main-i64-20261104
       - main
     paths:
