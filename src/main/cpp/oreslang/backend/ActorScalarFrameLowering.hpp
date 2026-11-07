@@ -270,6 +270,8 @@ struct Builder {
     }
 
     ActorScalarCompiledProgram compile(const std::string& root) {
+        if (!program.imports.empty())
+            deny("source module imports are not admitted into actor typed frames");
         out.root = enroll(root);
         // All reachable callables are validated before the first instruction
         // is emitted: no partial graph can fall back to native recursion.
