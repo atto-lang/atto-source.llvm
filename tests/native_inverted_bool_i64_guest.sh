@@ -88,6 +88,7 @@ import resource
 import signal
 import subprocess
 import sys
+import tempfile
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 guest = pathlib.Path(sys.argv[1])
 if guest.is_symlink() or not guest.is_file() or not os.access(guest, os.X_OK):
@@ -104,15 +105,21 @@ else:
 if magic not in allowed:
     raise SystemExit("FAIL: guest is not a native ELF/Mach-O executable")
 before = hashlib.sha256(guest.read_bytes()).hexdigest()
+def limits():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (4096, 4096))
+    resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
 try:
-    result = subprocess.run([str(guest)], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=15, check=False)
+    # Never capture unbounded guest output in Python process memory.
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        result = subprocess.run([str(guest)], stdout=out, stderr=err,
+                                timeout=15, check=False, preexec_fn=limits)
+        if out.tell() or err.tell():
+            raise SystemExit("FAIL: native guest unexpectedly wrote stdout/stderr")
 except (OSError, subprocess.TimeoutExpired) as exc:
     raise SystemExit(f"FAIL: guest not executed {sys.argv[3]} {sys.argv[4]}: {exc}")
 if hashlib.sha256(guest.read_bytes()).hexdigest() != before:
     raise SystemExit("FAIL: native guest executable changed while running")
-if result.stdout or result.stderr:
-    raise SystemExit("FAIL: native guest unexpectedly wrote stdout/stderr")
 if sys.argv[2] == "exit42":
     if result.returncode != 42:
         raise SystemExit(f"FAIL: {sys.argv[3]} {sys.argv[4]} exited {result.returncode}, expected 42")
