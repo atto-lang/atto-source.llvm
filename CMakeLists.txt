@@ -203,6 +203,19 @@ if(BUILD_TESTING)
         ${ORE_LLVM_LIBS})
     add_test(NAME native_ownership_ir_ssa_store_census_30
         COMMAND oreslang-native-ir-ssa-census-30-test)
+    # Real LLVM module live readback: erased StoreInst addresses must never
+    # be dereferenced by a stale advisory ownership receipt.
+    add_executable(oreslang-native-ir-store-live-readback-14-test
+        tests/native_ir_store_live_readback_14_test.cpp)
+    target_include_directories(oreslang-native-ir-store-live-readback-14-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-ir-store-live-readback-14-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-ir-store-live-readback-14-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    add_test(NAME native_ownership_ir_store_live_readback_14
+        COMMAND oreslang-native-ir-store-live-readback-14-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
