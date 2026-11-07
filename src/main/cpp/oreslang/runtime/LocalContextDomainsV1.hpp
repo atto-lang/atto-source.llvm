@@ -286,14 +286,17 @@ public:
             if ((found == table.end() && table.size() >= Slots::max_slots) ||
                 payload > Slots::max_bytes - (state.used_bytes - previous))
                 return false;
+            std::shared_ptr<LocalCellBaseV1> retired;
             if (found == table.end()) {
                 table.emplace(id_, std::move(incoming));
             } else {
-                auto retired = std::move(found->second);
+                retired = std::move(found->second);
                 found->second = std::move(incoming);
-                retired.reset();
             }
+            // Commit accounting BEFORE a replaced value's destructor can
+            // reenter this same physical TLS store.
             state.used_bytes = state.used_bytes - previous + payload;
+            retired.reset();
             return true;
         }
         std::optional<T> get_copy() const {
