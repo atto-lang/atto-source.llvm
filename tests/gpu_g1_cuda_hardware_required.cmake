@@ -36,7 +36,8 @@ function(g1_require_immutable_checkout phase)
     execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" rev-parse HEAD^{tree}
         OUTPUT_VARIABLE tree OUTPUT_STRIP_TRAILING_WHITESPACE
         RESULT_VARIABLE tree_rc)
-    if(NOT tree_rc EQUAL 0 OR NOT tree MATCHES "^[0-9a-f]{40}$")
+    string(LENGTH "${tree}" tree_len)
+    if(NOT tree_rc EQUAL 0 OR NOT tree_len EQUAL 40 OR tree MATCHES "[^0-9a-f]")
         message(FATAL_ERROR "GPU-G1-HW-005: invalid Git tree identity at ${phase}")
     endif()
     set(source_tree "${tree}" PARENT_SCOPE)
