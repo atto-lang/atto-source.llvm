@@ -47,7 +47,9 @@ public:
                 place.size() > 256 || place.front() == '.' ||
                 place.back() == '.' || place.find("..") != std::string::npos ||
                 (reinitialize_write_id &&
-                    (reinitialize_write_id > 4096 ||
+                    (((reinitialize_write_id >> 63) != 1) ||
+                     (reinitialize_write_id & ~(std::uint64_t{1} << 63)) == 0 ||
+                     (reinitialize_write_id & ~(std::uint64_t{1} << 63)) > 4096 ||
                      kind != SourceFieldWriteKind::Direct)) ||
                 emitted.getFunction() != &function ||
                 !emitted.getPointerOperand() || !emitted.getValueOperand())
@@ -128,7 +130,11 @@ public:
                     link.place.front() == '.' || link.place.back() == '.' ||
                     link.place.find("..") != std::string::npos ||
                     (link.reinitialize_write_id &&
-                        (link.reinitialize_write_id > 4096 ||
+                        ((link.reinitialize_write_id >> 63) != 1 ||
+                         (link.reinitialize_write_id &
+                             ~(std::uint64_t{1} << 63)) == 0 ||
+                         (link.reinitialize_write_id &
+                             ~(std::uint64_t{1} << 63)) > 4096 ||
                          link.kind != SourceFieldWriteKind::Direct ||
                          !restoration_tickets.insert(
                              link.reinitialize_write_id).second)) ||
