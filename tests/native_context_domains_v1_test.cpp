@@ -252,6 +252,45 @@ void test_bounds_and_close_race() {
         assert(!race->get_copy(actor_a, k));
     }
 }
+
+void test_measured_quota_and_unicode() {
+    // Logical TaskLocal replacement must be atomic for value and quota.
+    auto task = TaskLocalScopeV1::open(actor_a);
+    TaskLocalKeyV1<std::string> a, b, c;
+    assert(task->set(actor_a, a, std::string(4096, 'a')));
+    assert(task->set(actor_a, b, std::string(4096, 'b')));
+    assert(!task->set(actor_a, c, std::string("overflow")));
+    assert(!task->set(actor_a, a, std::string(4097, 'x')));
+    assert(task->get_copy(actor_a, a) == std::string(4096, 'a'));
+    assert(task->set(actor_a, a, std::string("x")));
+    assert(task->set(actor_a, c, std::string(4095, 'c')));
+    assert(!task->set(actor_a, c, std::string("\xed\xa0\x80", 3)));
+    assert(task->get_copy(actor_a, c) == std::string(4095, 'c'));
+    assert(task->erase(actor_a, b));
+    assert(task->set(actor_a, c, std::string(8191, 'd')));
+    assert(task->close());
+    assert(!task->set(actor_a, a, std::string("after close")));
+
+    // ActorLocal is logically separate from task/physical TLS.
+    auto actor = ActorLocalScopeV1::open(actor_a);
+    ActorLocalKeyV1<std::string> actor_key;
+    assert(actor->set(actor_a, actor_key, std::string(8192, 'q')));
+    assert(!actor->set(actor_a, actor_key, std::string(8193, 'q')));
+    assert(actor->get_copy(actor_a, actor_key) == std::string(8192, 'q'));
+    actor->close();
+
+    // Physical TLS has its own per-thread quota, not inherited TaskLocal.
+    ThreadLocalKeyV1<std::string> tls_a, tls_b;
+    assert(tls_a.set(std::string(8192, 't')));
+    assert(!tls_b.set(std::string("no capacity")));
+    assert(tls_a.get_copy() == std::string(8192, 't'));
+    assert(!tls_a.set(std::string("\xc0\xaf", 2))); // overlong UTF-8
+    assert(tls_a.get_copy() == std::string(8192, 't'));
+    assert(tls_a.erase());
+    assert(tls_b.set(std::string("free")));
+    assert(tls_b.erase());
+}
+
 } // namespace
 
 int main() {
@@ -260,5 +299,6 @@ int main() {
     test_reentrant_physical_tls_thread_exit();
     test_reentrant_copy_safe_retirement();
     test_bounds_and_close_race();
+    test_measured_quota_and_unicode();
     std::puts("LOCAL_CONTEXT_DOMAINS_V1_HOST_PASS");
 }
