@@ -46,7 +46,8 @@ public:
     // callback and be explicitly joined BEFORE scheduler destruction.
     static Ptr create(OresNativeActorScheduler* scheduler,
                       std::size_t actor_slots) {
-        if (!scheduler || actor_slots == 0 || actor_slots > max_actor_slots)
+        if (!scheduler || actor_slots == 0 || actor_slots > max_actor_slots ||
+            actor_slots != ores_native_actor_scheduler_actor_capacity_v1(scheduler))
             return {};
         Ptr registry(new RequestLocalActorTerminationRegistryV1(
             scheduler, actor_slots));
@@ -101,6 +102,53 @@ public:
         // even after a failed admission. This is deliberate fail-closed
         // identity handling for stale handles.
         return committed && request->active();
+    }
+
+    // Host ingress must never expose the raw newly opened request to guest
+    // code before scheduler-serialized registry admission succeeds. A failed
+    // registration closes the provisional scope rather than returning a
+    // usable untracked object. The caller is a trusted transport issuer:
+    // identity fields are NOT authenticated merely by this C++ API.
+    RequestContextLocalV1::Ptr admit_from_trusted_ingress(
+            RequestIdentityV1 identity,
+            TaskCancellation::Ptr cancellation) {
+        if (!cancellation || !identity.valid() ||
+            admissions_sealed_.load(std::memory_order_acquire))
+            return {};
+        auto scope = RequestContextLocalV1::open(
+            identity, std::move(cancellation));
+        if (!scope) return {};
+        if (!admit(identity.actor, scope)) {
+            scope->close();
+            return {};
+        }
+        return scope;
+    }
+
+    // All trusted supervisor causes use the same scheduler STOP observer.
+    // Admission/termination linearize under the scheduler mutex. Returns
+    // false for stale or already terminated refs; never blocks for DONE.
+    // Panic/cancel/restart/hot-reload MUST abandon queued DATA. Actual
+    // generation revival/migration is not implemented by this host facade.
+    enum class SupervisorCause {
+        normal_stop,
+        cancellation,
+        panic,
+        supervisor_shutdown,
+        restart,
+        hot_reload
+    };
+
+    bool signal_supervisor_termination(
+            OresNativeActorRef actor, SupervisorCause cause) {
+        if (!actor.scheduler_domain || !actor.generation ||
+            actor.actor_slot >= actor_slots_ ||
+            admissions_sealed_.load(std::memory_order_acquire))
+            return false;
+        const bool graceful = cause == SupervisorCause::normal_stop;
+        return graceful
+            ? ores_native_actor_scheduler_stop(scheduler_, actor) != 0
+            : ores_native_actor_scheduler_stop_sealed(scheduler_, actor) != 0;
     }
 
     // CONTROL only; never on any scheduler carrier. Returns false for an
