@@ -124,8 +124,9 @@ if(BUILD_TESTING)
         # not the prebuilt typed-IR emitter, to support guest-source claims.
         add_test(NAME native_gpu_g1_llc_ptx_from_restricted_atto
             COMMAND "${CMAKE_COMMAND}"
-                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-atto-saxpy-llvmc>"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-llvmc>"
                 "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
+                "-DG1_SOURCE_FLAG=--gpu-g1-kernel-ir"
                 "-DG1_REQUIRE_ATTO_SOURCE=ON"
                 "-DG1_LLC=${ATTO_GPU_G1_LLC}"
                 "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-source-ptx-proof"
@@ -159,8 +160,9 @@ if(BUILD_TESTING)
                 "-DG1_GIT=${GIT_EXECUTABLE}"
                 "-DG1_REPO=${CMAKE_CURRENT_SOURCE_DIR}"
                 "-DG1_HEAD=${ATTO_GPU_G1_EXACT_HEAD_SHA}"
-                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-atto-saxpy-llvmc>"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-llvmc>"
                 "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
+                "-DG1_SOURCE_FLAG=--gpu-g1-kernel-ir"
                 "-DG1_LLC=${ATTO_GPU_G1_LLC}"
                 "-DG1_PROBE=$<TARGET_FILE:oreslang-gpu-g1-cuda-physical-probe>"
                 "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-physical-proof"
@@ -186,6 +188,7 @@ if(BUILD_TESTING)
         add_test(NAME native_gpu_g1_atto_source_to_llvm_ir_clang_host_only
             COMMAND "${CMAKE_COMMAND}"
                 "-DG1_COMPILER=$<TARGET_FILE:oreslang-gpu-g1-atto-saxpy-llvmc>"
+                "-DG1_MAIN_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
                 "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
                 "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
                 "-DG1_CLANG=${ATTO_GPU_G1_CLANG}"
