@@ -266,7 +266,7 @@ test('51 independently executed Node source-oracle run is mandatory',()=>{
 test('52 node source oracle fifty-pass receipt cannot be forged',()=>{
   denied(workflow.replace(
     "grep -Eq '^# pass 50$' /tmp/atto-source-cfg-node-50.tap",
-    "grep -Eq '^# pass 0$' /tmp/atto-source-cfg-node-50.tap"),
+    ()=>"grep -Eq '^# pass 0$' /tmp/atto-source-cfg-node-50.tap"),
     'MISSING_INDEPENDENT_NODE_HOST_ORACLES');
 });
 test('53 source oracle file must retain exact-head PR path trigger',()=>{
