@@ -73,6 +73,19 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-gpu-g1-atto-source-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    # Typed source-alpha-renaming and 71 adversarial source mutations.
+    # Independently compiled and run; no CUDA/PTX hardware claim.
+    add_executable(oreslang-gpu-g1-typed-frontend-matrix-test
+        tests/gpu_g1_typed_frontend_matrix_test.cpp)
+    target_include_directories(oreslang-gpu-g1-typed-frontend-matrix-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-typed-frontend-matrix-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_typed_frontend_alpha_rename_negative_host_only
+        COMMAND oreslang-gpu-g1-typed-frontend-matrix-test)
+    set_tests_properties(native_gpu_g1_typed_frontend_alpha_rename_negative_host_only
+        PROPERTIES TIMEOUT 20 LABELS "restricted-atto;negative-mutation;host-only")
+
     add_test(NAME native_gpu_g1_restricted_atto_source_host_only
         COMMAND oreslang-gpu-g1-atto-source-test)
     set_tests_properties(native_gpu_g1_restricted_atto_source_host_only
