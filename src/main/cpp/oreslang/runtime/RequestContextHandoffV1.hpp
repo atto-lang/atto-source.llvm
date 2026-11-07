@@ -179,16 +179,36 @@ public:
         if (!request_local_current_actor_turn_v1(
                 scheduler_, sender, source)) return std::nullopt;
 
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (std::size_t i = 0; i < slots_.size(); ++i) {
-            Slot& s = slots_[i];
-            if (s.envelope) continue;
-            if (++s.generation > kMaxGeneration) s.generation = 1;
-            s.envelope = std::make_unique<Envelope>(std::move(env));
-            ++pending_;
-            return (s.generation << kSlotBits) | static_cast<std::uint64_t>(i);
+        // Allocate envelope outside both cancellation and scheduler locks.
+        // The final table insertion is bounded: no heap allocation, no
+        // guest callback and no value destruction under the lifecycle gate.
+        auto prepared = std::make_unique<Envelope>(std::move(env));
+        std::optional<std::uint64_t> published;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            source.cancellation_->with_active_authority([&] {
+                auto commit = [&]() -> bool {
+                    for (std::size_t i = 0; i < slots_.size(); ++i) {
+                        Slot& slot = slots_[i];
+                        if (slot.envelope) continue;
+                        if (++slot.generation > kMaxGeneration)
+                            slot.generation = 1;
+                        slot.envelope = std::move(prepared);
+                        ++pending_;
+                        published = (slot.generation << kSlotBits) |
+                                    static_cast<std::uint64_t>(i);
+                        return true;
+                    }
+                    return false;
+                };
+                return ores_native_actor_scheduler_commit_if_running_v1(
+                    scheduler_, sender,
+                    [](void* p) -> int {
+                        return (*static_cast<decltype(commit)*>(p))() ? 1 : 0;
+                    }, &commit) != 0;
+            });
         }
-        return std::nullopt;  // bounded: table full
+        return published; // no ticket if STOP or cancellation won
     }
 
     // Recipient side. Must run on `recipient`'s authenticated turn.
