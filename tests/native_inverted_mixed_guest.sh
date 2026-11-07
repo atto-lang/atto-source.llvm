@@ -75,6 +75,28 @@ audit_ir() {
         exit 1
     fi
     require_tools_unchanged
+    audited_ir_sha="$before"
+}
+compile_guest() {
+    local fixture="$1" ir="$2" fixture_sha
+    [[ -f "$fixture" && -s "$fixture" && ! -L "$fixture" ]] || {
+        echo "FAIL: missing or unsafe .atto guest fixture $fixture" >&2; exit 1
+    }
+    fixture_sha="$(hash_file "$fixture")" || exit 1
+    "$compiler" "$fixture" > "$ir"
+    [[ "$(hash_file "$fixture")" == "$fixture_sha" ]] || {
+        echo 'FAIL: source .atto fixture mutated during compiler execution' >&2; exit 1
+    }
+    require_tools_unchanged
+    audit_ir "$ir"
+    echo "MIXED_NATIVE_SOURCE_SHA256=$fixture_sha file=${fixture##*/}"
+}
+verify_compilation_unchanged() {
+    local ir="$1"
+    [[ "$(hash_file "$ir")" == "$audited_ir_sha" ]] || {
+        echo 'FAIL: LLVM IR mutated after no-GC audit' >&2; exit 1
+    }
+    require_tools_unchanged
 }
 # Verify a *real* native process and bound its execution independently of CTest.
 native_status() {
@@ -129,8 +151,7 @@ print("MIXED_NATIVE_IMAGE_SHA256="+before+" expected="+expected)
 PY
 }
 for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
-    "$compiler" "$fixtures/$file" > "$tmp/guest.ll"
-    audit_ir "$tmp/guest.ll"
+    compile_guest "$fixtures/$file" "$tmp/guest.ll"
     # The optimizer must see genuine field-separated LLVM arrays, typed loads
     # and checked terminal owner revocation, not a host-only pretend backend.
     for required in ' x i1]' ' x double]' 'store volatile i1 false, ptr %alive'                     'icmp ult i64' 'call void @llvm.trap()'                     'store volatile double'; do
@@ -154,16 +175,19 @@ for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
     fi
     for opt in -O0 -O2; do
         "$clang" "$opt" -x ir "$tmp/guest.ll" -o "$tmp/guest"
+        verify_compilation_unchanged "$tmp/guest.ll"
         native_status "$tmp/guest" exit42
+        verify_compilation_unchanged "$tmp/guest.ll"
     done
 done
-"$compiler" "$fixtures/negative-stale-dense-index.atto" > "$tmp/trap.ll"
-audit_ir "$tmp/trap.ll"
+compile_guest "$fixtures/negative-stale-dense-index.atto" "$tmp/trap.ll"
 grep -Fq 'call void @llvm.trap()' "$tmp/trap.ll" ||
     { echo 'FAIL: missing out-of-bounds trap in mixed guest IR' >&2; exit 1; }
 for opt in -O0 -O2; do
     "$clang" "$opt" -x ir "$tmp/trap.ll" -o "$tmp/trap"
+    verify_compilation_unchanged "$tmp/trap.ll"
     native_status "$tmp/trap" trap
+    verify_compilation_unchanged "$tmp/trap.ll"
 done
 # Every unsupported source rejects without writing any IR: no partial codegen.
 for item in \
