@@ -96,13 +96,13 @@ export function inspectOwnershipWorkflowShape(source) {
      !source.includes('atto_ownership_place_mir_real_compiler_50') ||
      !source.includes('--output-junit /tmp/atto-real-compiler-50.xml'))
     return fail('MISSING_REAL_COMPILER_MATRIX_RECEIPT');
-  if(!once(source,'--output-junit /tmp/atto-source-cfg-mut-28.xml') ||
-     !once(source,"grep -Eq 'Ran 28 tests' /tmp/atto-source-cfg-mut-28.log") ||
-     !once(source,"observed != ['native_ownership_source_cfg_manifest_28_mutations']") ||
+  if(!once(source,'--output-junit /tmp/atto-source-cfg-mut-29.xml') ||
+     !once(source,"grep -Eq 'Ran 29 tests' /tmp/atto-source-cfg-mut-29.log") ||
+     !once(source,"observed != ['native_ownership_source_cfg_manifest_29_mutations']") ||
      !once(source,'ATTO_SOURCE_CFG_REAL_COMPILER_FIXTURES=50/50_EXECUTED') ||
      !once(source,'ATTO_LLVM_SOURCE_CFG_GUEST=50/50_REAL_COMPILER_EXECUTED') ||
      !once(source,'--output-junit /tmp/atto-source-cfg-50.xml') ||
-     !once(source,"          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_28_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt") ||
+     !once(source,"          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_29_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt") ||
      !source.includes('atto_ownership_source_cfg_real_compiler_50') ||
      !source.includes("observed != ['atto_ownership_source_cfg_real_compiler_50']") ||
      !source.includes("int(root.get('skipped', '1'))") ||
