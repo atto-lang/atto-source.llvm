@@ -78,8 +78,8 @@ void test_isolation_and_migration() {
     auto ta = TaskLocalScopeV1::open(actor_a);
     auto tb = TaskLocalScopeV1::open(task_b);
     assert(actor && ta && tb);
-    ActorLocalKeyV1<std::string> actor_key;
-    TaskLocalKeyV1<std::string> task_key;
+    LegacyActorLocalKeyV1<std::string> actor_key;
+    LegacyTaskLocalKeyV1<std::string> task_key;
     assert(actor->set(actor_a, actor_key, std::string("actor-config")));
     assert(ta->set(actor_a, task_key, std::string("span-a")));
     assert(tb->set(task_b, task_key, std::string("span-b")));
@@ -123,7 +123,7 @@ struct DropProbe {
 
 void test_exact_drop_and_physical_tls() {
     auto drops = std::make_shared<std::atomic<int>>(0);
-    ThreadLocalKeyV1<DropProbe> key;
+    LegacyThreadLocalKeyV1<DropProbe> key;
     std::thread worker([&] {
         assert(key.set(DropProbe{drops}));
         assert(key.set(DropProbe{drops}));
@@ -132,7 +132,7 @@ void test_exact_drop_and_physical_tls() {
     worker.join();
     assert(*drops == 2); // second value destroyed on thread exit
     assert(!key.get_copy());
-    ThreadLocalKeyV1<int> num;
+    LegacyThreadLocalKeyV1<int> num;
     assert(num.set(15));
     std::thread other([&] {
         assert(!num.get_copy());
@@ -149,10 +149,10 @@ void test_exact_drop_and_physical_tls() {
 // code. Reentering the TLS map during C++ thread_local object teardown must
 // fail closed, not mutate the container while its destructor is running.
 struct ThreadExitReentrantDrop {
-    ThreadLocalKeyV1<ThreadExitReentrantDrop>* key;
+    LegacyThreadLocalKeyV1<ThreadExitReentrantDrop>* key;
     std::shared_ptr<std::atomic<int>> drops;
     ThreadExitReentrantDrop(
-        ThreadLocalKeyV1<ThreadExitReentrantDrop>* k,
+        LegacyThreadLocalKeyV1<ThreadExitReentrantDrop>* k,
         std::shared_ptr<std::atomic<int>> counter)
         : key(k), drops(std::move(counter)) {}
     ThreadExitReentrantDrop(const ThreadExitReentrantDrop&) = default;
@@ -169,7 +169,7 @@ struct ThreadExitReentrantDrop {
 
 void test_reentrant_physical_tls_thread_exit() {
     auto drops = std::make_shared<std::atomic<int>>(0);
-    ThreadLocalKeyV1<ThreadExitReentrantDrop> key;
+    LegacyThreadLocalKeyV1<ThreadExitReentrantDrop> key;
     for (int cycle = 0; cycle != 32; ++cycle) {
         std::thread worker([&] {
             assert(key.set(ThreadExitReentrantDrop(&key, drops)));
@@ -204,14 +204,14 @@ struct ThreadReentrantCopy {
 
 void test_reentrant_copy_safe_retirement() {
     auto actor = ActorLocalScopeV1::open(actor_a);
-    ActorLocalKeyV1<ReentrantCopy> actor_key;
+    LegacyActorLocalKeyV1<ReentrantCopy> actor_key;
     assert(actor->set(actor_a, actor_key, ReentrantCopy(actor)));
     auto copied = actor->get_copy(actor_a, actor_key);
     assert(copied);
     assert(!actor->is_open());
     assert(!actor->get_copy(actor_a, actor_key));
 
-    ThreadLocalKeyV1<ThreadReentrantCopy> tls_key;
+    LegacyThreadLocalKeyV1<ThreadReentrantCopy> tls_key;
     assert(tls_key.set(ThreadReentrantCopy([&] { (void)tls_key.erase(); })));
     auto tls_snapshot = tls_key.get_copy();
     assert(tls_snapshot);
@@ -222,7 +222,7 @@ void test_bounds_and_close_race() {
     assert(!TaskLocalScopeV1::open({}));
     assert(!ActorLocalScopeV1::open({}));
     auto scope = TaskLocalScopeV1::open(actor_a);
-    std::vector<TaskLocalKeyV1<int>> keys;
+    std::vector<LegacyTaskLocalKeyV1<int>> keys;
     for (int n = 0; n != 33; ++n) keys.emplace_back();
     for (int n = 0; n != 32; ++n)
         assert(scope->set(actor_a, keys[n], n));
@@ -235,7 +235,7 @@ void test_bounds_and_close_race() {
     assert(!scope->get_copy(actor_a, keys[32]));
     for (int repeat = 0; repeat < 200; ++repeat) {
         auto race = TaskLocalScopeV1::open(actor_a);
-        TaskLocalKeyV1<int> k;
+        LegacyTaskLocalKeyV1<int> k;
         std::atomic<bool> go{false};
         std::thread writer([&] {
             while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
@@ -256,7 +256,7 @@ void test_bounds_and_close_race() {
 void test_measured_quota_and_unicode() {
     // Logical TaskLocal replacement must be atomic for value and quota.
     auto task = TaskLocalScopeV1::open(actor_a);
-    TaskLocalKeyV1<std::string> a, b, c;
+    LegacyTaskLocalKeyV1<std::string> a, b, c;
     assert(task->set(actor_a, a, std::string(4096, 'a')));
     assert(task->set(actor_a, b, std::string(4096, 'b')));
     assert(!task->set(actor_a, c, std::string("overflow")));
@@ -268,7 +268,7 @@ void test_measured_quota_and_unicode() {
     assert(task->get_copy(actor_a, c) == std::string(4095, 'c'));
     // A vector with an unbounded heap allocation must not fit into a
     // single shallow sizeof(vector) charge, even after space is freed.
-    TaskLocalKeyV1<std::vector<std::string>> dynamic_key;
+    LegacyTaskLocalKeyV1<std::vector<std::string>> dynamic_key;
     assert(!task->set(actor_a, dynamic_key,
         std::vector<std::string>{std::string(10000, 'z')}));
     assert(task->get_copy(actor_a, a) == std::string("x"));
@@ -279,14 +279,14 @@ void test_measured_quota_and_unicode() {
 
     // ActorLocal is logically separate from task/physical TLS.
     auto actor = ActorLocalScopeV1::open(actor_a);
-    ActorLocalKeyV1<std::string> actor_key;
+    LegacyActorLocalKeyV1<std::string> actor_key;
     assert(actor->set(actor_a, actor_key, std::string(8192, 'q')));
     assert(!actor->set(actor_a, actor_key, std::string(8193, 'q')));
     assert(actor->get_copy(actor_a, actor_key) == std::string(8192, 'q'));
     actor->close();
 
     // Physical TLS has its own per-thread quota, not inherited TaskLocal.
-    ThreadLocalKeyV1<std::string> tls_a, tls_b;
+    LegacyThreadLocalKeyV1<std::string> tls_a, tls_b;
     assert(tls_a.set(std::string(8192, 't')));
     assert(!tls_b.set(std::string("no capacity")));
     assert(tls_a.get_copy() == std::string(8192, 't'));
