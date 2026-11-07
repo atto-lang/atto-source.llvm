@@ -31,7 +31,7 @@ const ir = run(flags.get('--compiler'),
   ['--target=wasm32', resolve(flags.get('--fixture'))]);
 // Test actual compiler-emitted IR: one actor has a fixed 2-cell scalar frame.
 assert.match(ir, /@atto\.wasm\.actor\.scalar\.frame\.v1\s*=\s*internal global\s*\[2 x i64\] zeroinitializer/);
-assert.match(ir, /getelementptr inbounds \[2 x i64\]/);
+assert.match(ir, /getelementptr inbounds\s*\(?\[2 x i64\]/);
 assert.ok((ir.match(/store volatile i64/g) || []).length >= 4,
   'message, field and terminal frame scrubbing must be volatile guest stores');
 assert.doesNotMatch(ir, /%message\.slot\s*=\s*alloca/,
