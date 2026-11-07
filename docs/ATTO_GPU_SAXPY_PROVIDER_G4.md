@@ -45,6 +45,15 @@ reported as physically pinned memory. The provider must remain alive until
 its terminal operation is retired; there is not yet a universal shutdown
 drain, actor scheduler integration or hot reload operation registry.
 The standalone physical probe's small host poll loop is not an actor carrier.
+The provider now exposes explicit close() after completion/drain. Closing
+while an event or quarantined allocation exists rejects. **Destroying the
+provider while active terminates the process** instead of freeing host
+staging memory referenced by an asynchronous OpenCL transfer. This is a
+deliberate fail-closed emergency invariant, **not an acceptable recovery
+strategy** for a production multi-tenant actor host: such hosts require a
+supervisor-owned shutdown/drain registry with durable quarantines and
+tenant-scoped fault containment before enabling general guest GPU tasks.
+The underlying SaxpyApi must also outlive the provider and operations.
 
 ## Reproduce build and tests on immutable source
 
@@ -59,23 +68,25 @@ ctest --test-dir build --output-on-failure -R 'atto_gpu_saxpy_'
 
 `atto_gpu_saxpy_provider_host_v1` is a **fake-driver state machine** test;
 its successful result must never be called physical GPU execution.
-`atto_gpu_saxpy_physical_opencl_v1` uses real OpenCL device calls. If no
-compatible physical GPU exists, it returns **77 = SKIPPED**, never green
+`atto_gpu_saxpy_physical_opencl_v1` first invokes the native compiler and
+passes its exact emitted OpenCL C bytes into the real OpenCL device probe.
+If no compatible physical GPU exists, it returns **77 = SKIPPED**, never green
 device evidence. The provider and compiler checks can pass on CPU hosts,
 but physical results cannot be inferred from them.
 
 On a real GPU worker in an exact, clean, immutable source checkout:
 
 ```sh
+ # This command itself rebuilds the compiler/probe and runs the host tests
 ATTO_EXPECTED_PR_HEAD_SHA="$(git rev-parse HEAD)" \
-bash scripts/verify-atto-gpu-saxpy-hardware.sh \
-  build/oreslang-llvmc \
-  build/oreslang-opencl-saxpy-gpu-probe \
-  tests/fixtures/atto-gpu-saxpy-f32.atto
+bash scripts/verify-atto-gpu-saxpy-hardware.sh
 ```
 
-The strict script emits the compiler's OpenCL device artifact, checks it
-matches the probe's source-derived kernel, requires a genuine GPU result,
+The strict script starts from a clean exact Git tree, checks the canonical
+tracked fixture blob, and creates fresh compiler/probe binaries in a
+throwaway CMake build; caller-provided binaries are not accepted. It runs
+native host tests, emits the compiler's OpenCL device artifact, checks it
+matches the probe's source-derived kernel, requires a GPU-reported result,
 compares all 256 output values bitwise to an independent f32 oracle,
 and prints exact head/tree, fixture, artifact, compiler and probe digests.
 On hosted CI, supply `ATTO_EXPECTED_PR_HEAD_SHA` from the immutable
@@ -83,11 +94,16 @@ On hosted CI, supply `ATTO_EXPECTED_PR_HEAD_SHA` from the immutable
 Do not rely on `github.sha`, which may identify a synthetic PR merge commit.
 Upload source-tree, toolchain, run ID, run attempt and nonzero executed steps
 as separate evidence. Any `steps=[]`/`null` means `NOT_EXECUTED`.
+The `CL_DEVICE_TYPE_GPU` flag and a driver-reported name are **not**
+cryptographic physical-device attestation: independently validate runner
+hardware inventory and the device/driver capability report. All unexpected
+OpenCL driver/ICD failures now fail the probe instead of being silently
+reclassified as no-compatible-GPU SKIP.
 
 ## Next release blockers
 
 - Exact-head C++17 compiler/CTest execution, independent review and CI.
-- Hardware-backed OpenCL run on an available GPU, negative mutation tests
+- Hardware-backed OpenCL run on an independently inventoried GPU, negative mutation tests
   and the exact device-event/fence receipt. This PR alone is not that proof.
 - Shared per-tenant/device quotas across multiple provider instances, full
   device UUID/capability attestation, shutdown/recovery ledger and tested
