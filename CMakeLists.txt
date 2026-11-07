@@ -1786,6 +1786,32 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_frame_isolation_restart_and_denial
         PROPERTIES TIMEOUT 30)
 
+    # One truly iterative actor-owned typed-frame VM; 100,000 tail transfers,
+    # 64-frame non-tail failure, and independent surviving source actor lanes.
+    # This is runtime C execution; compiler-backed .atto programs have their
+    # own source_actor_e2e.py path and exact-head receipt matrix.
+    add_executable(oreslang-source-actor-scalar-vm-runtime-test
+        tests/source_actor_scalar_vm_runtime_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-scalar-vm-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-scalar-vm-runtime-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-source-actor-scalar-vm-runtime-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_scalar_vm_tail_quota_sibling
+        COMMAND oreslang-source-actor-scalar-vm-runtime-test)
+    set_tests_properties(source_actor_scalar_vm_tail_quota_sibling
+        PROPERTIES TIMEOUT 30)
+
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
