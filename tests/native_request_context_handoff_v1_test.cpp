@@ -72,7 +72,8 @@ struct Fixture {
     std::unique_ptr<RequestContextHandoffTableV1> table;
     std::unique_ptr<NativeRequestLifecycleRegistryV1> lifecycle;
 
-    explicit Fixture(std::size_t capacity = 8, bool registered = false) {
+    explicit Fixture(std::size_t capacity = 8, bool registered = false,
+                     bool attach_recipient = true) {
         w.scheduler = ores_native_actor_scheduler_open(3, 8, 2, on_message, &w);
         CHECK(w.scheduler);
         w.a = ores_native_actor_scheduler_spawn(w.scheduler, 0);
@@ -81,7 +82,7 @@ struct Fixture {
         if (registered) {
             lifecycle = std::make_unique<NativeRequestLifecycleRegistryV1>(w.scheduler);
             CHECK(lifecycle->attach(w.a));
-            CHECK(lifecycle->attach(w.b));
+            if (attach_recipient) CHECK(lifecycle->attach(w.b));
             CHECK(lifecycle->attach(w.c));
             request = lifecycle->open_registered(
                 {7, 8, 9001, 1, w.a}, request_cancel);
