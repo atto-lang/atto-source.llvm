@@ -46,7 +46,12 @@ public:
     NativeRequestWakeGateV1& operator=(const NativeRequestWakeGateV1&) = delete;
 
     bool authorized() const {
+        // A revoked RequestLocal is a permanent negative gate. Check it
+        // before the raw scheduler pointer, then after the wake lookup.
+        // The external owner must still pin scheduler lifetime for any
+        // operation concurrent with scheduler destruction.
         return original_mail_ != 0
+            && request_->active()
             && ores_native_actor_scheduler_is_current_ready_wake(
                 scheduler_, ticket_)
             && request_->active();
