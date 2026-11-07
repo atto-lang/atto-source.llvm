@@ -56,6 +56,19 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 90)
     endif()
 
+    # Compiler-checked restricted SAXPY source-body HIR, not GPU execution.
+    add_executable(oreslang-native-gpu-kernel-body-hir-test
+        tests/gpu_kernel_body_hir_test.cpp)
+    target_include_directories(oreslang-native-gpu-kernel-body-hir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-kernel-body-hir-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-kernel-body-hir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_kernel_body_hir_host_only
+        COMMAND oreslang-native-gpu-kernel-body-hir-test)
+    set_tests_properties(native_atto_gpu_kernel_body_hir_host_only
+        PROPERTIES TIMEOUT 30)
+
     # Source-declared GPU kernel types -> typed kernel signature *shape*.
     # Does not resolve host values or yield device execution permissions.
     add_executable(oreslang-native-gpu-kernel-source-link-test
