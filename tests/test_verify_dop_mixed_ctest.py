@@ -2,6 +2,9 @@
 """Synthetic hostile CTest JUnit mutation suite (source-free, NOT guest proof)."""
 import copy
 import hashlib
+import shutil
+import subprocess
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -265,6 +268,63 @@ class MixedCertificateMutationTests(unittest.TestCase):
         root = canonical()
         self.assertTrue(all("classname" not in case.attrib for case in root))
         self.assertEqual(verify_junit(xml(root))["verified_tests"], 5)
+
+
+    def test_actual_ctest_3_junit_roundtrip_and_tamper(self):
+        # This executes *CTest*, not AttoLang. Printed markers are synthetic,
+        # intentionally host-only, to verify the report grammar itself.
+        cmake = shutil.which("cmake")
+        ctest = shutil.which("ctest")
+        if not cmake or not ctest:
+            self.fail("CTest and CMake mandatory for source-only report contract")
+        with tempfile.TemporaryDirectory(prefix="atto-dop-ctest-shape-") as home:
+            root = Path(home)
+            build = root / "build"
+            emitter = root / "emit.py"
+            emitter.write_text(
+                "import sys\n"
+                "case = sys.argv[1]\n"
+                "markers = {\n"
+                + repr(MIXED) + ": " + repr(MIXED_MARKER) + ",\n"
+                + repr(LEGACY) + ": " + repr(LEGACY_MARKER) + ",\n"
+                "}\n"
+                "print(markers.get(case, 'HOST_ONLY_REFERENCE'))\n",
+                encoding="utf-8",
+            )
+            cmake_lines = [
+                "cmake_minimum_required(VERSION 3.20)",
+                "project(DopHostOnlyCTestReceipt NONE)",
+                "enable_testing()",
+            ]
+            for name in sorted(EXPECTED):
+                cmake_lines.append(
+                    'add_test(NAME ' + name + ' COMMAND "' +
+                    sys.executable + '" "' + emitter.as_posix() +
+                    '" "' + name + '")'
+                )
+            (root / "CMakeLists.txt").write_text(
+                "\n".join(cmake_lines) + "\n", encoding="utf-8"
+            )
+            subprocess.run([cmake, "-S", str(root), "-B", str(build)],
+                           check=True, capture_output=True, timeout=30)
+            report = root / "ctest-junit.xml"
+            subprocess.run([
+                ctest, "--test-dir", str(build),
+                "--output-junit", str(report), "--output-on-failure"
+            ], check=True, capture_output=True, timeout=30)
+            original = report.read_bytes()
+            verified = verify_junit(original)
+            self.assertEqual(verified["verified_tests"], 5)
+            self.assertEqual(verified["junit_sha256"],
+                             hashlib.sha256(original).hexdigest())
+            suite = ET.fromstring(original)
+            self.assertTrue(all(case.find("properties") is not None
+                                for case in suite))
+            self.assertEqual(suite.get("tests"), "5")
+            native = next(c for c in suite if c.get("name") == MIXED)
+            native.find("system-out").text = "synthetic output removed\n"
+            with self.assertRaises(ValueError):
+                verify_junit(xml(suite))
 
 
 if __name__ == "__main__":
