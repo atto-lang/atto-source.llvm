@@ -1,0 +1,14 @@
+// Canonical DOP v1: writable first column, immutable second column.
+// The expected native exit status / host-reference result is 42.
+define inverted struct Row as
+    let value: int;
+    token: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Row>.with_capacity(3);
+    rows.push(11, 100);
+    rows.push(20, 101);
+    rows.set(1, value, 42);
+    return rows.get(1, value);
+}
