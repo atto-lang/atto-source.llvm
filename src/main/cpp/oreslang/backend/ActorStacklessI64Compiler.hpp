@@ -142,7 +142,10 @@ private:
             case Kind::LogicalXor: child(expr.left); child(expr.right); add(Op::LogicalXor); break;
             case Kind::Call: {
                 if (expr.arguments.size() != 1 ||
-                        !expr.argument_names.empty() || expr.type_arguments_present)
+                        (expr.argument_names.size() > 1 ||
+                         (!expr.argument_names.empty() &&
+                          !expr.argument_names.front().empty())) ||
+                        expr.type_arguments_present)
                     throw std::runtime_error("actor M3 calls require exactly one positional int argument");
                 child(expr.arguments.front());
                 const auto slot = code_.words.size() / 2;
