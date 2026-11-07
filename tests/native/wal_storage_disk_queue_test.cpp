@@ -100,6 +100,14 @@ void basic() {
         ok(receipt.frame()==frame(7,5,1,41),"receipt defensive source copy");
         auto second=queue.submit(&authority,scope,frame(7,5,2,42));
         ok(get(second).end_offset()==64,"second physical sync off carrier");
+        // More than twice the fixed ring size: both request and completion
+        // cursors wrap while physical end offsets remain sequential.
+        for (std::uint32_t seq=3;seq<=70;++seq) {
+            auto next=queue.submit(&authority,scope,frame(7,5,seq,seq+40));
+            if (get(next).end_offset()!=32u*seq)
+                throw std::runtime_error("ring cursor wrap corrupted WAL offset");
+        }
+        ok(queue.outstanding()==0,"fixed rings drain after wraparound");
         ok(!queue.quarantined(),"healthy owner not quarantined");
         queue.revoke();
         rejects<std::logic_error>([&]{
@@ -110,7 +118,7 @@ void basic() {
     if(fd<0)throw std::runtime_error("reopen failed");
     struct stat st {};
     if(::fstat(fd,&st)!=0){::close(fd);throw std::runtime_error("fstat failed");}
-    ok(st.st_size==64,"reopen preserved synced bytes");
+    ok(st.st_size==2240,"reopen preserved synced bytes");
     std::array<std::uint8_t,32> actual{};
     ssize_t n=::pread(fd,actual.data(),actual.size(),0);
     (void)::close(fd);
@@ -168,6 +176,27 @@ void bounded_and_healthy_tenant() {
     queue.reset(); // off-carrier worker joins; native FD finally released
     ok(::access(one.path().c_str(),F_OK)==0,"backing WAL remains for replay");
 }
+void global_queue_budget() {
+    int activation=31;
+    Scope scope{7,9,3,11,5};
+    std::vector<std::unique_ptr<TempFile>> files;
+    std::vector<std::unique_ptr<Queue>> queues;
+    for(std::size_t i=0;i<Queue::kMaxDiskQueues;++i) {
+        files.push_back(std::make_unique<TempFile>());
+        queues.push_back(std::make_unique<Queue>(adopt(*files.back(),&activation,scope),
+                                                  &activation,scope));
+    }
+    TempFile overflow;
+    rejects<std::length_error>([&]{
+        Queue exceeded(adopt(overflow,&activation,scope),&activation,scope);
+    },"global worker budget admitted unbounded queues");
+    queues.pop_back(); // both threads join and release one global budget slot
+    TempFile reused;
+    queues.push_back(std::make_unique<Queue>(adopt(reused,&activation,scope),
+                                              &activation,scope));
+    ok(queues.back()->outstanding()==0,"retired queue releases global budget");
+    queues.clear();
+}
 void physical_error() {
     TempFile temp;
     int authority=5;
@@ -190,6 +219,7 @@ void physical_error() {
 int main() {
     basic();
     bounded_and_healthy_tenant();
+    global_queue_budget();
     physical_error();
     std::cout<<"WAL_DISK_QUEUE_HOST_PASS checks="<<checks
              <<"; NO ACTOR PIN OR GUEST PROOF\n";
