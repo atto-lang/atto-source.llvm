@@ -135,12 +135,22 @@ jobs:
             -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$'
 
       - name: Refuse fake, contradictory or non-executed CTest JUnit evidence
+        id: certify_junit
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/verify_dop_mixed_ctest.py build-evidence/mixed-ctest.xml
+          python3 -B scripts/verify_dop_mixed_ctest.py build-evidence/mixed-ctest.xml | tee build-evidence/mixed-ctest-certifier.txt
+          test "$(wc -l < build-evidence/mixed-ctest-certifier.txt)" -eq 2
+          grep -Fxq 'DOP_MIXED_JUNIT_VERIFIED tests=5 guest_receipt_requires_independent_run_job_attestation=YES' build-evidence/mixed-ctest-certifier.txt
+          grep -Eq '^DOP_MIXED_JUNIT_SHA256=[0-9a-f]{64}$' build-evidence/mixed-ctest-certifier.txt
+          expected="$(sed -n 's/^DOP_MIXED_JUNIT_SHA256=//p' build-evidence/mixed-ctest-certifier.txt)"
+          test "${#expected}" -eq 64
+          test "$(sha256sum build-evidence/mixed-ctest.xml | cut -d ' ' -f1)" = "$expected"
+          printf 'junit_sha256=%s\n' "$expected" >> "$GITHUB_OUTPUT"
       - name: Qualify exact-head execution receipts
         shell: bash
+        env:
+          VERIFIED_JUNIT_SHA256: ${{ steps.certify_junit.outputs.junit_sha256 }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
