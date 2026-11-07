@@ -30,6 +30,7 @@ on:
       - 'tests/native_ownership_nll_partial_move_30_test.cpp'
       - 'tests/native_ownership_nll_closed_world_16_test.cpp'
       - 'tests/native_ownership_derived_last_use_12_test.cpp'
+      - 'tests/native_ownership_opaque_loan_metadata_10_test.cpp'
       - 'tests/contracts/atto_ownership_place_mir_50.json'
       - 'tests/ownership_compiler_fixture_matrix.py'
       - 'tests/test_ownership_compiler_fixture_matrix.py'
@@ -95,8 +96,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test oreslang-native-compiler-place-origin-test oreslang-native-ownership-identity-inventory-30-test oreslang-native-ownership-nll-partial-move-30-test oreslang-native-ownership-nll-closed-world-16-test oreslang-native-derived-last-use-12-test
-          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12)$' > /tmp/atto-place-inventory.txt
+          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test oreslang-native-compiler-place-origin-test oreslang-native-ownership-identity-inventory-30-test oreslang-native-ownership-nll-partial-move-30-test oreslang-native-ownership-nll-closed-world-16-test oreslang-native-derived-last-use-12-test oreslang-native-ownership-opaque-loan-metadata-10-test
+          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10)$' > /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_take_place_classification$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_place_authority$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_projection_root$' /tmp/atto-place-inventory.txt
@@ -105,12 +106,13 @@ jobs:
           grep -Eq 'Test +#[0-9]+: native_ownership_nll_partial_move_30$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_nll_closed_world_16$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_derived_last_use_12$' /tmp/atto-place-inventory.txt
-          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          grep -Eq 'Test +#[0-9]+: native_ownership_opaque_loan_metadata_10$' /tmp/atto-place-inventory.txt
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
           test -s /tmp/atto-ownership-place.xml
           python3 - <<'PY'
           from xml.etree import ElementTree
           root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
-          if int(root.get('tests', '-1')) != 8 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
+          if int(root.get('tests', '-1')) != 9 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
               raise SystemExit('native place/Share CTest evidence missing, failed or skipped')
           PY
           echo "ATTO_LLVM_RESOLVED_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"
