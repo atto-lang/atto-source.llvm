@@ -46,6 +46,30 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Source-declared GPU kernel types -> typed kernel signature *shape*.
+    # Does not resolve host values or yield device execution permissions.
+    add_executable(oreslang-native-gpu-kernel-source-link-test
+        tests/gpu_kernel_source_link_test.cpp)
+    target_include_directories(oreslang-native-gpu-kernel-source-link-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-kernel-source-link-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-kernel-source-link-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_kernel_source_link_host_only
+        COMMAND oreslang-native-gpu-kernel-source-link-test)
+    set_tests_properties(native_atto_gpu_kernel_source_link_host_only
+        PROPERTIES TIMEOUT 30)
+
+    # Actual oreslang-llvmc invocation: 13 source-only negative cases and no
+    # emitted LLVM IR/artifact. This is NOT physical GPU execution.
+    add_test(NAME native_atto_gpu_kernel_source_link_compiler_negative
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-kernel-source-link"
+            "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_kernel_source_link_admission.cmake")
+    set_tests_properties(native_atto_gpu_kernel_source_link_compiler_negative
+        PROPERTIES TIMEOUT 230)
+
     # Adversarial host-only source MIR mutation and negative-evidence tests.
     # These do NOT run native llvmc or a physical GPU.
     add_executable(oreslang-native-gpu-source-mir-adversarial-test
