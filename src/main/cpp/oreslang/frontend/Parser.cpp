@@ -7,6 +7,7 @@
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
+#include "oreslang/types/InvertedMixedGuestLlvm.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 
 #include <algorithm>
@@ -6192,9 +6193,13 @@ void resolve_and_validate_program(Program& program) {
         if (schemas.size() != program.inverted_structs.size())
             throw std::logic_error("native inverted schema preflight incomplete");
         if (program.inverted_main) {
-            // Production source is admitted only after full independent MIR
-            // verification. The emitter re-verifies by consuming that MIR.
-            (void)dop::mir::verify_production_inverted_i64(program);
+            // Both source forms use independently verified typed MIR. The
+            // legacy two-i64 slice is unchanged; the three-scalar case must
+            // also prove exact nominal literal types and i64 terminal result.
+            if (program.inverted_main->three_scalar)
+                (void)dop::mir::verify_production_inverted_mixed(program);
+            else
+                (void)dop::mir::verify_production_inverted_i64(program);
             return;
         }
         throw std::runtime_error(
