@@ -1535,12 +1535,23 @@ int ores_native_actor_scheduler_is_any_current_carrier_v1(void) {
 int ores_native_actor_scheduler_commit_if_running_v1(
         OresNativeActorScheduler* s, OresNativeActorRef actor,
         OresNativeActorBoundedCommitV1 commit, void* opaque) {
-    if (!s || !commit) return 0;
+    // The live state of an actor is NOT permission for a foreign thread or
+    // another actor callback to mutate it. A bounded commit must originate
+    // from this exact actor's admitted physical carrier and claim.
+    if (!s || !commit || executing != s || !executing_claim.carrier
+            || !actor.scheduler_domain
+            || actor.scheduler_domain != executing_actor.scheduler_domain
+            || actor.actor_slot != executing_actor.actor_slot
+            || actor.generation != executing_actor.generation)
+        return 0;
     lock(s);
+    // Lock order: scheduler lifecycle lock -> execution authority lock.
+    // STOP uses this same order, so the callback and STOP are serialized.
+    // Do NOT call guest code, allocate or acquire further locks in commit.
     const int live = !s->retired && matching(s, actor)
         && !s->actors[actor.actor_slot].retired
-        && ores_execution_phase(
-            &s->actors[actor.actor_slot].authority) == ORES_EXEC_RUNNING;
+        && ores_execution_owns_running(
+            &s->actors[actor.actor_slot].authority, executing_claim);
     const int ok = live ? (commit(opaque) != 0) : 0;
     unlock(s);
     return ok;
