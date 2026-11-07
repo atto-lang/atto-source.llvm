@@ -274,9 +274,12 @@ inline std::string emit(const Program& source) {
             {zero, llvm::ConstantInt::get(i64, i)});
         b.CreateStore(zero, address)->setVolatile(true);
     }
-    b.CreateStore(zero, depth);
-    b.CreateStore(status1, terminal);
-    b.CreateStore(two, lifecycle);
+    // These stores are observable by the trusted host after the Wasm trap.
+    // LLVM's optimizer must not erase them as dead stores merely because
+    // the current guest activation ends with a noreturn llvm.trap.
+    b.CreateStore(zero, depth)->setVolatile(true);
+    b.CreateStore(status1, terminal)->setVolatile(true);
+    b.CreateStore(two, lifecycle)->setVolatile(true);
     b.CreateCall(trap);
     b.CreateUnreachable();
 
@@ -298,7 +301,9 @@ inline std::string emit(const Program& source) {
 
     llvm::IRBuilder<> status(llvm::BasicBlock::Create(
         context, "entry", inspect));
-    status.CreateRet(status.CreateLoad(i32, terminal));
+    auto* observedStatus = status.CreateLoad(i32, terminal);
+    observedStatus->setVolatile(true);
+    status.CreateRet(observedStatus);
 
     std::string diagnostics;
     llvm::raw_string_ostream error_stream(diagnostics);
