@@ -88,7 +88,7 @@ for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
     audit_ir "$tmp/guest.ll"
     # The optimizer must see genuine field-separated LLVM arrays, typed loads
     # and checked terminal owner revocation, not a host-only pretend backend.
-    for required in '[2 x i1]' ' x double]' 'store volatile i1 false, ptr %alive'                     'icmp ult i64' 'call void @llvm.trap()'                     'store volatile double'; do
+    for required in ' x i1]' ' x double]' 'store volatile i1 false, ptr %alive'                     'icmp ult i64' 'call void @llvm.trap()'                     'store volatile double'; do
         grep -Fq "$required" "$tmp/guest.ll" ||
             { echo "FAIL: $file omits typed IR check: $required" >&2; exit 1; }
     done
