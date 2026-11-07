@@ -636,12 +636,24 @@ public:
         require("{");
         std::size_t braces = 1;
         std::size_t scanned = 0;
+        // Track source tokens only to fail closed for any unresolved call.
+        // This is not device call-graph resolution or a typed GPU effect proof.
+        std::string_view prior1, prior2, prior3;
+        Kind priorKind = Kind::End;
         while (braces != 0) {
             if (token_.kind == Kind::End)
                 throw std::runtime_error("GPU-KERNEL-006: unterminated device kernel body");
             if (++scanned > 65536 || braces > 64)
                 throw std::runtime_error("GPU-KERNEL-006: kernel lexical resource quota exceeded");
             const auto word = token_.text;
+            if (word == "(" && priorKind == Kind::Identifier
+                    && prior1 != "if"
+                    && !(prior1 == "global_id"
+                         && prior2 == "." && prior3 == "gpu")) {
+                throw std::runtime_error(
+                    "GPU-KERNEL-006: host/dynamic calls and unknown device intrinsics "
+                    "are forbidden before typed device call resolution");
+            }
             if (word == "await" || word == "suspends" || word == "async"
                     || word == "task" || word == "spawn" || word == "new"
                     || word == "critical" || word == "defer" || word == "recover"
@@ -653,6 +665,10 @@ public:
             }
             if (word == "{") ++braces;
             else if (word == "}") --braces;
+            prior3 = prior2;
+            prior2 = prior1;
+            prior1 = word;
+            priorKind = token_.kind;
             advance();
         }
         throw std::runtime_error(

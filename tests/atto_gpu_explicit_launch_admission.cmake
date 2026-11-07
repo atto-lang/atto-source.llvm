@@ -64,12 +64,16 @@ endforeach()
 # Native source-only gpu fnc declaration tests. Parse/ABI failures cannot
 # emit host executables or physical GPU kernels; exact-compiler tests remain
 # NOT_EXECUTED until the hosted runner actually executes this CMake script.
-set(kernel_cases "valid-header" "bad-abi" "suspending-body" "duplicate-parameter")
+set(kernel_cases "valid-header" "bad-abi" "suspending-body" "duplicate-parameter"
+                 "host-call" "unknown-device-intrinsic" "bare-global-id")
 set(source_valid-header
   "pub gpu fnc saxpy(f32 alpha, GpuReadBuffer<f32> x, GpuReadBuffer<f32> y, GpuWriteBuffer<f32> out, int n): void { const int i = gpu.global_id(0); if i < n { out[i] = alpha * x[i] + y[i]; } fi }\n")
 set(source_bad-abi "pub gpu fnc saxpy(string host): void { return; }\n")
 set(source_suspending-body "pub gpu fnc saxpy(int n): void { await n; }\n")
 set(source_duplicate-parameter "pub gpu fnc saxpy(int n, f32 n): void { return; }\n")
+set(source_host-call "pub gpu fnc saxpy(int n): void { hostCall(); }\n")
+set(source_unknown-device-intrinsic "pub gpu fnc saxpy(int n): void { gpu.unknown(0); }\n")
+set(source_bare-global-id "pub gpu fnc saxpy(int n): void { global_id(0); }\n")
 foreach(case_name IN LISTS kernel_cases)
   set(case_dir "${WORKDIR}/kernel-${case_name}")
   file(MAKE_DIRECTORY "${case_dir}")
