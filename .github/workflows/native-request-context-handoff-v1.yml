@@ -1,0 +1,83 @@
+name: Native RequestLocal cross-actor handoff (host only)
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp"
+      - "src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp"
+      - "src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp"
+      - "src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.h"
+      - "src/main/cpp/oreslang/runtime/TaskCancellation.hpp"
+      - "tests/native_request_context_handoff_v1_test.cpp"
+      - ".github/workflows/native-request-context-handoff-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-handoff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {cc: gcc, cxx: g++, mode: optimized}
+          - {cc: clang, cxx: clang++, mode: optimized}
+          - {cc: gcc, cxx: g++, mode: asan-ubsan}
+          - {cc: clang, cxx: clang++, mode: asan-ubsan}
+          - {cc: gcc, cxx: g++, mode: tsan}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact immutable source head and dependency blobs
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          for path in \
+            src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp \
+            src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp \
+            src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp \
+            src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
+            src/main/cpp/oreslang/runtime/TaskCancellation.hpp \
+            tests/native_request_context_handoff_v1_test.cpp; do
+            test -f "$path"
+            printf 'input_blob=%s:%s\n' "$path" "$(git hash-object "$path")"
+          done
+          printf 'source_head=%s\nsource_tree=%s\n' \
+            "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and execute pinned C scheduler and C++ handoff regressions
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          flags=(-O2 -UNDEBUG)
+          if [[ "$MODE" == asan-ubsan ]]; then
+            flags=(-O1 -g -UNDEBUG -fno-omit-frame-pointer -fsanitize=address,undefined)
+            export ASAN_OPTIONS='detect_leaks=1:halt_on_error=1'
+            export UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1'
+          elif [[ "$MODE" == tsan ]]; then
+            flags=(-O1 -g -UNDEBUG -fno-omit-frame-pointer -fsanitize=thread)
+            export TSAN_OPTIONS='halt_on_error=1'
+          fi
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o "$work/scheduler.o"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_context_handoff_v1_test.cpp \
+            "$work/scheduler.o" -o "$work/handoff-test"
+          "$work/handoff-test"
+          printf 'NATIVE_REQUEST_HANDOFF_EXACT_HEAD_HOST_PASS mode=%s cc=%s cxx=%s executable_sha256=%s\n' \
+            "$MODE" "$CC" "$CXX" "$(sha256sum "$work/handoff-test" | cut -d' ' -f1)"
