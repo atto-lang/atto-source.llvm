@@ -28,6 +28,12 @@ int main() {
     const auto stable = Key::stable_symbol("550e8400-e29b-41d4-a716-446655440000");
 
     const auto g1 = store.publish({ready, stable});
+    // A version minted by another VM-local store must not alias generation 1.
+    SharedSymbolLiteralImageStore other_store;
+    const auto foreign = other_store.publish({failed});
+    check(foreign != g1);
+    expect_rejected<std::logic_error>([&] { (void)store.pin_expected(foreign); });
+    expect_rejected<std::logic_error>([&] { (void)other_store.pin_expected(g1); });
     auto reader1 = store.pin_expected(g1);
     auto reader2 = store.pin_latest();
     check(reader1.get() == reader2.get()); // physical same immutable image
