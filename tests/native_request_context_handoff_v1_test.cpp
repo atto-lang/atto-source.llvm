@@ -443,6 +443,164 @@ void test_concurrent_cancel_race() {
     }
 }
 
+// Precisely named host-only registry-integrated handoff assertions. They
+// require real DATA-mail delivery on the native scheduler. The legacy table
+// constructor above remains a compatibility-only, unregistered host API.
+int registry_handoff_cases = 0;
+void registered_case(const char* name, bool ok) {
+    ++registry_handoff_cases;
+    if (!ok) {
+        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_FAIL %s\n", name);
+        ++failures;
+    } else {
+        std::printf("HANDOFF_REGISTRY_CASE_PASS %s\n", name);
+    }
+}
+
+void test_registered_handoff_stop_reclaims_derived_scope() {
+    Fixture f(8, true);
+    std::uint64_t ticket = 0;
+    std::optional<RedeemedRequestContextV1> held;
+    registered_case("01_three_actor_generations_attached",
+                    f.lifecycle && f.lifecycle->attached_actor_count() == 3);
+    registered_case("02_source_admitted_in_registry", f.request->active());
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace, std::string("registered-r")));
+        ticket = f.table->seal(f.w.a, *f.request, f.w.b,
+                               f.selection()).value_or(0);
+    });
+    send(f.w, f.w.a, 1);
+    registered_case("03_source_sealed_one_ticket",
+                    ticket && f.table->pending() == 1);
+    on(f.w, 1, [&](std::uint64_t payload) {
+        auto r = f.table->redeem(f.w.b, payload);
+        if (r) held.emplace(std::move(*r));
+    });
+    send(f.w, f.w.b, ticket);
+    registered_case("04_recipient_redeemed", held.has_value());
+    registered_case("05_derived_belongs_only_to_recipient",
+                    held && held->context().belongs_to(f.w.b) &&
+                    !held->context().belongs_to(f.w.a));
+    registered_case("06_derived_has_selected_copy",
+                    held && held->context().get_copy(f.trace) ==
+                      std::string("registered-r"));
+    registered_case("07_ticket_consumed_once", f.table->pending() == 0);
+    bool stopped = ores_native_actor_scheduler_stop_sealed(f.w.scheduler,f.w.b);
+    registered_case("08_recipient_STOP_and_cleanup_receipt",
+                    stopped && f.lifecycle->wait_cleaned(
+                        f.w.b, std::chrono::milliseconds(8000)));
+    registered_case("09_derived_scope_closed_and_quota_reclaimed",
+                    held && !held->context().active() &&
+                    held->context().used_bytes() == 0 &&
+                    !held->context().get_copy(f.trace));
+    registered_case("10_source_isolated_from_recipient_STOP",
+                    f.request->active() &&
+                    f.request->get_copy(f.trace) == std::string("registered-r"));
+}
+
+void test_unattached_recipient_cannot_receive_derived_context() {
+    Fixture f(8, true, false);
+    std::uint64_t ticket = 0;
+    bool rejected = false;
+    registered_case("11_only_sender_and_sibling_attached",
+                    f.lifecycle && f.lifecycle->attached_actor_count() == 2);
+    registered_case("12_source_scope_admitted", f.request->active());
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace, std::string("no-recipient")));
+        ticket = f.table->seal(f.w.a, *f.request, f.w.b,
+                               f.selection()).value_or(0);
+    });
+    send(f.w, f.w.a, 1);
+    registered_case("13_unattached_B_ticket_still_data_only",
+                    ticket && f.table->pending() == 1);
+    on(f.w, 1, [&](std::uint64_t payload) {
+        rejected = !f.table->redeem(f.w.b, payload);
+    });
+    send(f.w, f.w.b, ticket);
+    registered_case("14_unattached_B_redeem_fail_closed", rejected);
+    registered_case("15_rejected_one_shot_ticket_not_replayable",
+                    f.table->pending() == 0);
+    registered_case("16_rejection_does_not_affect_sender_or_create_B_registry",
+                    f.request->active() &&
+                    !f.lifecycle->wait_cleaned(
+                        f.w.b, std::chrono::milliseconds(0)));
+}
+
+void test_parent_cancellation_reaches_registered_derived_scope() {
+    Fixture f(8, true);
+    std::uint64_t ticket = 0;
+    std::optional<RedeemedRequestContextV1> held;
+    registered_case("17_parent_active_before_handoff", f.request->active());
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace, std::string("cancelled-parent")));
+        ticket = f.table->seal(f.w.a, *f.request, f.w.b,
+                               f.selection()).value_or(0);
+    });
+    send(f.w, f.w.a, 1);
+    registered_case("18_parent_handoff_ticket_available", ticket != 0);
+    on(f.w, 1, [&](std::uint64_t payload) {
+        auto r = f.table->redeem(f.w.b, payload);
+        if (r) held.emplace(std::move(*r));
+    });
+    send(f.w, f.w.b, ticket);
+    registered_case("19_derived_registered_and_active",
+                    held && held->context().active());
+    registered_case("20_copy_before_cancel_preserved",
+                    held && held->context().get_copy(f.trace) ==
+                        std::string("cancelled-parent"));
+    registered_case("21_parent_cancel_wins",
+                    f.request_cancel->cancel("parent-closed"));
+    registered_case("22_derived_revoked_on_parent_cancel",
+                    held && !held->context().active() &&
+                    held->context().used_bytes() == 0);
+    registered_case("23_B_still_running_but_cannot_write_revoked_scope",
+                    held && !held->context().set(f.budget, 11, f.w.scheduler) &&
+                    ores_native_actor_scheduler_poll_ready(
+                        f.w.scheduler, f.w.b));
+}
+
+void test_sender_STOP_does_not_corrupt_derived_recipient() {
+    Fixture f(8, true);
+    std::uint64_t ticket = 0;
+    std::optional<RedeemedRequestContextV1> held;
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace, std::string("survivor")));
+        ticket = f.table->seal(f.w.a, *f.request, f.w.b,
+                               f.selection()).value_or(0);
+    });
+    send(f.w, f.w.a, 1);
+    registered_case("24_cross_actor_snapshot_sealed", ticket != 0);
+    on(f.w, 1, [&](std::uint64_t payload) {
+        auto r = f.table->redeem(f.w.b, payload);
+        if (r) held.emplace(std::move(*r));
+    });
+    send(f.w, f.w.b, ticket);
+    registered_case("25_B_redeemed_before_sender_STOP", held.has_value());
+    registered_case("26_B_owned_scope_active",
+                    held && held->context().belongs_to(f.w.b) &&
+                    held->context().active());
+    const bool stopped = ores_native_actor_scheduler_stop_sealed(
+        f.w.scheduler, f.w.a);
+    registered_case("27_sender_STOP_cleanup_completed",
+                    stopped && f.lifecycle->wait_cleaned(
+                        f.w.a, std::chrono::milliseconds(8000)));
+    registered_case("28_sender_scope_closed_and_unreadable",
+                    !f.request->active() && !f.request->get_copy(f.trace));
+    registered_case("29_B_copy_survives_independent_sender_STOP",
+                    held && held->context().active() &&
+                    held->context().get_copy(f.trace) ==
+                        std::string("survivor") &&
+                    ores_native_actor_scheduler_poll_ready(
+                        f.w.scheduler, f.w.b));
+    registered_case("30_B_local_cancel_does_not_revive_A",
+                    held && held->cancel_local() &&
+                    !held->context().active() && !f.request->active());
+}
+
 }  // namespace
 
 int main() {
@@ -459,6 +617,14 @@ int main() {
         {"direct_STOP_during_handoff_copy_rejects_ticket",
             test_direct_STOP_during_handoff_copy_rejects_ticket},
         {"concurrent_cancel_race", test_concurrent_cancel_race},
+        {"registered_handoff_stop_reclaims_derived_scope",
+            test_registered_handoff_stop_reclaims_derived_scope},
+        {"unattached_recipient_cannot_receive_derived_context",
+            test_unattached_recipient_cannot_receive_derived_context},
+        {"parent_cancellation_reaches_registered_derived_scope",
+            test_parent_cancellation_reaches_registered_derived_scope},
+        {"sender_STOP_does_not_corrupt_derived_recipient",
+            test_sender_STOP_does_not_corrupt_derived_recipient},
     };
     for (auto& t : tests) {
         const int before = failures;
