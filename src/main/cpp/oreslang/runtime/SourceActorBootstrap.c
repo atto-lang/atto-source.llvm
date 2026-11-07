@@ -321,7 +321,11 @@ int oreslang_source_actor_scalar_vm_execute(
             memory_order_acquire) != ORES_SCALAR_OK)
         return ORES_SCALAR_INVALID_FRAME;
     int status = ORES_SCALAR_INVALID_PROGRAM;
-    if (!scalar_preflight(program)) goto failure;
+    if (!scalar_preflight(program)) {
+        atomic_store_explicit(&actor->frame_vm_error,
+            status, memory_order_release);
+        return status;
+    }
     const uint64_t epoch = actor->frame_epoch;
     size_t depth = 1;
     uint64_t executed = 0;
@@ -466,7 +470,6 @@ cleanup:
         tails, memory_order_relaxed);
     atomic_fetch_add_explicit(&actor->frame_vm_non_tail_calls,
         calls, memory_order_relaxed);
-failure:
     if (status != ORES_SCALAR_OK) {
         *result = 0;
         atomic_store_explicit(&actor->frame_vm_error,
