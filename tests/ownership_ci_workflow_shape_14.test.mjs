@@ -41,7 +41,7 @@ test('05 missing typed-MIR CTest inventory entry is rejected',()=>{
 });
 test('06 duplicated CTest inventory assertion is rejected',()=>{
   const line="          grep -Eq 'Test +#[0-9]+: native_ownership_mir_receipts_30$' /tmp/atto-place-inventory.txt\n";
-  denied(workflow.replace(line,line+line),
+  denied(workflow.replace(line,()=>line+line),
     'MISSING_OR_DUPLICATED_CTEST:mir_receipts_30');
 });
 test('07 50 actual LLVM compiler fixtures must remain required',()=>{
