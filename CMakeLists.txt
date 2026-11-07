@@ -1459,10 +1459,10 @@ if(BUILD_TESTING)
     endif()
     # Independent new source field restoration compiler matrix. Its host-only
     # manifest checker must NOT be interpreted as a guest/compiler pass.
-    add_test(NAME native_ownership_source_cfg_manifest_18_mutations
+    add_test(NAME native_ownership_source_cfg_manifest_28_mutations
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ownership_source_cfg_compiler_matrix.py")
-    set_tests_properties(native_ownership_source_cfg_manifest_18_mutations
+    set_tests_properties(native_ownership_source_cfg_manifest_28_mutations
         PROPERTIES TIMEOUT 30)
     if(ORE_CLANG)
         add_test(NAME atto_ownership_source_cfg_real_compiler_50
