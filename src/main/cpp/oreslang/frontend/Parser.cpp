@@ -3714,35 +3714,20 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java: `/` is always real division, so the scalar passes widen
-            // int operands and type the result as float.
+            // Canonical AttoLang removed percent remainder (and ^ / ^^).
+            // Reject at the operator before operand evaluation or LLVM IR.
+            if (token_.text == "%")
+                fail("removed AttoLang source operator '%'");
+            // AttoLang integer division yields f64 by explicit language rule,
+            // not by allowing implicit conversions in other expressions.
             const bool division = token_.text == "/";
             const auto offset = token_.offset;
             advance();
             auto right = unary();
-            // Admit exactly nonzero signed integer *literals*. Normalize
-            // unary-negative literal syntax into the already typed integer
-            // node; codegen independently checks the normalized invariant.
-            // Neither computed divisors nor unknown zero-divisor effects are
-            // silently admitted. The special MIN / -1 case is handled by
-            // codegen rather than emitting LLVM poison.
-            if (remainder) {
-                if (right->kind == Expression::Kind::Negate && right->left &&
-                        right->left->kind == Expression::Kind::Integer &&
-                        right->left->integer > 0) {
-                    const auto magnitude = right->left->integer;
-                    right->left.reset();
-                    right->kind = Expression::Kind::Integer;
-                    right->integer = -magnitude; // magnitude fits signed i64
-                }
-                // The scalar checker enforces the literal divisor rule once
-                // operand types distinguish int remainder from IEEE remainder.
-            }
-            auto expr = make_expression(remainder ? Expression::Kind::Remainder
-                                                 : division ? Expression::Kind::Divide
-                                                            : Expression::Kind::Multiply, offset);
+            auto expr = make_expression(division ? Expression::Kind::Divide
+                                                : Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
-            expr->right = unary();
+            expr->right = std::move(right);
             left = std::move(expr);
         }
         return left;
