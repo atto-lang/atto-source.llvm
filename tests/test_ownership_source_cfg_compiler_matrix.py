@@ -156,6 +156,14 @@ class SourceCfgManifestMutations(unittest.TestCase):
     def test_28_out_of_range_positive_exit(self):
         self.denied(lambda d: d["cases"][1].update(expected_guest_exit=256))
 
+    def test_29_false_branch_store_does_not_match_guest_exit(self):
+        def edit(d):
+            row = d["cases"][26]
+            row["source"] = row["source"].replace(
+                "else { p.left = saved + 1; }",
+                "else { p.left = saved + 2; }")
+        self.denied(edit)
+
 
 if __name__ == "__main__":
     unittest.main()
