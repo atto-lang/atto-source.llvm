@@ -8,6 +8,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/GpuTypedLaunchIr.hpp'
       - 'tests/gpu_kernel_source_link_test.cpp'
       - 'tests/atto_gpu_kernel_source_link_admission.cmake'
+      - 'tests/gpu_kernel_source_link_harness_selftest.sh'
       - 'tests/gpu_source_launch_mir_test.cpp'
       - 'tests/gpu_source_mir_adversarial_test.cpp'
       - 'tests/gpu_native_negative_harness_selftest.sh'
