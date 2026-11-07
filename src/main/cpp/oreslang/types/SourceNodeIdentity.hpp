@@ -2,6 +2,7 @@
 
 #include "oreslang/frontend/Parser.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -150,6 +151,66 @@ inline void validate_program_identity(const Program& program) {
     if (expected_node != program.compiler_source_node_count)
         throw std::runtime_error(
             "ownership violation: source node inventory truncated or extended");
+}
+
+
+// This is the only supported post-validation source *structural* mutation:
+// compiler-owned tree shaking has already compiled and checked the original
+// complete Program and supplies a set of retained, previously sealed source
+// function IDs. Reissue a fresh compilation unit epoch and all AST paths
+// atomically with respect to codegen admission. Never apply to user-defined
+// unvalidated or partially mutated source.
+inline void prune_and_reseal_validated_functions(
+        Program& program, const std::set<std::uint64_t>& retained_ids) {
+    validate_program_identity(program); // reject stale/mutated input first
+    if (retained_ids.empty() ||
+            retained_ids.size() > program.functions.size())
+        throw std::runtime_error(
+            "ownership violation: compiler tree shake has invalid retained source IDs");
+    for (const auto id : retained_ids)
+        if (!id || id > program.compiler_source_function_count)
+            throw std::runtime_error(
+                "ownership violation: compiler tree shake references a foreign source function ID");
+
+    try {
+        program.functions.erase(
+            std::remove_if(program.functions.begin(), program.functions.end(),
+                [&](const Function& function) {
+                    return !retained_ids.count(
+                        function.compiler_source_function_id);
+                }),
+            program.functions.end());
+        if (program.functions.size() != retained_ids.size())
+            throw std::runtime_error(
+                "ownership violation: compiler tree shake retained-function inventory changed");
+
+        const auto reset_tree = [&](const auto& self, Statement& statement) -> void {
+            statement.compiler_source_node_id = 0;
+            statement.compiler_source_path.clear();
+            for (auto& child : statement.then_statements) self(self, child);
+            for (auto& child : statement.else_statements) self(self, child);
+        };
+        for (auto& function : program.functions) {
+            function.compiler_source_function_id = 0;
+            function.compiler_source_sealed_name.clear();
+            for (auto& stmt : function.statements) reset_tree(reset_tree, stmt);
+            for (auto& stmt : function.caught_throw_defers) reset_tree(reset_tree, stmt);
+        }
+        program.compiler_source_unit_id = 0;
+        program.compiler_source_function_count = 0;
+        program.compiler_source_node_count = 0;
+        seal_validated_program(program);
+        validate_program_identity(program);
+    } catch (...) {
+        // Failed pruning/resealing must not leave a previously authorized
+        // Program eligible for codegen, even if a Future pipeline had
+        // been admitted before a future compiler tree-shake extension.
+        program.compiler_source_unit_id = 0;
+        for (auto& function : program.functions)
+            for (auto& pipeline : function.future_pipelines)
+                pipeline.ownership_admitted = false;
+        throw;
+    }
 }
 
 } // namespace oreslang::source_identity

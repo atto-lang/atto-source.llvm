@@ -345,6 +345,12 @@ public:
     }
 
     std::size_t size() const noexcept { return sites_.size(); }
+    // Read-only compiler-minted direct-store receipts for the separate,
+    // optional CFG Reinitialize.write_id candidate bridge. This does not
+    // export ownership authority or allow an external caller to mint tickets.
+    const std::vector<FieldWriteSite>& direct_store_receipts() const noexcept {
+        return sites_;
+    }
 
 private:
     static constexpr const char* kMetadataKind =

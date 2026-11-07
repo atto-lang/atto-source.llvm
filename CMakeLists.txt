@@ -218,29 +218,29 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-source-field-store-ledger-75-test)
     # Independent production source-AST direct FieldWrite inventory,
     # cross-checked against the emitted LLVM StoreInst provenance ledger.
-    # 60 negative and 14 positive host cases, including reverse-tag and
+    # 88 negative and 26 positive host cases, including reverse-tag and
     # source-to-native-function declaration cross-checks. No guest NLL proof.
-    add_executable(oreslang-native-source-fieldwrite-coverage-74-test
-        tests/native_source_fieldwrite_coverage_74_test.cpp)
-    target_include_directories(oreslang-native-source-fieldwrite-coverage-74-test PRIVATE
+    add_executable(oreslang-native-source-fieldwrite-coverage-114-test
+        tests/native_source_fieldwrite_coverage_114_test.cpp)
+    target_include_directories(oreslang-native-source-fieldwrite-coverage-114-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
         "${LLVM_INCLUDE_DIRS}")
-    target_compile_options(oreslang-native-source-fieldwrite-coverage-74-test PRIVATE
+    target_compile_options(oreslang-native-source-fieldwrite-coverage-114-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
-    target_link_libraries(oreslang-native-source-fieldwrite-coverage-74-test PRIVATE
+    target_link_libraries(oreslang-native-source-fieldwrite-coverage-114-test PRIVATE
         ${ORE_LLVM_LIBS})
-    add_test(NAME native_ownership_source_fieldwrite_coverage_74
-        COMMAND oreslang-native-source-fieldwrite-coverage-74-test)
+    add_test(NAME native_ownership_source_fieldwrite_coverage_114
+        COMMAND oreslang-native-source-fieldwrite-coverage-114-test)
     # Parsed/validated AttoLang source node identity seal; pure host C++.
     # No mocked LLVM stores or guest parity claim.
-    add_executable(oreslang-source-node-identity-65-test
-        tests/native_source_node_identity_65_test.cpp)
-    target_include_directories(oreslang-source-node-identity-65-test PRIVATE
+    add_executable(oreslang-source-node-identity-85-test
+        tests/native_source_node_identity_85_test.cpp)
+    target_include_directories(oreslang-source-node-identity-85-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_compile_options(oreslang-source-node-identity-65-test PRIVATE
+    target_compile_options(oreslang-source-node-identity-85-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
-    add_test(NAME native_ownership_source_node_identity_65
-        COMMAND oreslang-source-node-identity-65-test)
+    add_test(NAME native_ownership_source_node_identity_85
+        COMMAND oreslang-source-node-identity-85-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.

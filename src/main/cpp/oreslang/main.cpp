@@ -8,6 +8,7 @@
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
+#include "oreslang/types/SourceNodeIdentity.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -25,6 +26,8 @@
 #include <string>
 #include <array>
 #include <string_view>
+#include <set>
+#include <cstdint>
 
 
 // Compiler failures can include guest-controlled tokens and filenames.
@@ -181,13 +184,23 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
         }
     }
 
-    program.functions.erase(
-        std::remove_if(program.functions.begin(), program.functions.end(),
-            [&](const oreslang::Function& function) {
-                return !reachable.count(oreslang::realtime_detail::function_key(
-                    function.name, function.parameters.size()));
-            }),
-        program.functions.end());
+    // The input Program has already passed full source/ownership admission.
+    // Preserve the exact compiler-resolved reachability result, but never
+    // erase validated source functions and silently reuse the previous
+    // compilation-unit identity. The helper checks the original seal and
+    // atomically reissues a new epoch and structural paths after pruning.
+    std::set<std::uint64_t> retained_source_ids;
+    for (const auto& function : program.functions) {
+        const auto key = oreslang::realtime_detail::function_key(
+            function.name, function.parameters.size());
+        if (reachable.count(key) &&
+                !retained_source_ids.insert(
+                    function.compiler_source_function_id).second)
+            throw std::runtime_error(
+                "ownership violation: duplicate compiler tree-shake source identity");
+    }
+    oreslang::source_identity::prune_and_reseal_validated_functions(
+        program, retained_source_ids);
 }
 
 

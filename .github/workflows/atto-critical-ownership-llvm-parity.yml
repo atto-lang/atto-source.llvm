@@ -23,9 +23,11 @@ on:
       - 'audit/llvm-source-field-store-ledger-*'
       - 'audit/llvm-source-fieldwrite-completeness-*'
       - 'audit/llvm-validated-source-node-ids-*'
+      - 'audit/llvm-reinitialize-store-bridge-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/main.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
       - 'src/main/cpp/oreslang/types/NativeOwnershipPlace.hpp'
       - 'tests/native_share_place_authority_test.cpp'
@@ -43,8 +45,9 @@ on:
       - 'tests/native_ownership_mir_opaque_effects_18_test.cpp'
       - 'tests/native_ir_ssa_store_census_30_test.cpp'
       - 'tests/native_source_field_store_ledger_75_test.cpp'
-      - 'tests/native_source_fieldwrite_coverage_74_test.cpp'
-      - 'tests/native_source_node_identity_65_test.cpp'
+      - 'tests/native_source_fieldwrite_coverage_114_test.cpp'
+      - 'src/main/cpp/oreslang/backend/NativeIrReinitializeWriteBridge.hpp'
+      - 'tests/native_source_node_identity_85_test.cpp'
       - 'src/main/cpp/oreslang/types/SourceNodeIdentity.hpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/backend/NativeIrFieldWriteLedger.hpp'
@@ -131,9 +134,9 @@ jobs:
             oreslang-native-mir-opaque-effects-18-test \
             oreslang-native-ir-ssa-census-30-test \
             oreslang-native-source-field-store-ledger-75-test \
-            oreslang-native-source-fieldwrite-coverage-74-test \
-            oreslang-source-node-identity-65-test
-          ctest --test-dir build -N -R '^(native_ownership_take_place_classification|native_ownership_share_place_authority|native_ownership_share_projection_root|native_ownership_compiler_resolved_place_origin|native_ownership_identity_inventory_30|native_ownership_nll_partial_move_30|native_ownership_nll_closed_world_16|native_ownership_derived_last_use_12|native_ownership_opaque_loan_metadata_10|native_ownership_loan_write_domain_6|native_ownership_mir_receipts_30|native_ownership_mir_opaque_effects_18|native_ownership_ir_ssa_store_census_30|native_ownership_source_field_store_ledger_75|native_ownership_source_fieldwrite_coverage_74|native_ownership_source_node_identity_65)$' > /tmp/atto-ownership-focused-inventory.txt
+            oreslang-native-source-fieldwrite-coverage-114-test \
+            oreslang-source-node-identity-85-test
+          ctest --test-dir build -N -R '^(native_ownership_take_place_classification|native_ownership_share_place_authority|native_ownership_share_projection_root|native_ownership_compiler_resolved_place_origin|native_ownership_identity_inventory_30|native_ownership_nll_partial_move_30|native_ownership_nll_closed_world_16|native_ownership_derived_last_use_12|native_ownership_opaque_loan_metadata_10|native_ownership_loan_write_domain_6|native_ownership_mir_receipts_30|native_ownership_mir_opaque_effects_18|native_ownership_ir_ssa_store_census_30|native_ownership_source_field_store_ledger_75|native_ownership_source_fieldwrite_coverage_114|native_ownership_source_node_identity_85)$' > /tmp/atto-ownership-focused-inventory.txt
           python3 - <<'PY'
           import re
           from pathlib import Path
@@ -152,8 +155,8 @@ jobs:
               'native_ownership_mir_opaque_effects_18',
               'native_ownership_ir_ssa_store_census_30',
               'native_ownership_source_field_store_ledger_75',
-              'native_ownership_source_fieldwrite_coverage_74',
-              'native_ownership_source_node_identity_65',
+              'native_ownership_source_fieldwrite_coverage_114',
+              'native_ownership_source_node_identity_85',
           }
           rows = Path('/tmp/atto-ownership-focused-inventory.txt').read_text().splitlines()
           found = [m.group(1) for row in rows
@@ -161,7 +164,7 @@ jobs:
           if len(found) != 16 or len(set(found)) != 16 or set(found) != names:
               raise SystemExit(f'CTests missing, repeated, or substituted: {found!r}')
           PY
-          ctest --test-dir build -R '^(native_ownership_take_place_classification|native_ownership_share_place_authority|native_ownership_share_projection_root|native_ownership_compiler_resolved_place_origin|native_ownership_identity_inventory_30|native_ownership_nll_partial_move_30|native_ownership_nll_closed_world_16|native_ownership_derived_last_use_12|native_ownership_opaque_loan_metadata_10|native_ownership_loan_write_domain_6|native_ownership_mir_receipts_30|native_ownership_mir_opaque_effects_18|native_ownership_ir_ssa_store_census_30|native_ownership_source_field_store_ledger_75|native_ownership_source_fieldwrite_coverage_74|native_ownership_source_node_identity_65)$' \
+          ctest --test-dir build -R '^(native_ownership_take_place_classification|native_ownership_share_place_authority|native_ownership_share_projection_root|native_ownership_compiler_resolved_place_origin|native_ownership_identity_inventory_30|native_ownership_nll_partial_move_30|native_ownership_nll_closed_world_16|native_ownership_derived_last_use_12|native_ownership_opaque_loan_metadata_10|native_ownership_loan_write_domain_6|native_ownership_mir_receipts_30|native_ownership_mir_opaque_effects_18|native_ownership_ir_ssa_store_census_30|native_ownership_source_field_store_ledger_75|native_ownership_source_fieldwrite_coverage_114|native_ownership_source_node_identity_85)$' \
             --output-on-failure --timeout 90 --output-junit /tmp/atto-ownership-focused.xml
           test -s /tmp/atto-ownership-focused.xml
           python3 - <<'PY'
@@ -182,8 +185,8 @@ jobs:
               'native_ownership_mir_opaque_effects_18',
               'native_ownership_ir_ssa_store_census_30',
               'native_ownership_source_field_store_ledger_75',
-              'native_ownership_source_fieldwrite_coverage_74',
-              'native_ownership_source_node_identity_65',
+              'native_ownership_source_fieldwrite_coverage_114',
+              'native_ownership_source_node_identity_85',
           }
           actual = [case.get('name') for case in root.iter('testcase')]
           failures = int(root.get('failures', '1'))

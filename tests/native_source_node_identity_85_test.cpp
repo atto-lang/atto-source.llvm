@@ -14,6 +14,7 @@ using oreslang::Function;
 using oreslang::Statement;
 using oreslang::source_identity::seal_validated_program;
 using oreslang::source_identity::validate_program_identity;
+using oreslang::source_identity::prune_and_reseal_validated_functions;
 
 struct Fixture {
     Program program;
@@ -140,8 +141,28 @@ int main() {
         check([]{ Fixture f; f.program.functions.clear(); f.program.functions.emplace_back().name="empty"; f.seal(); f.validate(); return f.program.compiler_source_node_count==0; }(), "empty Function can be sealed without positive node proof", n);
         check([]{ Fixture f; auto& s=f.add(); s.kind=Statement::Kind::Call; f.seal(); f.validate(); return s.compiler_source_node_id==2; }(), "mixed non-field Statement gets immutable ID", n);
         check([]{ Fixture f; f.branch(); f.add("z"); f.seal(); f.validate(); return f.function().statements[1].compiler_source_node_id==3; }(), "nested children and root siblings retain order", n);
-        if(n!=65) throw std::runtime_error("wrong source identity test inventory");
-        std::cout<<"PASS 65/65 source identity cases (HOST ONLY; NOT LLVM NLL)\n";
+        check(denied([]{ Fixture f; prune_and_reseal_validated_functions(f.program,{1}); }), "tree-shake unsealed Program rejected", n);
+        check(denied([]{ Fixture f; f.seal(); prune_and_reseal_validated_functions(f.program,{}); }), "tree-shake empty retention rejected", n);
+        check(denied([]{ Fixture f; f.seal(); prune_and_reseal_validated_functions(f.program,{0}); }), "tree-shake zero retained source ID rejected", n);
+        check(denied([]{ Fixture f; f.seal(); prune_and_reseal_validated_functions(f.program,{2}); }), "tree-shake out-of-range source ID rejected", n);
+        check(denied([]{ Fixture f; f.seal(); prune_and_reseal_validated_functions(f.program,{1,2}); }), "tree-shake two IDs when only one function rejected", n);
+        check(denied([]{ Fixture f; f.seal(); f.first().compiler_source_node_id=5; prune_and_reseal_validated_functions(f.program,{1}); }), "tree-shake pre-corrupted statement identity rejected", n);
+        check(denied([]{ Fixture f; f.seal(); f.first().compiler_source_path="f2/s0"; prune_and_reseal_validated_functions(f.program,{1}); }), "tree-shake pre-corrupted path rejected", n);
+        check(denied([]{ Fixture f; f.seal(); f.function().compiler_source_function_id=8; prune_and_reseal_validated_functions(f.program,{1}); }), "tree-shake pre-corrupted function identity rejected", n);
+        check(denied([]{ Fixture f; f.seal(); f.function().name="forged"; prune_and_reseal_validated_functions(f.program,{1}); }), "tree-shake renamed function prior to reissue rejected", n);
+        check(denied([]{ Fixture f; f.second(); f.seal(); f.program.functions.pop_back(); prune_and_reseal_validated_functions(f.program,{1}); }), "tree-shake pre-truncated Program rejected", n);
+        check(denied([]{ Fixture f; f.seal(); f.add("later"); prune_and_reseal_validated_functions(f.program,{1}); }), "tree-shake pre-added statement rejected", n);
+        check(denied([]{ Fixture f; f.seal(); f.program.compiler_source_unit_id=0; prune_and_reseal_validated_functions(f.program,{1}); }), "tree-shake incompatible old epoch rejected", n);
+        check([]{ Fixture f; f.seal(); auto old=f.program.compiler_source_unit_id; prune_and_reseal_validated_functions(f.program,{1}); f.validate(); return f.program.compiler_source_unit_id!=old && f.program.functions.size()==1; }(), "tree-shake retained root reissues a distinct epoch", n);
+        check([]{ Fixture f; f.second(); f.seal(); prune_and_reseal_validated_functions(f.program,{1}); f.validate(); return f.program.functions.size()==1 && f.program.functions[0].name=="main"; }(), "tree-shake drops second function and preserves first", n);
+        check([]{ Fixture f; f.second(); f.seal(); prune_and_reseal_validated_functions(f.program,{2}); f.validate(); return f.program.functions.size()==1 && f.program.functions[0].name=="secondary" && f.program.functions[0].compiler_source_function_id==1; }(), "tree-shake drops first function and reindexes second", n);
+        check([]{ Fixture f; f.second(); f.seal(); auto old=f.program.compiler_source_unit_id; prune_and_reseal_validated_functions(f.program,{1,2}); f.validate(); return f.program.compiler_source_unit_id!=old && f.program.compiler_source_function_count==2; }(), "tree-shake retained full function set gets fresh epoch", n);
+        check([]{ Fixture f; f.branch(); f.second(); f.seal(); prune_and_reseal_validated_functions(f.program,{1}); f.validate(); return f.first().then_statements[0].compiler_source_path=="f1/s0/t0"; }(), "tree-shake retained nested then branch paths reissued", n);
+        check([]{ Fixture f; f.caught(); f.second(); f.seal(); prune_and_reseal_validated_functions(f.program,{1}); f.validate(); return f.function().caught_throw_defers[0].compiler_source_path=="f1/c0"; }(), "tree-shake retained caught cleanup path reissued", n);
+        check([]{ Fixture f; f.add("b"); f.second(); f.seal(); prune_and_reseal_validated_functions(f.program,{2}); f.validate(); return f.program.compiler_source_node_count==0; }(), "tree-shake retained source node count recalculated", n);
+        check([]{ Fixture f; f.second(); f.seal(); prune_and_reseal_validated_functions(f.program,{2}); auto old=f.program.compiler_source_unit_id; prune_and_reseal_validated_functions(f.program,{1}); f.validate(); return f.program.compiler_source_unit_id!=old && f.program.functions.size()==1; }(), "tree-shake can safely prune again with new epoch", n);
+        if(n!=85) throw std::runtime_error("wrong source identity test inventory");
+        std::cout<<"PASS 85/85 source identity and tree-shake cases (HOST ONLY; NOT LLVM NLL)\n";
         return 0;
     } catch(const std::exception& error) {
         std::cerr<<"FAILED "<<n<<": "<<error.what()<<'\n';
