@@ -2,7 +2,7 @@
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$repo"
-expected="$ATTO_EXPECTED_CARRIER_HEAD_SHA"
+expected="$EXPECTED_CARRIER_HEAD_SHA"
 if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$expected" ]]; then
   echo 'M4_LLVM_NOT_EXECUTED: exact carrier commit required' >&2; exit 2
 fi
