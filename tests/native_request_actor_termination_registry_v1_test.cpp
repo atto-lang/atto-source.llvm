@@ -4,11 +4,14 @@
 
 #include <atomic>
 #include <cassert>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 using namespace oreslang::runtime;
@@ -188,6 +191,86 @@ void carrier_must_not_wait() {
     cancellation->retire();
 }
 
+// An actor whose guest/host value-copy operation stays pinned cannot hold
+// back the other actor's request cleanup or its terminal receipt.
+struct PausedCopy {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool reached = false;
+    bool released = false;
+    void park() {
+        std::unique_lock<std::mutex> lock(mutex);
+        reached = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return released; });
+    }
+    bool await() {
+        std::unique_lock<std::mutex> lock(mutex);
+        return cv.wait_for(lock, std::chrono::seconds(8),
+                           [&] { return reached; });
+    }
+    void resume() {
+        std::lock_guard<std::mutex> lock(mutex);
+        released = true;
+        cv.notify_all();
+    }
+};
+struct BlockingCopy {
+    std::shared_ptr<PausedCopy> latch;
+    bool armed;
+    explicit BlockingCopy(std::shared_ptr<PausedCopy> latch_)
+        : latch(std::move(latch_)), armed(true) {}
+    BlockingCopy(const BlockingCopy& original)
+        : latch(original.latch), armed(false) {
+        if (original.armed) latch->park();
+    }
+    BlockingCopy(BlockingCopy&& original) noexcept
+        : latch(std::move(original.latch)), armed(original.armed) {
+        original.armed = false;
+    }
+};
+void stalled_actor_cannot_block_sibling_cleanup() {
+    World w;
+    auto ca = TaskCancellation::root();
+    auto cb = TaskCancellation::root();
+    auto ra = w.request(w.a, 700, ca), rb = w.request(w.b, 701, cb);
+    RequestLocalKeyV1<BlockingCopy> slow_key;
+    RequestLocalKeyV1<int> fast_key;
+    auto latch = std::make_shared<PausedCopy>();
+    check("hol_01_admit_independent_actors",
+          w.registry->admit(w.a, ra) && w.registry->admit(w.b, rb));
+    check("hol_02_install_lease_holding_value",
+          ra->set(slow_key, BlockingCopy(latch), w.scheduler));
+    check("hol_03_install_sibling_value",
+          rb->set(fast_key, 29, w.scheduler));
+    std::atomic<bool> snapshot_leaked{true};
+    std::thread reader([&] {
+        snapshot_leaked.store(ra->get_copy(slow_key).has_value());
+    });
+    check("hol_04_reader_pinned_before_STOP", latch->await());
+    check("hol_05_both_STOP_signals_published",
+          ores_native_actor_scheduler_stop(w.scheduler, w.a) &&
+          ores_native_actor_scheduler_stop(w.scheduler, w.b));
+    bool sibling_reaped = false;
+    for (int attempt = 0; attempt < 1000 && !sibling_reaped; ++attempt) {
+        sibling_reaped = w.registry->poll_reaped(w.b);
+        if (!sibling_reaped)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    check("hol_06_sibling_reaped_while_first_lease_is_pinned",
+          sibling_reaped && !w.registry->poll_reaped(w.a) &&
+          rb->used_bytes() == 0);
+    latch->resume();
+    reader.join();
+    check("hol_07_revoked_copy_does_not_escape",
+          !snapshot_leaked.load() && !ra->active());
+    check("hol_08_held_actor_reaps_after_release",
+          w.registry->wait_reaped(w.a) &&
+          w.registry->reaped_actors() == 2);
+    ca->retire();
+    cb->retire();
+}
+
 void registration_STOP_races() {
     // Each winner permitted; successful admissions are always revoked,
     // unsuccessful applications cannot resurrect a stopped incarnation.
@@ -258,9 +341,10 @@ int main() {
     capacity_and_retirement();
     cancellation_and_sealed_stop();
     carrier_must_not_wait();
+    stalled_actor_cannot_block_sibling_cleanup();
     registration_STOP_races();
     cancellation_STOP_races();
-    check("47_all_60_coordinated_races_executed", passes == 109);
+    check("47_all_60_coordinated_races_executed", passes == 117);
     std::printf("REQUEST_TERMINATION_REGISTRY_HOST_PASS total=%d race_trials=60\n",
                 passes);
 }
