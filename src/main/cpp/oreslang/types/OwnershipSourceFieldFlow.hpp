@@ -29,18 +29,22 @@ struct SourceFieldFlow {
 class SourceFieldFlowBuilder {
     static constexpr std::size_t kMaxBlocks = 2048;
     static constexpr std::size_t kMaxOperations = 16384;
+    static constexpr std::size_t kMaxNodes = 16384;
     static constexpr std::size_t kMaxDepth = 64;
 
     SourceFieldFlow result_;
     const Function& function_;
     const std::set<std::string> class_roots_;
     std::size_t operations_ = 0;
+    std::size_t scanned_nodes_ = 0;
     std::vector<const Statement*> defers_;
 
     void collect_declared_sites(const std::vector<Statement>& stmts,
-            std::set<std::uint64_t>& sites, std::size_t depth) const {
+            std::set<std::uint64_t>& sites, std::size_t depth) {
         require_depth(depth);
         for (const auto& stmt : stmts) {
+            if (++scanned_nodes_ > kMaxNodes)
+                unsupported("source statement quota exceeded");
             if (stmt.reinitialize_write_id &&
                     !sites.insert(stmt.reinitialize_write_id).second)
                 unsupported("repeated restoration ticket in source AST");
@@ -291,12 +295,14 @@ class SourceFieldFlowBuilder {
                 if (stmt.kind == SK::ForIndex) {
                     if (!stmt.branch_local || !stmt.branch_local->initializer ||
                             !stmt.branch_local->class_name.empty() ||
+                            stmt.branch_local->record_view ||
                             !stmt.condition || !stmt.loop_step)
                         unsupported("unclassified index-loop class owner or missing frame");
                     at = expression(*stmt.branch_local->initializer, at, depth + 1);
                 } else {
                     if (!stmt.expression || !stmt.branch_local ||
-                            !stmt.branch_local->class_name.empty())
+                            !stmt.branch_local->class_name.empty() ||
+                            stmt.branch_local->record_view)
                         unsupported("foreach has untracked borrowed class element or source");
                     at = expression(*stmt.expression, at, depth + 1);
                 }
@@ -359,6 +365,9 @@ public:
                 !function_.actor_actions.empty() ||
                 !function_.actor_field_writes.empty() ||
                 !function_.actor_spawns.empty() ||
+                !function_.actor_sends.empty() ||
+                !function_.actor_stops.empty() ||
+                function_.async_source_i64 ||
                 !function_.source_tasks.empty() ||
                 !function_.future_pipelines.empty() ||
                 !function_.ready_await_actor.empty() ||
