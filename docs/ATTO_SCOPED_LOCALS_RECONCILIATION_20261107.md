@@ -302,3 +302,59 @@ host-only tests. These tests and the five native/sanitizer workflow jobs are
 **authored, not executed**. Actual scheduler-owned request-registry hookup,
 guaranteed CONTROL sweeps, panic/restart/hot-reload lifecycle proof, and
 compiled `.atto` receipts remain unverified blockers.
+
+## P0 bounded automatic RequestLocal termination registry (stacked draft)
+
+**Status:** native host code authored; source GitHub Actions and compiled
+`.atto` execution are **NOT VERIFIED**. This is not a guest-accessible API.
+
+New `RequestLocalActorTerminationRegistryV1.hpp` builds on the bootstrap
+scheduler termination observer introduced in LLVM #1525. The registry MUST
+be installed before the first actor spawn, with the scheduler's exact
+actor-slot count (currently bounded to 256). It owns preallocated slots,
+at most 32 strong RequestLocal registrations per actor slot, and one
+non-resettable atomic lifetime token per slot. The native scheduler
+currently disallows reincarnation in one slot; registry reuse/revival is
+explicitly prohibited. The registry attaches this lifetime token to an
+individual request *before* its scheduler-gated admission and uses the
+same `ores_native_actor_scheduler_commit_if_live_v1` lifecycle mutex to
+linearize successful registration against STOP and runtime retirement.
+
+The observer on **ordinary STOP**, **sealed STOP**, or **whole-runtime
+retirement** only writes preallocated atomics: it does not lock a RequestLocal
+scope or registry, allocate, close request values, reenter the scheduler,
+run user callbacks, or block. The token immediately fences future
+`RequestContextLocalV1::active`, original-mail binding, `begin_operation`,
+`set`, `get_copy`, and `erase` admission for registered requests,
+including the post-copy read recheck. A preexisting operation that wins
+before STOP remains accounted until its in-flight lease finishes.
+
+A dedicated external C++ CONTROL worker periodically observes invalid
+tokens and moves registered strong references out under a short registry
+mutex. It then closes scopes, waits their operation leases, and joins the
+actor's DONE barrier **outside** scheduler/carrier/registry locks. The
+worker polls at a provisional 1 ms cadence and is **not a real-time
+latency guarantee**. Production runtime ownership must keep the registry
+alive until `shutdown_after_retire()` joins the worker, then drain and
+destroy the scheduler, and only then destroy the registry.
+
+The new `native_request_actor_termination_registry_v1_test.cpp` authors
+46 fixed checks plus 60 two-thread registration/STOP and
+cancellation/sealed-STOP trials and a final count assertion (107 expected
+named checks); it also checks sibling survival, generation ABA denial,
+per-actor 32-context registration quota, double STOP, direct STOP,
+retirement without explicit group reconciliation, cancellation first,
+post-stop zero quota, and carrier wait refusal. The RequestLocal workflow
+now pins the new request header, registry and test blobs and compiles the
+test on GCC/Clang optimized, ASan/UBSan, and GCC TSan. These are
+**source-authored**, not executed receipts.
+
+**Remaining release blockers:** runtime HTTP ingress and supervisor
+ownership must instantiate and use this registry exclusively; callers
+may still create *raw host-only, unregistered* RequestLocal objects that
+are deliberately not promised automatic cleanup. Tenant/isolate issuer
+authentication, compiler-owned AOT descriptors, borrow/transitive memory
+bounds, task/actor ABA across actual slot reuse, panic/restart/hot-reload
+paths, bounded shutdown time, host native sanitizer and compiler-backed
+`.atto` execution all remain open. Never equate the regression's
+simulated host values with guest-visible or five-backend parity.
