@@ -10,6 +10,12 @@
 
 namespace oreslang::runtime {
 
+namespace detail {
+// One physical carrier may enter one actor frame arena, even when templates
+// have different capacity specializations.
+inline thread_local const void* active_actor_frame_arena = nullptr;
+} // namespace detail
+
 // Native, bounded per-actor *logical* frame bytes. This is intentionally NOT an
 // OS stack, a compiler-lowered frame layout, or a native-fault containment
 // boundary. Only a trusted runtime adapter should enter/exit physical turns.
@@ -43,7 +49,6 @@ private:
     std::atomic<bool> occupied_{false};
     std::atomic<bool> poisoned_{false};
     std::atomic<bool> retired_{false};
-    inline static thread_local ActorFrameArena* tls_active_ = nullptr;
     inline static std::atomic<std::uint64_t> next_arena_id_{1};
     const std::uint64_t arena_id_;
     std::uint64_t execution_ = 0;
@@ -69,7 +74,7 @@ private:
     }
 
     bool owns_turn() const noexcept {
-        return tls_active_ == this && execution_ != 0;
+        return detail::active_actor_frame_arena == this && execution_ != 0;
     }
 
     Frame* find(FrameRef ref) noexcept {
@@ -84,7 +89,7 @@ private:
 
     void release_turn() noexcept {
         execution_ = 0;
-        tls_active_ = nullptr;
+        detail::active_actor_frame_arena = nullptr;
         occupied_.store(false, std::memory_order_release);
     }
 
@@ -97,7 +102,7 @@ public:
     // Nonparking admission: a suspended logical execution may resume on a
     // different carrier, but no other execution can borrow its live frames.
     bool enter(std::uint64_t execution) noexcept {
-        if (!execution || !arena_id_ || tls_active_) return false;
+        if (!execution || !arena_id_ || detail::active_actor_frame_arena) return false;
         bool expected = false;
         if (!occupied_.compare_exchange_strong(expected, true,
                 std::memory_order_acquire, std::memory_order_relaxed))
@@ -110,7 +115,7 @@ public:
         }
         if (suspended_execution_ == execution) suspended_execution_ = 0;
         execution_ = execution;
-        tls_active_ = this;
+        detail::active_actor_frame_arena = this;
         return true;
     }
 
@@ -195,7 +200,7 @@ public:
     // Requires supervisor-established STOP + callback/continuation quiescence.
     // CAS refuses racing physical admission; no actor frame can be freed live.
     bool retire_quiesced() noexcept {
-        if (tls_active_ == this) return false;
+        if (detail::active_actor_frame_arena == this) return false;
         bool expected = false;
         if (!occupied_.compare_exchange_strong(expected, true,
                 std::memory_order_acquire, std::memory_order_relaxed))
