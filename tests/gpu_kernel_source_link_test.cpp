@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <type_traits>
+#include <random>
 
 using namespace oreslang::gpu;
 using source_link::Parameter;
@@ -135,6 +136,46 @@ int main() {
         for (auto e : shape.access_hints)
             check(e == source_link::AccessHint::DeviceRead || e == source_link::AccessHint::DeviceWrite,
                   "effect summary must not grant host effects");
+    }
+    // A syntactically valid unresolved name must NOT be granted a host-value
+    // type merely because its arity and kernel parameter shape matched.
+    {
+        auto unknown = launch();
+        unknown.ordered_arguments[0] = "definitely_not_a_host_binding";
+        const auto parsed = source_link::link({signature()}, unknown);
+        check(!parsed.host_arguments_typed() &&
+              parsed.unresolved_host_arguments[0] == "definitely_not_a_host_binding" &&
+              !parsed.source_shape.effects_verified(), "host binding remains unresolved");
+    }
+    // Fixed-seed property tests: compare source access-hint inference against
+    // independent expected flags, then mutate the arity. Never promote an
+    // unverified source shape to a typed kernel execution contract.
+    std::mt19937_64 rng{0xA7701151CULL};
+    constexpr int kCases = 2048;
+    for (int round=0; round<kCases; ++round) {
+        Signature sig{"kernel", {}, true, true};
+        auto expr = launch();
+        expr.kernel = "kernel";
+        expr.ordered_arguments.clear();
+        bool reads = false, writes = false;
+        const int count = 1 + static_cast<int>(rng() % 64);
+        for (int i=0; i<count; ++i) {
+            const auto type = static_cast<typed_ir::Parameter>(rng() % 5);
+            auto name = "v" + std::to_string(i);
+            sig.parameters.push_back({name,type});
+            expr.ordered_arguments.push_back(name);
+            if (type == typed_ir::Parameter::ReadF32) reads = true;
+            if (type == typed_ir::Parameter::WriteF32) writes = true;
+        }
+        const auto linked = source_link::link({sig},expr);
+        const auto& hints = linked.source_shape.access_hints;
+        check(hints.size() == static_cast<std::size_t>(reads + writes) &&
+              (!reads || (hints[0] == source_link::AccessHint::DeviceRead)) &&
+              (!writes || (hints.back() == source_link::AccessHint::DeviceWrite)) &&
+              !linked.source_shape.effects_verified() &&
+              !linked.executable(), "source-only hint oracle and non-executable");
+        expr.ordered_arguments.push_back("extra");
+        denied([&] { (void)source_link::link({sig},expr); }, "GPU-LAUNCH-002");
     }
     std::cout << "PASS " << verified
               << " host-only GPU kernel signature and launch-source-link checks; executable=false\n";
