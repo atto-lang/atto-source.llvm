@@ -339,12 +339,15 @@ alive until `shutdown_after_retire()` joins the worker, then drain and
 destroy the scheduler, and only then destroy the registry.
 
 The new `native_request_actor_termination_registry_v1_test.cpp` authors
-46 fixed checks plus 60 two-thread registration/STOP and
-cancellation/sealed-STOP trials and a final count assertion (107 expected
+49 fixed checks plus 60 two-thread registration/STOP and
+cancellation/sealed-STOP trials and a final count assertion (110 expected
 named checks); it also checks sibling survival, generation ABA denial,
 per-actor 32-context registration quota, double STOP, direct STOP,
 retirement without explicit group reconciliation, cancellation first,
-post-stop zero quota, and carrier wait refusal. The RequestLocal workflow
+post-stop zero quota, and carrier wait refusal. Three additional negative tests ensure that registry-bound host
+mutations cannot bypass the scheduler lifecycle gate by omitting the
+scheduler parameter: raw set, erase, and first-mail binding all reject.
+The RequestLocal workflow
 now pins the new request header, registry and test blobs and compiles the
 test on GCC/Clang optimized, ASan/UBSan, and GCC TSan. These are
 **source-authored**, not executed receipts.
