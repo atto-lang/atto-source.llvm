@@ -6,6 +6,9 @@ on:
       - 'src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp'
       - 'src/main/cpp/oreslang/frontend/GpuKernelSourceLink.hpp'
       - 'src/main/cpp/oreslang/frontend/GpuKernelBodyHir.hpp'
+      - 'src/main/cpp/oreslang/frontend/GpuKernelOpenClSource.hpp'
+      - 'tests/gpu_kernel_opencl_source_test.cpp'
+      - 'scripts/verify-gpu-opencl-offline.sh'
       - 'tests/gpu_kernel_body_hir_test.cpp'
       - 'src/main/cpp/oreslang/runtime/GpuTypedLaunchIr.hpp'
       - 'tests/gpu_kernel_source_link_test.cpp'
@@ -42,6 +45,36 @@ jobs:
         with:
           name: gpu-source-mir-host-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/atto-gpu-source-mir-host-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7
+  host-opencl-spir64-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: OpenCL C source and SPIR64 LLVM IR offline proof
+        shell: bash
+        env:
+          EXPECTED_GPU_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_GPU_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "source_head=$EXPECTED_GPU_HEAD_SHA"
+          echo "source_tree=$(git rev-parse 'HEAD^{tree}')"
+          echo "run_id=${{ github.run_id }}"
+          echo "run_attempt=${{ github.run_attempt }}"
+          bash scripts/verify-gpu-opencl-offline.sh |
+            tee "$RUNNER_TEMP/atto-gpu-opencl-source-offline.txt"
+      - name: Upload offline source-only receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencl-spir64-source-only-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/atto-gpu-opencl-source-offline.txt
           if-no-files-found: warn
           retention-days: 7
   native-compiler-source-link-negative:
