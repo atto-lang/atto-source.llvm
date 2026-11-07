@@ -3898,7 +3898,11 @@ private:
                      token_.text == "yield" || token_.text == "actor" ||
                      token_.text == "new" || token_.text == "defer" ||
                      token_.text == "recover" || token_.text == "select" ||
-                     token_.text == "readch" || token_.text == "writech"))
+                     token_.text == "readch" || token_.text == "writech" ||
+                     token_.text == "throw" || token_.text == "raise" ||
+                     token_.text == "panic" || token_.text == "async" ||
+                     token_.text == "nb" || token_.text == "using" ||
+                     token_.text == "console" || token_.text == "sleep"))
                 gpu_launch_parse_error("GPU-LAUNCH-006", "effectful operation in GPU kernel source", token_.offset);
             if (token_.kind == Kind::Symbol && token_.text == "{") ++depth;
             else if (token_.kind == Kind::Symbol && token_.text == "}") --depth;
