@@ -62,6 +62,24 @@ int main() {
         if (resolve(dir/"app/main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
             throw std::runtime_error("positive project-root resolution mismatch");
     }
+
+    {
+        // Direct validator defense: resolver callers may provide their own
+        // manifest readers, not necessarily the bounded test reader above.
+        using oreslang::project_root_import_detail::validate_manifest;
+        must_fail("direct oversized manifest", "64 KiB", [&] {
+            validate_manifest(std::string(65537, 'x'));
+        });
+        const std::string with_nul =
+            std::string(R"manifest(schema_version = "1"
+note = "good"
+)manifest") + std::string(1, '\0');
+        must_fail("direct manifest NUL", "contains NUL", [&] {
+            validate_manifest(with_nul);
+        });
+        validate_manifest(std::string(R"manifest(schema_version = "1"
+)manifest"));
+    }
     {
         const auto dir = temp / "quoted-key";
         write_text(dir/".ores.pkg.toml", "\"schema_version\" = \"1\"\n");

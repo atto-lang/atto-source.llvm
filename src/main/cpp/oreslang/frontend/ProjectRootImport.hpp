@@ -46,6 +46,15 @@ inline void reject_nested_package(const fs::path& root, const fs::path& path) {
 }
 
 inline void validate_manifest(const std::string& manifest_bytes) {
+    // Defense in depth: the public resolver takes a caller-supplied reader,
+    // whose byte limit may differ from the bundled 64 KiB file reader.
+    // Refuse oversized text before constructing streams or running regexes.
+    if (manifest_bytes.size() > 64u * 1024u)
+        throw std::runtime_error("native package manifest exceeds 64 KiB");
+    // NUL cannot occur in a TOML text manifest. Different consumers must
+    // never disagree because one treats a truncated C-string as the file.
+    if (manifest_bytes.find('\0') != std::string::npos)
+        throw std::runtime_error("native package manifest contains NUL byte");
     if (manifest_bytes.find("\"\"\"") != std::string::npos ||
             manifest_bytes.find("'''") != std::string::npos)
         throw std::runtime_error("native package manifest multiline TOML requires full parser");
