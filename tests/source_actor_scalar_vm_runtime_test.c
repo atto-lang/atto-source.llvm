@@ -14,6 +14,9 @@ static atomic_int sibling_processed;
 static atomic_int sibling_after_failure;
 static atomic_int observed_quota_error;
 static atomic_int malformed_processed;
+static atomic_int bounded_processed;
+static atomic_int tag_failure_processed;
+static atomic_int fuel_failure_processed;
 
 #define OP(x, y) { x, y }
 /* tail(n) = n <= 0 ? 0 : tail(n-1). Executes 100k recursive guest
@@ -70,6 +73,29 @@ static const OresActorScalarInstruction invalid_code[] = {
 };
 static const OresActorScalarProgram invalid_program = {
     1, sizeof(invalid_code)/sizeof(invalid_code[0]), 0, entry, invalid_code
+};
+/* Preflight admits these valid opcodes; runtime must still reject a forged
+ * typed operand (NOT on an i64), and a finite-fuel tight guest loop. */
+static const OresActorScalarInstruction wrong_tag_code[] = {
+    OP(ORES_SCALAR_PUSH_I64, 1),
+    OP(ORES_SCALAR_NOT, 0),
+    OP(ORES_SCALAR_RETURN, 0)
+};
+static const OresActorScalarProgram wrong_tag_program = {
+    1, sizeof(wrong_tag_code)/sizeof(wrong_tag_code[0]),
+    0, entry, wrong_tag_code
+};
+static const OresActorScalarInstruction infinite_code[] = {
+    OP(ORES_SCALAR_PUSH_I64, 1),
+    OP(ORES_SCALAR_PUSH_I64, 0),
+    OP(ORES_SCALAR_LE, 0),
+    OP(ORES_SCALAR_BRANCH_FALSE, 0),
+    OP(ORES_SCALAR_PUSH_I64, 0),
+    OP(ORES_SCALAR_RETURN, 0)
+};
+static const OresActorScalarProgram infinite_program = {
+    1, sizeof(infinite_code)/sizeof(infinite_code[0]),
+    0, entry, infinite_code
 };
 
 static void check(int condition) { if (!condition) abort(); }
@@ -131,6 +157,40 @@ static int64_t post_failure_message(
         &sibling_after_failure, 1, memory_order_release);
     return value;
 }
+static int64_t bounded_depth_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap;
+    check(domain && epoch && payload == 63);
+    int64_t result = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &depth_program, payload, &result) == ORES_SCALAR_OK);
+    check(result == 63);
+    atomic_fetch_add_explicit(&bounded_processed, 1, memory_order_release);
+    return result;
+}
+static int64_t wrong_tag_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap; (void)domain; (void)epoch; (void)payload;
+    int64_t result = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &wrong_tag_program, 1, &result) == ORES_SCALAR_INVALID_FRAME
+        && result == 0);
+    atomic_fetch_add_explicit(
+        &tag_failure_processed, 1, memory_order_release);
+    return 0;
+}
+static int64_t fuel_exhausted_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap; (void)domain; (void)epoch; (void)payload;
+    int64_t result = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &infinite_program, 1, &result) == ORES_SCALAR_FUEL_EXHAUSTED
+        && result == 0);
+    atomic_fetch_add_explicit(
+        &fuel_failure_processed, 1, memory_order_release);
+    return 0;
+}
+
 static int64_t malformed_message(
         OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
     (void)heap; (void)domain; (void)epoch; (void)payload;
@@ -188,8 +248,35 @@ int main(void) {
     oreslang_source_actor_request_stop(malformed);
     oreslang_source_actor_join_done(malformed);
 
+    /* The last admitted non-tail depth is exactly 64 actor-owned frames,
+     * so depth(63) must return cleanly before depth(64) would overflow. */
+    void* boundary = oreslang_source_actor_spawn(
+        init, bounded_depth_message, 1);
+    check(boundary);
+    oreslang_source_actor_send(boundary, 63);
+    check(wait_for(&bounded_processed, 1));
+    oreslang_source_actor_stop(boundary);
+
+    void* wrong_tag = oreslang_source_actor_spawn(
+        init, wrong_tag_message, 1);
+    check(wrong_tag);
+    oreslang_source_actor_send(wrong_tag, 1);
+    check(wait_for(&tag_failure_processed, 1));
+    oreslang_source_actor_stop(wrong_tag);
+
+    void* infinite = oreslang_source_actor_spawn(
+        init, fuel_exhausted_message, 1);
+    check(infinite);
+    oreslang_source_actor_send(infinite, 1);
+    check(wait_for(&fuel_failure_processed, 1));
+    oreslang_source_actor_stop(infinite);
+
+    /* The same sibling accepts another message after all three kinds of
+     * actor-local failure: quota, malformed program, and typed tag/fuel. */
+    oreslang_source_actor_send(sibling, 12);
+    check(wait_for(&sibling_processed, 3));
     oreslang_source_actor_stop(tail);
     oreslang_source_actor_stop(sibling);
-    puts("SOURCE_ACTOR_TYPED_SCALAR_VM_PASS tail=100000 quota=64 siblings=2");
+    puts("SOURCE_ACTOR_TYPED_SCALAR_VM_PASS tail=100000 quota=64 fuel=2000000 sibling_survives=1");
     return 0;
 }
