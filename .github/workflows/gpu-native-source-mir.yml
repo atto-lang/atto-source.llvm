@@ -1,0 +1,37 @@
+name: AttoLang native GPU source MIR host-only
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp'
+      - 'tests/gpu_source_launch_mir_test.cpp'
+      - 'tests/atto_gpu_explicit_launch_admission.cmake'
+      - 'scripts/verify-gpu-native-source-mir.sh'
+      - '.github/workflows/gpu-native-source-mir.yml'
+      - 'CMakeLists.txt'
+permissions:
+  contents: read
+jobs:
+  host-source-mir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify native source MIR host proof at exact PR head
+        env:
+          EXPECTED_GPU_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          bash scripts/verify-gpu-native-source-mir.sh |
+            tee "$RUNNER_TEMP/atto-gpu-source-mir-host-receipt.txt"
+      - name: Upload host-only receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-source-mir-host-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/atto-gpu-source-mir-host-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7
