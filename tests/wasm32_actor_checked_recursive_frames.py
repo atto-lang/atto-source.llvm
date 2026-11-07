@@ -43,6 +43,9 @@ for value in ("atto.trampoline.push", "atto.trampoline.unwind",
 assert "getelementptr inbounds [64 x i64]" in ir
 assert "store volatile i64" in ir
 assert "load volatile i64" in ir
+assert re.search(r"store volatile i32 1,", ir), (
+    "optimizer may eliminate terminal status before trapping")
+assert "load volatile i32" in ir, "typed terminal status export must read volatile"
 assert "@descend(" not in ir, "recursive native engine call was emitted"
 assert "declare" not in "\n".join(
     line for line in ir.splitlines()
