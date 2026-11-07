@@ -46,7 +46,7 @@ bool actor_local_set_on_turn_v1(
     OresNativeActorRef actor,
     ActorLocalScopeV1& scope,
     ExecutionStampV1 stamp,
-    const ActorLocalKeyV1<T>& key, T value) {
+    const LegacyActorLocalKeyV1<T>& key, T value) {
     if (!actor_local_current_turn_v1(scheduler, actor, stamp)) return false;
     return scope.set(stamp, key, std::move(value));
 }
@@ -57,7 +57,7 @@ std::optional<T> actor_local_get_on_turn_v1(
     OresNativeActorRef actor,
     const ActorLocalScopeV1& scope,
     ExecutionStampV1 stamp,
-    const ActorLocalKeyV1<T>& key) {
+    const LegacyActorLocalKeyV1<T>& key) {
     if (!actor_local_current_turn_v1(scheduler, actor, stamp))
         return std::nullopt;
     return scope.get_copy(stamp, key);
@@ -69,7 +69,7 @@ bool actor_local_erase_on_turn_v1(
     OresNativeActorRef actor,
     ActorLocalScopeV1& scope,
     ExecutionStampV1 stamp,
-    const ActorLocalKeyV1<T>& key) {
+    const LegacyActorLocalKeyV1<T>& key) {
     if (!actor_local_current_turn_v1(scheduler, actor, stamp))
         return false;
     return scope.erase(stamp, key);
