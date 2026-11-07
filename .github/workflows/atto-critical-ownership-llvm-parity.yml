@@ -240,7 +240,7 @@ jobs:
           print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
           print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
           PY
-      - name: Execute 50 real compiler fixtures and fail-closed matrix mutations
+      - name: Execute 100 real compiler fixtures in two matrices and fail-closed mutations
         shell: bash
         run: |
           set -euo pipefail
