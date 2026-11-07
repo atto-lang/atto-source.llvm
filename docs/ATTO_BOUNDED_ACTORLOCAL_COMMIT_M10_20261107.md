@@ -38,3 +38,7 @@ Keep **one canonical ActorLocal store**. Prepare (allocate and measure) a replac
 Before any generic guest lowering, add deterministic negative tests for stopped actor admission, stale generation, foreign scheduler actor, cancellation during preparation, concurrent STOP vs commit, duplicate ticket replay, quota overflow, reentrant destructors, and reader pinning; then execute compiled `.atto` fixtures and prove five-backend parity with exact-head receipts.
 
 **Release gates:** stepful source-owned runner canary, GCC/Clang optimized and sanitizers, the two negative mutations, exact Git head/tree/workflow-job receipts and independent review. Neither this note nor local source-free checks override those gates.
+
+## Final source-pin correction
+
+The STOP-race negative mutation now deletes the retired-actor predicate instead of replacing it with a constant expression; this avoids treating a compiler warning as mutation evidence under strict `-Werror` builds. The source-verified mutation witness is Git blob `8bd31ea0a18928f1d0aee98e7b13f358a847c4fe`. The updated six-host offline verifier is `b92000eeb3d261e5624408b1e2e045b6d38b4c8d`. Both require the same exact source-local checkout and remain unexecuted under the current GitHub runner-admission failure.
