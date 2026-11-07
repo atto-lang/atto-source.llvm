@@ -93,8 +93,17 @@ void on_actor_message(void* userdata, std::size_t actor_index,
     assert(ores_native_actor_scheduler_is_current_actor(
         s.scheduler, s.actor));
     assert(s.left->belongs_to(s.actor) && s.right->belongs_to(s.actor));
-    assert(request_local_current_actor_turn_v1(s.scheduler, s.actor, *s.left));
-    assert(request_local_current_actor_turn_v1(s.scheduler, s.actor, *s.right));
+    // Each HTTP request is attached to one scheduler-issued DATA mail. A
+    // later message on the same physical actor never inherits that request.
+    std::uint64_t mail = 0;
+    assert(ores_native_actor_scheduler_current_data_mail_sequence(
+        s.scheduler, s.actor, &mail));
+    if (payload == 1) assert(s.left->bind_original_mail_once(mail));
+    if (payload == 2) assert(s.right->bind_original_mail_once(mail));
+    assert(request_local_current_actor_turn_v1(
+        s.scheduler, s.actor, *s.left) == (payload == 1));
+    assert(request_local_current_actor_turn_v1(
+        s.scheduler, s.actor, *s.right) == (payload == 2));
     OresNativeActorRef other_generation = s.actor;
     ++other_generation.generation;
     assert(!request_local_current_actor_turn_v1(
@@ -117,13 +126,15 @@ void on_actor_message(void* userdata, std::size_t actor_index,
         assert(s.right->set(s.counter, 2));
     } else if (payload == 3) {
         assert(test_native_tls_marker == 41);
-        assert(request_local_get_on_actor_turn_v1(
-            s.scheduler, s.actor, *s.left, s.trace) ==
-            std::string("trace-left"));
+        // Both previous request-local values exist as owned host state,
+        // but neither may be observed through the guest-turn adapter.
+        assert(!request_local_get_on_actor_turn_v1(
+            s.scheduler, s.actor, *s.left, s.trace));
+        assert(!request_local_get_on_actor_turn_v1(
+            s.scheduler, s.actor, *s.right, s.trace));
+        assert(s.left->get_copy(s.trace) == std::string("trace-left"));
         assert(s.left->get_copy(s.counter) == 1);
-        assert(request_local_get_on_actor_turn_v1(
-            s.scheduler, s.actor, *s.right, s.trace) ==
-            std::string("trace-right"));
+        assert(s.right->get_copy(s.trace) == std::string("trace-right"));
     } else if (payload == 4) {
         assert(s.right->get_copy(s.trace) == std::string("trace-right"));
         assert(s.right->get_copy(s.counter) == 2);
