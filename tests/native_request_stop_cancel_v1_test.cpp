@@ -82,9 +82,15 @@ struct PauseOnCopy {
 };
 
 std::atomic<unsigned> received{0};
-void receive(void*, std::size_t, std::uint64_t) {
+std::atomic<RequestLocalStopGroupV1*> foreign_stop_target{nullptr};
+std::atomic<bool> foreign_stop_denied{false};
+void receive(void*, std::size_t, std::uint64_t payload) {
     // A callback carrier must be observable without a scheduler pointer.
     assert(ores_native_actor_scheduler_is_any_current_carrier_v1());
+    if (payload == 77)
+        if (auto* group = foreign_stop_target.load()) {
+            foreign_stop_denied.store(!group->stop_sealed_and_wait());
+        }
     ++received;
 }
 
@@ -267,6 +273,27 @@ void stop_waits_for_pinned_read_copy() {
     cancellation->retire();
 }
 
+void foreign_scheduler_carrier_must_not_block_STOP() {
+    Actors owner, foreign;
+    auto cancellation = TaskCancellation::root();
+    auto request = new_request(owner.a, 9, cancellation);
+    RequestLocalStopGroupV1 stop(owner.scheduler, owner.a);
+    check("36_foreign_carrier_target_registered",
+          stop.register_request(request));
+    foreign_stop_denied.store(false);
+    foreign_stop_target.store(&stop);
+    const bool sent = ores_native_actor_scheduler_try_send(
+        foreign.scheduler, foreign.b, 77) == ORES_NATIVE_SEND_ACCEPTED;
+    const bool drained = sent &&
+        ores_native_actor_scheduler_drain(foreign.scheduler);
+    foreign_stop_target.store(nullptr);
+    check("37_other_scheduler_carrier_cannot_wait",
+          drained && foreign_stop_denied.load() && !stop.sealed());
+    check("38_external_CONTROL_can_finish_original_STOP",
+          stop.stop_sealed_and_wait() && !request->active());
+    cancellation->retire();
+}
+
 void replay_quota_and_retirement() {
     auto c = TaskCancellation::root();
     auto request = new_request({71, 8, 1}, 7, c);
@@ -297,6 +324,7 @@ int main() {
     close_wins_during_read_copy();
     replay_quota_and_retirement();
     stop_waits_for_pinned_read_copy();
-    if (passed != 35) return 2;
-    std::puts("REQUEST_STOP_CANCEL_35_HOST_CASES_PASS");
+    foreign_scheduler_carrier_must_not_block_STOP();
+    if (passed != 38) return 2;
+    std::puts("REQUEST_STOP_CANCEL_38_HOST_CASES_PASS");
 }
