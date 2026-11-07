@@ -249,12 +249,36 @@ void test_cancelled_authority_on_real_data_turn() {
     check("31_live_sibling_after_cancelled_request",
           ores_native_actor_scheduler_poll_ready(w.scheduler, w.actors[0]));
 }
+// Scope is strongly retained by the DATA gate even after its scheduler
+// is destroyed. The registry's STOP/retire cleanup must revoke it first, so
+// every public access short-circuits before touching the stale raw pointer.
+void test_terminated_gate_outlives_scheduler() {
+    std::unique_ptr<Gate> escaped;
+    {
+        World w;
+        w.deliver(0, 1);
+        escaped = std::move(w.gates[0][0]);
+        check("stale_gate_01_issued_before_destroy",
+              bool(escaped));
+        // World tears down the registry/actors/scheduler in this scope.
+    }
+    RequestLocalKeyV1<int> unrelated;
+    check("stale_gate_02_authorized_denied_after_destroy",
+          escaped && !escaped->authorized());
+    check("stale_gate_03_copy_denied_after_destroy",
+          escaped && !escaped->get_copy(unrelated));
+    check("stale_gate_04_mutations_denied_after_destroy",
+          escaped && !escaped->set(unrelated, 9)
+          && !escaped->remove(unrelated));
+}
+
 } // namespace
 
 int main() {
     test_offturn_and_issuer_configuration();
     test_issued_turns_and_revocation();
     test_cancelled_authority_on_real_data_turn();
+    test_terminated_gate_outlives_scheduler();
     // Fixed: 14 bootstrap + 25 retirement + 31 final? Count by markers
     // is runtime validated by the workflow, never infer an execution pass
     // from this source comment.
