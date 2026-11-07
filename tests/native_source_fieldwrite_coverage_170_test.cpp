@@ -190,6 +190,10 @@ bool safe_candidate(CandidateReinitializeAudit result) {
 // This only tests the sealed identity + live StoreInst verifier.
 void seal_direct_write(Fixture& f, bool reinitialize) {
     f.primary->compiler_checked_field_reinitialization = reinitialize;
+    if (reinitialize)
+        f.source_function->compiler_checked_reinitialize_operations.push_back({
+            0, "owner.x", f.primary->offset, 0
+        });
     oreslang::source_identity::seal_validated_program(f.program);
     f.ledger = FieldWriteLedger(f.program);
     f.bind_primary();
@@ -378,8 +382,24 @@ int main() {
         check([]{ Fixture f; seal_direct_write(f,true); (void)f.another(); return bounded_only(direct_reinit(f)); }(), "untagged housekeeping stores allowed with verified reinit", n);
         check([]{ Fixture f; seal_direct_write(f,true); auto* extra=f.another(f.alternate); return extra && bounded_only(direct_reinit(f)); }(), "ordinary unrelated LLVM housekeeping store with reinit allowed", n);
         check([]{ Fixture f; seal_direct_write(f,true); auto a=f.ledger.verify_source_coverage(f.program,f.module,f.function_map()); return a.immutable_source_identity_bound && !a.ownership_complete && bounded_only(direct_reinit(f)); }(), "verified source ledger and reinit proof remain separate", n);
-        if(n != 154) throw std::runtime_error("wrong test inventory");
-        std::cout<<"PASS 154/154 source FieldWrite + reinit candidate and checked-store cases "
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_checked_reinitialize_operations.clear(); direct_reinit(f); }), "checker MIR operation erased after sealing rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); auto e=f.source_function->compiler_checked_reinitialize_operations.front(); f.source_function->compiler_checked_reinitialize_operations.push_back(e); direct_reinit(f); }), "checker MIR operation duplicated rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_checked_reinitialize_operations.front().statement_index=900; direct_reinit(f); }), "checker MIR operation index out of bounds rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_checked_reinitialize_operations.front().statement_index=1; direct_reinit(f); }), "checker MIR operation index shifted rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_checked_reinitialize_operations.front().canonical_place="owner.y"; direct_reinit(f); }), "checker MIR operation wrong place rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_checked_reinitialize_operations.front().canonical_place.clear(); direct_reinit(f); }), "checker MIR operation empty place rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); ++f.source_function->compiler_checked_reinitialize_operations.front().source_offset; direct_reinit(f); }), "checker MIR operation source offset mismatch rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_checked_reinitialize_operations.front().sealed_write_id=0; direct_reinit(f); }), "checker MIR operation zero sealed WriteId rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_checked_reinitialize_operations.front().sealed_write_id=888; direct_reinit(f); }), "checker MIR operation foreign sealed WriteId rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,false); f.source_function->compiler_checked_reinitialize_operations.push_back({0,"owner.x",f.primary->offset,1}); direct_reinit(f); }), "checker MIR operation copied to ordinary field write rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_checked_reinitialize_operations.front().canonical_place="other.x"; direct_reinit(f); }), "checker MIR operation forged on fresh source after sealing rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->compiler_source_path="f1/s42"; direct_reinit(f); }), "checker MIR operation forged source node path rejected", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return f.source_function->compiler_checked_reinitialize_operations.size()==1 && bounded_only(direct_reinit(f)); }(), "checker MIR operation inventory retained across source seal", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return f.source_function->compiler_checked_reinitialize_operations.front().statement_index==0 && bounded_only(direct_reinit(f)); }(), "checker MIR operation ordinal is source index zero", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return f.source_function->compiler_checked_reinitialize_operations.front().canonical_place=="owner.x" && bounded_only(direct_reinit(f)); }(), "checker MIR operation place exact", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return f.source_function->compiler_checked_reinitialize_operations.front().sealed_write_id==f.primary->compiler_source_node_id && bounded_only(direct_reinit(f)); }(), "checker MIR operation sealed WriteId matches source node", n);
+        if(n != 170) throw std::runtime_error("wrong test inventory");
+        std::cout<<"PASS 170/170 source FieldWrite + checker MIR inventory and StoreInst cases "
                     "(REAL LLVM IR HOST TEST; NOT NLL/GUEST VERIFIED)\n";
         return 0;
     } catch(const std::exception& error) {

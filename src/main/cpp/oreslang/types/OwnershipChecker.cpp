@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -579,6 +580,7 @@ void validate_i64_ownership(Program& program) {
         for (auto& child : stmt.else_statements) self(self, child);
     };
     for (auto& fn : program.functions) {
+        fn.compiler_checked_reinitialize_operations.clear();
         for (auto& stmt : fn.statements) clear_claims(clear_claims, stmt);
         for (auto& stmt : fn.caught_throw_defers) clear_claims(clear_claims, stmt);
     }
@@ -683,7 +685,7 @@ void validate_i64_ownership(Program& program) {
         if (method.result) pure(*method.result);
     }
 
-    for (const auto& function : program.functions) {
+    for (auto& function : program.functions) {
         Locals locals;
         // IDs are minted by this compiler frame, never supplied by source.
         // Their scope is the checked function, not globally independent
@@ -1122,8 +1124,28 @@ void validate_i64_ownership(Program& program) {
                         !recv.subobjects.count(stmt.field)) {
                     // Recorded by the actual ownership checker after value
                     // validation, never invented by LLVM lowering.
+                    // This second, independently enumerated effect inventory
+                    // originates in semantic ownership validation, not AST
+                    // scanning during LLVM lowering.
+                    const auto it = std::find_if(
+                        function.statements.begin(), function.statements.end(),
+                        [&](const Statement& direct) { return &direct == &stmt; });
+                    if (it == function.statements.end())
+                        throw std::runtime_error(
+                            "ownership violation: non-direct source reinitialization effect");
+                    if (function.compiler_checked_reinitialize_operations.size() >= 4096)
+                        throw std::runtime_error(
+                            "ownership violation: source reinitialization inventory exceeds bound");
+                    const auto index = static_cast<std::size_t>(
+                        std::distance(function.statements.begin(), it));
+                    function.compiler_checked_reinitialize_operations.push_back({
+                        index, stmt.receiver + "." + stmt.field, stmt.offset, 0
+                    });
                     stmt.compiler_checked_field_reinitialization = true;
                 }
+                if (recv.moved || recv.exclusive_loan || recv.shared_loans != 0)
+                    throw std::runtime_error(
+                        "ownership violation: field owner invalidated during assignment");
                 recv.moved_fields.erase(stmt.field);
             } else if (stmt.kind == Statement::Kind::Call) {
                 const Expression& call = *stmt.expression;

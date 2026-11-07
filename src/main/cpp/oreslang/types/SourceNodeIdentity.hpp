@@ -53,6 +53,13 @@ inline void seal_validated_program(Program& program) {
                 !function.compiler_source_sealed_name.empty())
             throw std::runtime_error(
                 "ownership violation: preassigned source function identity");
+        if (function.compiler_checked_reinitialize_operations.size() > 4096)
+            throw std::runtime_error(
+                "ownership violation: source reinit operation count exceeds bound");
+        for (const auto& effect : function.compiler_checked_reinitialize_operations)
+            if (effect.sealed_write_id)
+                throw std::runtime_error(
+                    "ownership violation: preassigned source reinit effect identity");
         for (const auto& stmt : function.statements)
             count_tree(count_tree, stmt, 0);
         for (const auto& stmt : function.caught_throw_defers)
@@ -101,6 +108,27 @@ inline void seal_validated_program(Program& program) {
         for (std::size_t i = 0; i < function.caught_throw_defers.size(); ++i)
             mint_tree(mint_tree, function.caught_throw_defers[i],
                 prefix + "/c" + std::to_string(i));
+        std::set<std::size_t> seen_effects;
+        for (auto& effect : function.compiler_checked_reinitialize_operations) {
+            if (effect.statement_index >= function.statements.size() ||
+                    !seen_effects.insert(effect.statement_index).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate or invalid checker operation ordinal");
+            const auto& statement = function.statements[effect.statement_index];
+            if (!statement.compiler_checked_field_reinitialization ||
+                    statement.compiler_reinitialize_write_id == 0 ||
+                    statement.receiver + "." + statement.field !=
+                        effect.canonical_place ||
+                    statement.offset != effect.source_offset)
+                throw std::runtime_error(
+                    "ownership violation: unchecked or mismatched compiler reinit operation");
+            effect.sealed_write_id = statement.compiler_reinitialize_write_id;
+        }
+        for (std::size_t i = 0; i < function.statements.size(); ++i)
+            if (function.statements[i].compiler_checked_field_reinitialization &&
+                    !seen_effects.count(i))
+                throw std::runtime_error(
+                    "ownership violation: reinit marker absent from checker operation inventory");
     }
     // Publish only after all identities have been minted. A truncated tail
     // could otherwise preserve a valid 1..N prefix of node identities.
@@ -161,6 +189,32 @@ inline void validate_program_identity(const Program& program) {
         for (std::size_t i = 0; i < function.caught_throw_defers.size(); ++i)
             visit(visit, function.caught_throw_defers[i], 0,
                 prefix + "/c" + std::to_string(i));
+        if (function.compiler_checked_reinitialize_operations.size() > 4096)
+            throw std::runtime_error(
+                "ownership violation: oversized checker operation inventory");
+        std::set<std::size_t> checked_effects;
+        for (const auto& effect : function.compiler_checked_reinitialize_operations) {
+            if (effect.statement_index >= function.statements.size() ||
+                    !checked_effects.insert(effect.statement_index).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate or out-of-range checker reinit operation");
+            const auto& statement = function.statements[effect.statement_index];
+            if (!statement.compiler_checked_field_reinitialization ||
+                    !statement.compiler_reinitialize_write_id ||
+                    statement.kind != Statement::Kind::FieldWrite ||
+                    effect.sealed_write_id !=
+                        statement.compiler_reinitialize_write_id ||
+                    effect.canonical_place !=
+                        statement.receiver + "." + statement.field ||
+                    effect.source_offset != statement.offset)
+                throw std::runtime_error(
+                    "ownership violation: source reinit checker inventory mismatch");
+        }
+        for (std::size_t i = 0; i < function.statements.size(); ++i)
+            if (function.statements[i].compiler_checked_field_reinitialization &&
+                    !checked_effects.count(i))
+                throw std::runtime_error(
+                    "ownership violation: source reinit marker lacks checker operation");
     }
     if (expected_node != program.compiler_source_node_count)
         throw std::runtime_error(
@@ -210,6 +264,8 @@ inline void prune_and_reseal_validated_functions(
         for (auto& function : program.functions) {
             function.compiler_source_function_id = 0;
             function.compiler_source_sealed_name.clear();
+            for (auto& effect : function.compiler_checked_reinitialize_operations)
+                effect.sealed_write_id = 0;
             for (auto& stmt : function.statements) reset_tree(reset_tree, stmt);
             for (auto& stmt : function.caught_throw_defers) reset_tree(reset_tree, stmt);
         }

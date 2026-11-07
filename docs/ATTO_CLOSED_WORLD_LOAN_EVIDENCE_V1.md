@@ -301,3 +301,42 @@ reinit metadata with the same exit code, and compile-time rejection of an
 unrestored moved-field read. It has exact-name CTest/JUnit verification and
 two-guests-one-rejection marker; it cannot be satisfied by a host-only test.
 All work is AUTHORED / NOT_EXECUTED until a real exact-head runner executes.
+
+## Checker-owned straight-line MIR operation inventory / compile repair
+
+Compile-focused audit found the function ownership-checking loop was
+`for (const auto& function : program.functions)` despite PR #1556 now
+writing an admission marker to its `Statement`. The loop is changed to
+a mutable Function reference, and <iterator> is included explicitly for
+std::distance used by the bounded source statement provenance mapping.
+
+Source ownership checker independently records each safely verified
+straight-line moved-field restoration in a Function-level vector of
+CheckedSourceReinitializeOperation: source statement index, canonical
+place and exact source offset. This is separate from per-Statement admission
+metadata and independent of LLVM StoreInst receipts. It is populated
+only during successful semantic ownership checking, after RHS checking.
+Revalidation clears both statement markers and vector evidence.
+
+Validated AST sealing gives each operation the exact compiler-minted
+source WriteId and validates unique indices, place, offset, and checked
+statement status. Before returning IR, production verification walks
+this compiler-created operation inventory (not a synthetic host graph)
+and requires a one-to-one match to emitted actual LLVM StoreInst
+provenance. Every marked statement must have exactly one semantic
+operation and vice versa. The trusted tree-shaking transformer reissues
+operation WriteIds when it reissues the compilation-unit/source IDs.
+
+This is still a straight-line reinit subset, not a complete typed-MIR
+control-flow graph; no loan-use/SSA, exception, suspension, optimization,
+actor cancellation or whole-program ownership completeness is claimed.
+All broad proof flags remain false.
+
+Host source field-write tests expand from 154 to 170 authored cases
+(12 negative mutations plus 4 controls), including source-operation
+deletion/duplication, wrong statement ordinal, wrong field/offset,
+forged/zero WriteId and unclaimed/ordinary write claims. Existing 16
+focused CTests, 85 source identity checks, 50 native compiler guests,
+tree shake guest and two-reinit-guests-plus-rejection gate remain mandatory.
+No successful executed test receipts exist while runner admission
+reports zero steps; this work must stay draft until actual compile/tests.
