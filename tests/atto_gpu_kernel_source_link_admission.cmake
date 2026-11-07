@@ -14,7 +14,22 @@ set(launch
 set(cases "gpu-only" "source-linked" "array-mutable" "unknown-kernel" "wrong-arity"
           "duplicate-kernel" "duplicate-param" "forbidden-await" "invalid-type"
           "nonvoid" "missing-body" "read-mut" "wrong-scalar-name" "signed-int"
-          "string-body" "template-body" "defer-body")
+          "string-body" "template-body" "defer-body"
+          "throw-body"
+          "raise-body"
+          "panic-body"
+          "async-body"
+          "nb-body"
+          "using-body"
+          "console-body"
+          "sleep-body"
+          "select-body"
+          "readch-body"
+          "writech-body"
+          "spawn-body"
+          "nested-braces"
+          "comment-braces"
+          "opaque-host-call")
 set(source_gpu-only "${kernel}")
 set(source_source-linked "${kernel}${launch}")
 set(source_array-mutable "${legacy}${launch}")
@@ -32,6 +47,21 @@ set(source_signed-int "pub gpu fnc saxpy(int n): void { return; }\n")
 set(source_string-body "pub gpu fnc saxpy(): void { const val = \"}\"; return; }\n")
 set(source_template-body "pub gpu fnc saxpy(): void { const val = `hello`; return; }\n")
 set(source_defer-body "pub gpu fnc saxpy(): void { defer cleanup(); }\n")
+set(source_throw-body "pub gpu fnc saxpy(): void { throw error; }\n")
+set(source_raise-body "pub gpu fnc saxpy(): void { raise error; }\n")
+set(source_panic-body "pub gpu fnc saxpy(): void { panic error; }\n")
+set(source_async-body "pub gpu fnc saxpy(): void { async fnc f() {} }\n")
+set(source_nb-body "pub gpu fnc saxpy(): void { nb select first; }\n")
+set(source_using-body "pub gpu fnc saxpy(): void { using device; }\n")
+set(source_console-body "pub gpu fnc saxpy(): void { console.log(); }\n")
+set(source_sleep-body "pub gpu fnc saxpy(): void { sleep(10); }\n")
+set(source_select-body "pub gpu fnc saxpy(): void { select first; }\n")
+set(source_readch-body "pub gpu fnc saxpy(): void { readch c; }\n")
+set(source_writech-body "pub gpu fnc saxpy(): void { writech c; }\n")
+set(source_spawn-body "pub gpu fnc saxpy(): void { spawn worker; }\n")
+set(source_nested-braces "pub gpu fnc saxpy(): void { if true { if true { return; } } }\n")
+set(source_comment-braces "pub gpu fnc saxpy(): void { /* } } } */ return; }\n")
+set(source_opaque-host-call "pub gpu fnc saxpy(): void { unresolved_host_function(); }\n")
 set(expected_gpu-only "GPU-LAUNCH-008")
 set(expected_source-linked "GPU-LAUNCH-008")
 set(expected_array-mutable "GPU-LAUNCH-008")
@@ -49,6 +79,21 @@ set(expected_signed-int "GPU-LAUNCH-008")
 set(expected_string-body "GPU-LAUNCH-006")
 set(expected_template-body "GPU-LAUNCH-006")
 set(expected_defer-body "GPU-LAUNCH-006")
+set(expected_throw-body "GPU-LAUNCH-006")
+set(expected_raise-body "GPU-LAUNCH-006")
+set(expected_panic-body "GPU-LAUNCH-006")
+set(expected_async-body "GPU-LAUNCH-006")
+set(expected_nb-body "GPU-LAUNCH-006")
+set(expected_using-body "GPU-LAUNCH-006")
+set(expected_console-body "GPU-LAUNCH-006")
+set(expected_sleep-body "GPU-LAUNCH-006")
+set(expected_select-body "GPU-LAUNCH-006")
+set(expected_readch-body "GPU-LAUNCH-006")
+set(expected_writech-body "GPU-LAUNCH-006")
+set(expected_spawn-body "GPU-LAUNCH-006")
+set(expected_nested-braces "GPU-LAUNCH-008")
+set(expected_comment-braces "GPU-LAUNCH-008")
+set(expected_opaque-host-call "GPU-LAUNCH-008")
 
 foreach(case_name IN LISTS cases)
   string(RANDOM LENGTH 24 ALPHABET "0123456789abcdef" nonce)
@@ -88,4 +133,4 @@ foreach(case_name IN LISTS cases)
     message(FATAL_ERROR "${case_name}: rejected source created hidden or nested artifacts")
   endif()
 endforeach()
-message(STATUS "PASS 17 native source-link compiler negative admissions; physical_gpu_executed=false")
+message(STATUS "PASS 32 native source-link compiler negative admissions; physical_gpu_executed=false")
