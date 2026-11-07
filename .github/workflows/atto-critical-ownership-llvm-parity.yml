@@ -40,7 +40,7 @@ on:
       - 'tests/native_ownership_mir_opaque_effects_18_test.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipMirEvidence.hpp'
       - 'scripts/ownership-ci-workflow-shape.mjs'
-      - 'tests/ownership_ci_workflow_shape_14.test.mjs'
+      - 'tests/ownership_ci_workflow_shape_18.test.mjs'
       - 'bin/check-ownership-workflow-shape.mjs'
       - 'tests/contracts/atto_ownership_place_mir_50.json'
       - 'tests/ownership_compiler_fixture_matrix.py'
@@ -78,9 +78,9 @@ jobs:
           echo "ATTO_LLVM_EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
           # STATIC_ONLY: refuse malformed workflow without granting runner or guest evidence.
           node --check scripts/ownership-ci-workflow-shape.mjs
-          node --check tests/ownership_ci_workflow_shape_14.test.mjs
+          node --check tests/ownership_ci_workflow_shape_18.test.mjs
           node --check bin/check-ownership-workflow-shape.mjs
-          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_14.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
+          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_18.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
           grep -Eq '^# tests 18$' /tmp/atto-ownership-workflow-shape.tap
           grep -Eq '^# pass 18$' /tmp/atto-ownership-workflow-shape.tap
           grep -Eq '^# fail 0$' /tmp/atto-ownership-workflow-shape.tap
