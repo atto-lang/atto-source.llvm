@@ -1861,6 +1861,63 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-actor-membership-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_multi_group_membership COMMAND oreslang-native-actor-membership-test)
     set_tests_properties(native_actor_multi_group_membership PROPERTIES TIMEOUT 20)
+    # Host-only ETS scalar set and pg-style membership snapshots; neither
+    # proves source lowering, distributed pg or VM/IsolateVM admission.
+    add_executable(oreslang-native-ets-scalar-set-test
+        tests/native_ets_scalar_set_test.cpp)
+    target_include_directories(oreslang-native-ets-scalar-set-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ets-scalar-set-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-ets-scalar-set-test PRIVATE Threads::Threads)
+    add_test(NAME native_ets_host_scalar_acl_lifetime
+        COMMAND oreslang-native-ets-scalar-set-test)
+    set_tests_properties(native_ets_host_scalar_acl_lifetime PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-pg-snapshot-test
+        tests/native_pg_membership_snapshot_test.cpp)
+    target_include_directories(oreslang-native-pg-snapshot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-pg-snapshot-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-pg-snapshot-test PRIVATE Threads::Threads)
+    add_test(NAME native_pg_host_membership_snapshot
+        COMMAND oreslang-native-pg-snapshot-test)
+    set_tests_properties(native_pg_host_membership_snapshot PROPERTIES TIMEOUT 30)
+    # Adversarial host-only ETS and pg tests: stop races, reincarnation,
+    # group-ID ABA, callback reentrancy, and individual mailbox rejection.
+    add_executable(oreslang-native-ets-linearization-test
+        tests/native_ets_linearizable_retirement_test.cpp)
+    target_include_directories(oreslang-native-ets-linearization-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ets-linearization-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-ets-linearization-test PRIVATE Threads::Threads)
+    add_test(NAME native_ets_insert_new_and_retire_race
+        COMMAND oreslang-native-ets-linearization-test)
+    set_tests_properties(native_ets_insert_new_and_retire_race PROPERTIES TIMEOUT 45)
+    add_executable(oreslang-native-ets-versioned-cas-test
+        tests/native_ets_versioned_cas_test.cpp)
+    target_include_directories(oreslang-native-ets-versioned-cas-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ets-versioned-cas-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-ets-versioned-cas-test PRIVATE Threads::Threads)
+    add_test(NAME native_ets_aba_versioned_cas_contention
+        COMMAND oreslang-native-ets-versioned-cas-test)
+    set_tests_properties(native_ets_aba_versioned_cas_contention
+        PROPERTIES TIMEOUT 45)
+
+    add_executable(oreslang-native-pg-broadcast-test
+        tests/native_pg_broadcast_test.cpp)
+    target_include_directories(oreslang-native-pg-broadcast-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-pg-broadcast-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-pg-broadcast-test PRIVATE Threads::Threads)
+    add_test(NAME native_pg_bounded_broadcast_and_group_aba
+        COMMAND oreslang-native-pg-broadcast-test)
+    set_tests_properties(native_pg_bounded_broadcast_and_group_aba PROPERTIES TIMEOUT 45)
     # Host-only CONTROL timer queue: no guest callback, no source async lowering.
     # Expiry tickets are held until exactly-once claim/discard, including
     # accounting for polled-but-not-yet-dispatched timers.
@@ -4350,6 +4407,49 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME native_vm_nio_lifecycle_and_rt_prestart
         COMMAND oreslang-native-vm-nio-lifecycle-test)
     set_tests_properties(native_vm_nio_lifecycle_and_rt_prestart
+        PROPERTIES TIMEOUT 30)
+    # One host process, zero VM-created pthreads: ETS, pg, control wake and
+    # attached-but-idle epoll must not secretly start scheduler/reactor workers.
+    add_executable(oreslang-native-vm-ets-pg-cold-boot-test
+        tests/native_vm_ets_pg_cold_boot_test.cpp
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+        src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+    target_include_directories(oreslang-native-vm-ets-pg-cold-boot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-vm-ets-pg-cold-boot-test PRIVATE
+        c_std_11 cxx_std_17)
+    set_target_properties(oreslang-native-vm-ets-pg-cold-boot-test PROPERTIES
+        LINKER_LANGUAGE CXX)
+    target_link_libraries(oreslang-native-vm-ets-pg-cold-boot-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-vm-ets-pg-cold-boot-test PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>
+        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_vm_ets_pg_zero_cold_threads
+        COMMAND oreslang-native-vm-ets-pg-cold-boot-test)
+    set_tests_properties(native_vm_ets_pg_zero_cold_threads
+        PROPERTIES TIMEOUT 30)
+    # Real native VM mailbox admission, not a mock send callback. Test only
+    # runs with trusted host refs; source pg lowering remains unsupported.
+    add_executable(oreslang-native-pg-vm-mailbox-test
+        tests/native_pg_vm_mailbox_admission_test.cpp
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-pg-vm-mailbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-pg-vm-mailbox-test PROPERTIES
+        LINKER_LANGUAGE CXX)
+    target_link_libraries(oreslang-native-pg-vm-mailbox-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-pg-vm-mailbox-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_pg_real_vm_mailbox_stop_backpressure
+        COMMAND oreslang-native-pg-vm-mailbox-test)
+    set_tests_properties(native_pg_real_vm_mailbox_stop_backpressure
         PROPERTIES TIMEOUT 30)
 endif()
 
