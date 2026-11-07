@@ -1,0 +1,83 @@
+name: Atto GPU SAXPY source and provider host checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/atto-gpu-saxpy-host-v1.yml'
+      - 'src/main/cpp/oreslang/frontend/AttoGpuSaxpyV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/SaxpyOpenClProvider.hpp'
+      - 'src/main/cpp/oreslang/runtime/OpenClSystemApi.hpp'
+      - 'tests/atto_gpu_saxpy_source_v1_test.cpp'
+      - 'tests/opencl_saxpy_provider_v1_test.cpp'
+      - 'tests/opencl_saxpy_gpu_probe.cpp'
+      - 'tests/cmake/verify-atto-gpu-saxpy-physical-v1.cmake'
+      - 'scripts/verify-atto-gpu-saxpy-hardware.sh'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-host-sanitizers:
+    name: source-only typed GPU and three-buffer host sanitizer gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact immutable source head
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Bind runner to checked source head and tree
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_HEAD_SHA"
+          test -n "$(git rev-parse HEAD^{tree})"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "gpu_source_head=$actual"
+          echo "gpu_source_tree=$(git rev-parse HEAD^{tree})"
+          echo "gpu_run_attempt=${{ github.run_attempt }}"
+          echo "gpu_run_id=${{ github.run_id }}"
+
+      - name: Compile exact-source host-only tests under ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/atto-gpu-saxpy-host
+          clang++ --version
+          clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+            -Isrc/main/cpp tests/atto_gpu_saxpy_source_v1_test.cpp \
+            -o /tmp/atto-gpu-saxpy-host/source-test
+          clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+            -Isrc/main/cpp tests/opencl_saxpy_provider_v1_test.cpp \
+            -o /tmp/atto-gpu-saxpy-host/provider-test
+          clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+            -Isrc/main/cpp tests/opencl_saxpy_gpu_probe.cpp -ldl \
+            -o /tmp/atto-gpu-saxpy-host/physical-probe
+          sha256sum /tmp/atto-gpu-saxpy-host/source-test \
+            /tmp/atto-gpu-saxpy-host/provider-test \
+            /tmp/atto-gpu-saxpy-host/physical-probe
+
+      - name: Run real native host tests (NOT a hardware pass)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          /tmp/atto-gpu-saxpy-host/source-test
+          /tmp/atto-gpu-saxpy-host/provider-test
+          printf 'ATTO_GPU_HOST_ONLY_RECEIPT_V1\n'
+          printf 'source_head=%s\n' "$(git rev-parse HEAD)"
+          printf 'source_tree=%s\n' "$(git rev-parse HEAD^{tree})"
+          printf 'runner_attempt=%s\n' "${{ github.run_attempt }}"
+          printf 'evidence_class=HOST_ONLY_SANITIZERS_NOT_DEVICE_EXECUTION\n'
