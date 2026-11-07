@@ -478,6 +478,15 @@ struct InvertedStructDecl {
     std::size_t offset = 0;
 };
 
+// A source literal with its explicit nominal scalar type. This is never
+// a pointer, runtime value, implicit conversion or guest authority.
+struct InvertedSourceLiteral {
+    InvertedScalarKind kind = InvertedScalarKind::I64;
+    std::int64_t integer = 0;
+    bool boolean = false;
+    double floating = 0.0;
+};
+
 // One strictly local and bounded source-to-MIR slice. These are parsed
 // production source operations, NOT LLVM IR or a compiler authorization;
 // an independent typed HIR/MIR verifier must admit the complete stream.
@@ -488,12 +497,16 @@ struct InvertedSourceOperation {
     std::string field;
     std::array<std::int64_t, 2> values{};
     std::int64_t value = 0;
+    // Appended: preserve the legacy aggregate five-field AST initializers.
+    std::array<InvertedSourceLiteral, 3> mixed_values{};
+    InvertedSourceLiteral mixed_value{};
 };
 struct InvertedSourceMain {
     std::string schema_name;
     std::string owner_name;
     std::size_t capacity = 0;
     std::vector<InvertedSourceOperation> operations;
+    bool three_scalar = false; // separate i64/bool/f64 production admission
 };
 
 struct Program {
