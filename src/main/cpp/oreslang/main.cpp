@@ -426,8 +426,8 @@ int main(int argc, char** argv) {
         source_namespace = ast.namespace_name;
 
         if (ast.inverted_main) {
-            // Bounded production two-i64 stack owner only; no escaping
-            // handles, async/actor lifetime, or target/RT guarantees.
+            // Bounded production two-scalar stack owner only: exact i64/i64
+            // or bool/i64. No escaped handles, actor/async effects or target/RT guarantees.
             if (experimental_owned_int || experimental_rt_scalar_loop ||
                     wasm32_target || cortex_m_target || native_hard_rt_profile ||
                     rt_check_only || rt_report_seen || rt_entry_seen ||
@@ -435,7 +435,7 @@ int main(int argc, char** argv) {
                     constraint_descriptors_only || library_profile_seen ||
                     allocator_provider_seen)
                 throw std::runtime_error(
-                    "production inverted i64 slice requires plain host compilation without extra owner, RT or target flags");
+                    "production inverted scalar-pair slice requires plain host compilation without extra owner, RT or target flags");
             const bool bool_i64 = ast.inverted_structs.size() == 1 &&
                 ast.inverted_structs.front().fields.size() == 2 &&
                 ast.inverted_structs.front().fields[0].type ==
