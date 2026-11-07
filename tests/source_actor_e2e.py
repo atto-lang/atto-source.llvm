@@ -100,6 +100,10 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "atto-actor-frame-internal-symbol-reject.atto":
+            "reserved native actor runtime symbol collision",
+        "atto-actor-heap-internal-symbol-reject.atto":
+            "reserved native actor runtime symbol collision",
         "source-actor-owned-unknown-initializer-reject.ores":
             "unknown parameter 'not_yet_declared'",
         "source-actor-owned-forward-reference-reject.ores":
