@@ -95,13 +95,13 @@ void ordinary_stop() {
     RequestLocalKeyV1<int> key;
     int commits = 0;
     check("01_live_commit_gate_admits",
-          ores_native_actor_scheduler_commit_if_running_v1(
+          ores_native_actor_scheduler_commit_if_live_v1(
               w.scheduler, w.a, increment, &commits) && commits == 1);
     check("02_live_store_commit", request->set(key, 7, w.scheduler));
     check("03_live_mail_binding", request->bind_original_mail_once(91, w.scheduler));
     check("04_direct_stop_succeeds", ores_native_actor_scheduler_stop(w.scheduler, w.a));
     check("05_stopped_commit_denied",
-          !ores_native_actor_scheduler_commit_if_running_v1(
+          !ores_native_actor_scheduler_commit_if_live_v1(
               w.scheduler, w.a, increment, &commits) && commits == 1);
     check("06_stopped_store_replacement_denied",
           !request->set(key, 8, w.scheduler) &&
@@ -142,7 +142,7 @@ void whole_runtime_retirement() {
     check("19_retire_denies_deletion", !request->erase(key, w.scheduler));
     int calls = 0;
     check("20_retire_denies_bounded_callback",
-          !ores_native_actor_scheduler_commit_if_running_v1(
+          !ores_native_actor_scheduler_commit_if_live_v1(
               w.scheduler, w.a, increment, &calls) && calls == 0);
     authority->retire();
 }
