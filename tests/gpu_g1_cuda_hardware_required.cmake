@@ -1,5 +1,5 @@
 # Strict GPU-G1 hardware-only proof. Must NEVER be treated as .atto guest parity.
-foreach(key IN ITEMS G1_GIT G1_REPO G1_HEAD G1_EMITTER G1_LLC G1_PROBE G1_WORK G1_PTX_GATE)
+foreach(key IN ITEMS G1_GIT G1_REPO G1_HEAD G1_EMITTER G1_LLC G1_PROBE G1_WORK G1_PTX_GATE G1_SOURCE)
     if(NOT DEFINED ${key} OR "${${key}}" STREQUAL "")
         message(FATAL_ERROR "GPU-G1-HW-001: missing required ${key}")
     endif()
@@ -66,8 +66,20 @@ function(g1_require_immutable_checkout phase)
     set(actual_head "${actual_head}" PARENT_SCOPE)
 endfunction()
 g1_require_immutable_checkout("pre-PTX")
+# Source must be part of this immutable Git tree: no external unreviewed
+# .atto file can be passed into a source-to-hardware certification receipt.
+if(NOT EXISTS "${G1_SOURCE}" OR IS_DIRECTORY "${G1_SOURCE}")
+    message(FATAL_ERROR "GPU-G1-HW-011: source file does not exist")
+endif()
+execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" ls-files --error-unmatch -- "${G1_SOURCE}"
+    RESULT_VARIABLE source_tracked_rc OUTPUT_QUIET ERROR_QUIET)
+if(NOT source_tracked_rc EQUAL 0)
+    message(FATAL_ERROR "GPU-G1-HW-011: source file is not tracked in immutable PR tree")
+endif()
+file(SHA256 "${G1_SOURCE}" atto_source_sha)
 execute_process(COMMAND "${CMAKE_COMMAND}"
-    "-DG1_EMITTER=${G1_EMITTER}" "-DG1_LLC=${G1_LLC}"
+    "-DG1_EMITTER=${G1_EMITTER}" "-DG1_SOURCE=${G1_SOURCE}"
+    "-DG1_REQUIRE_ATTO_SOURCE=ON" "-DG1_LLC=${G1_LLC}"
     "-DG1_WORK=${G1_WORK}" -P "${G1_PTX_GATE}"
     RESULT_VARIABLE ptx_rc OUTPUT_VARIABLE ptx_log ERROR_VARIABLE ptx_err)
 if(NOT ptx_rc EQUAL 0)
@@ -90,8 +102,12 @@ g1_require_immutable_checkout("post-CUDA")
 g1_require_unchanged_tools("post-CUDA")
 file(SHA256 "${ptx}" post_ptx_sha)
 file(SHA256 "${G1_WORK}/gpu-g1-saxpy.ll" post_ir_sha)
+file(SHA256 "${G1_SOURCE}" post_atto_sha)
+if(NOT post_atto_sha STREQUAL atto_source_sha)
+    message(FATAL_ERROR "GPU-G1-HW-011: source bytes changed during device execution")
+endif()
 if(NOT post_ptx_sha STREQUAL ptx_sha OR NOT post_ir_sha STREQUAL ir_sha)
     message(FATAL_ERROR "GPU-G1-HW-010: kernel input artifacts changed during physical execution")
 endif()
 message(STATUS "${device_log}")
-message(STATUS "GPU_G1_DEVICE_RECEIPT source_head=${actual_head} source_tree=${source_tree} ir_sha256=${ir_sha} ptx_sha256=${ptx_sha} emitter_sha256=${emitter_sha} llc_sha256=${llc_sha} probe_sha256=${probe_sha} gate_sha256=${ptx_gate_sha} receipt_gate_sha256=${receipt_gate_sha} git_sha256=${git_sha} class=PHYSICAL_PTX_TYPED_IR_ONLY_NOT_ATTO_GUEST runner_trust=EXTERNAL_REVIEW_REQUIRED")
+message(STATUS "GPU_G1_DEVICE_RECEIPT source_head=${actual_head} source_tree=${source_tree} ir_sha256=${ir_sha} ptx_sha256=${ptx_sha} emitter_sha256=${emitter_sha} llc_sha256=${llc_sha} probe_sha256=${probe_sha} gate_sha256=${ptx_gate_sha} receipt_gate_sha256=${receipt_gate_sha} git_sha256=${git_sha} atto_source_sha256=${atto_source_sha} class=PHYSICAL_RESTRICTED_ATTO_KERNEL_NOT_HOST_LAUNCH runner_trust=EXTERNAL_REVIEW_REQUIRED")
