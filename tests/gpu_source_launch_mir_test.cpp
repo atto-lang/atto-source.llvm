@@ -102,6 +102,18 @@ int main() {
         }, "GPU-LAUNCH-003");
         cycle->left.reset(); // explicitly break the test's deliberate cycle
     }
+    rejects([] { (void)I64::named("bad..name"); }, "GPU-LAUNCH-003");
+    rejects([] { (void)I64::ceil_div(
+                I64{I64::Kind::Constant, 4, "forged", {}, {}},
+                I64::constant(2)); }, "GPU-LAUNCH-003");
+    rejects([] { (void)I64::ceil_div(
+                I64::constant(4),
+                I64{I64::Kind::Constant, 2, "forged", {}, {}}); },
+            "GPU-LAUNCH-003");
+    rejects([] { (void)I64::ceil_div(
+                I64{I64::Kind::Constant, 4, {},
+                    std::make_shared<I64>(I64::constant(9)), {}},
+                I64::constant(2)); }, "GPU-LAUNCH-003");
     auto qualified = positive(false);
     qualified.kernel = "math.saxpy";
     qualified.queue = "device.queue";
