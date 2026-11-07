@@ -286,6 +286,54 @@ void test_slot_reuse_bumps_generation() {
 
 // Many handoffs in flight from two sender turns to a recipient while the
 // request is cancelled concurrently. Must be race-free under TSan.
+// Host-only adversarial value. Its copy triggers request cancellation while
+// seal() is building its snapshot; no guest type with hidden pointers may use
+// this transport without compiler-owned descriptors.
+struct CancelRequestOnCopy {
+    TaskCancellation* cancellation = nullptr;
+    explicit CancelRequestOnCopy(TaskCancellation* value) : cancellation(value) {}
+    CancelRequestOnCopy(CancelRequestOnCopy&&) noexcept = default;
+    CancelRequestOnCopy(const CancelRequestOnCopy& other)
+        : cancellation(other.cancellation) {
+        if (cancellation) (void)cancellation->cancel("cancel-during-copy");
+    }
+};
+
+void test_reentrant_cancellation_during_seal_denied() {
+    Fixture f;
+    RequestLocalKeyV1<CancelRequestOnCopy> key;
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(key, CancelRequestOnCopy(f.request_cancel.get())));
+        RequestContextHandoffTableV1::Selection selection;
+        selection.include(key);
+        CHECK(!f.table->seal(f.w.a, *f.request, f.w.b, selection));
+    });
+    send(f.w, f.w.a, 1);
+    CHECK(!f.request->active());
+    CHECK(f.table->pending() == 0);
+}
+
+void test_stopped_recipient_revokes_unredeemed_ticket() {
+    Fixture f;
+    std::uint64_t ticket = 0;
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace, std::string("protected")));
+        ticket = f.table->seal(
+            f.w.a, *f.request, f.w.b, f.selection()).value_or(0);
+        CHECK(ticket != 0);
+    });
+    send(f.w, f.w.a, 1);
+    CHECK(f.table->pending() == 1);
+    // No callback can run for a sealed stopped actor. Retirement also
+    // rejects a late attempt to redeem the old recipient generation.
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.w.scheduler, f.w.b));
+    CHECK(ores_native_actor_scheduler_wait_done(f.w.scheduler, f.w.b));
+    CHECK(f.table->revoke_recipient(f.w.b) == 1);
+    CHECK(f.table->pending() == 0);
+}
+
 void test_concurrent_cancel_race() {
     for (int round = 0; round < 50; ++round) {
         Fixture f(64);
@@ -323,6 +371,10 @@ int main() {
         {"cancellation_flows_one_way", test_cancellation_flows_one_way},
         {"sweep_revoke_and_capacity", test_sweep_revoke_and_capacity},
         {"slot_reuse_bumps_generation", test_slot_reuse_bumps_generation},
+        {"reentrant_cancellation_during_seal_denied",
+            test_reentrant_cancellation_during_seal_denied},
+        {"stopped_recipient_revokes_unredeemed_ticket",
+            test_stopped_recipient_revokes_unredeemed_ticket},
         {"concurrent_cancel_race", test_concurrent_cancel_race},
     };
     for (auto& t : tests) {
