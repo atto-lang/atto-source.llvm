@@ -80,11 +80,21 @@ inline Graph lower_explicit_last_use_evidence_v1(
                 violation(proof.place, "loan used after claimed last use");
         }
     }
-    // Reject explicit unproven loan uses or implicit read/call escape
-    // assumptions. Every use marker must bind a claimed loan, with a
-    // real borrow strictly earlier in the same block.
+    // A syntactic owner read after an annotated borrow might actually be
+    // an access through the borrowed view. Until typed SSA classifies every
+    // read/call argument by LoanId, fail closed on ANY unclassified read
+    // occurring after a tracked borrow. This intentionally also rejects
+    // safe independent/owner reads: precision needs a future compiler proof.
+    // Move/Drop are separately validated against active loans by verify().
+    std::size_t earliest_borrow = operations.size();
+    for (const auto& item : expected)
+        if (item.second.borrow_site < earliest_borrow)
+            earliest_borrow = item.second.borrow_site;
     for (std::size_t i = 0; i < operations.size(); ++i) {
         const auto& op = operations[i];
+        if (i > earliest_borrow && (op.kind == Operation::Kind::Read ||
+                op.kind == Operation::Kind::ReadObject))
+            violation(op.place, "unclassified read after borrow requires typed SSA use proof");
         if (op.kind != Operation::Kind::UseSharedLoan &&
                 op.kind != Operation::Kind::UseExclusiveLoan) continue;
         if (!op.loan_id || !expected.count(*op.loan_id) ||
