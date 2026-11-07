@@ -590,6 +590,77 @@ public:
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
+    // Non-executable source signature recognition for 'pub gpu fnc'.
+    // Unknown call effects are not proved by lexical body scanning.
+    // Always rejects before any native scalar/AOT/host IR is produced.
+    [[noreturn]] void gpu_kernel_source_only() {
+        accept("pub");
+        require("gpu");
+        if (!accept("fnc"))
+            throw std::runtime_error(
+                "GPU-KERNEL-001: expected gpu fnc; no implicit CPU fallback");
+        const auto name = identifier();
+        if (name.empty() || name.size() > 256)
+            throw std::runtime_error("GPU-KERNEL-001: invalid device kernel symbol");
+        require("(");
+        std::unordered_set<std::string> names;
+        std::size_t count = 0;
+        if (!accept(")")) {
+            do {
+                if (++count > 64)
+                    throw std::runtime_error("GPU-KERNEL-002: too many kernel ABI parameters");
+                const std::string_view type = token_.text;
+                if (type == "int" || type == "i64" || type == "f32" || type == "bool") {
+                    advance();
+                } else if (type == "GpuReadBuffer" || type == "GpuWriteBuffer"
+                        || type == "GpuReadWriteBuffer") {
+                    advance();
+                    require("<");
+                    if (!accept("f32"))
+                        throw std::runtime_error(
+                            "GPU-KERNEL-002: only f32 device buffer elements are staged");
+                    require(">");
+                } else {
+                    throw std::runtime_error(
+                        "GPU-KERNEL-002: unsupported GPU kernel parameter type; no CPU fallback");
+                }
+                const std::string parameter = identifier();
+                if (!names.insert(parameter).second)
+                    throw std::runtime_error("GPU-KERNEL-003: duplicate GPU parameter");
+            } while (accept(","));
+            require(")");
+        }
+        require(":");
+        if (!accept("void"))
+            throw std::runtime_error("GPU-KERNEL-002: GPU kernel entry must return void");
+        require("{");
+        std::size_t braces = 1;
+        std::size_t scanned = 0;
+        while (braces != 0) {
+            if (token_.kind == Kind::End)
+                throw std::runtime_error("GPU-KERNEL-006: unterminated device kernel body");
+            if (++scanned > 65536 || braces > 64)
+                throw std::runtime_error("GPU-KERNEL-006: kernel lexical resource quota exceeded");
+            const auto word = token_.text;
+            if (word == "await" || word == "suspends" || word == "async"
+                    || word == "task" || word == "spawn" || word == "new"
+                    || word == "critical" || word == "defer" || word == "recover"
+                    || word == "throw" || word == "raise" || word == "panic"
+                    || word == "try" || word == "catch" || word == "finally"
+                    || word == "rt") {
+                throw std::runtime_error(
+                    "GPU-KERNEL-006: suspending, host and unwinding effects forbidden in device source");
+            }
+            if (word == "{") ++braces;
+            else if (word == "}") --braces;
+            advance();
+        }
+        throw std::runtime_error(
+            "GPU-KERNEL-008: native gpu fnc header is recognized but device-effect "
+            "type checking, ownership/loan proof and physical GPU backend are "
+            "not implemented; no implicit CPU fallback");
+    }
+
     Program parse() {
         Program program;
         while (token_.text == "import") {
@@ -727,6 +798,12 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            // GPU entries must never enter the ordinary host callable registry.
+            // Header/body staging grants neither device effects nor codegen.
+            if (token_.text == "gpu" ||
+                    (token_.text == "pub" && peek_next().text == "gpu")) {
+                gpu_kernel_source_only(); // never returns
+            }
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
             if (at_type_only_introducer()) {
