@@ -331,16 +331,17 @@ before STOP remains accounted until its in-flight lease finishes.
 
 A dedicated external C++ CONTROL worker periodically observes invalid
 tokens and moves registered strong references out under a short registry
-mutex. It then closes scopes, waits their operation leases, and joins the
-actor's DONE barrier **outside** scheduler/carrier/registry locks. The
+mutex. It closes every revoked scope first and then polls each actor's lease
+quiescence and DONE independently **outside** scheduler/carrier/registry
+locks. A pinned operation on actor A cannot prevent processing actor B. The
 worker polls at a provisional 1 ms cadence and is **not a real-time
 latency guarantee**. Production runtime ownership must keep the registry
 alive until `shutdown_after_retire()` joins the worker, then drain and
 destroy the scheduler, and only then destroy the registry.
 
 The new `native_request_actor_termination_registry_v1_test.cpp` authors
-49 fixed checks plus 60 two-thread registration/STOP and
-cancellation/sealed-STOP trials and a final count assertion (110 expected
+57 fixed checks plus 60 two-thread registration/STOP and
+cancellation/sealed-STOP trials and a final count assertion (118 expected
 named checks); it also checks sibling survival, generation ABA denial,
 per-actor 32-context registration quota, double STOP, direct STOP,
 retirement without explicit group reconciliation, cancellation first,
@@ -361,3 +362,24 @@ bounds, task/actor ABA across actual slot reuse, panic/restart/hot-reload
 paths, bounded shutdown time, host native sanitizer and compiler-backed
 `.atto` execution all remain open. Never equate the regression's
 simulated host values with guest-visible or five-backend parity.
+
+### Nonblocking sibling-cleanup hardening
+
+The first CONTROL worker design synchronously waited for each actor's pinned
+request operations and DONE before visiting the next actor. This allowed a
+single stalled reader to starve cleanup for an unrelated actor. The worker
+now first closes every observed revoked request, then uses nonblocking
+`closed_quiescent_now()` and `ores_native_actor_scheduler_poll_done()`
+per actor; it never calls `wait_closed_quiescent()` or `wait_done()` in
+the sweeping loop. A new eight-check regression deliberately parks actor
+A's request-value copy while STOP also terminates actor B, verifies B's
+context closes and reaps before A's pinned lease releases, then releases A
+and verifies its late copy cannot escape. Combined suite: 118 authored
+named host checks (57 fixed, 60 coordinated races, final count check).
+
+**Remaining limitation:** C++ host value destructors in `close()` run
+outside locks but could themselves block; neither this single worker nor
+the shallow host value policy proves bounded cleanup latency under an
+arbitrarily blocking destructor. The compiler-facing value/ownership
+descriptor, bounded cleanup policy, and integration through the real
+supervisor/HTTP lifecycle are still mandatory.
