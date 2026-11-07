@@ -59,4 +59,20 @@ file(WRITE "${gate}" "file(MAKE_DIRECTORY \"\${G1_WORK}\")\nfile(WRITE \"\${G1_W
 file(WRITE "${probe}" "#!/bin/sh\nprintf 'tampered\\n' >> '${repo}/fixture.atto'\nprintf '%s\\n' '${pass}'\n")
 file(CHMOD "${probe}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
 expect_identity_failure("post-CUDA" "GPU-G1-HW-004.*post-CUDA")
-message(STATUS "PASS host-only G1 receipt TOCTOU negative mutations post-PTX and post-CUDA")
+# A forged success message is not sufficient if the physical probe rewrites
+# the PTX artifact after its first receipt hash was computed.
+execute_process(COMMAND "${G1_NEGATIVE_GIT}" -C "${repo}"
+    checkout -- fixture.atto RESULT_VARIABLE restore_rc)
+if(NOT restore_rc EQUAL 0)
+    message(FATAL_ERROR "GPU-G1-RECEIPT-005: restore failed")
+endif()
+file(WRITE "${probe}" "#!/bin/sh\nprintf 'tampered\\n' >> '${work}/gpu-g1-saxpy.ptx'\nprintf '%s\\n' '${pass}'\n")
+file(CHMOD "${probe}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+expect_identity_failure("post-CUDA artifact" "GPU-G1-HW-010")
+
+# A codegen gate that edits its own file cannot retain its pre-execution hash.
+file(WRITE "${probe}" "#!/bin/sh\nprintf '%s\\n' '${pass}'\n")
+file(CHMOD "${probe}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+file(WRITE "${gate}" "file(MAKE_DIRECTORY \"\${G1_WORK}\")\nfile(WRITE \"\${G1_WORK}/gpu-g1-saxpy.ll\" \"synthetic\\n\")\nfile(WRITE \"\${G1_WORK}/gpu-g1-saxpy.ptx\" \"synthetic\\n\")\nfile(APPEND \"${gate}\" \"# mutated after codegen\\n\")\n")
+expect_identity_failure("post-PTX tool" "GPU-G1-HW-009")
+message(STATUS "PASS host-only G1 receipt TOCTOU negatives: source post-PTX, source post-CUDA, PTX artifact, gate self-mutation")
