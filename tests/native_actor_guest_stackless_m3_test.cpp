@@ -115,7 +115,9 @@ int main(int argc, char** argv) {
         overflow_actor.owner = overflow_carrier.register_actor(
             &overflow_actor, compiled_actor, cancel_actor);
         overflow_shared.a = overflow_actor.owner;
-        overflow_shared.b = overflow_actor.owner;
+        // Sibling remains invalid. A same-owner token here would make the
+        // impersonation preflight mutate our own stack and abort BEFORE
+        // recursion; that would be a false-positive overflow receipt.
         init_heap(overflow_actor);
         auto producer = overflow_carrier.producer();
         overflow_carrier.start();
