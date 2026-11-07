@@ -158,6 +158,15 @@ if(BUILD_TESTING)
             COMMAND oreslang-gpu-g1-verified-ptx-host-test)
         set_tests_properties(native_gpu_g1_verified_ptx_hash_mutation_host_only
             PROPERTIES TIMEOUT 20 LABELS "host-only;gpu-ptx;negative-mutation")
+        find_package(Python3 QUIET COMPONENTS Interpreter)
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME native_gpu_g1_verified_ptx_negative_source_mutations_host_only
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_verified_ptx_negative_mutations.py")
+            set_tests_properties(native_gpu_g1_verified_ptx_negative_source_mutations_host_only
+                PROPERTIES TIMEOUT 120 LABELS "host-only;gpu-ptx;negative-mutation"
+                ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}")
+        endif()
     else()
         message(STATUS "GPU G1 PTX hash tests NOT_EXECUTED: OpenSSL Crypto missing")
     endif()
