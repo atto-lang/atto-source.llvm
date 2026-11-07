@@ -36,6 +36,9 @@ on:
       - 'tests/native_ownership_loan_write_domain_6_test.cpp'
       - 'tests/native_ownership_mir_receipts_30_test.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipMirEvidence.hpp'
+      - 'scripts/ownership-ci-workflow-shape.mjs'
+      - 'bin/check-ownership-workflow-shape.mjs'
+      - 'tests/ownership_ci_workflow_shape_14.test.mjs'
       - 'tests/contracts/atto_ownership_place_mir_50.json'
       - 'tests/ownership_compiler_fixture_matrix.py'
       - 'tests/test_ownership_compiler_fixture_matrix.py'
@@ -70,6 +73,16 @@ jobs:
           test -z "$(git status --porcelain)"
           echo "ATTO_LLVM_EXACT_HEAD=$(git rev-parse HEAD)"
           echo "ATTO_LLVM_EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
+          # Source-only structural canary: must not be mistaken for real CTests.
+          node --version
+          node --check scripts/ownership-ci-workflow-shape.mjs
+          node --check bin/check-ownership-workflow-shape.mjs
+          node --check tests/ownership_ci_workflow_shape_14.test.mjs
+          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_14.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# tests 14$' /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# pass 14$' /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# fail 0$' /tmp/atto-ownership-workflow-shape.tap
+          node bin/check-ownership-workflow-shape.mjs
       - name: Install Clang/LLVM developer toolchain
         shell: bash
         run: |
