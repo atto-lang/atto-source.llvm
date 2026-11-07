@@ -1,11 +1,13 @@
 // Opt-in PHYSICAL CUDA kernel probe for typed G1 IR only, NOT an .atto guest.
 // Requires CUDA Driver API and a real GPU; never marks host emulation as pass.
 #include <cuda.h>
+#include "oreslang/backend/GpuG1SaxpyLaunchAdmission.hpp"
 #include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -43,7 +45,8 @@ struct Buffer {
     Buffer(const Buffer&) = delete;
     Buffer& operator=(const Buffer&) = delete;
 };
-void case_on_device(CUfunction kernel, std::uint64_t n) {
+void case_on_device(CUfunction kernel, std::uint64_t n,
+                    std::uint64_t device_max_threads, std::uint64_t device_max_groups) {
     constexpr unsigned int group = 256;
     const std::size_t count = static_cast<std::size_t>(n) + 2;
     const std::size_t bytes = count * sizeof(float);
@@ -59,9 +62,28 @@ void case_on_device(CUfunction kernel, std::uint64_t n) {
     ok(cuMemcpyHtoD(dx.value, x.data(), bytes), "upload x");
     ok(cuMemcpyHtoD(dy.value, y.data(), bytes), "upload y");
     ok(cuMemcpyHtoD(dout.value, output.data(), bytes), "upload out");
+    // Bind the structural preflight to allocations actually returned by
+    // the CUDA driver. Tenant/generation values remain TEST FIXTURES, not
+    // authenticated provider capabilities or compiler borrow-checking proof.
+    using namespace oreslang::gpu::g1;
+    constexpr std::uint64_t fixture_tenant = 1;
+    constexpr std::uint64_t fixture_device = 1;
+    constexpr std::uint64_t fixture_generation = 1;
+    const QueueLocation queue{fixture_tenant, fixture_device, fixture_generation, 1, 1};
+    const LaunchLimits limits{device_max_threads, device_max_groups, 1U << 24};
+    const DeviceView view_x{fixture_tenant, fixture_device, fixture_generation,
+        static_cast<std::uint64_t>(dx.value), 1, count, 0, count, Loan::ReadOnly};
+    const DeviceView view_y{fixture_tenant, fixture_device, fixture_generation,
+        static_cast<std::uint64_t>(dy.value), 1, count, 0, count, Loan::ReadOnly};
+    const DeviceView view_out{fixture_tenant, fixture_device, fixture_generation,
+        static_cast<std::uint64_t>(dout.value), 1, count, 0, count, Loan::ExclusiveWrite};
+    const auto plan = admit_saxpy_launch(view_x, view_y, view_out, queue,
+                                         limits, n, group);
+    if (plan.empty || plan.groups_x > std::numeric_limits<unsigned int>::max())
+        throw std::runtime_error("GPU_G1_HW_INVALID_LAUNCH_PLAN");
     auto ax = dx.value, ay = dy.value, ao = dout.value;
     void* args[] = {&scale, &ax, &ay, &ao, &n};
-    const auto grid = static_cast<unsigned int>(n / group + (n % group != 0));
+    const auto grid = static_cast<unsigned int>(plan.groups_x);
     ok(cuLaunchKernel(kernel, grid, 1, 1, group, 1, 1, 0, nullptr, args, nullptr), "launch");
     // Test-only blocking wait. Production Atto Future must be nonblocking.
     ok(cuCtxSynchronize(), "device completion");
@@ -113,7 +135,8 @@ int main(int argc, char** argv) {
         CUfunction kernel = nullptr;
         ok(cuModuleGetFunction(&kernel, module.value, "atto_g1_saxpy_f32"), "resolve entry");
         for (std::uint64_t n : {1ULL, 255ULL, 256ULL, 257ULL, 1025ULL, 65537ULL})
-            case_on_device(kernel, n);
+            case_on_device(kernel, n, static_cast<std::uint64_t>(max_threads),
+                           static_cast<std::uint64_t>(max_grid_x));
         std::cout << "GPU_G1_PHYSICAL_PASS 6/6 driver=" << driver << " device="
                   << name << " sm=" << major << '.' << minor
                   << " evidence=PTX_TYPED_IR_ONLY_NOT_ATTO_GUEST\n";
