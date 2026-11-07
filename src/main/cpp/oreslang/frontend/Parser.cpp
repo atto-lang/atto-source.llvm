@@ -4,6 +4,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/types/SourceNodeIdentity.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -5881,6 +5882,9 @@ void resolve_and_validate_program(Program& program) {
                 pipeline.ownership_admitted = false;
         throw;
     }
+    // This boundary executes only after source/ownership/type validation.
+    // Mint immutable compiler identities before exposing Program to codegen.
+    source_identity::seal_validated_program(program);
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,

@@ -1,0 +1,155 @@
+#pragma once
+
+#include "oreslang/frontend/Parser.hpp"
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <set>
+#include <stdexcept>
+#include <string>
+
+namespace oreslang::source_identity {
+
+// Called by the parser/resolver only *after* full validation has completed.
+// The minted values are independent of source offsets and allocator addresses.
+// A fresh compilation gets a distinct unit identity; IDs within that unit
+// represent the exact validated AST nodes and are never recycled.
+inline void seal_validated_program(Program& program) {
+    if (program.compiler_source_unit_id != 0)
+        throw std::runtime_error(
+            "ownership violation: validated source identity already sealed");
+    constexpr std::size_t kMaxFunctions = 8192;
+    constexpr std::uint64_t kMaxNodes = 1048576;
+    constexpr std::size_t kMaxDepth = 64;
+    if (program.functions.size() > kMaxFunctions)
+        throw std::runtime_error(
+            "ownership violation: source function identity inventory exceeds bound");
+
+    // Check source-node bounds before publishing a unit identity.
+    std::uint64_t count = 0;
+    const auto count_tree = [&](const auto& self,
+            const Statement& statement, std::size_t depth) -> void {
+        if (depth > kMaxDepth || count == kMaxNodes)
+            throw std::runtime_error(
+                "ownership violation: source node identity traversal exceeds bound");
+        if (statement.compiler_source_node_id ||
+                !statement.compiler_source_path.empty())
+            throw std::runtime_error(
+                "ownership violation: preassigned source node identity");
+        ++count;
+        for (const auto& child : statement.then_statements)
+            self(self, child, depth + 1);
+        for (const auto& child : statement.else_statements)
+            self(self, child, depth + 1);
+    };
+    for (const auto& function : program.functions) {
+        if (function.compiler_source_function_id ||
+                !function.compiler_source_sealed_name.empty())
+            throw std::runtime_error(
+                "ownership violation: preassigned source function identity");
+        for (const auto& stmt : function.statements)
+            count_tree(count_tree, stmt, 0);
+        for (const auto& stmt : function.caught_throw_defers)
+            count_tree(count_tree, stmt, 0);
+    }
+
+    // Global process-local epoch, with atomic uniqueness across concurrent
+    // compilations. Overflow cannot silently recycle an old unit identity.
+    static std::atomic<std::uint64_t> next_unit{1};
+    std::uint64_t identity = next_unit.load(std::memory_order_relaxed);
+    for (;;) {
+        if (identity == 0 || identity == std::numeric_limits<std::uint64_t>::max())
+            throw std::runtime_error(
+                "ownership violation: exhausted compiler source unit identities");
+        if (next_unit.compare_exchange_weak(identity, identity + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            break;
+    }
+
+    std::uint64_t next_node = 0;
+    const auto mint_tree = [&](const auto& self, Statement& stmt,
+            const std::string& path) -> void {
+        stmt.compiler_source_node_id = ++next_node;
+        stmt.compiler_source_path = path;
+        for (std::size_t i = 0; i < stmt.then_statements.size(); ++i)
+            self(self, stmt.then_statements[i],
+                path + "/t" + std::to_string(i));
+        for (std::size_t i = 0; i < stmt.else_statements.size(); ++i)
+            self(self, stmt.else_statements[i],
+                path + "/e" + std::to_string(i));
+    };
+    std::uint64_t function_id = 0;
+    for (auto& function : program.functions) {
+        function.compiler_source_function_id = ++function_id;
+        function.compiler_source_sealed_name = function.name;
+        const std::string prefix = "f" + std::to_string(function_id);
+        for (std::size_t i = 0; i < function.statements.size(); ++i)
+            mint_tree(mint_tree, function.statements[i],
+                prefix + "/s" + std::to_string(i));
+        for (std::size_t i = 0; i < function.caught_throw_defers.size(); ++i)
+            mint_tree(mint_tree, function.caught_throw_defers[i],
+                prefix + "/c" + std::to_string(i));
+    }
+    // Publish only after all identities have been minted. A truncated tail
+    // could otherwise preserve a valid 1..N prefix of node identities.
+    program.compiler_source_node_count = next_node;
+    program.compiler_source_function_count = function_id;
+    program.compiler_source_unit_id = identity;
+}
+
+// Read-only safety check. It catches erased/replaced nodes, stale epochs,
+// duplicate IDs and copied identities even if malloc reuses the same address.
+// No pointer supplied by the caller serves as the proof of node identity.
+inline void validate_program_identity(const Program& program) {
+    if (!program.compiler_source_unit_id)
+        throw std::runtime_error(
+            "ownership violation: source compilation identity is unsealed");
+    std::set<std::uint64_t> node_ids;
+    std::uint64_t expected_node = 0;
+    std::uint64_t expected_function = 0;
+    constexpr std::uint64_t kMaxNodes = 1048576;
+    constexpr std::size_t kMaxDepth = 64;
+    const auto visit = [&](const auto& self,
+            const Statement& stmt, std::size_t depth,
+            const std::string& expected_path) -> void {
+        if (depth > kMaxDepth || expected_node == kMaxNodes)
+            throw std::runtime_error(
+                "ownership violation: source identity traversal exceeds bound");
+        ++expected_node;
+        if (stmt.compiler_source_node_id != expected_node ||
+                stmt.compiler_source_path != expected_path ||
+                !node_ids.insert(stmt.compiler_source_node_id).second)
+            throw std::runtime_error(
+                "ownership violation: stale, copied, reparented or missing source node identity");
+        for (std::size_t i = 0; i < stmt.then_statements.size(); ++i)
+            self(self, stmt.then_statements[i], depth + 1,
+                expected_path + "/t" + std::to_string(i));
+        for (std::size_t i = 0; i < stmt.else_statements.size(); ++i)
+            self(self, stmt.else_statements[i], depth + 1,
+                expected_path + "/e" + std::to_string(i));
+    };
+    if (program.functions.size() > 8192 ||
+            program.functions.size() != program.compiler_source_function_count)
+        throw std::runtime_error(
+            "ownership violation: source function count or identity mismatch");
+    for (const auto& function : program.functions) {
+        if (function.compiler_source_function_id != ++expected_function ||
+                function.compiler_source_sealed_name != function.name)
+            throw std::runtime_error(
+                "ownership violation: missing, reordered or renamed source function identity");
+        const std::string prefix = "f" + std::to_string(expected_function);
+        for (std::size_t i = 0; i < function.statements.size(); ++i)
+            visit(visit, function.statements[i], 0,
+                prefix + "/s" + std::to_string(i));
+        for (std::size_t i = 0; i < function.caught_throw_defers.size(); ++i)
+            visit(visit, function.caught_throw_defers[i], 0,
+                prefix + "/c" + std::to_string(i));
+    }
+    if (expected_node != program.compiler_source_node_count)
+        throw std::runtime_error(
+            "ownership violation: source node inventory truncated or extended");
+}
+
+} // namespace oreslang::source_identity
