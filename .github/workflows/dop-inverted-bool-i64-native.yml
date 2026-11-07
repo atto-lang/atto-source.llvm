@@ -10,6 +10,7 @@ on:
       - 'src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp'
       - 'src/main/cpp/oreslang/types/InvertedMirLlvmBoolI64.hpp'
       - 'tests/native_inverted_bool_i64*'
+      - 'tests/test_native_inverted_bool_i64_guest_hardening.py'
       - 'tests/fixtures/inverted-bool-i64/**'
   workflow_dispatch:
 
@@ -49,7 +50,8 @@ jobs:
                       src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp \
                       src/main/cpp/oreslang/types/InvertedMirLlvmBoolI64.hpp \
                       tests/native_inverted_bool_i64_mir_test.cpp \
-                      tests/native_inverted_bool_i64_guest.sh; do
+                      tests/native_inverted_bool_i64_guest.sh \
+                      tests/test_native_inverted_bool_i64_guest_hardening.py; do
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
             echo "ATTO_MIXED_SOURCE_BLOB=$path:$(git rev-parse "HEAD:$path")"
           done
@@ -60,6 +62,13 @@ jobs:
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             build-essential cmake clang llvm-dev rustc cargo python3
+      - name: Execute eleven source-local native evidence adversarial controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/test_native_inverted_bool_i64_guest_hardening.py
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo 'ATTO_NATIVE_GUEST_EVIDENCE_HOST_NEGATIVES=11 (NOT GUEST PARITY)'
       - name: Compile production compiler, checked MIR and mandatory no-GC auditor
         shell: bash
         run: |
