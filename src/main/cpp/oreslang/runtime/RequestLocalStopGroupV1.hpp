@@ -79,7 +79,7 @@ public:
     // A failed STOP/await is not a DONE receipt.
     bool stop_sealed_and_wait() {
         if (!scheduler_ ||
-            ores_native_actor_scheduler_is_current_carrier(scheduler_))
+            ores_native_actor_scheduler_is_any_current_carrier_v1())
             return false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
