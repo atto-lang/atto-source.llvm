@@ -125,7 +125,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         // Read cancellation under the same lock as slot admission; cancellation
         // marks TaskCancellation before delivering the revocation callback.
-        return open_ && !cancellation_->is_cancelled();
+        return cancellation_->with_active_authority([&] { return open_; });
     }
 
     // Trusted-ingress one-shot binding to scheduler-minted original DATA mail.
@@ -134,9 +134,13 @@ public:
     bool bind_original_mail_once(std::uint64_t admitted_mail) {
         if (!admitted_mail) return false;
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!open_ || cancellation_->is_cancelled()) return false;
-        if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
-        return original_mail_sequence_ == admitted_mail;
+        // This tiny mutation is serialized with cancellation and retirement
+        // by the cancellation graph's authority mutex. No user callbacks.
+        return cancellation_->with_active_authority([&] {
+            if (!open_) return false;
+            if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
+            return original_mail_sequence_ == admitted_mail;
+        });
     }
 
     // Trusted-host predicate: a copied request handle does not authorize a
@@ -146,8 +150,9 @@ public:
     bool bound_to_original_mail(std::uint64_t current_mail) const {
         if (!current_mail) return false;
         std::lock_guard<std::mutex> lock(mutex_);
-        return open_ && !cancellation_->is_cancelled() &&
-               original_mail_sequence_ == current_mail;
+        return cancellation_->with_active_authority([&] {
+            return open_ && original_mail_sequence_ == current_mail;
+        });
     }
 
     std::size_t used_bytes() const noexcept {
@@ -171,23 +176,32 @@ public:
         }
         auto next = std::make_shared<Cell<T>>(std::move(value), bytes);
         std::shared_ptr<CellBase> previous;
+        bool committed = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!open_ || cancellation_->is_cancelled()) return false;
-            auto found = slots_.find(key.id_);
-            const std::size_t old = found == slots_.end() ? 0 : found->second->bytes;
-            if ((found == slots_.end() && slots_.size() >= max_slots) ||
-                bytes > max_bytes - (used_bytes_ - old)) return false;
-            if (found == slots_.end()) {
-                slots_.emplace(key.id_, std::move(next));
-            } else {
-                previous.swap(found->second);
-                found->second = std::move(next);
-            }
-            used_bytes_ = used_bytes_ - old + bytes;
+            // Linearization is at this final slot mutation. A cancellation
+            // that acquires graph authority first denies the commit; an
+            // earlier commit finishes before cancellation can become visible.
+            // No guest copy/move/dtor or user callback runs under graph lock.
+            committed = cancellation_->with_active_authority([&] {
+                if (!open_) return false;
+                auto found = slots_.find(key.id_);
+                const std::size_t old =
+                    found == slots_.end() ? 0 : found->second->bytes;
+                if ((found == slots_.end() && slots_.size() >= max_slots) ||
+                    bytes > max_bytes - (used_bytes_ - old)) return false;
+                if (found == slots_.end()) {
+                    slots_.emplace(key.id_, std::move(next));
+                } else {
+                    previous.swap(found->second);
+                    found->second = std::move(next);
+                }
+                used_bytes_ = used_bytes_ - old + bytes;
+                return true;
+            });
         }
         previous.reset(); // reentrant destructors never run with the scope locked
-        return true;
+        return committed;
     }
 
     template <typename T>
@@ -206,9 +220,17 @@ public:
             // replace or erase the request without invalidating this source.
             pinned = std::static_pointer_cast<const Cell<T>>(found->second);
         }
-        // An already-authorized read may return its pinned snapshot after a
-        // concurrent close. It MUST NOT expose a borrowed mutable reference.
-        return pinned->value;
+        // User-defined copies run outside BOTH locks. After the copy, a
+        // reentrant close, cancellation, retirement or teardown invalidates
+        // the snapshot instead of releasing it as an authorized result.
+        T snapshot = pinned->value;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!cancellation_->with_active_authority(
+                    [&] { return open_; }))
+                return std::nullopt;
+        }
+        return snapshot;
     }
 
     // Explicit per-key retirement frees one quota slot. A retired value's
@@ -217,19 +239,23 @@ public:
     template <typename T>
     bool erase(const RequestLocalKeyV1<T>& key) {
         std::shared_ptr<CellBase> retired;
+        bool committed = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!open_ || cancellation_->is_cancelled())
-                return false;
-            const auto found = slots_.find(key.id_);
-            if (found == slots_.end())
-                return false;
-            retired = std::move(found->second);
-            used_bytes_ -= retired->bytes;
-            slots_.erase(found);
+            // Deletion and quota return linearize against the graph's
+            // cancellation and retirement state, without running T::~T.
+            committed = cancellation_->with_active_authority([&] {
+                if (!open_) return false;
+                const auto found = slots_.find(key.id_);
+                if (found == slots_.end()) return false;
+                retired = std::move(found->second);
+                used_bytes_ -= retired->bytes;
+                slots_.erase(found);
+                return true;
+            });
         }
         retired.reset();
-        return true;
+        return committed;
     }
 
     bool close() noexcept {
