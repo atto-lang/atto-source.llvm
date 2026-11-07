@@ -3877,14 +3877,42 @@ if(BUILD_TESTING)
     endif()
     # Scheduler latency vs. kernel (condvar) and hardware (spin) floors. CTest
     # runs a --smoke pass only; run the binary directly for real numbers.
+    # Dedicated per-core RT domain: static placement, SPSC ring matrix, no
+    # scheduler lock. Contract, drain, lost-wakeup probe and stress.
+    add_executable(oreslang-native-rt-domain-test
+        tests/native_rt_domain_test.c
+        src/main/cpp/oreslang/runtime/NativeRtDomain.c)
+    target_include_directories(oreslang-native-rt-domain-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-rt-domain-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-rt-domain-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_rt_domain COMMAND oreslang-native-rt-domain-test)
+    set_tests_properties(native_rt_domain PROPERTIES TIMEOUT 60)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-native-rt-domain-tsan-test
+            tests/native_rt_domain_test.c
+            src/main/cpp/oreslang/runtime/NativeRtDomain.c)
+        target_include_directories(oreslang-native-rt-domain-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-rt-domain-tsan-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-rt-domain-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-rt-domain-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        add_test(NAME native_rt_domain_tsan COMMAND oreslang-native-rt-domain-tsan-test)
+        set_tests_properties(native_rt_domain_tsan PROPERTIES TIMEOUT 180)
+    endif()
     add_executable(oreslang-native-actor-scheduler-latency-bench
         tests/native_actor_scheduler_latency_bench.c
-        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeRtDomain.c)
     target_include_directories(oreslang-native-actor-scheduler-latency-bench PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-actor-scheduler-latency-bench PRIVATE Threads::Threads)
     target_compile_definitions(oreslang-native-actor-scheduler-latency-bench PRIVATE
-        ORESLANG_BENCH_HAS_TUNING=1)
+        ORESLANG_BENCH_HAS_TUNING=1 ORESLANG_BENCH_HAS_RT_DOMAIN=1)
     target_compile_options(oreslang-native-actor-scheduler-latency-bench PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_scheduler_latency_bench_smoke
