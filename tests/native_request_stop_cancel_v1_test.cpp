@@ -83,6 +83,8 @@ struct PauseOnCopy {
 
 std::atomic<unsigned> received{0};
 void receive(void*, std::size_t, std::uint64_t) {
+    // A callback carrier must be observable without a scheduler pointer.
+    assert(ores_native_actor_scheduler_is_any_current_carrier_v1());
     ++received;
 }
 
@@ -127,7 +129,9 @@ void stop_and_sibling_survival() {
     check("02_register_request_2", stop.register_request(a2));
     check("03_duplicate_registration_denied", !stop.register_request(a1));
     check("04_foreign_actor_registration_denied", !stop.register_request(b));
-    check("05_open_before_stop", a1->active() && a2->active());
+    check("05_open_before_stop",
+          a1->active() && a2->active() &&
+          !ores_native_actor_scheduler_is_any_current_carrier_v1());
     check("06_control_plane_stop_and_quiescence", stop.stop_sealed_and_wait());
     check("07_first_request_closed", !a1->active());
     check("08_second_request_closed", !a2->active());
