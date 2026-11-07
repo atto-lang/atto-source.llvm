@@ -37,9 +37,13 @@ typedef struct {
     OresNativeWakeOutcome outcome;
     WakeState state;
     uint64_t generation; /* never recycled at UINT64_MAX */
+    /* Runtime-authenticated source DATA-mail at WAKE reservation, 0 for
+     * outside-DATA and generic callback reservations. Never guest supplied. */
+    uint64_t originating_data_mail;
 } WakeCredit;
 typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
+    uint64_t* mail_sequences; /* monotonic admission ordinal per ring entry */
     size_t head, tail, queued;
     unsigned active;
     pthread_t carrier_owner; /* owning physical worker while active */
@@ -84,6 +88,7 @@ struct OresNativeActorScheduler {
     pthread_cond_t drained;
     ActorLane* actors;
     uint64_t* slots;
+    uint64_t* sequence_slots;
     WakeCredit* wake_slots;
     pthread_t* threads;
     CarrierSlot* carrier_slots;
@@ -123,8 +128,10 @@ struct OresNativeActorScheduler {
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
+static _Thread_local uint64_t executing_data_mail_sequence;
 static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local OresNativeWakeTicket executing_wake;
+static _Thread_local OresNativeWakeOutcome executing_wake_outcome;
 static _Thread_local int executing_wake_valid;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
@@ -394,6 +401,7 @@ static void release_wake_locked(OresNativeActorScheduler* s,
     --lane->wake_live;
     credit->state = WAKE_EMPTY;
     credit->ticket = (OresNativeWakeTicket){0};
+    credit->originating_data_mail = 0;
     maybe_finish_stopped_locked(s, i);
 }
 /* Read back this carrier's OS affinity: a successful pthread_attr call is
@@ -489,6 +497,7 @@ static void* carrier(void* raw) {
         recent_actor = i;
         ActorLane* lane = &s->actors[i];
         uint64_t payload = 0;
+        uint64_t original_mail_sequence = 0;
         OresNativeActorTerminalFailure failure = {0};
         OresNativeWakeTicket wake_ticket = {0};
         OresNativeWakeOutcome wake_outcome = ORES_NATIVE_WAKE_FAILED;
@@ -517,6 +526,8 @@ static void* carrier(void* raw) {
             --lane->wake_ready;
         } else {
             payload = lane->messages[lane->head];
+            original_mail_sequence = lane->mail_sequences[lane->head];
+            if (!original_mail_sequence) abort();
             if (++lane->head == s->per_actor_capacity) lane->head = 0;
             lane->queued--;
         }
@@ -545,6 +556,7 @@ static void* carrier(void* raw) {
         // Actor identity is authorized only by the physical execution claim.
         executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
         executing_claim = execution_claim;
+        executing_data_mail_sequence = kind == TURN_DATA ? original_mail_sequence : 0;
         executing_context = (OresNativeExecutionContext){
             .id = {s->domain, execution_id},
             .allocation = lane->allocation_domain,
@@ -552,16 +564,20 @@ static void* carrier(void* raw) {
             .continuation = {0, 0}
         };
         executing = s;
-        executing_wake_valid = kind == 1;
+        executing_wake_valid = kind == TURN_WAKE;
         executing_wake = wake_ticket;
+        executing_wake_outcome = kind == TURN_WAKE
+                ? wake_outcome : ORES_NATIVE_WAKE_FAILED;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (kind == 2) s->control_callback(s->context, i, payload);
         else if (kind == 1) s->wake_callback(s->context, i, wake_ticket, wake_outcome);
         else s->callback(s->context, i, payload);
         executing_wake_valid = 0;
         executing_wake = (OresNativeWakeTicket){0};
+        executing_wake_outcome = ORES_NATIVE_WAKE_FAILED;
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
+        executing_data_mail_sequence = 0;
         executing_context = (OresNativeExecutionContext){0};
         executing = NULL;
 
@@ -597,6 +613,7 @@ static void* carrier(void* raw) {
                 abort();
             active_wake->state = WAKE_EMPTY;
             active_wake->ticket = (OresNativeWakeTicket){0};
+            active_wake->originating_data_mail = 0;
             --lane->wake_live;
             ++s->wakes_completed;
         }
@@ -656,11 +673,13 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
     size_t initialized = 0;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
+    s->sequence_slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     if (wake_callback) s->wake_slots = (WakeCredit*)calloc(
         actors * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR, sizeof(WakeCredit));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
     s->carrier_slots = (CarrierSlot*)calloc(workers, sizeof(CarrierSlot));
-    if (!s->actors || !s->slots || (wake_callback && !s->wake_slots)
+    if (!s->actors || !s->slots || !s->sequence_slots
+            || (wake_callback && !s->wake_slots)
             || !s->threads || !s->carrier_slots)
         goto allocation_failed;
     for (size_t w = 0; w < workers; ++w)
@@ -683,6 +702,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
         for (int k = 0; k < TURN_CLASSES; ++k)
             s->actors[i].rq_next[k] = s->actors[i].rq_prev[k] = RQ_NIL;
         s->actors[i].messages = s->slots + i * capacity;
+        s->actors[i].mail_sequences = s->sequence_slots + i * capacity;
         s->actors[i].wakes = wake_callback
             ? s->wake_slots + i * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR : NULL;
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
@@ -706,6 +726,7 @@ allocation_failed:
     free(s->carrier_slots);
     free(s->threads);
     free(s->slots);
+    free(s->sequence_slots);
     free(s->wake_slots);
     free(s->actors);
     free(s);
@@ -933,6 +954,7 @@ int ores_native_actor_scheduler_priority_inheritance_enabled(
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
+        || s->actors[i].accepted_user_messages == UINT64_MAX
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
         || s->accepted >= UINT64_MAX - s->reserved_wakes
         || !execution_slot_available_locked(s)) {
@@ -946,11 +968,16 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
         return 0;
     }
     if (new_lane) ++s->runnable_lanes;
+    /* The source-mail ordinal is minted at SUCCESSFUL enqueue, not inferred
+     * from payload, carrier, or the number of completed callbacks. The pair
+     * lives in parallel preallocated ring slots and cannot be reassigned by a
+     * producer's Future completion or a guest-supplied token. */
+    const uint64_t admitted_sequence = a->accepted_user_messages + UINT64_C(1);
     a->messages[a->tail] = payload;
+    a->mail_sequences[a->tail] = admitted_sequence;
     if (++a->tail == s->per_actor_capacity) a->tail = 0;
     a->queued++;
-    if (a->accepted_user_messages == UINT64_MAX) abort();
-    ++a->accepted_user_messages;
+    a->accepted_user_messages = admitted_sequence;
     s->reserved_executions++;
     s->accepted++;
     s->outstanding++;
@@ -1014,7 +1041,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
-        } else if (lane->queued + lane->active >= s->per_actor_capacity) {
+        } else if (lane->accepted_user_messages == UINT64_MAX
+                || lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
         } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
                 || !execution_slot_available_locked(s)) {
@@ -1117,6 +1145,15 @@ int ores_native_actor_scheduler_reserve_wake(
     }
     if (ok) {
         ++w->generation;
+        /* Scheduler->authority lock order. A producer thread, CONTROL or
+         * WAKE callback cannot forge the original DATA-mail provenance. */
+        w->originating_data_mail =
+            executing == s && executing_data_mail_sequence
+            && executing_actor.scheduler_domain == producer.scheduler_domain
+            && executing_actor.actor_slot == producer.actor_slot
+            && executing_actor.generation == producer.generation
+            && ores_execution_owns_running(&lane->authority, executing_claim)
+            ? executing_data_mail_sequence : 0;
         const size_t slot = (size_t)(w - lane->wakes);
         w->ticket = (OresNativeWakeTicket){
             .producer = producer, .target = target,
@@ -1131,6 +1168,28 @@ int ores_native_actor_scheduler_reserve_wake(
         ++lane->wake_live;
         *out = w->ticket;
     }
+    unlock(s);
+    return ok;
+}
+/* Verify a WAKE ticket was genuinely RESERVED during THIS authenticated
+ * originating DATA-mail turn, not constructed from matching actor IDs or a
+ * guest-supplied original-mail integer. No wake-ticket ABI change required:
+ * the proof is in the scheduler-owned WakeCredit slot. */
+int ores_native_actor_scheduler_current_data_issued_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket,
+        uint64_t expected_original_mail) {
+    if (!s || !expected_original_mail) return 0;
+    uint64_t authenticated_mail = 0;
+    if (!ores_native_actor_scheduler_current_data_mail_sequence(
+            s, ticket.producer, &authenticated_mail)
+            || authenticated_mail != expected_original_mail)
+        return 0;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket);
+    const int ok = w && w->state == WAKE_RESERVED
+        && w->originating_data_mail == expected_original_mail
+        && ores_execution_owns_running(
+            &s->actors[ticket.producer.actor_slot].authority, executing_claim);
     unlock(s);
     return ok;
 }
@@ -1225,6 +1284,18 @@ int ores_native_actor_scheduler_is_current_wake(
             || executing_wake.target.generation != ticket.target.generation)
         return 0;
     return ores_native_actor_scheduler_is_current_actor(s, ticket.producer);
+}
+/* Request-local SourceTask resume may access its original scope only on the
+ * exact scheduler-issued continuation WAKE, with a successful READY outcome,
+ * and only while its producer actor remains RUNNING on this physical carrier.
+ * CANCELLED/FAILED, foreign callbacks and STOPPING cleanup fail closed. */
+int ores_native_actor_scheduler_is_current_ready_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!ores_native_actor_scheduler_is_current_wake(s, ticket)
+            || executing_wake_outcome != ORES_NATIVE_WAKE_READY)
+        return 0;
+    return ores_execution_owns_running(
+        &s->actors[ticket.producer.actor_slot].authority, executing_claim);
 }
 size_t ores_native_actor_scheduler_outstanding_wake_loans(
         OresNativeActorScheduler* s, OresNativeActorRef producer) {
@@ -1462,6 +1533,27 @@ int ores_native_actor_scheduler_is_current_actor(
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
 }
+/* Original user DATA-mail sequence is available only while the authenticated
+ * actor callback is RUNNING on this scheduler's physical carrier. It is not
+ * available to CONTROL, WAKE, detached Tasks or external Future producers.
+ * The sequence was minted at mailbox admission, not recovered from payload. */
+int ores_native_actor_scheduler_current_data_mail_sequence(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        uint64_t* out_sequence) {
+    if (!s || !out_sequence || executing != s
+            || !executing_data_mail_sequence || !actor.scheduler_domain
+            || actor.scheduler_domain != executing_actor.scheduler_domain
+            || actor.actor_slot != executing_actor.actor_slot
+            || actor.generation != executing_actor.generation
+            || !executing_claim.carrier)
+        return 0;
+    if (!ores_execution_owns_running(
+            &s->actors[actor.actor_slot].authority, executing_claim))
+        return 0;
+    *out_sequence = executing_data_mail_sequence;
+    return 1;
+}
+
 int ores_native_actor_scheduler_current_execution_context(
         OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
     if (!s || !out || executing != s || !executing_context.id.runtime_domain
@@ -1517,6 +1609,7 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     free(s->carrier_slots);
     free(s->threads);
     free(s->slots);
+    free(s->sequence_slots);
     free(s->wake_slots);
     free(s->actors);
     free(s);
