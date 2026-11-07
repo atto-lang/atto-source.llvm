@@ -13,17 +13,17 @@
 
 ## Local executed evidence — not CUDA hardware
 
-- **289 host-only fake-driver assertions passed** using locally compiled exact-source `G1CudaProvider.hpp` and `gpu_g2_cuda_provider_host_test.cpp`. Coverage includes overlapping submissions across distinct tenants, mutable shared-stream serialization, event pending/failure, quarantine, cancellation, resource-release retry, geometry limits and exact operation state.
+- **307,078 host-only fake-driver assertions passed** using locally compiled exact-source `G1CudaProvider.hpp` and `gpu_g2_cuda_provider_host_test.cpp`. Coverage includes overlapping submissions across distinct tenants, mutable shared-stream serialization, 128 four-way concurrent stream admission races (512 attempted submissions), 300 seeded SAXPY CPU-oracle vector/geometry trials, allocation failures at all three positions, upload/launch/download/event failures, quarantine, cancellation, event/module cleanup retries, geometry limits and exact operation state.
 - **8 host-only bounded PTX input assertions passed**, including the 512 KiB boundary, 512 KiB+1 rejection, malformed input and embedded NUL.
 - **2 host-only CMake mutation scenarios passed**: mutated source and failing LLVM target both rejected without retaining any stale PTX.
-- Repeated fake-driver and bounded-input tests under **AddressSanitizer and UBSan** also passed.
-- The CMake pipeline orchestrator locally generated real offline NVPTX for the pinned `.atto` fixture with LLVM 20.1.8 (via temporary local `llvmlite` adapter); the final **hardware invocation was a synthetic fake executable** that printed a nine-case success line. **That line is not physical GPU evidence.**
+- The updated **307,078-assertion** fake-driver suite passed under both GCC and Clang with AddressSanitizer/UBSan, using locally compiled repository-matching source blobs and **stand-in** runtime headers. The bounded-input host test also passed under sanitizers.
+- The CMake pipeline orchestrator previously generated real offline NVPTX for the pinned `.atto` fixture with LLVM 20.1.8 (via temporary local `llvmlite` adapter); its final **hardware invocation was synthetic** and is **not physical GPU evidence**. The hardware test has since expanded to **75 planned cases**: eight fixed boundary sizes, 64 seeded numerical/geometry workloads, two fail-closed geometry/quota admissions, and one cancellation case. The updated hardware suite compiled in syntax-only mode under GCC and Clang against an interface stand-in; **the new 75-case hardware suite has NOT_EXECUTED**.
 - Exact Git blob identities verified by GitHub readback and matching local `git hash-object` for all seven new/modified standalone provider/test/script files.
 - These tests used local **stand-in** `GpuBufferFence.hpp`, `GpuLaunchGeometry.hpp` and CUDA header signatures; no full-repository CMake/CTest or real SDK/device runs have completed.
 
 ### Remaining blockers — do not promote
 
-1. Physical NVIDIA device, authentic CUDA Driver API headers/library, actual `cuLaunchKernel`, hardware output comparison and 9 real hardware cases; all remain `NOT_EXECUTED`.
+1. Physical NVIDIA device, authentic CUDA Driver API headers/library, actual `cuLaunchKernel`, hardware output comparison and 75 real hardware cases; all remain `NOT_EXECUTED`.
 2. Exact-head hosted CI with nonzero executed steps. A workflow failure with `steps=null` is **runner admission**, never compiler/test evidence. Independent review required before merging.
 3. Replace `.entry saxpy` substring checks with **authenticated, compiler-issued PTX provenance and kernel ABI attestation** before exposing any device compilation/dispatch to untrusted guest code.
 4. The CUDA adapter uses pageable host staging, which may block at driver submission; this is **not** the AttoLang async actor/scheduler API. Production requires pinned host memory, bounded async queue admission and no carrier blocking.
