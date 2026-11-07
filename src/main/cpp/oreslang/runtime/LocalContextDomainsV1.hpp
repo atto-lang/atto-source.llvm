@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/LocalValueAdmissionV1.hpp"
+#include "oreslang/runtime/LocalPayloadBudgetV1.hpp"
 
 // AttoLang native HOST substrate for ThreadLocal, TaskLocal and ActorLocal.
 // The existing RequestContextLocalV1.hpp owns HTTP RequestLocal. None of
@@ -64,12 +65,15 @@ inline std::uint64_t next_local_key_id_v1() {
 }
 
 struct LocalCellBaseV1 {
+    explicit LocalCellBaseV1(std::size_t payload) : bytes(payload) {}
     virtual ~LocalCellBaseV1() = default;
+    const std::size_t bytes;
 };
 
 template <class T>
 struct LocalCellV1 final : LocalCellBaseV1 {
-    explicit LocalCellV1(T input) : value(std::move(input)) {}
+    LocalCellV1(T input, std::size_t payload)
+        : LocalCellBaseV1(payload), value(std::move(input)) {}
     T value;
 };
 
@@ -93,6 +97,7 @@ class LogicalLocalScopeV1 final {
 public:
     using Ptr = std::shared_ptr<LogicalLocalScopeV1>;
     static constexpr std::size_t max_slots = 32;
+    static constexpr std::size_t max_bytes = 8192; // measured, not deep heap allocations
 
     static Ptr open(ExecutionStampV1 identity) {
         if constexpr (Domain == LocalDomainV1::Actor) {
@@ -125,22 +130,29 @@ public:
     bool set(ExecutionStampV1 current,
              const LogicalLocalKeyV1<Domain, T>& key, T value) {
         if (!authorized(current)) return false;
-        auto incoming = std::make_shared<LocalCellV1<T>>(std::move(value));
+        const std::size_t payload = local_measured_payload_bytes_v1(value);
+        if (payload > max_bytes) return false; // also rejects malformed UTF-8
+        auto incoming = std::make_shared<LocalCellV1<T>>(std::move(value), payload);
         std::shared_ptr<LocalCellBaseV1> retired;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!open_) return false;
             auto found = slots_.find(key.id_);
+            const std::size_t previous =
+                found == slots_.end() ? 0 : found->second->bytes;
+            // Check BEFORE replacing. A failed operation preserves old value
+            // and quota. Only one generation can close or mutate under lock.
+            if ((found == slots_.end() && slots_.size() >= max_slots) ||
+                payload > max_bytes - (used_bytes_ - previous)) return false;
             if (found == slots_.end()) {
-                if (slots_.size() >= max_slots) return false;
                 slots_.emplace(key.id_, std::move(incoming));
             } else {
                 retired.swap(found->second);
                 found->second = std::move(incoming);
             }
+            used_bytes_ = used_bytes_ - previous + payload;
         }
-        // User-defined destructors are never run under the scope mutex.
-        retired.reset();
+        retired.reset(); // do not run destructors under scope mutex
         return true;
     }
 
@@ -173,6 +185,7 @@ public:
             auto found = slots_.find(key.id_);
             if (found == slots_.end()) return false;
             retired = std::move(found->second);
+            used_bytes_ -= retired->bytes;
             slots_.erase(found);
         }
         retired.reset();
@@ -187,6 +200,7 @@ public:
             if (!open_) return false;
             open_ = false;
             retired.swap(slots_);
+            used_bytes_ = 0;
         }
         retired.clear();
         return true;
@@ -214,6 +228,7 @@ private:
     const ExecutionStampV1 identity_;
     mutable std::mutex mutex_;
     bool open_ = true;
+    std::size_t used_bytes_ = 0;
     std::unordered_map<std::uint64_t,
                        std::shared_ptr<LocalCellBaseV1>> slots_;
 };
@@ -228,7 +243,9 @@ template <class T> using TaskLocalKeyV1 = LogicalLocalKeyV1<LocalDomainV1::Task,
 class PhysicalThreadLocalsV1 final {
     struct Slots {
         static constexpr std::size_t max_slots = 32;
+        static constexpr std::size_t max_bytes = 8192;
         bool closing = false;
+        std::size_t used_bytes = 0;
         std::unordered_map<std::uint64_t,
                            std::shared_ptr<LocalCellBaseV1>> values;
 
@@ -237,6 +254,7 @@ class PhysicalThreadLocalsV1 final {
             // on this SAME physical thread. Fence read/write/erase before
             // dropping any cell and empty the table before its callbacks.
             closing = true;
+            used_bytes = 0;
             decltype(values) retiring;
             retiring.swap(values);
             retiring.clear();
@@ -258,17 +276,24 @@ public:
         bool set(T value) const {
             auto& state = slots();
             if (state.closing) return false;
-            auto incoming = std::make_shared<LocalCellV1<T>>(std::move(value));
+            const std::size_t payload = local_measured_payload_bytes_v1(value);
+            if (payload > Slots::max_bytes) return false;
+            auto incoming = std::make_shared<LocalCellV1<T>>(std::move(value), payload);
             auto& table = state.values;
             auto found = table.find(id_);
+            const std::size_t previous =
+                found == table.end() ? 0 : found->second->bytes;
+            if ((found == table.end() && table.size() >= Slots::max_slots) ||
+                payload > Slots::max_bytes - (state.used_bytes - previous))
+                return false;
             if (found == table.end()) {
-                if (table.size() >= Slots::max_slots) return false;
                 table.emplace(id_, std::move(incoming));
             } else {
                 auto retired = std::move(found->second);
                 found->second = std::move(incoming);
                 retired.reset();
             }
+            state.used_bytes = state.used_bytes - previous + payload;
             return true;
         }
         std::optional<T> get_copy() const {
@@ -287,6 +312,7 @@ public:
             auto found = table.find(id_);
             if (found == table.end()) return false;
             auto retired = std::move(found->second);
+            state.used_bytes -= retired->bytes;
             table.erase(found);
             retired.reset(); // destructor runs after the slot is invisible
             return true;
