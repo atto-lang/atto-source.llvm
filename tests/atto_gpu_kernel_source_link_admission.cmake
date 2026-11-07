@@ -29,7 +29,19 @@ set(cases "gpu-only" "source-linked" "array-mutable" "unknown-kernel" "wrong-ari
           "spawn-body"
           "nested-braces"
           "comment-braces"
-          "opaque-host-call")
+          "opaque-host-call"
+          "saxpy-typed-int"
+          "saxpy-early-return"
+          "saxpy-unguarded"
+          "saxpy-readonly-store"
+          "saxpy-read-from-output"
+          "saxpy-wrong-index"
+          "saxpy-invalid-axis"
+          "saxpy-signedness"
+          "saxpy-wrong-operator"
+          "saxpy-early-no-return"
+          "saxpy-wrong-bound"
+          "saxpy-leak-store")
 set(source_gpu-only "${kernel}")
 set(source_source-linked "${kernel}${launch}")
 set(source_array-mutable "${legacy}${launch}")
@@ -62,6 +74,19 @@ set(source_spawn-body "pub gpu fnc saxpy(): void { spawn worker; }\n")
 set(source_nested-braces "pub gpu fnc saxpy(): void { if true { if true { return; } } }\n")
 set(source_comment-braces "pub gpu fnc saxpy(): void { /* } } } */ return; }\n")
 set(source_opaque-host-call "pub gpu fnc saxpy(): void { unresolved_host_function(); }\n")
+set(typed_saxpy_prefix "pub gpu fnc saxpy(f32 alpha, GpuReadBuffer<f32> x, GpuReadBuffer<f32> y, GpuWriteBuffer<f32> out, int n): void { ")
+set(source_saxpy-typed-int "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i < n { out[i] = alpha * x[i] + y[i]; } fi }\n")
+set(source_saxpy-early-return "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i >= n { return; } out[i] = alpha * x[i] + y[i]; return; }\n")
+set(source_saxpy-unguarded "${typed_saxpy_prefix}const int i = gpu.global_id(0); out[i] = alpha * x[i] + y[i]; }\n")
+set(source_saxpy-readonly-store "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i < n { x[i] = alpha * x[i] + y[i]; } }\n")
+set(source_saxpy-read-from-output "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i < n { out[i] = alpha * out[i] + y[i]; } }\n")
+set(source_saxpy-wrong-index "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i < n { out[n] = alpha * x[i] + y[i]; } }\n")
+set(source_saxpy-invalid-axis "${typed_saxpy_prefix}const int i = gpu.global_id(1); if i < n { out[i] = alpha * x[i] + y[i]; } }\n")
+set(source_saxpy-signedness "${typed_saxpy_prefix}const u64 i = gpu.global_id(0); if i < n { out[i] = alpha * x[i] + y[i]; } }\n")
+set(source_saxpy-wrong-operator "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i < n { out[i] = alpha + x[i] + y[i]; } }\n")
+set(source_saxpy-early-no-return "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i >= n {} out[i] = alpha * x[i] + y[i]; }\n")
+set(source_saxpy-wrong-bound "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i < other { out[i] = alpha * x[i] + y[i]; } }\n")
+set(source_saxpy-leak-store "${typed_saxpy_prefix}const int i = gpu.global_id(0); if i < n { out[i] = alpha * x[i] + y[i]; } out[i] = alpha * x[i] + y[i]; }\n")
 set(expected_gpu-only "GPU-LAUNCH-008")
 set(expected_source-linked "GPU-LAUNCH-008")
 set(expected_array-mutable "GPU-LAUNCH-008")
@@ -95,6 +120,18 @@ set(expected_nested-braces "GPU-LAUNCH-008")
 set(expected_comment-braces "GPU-LAUNCH-008")
 set(expected_opaque-host-call "GPU-LAUNCH-008")
 
+set(expected_saxpy-typed-int "GPU-LAUNCH-008")
+set(expected_saxpy-early-return "GPU-LAUNCH-008")
+set(expected_saxpy-unguarded "GPU-LAUNCH-005")
+set(expected_saxpy-readonly-store "GPU-LAUNCH-005")
+set(expected_saxpy-read-from-output "GPU-LAUNCH-005")
+set(expected_saxpy-wrong-index "GPU-LAUNCH-005")
+set(expected_saxpy-invalid-axis "GPU-LAUNCH-003")
+set(expected_saxpy-signedness "GPU-LAUNCH-002")
+set(expected_saxpy-wrong-operator "GPU-LAUNCH-002")
+set(expected_saxpy-early-no-return "GPU-LAUNCH-005")
+set(expected_saxpy-wrong-bound "GPU-LAUNCH-005")
+set(expected_saxpy-leak-store "GPU-LAUNCH-008")
 foreach(case_name IN LISTS cases)
   string(RANDOM LENGTH 24 ALPHABET "0123456789abcdef" nonce)
   set(case_dir "${WORKDIR}/kernel-link-${case_name}-${nonce}")
@@ -133,4 +170,4 @@ foreach(case_name IN LISTS cases)
     message(FATAL_ERROR "${case_name}: rejected source created hidden or nested artifacts")
   endif()
 endforeach()
-message(STATUS "PASS 32 native source-link compiler negative admissions; physical_gpu_executed=false")
+message(STATUS "PASS 44 native source-link compiler negative admissions; physical_gpu_executed=false")
