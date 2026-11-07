@@ -40,6 +40,9 @@ bool expect(const char* description, const Expression& expression,
             (result && (result->origin != origin ||
                 result->fields.size() != expected_fields ||
                 result->lexical_slot != "owner" ||
+                result->binding_id.value != 1 ||
+                result->allocation_origin.value != 0 ||
+                result->has_proven_allocation() ||
                 result->owns_storage() != (origin == PlaceOrigin::OwnedSlot)))) {
         std::cerr << "native compiler-resolved place failure: " << description
                   << " case " << executed << '\n';
@@ -62,12 +65,28 @@ bool expect(const char* description, const Expression& expression,
 int main() {
     Locals owned, shared, exclusive;
     LocalOwnership value;
+    // Production IDs are minted from the current function's lexical table.
+    // Synthetic test fixtures must declare the binding explicitly as well.
+    value.binding_id.value = 1;
     value.mode = Mode::Value;
     owned.emplace("owner", value);
     value.mode = Mode::Borrow;
     shared.emplace("owner", value);
     value.mode = Mode::BorrowMut;
     exclusive.emplace("owner", value);
+    // An unminted lexical slot cannot acquire ownership authority just by
+    // being inserted in the map under a plausible name.
+    Locals unminted = owned;
+    unminted.at("owner").binding_id.value = 0;
+    if (resolve_compiler_place(projected("owner", 0), unminted)) {
+        std::cerr << "unminted AST name acquired compiler-owned provenance\n";
+        return 10;
+    }
+    // Borrowed roots cannot create allocation provenance from a different
+    // lexical binding identity; zero remains explicitly unproven.
+    if (resolve_compiler_place(projected("owner", 0), shared)
+            ->allocation_origin.value != 0)
+        return 11;
     std::size_t count = 0;
 
     // 27 actual AST -> compiler Locals -> typed Place cases:
