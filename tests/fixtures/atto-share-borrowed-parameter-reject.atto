@@ -1,0 +1,11 @@
+// EXPECT_COMPILE_ERROR: E_SHARE_BORROW
+// A named borrowed scalar is a loan, not an owned Share capability.
+// Copyable i64 storage does not authorize upgrading that loan to
+// independently shareable ownership.
+pub fnc wrongly_shared(borrow int incoming): int {
+  return rt share incoming;
+}
+pub fnc main(): int {
+  let int owned = 42;
+  return wrongly_shared(rt borrow owned);
+}
