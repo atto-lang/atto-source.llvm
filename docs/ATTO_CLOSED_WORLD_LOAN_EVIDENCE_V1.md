@@ -112,3 +112,30 @@ plus eight non-promoting controls. Focused ownership CI requires exactly
 15 distinct named CTests and 15 distinct passing JUnit cases, followed by
 the separately guarded real 50-program LLVM/Clang guest matrix. Source-org
 runner-admission failures mean these remain AUTHORED, NOT_EXECUTED.
+
+
+## Independent native function provenance and reverse metadata inventory
+
+The direct-source field-write coverage verifier now requires a **separate
+compiler declaration registry** mapping every `Program.functions[]` identity
+to its actual, fully emitted LLVM function. A valid StoreInst must belong to
+the native function independently associated with its source function. This
+prevents the emitter from passing a self-consistent but wrong function pair.
+Missing/foreign/aliased declarations fail closed, including missing source
+functions with zero direct field writes.
+
+A second independent scan of the actual LLVM module inventories **every**
+StoreInst carrying `atto.ownership.field_write.source.v1`. The reverse
+tagged-store inventory must match the source ledger exactly. Unexpected
+cloned/forged/unpaired tagged stores fail closed, while ordinary untagged
+compiler housekeeping stores remain permitted. An empty source/ledger
+inventory cannot set `direct_source_writes_complete=true`.
+
+The original field-write coverage host test expands to **66 assertions**:
+54 negative mutations and 12 positive/nonpromoting controls, including
+forged native declaration maps and extra tagged stores. The exact-name
+focused CTest remains one of 15 and the 50 real compiler-backed `.atto`
+fixtures remain a separate gate. No compiler-backed guest or hosted test
+success is claimed until nonzero Actions runner steps exist. General LoanId,
+Reinitialize.write_id, optimized-code, cancellation and guest correctness
+remain unproven and all broad proof flags stay false.

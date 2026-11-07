@@ -108,11 +108,24 @@ public:
         // Inspect the actual LLVM instruction list; never dereference a
         // potentially removed StoreInst until its pointer was found live.
         std::map<const llvm::Instruction*, const llvm::Function*> live;
+        // Reverse inventory: an extra cloned/forged provenance-tagged store
+        // must not escape the forward per-source receipt comparison.
+        std::map<const llvm::StoreInst*, const llvm::Function*> tagged_stores;
         for (const auto& function : module) {
             if (function.isDeclaration()) continue;
             for (const auto& block : function)
-                for (const auto& instruction : block)
+                for (const auto& instruction : block) {
                     live.emplace(&instruction, &function);
+                    if (const auto* store =
+                            llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+                        if (store->getMetadata(kMetadataKind)) {
+                            if (tagged_stores.size() >= 4096 ||
+                                    !tagged_stores.emplace(store, &function).second)
+                                throw std::runtime_error(
+                                    "ownership violation: duplicate or oversized emitted tagged store inventory");
+                        }
+                    }
+                }
         }
         std::set<const Statement*> unique_sources;
         std::set<const llvm::Instruction*> unique_stores;
@@ -145,6 +158,11 @@ public:
                     actual->getValueOperand() != record.stored)
                 throw std::runtime_error(
                     "ownership violation: source field-write store mutated or substituted");
+            const auto bound_tag = tagged_stores.find(actual);
+            if (bound_tag == tagged_stores.end() ||
+                    bound_tag->second != found->second)
+                throw std::runtime_error(
+                    "ownership violation: emitted tagged store not in reverse inventory");
             const auto* tag = actual->getMetadata(kMetadataKind);
             if (!tag || tag->getNumOperands() != 3)
                 throw std::runtime_error(
@@ -170,6 +188,9 @@ public:
                 throw std::runtime_error(
                     "ownership violation: emitted field-write provenance metadata changed");
         }
+        if (tagged_stores.size() != sites_.size())
+            throw std::runtime_error(
+                "ownership violation: invented or unpaired emitted tagged field store");
         return {sites_.size(), !sites_.empty(), false, false, false};
     }
 
@@ -179,8 +200,27 @@ public:
     // cleanup writes. 'Defer' effects are NOT direct FieldWrite and remain
     // outside this bounded proof.
     FieldWriteAudit verify_source_coverage(
-            const Program& source, const llvm::Module& module) const {
+            const Program& source, const llvm::Module& module,
+            const std::map<const Function*, const llvm::Function*>&
+                independent_function_declarations) const {
         auto result = verify(module); // check actual live StoreInst first
+        // The declaration registry is built independently from source
+        // Program functions in production codegen, not the store ledger.
+        // Do not confuse an arbitrary LLVM function with the correct
+        // lowered body merely because the StoreInst belongs to it.
+        if (independent_function_declarations.size() != source.functions.size())
+            throw std::runtime_error(
+                "ownership violation: incomplete source to native function declarations");
+        std::set<const llvm::Function*> seen_native_functions;
+        for (const auto& source_function : source.functions) {
+            const auto it = independent_function_declarations.find(&source_function);
+            if (it == independent_function_declarations.end() ||
+                    !it->second || it->second->getParent() != &module ||
+                    it->second->isDeclaration() ||
+                    !seen_native_functions.insert(it->second).second)
+                throw std::runtime_error(
+                    "ownership violation: missing, foreign or aliased native function declaration");
+        }
         std::map<const Statement*, const Function*> expected;
         std::size_t visited = 0;
         const auto visit = [&](const auto& self,
@@ -219,8 +259,13 @@ public:
         std::set<const Statement*> matched;
         for (const auto& site : sites_) {
             const auto found = expected.find(site.source);
+            const auto declaration = found != expected.end()
+                ? independent_function_declarations.find(found->second)
+                : independent_function_declarations.end();
             if (found == expected.end() || site.source_function != found->second ||
+                    declaration == independent_function_declarations.end() ||
                     !site.emitted_function ||
+                    site.emitted_function != declaration->second ||
                     site.store->getFunction() != site.emitted_function ||
                     !matched.insert(site.source).second)
                 throw std::runtime_error(
@@ -229,7 +274,9 @@ public:
         if (matched.size() != expected.size())
             throw std::runtime_error(
                 "ownership violation: incomplete compiler source field-write inventory");
-        result.direct_source_writes_complete = true;
+        // Zero expected writes is a vacuous match, not positive evidence
+        // of any source field-write instruction being linked to a store.
+        result.direct_source_writes_complete = !expected.empty();
         // The direct FieldWrite inventory is NOT a complete ownership
         // loan-use / deferred-effect / optimized machine-code certificate.
         return result;

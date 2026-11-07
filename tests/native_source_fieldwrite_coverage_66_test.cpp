@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <iterator>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -112,9 +114,37 @@ struct Fixture {
     }
 
     void bind_primary() {bind(*primary);}
-    void cover() const {(void)ledger.verify_source_coverage(program,module);}
-    bool complete() const {
-        const auto result = ledger.verify_source_coverage(program,module);
+    // Builds the independent source-Function -> actual LLVM Function map used
+    // by production codegen from its declaration registry. Extra test source
+    // functions receive genuine separate LLVM function bodies, so missing
+    // field-write mutations do not pass merely due to a missing declaration.
+    std::map<const Function*, const llvm::Function*> function_map() {
+        std::map<const Function*, const llvm::Function*> result;
+        for (std::size_t i = 0; i < program.functions.size(); ++i) {
+            if (i == 0) {
+                result.emplace(&program.functions[i], emitted_function);
+                continue;
+            }
+            const auto name = std::string("guest_extra_") + std::to_string(i);
+            llvm::Function* extra = module.getFunction(name);
+            if (!extra) {
+                extra = llvm::Function::Create(
+                    llvm::FunctionType::get(builder.getVoidTy(), false),
+                    llvm::Function::ExternalLinkage, name, module);
+                llvm::IRBuilder<> body(
+                    llvm::BasicBlock::Create(context, "entry", extra));
+                body.CreateRetVoid();
+            }
+            result.emplace(&program.functions[i], extra);
+        }
+        return result;
+    }
+    void cover() {
+        (void)ledger.verify_source_coverage(program,module,function_map());
+    }
+    bool complete() {
+        const auto result =
+            ledger.verify_source_coverage(program,module,function_map());
         return result.direct_source_writes_complete &&
             !result.ownership_complete && !result.optimized_code_verified &&
             !result.guest_verified;
@@ -165,7 +195,7 @@ int main() {
         check(denied([]{ Fixture f; f.bind_primary(); (void)f.add(*f.source_function,std::string(256,'o'),"z"); f.cover(); }),"unbound source path length exceeds 256",n);
         check(denied([]{ Fixture f; f.bind_primary(); Statement external{}; external.kind=Statement::Kind::FieldWrite; external.receiver="owner"; external.field="fake"; f.bind(external,f.another()); f.cover(); }),"forged source field with matching names but outside Program",n);
         check(denied([]{ Fixture f; f.bind_primary(); Statement external{}; external.kind=Statement::Kind::FieldWrite; external.receiver="owner"; external.field="y"; external.offset=0; f.bind(external,f.another()); f.cover(); }),"forged source field with zero offset outside Program",n);
-        check(denied([]{ Fixture f; f.bind_primary(); Program foreign; f.ledger.verify_source_coverage(foreign,f.module); }),"source field bound to different Program",n);
+        check(denied([]{ Fixture f; f.bind_primary(); Program foreign; f.ledger.verify_source_coverage(foreign,f.module,f.function_map()); }),"source field bound to different Program",n);
         check(denied([]{ Fixture f; f.program.functions.emplace_back(); auto& other=f.program.functions.back(); f.bind(*f.primary,f.store,nullptr,&other,f.emitted_function); f.cover(); }),"source field bound to wrong source Function object",n);
         check(denied([]{ Fixture f; auto* alt=llvm::Function::Create(llvm::FunctionType::get(f.builder.getVoidTy(),false),llvm::Function::ExternalLinkage,"other",f.module); f.bind(*f.primary,f.store,nullptr,f.source_function,alt); }),"source field binding mismatches actual LLVM Function",n);
         check(denied([]{ Fixture f; f.another(f.destination); f.cover(); }),"source field omitted but equivalent extra physical store exists",n);
@@ -178,7 +208,7 @@ int main() {
         check(denied([]{ Fixture f; f.bind_primary(); f.store->setOperand(1,f.alternate); f.cover(); }),"source physical store destination mutated after binding",n);
         check(denied([]{ Fixture f; f.bind_primary(); f.store->eraseFromParent(); f.cover(); }),"source physical store erased after binding",n);
         check(denied([]{ Fixture f; f.bind_primary(); f.store->setMetadata("atto.ownership.field_write.source.v1",nullptr); f.cover(); }),"source physical store metadata erased after binding",n);
-        check(denied([]{ Fixture f; f.bind_primary(); llvm::Module foreign("other",f.context); f.ledger.verify_source_coverage(f.program,foreign); }),"source binding missing actual store in foreign LLVM module",n);
+        check(denied([]{ Fixture f; f.bind_primary(); llvm::Module foreign("other",f.context); f.ledger.verify_source_coverage(f.program,foreign,f.function_map()); }),"source binding missing actual store in foreign LLVM module",n);
         check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.emplace_back(); auto& other=f.program.functions.back(); other.statements.reserve(4100); for(int i=0;i<4100;++i){auto& s=other.statements.emplace_back(); s.kind=Statement::Kind::Call;} f.cover(); }),"source inventory over 4096 operations",n);
         check([]{ Fixture f; f.bind_primary(); return f.complete(); }(),"one source field fully inventoried",n);
         check([]{ Fixture f; f.bind_primary(); auto& s=f.add(*f.source_function); f.bind(s,f.another()); return f.complete() && f.ledger.size()==2; }(),"two direct fields inventoried",n);
@@ -187,9 +217,25 @@ int main() {
         check([]{ Fixture f; f.bind_primary(); auto& w=f.wrapper(Statement::Kind::ForIndex); auto& s=f.child(w); f.bind(s,f.another()); return f.complete(); }(),"ForIndex field inventoried",n);
         check([]{ Fixture f; f.bind_primary(); auto& w=f.wrapper(Statement::Kind::ForEach); auto& s=f.child(w); f.bind(s,f.another()); return f.complete(); }(),"ForEach field inventoried",n);
         check([]{ Fixture f; f.bind_primary(); auto& s=f.caught(); f.bind(s,f.another()); return f.complete(); }(),"caught-throw field inventoried",n);
-        check([]{ Fixture f; f.program.functions.clear(); auto result=f.ledger.verify_source_coverage(f.program,f.module); return result.direct_source_writes_complete && !result.source_to_unoptimized_ir_bound && !result.guest_verified; }(),"empty source/ledger is vacuous, nonpromoting",n);
-        if(n != 50) throw std::runtime_error("wrong test inventory");
-        std::cout<<"PASS 50/50 direct source FieldWrite completeness cases "
+        check([]{ Fixture f; f.program.functions.clear(); auto result=f.ledger.verify_source_coverage(f.program,f.module,f.function_map()); return !result.direct_source_writes_complete && !result.source_to_unoptimized_ir_bound && !result.guest_verified; }(),"empty source/ledger is vacuous, nonpromoting",n);
+        check(denied([]{ Fixture f; f.bind_primary(); std::map<const Function*,const llvm::Function*> missing; f.ledger.verify_source_coverage(f.program,f.module,missing); }), "reject missing authoritative function declaration", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto map=f.function_map(); Function outside; map.emplace(&outside,f.emitted_function); f.ledger.verify_source_coverage(f.program,f.module,map); }), "reject forged extra source declaration", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.emplace_back(); auto map=f.function_map(); map.erase(&f.program.functions.back()); f.ledger.verify_source_coverage(f.program,f.module,map); }), "reject omitted second source function declaration", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.emplace_back(); auto map=f.function_map(); map[&f.program.functions.back()]=f.emitted_function; f.ledger.verify_source_coverage(f.program,f.module,map); }), "reject two source functions aliased to one LLVM function", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto* alternative=llvm::Function::Create(llvm::FunctionType::get(f.builder.getVoidTy(),false),llvm::Function::ExternalLinkage,"wrong",f.module); llvm::IRBuilder<> b(llvm::BasicBlock::Create(f.context,"entry",alternative)); b.CreateRetVoid(); auto map=f.function_map(); map[f.source_function]=alternative; f.ledger.verify_source_coverage(f.program,f.module,map); }), "reject mapped LLVM function different from store's real owner", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto* declaration=llvm::Function::Create(llvm::FunctionType::get(f.builder.getVoidTy(),false),llvm::Function::ExternalLinkage,"external_only",f.module); auto map=f.function_map(); map[f.source_function]=declaration; f.ledger.verify_source_coverage(f.program,f.module,map); }), "reject source declaration without emitted body", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto* copied=f.another(); copied->setMetadata("atto.ownership.field_write.source.v1",f.store->getMetadata("atto.ownership.field_write.source.v1")); f.cover(); }), "reject unpaired duplicated tagged store", n);
+        check(denied([]{ Fixture f; f.program.functions.clear(); auto* tag=llvm::MDNode::get(f.context,{llvm::MDString::get(f.context,"owner.x")}); f.store->setMetadata("atto.ownership.field_write.source.v1",tag); f.cover(); }), "reject tagged store with empty source inventory", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto* extra=llvm::Function::Create(llvm::FunctionType::get(f.builder.getVoidTy(),false),llvm::Function::ExternalLinkage,"forged_extra",f.module); llvm::IRBuilder<> b(llvm::BasicBlock::Create(f.context,"entry",extra)); auto* slot=b.CreateAlloca(b.getInt64Ty()); auto* tagged=b.CreateStore(llvm::ConstantInt::get(b.getInt64Ty(),4),slot); tagged->setMetadata("atto.ownership.field_write.source.v1",f.store->getMetadata("atto.ownership.field_write.source.v1")); b.CreateRetVoid(); f.cover(); }), "reject forged tagged store in separate LLVM function", n);
+        check(denied([]{ Fixture f; f.bind_primary(); for(int i=0;i<3;++i){auto* tagged=f.another();tagged->setMetadata("atto.ownership.field_write.source.v1",f.store->getMetadata("atto.ownership.field_write.source.v1"));}f.cover(); }), "reject three unpaired tagged stores despite one ledger entry", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto* tagged=f.another(); tagged->setOperand(0,llvm::ConstantInt::get(f.builder.getInt64Ty(),999)); tagged->setMetadata("atto.ownership.field_write.source.v1",f.store->getMetadata("atto.ownership.field_write.source.v1")); f.cover(); }), "reject unpaired differently valued tagged store", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto* forged=f.another(f.destination); forged->setMetadata("atto.ownership.field_write.source.v1",f.store->getMetadata("atto.ownership.field_write.source.v1")); f.cover(); }), "reject substituted source ledger tag on unbound destination", n);
+        check([]{ Fixture f; f.bind_primary(); auto map=f.function_map(); auto proof=f.ledger.verify_source_coverage(f.program,f.module,map); return map.size()==1 && proof.direct_source_writes_complete && !proof.ownership_complete && !proof.optimized_code_verified && !proof.guest_verified; }(), "authoritative source mapping keeps one bound write", n);
+        check([]{ Fixture f; f.bind_primary(); f.program.functions.emplace_back(); auto map=f.function_map(); return map.size()==2 && map.begin()->second!=std::next(map.begin())->second && f.ledger.verify_source_coverage(f.program,f.module,map).direct_source_writes_complete; }(), "independent second native function with zero writes is allowed", n);
+        check([]{ Fixture f; f.bind_primary(); (void)f.another(); return f.complete(); }(), "plain untagged housekeeping store remains admissible", n);
+        check([]{ Fixture f; f.bind_primary(); auto* helper=llvm::Function::Create(llvm::FunctionType::get(f.builder.getVoidTy(),false),llvm::Function::ExternalLinkage,"internal_helper",f.module); llvm::IRBuilder<> b(llvm::BasicBlock::Create(f.context,"entry",helper)); auto* slot=b.CreateAlloca(b.getInt64Ty()); b.CreateStore(llvm::ConstantInt::get(b.getInt64Ty(),0),slot); b.CreateRetVoid(); return f.complete(); }(), "separate runtime LLVM helper untagged store remains admissible", n);
+        if(n != 66) throw std::runtime_error("wrong test inventory");
+        std::cout<<"PASS 66/66 direct source FieldWrite completeness cases "
                     "(REAL LLVM IR HOST TEST; NOT NLL/GUEST VERIFIED)\n";
         return 0;
     } catch(const std::exception& error) {
