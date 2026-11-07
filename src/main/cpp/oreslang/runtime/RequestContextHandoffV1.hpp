@@ -30,6 +30,7 @@
 // burn the ticket, so a wrong actor cannot destroy B's envelope.
 
 #include "oreslang/runtime/RequestLocalSchedulerTurnV1.hpp"
+#include "oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -150,8 +151,20 @@ public:
 
     static constexpr std::size_t max_capacity = 1u << 16;
 
+    // Compatibility host-only table: callers own recipient cleanup.
+    // Do NOT expose this constructor to the .atto guest ABI.
     RequestContextHandoffTableV1(OresNativeActorScheduler* scheduler, std::size_t capacity)
         : scheduler_(scheduler), slots_(capacity > max_capacity ? max_capacity : capacity) {}
+
+    // Trusted ingress variant: redeemed recipients are registered with the
+    // exact-generation lifecycle owner BEFORE their context can be returned.
+    // The registry must outlive this table and the native scheduler must
+    // outlive both. A missing actor attachment fails closed.
+    RequestContextHandoffTableV1(OresNativeActorScheduler* scheduler,
+                                 std::size_t capacity,
+                                 NativeRequestLifecycleRegistryV1& lifecycle)
+        : scheduler_(scheduler), slots_(capacity > max_capacity ? max_capacity : capacity),
+          lifecycle_registry_(&lifecycle) {}
     RequestContextHandoffTableV1(const RequestContextHandoffTableV1&) = delete;
     RequestContextHandoffTableV1& operator=(const RequestContextHandoffTableV1&) = delete;
 
@@ -244,7 +257,13 @@ public:
         (void)link;  // retained by `derived` until it retires
         RequestIdentityV1 identity = env->identity;
         identity.actor = recipient;
-        auto context = RequestContextLocalV1::open(identity, derived);
+        // The lifecycle-aware path closes the prior hole: a derived scope
+        // cannot escape if the recipient actor was never attached, or STOP
+        // won registry admission. On failed registration the context is
+        // closed and the one-shot ticket remains consumed (no replay).
+        auto context = lifecycle_registry_
+            ? lifecycle_registry_->open_registered(identity, derived)
+            : RequestContextLocalV1::open(identity, derived);
         RedeemedRequestContextV1 out(context, derived);
         if (!context || derived->is_cancelled() ||
             !context->bind_original_mail_once(current_mail, scheduler_)) return std::nullopt;
@@ -319,6 +338,7 @@ private:
     };
 
     OresNativeActorScheduler* const scheduler_;
+    NativeRequestLifecycleRegistryV1* const lifecycle_registry_ = nullptr;
     mutable std::mutex mutex_;
     std::vector<Slot> slots_;
     std::size_t pending_ = 0;
