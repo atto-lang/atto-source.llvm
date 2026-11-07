@@ -35,8 +35,9 @@ struct I64 {
         return {Kind::Symbol, 0, std::move(name), {}, {}};
     }
     static I64 ceil_div(I64 a, I64 b) {
-        if (b.kind == Kind::Constant && b.value == 0)
-            throw std::invalid_argument("GPU-LAUNCH-003: ceil_div by zero");
+        if ((a.kind == Kind::Constant && a.value < 0) ||
+                (b.kind == Kind::Constant && b.value <= 0))
+            throw std::invalid_argument("GPU-LAUNCH-003: invalid ceil_div operand");
         if (a.kind == Kind::Constant && b.kind == Kind::Constant)
             return constant(a.value / b.value + (a.value % b.value != 0));
         return {Kind::CeilDiv, 0, {},
@@ -124,6 +125,9 @@ inline Candidate source_candidate(Candidate value) {
         throw std::invalid_argument("GPU-LAUNCH-002: too many kernel arguments");
     for (const auto& a : value.ordered_arguments)
         require_name(a, "kernel argument");
+    if (value.geometry.mode != Mode::PhysicalGridBlock &&
+            value.geometry.mode != Mode::LogicalOverGroup)
+        throw std::invalid_argument("GPU-LAUNCH-003: unknown geometry mode");
     if (value.geometry.extent.size() != 3 || value.geometry.group.size() != 3)
         throw std::invalid_argument("GPU-LAUNCH-003: launch axes must normalize to 3D");
     std::size_t nodes = 0;
