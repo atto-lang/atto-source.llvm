@@ -57,6 +57,17 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_affine_join_complete
         COMMAND oreslang-native-ownership-join-test)
 
+    # Exercise the same tracked-source classifier used by the production
+    # rt take checker. No synthetic compiler diagnostics are generated here.
+    add_executable(oreslang-native-ownership-place-test
+        tests/native_ownership_place_test.cpp)
+    target_include_directories(oreslang-native-ownership-place-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ownership-place-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_take_place_classification
+        COMMAND oreslang-native-ownership-place-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
@@ -1232,6 +1243,10 @@ if(BUILD_TESTING)
     # the operand is a runtime-selected conditional expression.
     oreslang_contract_test(atto_take_conditional_untracked_rejected
         atto-take-conditional-untracked.atto --diagnostic "E_TAKE_UNTRACKED_SELECT")
+    # Arithmetic or other computed temporaries are not tracked source places
+    # for native ownership transfer; require a semantic denial, not syntax.
+    oreslang_contract_test(atto_take_computed_untracked_rejected
+        atto-take-computed-untracked.atto --diagnostic "E_TAKE_UNTRACKED_PLACE")
     # Copy scalars retain parity with Java rt share Copy semantics.
     # Require real compiler IR, Clang link and native process exit.
     if(ORE_CLANG)
