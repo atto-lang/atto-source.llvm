@@ -99,7 +99,7 @@ export function inspectOwnershipWorkflowShape(source) {
   if(!once(source,'ATTO_SOURCE_CFG_REAL_COMPILER_FIXTURES=50/50_EXECUTED') ||
      !once(source,'ATTO_LLVM_SOURCE_CFG_GUEST=50/50_REAL_COMPILER_EXECUTED') ||
      !once(source,'--output-junit /tmp/atto-source-cfg-50.xml') ||
-     !once(source,'native_ownership_source_cfg_manifest_18_mutations$') ||
+     !once(source,"          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_18_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt") ||
      !source.includes('atto_ownership_source_cfg_real_compiler_50') ||
      !source.includes("observed != ['atto_ownership_source_cfg_real_compiler_50']") ||
      !source.includes("int(root.get('skipped', '1'))") ||
