@@ -79,6 +79,16 @@ Program make_source() {
     source.inverted_main = std::move(main);
     return source;
 }
+Program make_compare_source() {
+    auto source=make_source();
+    auto& terminal=source.inverted_main->operations.back();
+    terminal.kind=InvertedSourceOperation::Kind::ReturnCompareF64;
+    terminal.field="energy";
+    terminal.mixed_value=f64(3.75);
+    terminal.equal_result=42;
+    terminal.unequal_result=7;
+    return source;
+}
 } // namespace
 
 int main() {
@@ -187,13 +197,7 @@ int main() {
     // Runtime f64 result is observable through an ordinary ordered compare
     // and an i64 selection; no implicit binary64->integer conversion.
     {
-        auto source=make_source();
-        auto& terminal=source.inverted_main->operations.back();
-        terminal.kind=InvertedSourceOperation::Kind::ReturnCompareF64;
-        terminal.field="energy";
-        terminal.mixed_value=f64(3.75);
-        terminal.equal_result=42;
-        terminal.unequal_result=7;
+        auto source=make_compare_source();
         const auto selected=verify_production_inverted_mixed(source);
         require(selected.operands.terminal_f64_compare.has_value(),
                 "verified mixed source lost terminal f64 predicate");
@@ -204,19 +208,19 @@ int main() {
                 "f64 comparison omitted IEEE ordered compare");
         require(ir_compare.find(", i64 42, i64 7") != std::string::npos,
                 "f64 comparison lost both integer result branches");
-        auto forged=source;
+        auto forged=make_compare_source();
         forged.inverted_main->operations.back().field="x";
         rejects([&]{ (void)verify_production_inverted_mixed(forged); },
                 "must read f64 column");
-        forged=source;
+        forged=make_compare_source();
         forged.inverted_main->operations.back().mixed_value=i64(3);
         rejects([&]{ (void)verify_production_inverted_mixed(forged); },
                 "scalar type mismatch");
-        forged=source;
+        forged=make_compare_source();
         forged.inverted_main->operations.back().mixed_values[0]=bit(true);
         rejects([&]{ (void)verify_production_inverted_mixed(forged); },
                 "invalid mixed inverted f64 comparison metadata");
-        forged=source;
+        forged=make_compare_source();
         forged.inverted_main->operations[0].equal_result=42;
         rejects([&]{ (void)verify_production_inverted_mixed(forged); },
                 "nonterminal operation has comparison metadata");
