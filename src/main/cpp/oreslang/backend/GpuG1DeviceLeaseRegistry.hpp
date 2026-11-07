@@ -39,6 +39,11 @@ public:
             : registry_(r), tenant_(t), device_(d), id_(id), generation_(g) {}
     public:
         std::uint64_t generation() const noexcept { return generation_; }
+        // Inspectable only by trusted provider code; these are not guest capabilities.
+        std::uint64_t id() const noexcept { return id_; }
+        std::uint64_t tenant() const noexcept { return tenant_; }
+        std::uint64_t device() const noexcept { return device_; }
+        std::uint64_t registry() const noexcept { return registry_; }
     };
     class AllocationHandle final {
         friend class DeviceLeaseRegistry;
@@ -48,6 +53,11 @@ public:
             : registry_(r), tenant_(t), device_(d), id_(id), generation_(g) {}
     public:
         std::uint64_t generation() const noexcept { return generation_; }
+        // Inspectable only by trusted provider code; these are not guest capabilities.
+        std::uint64_t id() const noexcept { return id_; }
+        std::uint64_t tenant() const noexcept { return tenant_; }
+        std::uint64_t device() const noexcept { return device_; }
+        std::uint64_t registry() const noexcept { return registry_; }
     };
     struct View {
         AllocationHandle allocation;
