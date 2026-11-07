@@ -71,6 +71,25 @@ def main():
             ("malformed_literal", "first.send(7);", "first.send(9223372036854775808);"),
             ("unknown_actor", "spawn Counter();", "spawn Missing();"),
             ("moved_return", "return 43;", "return first;"),
+            # Pony capabilities are a *semantic inspiration*, not AttoLang
+            # aliases or a second grammar. The checked LLVM source path must
+            # refuse them rather than erasing capability annotations.
+            ("pony_iso_keyword", "define actor Counter as", "define actor Counter iso as"),
+            ("pony_trn_keyword", "let total: int = 0;", "let total: int trn = 0;"),
+            ("pony_ref_keyword", "let total: int = 0;", "let total: int ref = 0;"),
+            ("pony_val_keyword", "let total: int = 0;", "let total: int val = 0;"),
+            ("pony_box_keyword", "let total: int = 0;", "let total: int box = 0;"),
+            ("pony_tag_keyword", "let total: int = 0;", "let total: int tag = 0;"),
+            ("pony_recover_not_syntax", "first.send(7);",
+             "recover val first; first.send(7);"),
+            # Until transitive ownership+borrow checking is projected into IR,
+            # none of these may silently become a synchronous plain send.
+            ("at_to_borrow_not_erased", "first.send(7);",
+             "rt borrow first; first.send(7);"),
+            ("at_to_borrow_mut_not_erased", "first.send(7);",
+             "rt borrow mut first; first.send(7);"),
+            ("at_to_share_not_erased", "first.send(7);",
+             "rt share first; first.send(7);"),
         ]
         text = src.decode("utf-8")
         for name, needle, replacement in probes:
