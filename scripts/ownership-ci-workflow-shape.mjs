@@ -64,7 +64,7 @@ export function inspectOwnershipWorkflowShape(source) {
     if(!source.includes(name+'|') && !source.includes(name+')'))
       return fail('MISSING_NATIVE_CTEST_REGEX:'+name);
   }
-  if(!source.includes('native_ownership_loan_write_domain_6-test') ||
+  if(!source.includes('oreslang-native-loan-write-domain-6-test') ||
      !source.includes('oreslang-native-mir-receipts-30-test') ||
      !source.includes('--output-junit /tmp/atto-ownership-place.xml'))
     return fail('MISSING_NATIVE_BUILD_OR_RECEIPT');
