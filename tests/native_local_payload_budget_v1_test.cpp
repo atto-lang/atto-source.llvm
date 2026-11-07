@@ -1,6 +1,12 @@
 #include "oreslang/runtime/LocalPayloadBudgetV1.hpp"
 #include <cassert>
 #include <string>
+#include <vector>
+#include <map>
+#include <tuple>
+#include <optional>
+#include <array>
+#include <variant>
 using namespace oreslang::runtime;
 int main() {
     const std::string emoji = "\xf0\x9f\x98\x80";
@@ -17,4 +23,22 @@ int main() {
         assert(local_measured_payload_bytes_v1(value) > 8192);
     }
     assert(local_measured_payload_bytes_v1(7) == sizeof(int));
+    // In a v1 shallow-typed host key, heap-owning STL containers are
+    // not safely size-accounted; deny instead of billing only sizeof(T).
+    assert(local_measured_payload_bytes_v1(
+        std::vector<std::string>{std::string(10000, 'z')}) > 8192);
+    assert(local_measured_payload_bytes_v1(
+        std::map<int, std::string>{{1, "x"}}) > 8192);
+    assert(local_measured_payload_bytes_v1(
+        std::optional<std::string>{"x"}) > 8192);
+    assert(local_measured_payload_bytes_v1(
+        std::tuple<int, std::string>{7, "x"}) > 8192);
+    assert(local_measured_payload_bytes_v1(
+        std::array<std::string, 2>{"x", "y"}) > 8192);
+    assert(local_measured_payload_bytes_v1(
+        std::variant<int, std::string>{std::string("x")}) > 8192);
+    // Truly fixed-size arithmetic composites can be conservatively charged.
+    assert(local_measured_payload_bytes_v1(
+        std::array<int, 4>{1, 2, 3, 4}) == sizeof(std::array<int, 4>));
+
 }
