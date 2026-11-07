@@ -215,6 +215,12 @@ inline std::string emit(const Program& source) {
     auto* emptyStack = b.CreateICmpEQ(b.CreateLoad(i64, depth), zero);
     trap_if_invalid(b, handler,
         b.CreateAnd(stateOk, b.CreateAnd(statusOk, emptyStack)));
+    // The restricted recurrence has a signed-i64 subtraction at every
+    // nonzero level. Negative inputs (especially INT64_MIN) cannot be
+    // lowered as unchecked wrapping arithmetic and then mislabeled as
+    // a stack quota failure. Deny them before publishing a frame.
+    trap_if_invalid(b, handler,
+        b.CreateICmpSGE(&*handler->arg_begin(), zero));
 
     auto* current = b.CreateAlloca(i64, nullptr, "atto.trampoline.current");
     auto* answer = b.CreateAlloca(i64, nullptr, "atto.trampoline.answer");
