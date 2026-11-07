@@ -61,3 +61,28 @@ executed local command, not implicitly part of the script.
 
 **Security:** no cross-org private-source mirror was performed. Do not infer
 authorization to move compiler source from this local evidence.
+
+## Additional local CTest registration check
+
+An opt-in native-host CTest `native_record_region_negative_mutations` is
+registered alongside the existing `native_record_region_generation_quota_cleanup`
+when building on UNIX with GCC/Clang and `bash` available. The mutation
+script is executable in the PR's Git tree.
+
+The CMake fragment was reproduced in a **minimal local CMake project**, using
+the verified exact source/test/script blobs (rather than a checkout of the
+complete LLVM repository), then built and executed:
+
+- `cmake -S <minimal-project> -B <build> -DBUILD_TESTING=ON`: **PASS**
+- `cmake --build <build>`: **PASS**
+- `ctest --test-dir <build> --output-on-failure -V`: **2/2 PASS**
+  - `native_record_region_generation_quota_cleanup`: PASS
+  - `native_record_region_negative_mutations`: PASS
+- Negative mutations triggered native assertions and exit 134 as expected,
+  which the test shell treats as deliberately killed mutants rather than
+  successful mutated behavior.
+
+**Important:** this demonstrates the isolated CMake registration syntax and
+replayability. It does not establish that the *full* repository's 313k-byte
+`CMakeLists.txt`, complete LLVM compiler build, or a hosted GitHub Actions
+job configured/executed successfully.
