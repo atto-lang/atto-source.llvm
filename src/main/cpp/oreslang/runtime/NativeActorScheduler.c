@@ -129,6 +129,7 @@ static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
 static _Thread_local uint64_t executing_data_mail_sequence;
+static _Thread_local uint64_t executing_data_payload;
 static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local OresNativeWakeTicket executing_wake;
 static _Thread_local OresNativeWakeOutcome executing_wake_outcome;
@@ -557,6 +558,7 @@ static void* carrier(void* raw) {
         executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
         executing_claim = execution_claim;
         executing_data_mail_sequence = kind == TURN_DATA ? original_mail_sequence : 0;
+        executing_data_payload = kind == TURN_DATA ? payload : 0;
         executing_context = (OresNativeExecutionContext){
             .id = {s->domain, execution_id},
             .allocation = lane->allocation_domain,
@@ -578,6 +580,7 @@ static void* carrier(void* raw) {
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
         executing_data_mail_sequence = 0;
+        executing_data_payload = 0;
         executing_context = (OresNativeExecutionContext){0};
         executing = NULL;
 
@@ -1554,6 +1557,18 @@ int ores_native_actor_scheduler_current_data_mail_sequence(
     return 1;
 }
 
+/* Current DATA payload, sampled only from the scheduler-owned callback
+ * envelope. There is no ambient value on physical carrier reuse. */
+int ores_native_actor_scheduler_current_data_payload(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        uint64_t* out_payload) {
+    if (!out_payload) return 0;
+    uint64_t sequence = 0;
+    if (!ores_native_actor_scheduler_current_data_mail_sequence(
+            s, actor, &sequence)) return 0;
+    *out_payload = executing_data_payload;
+    return 1;
+}
 int ores_native_actor_scheduler_current_execution_context(
         OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
     if (!s || !out || executing != s || !executing_context.id.runtime_domain

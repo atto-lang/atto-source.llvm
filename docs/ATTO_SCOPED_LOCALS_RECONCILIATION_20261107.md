@@ -157,3 +157,34 @@ native or guest results. Hosted jobs with \`runner_id=0\` and \`steps=[]\`
 remain runner-admission failures. Do not promote drafts, merge #1391, claim
 compiler-backed .atto parity, or mirror private source before independent
 review, explicit source-transfer authorization and real exact-head receipts.
+
+## Follow-up: legacy bridge and handoff provenance (2026-11-07)
+
+The legacy RequestLocal host adapter now denies an unbound request, another
+DATA mail on the same pooled actor, WAKE/CONTROL, foreign carriers and
+revoked request generations. It verifies the scheduler-minted original mail
+ordinal and rechecks authorization after copying a value.
+
+The native scheduler now exposes host-only authenticated current DATA payload
+readback. RequestContextHandoffV1 redeem requires the scheduler-delivered
+payload to equal the ticket, binds its derived request to that recipient
+mail, and rechecks payload/mail/request authority after copying selections.
+Seal rechecks source-mail authority after any user copy constructors.
+Wrong mail or foreign attempts cannot consume the ticket.
+
+Selection now OWNS copies of its typed key identities rather than retaining
+borrowed caller-key pointers. The regression releases a heap-allocated alias
+before seal/redeem, so ASan can catch a raw-pointer use-after-free.
+
+Native test fixtures now cover wrong source mail, unauthorized later message,
+wrong recipient DATA payload not burning the ticket, expired key aliases,
+scope close during copy, cancellation during selection copy and STOP/revoke.
+Original-mail tests also cover current payload/foreign/offturn readback.
+Both source-local workflows pin updated exact Git blobs.
+
+Unproven: exact-head GCC/Clang/sanitizer and compiled .atto guest results.
+The raw C++ request store, legacy host adapters and custom C++ aggregate
+values are NOT guest APIs. Genuine tenant/isolate origin and a jointly
+linearized STOP/cancel/write/borrow fence are still required. A STOP racing
+an already-authorized host mutation has not been proven impossible.
+Retain draft, maintain #1391 as the alternate draft, and do not claim parity.

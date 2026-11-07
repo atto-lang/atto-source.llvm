@@ -118,7 +118,13 @@ public:
         template <typename T>
         Selection& include(const RequestLocalKeyV1<T>& key) {
             if (keys_.size() < RequestContextLocalV1::max_slots)
-                keys_.push_back({&key, &pick<T>});
+                // Own the typed key identity: callers may pass temporary
+                // aliases and their stack frame may end before seal().
+                keys_.push_back({
+                    std::static_pointer_cast<const void>(
+                        std::make_shared<RequestLocalKeyV1<T>>(key)),
+                    &pick<T>
+                });
             else
                 overflow_ = true;
             return *this;
@@ -132,7 +138,13 @@ public:
             if (!value) return nullptr;
             return std::make_unique<Entry<T>>(typed, std::move(*value));
         }
-        std::vector<std::pair<const void*, Picker>> keys_;
+        // Immutable owned key identities; never retain caller stack
+        // addresses across a mailbox handoff or asynchronous selection.
+        struct BoundPicker {
+            std::shared_ptr<const void> key;
+            Picker pick;
+        };
+        std::vector<BoundPicker> keys_;
         bool overflow_ = false;
     };
 
@@ -158,11 +170,14 @@ public:
         env.recipient = recipient;
         env.request_cancellation = source.cancellation_;
         env.entries.reserve(selection.keys_.size());
-        for (const auto& [key, pick] : selection.keys_)
-            if (auto entry = pick(key, source)) env.entries.push_back(std::move(entry));
-        // Re-check after user copy constructors ran: the request may have
-        // been cancelled meanwhile. Never hand off a dead request.
-        if (!source.active()) return std::nullopt;
+        for (const auto& bound : selection.keys_)
+            if (auto entry = bound.pick(bound.key.get(), source))
+                env.entries.push_back(std::move(entry));
+        // Copy constructors can run arbitrary host code, including STOP,
+        // cancellation and actor turnover. Check original mail again rather
+        // than accepting an unrelated later turn on the same pooled actor.
+        if (!request_local_current_actor_turn_v1(
+                scheduler_, sender, source)) return std::nullopt;
 
         std::lock_guard<std::mutex> lock(mutex_);
         for (std::size_t i = 0; i < slots_.size(); ++i) {
@@ -179,6 +194,15 @@ public:
     // Recipient side. Must run on `recipient`'s authenticated turn.
     std::optional<RedeemedRequestContextV1> redeem(OresNativeActorRef recipient, std::uint64_t ticket) {
         if (!actor_turn_authenticated_v1(scheduler_, recipient)) return std::nullopt;
+        // The ticket is NOT a bearer capability. Redeem only when the actual
+        // scheduler-delivered DATA envelope has exactly this ticket payload,
+        // not when another message on the same actor happens to know it.
+        std::uint64_t current_payload = 0, current_mail = 0;
+        if (!ores_native_actor_scheduler_current_data_payload(
+                scheduler_, recipient, &current_payload) ||
+            !ores_native_actor_scheduler_current_data_mail_sequence(
+                scheduler_, recipient, &current_mail) ||
+            !current_mail || current_payload != ticket) return std::nullopt;
         std::unique_ptr<Envelope> env;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -202,9 +226,21 @@ public:
         identity.actor = recipient;
         auto context = RequestContextLocalV1::open(identity, derived);
         RedeemedRequestContextV1 out(context, derived);
-        if (!context || derived->is_cancelled()) return std::nullopt;
+        if (!context || derived->is_cancelled() ||
+            !context->bind_original_mail_once(current_mail)) return std::nullopt;
         for (const auto& entry : env->entries)
-            if (!entry->apply(*context)) return std::nullopt;  // cancelled mid-copy
+            if (!entry->apply(*context)) return std::nullopt;
+        // Do not publish a snapshot after STOP, actor handoff, or a
+        // request-cancellation race during the selected-entry copy.
+        std::uint64_t final_payload = 0, final_mail = 0;
+        if (!ores_native_actor_scheduler_current_data_payload(
+                scheduler_, recipient, &final_payload) ||
+            !ores_native_actor_scheduler_current_data_mail_sequence(
+                scheduler_, recipient, &final_mail) ||
+            final_payload != ticket || final_mail != current_mail ||
+            !request_local_current_actor_turn_v1(
+                scheduler_, recipient, *context))
+            return std::nullopt;
         return out;
     }
 

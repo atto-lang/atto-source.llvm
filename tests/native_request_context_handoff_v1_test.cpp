@@ -92,9 +92,25 @@ struct Fixture {
         request->close();
         request_cancel->retire();
     }
+    // A trusted test ingress invokes this only from A's real DATA callback;
+    // integer mail IDs supplied by a guest are never an authority source.
+    bool bind_source_mail() {
+        std::uint64_t current = 0;
+        return ores_native_actor_scheduler_current_data_mail_sequence(
+                   w.scheduler, w.a, &current) &&
+               request->bind_original_mail_once(current);
+    }
     RequestContextHandoffTableV1::Selection selection() {
         RequestContextHandoffTableV1::Selection s;
-        s.include(trace).include(budget);
+        {
+            // A heap-backed alias is explicitly released BEFORE seal().
+            // ASan must detect UAF if Selection ever stores its address.
+            auto ephemeral_alias = std::make_unique<
+                RequestLocalKeyV1<std::string>>(trace);
+            s.include(*ephemeral_alias);
+            ephemeral_alias.reset();
+        }
+        s.include(budget);
         return s;
     }
 };
@@ -104,6 +120,7 @@ void test_snapshot_handoff_is_independent() {
     std::uint64_t ticket = 0;
     std::optional<RedeemedRequestContextV1> held;
     on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
         CHECK(f.request->set(f.trace, std::string("trace-1")));
         CHECK(f.request->set(f.budget, 100));
         CHECK(f.request->set(f.secret, std::string("A-only")));
@@ -149,6 +166,7 @@ void test_misdirected_forged_offturn_tickets() {
     Fixture f;
     std::uint64_t ticket = 0;
     on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
         CHECK(f.request->set(f.trace, std::string("t")));
         ticket = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0);
         CHECK(ticket != 0);
@@ -169,6 +187,13 @@ void test_misdirected_forged_offturn_tickets() {
     });
     send(f.w, f.w.c, ticket);
     CHECK(f.table->pending() == 1);
+    // B received a different DATA payload on its own real turn. Possessing
+    // the old ticket off-envelope must not redeem or consume the message.
+    on(f.w, 1, [&](std::uint64_t) {
+        CHECK(!f.table->redeem(f.w.b, ticket));
+    });
+    send(f.w, f.w.b, ticket + 123);
+    CHECK(f.table->pending() == 1);
     // Restarted B incarnation (different generation) is a different recipient.
     on(f.w, 1, [&](std::uint64_t p) {
         OresNativeActorRef stale = f.w.b;
@@ -186,6 +211,7 @@ void test_cancellation_flows_one_way() {
     std::uint64_t t1 = 0, t2 = 0;
     std::optional<RedeemedRequestContextV1> held;
     on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
         CHECK(f.request->set(f.trace, std::string("t")));
         t1 = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0);
         t2 = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0);
@@ -214,6 +240,7 @@ void test_sweep_revoke_and_capacity() {
     Fixture f(2);
     std::uint64_t t[3] = {0, 0, 0};
     on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
         t[0] = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0);
         t[1] = f.table->seal(f.w.a, *f.request, f.w.c, f.selection()).value_or(0);
         t[2] = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0);
@@ -237,27 +264,84 @@ void test_sweep_revoke_and_capacity() {
 void test_slot_reuse_bumps_generation() {
     Fixture f(1);
     std::uint64_t first = 0, second = 0;
-    on(f.w, 0, [&](std::uint64_t) { first = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0); });
+    on(f.w, 0, [&](std::uint64_t) { CHECK(f.bind_source_mail()); first = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0); });
     send(f.w, f.w.a, 1);
     on(f.w, 1, [&](std::uint64_t p) { CHECK(f.table->redeem(f.w.b, p).has_value()); });
     send(f.w, f.w.b, first);
-    on(f.w, 0, [&](std::uint64_t) { second = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0); });
+    on(f.w, 0, [&](std::uint64_t) {
+        // Original request R cannot seal from the later DATA mail. New
+        // request R2 must be admitted and bound independently.
+        CHECK(!f.table->seal(f.w.a, *f.request, f.w.b, f.selection()));
+        f.request = RequestContextLocalV1::open(
+            {7, 8, 9002, 1, f.w.a}, f.request_cancel);
+        CHECK(f.request && f.bind_source_mail());
+        second = f.table->seal(f.w.a, *f.request, f.w.b, f.selection()).value_or(0);
+    });
     send(f.w, f.w.a, 2);
     CHECK(first && second && first != second && (first & 0xffff) == (second & 0xffff));
     on(f.w, 1, [&](std::uint64_t) {
         CHECK(!f.table->redeem(f.w.b, first));  // old ticket for reused slot
         CHECK(f.table->redeem(f.w.b, second).has_value());
     });
-    send(f.w, f.w.b, 0);
+    send(f.w, f.w.b, second);
 }
 
 // Many handoffs in flight from two sender turns to a recipient while the
 // request is cancelled concurrently. Must be race-free under TSan.
+// Host-only adversarial value. Its copy triggers request cancellation while
+// seal() is building its snapshot; no guest type with hidden pointers may use
+// this transport without compiler-owned descriptors.
+struct CancelRequestOnCopy {
+    TaskCancellation* cancellation = nullptr;
+    explicit CancelRequestOnCopy(TaskCancellation* value) : cancellation(value) {}
+    CancelRequestOnCopy(CancelRequestOnCopy&&) noexcept = default;
+    CancelRequestOnCopy(const CancelRequestOnCopy& other)
+        : cancellation(other.cancellation) {
+        if (cancellation) (void)cancellation->cancel("cancel-during-copy");
+    }
+};
+
+void test_reentrant_cancellation_during_seal_denied() {
+    Fixture f;
+    RequestLocalKeyV1<CancelRequestOnCopy> key;
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(key, CancelRequestOnCopy(f.request_cancel.get())));
+        RequestContextHandoffTableV1::Selection selection;
+        selection.include(key);
+        CHECK(!f.table->seal(f.w.a, *f.request, f.w.b, selection));
+    });
+    send(f.w, f.w.a, 1);
+    CHECK(!f.request->active());
+    CHECK(f.table->pending() == 0);
+}
+
+void test_stopped_recipient_revokes_unredeemed_ticket() {
+    Fixture f;
+    std::uint64_t ticket = 0;
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace, std::string("protected")));
+        ticket = f.table->seal(
+            f.w.a, *f.request, f.w.b, f.selection()).value_or(0);
+        CHECK(ticket != 0);
+    });
+    send(f.w, f.w.a, 1);
+    CHECK(f.table->pending() == 1);
+    // No callback can run for a sealed stopped actor. Retirement also
+    // rejects a late attempt to redeem the old recipient generation.
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.w.scheduler, f.w.b));
+    CHECK(ores_native_actor_scheduler_wait_done(f.w.scheduler, f.w.b));
+    CHECK(f.table->revoke_recipient(f.w.b) == 1);
+    CHECK(f.table->pending() == 0);
+}
+
 void test_concurrent_cancel_race() {
     for (int round = 0; round < 50; ++round) {
         Fixture f(64);
         std::vector<std::uint64_t> tickets;
         on(f.w, 0, [&](std::uint64_t) {
+            CHECK(f.bind_source_mail());
             CHECK(f.request->set(f.trace, std::string(64, 'x')));
             for (int i = 0; i < 32; ++i)
                 if (auto t = f.table->seal(f.w.a, *f.request, f.w.b, f.selection())) tickets.push_back(*t);
@@ -289,6 +373,10 @@ int main() {
         {"cancellation_flows_one_way", test_cancellation_flows_one_way},
         {"sweep_revoke_and_capacity", test_sweep_revoke_and_capacity},
         {"slot_reuse_bumps_generation", test_slot_reuse_bumps_generation},
+        {"reentrant_cancellation_during_seal_denied",
+            test_reentrant_cancellation_during_seal_denied},
+        {"stopped_recipient_revokes_unredeemed_ticket",
+            test_stopped_recipient_revokes_unredeemed_ticket},
         {"concurrent_cancel_race", test_concurrent_cancel_race},
     };
     for (auto& t : tests) {

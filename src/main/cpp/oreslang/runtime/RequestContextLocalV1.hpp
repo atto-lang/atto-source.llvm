@@ -139,6 +139,17 @@ public:
         return original_mail_sequence_ == admitted_mail;
     }
 
+    // Trusted-host predicate: a copied request handle does not authorize a
+    // different DATA mail even when the pooled actor identity still matches.
+    // The caller must obtain 'current_mail' from the physical scheduler,
+    // never from guest source, a payload field or a previous carrier's TLS.
+    bool bound_to_original_mail(std::uint64_t current_mail) const {
+        if (!current_mail) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        return open_ && !cancellation_->is_cancelled() &&
+               original_mail_sequence_ == current_mail;
+    }
+
     std::size_t used_bytes() const noexcept {
         std::lock_guard<std::mutex> lock(mutex_);
         return used_bytes_;
