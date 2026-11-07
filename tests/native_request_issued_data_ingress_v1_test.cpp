@@ -46,13 +46,13 @@ struct World {
                            std::uint64_t payload) {
         auto& w = *static_cast<World*>(opaque);
         assert(actor_index < 2);
-        assert(payload >= 1 && payload <= per_actor + 1);
+        assert(payload >= 1 && payload <= per_actor);
         const auto actor = w.actors[actor_index];
         std::uint64_t actual_mail = 0;
         assert(ores_native_actor_scheduler_current_data_mail_sequence(
             w.scheduler, actor, &actual_mail));
         assert(actual_mail == payload);
-        if (payload == per_actor + 1) {
+        if (w.cancellations[actor_index]->is_cancelled()) {
             assert(!w.issuer->admit_current_data_turn(
                 actor, w.cancellations[actor_index]));
             std::lock_guard<std::mutex> lock(w.mutex);
