@@ -30,6 +30,15 @@ test ! -s "$tmp/invalid.ll"
 grep -Fq "actor guest frame M2 requires one native actor-only source module" \
     "$tmp/invalid.err"
 
+# Unflagged compilation must retain the existing source actor ABI,
+# without importing the new experimental actor stack primitives.
+"$compiler" "$source_file" > "$tmp/unflagged.ll"
+test -s "$tmp/unflagged.ll"
+if grep -Fq 'oreslang_actor_guest_frame_i64_' "$tmp/unflagged.ll"; then
+  echo "FAIL: experimental frame ABI leaked into ordinary actor lowering" >&2
+  exit 1
+fi
+
 "$compiler" --experimental-actor-guest-frames "$source_file" > "$tmp/actor.ll"
 test -s "$tmp/actor.ll"
 grep -Fq "define void @oreslang_actor_Counter_init" "$tmp/actor.ll"
