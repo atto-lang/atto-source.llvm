@@ -206,6 +206,30 @@ void attack_matrix(const char* library, bool bounded) {
     }
 }
 
+// A hostile module can recurse until a host call is what crosses the end of the stack. The host
+// is not in guest mode at that point, so without a check on entry the fault ends the process.
+void overflow_in_a_host_call_costs_one_vm() {
+    const LoadedGuest guest = load("hostile_bounds");
+    if (!guest.module) return;
+    HostLimits limits;
+    limits.carriers = 2;
+    limits.carrier_stack_bytes = std::size_t{1} << 20; // fewer levels, each paying for a spawn
+    TenantVmHost host(limits);
+    auto witness = host.open(spec("witness", guest));
+    REQUIRE_OK(witness);
+    auto witness_actor = host.spawn_actor(witness.handle, 0);
+    REQUIRE_OK(witness_actor);
+    for (int round = 0; round < 3; ++round) {
+        auto v = host.open(spec("recursing", guest, 20000));
+        REQUIRE_OK(v);
+        auto a = host.spawn_actor(v.handle, 0);
+        REQUIRE_OK(a);
+        CHECK_STATUS(host.call(a.actor, msg(OP_RECURSE_IN_HOST_CALLS, 0)).get().status, Status::TenantFailed);
+        CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::StackOverflow);
+        CHECK(word(host.call(witness_actor.actor, msg(OP_ADD, 1)).get().payload) == round + 1);
+    }
+}
+
 // Bounds checks also keep actors of one tenant apart. Without them they share a cage, which
 // is not a boundary this design promises, and is the reason bounds are the default.
 void actors_of_one_tenant() {
@@ -402,7 +426,7 @@ void atto_runaway_source_ends_only_its_turn() {
     auto sa = host.spawn_actor(s.handle, 0);
     auto ra = host.spawn_actor(r.handle, 0);
     std::int64_t expected = 0;
-    for (int round = 0; round < 8; ++round) { // the limit on restarts in a row is 8
+    for (int round = 0; round < 3; ++round) { // the budget is 3 restarts in a window
         const auto spun = host.call(sa.actor, one(1)).get();
         CHECK_STATUS(spun.status, Status::ActorRestarted);
         const auto recursed = host.call(ra.actor, one(1)).get();
@@ -411,11 +435,16 @@ void atto_runaway_source_ends_only_its_turn() {
         expected += 1;
         CHECK(word(host.call(b.actor, one(1)).get().payload) == expected);
     }
-    // That was the last one allowed in a row. The next ends the VM, and only that one.
-    CHECK_STATUS(host.call(sa.actor, one(1)).get().status, Status::TenantFailed);
-    const VmTerminal terminal = host.wait_closed(s.handle);
-    CHECK(terminal.phase == Phase::Failed);
-    CHECK(terminal.actor_restarts == 8);
+    // That spent the budget. The next failure ends that actor, and its VM goes on.
+    // Which reason depends on the toolchain: clang may compile this recursion to a loop or to a trap.
+    const auto ended = host.call(sa.actor, one(1)).get();
+    CHECK_STATUS(ended.status, Status::ActorTerminated);
+    CHECK(ended.failure == FailReason::Trap || ended.failure == FailReason::TurnDeadline);
+    CHECK_STATUS(host.call(sa.actor, one(1)).get().status, Status::ActorTerminated);
+    const VmSnapshot snapshot = host.snapshot(s.handle);
+    CHECK(snapshot.phase == Phase::Running);
+    CHECK(snapshot.actor_restarts == 3);
+    CHECK(snapshot.actors_terminated == 1);
     CHECK(host.snapshot(r.handle).phase == Phase::Running);
     CHECK(word(host.call(b.actor, one(1)).get().payload) == expected + 1);
     CHECK(host.stats().wild_accesses == 0);
@@ -447,7 +476,8 @@ void atto_kills_never_tear_stored_state() {
     if (!pair.module) return;
     TenantVmHost host;
     VmSpec s = spec("pair", pair, 1);
-    s.limits.max_consecutive_restarts = 1000000;
+    s.limits.restart_budget = 1000000;
+    s.limits.restart_backoff_ms = 0;
     auto v = host.open(s);
     REQUIRE_OK(v);
     auto a = host.spawn_actor(v.handle, 0);
@@ -767,6 +797,7 @@ int run_accepted_guest(const std::string& name) {
 
 struct Case { const char* name; void (*run)(); };
 const Case cases[] = {
+    {"overflow_in_a_host_call_costs_one_vm", overflow_in_a_host_call_costs_one_vm},
     {"attack_matrix_bounds", [] { attack_matrix("hostile_bounds", true); }},
     {"attack_matrix_guard_pages_alone", [] { attack_matrix("hostile_guard", false); }},
     {"actors_of_one_tenant", actors_of_one_tenant},

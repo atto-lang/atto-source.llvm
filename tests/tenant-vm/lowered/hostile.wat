@@ -17,6 +17,14 @@
     i64.const 1
     i64.add)
 
+  ;; A host call at every depth, so that one of them is what reaches the end of the stack.
+  (func $recurse_in_host_calls (param $n i64) (result i64)
+    (local $deeper i64)
+    (call $vm_stop (call $vm_spawn (i64.const 0)))
+    (local.set $deeper (call $recurse_in_host_calls (i64.add (local.get $n) (i64.const 1))))
+    (i64.store (i32.const 8) (local.get $n)) ;; a store after the call, so clang cannot make this a loop
+    (local.get $deeper))
+
   ;; Input is op, a, b as i64. State holds one i64.
   (func (export "turn") (param $self i64) (param $state i32) (param $input i32)
         (param $input_length i32) (param $output i32) (param $capacity i32) (result i64)
@@ -25,11 +33,12 @@
     (local.set $a (i64.load offset=8 (local.get $input)))
     (local.set $b (i64.load offset=16 (local.get $input)))
     (block $done
-      (block $case_commit_send (block $case_stop (block $case_send (block $case_spawn
+      (block $case_commit_send (block $case_recurse_in_host_calls (block $case_stop (block $case_send (block $case_spawn
       (block $case_indirect (block $case_recurse (block $case_spin (block $case_trap
       (block $case_poke (block $case_peek_far (block $case_peek (block $case_read (block $case_add
         (br_table $case_add $case_read $case_peek $case_peek_far $case_poke $case_trap
-                  $case_spin $case_recurse $case_indirect $case_spawn $case_send $case_stop $case_commit_send $done
+                  $case_spin $case_recurse $case_indirect $case_spawn $case_send $case_stop $case_recurse_in_host_calls
+                  $case_commit_send $done
                   (i32.wrap_i64 (local.get $op))))
       ;; add: state += a
       (i64.store (local.get $state) (i64.add (i64.load (local.get $state)) (local.get $a)))
@@ -62,6 +71,8 @@
       (call $vm_send (local.get $a) (local.get $b))
       (br $done))
       (call $vm_stop (local.get $a))
+      (br $done))
+      (local.set $value (call $recurse_in_host_calls (i64.const 0)))
       (br $done))
       ;; has no outbox in this kind of turn, so it must be refused
       (call $vm_send_on_commit (local.get $a) (local.get $b))

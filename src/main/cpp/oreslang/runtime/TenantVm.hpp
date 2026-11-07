@@ -52,7 +52,8 @@ enum class Status {
     TenantFailed,
     HostClosed,
     SignalHandlerLost, // another component replaced our fault handler, so a guest fault would be fatal
-    ActorRestarted     // this turn failed. The actor restarted from its stored state and goes on
+    ActorRestarted,    // this turn failed. The actor restarted from its stored state and goes on
+    ActorTerminated    // the actor spent its restart budget and has ended; the rest of the VM goes on
 };
 const char* to_string(Status status) noexcept;
 
@@ -82,9 +83,11 @@ struct VmLimits {
     std::uint32_t max_reply_bytes = 64 * 1024;
     std::uint32_t turn_deadline_ms = 1000; // CPU time of one turn, with a wall-clock backstop
     std::uint64_t cpu_budget_ms = 0;       // cumulative turn time, 0 = unlimited
-    // Restarts of one actor in a row before its VM fails. A crash loop has to end somewhere, and a
-    // turn that succeeds resets the count.
-    std::uint32_t max_consecutive_restarts = 8;
+    // Restarts one actor may have in the window. One more failure ends that actor for good, and
+    // the rest of the VM goes on. A crash loop has to end somewhere, and stored state can be its cause.
+    std::uint32_t restart_budget = 3;
+    std::uint32_t restart_window_ms = 10000;
+    std::uint32_t restart_backoff_ms = 10; // before the next turn, doubling with each failure in the window
 };
 
 struct VmSpec {
@@ -98,7 +101,7 @@ struct HostLimits {
     std::uint32_t max_vms = 1000;
     std::uint32_t carriers = 8;
     std::uint64_t max_admitted_heap_bytes = std::uint64_t{1} << 40;
-    std::size_t carrier_stack_bytes = std::size_t{8} << 20;
+    std::size_t carrier_stack_bytes = std::size_t{8} << 20; // at least 512 KiB; host calls reserve 256 KiB of it
     std::uint64_t max_queued_bytes = std::uint64_t{4} << 30; // mail across all VMs
     // A fault outside any cage means the boundary itself failed: lowered code broke the
     // addressing rule, so memory safety of every tenant is in doubt. Stop rather than continue.
@@ -114,6 +117,8 @@ struct VmTerminal {
     // A VM can stop cleanly after some of its turns failed. These keep that from looking like a clean run.
     std::uint64_t actor_restarts = 0;
     std::uint64_t mail_lost = 0; // restarts whose failed turn had no caller to tell
+    std::uint64_t actors_terminated = 0; // spent their restart budget
+    std::uint64_t mail_abandoned = 0;    // queued for an actor that then ended this way
     std::string detail;
 };
 
@@ -129,6 +134,8 @@ struct VmSnapshot {
     std::size_t inflight = 0;
     std::uint64_t actor_restarts = 0;
     std::uint64_t mail_lost = 0;
+    std::uint64_t actors_terminated = 0;
+    std::uint64_t mail_abandoned = 0;
 };
 
 struct TurnResult {

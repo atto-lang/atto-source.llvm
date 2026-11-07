@@ -38,6 +38,10 @@ Outside guest mode the same fault is a host bug, and stays fatal. So every byte 
 reads or writes on a guest's behalf must be checked first: that is how the first version could be
 crashed by any tenant (see [Audit](#audit-findings)).
 
+Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
+256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must
+therefore be at least 512 KiB.
+
 **Killing a VM.** Spinning guest code needs no compiler checks to be stopped. The host signals its
 carriers; each abandons the turn. That is safe because the VM's memory is discarded, and guest code
 holds no host locks. Host calls clear guest mode first, so a kill landing in one waits for it to
@@ -163,7 +167,7 @@ References are `i64`, and resolve only inside the caller's VM.
 because a mailbox is full. A turn cannot block, and carrying on would turn a lost message into a wrong
 answer that looks fine. In `main` that ends the VM. In a handler the turn fails and the actor restarts, so
 the message that caused it is lost and counted. **There is no backpressure:** a stage sending faster than
-the next one drains will fail repeatedly once a mailbox fills, until `max_consecutive_restarts` ends the VM.
+the next one drains will fail repeatedly once a mailbox fills, until its restart budget is spent and it ends.
 The spec says `send` must report admission as a `Result`, and that is not done.
 
 Compiler changes: a wasm32 handler can call functions, where it used to fail with an internal
@@ -209,15 +213,28 @@ Limits on what this means today:
   like an ETS table" this needs now, and nothing here is durable across a crash of the process.
 - Delivery is at most once. A message whose turn fails is not retried, so it is gone, and counted.
 
-**Waiting on a decision:**
+**A crash loop ends the actor, not the VM.** An actor may have `restart_budget` restarts in
+`restart_window_ms`, by default 3 in 10 seconds. Stored state can be what causes the crash, so reloading
+it could otherwise loop forever. A turn that works does not refill the budget; only time does. Between
+tries the actor waits `restart_backoff_ms`, by default 10 ms, doubling with each failure in the window,
+and its mail waits with it. These numbers are starting values, not measurements.
 
-- `max_consecutive_restarts` defaults to 8, and a successful turn resets it. Something has to end a crash
-  loop, but this number and "fail the VM" are proposals, not agreed behaviour.
-- Holding a turn's sends until it commits was a proposal. It is implemented, because the alternative lets a
-  failed turn's message escape, but it has not been agreed.
-- Stages fail rather than wait when a mailbox is full. See above.
-- `ACTOR_RUNTIME_RESILIENCE_V1` section 9 forbids carrying mail over, and the decision was to do so. It
-  still needs amending.
+One more failure ends that actor. The failed call and each queued call get `ActorTerminated`, and queued
+sends count in `mail_abandoned`. Its memory and quota go back to the VM, and later calls get
+`ActorTerminated`. The rest of the VM goes on. `actors_terminated` and `mail_abandoned` are reported even
+when the VM stops cleanly.
+
+**A turn commits whole.** A handler's sends are held until its turn commits, as `ACTOR_RUNTIME_RESILIENCE_V1`
+section 9 proposes, so a restart can never resend them. See [Actors messaging actors](#what-atto-can-do-in-a-vm).
+
+**Not built yet:**
+
+- What a pipeline does when a stage ends for good. The contract's proposal is an abort barrier: the stages
+  after it finish their accepted mail and stop, marked as failed upstream, and the rest of the tenant keeps
+  running.
+- Stages fail rather than wait when a mailbox is full. The contract proposes reserving capacity during the
+  turn, so that `send` can report admission, and that is not done.
+- A failed actor reports through the VM's counters and the failed call. There is no supervisor to tell yet.
 
 ## Backends
 
@@ -270,6 +287,7 @@ Each was reproduced against the first version before being fixed, and has a regr
 | 18 | Low | `SIGURG` was swallowed for threads that were not carriers | Chained |
 | 19 | Low | Slot generations could wrap, reviving a stale reference | Slot retired instead |
 | 20 | Low | C API could leak exceptions to P/Invoke, and did not check null lengths | Caught and checked |
+| 21 | **Critical** | A validated Wasm module could end the process: recursing with `spawn` and `stop` at each level makes a host call the first thing to cross the end of the stack, outside guest mode, where a fault is fatal | Host calls check for 256 KiB of stack on entry, and a shortage is an ordinary stack overflow |
 
 Correcting an earlier claim: "a noisy tenant cannot starve a quiet one" was true of latency in that
 test, but finding 5 means CPU share was not fair until now.
@@ -300,6 +318,7 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Forged references | Made-up references, and a real one used in another VM, are refused and end only the caller's VM | macOS, Linux |
 | `.atto` state is private and durable | 1000 turns; separate per actor, tenant and program | macOS, Linux |
 | `.atto` overflow, recursion and runaway end one VM | Trap and StackOverflow; bystander unaffected across 5 rounds | macOS, Linux |
+| Stack overflow inside a host call is contained | C and validated Wasm guests end one VM, with a witness tenant. Before the fix both ended the process with a bus error | macOS, Linux |
 | Hostile Wasm stays in its cage | 64 attacks in each mode, including host pointer halves and maximum displacement: 12 in its own memory, 52 stopped, 0 left. Guard mode: all 52 fault inside its own cage | macOS, Linux |
 | Admission refuses hostile modules | 29 hand-written cases, 0 accepted | macOS, Linux |
 | Mutated modules cannot crash the pipeline | 1000 mutations: 995 refused, 5 accepted, 0 crashed | Linux |
@@ -375,16 +394,15 @@ If the compiler cannot be built here, `-DTENANT_VM_ATTO_IR_DIR=` takes IR it emi
 In priority order. Done since the first version: `.atto` to a VM, code loading, host-call coverage, the
 targeted Wasmtime kill, actor restart, and the audit, which found what most needed doing first.
 
-1. **Restart decisions.** See [Restart](#restart): the crash-loop limit, what a pipeline does when a stage
-   fails, and amending `ACTOR_RUNTIME_RESILIENCE_V1` section 9, which forbids carrying mail over.
-2. **Language decisions on messaging.** Ratify or replace the child-field syntax across backends. `send`
-   reporting admission and backpressure. Passing references between actors. Replies.
-3. **Reconcile with the process-worker direction and `tenant-isolation-v1.json`.** A decision, not code.
-4. **Durable heap for real programs.** `alloc` and `free` exist with size classes, and memory persists.
+1. **Actor-to-actor messaging, loops and locals in handlers, richer messages.** Language and compiler work,
+   on every backend. Child fields and handler sends exist under `--guest-abi=tenant-vm` only, and are not
+   ratified language. `send` reporting admission, backpressure, passing references and replies are open.
+2. **Reconcile with the process-worker direction and `tenant-isolation-v1.json`.** A decision, not code.
+3. **Durable heap for real programs.** `alloc` and `free` exist with size classes, and memory persists.
    Nothing compiled calls them yet, nothing suspends across `await`, and zero-GC for real programs
    depends on borrow-checker lowering to them.
-5. **Run it in CI and on real x86_64.** See Evidence.
-6. **GraalVM.** One Engine per tenant is not started.
-7. **Wire the Wasmtime and .NET spikes into their hosts.** They are spikes in their own repositories.
-8. **Very short turns on oversubscribed hosts.** Decide whether the cliff above matters before sharding the queue.
-9. **Hardening.** Sandbox the lowering tools. Timing-attack testing. PKU on x86. Multi-kind modules.
+4. **Run it in CI and on real x86_64.** See Evidence.
+5. **GraalVM.** One Engine per tenant is not started.
+6. **Wire the Wasmtime and .NET spikes into their hosts.** They are spikes in their own repositories.
+7. **Very short turns on oversubscribed hosts.** Decide whether the cliff above matters before sharding the queue.
+8. **Hardening.** Sandbox the lowering tools. Timing-attack testing. PKU on x86. Multi-kind modules.
