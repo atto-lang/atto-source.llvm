@@ -1,0 +1,92 @@
+name: DOP inverted i64 exact-head LLVM COMPILER-BACKED native
+on:
+  pull_request:
+    paths:
+      - 'contracts/dop-inverted-v1/*.atto'
+      - 'src/main/cpp/oreslang/types/Inverted*'
+      - 'tests/native_inverted_production_*'
+      - 'tests/fixtures/inverted-i64/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/dop-inverted-i64-native-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  dop-llvm-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Deny foreign PR repository before checkout
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          EXPECTED_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$EVENT_NAME" == pull_request || "$EVENT_NAME" == workflow_dispatch ]]
+          test "$EXPECTED_REPO" = ores-truffle-oreslang/oreslang-source.llvm
+          test "$SOURCE_REPO" = "$EXPECTED_REPO"
+          echo DOP_LLVM_SOURCE_ORG_ONLY=true
+      - name: Checkout immutable LLVM source HEAD
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact source revision and record immutable tree identity
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --quiet --exit-code
+          printf 'DOP_LLVM_SOURCE_HEAD=%s\nDOP_LLVM_SOURCE_TREE=%s\nDOP_RUN_ID=%s\nDOP_RUN_ATTEMPT=%s\n' \
+            "$EXPECTED_HEAD" "$(git rev-parse 'HEAD^{tree}')" \
+            "$EXPECTED_RUN_ID" "$EXPECTED_RUN_ATTEMPT"
+      - name: Install native LLVM test toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          cmake --version
+          clang --version
+      - name: Syntax-validate the actual native guest harness
+        run: bash -n tests/native_inverted_production_guest.sh
+      - name: Compile production compiler, independent no-GC auditor and C++ MIR verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target \
+            oreslang-llvmc oreslang-no-gc-ir-audit \
+            oreslang-inverted-production-mir-test --parallel 2
+          sha256sum build/oreslang-llvmc build/oreslang-no-gc-ir-audit \
+            build/oreslang-inverted-production-mir-test
+      - name: Require exactly two selected production CTest cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N \
+            -R '^(inverted_production_source_mir_cpp17|native_inverted_production_source_to_native)$' \
+            | tee /tmp/dop-ctest-inventory.txt
+          grep -Fx 'Total Tests: 2' /tmp/dop-ctest-inventory.txt
+      - name: Execute C++ verifier and real O0/O2 compiler IR native guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            -R '^(inverted_production_source_mir_cpp17|native_inverted_production_source_to_native)$'
+      - name: Mark LLVM-only compiler-backed native evidence after successful execution
+        run: |
+          echo DOP_LLVM_NATIVE_COMPILER_GUEST_TESTED=true
+          echo DOP_JAVA_TRUFFLE_GUEST_PARITY=NOT_TESTED
+          echo DOP_NO_GC_FFI_FULL_AUDIT=NOT_TESTED
+          echo DOP_MERGE_OR_RELEASE_AUTHORIZATION=NOT_GRANTED
