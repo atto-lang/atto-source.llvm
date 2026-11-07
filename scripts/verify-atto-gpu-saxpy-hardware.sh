@@ -19,8 +19,24 @@ if ! command -v git >/dev/null || ! command -v sha256sum >/dev/null; then
   echo "git and sha256sum required for exact-source GPU assurance" >&2
   exit 69
 fi
+repo_root="$(git rev-parse --show-toplevel)"
 head_sha="$(git rev-parse --verify HEAD^{commit})"
 head_tree="$(git rev-parse --verify HEAD^{tree})"
+# This receipt is for the tracked canonical .atto input, not an arbitrary
+# caller-provided file that happens to produce the same device marker.
+tracked_fixture="tests/fixtures/atto-gpu-saxpy-f32.atto"
+fixture_root="$(cd "$(dirname "$fixture")" && pwd -P)"
+if [ "$fixture_root/$(basename "$fixture")" != "$repo_root/$tracked_fixture" ] || \
+   [ -L "$fixture" ]; then
+  echo "SAXPY fixture must be the canonical tracked source file" >&2
+  exit 70
+fi
+expected_blob="$(git -C "$repo_root" rev-parse "HEAD:$tracked_fixture")"
+actual_blob="$(git hash-object -- "$fixture")"
+if [ -z "$expected_blob" ] || [ "$expected_blob" != "$actual_blob" ]; then
+  echo "GPU source fixture differs from immutable PR-head blob" >&2
+  exit 70
+fi
 if [ -z "$head_sha" ] || [ -z "$head_tree" ]; then
   echo "missing exact source Git identity" >&2
   exit 69
