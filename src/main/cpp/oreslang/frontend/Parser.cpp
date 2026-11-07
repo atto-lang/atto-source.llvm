@@ -7,6 +7,7 @@
 #include "oreslang/frontend/GpuLaunchSourceMir.hpp"
 #include "oreslang/frontend/GpuKernelSourceLink.hpp"
 #include "oreslang/frontend/GpuKernelBodyHir.hpp"
+#include "oreslang/frontend/GpuKernelOpenClSource.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -849,6 +850,7 @@ public:
 private:
     std::vector<gpu::source_link::Signature> gpu_kernel_source_signatures_;
     std::vector<std::pair<std::string, gpu::body_hir::CheckedBody>> gpu_kernel_typed_body_hirs_;
+    std::vector<std::pair<std::string, gpu::opencl_source::Preview>> gpu_kernel_opencl_source_previews_;
     std::vector<NativeSumType> sum_types_;
     bool is_sum_name(const std::string& name) const {
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
@@ -3946,6 +3948,18 @@ private:
                     typed_body.provider_loans_verified())
                 gpu_launch_parse_error("GPU-LAUNCH-008",
                     "forged GPU typed-body execution authority", token_.offset);
+            // Provisional, source-only OpenCL text is derived from the same
+            // compiler lexer tokens, but never written as device output here.
+            // Re-check rather than trusting an externally forged HIR record.
+            if (typed_body.guard != gpu::body_hir::Guard::NoOp) {
+                auto preview = gpu::opencl_source::emit_saxpy(body_params, body_tokens);
+                if (preview.compiler_device_binary() || preview.executable() ||
+                        preview.authenticated_device())
+                    gpu_launch_parse_error("GPU-LAUNCH-008",
+                        "forged OpenCL preview runtime authority", token_.offset);
+                gpu_kernel_opencl_source_previews_.push_back(
+                    {sig.symbol, std::move(preview)});
+            }
             gpu_kernel_typed_body_hirs_.push_back({sig.symbol, std::move(typed_body)});
         } catch (const std::invalid_argument& malformed) {
             throw std::runtime_error(std::string(malformed.what()) +
