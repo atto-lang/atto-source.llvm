@@ -87,7 +87,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 tests/test_verify_dop_mixed_ctest.py
+          python3 -B tests/test_verify_dop_mixed_ctest.py
           test -z "$(git status --porcelain=v1 --untracked-files=all -- . ':!build-evidence')"
           echo 'ATTO_DOP_CTEST_VERIFIER_HOST_ONLY=24 NOT_GUEST_EXECUTION'
       - name: Compile production parser, verifier, native compiler and auditor
