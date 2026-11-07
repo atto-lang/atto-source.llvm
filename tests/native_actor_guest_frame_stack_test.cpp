@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <cstdlib>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -169,8 +170,9 @@ static void test_carrier_owned_frames() {
     CHECK(shared.failures.load() == 0);
     CHECK(carrier.stats().protocol_failures == 0);
     CHECK(carrier.stats().accepted == 2 && carrier.stats().completed == 1);
+    std::uint64_t retired_value = 0;
     CHECK(!MultiActorCarrier::guest_frame_read(shared.a_id, shared.a_frame,
-                                               0, &outsider, sizeof(outsider)));
+                                               0, &retired_value, sizeof(retired_value)));
     CHECK(!producer.try_send(shared.a_id, {2, 0}));
     CHECK(!producer.try_send(shared.b_id, {2, 0}));
 }
