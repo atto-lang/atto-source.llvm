@@ -33,6 +33,20 @@ pub fnc exported_unused(): int {
 }
 """
 
+# Removing a function *before* main changes every later validated
+# source FunctionId/NodeId. The compiler must reissue the identity epoch
+# after pruning or its second LLVM emission will fail closed.
+TREE_SHAKE_REINDEX_SURFACE = """fnc unreachable_before_main(): int {
+  return 99;
+}
+pub fnc main(): int {
+  return retained_helper(40);
+}
+fnc retained_helper(int value): int {
+  return value + 2;
+}
+"""
+
 PRIVATE_ONLY = """fnc hidden(): int {
   return 1;
 }
@@ -208,6 +222,28 @@ def main():
             b"rejects scalar continuation functions until continuation ABI roots are modeled"
             in continuation_shaken.stderr,
             "scalar continuation tree shaking did not fail closed")
+    # Compiler-backed proof that pruning and source identity resealing
+    # work together even when the old first function is discarded.
+    reindexed=compile_ir(args.compiler,TREE_SHAKE_REINDEX_SURFACE,True)
+    require(reindexed.returncode==0,
+            "tree-shake source-ID reseal compile failed: "+
+            repr(reindexed.stderr[:1024]))
+    require(b"@unreachable_before_main(" not in reindexed.stdout,
+            "unreachable function preceding main survived tree shake")
+    require(b"@retained_helper(" in reindexed.stdout,
+            "retained helper lost after source identity reindex")
+    with tempfile.TemporaryDirectory(prefix="atto-tree-reseal-guest-") as td:
+        ir=Path(td)/"reindexed.ll"
+        exe=Path(td)/"reindexed"
+        ir.write_bytes(reindexed.stdout)
+        linked=run([str(args.clang),"-O2","-x","ir",str(ir),"-o",str(exe)])
+        require(linked.returncode==0,
+                "reindexed LLVM/Clang link failed: "+repr(linked.stderr[:1024]))
+        actual=run([str(exe)])
+        require(actual.returncode==42 and
+                actual.stdout==b"" and actual.stderr==b"",
+                "reindexed tree-shaken guest behavior mismatch")
+    print("ATTO_TREE_SHAKE_SOURCE_RESEAL=COMPILER_CLANG_GUEST_EXECUTED")
     return 0
 
 if __name__=="__main__":

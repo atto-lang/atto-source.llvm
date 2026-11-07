@@ -248,3 +248,19 @@ No production MIR code currently supplies the complete reinitialization
 CFG to the candidate store bridge. Accordingly typed-MIR completeness,
 guest execution, LoanId coverage and optimizer correctness remain
 explicitly false/unproven. All new cases are authored, NOT_EXECUTED.
+
+### Production compiler/Clang tree-shake identity reseal gate
+
+The previously existing `native_tree_shaking_direct_calls` CTest now runs
+as its own mandatory executed gate in the ownership workflow, separate
+from 16 focused host CTests and the 50 real ownership compiler fixtures.
+It exercises a new source where an unreachable function *precedes* main
+and an invoked helper; deleting the earlier function forces new source
+FunctionId and structural NodeId paths before the second LLVM emission.
+The script requires successful production compiler output, no dead symbol,
+a retained helper, a real Clang-linked binary and exit code 42.
+The marker `ATTO_TREE_SHAKE_SOURCE_RESEAL=COMPILER_CLANG_GUEST_EXECUTED`
+and CTest JUnit receipt are checked on exact head. A CTest-registration
+only check or host-only model run must not substitute for actual execution.
+No successful run has been observed; current runner-admission failures
+leave the guest claim explicitly UNVERIFIED.

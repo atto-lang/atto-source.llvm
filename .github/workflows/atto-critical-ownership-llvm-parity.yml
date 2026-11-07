@@ -48,6 +48,7 @@ on:
       - 'tests/native_source_fieldwrite_coverage_114_test.cpp'
       - 'src/main/cpp/oreslang/backend/NativeIrReinitializeWriteBridge.hpp'
       - 'tests/native_source_node_identity_85_test.cpp'
+      - 'tests/native_tree_shaking.py'
       - 'src/main/cpp/oreslang/types/SourceNodeIdentity.hpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/backend/NativeIrFieldWriteLedger.hpp'
@@ -272,6 +273,62 @@ jobs:
           if tests != 1 or failures or skipped:
               raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
           print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+
+      - name: Execute real compiler tree-shake/source-identity reseal guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This is distinct from host-only CTest and the ownership 50-case
+          # matrix: it exercises --tree-shake on the production LLVM compiler,
+          # links the emitted IR using Clang, then executes native guests.
+          ctest --test-dir build -N -R '^native_tree_shaking_direct_calls
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ > /tmp/atto-source-reseal-ctest-inventory.txt
+          test "$(grep -Ec '^[[:space:]]*Test +#[0-9]+: native_tree_shaking_direct_calls
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ /tmp/atto-source-reseal-ctest-inventory.txt)" = 1
+          ctest --test-dir build -V -R '^native_tree_shaking_direct_calls
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ \
+            --timeout 180 --output-junit /tmp/atto-source-reseal-guest.xml \
+            | tee /tmp/atto-source-reseal-guest.log
+          grep -Fq 'ATTO_TREE_SHAKE_SOURCE_RESEAL=COMPILER_CLANG_GUEST_EXECUTED' /tmp/atto-source-reseal-guest.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-source-reseal-guest.xml').getroot()
+          actual = [case.get('name') for case in root.iter('testcase')]
+          bad = sum(int(root.get(key, '0')) for key in ('failures', 'errors', 'skipped'))
+          if root.get('tests') != '1' or actual != ['native_tree_shaking_direct_calls'] or bad:
+              raise SystemExit(f'compiler tree-shake/source-seal guest receipt invalid: {actual=} {bad=}')
+          print('ATTO_LLVM_TREE_SHAKE_SOURCE_RESEAL=1/1_COMPILER_GUEST_EXECUTED')
           PY
 
       - name: Reverify checkout head and clean tracked source
