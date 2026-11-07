@@ -124,6 +124,8 @@ struct OresNativeActorScheduler {
     OresNativeActorWakeFn wake_callback;
     void* context;
     OresNativePhysicalTurnGate* physical_turn_gate;
+    OresNativeActorTerminationObserverV1 termination_observer;
+    void* termination_observer_context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
@@ -1387,6 +1389,32 @@ uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler*
     unlock(s);
     return n;
 }
+/* Only bootstrap may install a trusted nonblocking lifecycle observer.
+ * Never replace a callback while another thread could still use its context.
+ */
+int ores_native_actor_scheduler_configure_termination_observer_v1(
+        OresNativeActorScheduler* s,
+        OresNativeActorTerminationObserverV1 observer, void* context) {
+    if (!s || !observer || !context) return 0;
+    lock(s);
+    int ok = !s->retired && !s->termination_observer
+        && !s->started_workers && !s->outstanding;
+    if (ok) {
+        for (size_t i = 0; i < s->actor_count; ++i) {
+            if (s->actors[i].spawned) {
+                ok = 0;
+                break;
+            }
+        }
+    }
+    if (ok) {
+        s->termination_observer = observer;
+        s->termination_observer_context = context;
+    }
+    unlock(s);
+    return ok;
+}
+
 static int stop_locked(
         OresNativeActorScheduler* s,
         OresNativeActorRef actor,
@@ -1397,6 +1425,13 @@ static int stop_locked(
     ActorLane* lane = &s->actors[actor.actor_slot];
     lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_STOPPED;
     lane->retired = 1;
+
+    /* Publish an atomic revocation fence while admission is excluded.
+     * The observer MUST NOT acquire any other lock or close request values.
+     */
+    if (s->termination_observer)
+        s->termination_observer(s->termination_observer_context,
+            actor, ORES_NATIVE_TERMINATION_STOPPED);
 
     if (abandon_queued_data && lane->queued) {
         const size_t abandoned = lane->queued;
@@ -1506,9 +1541,14 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     s->retired = 1;
     for (size_t i = 0; i < s->actor_count; ++i) {
         ActorLane* lane = &s->actors[i];
-        if (lane->spawned && !lane->retired)
+        const int newly_retired = lane->spawned && !lane->retired;
+        if (newly_retired)
             lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_RUNTIME_RETIRED;
         lane->retired = 1;
+        if (newly_retired && s->termination_observer)
+            s->termination_observer(s->termination_observer_context,
+                (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation},
+                ORES_NATIVE_TERMINATION_RUNTIME_RETIRED);
         if (lane->spawned) {
             if (ores_execution_phase(&lane->authority) != ORES_EXEC_STOPPING
                 && ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
