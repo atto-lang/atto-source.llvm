@@ -324,7 +324,6 @@ struct ScalarWhileLoop {
 
 struct Function {
     std::string name;
-    bool direct_only_routine = false; // never admit recursive routine through fnc TCO
     std::vector<GenericParameter> generic_parameters;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
@@ -375,6 +374,7 @@ struct Function {
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
+    bool direct_only_routine = false; // do not admit recursive routines as fnc
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
