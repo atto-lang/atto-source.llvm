@@ -198,6 +198,39 @@ void external_runtime_retirement_cleanup() {
           !request->set(RequestLocalKeyV1<int>{},1,w.scheduler));
     authority->retire();
 }
+void exact_generation_stop_reconciliation() {
+    World w;
+    auto authority = TaskCancellation::root();
+    auto request = open_request(w.a, authority, 801);
+    RequestLocalStopGroupV1 group(w.scheduler, w.a);
+    check("39_exact_generation_register", group.register_request(request));
+    check("40_running_not_stopping",
+          !ores_native_actor_scheduler_is_stopping_v1(w.scheduler, w.a));
+    auto stale = w.a; ++stale.generation;
+    check("41_stale_generation_not_stopping",
+          !ores_native_actor_scheduler_is_stopping_v1(w.scheduler, stale));
+    auto other_slot = w.a; other_slot.actor_slot = 99;
+    check("42_forged_slot_not_stopping",
+          !ores_native_actor_scheduler_is_stopping_v1(w.scheduler, other_slot));
+    auto wrong_domain = w.a; ++wrong_domain.scheduler_domain;
+    check("43_foreign_domain_not_stopping",
+          !ores_native_actor_scheduler_is_stopping_v1(w.scheduler, wrong_domain));
+    check("44_external_cleanup_running_denied",
+          !group.finish_after_external_stop() && request->active());
+    check("45_explicit_STOP_published",
+          ores_native_actor_scheduler_stop_sealed(w.scheduler, w.a));
+    check("46_exact_generation_reports_stopping",
+          ores_native_actor_scheduler_is_stopping_v1(w.scheduler, w.a));
+    check("47_old_generation_cannot_claim_stop",
+          !ores_native_actor_scheduler_is_stopping_v1(w.scheduler, stale));
+    check("48_sibling_generation_stays_running",
+          !ores_native_actor_scheduler_is_stopping_v1(w.scheduler, w.b));
+    check("49_exact_external_cleanup_completes",
+          group.finish_after_external_stop() && group.completed() &&
+          !request->active());
+    authority->retire();
+}
+
 void stop_wins_during_precommit() {
     World w;
     auto authority = TaskCancellation::root();
@@ -228,6 +261,7 @@ int main() {
     external_stop_reconciliation();
     external_runtime_retirement_cleanup();
     stop_wins_during_precommit();
-    if (passes != 38) return 2;
-    std::puts("ACTOR_LIFECYCLE_GUARD_38_HOST_CASES_PASS");
+    exact_generation_stop_reconciliation();
+    if (passes != 49) return 2;
+    std::puts("ACTOR_LIFECYCLE_GUARD_49_HOST_CASES_PASS");
 }
