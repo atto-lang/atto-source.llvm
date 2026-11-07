@@ -67,10 +67,14 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-opencl-saxpy-gpu-probe PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME atto_gpu_saxpy_physical_opencl_v1
-        COMMAND oreslang-opencl-saxpy-gpu-probe
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-f32.atto")
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DPROBE=$<TARGET_FILE:oreslang-opencl-saxpy-gpu-probe>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/atto-gpu-saxpy-f32.atto"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify-atto-gpu-saxpy-physical-v1.cmake")
     set_tests_properties(atto_gpu_saxpy_physical_opencl_v1 PROPERTIES
-        TIMEOUT 60 SKIP_RETURN_CODE 77)
+        TIMEOUT 65
+        SKIP_REGULAR_EXPRESSION "SKIP:no-compatible-physical-opencl-gpu")
 
     # Atto-native SAXPY source admission and OpenCL C compiler artifact.
     # These are real host/compiler checks, never a device-dispatch claim.
