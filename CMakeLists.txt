@@ -80,6 +80,18 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_share_place_authority
         COMMAND oreslang-native-share-place-authority-test)
 
+    # Native AST root classification is used by the production Share checker
+    # before the semantic value read. This remains HOST_CPP17_ONLY; separate
+    # .atto compiler-negative CTests prove parser and checker execution.
+    add_executable(oreslang-native-share-projection-root-test
+        tests/native_share_projection_root_test.cpp)
+    target_include_directories(oreslang-native-share-projection-root-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-share-projection-root-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_share_projection_root
+        COMMAND oreslang-native-share-projection-root-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
