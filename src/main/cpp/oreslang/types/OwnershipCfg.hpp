@@ -124,9 +124,30 @@ inline void require_owned(const std::string& key, const PlaceState& value) {
         violation(key, "not definitely initialized on every CFG predecessor");
 }
 
+// Loan provenance may only appear on operations that actually issue, use,
+// or release a loan. Opaque reads, moves, drops, and suspension cannot
+// smuggle a LoanId into a source stream and be mistaken for a typed use.
+inline bool is_loan_token_operation(Operation::Kind kind) {
+    switch (kind) {
+        case Operation::Kind::BorrowShared:
+        case Operation::Kind::BorrowExclusive:
+        case Operation::Kind::UseSharedLoan:
+        case Operation::Kind::UseExclusiveLoan:
+        case Operation::Kind::ReleaseShared:
+        case Operation::Kind::ReleaseExclusive:
+            return true;
+        default:
+            return false;
+    }
+}
+
 inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
+    if (op.loan_id && !is_loan_token_operation(op.kind))
+        violation(op.place, "loan identity on non-loan operation");
+    if (op.write_id && op.kind != Operation::Kind::Reinitialize)
+        violation(op.place, "write-site evidence on non-reinitialization operation");
     if (op.kind == Operation::Kind::Suspend) {
         // A carrier/task suspension cannot carry an unproved lexical loan
         // across resumed execution. Future ownership-safe suspension must
@@ -303,6 +324,10 @@ inline Analysis verify(const Graph& graph) {
                 violation(std::to_string(block_id), "CFG edge outside graph");
         for (std::size_t op_id = 0; op_id < block.operations.size(); ++op_id) {
             const auto& op = block.operations[op_id];
+            // Perform this preflight even in currently unreachable blocks:
+            // future CFG transformations must not expose forged metadata.
+            if (op.loan_id && !is_loan_token_operation(op.kind))
+                violation(op.place, "loan identity on non-loan operation");
             if (op.kind == Operation::Kind::Reinitialize) {
                 if (!op.write_id || !*op.write_id ||
                         !claimed_write_sites.insert(*op.write_id).second)
