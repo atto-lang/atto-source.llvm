@@ -142,8 +142,8 @@ jobs:
               raise SystemExit('FAIL: missing actual executed CTest case status or duration')
           native=next(x for x in cases if x.attrib.get('name')=='native_inverted_mixed_source_to_native')
           text=' '.join(native.itertext())
-          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 2 trap signals, '
-                        '5 rejects; IR no-GC screened (not linked/FFI proof)')
+          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 10 exit42, 4 trap signals, '
+                        '7 rejects; IR no-GC screened (not linked/FFI proof)')
           if exact_marker not in text:
               raise SystemExit('FAIL: no exact executed mixed native guest marker in JUnit result')
           legacy=next(x for x in cases
@@ -187,7 +187,7 @@ jobs:
                  'build/oreslang-no-gc-ir-audit',
                  'build/oreslang-llvmc']
           paths += sorted(str(p) for p in pathlib.Path('tests/fixtures/inverted-mixed').glob('*.atto'))
-          if len([p for p in paths if p.endswith('.atto')]) != 8:
+          if len([p for p in paths if p.endswith('.atto')]) != 14:
               raise SystemExit('FAIL: fixture inventory changed')
           receipt=dict(head=head,tree=source_tree,run=os.environ['GITHUB_RUN_ID'],
                        attempt=os.environ['GITHUB_RUN_ATTEMPT'],
