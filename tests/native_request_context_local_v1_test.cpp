@@ -341,8 +341,10 @@ void test_request_copy_reentrancy_and_pin_lifetime() {
                 assert(cancellation->cancel("reentrant-copy"));
             }
         })));
+        // A value copy that closes/cancels the source must not escape the
+        // context as an authorized read after its revocation.
         auto snapshot = scope->get_copy(key);
-        assert(snapshot);
+        assert(!snapshot);
         assert(callback_count.load() == 1);
         assert(!scope->active());
         assert(!scope->get_copy(key));
