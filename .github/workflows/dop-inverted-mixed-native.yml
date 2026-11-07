@@ -100,7 +100,7 @@ jobs:
               raise SystemExit(f'FAIL: wrong DOP mixed native CTest inventory: {cases}')
           PY
 
-      - name: Execute real guest compiler, Clang O0/O2 and static negative cases
+      - name: Execute real guest compiler, Clang O0/O2 and negative traps
         shell: bash
         run: |
           set -euo pipefail
@@ -130,8 +130,8 @@ jobs:
               raise SystemExit('FAIL: missing actual executed CTest case status or duration')
           native=next(x for x in cases if x.attrib.get('name')=='native_inverted_mixed_source_to_native')
           text=' '.join(native.itertext())
-          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 6 compile rejects, '
-                        'source IR trap guards present; IR no-GC screened (not linked/FFI proof)')
+          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 2 trap signals, '
+                        '5 rejects; IR no-GC screened (not linked/FFI proof)')
           if exact_marker not in text:
               raise SystemExit('FAIL: no exact executed mixed native guest marker in JUnit result')
           head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
