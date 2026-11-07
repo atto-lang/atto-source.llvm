@@ -140,7 +140,7 @@ int main() {
         check([]{ Fixture f; f.function().actor_stops.push_back("worker"); return !f.trace().has_value(); }(), "unsupported actor-owned operations return unproved", n);
         check([]{ Fixture f; oreslang::Parameter arg; arg.name="param"; f.function().parameters.push_back(std::move(arg)); return !f.trace().has_value(); }(), "unsupported function parameters return unproved", n);
         check([]{ Fixture f; f.function().early_returns.emplace_back(); return !f.trace().has_value(); }(), "unsupported return guard returns unproved", n);
-        check([]{ Fixture f; f.program.classes.front().fields.front().int_array=true; return !f.trace().has_value(); }(), "unsupported class array handle returns unproved", n);
+        check([]{ Fixture f; f.program.classes.front().fields.front().int_array=true; Fixture g; g.program.classes.front().fields.front().initializer_expression.reset(); return !f.trace().has_value() && !g.trace().has_value(); }(), "array field or absent constructor initializer returns unproved", n);
         check([]{ Fixture f; f.function().result.reset(); return !f.trace().has_value(); }(), "unsupported missing source return returns unproved", n);
         if(n!=32) throw std::runtime_error("source MIR test count changed");
         std::cout<<"PASS 32/32 compiler-source straight-line MIR host cases "

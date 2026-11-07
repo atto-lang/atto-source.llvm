@@ -97,8 +97,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
                 if (field.name.empty() || field.name.find('.') != std::string::npos ||
                         field.int_array || !field.class_name.empty() ||
                         field.constructor_argument ||
-                        (field.initializer_expression &&
-                         field.initializer_expression->kind != Expression::Kind::Integer &&
+                        !field.initializer_expression ||
+                        (field.initializer_expression->kind != Expression::Kind::Integer &&
                          field.initializer_expression->kind != Expression::Kind::Boolean) ||
                         !fields.insert(field.name).second)
                     return std::nullopt;
