@@ -112,8 +112,9 @@ class SourceFieldFlowBuilder {
             case K::Field: {
                 if (!expr.left || expr.left->kind != K::Variable)
                     unsupported("nested or untracked field projection");
-                if (class_roots_.count(expr.left->name))
-                    place_read(at, expr.left->name, expr.name);
+                if (!class_roots_.count(expr.left->name))
+                    unsupported("field read from untracked source owner");
+                place_read(at, expr.left->name, expr.name);
                 return at;
             }
             case K::Take:
@@ -128,12 +129,12 @@ class SourceFieldFlowBuilder {
                         expr.left->left &&
                         expr.left->left->kind == K::Variable) {
                     const auto& root = expr.left->left->name;
-                    if (class_roots_.count(root)) {
-                        const auto key = root + "." + expr.left->name;
-                        if (!result_.graph.entry.count(key))
-                            unsupported("take from unknown class field " + key);
-                        emit(at, Operation::Kind::Move, key);
-                    }
+                    if (!class_roots_.count(root))
+                        unsupported("field take from untracked source owner");
+                    const auto key = root + "." + expr.left->name;
+                    if (!result_.graph.entry.count(key))
+                        unsupported("take from unknown class field " + key);
+                    emit(at, Operation::Kind::Move, key);
                     return at;
                 }
                 unsupported("opaque take source");
@@ -212,11 +213,8 @@ class SourceFieldFlowBuilder {
         at = expression(*stmt.expression, at, 1);
         const auto key = stmt.receiver + "." + stmt.field;
         const bool tracked = class_roots_.count(stmt.receiver) != 0;
-        if (!tracked) {
-            if (stmt.reinitialize_write_id)
-                unsupported("ticket on untracked source field");
-            return at;
-        }
+        if (!tracked)
+            unsupported("source field write from untracked class owner");
         if (!result_.graph.entry.count(key))
             unsupported("field write to unknown tracked projection " + key);
         if (stmt.reinitialize_write_id) {
