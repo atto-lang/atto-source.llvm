@@ -93,8 +93,8 @@ bool actor_local_erase_on_turn_v1(
  * stopped accepting messages. The generation-specific scheduler completion
  * fence must finish before the logical actor's cells can be reclaimed.
  *
- * Never call this from a carrier (including the same actor): wait_done would
- * block a scheduler thread. A failed wait leaves the scope OPEN so the caller
+ * Never call this from a carrier of ANY scheduler: wait_done could
+ * block a scheduler worker and form a cross-domain deadlock cycle. A failed wait leaves the scope OPEN so the caller
  * can retry after resolving outstanding work; it does not forge quiescence.
  */
 inline bool actor_local_close_after_terminal_v1(
@@ -107,7 +107,10 @@ inline bool actor_local_close_after_terminal_v1(
         owner.actor_slot != actor.actor_slot ||
         owner.actor_generation != actor.generation ||
         !scope.authorized(owner) ||
-        ores_native_actor_scheduler_is_current_carrier(scheduler))
+        // A carrier belonging to ANY scheduler must not wait on another
+        // scheduler's terminal barrier. Cross-domain waits can exhaust
+        // every carrier and deadlock the VM, not just the target scheduler.
+        ores_native_actor_scheduler_is_any_current_carrier_v1())
         return false;
     if (!ores_native_actor_scheduler_wait_done(scheduler, actor))
         return false;
