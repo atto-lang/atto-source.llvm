@@ -65,8 +65,8 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
           test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "ebba397307a27451492d0c3aa20d8b259807d80f"
-          test "$(git hash-object tests/native_request_lifecycle_registry_v1_test.cpp)" = "030a61d075a1aad18d83f89d2a74591fe2402d38"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "13225da1c2fd71358e14fad928c61433dee88adc"
+          test "$(git hash-object tests/native_request_lifecycle_registry_v1_test.cpp)" = "82f02b774c0d810215528749e6fe2f64d17206d3"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "ecb1ea7aa3edac93b0d5210e9c6b4b789aefe887"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -110,8 +110,8 @@ jobs:
             -Isrc/main/cpp tests/native_request_lifecycle_registry_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-lifecycle-registry"
           "$tmp/request-lifecycle-registry" | tee "$tmp/request-lifecycle-registry-cases.log"
-          test "$(grep -c '^LIFECYCLE_REGISTRY_PASS ' "$tmp/request-lifecycle-registry-cases.log")" = "30"
-          grep -qx 'NATIVE_REQUEST_LIFECYCLE_REGISTRY_30_HOST_CASES_PASS' "$tmp/request-lifecycle-registry-cases.log"
+          test "$(grep -c '^LIFECYCLE_REGISTRY_PASS ' "$tmp/request-lifecycle-registry-cases.log")" = "35"
+          grep -qx 'NATIVE_REQUEST_LIFECYCLE_REGISTRY_35_HOST_CASES_PASS' "$tmp/request-lifecycle-registry-cases.log"
           "$tmp/request-stop-cancel" | tee "$tmp/request-stop-cases.log"
           test "$(grep -c '^REQUEST_STOP_CASE_PASS ' "$tmp/request-stop-cases.log")" = "38"
           grep -qx 'REQUEST_STOP_CANCEL_38_HOST_CASES_PASS' "$tmp/request-stop-cases.log"
