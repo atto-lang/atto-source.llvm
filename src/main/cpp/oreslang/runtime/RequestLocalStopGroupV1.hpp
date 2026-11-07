@@ -11,7 +11,8 @@
 //
 // Linearization: seal request registration, close all pinned request stores
 // (each close serializes with its pending set/erase under the store mutex),
-// then seal the scheduler mailbox and await quiescence OUTSIDE carrier threads.
+// wait until pinned operations quiesce, then seal the scheduler mailbox
+// and await actor DONE OUTSIDE carrier threads.
 // No guest values/destructors run under this group's registry lock.
 // "STOP completed" is never reported until actor DONE is observed.
 
@@ -47,9 +48,9 @@ public:
         return true;
     }
 
-    // Nonblocking admission fence: no new requests register afterwards.
-    // Close each current scope outside the registry mutex; closing cannot
-    // create a new value after it acquires that scope's store mutex.
+private:
+    // CONTROL-plane close barrier: new admission is sealed, and every pinned
+    // copy/mutation must quiesce before STOP returns. Never invoke on carrier.
     bool seal_and_revoke() {
         std::vector<RequestContextLocalV1::Ptr> pinned;
         {
@@ -65,12 +66,19 @@ public:
             registered_.clear();
         }
         for (const auto& request : pinned) request->close();
+        // A value-copy may still be running outside the scope mutex with a
+        // pinned cell. STOP may not publish DONE or reclaim that actor heap
+        // until those earlier accepted operations have all released.
+        // This host bridge rejects carrier callers before calling us.
+        for (const auto& request : pinned)
+            if (!request->wait_closed_quiescent()) return false;
         return true;
     }
 
-    // Never call on a scheduler carrier; wait_done may block while the actor
-    // completes its current turn. A failed STOP/await is not a DONE receipt.
-    // The bridge's destructor does not stop the actor implicitly.
+public:
+    // Never call on a scheduler carrier; both pending operation quiescence
+    // and wait_done may block until admitted host work has drained.
+    // A failed STOP/await is not a DONE receipt.
     bool stop_sealed_and_wait() {
         if (!scheduler_ ||
             ores_native_actor_scheduler_is_current_carrier(scheduler_))
