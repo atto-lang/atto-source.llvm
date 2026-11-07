@@ -14,6 +14,25 @@
 
 using namespace oreslang::runtime;
 
+// Boundary witness for permanent generation retirement; no 2^48 loop,
+// test-only generation override, or guest-accessible authority is required.
+static_assert(detail::handoff_next_generation_v1(0).has_value(),
+              "empty slot must issue its first generation");
+static_assert(*detail::handoff_next_generation_v1(0) == 1,
+              "first generation must equal one");
+static_assert(detail::handoff_next_generation_v1(
+                  detail::handoff_max_generation_v1 - 1).has_value(),
+              "last usable generation must be issued");
+static_assert(*detail::handoff_next_generation_v1(
+                  detail::handoff_max_generation_v1 - 1) ==
+                  detail::handoff_max_generation_v1,
+              "last usable generation must not wrap");
+static_assert(!detail::handoff_next_generation_v1(
+                  detail::handoff_max_generation_v1).has_value(),
+              "exhausted slot must never issue a recycled ticket");
+static_assert(!detail::handoff_next_generation_v1(~std::uint64_t{0}).has_value(),
+              "overflowing inputs must fail closed");
+
 static int failures = 0;
 #define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++failures; } } while (0)
 
