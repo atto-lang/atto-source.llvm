@@ -9,6 +9,19 @@
 #include <limits>
 #include <string>
 #include <type_traits>
+#include <array>
+#include <deque>
+#include <forward_list>
+#include <list>
+#include <map>
+#include <optional>
+#include <set>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace oreslang::runtime {
 inline bool local_valid_utf8_scalars_v1(const std::string& value) noexcept {
@@ -38,16 +51,59 @@ inline bool local_valid_utf8_scalars_v1(const std::string& value) noexcept {
     }
     return true;
 }
+// Common heap-backed C++ containers cannot be charged with sizeof(T):
+// doing so would allow an arbitrarily large allocation through one local
+// slot. Until the compiler provides a transitive bounded-value descriptor,
+// reject them at host storage admission. A custom C++ aggregate remains
+// shallow-accounted and must never be trusted as a guest value descriptor.
+template <typename T> struct LocalUnboundedPayloadV1 : std::false_type {};
+template <typename T, typename Alloc>
+struct LocalUnboundedPayloadV1<std::vector<T, Alloc>> : std::true_type {};
+template <typename T, typename Alloc>
+struct LocalUnboundedPayloadV1<std::deque<T, Alloc>> : std::true_type {};
+template <typename T, typename Alloc>
+struct LocalUnboundedPayloadV1<std::list<T, Alloc>> : std::true_type {};
+template <typename T, typename Alloc>
+struct LocalUnboundedPayloadV1<std::forward_list<T, Alloc>> : std::true_type {};
+template <typename Key, typename Value, typename Cmp, typename Alloc>
+struct LocalUnboundedPayloadV1<std::map<Key, Value, Cmp, Alloc>> : std::true_type {};
+template <typename Key, typename Value, typename Hash, typename Eq, typename Alloc>
+struct LocalUnboundedPayloadV1<std::unordered_map<Key, Value, Hash, Eq, Alloc>> : std::true_type {};
+template <typename T, typename Cmp, typename Alloc>
+struct LocalUnboundedPayloadV1<std::set<T, Cmp, Alloc>> : std::true_type {};
+template <typename T, typename Hash, typename Eq, typename Alloc>
+struct LocalUnboundedPayloadV1<std::unordered_set<T, Hash, Eq, Alloc>> : std::true_type {};
+// Even a fixed-size wrapper can hide variable-length string allocations.
+template <typename T>
+struct LocalUnboundedPayloadV1<std::optional<T>>
+    : std::bool_constant<!std::is_arithmetic_v<T> &&
+                         !std::is_enum_v<T>> {};
+template <typename A, typename B>
+struct LocalUnboundedPayloadV1<std::pair<A, B>>
+    : std::bool_constant<!std::is_arithmetic_v<A> || !std::is_arithmetic_v<B>> {};
+template <typename... T>
+struct LocalUnboundedPayloadV1<std::tuple<T...>>
+    : std::bool_constant<(!std::is_arithmetic_v<T> && !std::is_enum_v<T> || ...)> {};
+template <typename T, std::size_t N>
+struct LocalUnboundedPayloadV1<std::array<T, N>>
+    : std::bool_constant<!std::is_arithmetic_v<T> && !std::is_enum_v<T>> {};
+template <typename... T>
+struct LocalUnboundedPayloadV1<std::variant<T...>>
+    : std::bool_constant<(!std::is_arithmetic_v<T> && !std::is_enum_v<T> || ...)> {};
+
 template <typename T>
 std::size_t local_measured_payload_bytes_v1(const T& value) noexcept {
     using Item = std::remove_cv_t<std::remove_reference_t<T>>;
     if constexpr (std::is_same_v<Item, std::string>) {
         return local_valid_utf8_scalars_v1(value) ? value.size()
             : std::numeric_limits<std::size_t>::max();
+    } else if constexpr (LocalUnboundedPayloadV1<Item>::value) {
+        // No observable mutation is allowed for unbounded composite values.
+        (void)value;
+        return std::numeric_limits<std::size_t>::max();
     } else {
-        // Host-only custom aggregates are charged shallow sizeof(T), NOT
-        // transitive allocation. The guest compiler must reject unbounded
-        // opaque value kinds until it can compute their real budgets.
+        // Host-only opaque custom aggregates remain shallow-accounted.
+        // They are not guest-admissible without compiler-owned deep sizing.
         (void)value;
         return sizeof(Item);
     }
