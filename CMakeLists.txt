@@ -203,6 +203,19 @@ if(BUILD_TESTING)
         ${ORE_LLVM_LIBS})
     add_test(NAME native_ownership_ir_ssa_store_census_30
         COMMAND oreslang-native-ir-ssa-census-30-test)
+    # Real LLVM source-Statement -> native StoreInst provenance controls.
+    # 59 negative source/store/metadata mutations and 16 nonpromoting cases.
+    add_executable(oreslang-native-source-field-store-ledger-75-test
+        tests/native_source_field_store_ledger_75_test.cpp)
+    target_include_directories(oreslang-native-source-field-store-ledger-75-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-source-field-store-ledger-75-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-source-field-store-ledger-75-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    add_test(NAME native_ownership_source_field_store_ledger_75
+        COMMAND oreslang-native-source-field-store-ledger-75-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.

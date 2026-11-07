@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/NativeIrOwnershipCensus.hpp"
+#include "oreslang/backend/NativeIrFieldWriteLedger.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -801,6 +802,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             throw std::runtime_error("reserved native entrypoint symbol collision");
     }
     llvm::Module module("oreslang-source", context);
+    // Compiler-owned source FieldWrite -> real emitted StoreInst evidence.
+    // Never interpreted as a complete NLL or optimized machine-code proof.
+    native_ir::FieldWriteLedger field_write_ledger;
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
     // Never infer browser capabilities from the target triple alone.
@@ -1692,13 +1696,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     builder.CreateCall(arrayDrop, {array_region, obsolete});
                     builder.CreateStore(llvm::ConstantInt::get(i64, 0),
                         array_failure_places.at(target));
-                    builder.CreateStore(incoming, original);
+                    auto* published_field = builder.CreateStore(incoming, original);
+                    field_write_ledger.bind(effect, target, original, published_field);
                     builder.CreateStore(llvm::ConstantInt::get(i64, 0), lexical);
                     array_failure_places[target] = array_failure_places.at(source);
                 } else {
                     llvm::Value* updated = lower(*effect.expression, builder, i64,
                         storage, field_storage, declarations, &region_moves);
-                    builder.CreateStore(updated, field_storage.at(target));
+                    auto* field_destination = field_storage.at(target);
+                    auto* field_store = builder.CreateStore(updated, field_destination);
+                    field_write_ledger.bind(effect, target, field_destination, field_store);
                 }
             } else if (effect.kind == Statement::Kind::Call) {
                 lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
@@ -2938,6 +2945,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Its raw IR pointers cannot outlive the Module.
     const auto emitted_ir_census = native_ir::collect_native_ir_ssa_census(module);
     (void)emitted_ir_census;
+    const auto source_field_write_audit = field_write_ledger.verify(module);
+    (void)source_field_write_audit;
+    // General source LoanId completeness, optimization survival and guest
+    // execution remain explicitly unproven and non-promoting.
     std::string result;
     llvm::raw_string_ostream output(result);
     module.print(output, nullptr);
