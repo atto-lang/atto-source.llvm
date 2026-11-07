@@ -336,6 +336,69 @@ void test_stopped_recipient_revokes_unredeemed_ticket() {
     CHECK(f.table->pending() == 0);
 }
 
+struct HandoffCopyPause {
+    std::mutex mu;
+    std::condition_variable cv;
+    bool entered = false, released = false;
+    bool await() {
+        std::unique_lock<std::mutex> guard(mu);
+        return cv.wait_for(guard, std::chrono::seconds(8),
+                           [&] { return entered; });
+    }
+    void resume() {
+        std::lock_guard<std::mutex> guard(mu);
+        released = true;
+        cv.notify_all();
+    }
+};
+struct BlockingHandoffValue {
+    std::shared_ptr<HandoffCopyPause> pause;
+    bool armed = true;
+    explicit BlockingHandoffValue(std::shared_ptr<HandoffCopyPause> p)
+        : pause(std::move(p)) {}
+    BlockingHandoffValue(const BlockingHandoffValue& other)
+        : pause(other.pause), armed(false) {
+        if (!other.armed) return;
+        std::unique_lock<std::mutex> guard(pause->mu);
+        pause->entered = true;
+        pause->cv.notify_all();
+        pause->cv.wait(guard, [&] { return pause->released; });
+    }
+    BlockingHandoffValue(BlockingHandoffValue&& other) noexcept
+        : pause(std::move(other.pause)), armed(other.armed) {
+        other.armed = false;
+    }
+};
+
+// This is a real native scheduler DATA callback. An outside CONTROL thread
+// stops actor A while its selected value copy is suspended. The in-flight
+// snapshot cannot yield a new handoff ticket after scheduler STOP won.
+void test_direct_STOP_during_handoff_copy_rejects_ticket() {
+    Fixture f;
+    auto pause = std::make_shared<HandoffCopyPause>();
+    RequestLocalKeyV1<BlockingHandoffValue> key;
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(key, BlockingHandoffValue(pause)));
+        RequestContextHandoffTableV1::Selection selected;
+        selected.include(key);
+        CHECK(!f.table->seal(f.w.a, *f.request, f.w.b, selected));
+    });
+    CHECK(ores_native_actor_scheduler_try_send(
+        f.w.scheduler, f.w.a, 1) == ORES_NATIVE_SEND_ACCEPTED);
+    const bool entered = pause->await();
+    CHECK(entered);
+    CHECK(ores_native_actor_scheduler_stop_sealed(f.w.scheduler, f.w.a));
+    pause->resume();
+    {
+        std::unique_lock<std::mutex> guard(f.w.mutex);
+        CHECK(f.w.cv.wait_for(guard, std::chrono::seconds(8),
+                             [&] { return f.w.completed >= 1; }));
+    }
+    CHECK(f.table->pending() == 0);
+    CHECK(ores_native_actor_scheduler_wait_done(f.w.scheduler, f.w.a));
+}
+
 void test_concurrent_cancel_race() {
     for (int round = 0; round < 50; ++round) {
         Fixture f(64);
@@ -377,6 +440,8 @@ int main() {
             test_reentrant_cancellation_during_seal_denied},
         {"stopped_recipient_revokes_unredeemed_ticket",
             test_stopped_recipient_revokes_unredeemed_ticket},
+        {"direct_STOP_during_handoff_copy_rejects_ticket",
+            test_direct_STOP_during_handoff_copy_rejects_ticket},
         {"concurrent_cancel_race", test_concurrent_cancel_race},
     };
     for (auto& t : tests) {
