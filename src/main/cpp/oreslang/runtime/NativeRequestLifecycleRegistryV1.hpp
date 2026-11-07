@@ -15,7 +15,9 @@
 // a host integration building block, NOT the guest ABI, compiler ownership,
 // tenant issuer, or hot-upgrade proof. Single-worker cleanup is serial; one
 // blocked actor can delay unrelated actor reclamation. Production schedulers
-// need bounded per-tenant/actor cleanup admission and independent progress.
+// need bounded per-tenant/actor cleanup admission. Stalled value destructors
+// can still delay the single CONTROL worker; pinned reads are polled without
+// blocking other actors' cleanup.
 
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/RequestLocalStopGroupV1.hpp"
@@ -169,31 +171,58 @@ private:
 
     void control_loop() noexcept {
         for (;;) {
-            Entry* selected = nullptr;
+            std::size_t count = 0;
+            bool shutdown = false;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
-                // Bounded poll prevents lost-wake races without acquiring
-                // the registry mutex in the scheduler's STOP callback.
+                // Bounded poll prevents lost wakes. STOP's atomic-only
+                // callback never needs this registry mutex or a scheduler
+                // callback. Entries are stable while worker is alive.
                 changed_.wait_for(lock, std::chrono::milliseconds(10));
-                for (const auto& entry : entries_)
-                    if (entry->notified.load(std::memory_order_acquire) &&
-                        !entry->claimed.load(std::memory_order_relaxed)) {
-                        entry->claimed.store(true, std::memory_order_relaxed);
-                        selected = entry.get();
-                        break;
+                count = entries_.size();
+                shutdown = shutdown_;
+            }
+            bool pending = false;
+            for (std::size_t i = 0; i < count; ++i) {
+                Entry* selected = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    selected = entries_[i].get();
+                }
+                if (!selected->notified.load(std::memory_order_acquire) ||
+                    selected->finished.load(std::memory_order_acquire))
+                    continue;
+                pending = true;
+                if (!selected->claimed.exchange(
+                        true, std::memory_order_acq_rel)) {
+                    bool started = false;
+                    try {
+                        started = selected->group.begin_external_cleanup_without_wait();
+                    } catch (...) {
+                        started = false;
                     }
-                if (!selected && shutdown_) break;
+                    if (!started) {
+                        selected->cleaned.store(false, std::memory_order_release);
+                        selected->finished.store(true, std::memory_order_release);
+                        changed_.notify_all();
+                        continue;
+                    }
+                }
+                // No wait for a pinned copy or actor DONE: actor B can be
+                // reclaimed even while an earlier actor A read is paused.
+                bool done = false;
+                try {
+                    done = selected->group.poll_external_cleanup_finished();
+                } catch (...) {
+                    done = false;
+                }
+                if (done) {
+                    selected->cleaned.store(true, std::memory_order_release);
+                    selected->finished.store(true, std::memory_order_release);
+                    changed_.notify_all();
+                }
             }
-            if (!selected) continue;
-            bool success = false;
-            try {
-                success = selected->group.finish_after_external_stop();
-            } catch (...) {
-                success = false; // never terminate the CONTROL worker
-            }
-            selected->cleaned.store(success, std::memory_order_release);
-            selected->finished.store(true, std::memory_order_release);
-            changed_.notify_all();
+            if (shutdown && !pending) break;
         }
     }
 
