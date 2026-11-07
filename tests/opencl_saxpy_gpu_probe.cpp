@@ -122,6 +122,8 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        if (operation->completed_events() != 4)
+            throw std::runtime_error("physical GPU probe lacks four authenticated event completions");
         const auto output = operation->result();
         if (output.size() != n)
             throw std::runtime_error("physical GPU returned wrong output length");
@@ -146,7 +148,7 @@ int main(int argc, char** argv) {
                   << " elements=" << n
                   << " queue=1 generation=" << operation->allocation_generation()
                   << " verified_outputs=" << output.size()
-                  << " event_stages=4"
+                  << " completed_native_events=" << operation->completed_events()
                   << " released_buffers=3"
                   << " output_checksum_bits=" << bits(output.back())
                   << "\n";
