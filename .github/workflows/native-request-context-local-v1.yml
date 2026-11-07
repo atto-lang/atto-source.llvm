@@ -59,7 +59,7 @@ jobs:
           test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e7e909861262df0d062350d1d309e91abafe66f6"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "6242cbcf017766513a740bc83a2f8003c67330bb"
           test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
-          test "$(git hash-object tests/native_actor_termination_observer_v1_test.cpp)" = "3a84b28d66311667d7bbbdbb262bb50c90f7db08"
+          test "$(git hash-object tests/native_actor_termination_observer_v1_test.cpp)" = "d0949ec9130de08777a8ad307b2eacbab9fd12e6"
           test "$(git hash-object tests/native_request_external_termination_v1_test.cpp)" = "ab63f8586b5a27b1d9ef5691365bcb7bf41cb14a"
       - name: Compile and execute real actor two-request isolation
         shell: bash
