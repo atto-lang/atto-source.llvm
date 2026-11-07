@@ -18,7 +18,7 @@ namespace oreslang::gpu::typed_ir {
 // completion event, runtime token, or device authority can be minted here.
 // All handle identities must originate from a separately authenticated and
 // pinned provider snapshot before this value is useful to a real backend.
-enum class Parameter { F32, U64, ReadF32, WriteF32 };
+enum class Parameter { F32, U64, ReadF32, WriteF32, I64 };
 enum class Effect { DeviceRead, DeviceWrite, HostIo, Suspend, ActorSend,
                     DynamicAllocation, Barrier, Atomic };
 enum class Access { Read, Write, ReadWrite };
@@ -35,7 +35,8 @@ struct BufferView {
 };
 struct ScalarF32 { std::uint32_t bits; };
 struct ScalarU64 { std::uint64_t value; };
-using Argument = std::variant<ScalarF32, ScalarU64, BufferView>;
+struct ScalarI64 { std::int64_t value; };
+using Argument = std::variant<ScalarF32, ScalarU64, BufferView, ScalarI64>;
 
 struct Kernel {
     std::string symbol;
@@ -121,6 +122,11 @@ inline SourceCheckedLaunch verify(const Request& input) {
         if (kind == Parameter::U64) {
             if (!std::holds_alternative<ScalarU64>(arg))
                 deny("GPU-LAUNCH-002", "expected u64 scalar");
+            continue;
+        }
+        if (kind == Parameter::I64) {
+            if (!std::holds_alternative<ScalarI64>(arg))
+                deny("GPU-LAUNCH-002", "expected signed i64 scalar");
             continue;
         }
         if (!std::holds_alternative<BufferView>(arg))
