@@ -18,6 +18,7 @@ on:
       - "src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp"
       - "tests/native_request_actor_lifecycle_guard_v1_test.cpp"
       - "src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp"
+      - "CMakeLists.txt"
       - "tests/native_request_lifecycle_registry_v1_test.cpp"
       - "tests/native_actor_stop_notice_v1_test.c"
       - ".github/workflows/native-request-context-local-v1.yml"

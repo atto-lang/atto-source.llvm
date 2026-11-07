@@ -352,13 +352,14 @@ is not itself proof of full language or backend parity.
 - A destructor of a C++ RequestLocal value may reenter the registry on the
   CONTROL thread; `wait_cleaned` now rejects that self-wait immediately.
 - Lock order (when locks are nested): **registry -> scheduler** for
-  registration/unregistration/STOP, **store -> cancellation authority ->
-  scheduler** for admitted RequestLocal mutation, and
-  **stop group -> store** only during a snapshot (releasing the group
-  lock before any `close` or value destruction). The scheduler invokes
-  STOP observers only as lock-free atomic stores. CONTROL closes request
-  values without holding registry, stop-group, cancellation or scheduler
-  mutexes. No path may invert scheduler -> registry/store.
+  lifecycle registration/STOP; **registry -> request store -> cancellation
+  authority** when checking active scope admission; **store -> cancellation
+  authority -> scheduler** for admitted RequestLocal mutations. The stop
+  group takes its own lock for weak-scope snapshots and releases it *before*
+  RequestLocal `close` or value destruction. The scheduler invokes STOP
+  observers only as lock-free atomic stores. CONTROL closes request values
+  without holding registry, stop-group, cancellation or scheduler mutexes.
+  No path may invert scheduler -> registry/store.
 - 28 additional named host regression assertions cover teardown before
   explicit STOP, unaffected sibling actors, cancellation + STOP,
   reentrant value destruction on CONTROL, and four racing ingress/STOP
