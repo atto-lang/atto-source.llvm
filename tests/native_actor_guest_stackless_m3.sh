@@ -99,6 +99,9 @@ for mode in 0 2; do
     cat "$tmp/overflow-$mode.out" >&2
     exit 1
   fi
+  # Exit 134 alone is not evidence of the correct failure: a broken runtime
+  # can also abort due to invalid tokens or a parser/linker problem.
+  grep -Fqx ATTO_LLVM_ACTOR_STACKLESS_DEPTH_EXCEEDED "$tmp/overflow-$mode.out"
 done
 echo "ATTO_LLVM_COMPILER_STACKLESS_M3_O0_O2_PASS"
 if [[ "${3:-}" == "--sanitized" ]]; then
