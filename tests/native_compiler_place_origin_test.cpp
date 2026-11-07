@@ -49,7 +49,7 @@ bool expect(const char* description, const Expression& expression,
 }
 
 int main() {
-    Locals owned, shared, exclusive, missing;
+    Locals owned, shared, exclusive;
     LocalOwnership value;
     value.mode = Mode::Value;
     owned.emplace("owner", value);
