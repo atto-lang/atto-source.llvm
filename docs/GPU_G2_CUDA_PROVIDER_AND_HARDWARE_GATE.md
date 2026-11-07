@@ -49,3 +49,10 @@ No hardware case can run by default: CMake explicitly keeps physical tests OFF, 
 ## Local evidence only
 
 The exact GitHub source blobs were read back and compared to matching local files. A local independent g++ host mock test passed **155 assertions**, including an AddressSanitizer/UBSan run. Additional mutations now cover failed CUDA event queries, explicit stream-quiescence recovery, provider-defined maximum block dimensions, bounded allocation admission and allocation-generation overflow. The real CUDA Driver API header was checked for C++17 signatures using a *local temporary header stand-in*, not a downloaded NVIDIA CUDA SDK; no physical device or actual CUDA header was available. These are host tests, **not hardware execution**. All G2 physical GPU outcomes remain `NOT_EXECUTED`.
+
+
+## Superseding tests in stacked security PR
+
+The hardening branch now contains **307,078 locally executed host-only mock-driver assertions**, including 128 four-way stream races, 300 seeded SAXPY/geometry differential cases, and allocation, launch, download, event and release fault injection. These were built and run under GCC and Clang and under ASan/UBSan, but still use local stand-ins for real `GpuBufferFence.hpp` and geometry headers.
+
+The physical NVIDIA CTest has grown from nine to **75 planned hardware cases** (eight fixed sizes, 64 seeded workloads, two negative preflight admissions, one cancellation). Its wrapper now rejects output unless all 75 pass. No physical GPU was present; all 75 are `NOT_EXECUTED`. This section supersedes earlier local-test counts and the earlier nine-case description above; see `GPU_G2_STREAM_AND_ARTIFACT_SECURITY_AUDIT.md`.
