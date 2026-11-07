@@ -12,6 +12,7 @@ on:
       - "tests/native_original_data_mail_sequence_v1_test.c"
       - "tests/native_request_data_mail_gate_v1_test.cpp"
       - "tests/native_request_wake_origin_v1_test.cpp"
+      - "src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp"
       - "tests/native_scoped_locals_45_case_matrix.cpp"
       - ".github/workflows/native-scoped-locals-mail-reconcile-v1.yml"
   workflow_dispatch:
@@ -53,7 +54,8 @@ jobs:
           test "$(git hash-object tests/native_original_data_mail_sequence_v1_test.c)" = "8e6c2e3d89b4ea4ceca0d7e97d97d763049cb6ee"
           test "$(git hash-object tests/native_request_data_mail_gate_v1_test.cpp)" = "dab3259be523afd76a2a0357663be7e5bfc661ef"
           test "$(git hash-object tests/native_request_wake_origin_v1_test.cpp)" = "85244e6bba9f913aaecde7df2ae010f20db362ad"
-          test "$(git hash-object tests/native_scoped_locals_45_case_matrix.cpp)" = "98cb1b2c8bb4c735e40139445120435f4108633c"
+          test "$(git hash-object tests/native_scoped_locals_45_case_matrix.cpp)" = "31ad16f4087bc49becf8d0eac1931e13b55fabfc"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "fd5a8e17402092d3e2734007b6465c18ed346321"
           printf 'checkout_head=%s\ncheckout_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute scheduler-origin, DATA, WAKE and 45-case host gates
         shell: bash
