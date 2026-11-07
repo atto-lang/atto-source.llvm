@@ -2906,8 +2906,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // Check the bounded actor-instance frame depth before taking a
         // private scalar slot. This is a compiler-owned guest frame and
         // does not rely on the OS Worker call stack for the message value.
-        llvm::Value* depth = b.CreateLoad(i64, guestFrameDepth,
+        auto* depthLoad = b.CreateLoad(i64, guestFrameDepth,
             "atto.actor.guest.frame.depth.before");
+        depthLoad->setVolatile(true);
+        llvm::Value* depth = depthLoad;
         auto* frameAdmitted = llvm::BasicBlock::Create(
             context, "atto.actor.guest.frame.admitted", handler);
         auto* frameDenied = llvm::BasicBlock::Create(
@@ -2924,10 +2926,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         b.SetInsertPoint(frameAdmitted);
         llvm::Value* paramSlot = b.CreateInBoundsGEP(frameType,
             guestFrameSlots, {zero, depth}, "atto.actor.guest.frame.message");
-        b.CreateStore(&*handler->arg_begin(), paramSlot);
-        b.CreateStore(b.CreateAdd(depth, one), guestFrameDepth);
+        // Volatile guest-frame accesses make the per-instance memory
+        // materialization observable even under native wasm32 -Oz.
+        // A transient carrier-stack cache remains for the current scalar
+        // evaluator; this does not establish full stackless call lowering.
+        auto* incomingStore = b.CreateStore(&*handler->arg_begin(), paramSlot);
+        incomingStore->setVolatile(true);
+        auto* incomingRead = b.CreateLoad(i64, paramSlot,
+            "atto.actor.guest.frame.message.read");
+        incomingRead->setVolatile(true);
+        auto* carrierCache = b.CreateAlloca(i64, nullptr,
+            "atto.actor.guest.message.cache");
+        b.CreateStore(incomingRead, carrierCache);
+        auto* pushDepth = b.CreateStore(b.CreateAdd(depth, one), guestFrameDepth);
+        pushDepth->setVolatile(true);
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
-        values.emplace(actor.on_message.parameters[0].name, paramSlot);
+        values.emplace(actor.on_message.parameters[0].name, carrierCache);
         for (std::size_t i = 0; i < actor.fields.size(); ++i) {
             auto* slot = b.CreateAlloca(i64, nullptr, actor.fields[i].name + ".slot");
             b.CreateStore(b.CreateLoad(i64, globals[i]), slot);
@@ -2950,8 +2964,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // Pop and zero the private guest frame before returning control to
         // the pooled host carrier. An abnormal Wasm trap never returns:
         // physical-instance quarantine/retirement must scrub its memory.
-        b.CreateStore(zero, paramSlot);
-        b.CreateStore(depth, guestFrameDepth);
+        auto* frameClear = b.CreateStore(zero, paramSlot);
+        frameClear->setVolatile(true);
+        auto* depthRelease = b.CreateStore(depth, guestFrameDepth);
+        depthRelease->setVolatile(true);
         b.CreateRet(value);
 
         auto* teardown = llvm::Function::Create(
