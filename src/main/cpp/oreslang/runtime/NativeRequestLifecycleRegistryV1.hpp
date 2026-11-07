@@ -66,16 +66,16 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             shutdown_ = true;
+            // Synchronize with any in-progress callback BEFORE waiting for
+            // the worker. No STOP notification can arrive after unregister.
+            // Already-published atomic flags remain visible to the worker.
+            for (const auto& entry : entries_)
+                if (!ores_native_actor_scheduler_unregister_stop_notice_v1(
+                        scheduler_, entry->actor, &stop_notice,
+                        entry.get())) std::terminate();
         }
         changed_.notify_all();
         if (control_.joinable()) control_.join();
-        // Registration is synchronized with STOP notifications by scheduler
-        // mutex. No callback can run after a successful unregister.
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (const auto& entry : entries_)
-            if (!ores_native_actor_scheduler_unregister_stop_notice_v1(
-                    scheduler_, entry->actor, &stop_notice,
-                    entry.get())) std::terminate();
     }
 
     bool attach(OresNativeActorRef actor) {
