@@ -253,6 +253,84 @@ void test_slot_reuse_bumps_generation() {
 
 // Many handoffs in flight from two sender turns to a recipient while the
 // request is cancelled concurrently. Must be race-free under TSan.
+
+void test_selection_owns_temporary_and_scoped_keys() {
+    Fixture f;
+    RequestContextHandoffTableV1::Selection selected;
+    // The source key objects below die BEFORE seal() executes on actor A.
+    // The selection must own copies of their minted key identities, never
+    // retain addresses of stack temporaries or the caller's local variables.
+    selected.include(RequestLocalKeyV1<std::string>(f.trace));
+    {
+        RequestLocalKeyV1<int> short_lived = f.budget;
+        selected.include(short_lived);
+    }
+    std::uint64_t ticket = 0;
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.request->set(f.trace, std::string("owned-selection")));
+        CHECK(f.request->set(f.budget, 37));
+        CHECK(f.request->set(f.secret, std::string("not-selected")));
+        ticket = f.table->seal(f.w.a, *f.request, f.w.b, selected).value_or(0);
+        CHECK(ticket != 0);
+    });
+    send(f.w, f.w.a, 1);
+    on(f.w, 1, [&](std::uint64_t payload) {
+        auto redeemed = f.table->redeem(f.w.b, payload);
+        CHECK(redeemed.has_value());
+        if (!redeemed) return;
+        CHECK(redeemed->context().get_copy(f.trace) ==
+              std::string("owned-selection"));
+        CHECK(redeemed->context().get_copy(f.budget) == 37);
+        CHECK(!redeemed->context().get_copy(f.secret));
+    });
+    send(f.w, f.w.b, ticket);
+    CHECK(f.table->pending() == 0);
+}
+
+void test_copied_selection_retains_owned_keys_after_origin_dies() {
+    Fixture f;
+    auto selected = [&] {
+        RequestContextHandoffTableV1::Selection original;
+        RequestLocalKeyV1<std::string> temporary = f.trace;
+        original.include(temporary);
+        // A copied Selection must retain the key snapshot even after both
+        // this stack frame's temporary key and the original Selection die.
+        return RequestContextHandoffTableV1::Selection(original);
+    }();
+    std::uint64_t ticket = 0;
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.request->set(f.trace, std::string("copied")));
+        ticket = f.table->seal(f.w.a, *f.request, f.w.b, selected).value_or(0);
+        CHECK(ticket != 0);
+    });
+    send(f.w, f.w.a, 1);
+    on(f.w, 1, [&](std::uint64_t payload) {
+        auto derived = f.table->redeem(f.w.b, payload);
+        CHECK(derived.has_value());
+        if (derived) CHECK(derived->context().get_copy(f.trace) ==
+                           std::string("copied"));
+    });
+    send(f.w, f.w.b, ticket);
+}
+
+void test_selection_overflow_denies_without_ticket_or_source_mutation() {
+    Fixture f(1);
+    RequestContextHandoffTableV1::Selection overlong;
+    for (std::size_t i = 0; i <= RequestContextLocalV1::max_slots; ++i) {
+        RequestLocalKeyV1<int> transient;
+        overlong.include(transient);
+    }
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.request->set(f.budget, 91));
+        CHECK(!f.table->seal(f.w.a, *f.request, f.w.b, overlong));
+        CHECK(f.table->pending() == 0);
+        CHECK(f.request->get_copy(f.budget) == 91);
+        auto valid = f.table->seal(f.w.a, *f.request, f.w.b, f.selection());
+        CHECK(valid.has_value());  // overflow did not consume capacity
+    });
+    send(f.w, f.w.a, 1);
+}
+
 void test_concurrent_cancel_race() {
     for (int round = 0; round < 50; ++round) {
         Fixture f(64);
@@ -289,6 +367,9 @@ int main() {
         {"cancellation_flows_one_way", test_cancellation_flows_one_way},
         {"sweep_revoke_and_capacity", test_sweep_revoke_and_capacity},
         {"slot_reuse_bumps_generation", test_slot_reuse_bumps_generation},
+        {"selection_owns_temporary_and_scoped_keys", test_selection_owns_temporary_and_scoped_keys},
+        {"copied_selection_retains_owned_keys_after_origin_dies", test_copied_selection_retains_owned_keys_after_origin_dies},
+        {"selection_overflow_denies_without_ticket_or_source_mutation", test_selection_overflow_denies_without_ticket_or_source_mutation},
         {"concurrent_cancel_race", test_concurrent_cancel_race},
     };
     for (auto& t : tests) {
