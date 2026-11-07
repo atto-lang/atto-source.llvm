@@ -34,7 +34,7 @@ public:
                 || !ores_native_actor_scheduler_current_data_mail_sequence(
                     scheduler_, actor_, &authenticated_mail)
                 || authenticated_mail != original_mail_
-                || !request_->bind_original_mail_once(original_mail_)) {
+                || !request_->bind_original_mail_once(original_mail_, scheduler_)) {
             throw std::invalid_argument("invalid native DATA-mail request binding");
         }
     }
@@ -55,7 +55,7 @@ public:
         // RequestContextLocalV1 atomically arbitrates request cancellation
         // and quota. Source scheduler STOP and request cancellation must be
         // linked by trusted ingress before this is exposed to guest code.
-        return request_->set(key, std::move(value));
+        return request_->set(key, std::move(value), scheduler_);
     }
 
     template <typename T>
@@ -71,7 +71,7 @@ public:
     template <typename T>
     bool remove(const RequestLocalKeyV1<T>& key) {
         if (!authorized()) return false;
-        return request_->erase(key);
+        return request_->erase(key, scheduler_);
     }
 
 private:
