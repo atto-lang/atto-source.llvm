@@ -102,7 +102,7 @@ inline Linked link(const std::vector<Signature>& declarations,
     if (launch.ordered_arguments.size() != found->parameters.size())
         reject("GPU-LAUNCH-002", "GPU source launch arity differs from declaration");
     auto resolved = signature_to_typed_shape(*found);
-    return {std::move(resolved), std::move(launch),
-            launch.ordered_arguments};
+    const auto arguments = launch.ordered_arguments;
+    return {std::move(resolved), std::move(launch), std::move(arguments)};
 }
 } // namespace oreslang::gpu::source_link
