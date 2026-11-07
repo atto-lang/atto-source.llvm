@@ -186,6 +186,26 @@ void actor_self_stop() {
           !r->active() && r->used_bytes()==0);
     c->retire();
 }
+void fail_closed_registered_ingress() {
+    World w;
+    NativeRequestLifecycleRegistryV1 reg(w.scheduler);
+    auto cancel = TaskCancellation::root();
+    RequestIdentityV1 identity{23,54,601,1,w.a};
+    check("31_ingress_without_attached_actor_denied",
+          !reg.open_registered(identity,cancel));
+    check("32_ingress_actor_attach",reg.attach(w.a));
+    auto scope=reg.open_registered(identity,cancel);
+    check("33_registered_ingress_factory_admitted",
+          scope && scope->active());
+    check("34_same_scope_duplicate_registration_denied",
+          !reg.register_request(w.a,scope));
+    assert(ores_native_actor_scheduler_stop_sealed(w.scheduler,w.a));
+    assert(reg.wait_cleaned(w.a,timeout));
+    check("35_registered_ingress_fenced_after_STOP",
+          !scope->active() && !reg.open_registered(identity,cancel));
+    cancel->retire();
+}
+
 void paused_copy_holds_cleanup() {
     World w;
     NativeRequestLifecycleRegistryV1 reg(w.scheduler);
@@ -226,6 +246,7 @@ int main() {
     global_retirement_two_actors();
     actor_self_stop();
     paused_copy_holds_cleanup();
-    if (passed != 30) return 2;
-    std::puts("NATIVE_REQUEST_LIFECYCLE_REGISTRY_30_HOST_CASES_PASS");
+    fail_closed_registered_ingress();
+    if (passed != 35) return 2;
+    std::puts("NATIVE_REQUEST_LIFECYCLE_REGISTRY_35_HOST_CASES_PASS");
 }
