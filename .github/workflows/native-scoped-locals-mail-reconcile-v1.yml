@@ -58,9 +58,9 @@ jobs:
           test "$(git hash-object tests/native_request_data_mail_gate_v1_test.cpp)" = "dab3259be523afd76a2a0357663be7e5bfc661ef"
           test "$(git hash-object tests/native_request_wake_origin_v1_test.cpp)" = "85244e6bba9f913aaecde7df2ae010f20db362ad"
           test "$(git hash-object tests/native_scoped_locals_45_case_matrix.cpp)" = "98cb1b2c8bb4c735e40139445120435f4108633c"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestIngressIssuerV1.hpp)" = "28ec7d4340b04463c05b45bf1f21b08f41ca9dd1"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "fef7c42d3dedf3f6126c3d6036e55c78a4689c8c"
-          test "$(git hash-object tests/native_request_issued_data_ingress_v1_test.cpp)" = "9d94f66b2a12ee6527f45d495c71c8f52a6d73cb"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestIngressIssuerV1.hpp)" = "8fd70cc1de7b0beac139b0c61ccb1bf993bbe8f8"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "0de02957361a5eb39a3a60eb906f39ed50124c90"
+          test "$(git hash-object tests/native_request_issued_data_ingress_v1_test.cpp)" = "f11ac9608caa2ec2f402fbce843c65a6990521c1"
           test "$(git hash-object tests/native_request_issued_data_stop_race_v1_test.cpp)" = "1217af207ea618a91462abcd9994661830dac991"
           printf 'checkout_head=%s\ncheckout_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute scheduler-origin, DATA, WAKE and 45-case host gates
@@ -107,8 +107,8 @@ jobs:
             -Isrc/main/cpp tests/native_request_issued_data_ingress_v1_test.cpp \
             "$work/scheduler.o" -o "$work/issued-ingress"
           "$work/issued-ingress" | tee "$work/issued-ingress.log"
-          test "$(grep -c '^ISSUED_DATA_INGRESS_PASS ' "$work/issued-ingress.log")" = "239"
-          grep -qx 'NATIVE_ISSUED_DATA_INGRESS_HOST_PASS total=239' "$work/issued-ingress.log"
+          test "$(grep -c '^ISSUED_DATA_INGRESS_PASS ' "$work/issued-ingress.log")" = "240"
+          grep -qx 'NATIVE_ISSUED_DATA_INGRESS_HOST_PASS total=240' "$work/issued-ingress.log"
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_issued_data_stop_race_v1_test.cpp \
             "$work/scheduler.o" -o "$work/issued-stop-races"
