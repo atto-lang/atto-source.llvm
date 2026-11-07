@@ -1389,6 +1389,16 @@ uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler*
     unlock(s);
     return n;
 }
+/* Static actor-slot capacity is immutable after scheduler open. */
+size_t ores_native_actor_scheduler_actor_capacity_v1(
+        OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    const size_t n = s->actor_count;
+    unlock(s);
+    return n;
+}
+
 /* Only bootstrap may install an observer. Never replace it once a
  * potentially live observer context could be reached from STOP/retire.
  */
