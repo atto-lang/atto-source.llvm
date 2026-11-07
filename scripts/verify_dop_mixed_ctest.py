@@ -73,9 +73,15 @@ def verify_junit(raw: bytes) -> dict[str, object]:
         _error("expected exactly one CTest testsuite root")
     if _nonnegative_integer(suite.get("tests"), "suite tests") != 5:
         _error("suite tests must equal five")
-    for field in ("failures", "errors", "skipped"):
+    for field in ("failures", "skipped"):
         if _nonnegative_integer(suite.get(field), "suite " + field) != 0:
-            _error("suite contains failure/error/skip")
+            _error("suite contains failure/skip")
+    # CTest 3.31 JUnit has "disabled" but can omit "errors" entirely.
+    # When present, either count must be zero; unknown malformed values fail.
+    for field in ("errors", "disabled"):
+        value = suite.get(field)
+        if value is not None and _nonnegative_integer(value, "suite " + field) != 0:
+            _error("suite contains error/disabled tests")
     # Only direct testcase records count. Nested/extra reporting sections are
     # not allowed to hide a duplicated or skipped case.
     cases = list(suite)
@@ -92,8 +98,12 @@ def verify_junit(raw: bytes) -> dict[str, object]:
             _error("testcase is not reported as actually run: " + name)
         durations[name] = _elapsed(case.get("time"), "case time " + name)
         children = list(case)
-        if any(child.tag not in ("system-out", "system-err") for child in children):
+        if any(child.tag not in ("properties", "system-out", "system-err") for child in children):
             _error("unexpected test outcome or metadata in " + name)
+        properties = [child for child in children if child.tag == "properties"]
+        if len(properties) > 1 or any(child.attrib or child.text or list(child)
+                                      for child in properties):
+            _error("unexpected or nonempty CTest properties in " + name)
         if len([child for child in children if child.tag == "system-out"]) > 1:
             _error("duplicate system-out in " + name)
         if len([child for child in children if child.tag == "system-err"]) > 1:
