@@ -29,7 +29,8 @@ export function inspectOwnershipWorkflowShape(source) {
      source.includes('\r') || source.includes('\0'))
     return fail('INVALID_WORKFLOW_BYTES');
   const lines=source.trimEnd().split('\n');
-  if(!once(source,'\njobs:\n') || !once(source,'\n  llvm-native-critical-share:\n'))
+  if(lines.filter(x=>x==='jobs:').length!==1 ||
+     lines.filter(x=>x==='  llvm-native-critical-share:').length!==1)
     return fail('DUPLICATE_OR_MISSING_WORKFLOW_JOB');
   if(!once(source,'\n  pull_request:\n') ||
      !source.includes("      - 'audit/llvm-typed-mir-receipt-fence-*'"))
