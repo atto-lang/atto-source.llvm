@@ -11,8 +11,7 @@ and method values, `Array<float>`, `Option<float>`, `Result<float, E>`.
 | `val float x = 1;`, float parameter, field, return or element given an int | Widens with `sitofp` |
 | `1 + 2.5`, `x < 1`, `c ? 1 : 2.5` | The int operand widens; the result is float |
 | `1 / 2` | Real division, `0.5`. `1 / 0` is `Infinity`; the result never assigns to `int` |
-| `5.5 % 2`, `5 % 0.0` | IEEE remainder (`frem`). Links libm where `frem` is not folded |
-| `int % int` | Integer remainder; still requires a nonzero literal divisor |
+| `5.5 % 2`, `5 % 3`, `^`, `^^` | Removed source operators; lexical error before IR |
 | `2 == 2.0` | Exact: `2^53 + 1` does not equal the double it rounds to |
 | `1.0e400`, `1.0e-400`, `1_000.5` | Infinity, zero and `1000.5`, as Java's lexer rounds them |
 | `<`, `==` with NaN or signed zero | IEEE `fcmp`. See the divergence below |
@@ -80,3 +79,13 @@ stdout byte for byte with output captured from the Java backend. Regenerate the
 cases. `Double.toString` formatting was separately compared with the JVM over
 2,000,000 values, including subnormals and exact powers of two; that comparison is
 not part of CTest.
+
+## Review blocker — implicit numeric conversions
+
+The current draft still permits implicit `int`→`float` conversion in the
+parser and scalar type checker. This contradicts the canonical AttoLang
+contract and is **NOT_CERTIFIED**. The remaining migration must reject those
+coercions in bindings, arguments, fields, arrays, returns, conditional arms,
+comparisons and mixed arithmetic, while rewriting training guests to use
+approved explicit conversions or same-type constants. No native numeric
+parity is claimed pending an independently reviewed compiler-backed run.

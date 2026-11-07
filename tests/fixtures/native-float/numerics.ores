@@ -24,7 +24,6 @@ pub routine main(): void {
   stdio.stdout.println(1 / 2);
   stdio.stdout.println(4 / 2);
   stdio.stdout.println(1 / 0);
-  stdio.stdout.println(5.5 % 2.0);
   stdio.stdout.println(1 + 2.5);
   stdio.stdout.println(2 == 2.0);
   stdio.stdout.println(2 != 2.5);
@@ -38,9 +37,6 @@ pub routine main(): void {
   stdio.stdout.println(4.9e-324);
   stdio.stdout.println(1.7976931348623157e308);
   stdio.stdout.println(2.0e23);
-  stdio.stdout.println(5 % 3);
-  stdio.stdout.println(-5.5 % 2);
-  stdio.stdout.println(5 % 0.0);
   stdio.stdout.println(1_000.5);
   stdio.stdout.println(1.0e400);
   stdio.stdout.println(1.0e-400);

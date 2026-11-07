@@ -276,7 +276,12 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        // %, ^ and ^^ were removed from AttoLang: reject at the token
+        // boundary instead of silently reviving legacy precedence.
+        if (ch == '%' || ch == '^')
+            throw std::runtime_error("removed AttoLang source operator at byte " +
+                std::to_string(start));
+        for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -290,7 +295,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/=.<>@?!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }

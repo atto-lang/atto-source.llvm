@@ -16,7 +16,7 @@ pub routine main(): void {
     val float gw = (wa + wc + wd) / 3;
     val float gb = (ba + bc + bd) / 3;
     p = apply(rt borrow p, gw, gb, 0.05);
-    if step % 100 == 0 then
+    if step == 0 || step == 100 || step == 200 || step == 300 || step == 400 then
       val float la = loss(rt borrow p, rt borrow a);
       val float lc = loss(rt borrow p, rt borrow c);
       val float ld = loss(rt borrow p, rt borrow d);

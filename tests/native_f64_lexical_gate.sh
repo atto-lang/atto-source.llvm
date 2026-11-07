@@ -391,6 +391,10 @@ positive widen_scoped_assignment 'pub fnc main(): int {
   return 86;
 }'
 
-[[ "$pass" -eq 42 && "$reject" -eq 11 ]] ||
+# Removed source operators must fail lexically, before producing LLVM IR.
+negative removed_percent 'pub fnc main(): int { return 5 % 3; }' 'removed AttoLang source operator'
+negative removed_double_caret 'pub fnc main(): int { return true ^^ false; }' 'removed AttoLang source operator'
+negative removed_single_caret 'pub fnc main(): int { return 5 ^ 3; }' 'removed AttoLang source operator'
+[[ "$pass" -eq 42 && "$reject" -eq 14 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=42; NEGATIVE_NO_IR_PASS=11"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=42; NEGATIVE_NO_IR_PASS=14"

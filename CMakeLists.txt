@@ -1259,7 +1259,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_float_fraction_unavailable numeric-floating-fraction-reject.ores
         --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
-        --diagnostic "native remainder requires a nonzero signed integer literal divisor")
+        --diagnostic "removed AttoLang source operator")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
