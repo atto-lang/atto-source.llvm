@@ -27,27 +27,27 @@ set(cases
   "zero-grid" "negative-grid" "wrong-placement" "host-geometry"
   "zero-divisor" "mixed-geometry" "literal-argument")
 set(source_explicit
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue}; }\n")
 set(source_logical
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {over: [257], group: [256], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {over: [257], group: [256], queue: queue}; }\n")
 set(source_empty-logical
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {over: [0], group: [256], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {over: [0], group: [256], queue: queue}; }\n")
 set(source_invalid-block
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1], block: [0,1,1], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1], block: [0,1,1], queue: queue}; }\n")
 set(source_zero-grid
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [0,1,1], block: [64,1,1], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [0,1,1], block: [64,1,1], queue: queue}; }\n")
 set(source_negative-grid
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [-1,1,1], block: [64,1,1], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [-1,1,1], block: [64,1,1], queue: queue}; }\n")
 set(source_wrong-placement
-  "pub fnc main(): int { return launch saxpy(x) on cpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on cpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue}; }\n")
 set(source_host-geometry
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [hostCall(),1,1], block: [64,1,1], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [hostCall(),1,1], block: [64,1,1], queue: queue}; }\n")
 set(source_zero-divisor
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [ceil_div(n,0),1,1], block: [64,1,1], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [ceil_div(n,0),1,1], block: [64,1,1], queue: queue}; }\n")
 set(source_mixed-geometry
-  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {over: [16], block: [64], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {over: [16], block: [64], queue: queue}; }\n")
 set(source_literal-argument
-  "pub fnc main(): int { return launch saxpy(1) on gpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue}; }\\n")
+  "pub fnc main(): int { return launch saxpy(1) on gpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue}; }\n")
 set(expected_explicit "GPU-LAUNCH-008")
 set(expected_logical "GPU-LAUNCH-008")
 set(expected_empty-logical "GPU-LAUNCH-008")
