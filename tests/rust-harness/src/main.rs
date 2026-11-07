@@ -408,6 +408,24 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
                 executed.status.code(), stderr(&executed)))?;
     }
 
+    // Canonical spelling shared with the Java frontend: `as ... end`, a
+    // type-first field, `self.field`, a bare method and `worker.stop()`.
+    // The same bytes must run on both backends.
+    fs::write(&actor_source, "define actor Worker as\n  let int total = 0;\n  pub on_message(int n): int {\n    self.total = self.total + n;\n    return self.total;\n  }\nend\n\
+pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  worker.stop();\n  await worker.get_done();\n  return 46;\n}\n")
+        .map_err(|e| format!("canonical actor: write guest: {e}"))?;
+    let built = Command::new(driver)
+        .arg(&actor_source).arg(&output)
+        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+        .output().map_err(|e| format!("canonical actor: AOT driver: {e}"))?;
+    require(built.status.success(),
+        format!("canonical actor: compile/link failed: {}", stderr(&built)))?;
+    let executed = Command::new(&output)
+        .env_clear().env("PATH", "/nonexistent")
+        .output().map_err(|e| format!("canonical actor: native entrypoint: {e}"))?;
+    require(executed.status.code() == Some(46),
+        format!("canonical actor guest returned {:?} instead of 46", executed.status.code()))?;
+
     // Rebuild the original image before negative cases: they must preserve
     // exactly these published bytes and never publish a partial executable.
     fs::write(&source, "fnc main(): int { return 42; }\n")
