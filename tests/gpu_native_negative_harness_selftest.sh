@@ -39,7 +39,7 @@ if [[ "$case_name" == invalid-block ]]; then
     mutation) printf 'changed\n' >> "$input" ;;
     no-fallback) echo "oreslang-llvmc: $code: no provider" >&2; exit 1 ;;
     zero-exit) exit 0 ;;
-    signal-crash) kill -TERM "$" ;;
+    signal-crash) kill -TERM "$BASHPID" ;;
     reflection) echo "source: GPU-LAUNCH-003: no implicit CPU fallback" >&2; exit 1 ;;
     stderr-only-code) echo "GPU-LAUNCH-003: no implicit CPU fallback" >&2; exit 1 ;;
   esac
