@@ -665,7 +665,34 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
-                                  bool bounded_allocator_provider) {
+                                  bool bounded_allocator_provider,
+                                  bool actor_guest_frames) {
+    // M2 pilot is a compiler-produced native actor HANDLER ABI. It is
+    // intentionally not source ActorRef/spawn, stackless calls, or await.
+    // The program cannot have an alternate entrypoint which would execute
+    // this handler outside the authenticated MultiActorCarrier.
+    if (actor_guest_frames) {
+        if (wasm32_target || cortex_m_target || bounded_allocator_provider ||
+                source.actors.size() != 1 || !source.functions.empty() ||
+                !source.classes.empty() || !source.generators.empty() ||
+                !source.sum_types.empty() || !source.cooperative_loops.empty() ||
+                !source.type_only_declarations.empty() ||
+                !source.contracts.empty()) {
+            throw std::runtime_error(
+                "actor guest frame M2 requires one native actor-only source module");
+        }
+        const auto& actor = source.actors.front();
+        if (actor.fields.empty() || actor.fields.size() > 16 ||
+                actor.on_message.parameters.size() != 1 ||
+                actor.on_message.parameters.front().type != ScalarType::I64 ||
+                !actor.on_message.result || actor.on_message.returns_void ||
+                !actor.on_message.locals.empty() ||
+                !actor.on_message.statements.empty() ||
+                !actor.on_message.early_returns.empty()) {
+            throw std::runtime_error(
+                "actor guest frame M2 requires synchronous int on_message without locals or suspension");
+        }
+    }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -979,6 +1006,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
+    llvm::FunctionCallee guestFrameEnter, guestFrameRead, guestFrameLeave;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -996,6 +1024,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, native_ptr}, false));
+        if (actor_guest_frames) {
+            guestFrameEnter = module.getOrInsertFunction(
+                "oreslang_actor_guest_frame_i64_enter",
+                llvm::FunctionType::get(voidTy, {i64}, false));
+            guestFrameRead = module.getOrInsertFunction(
+                "oreslang_actor_guest_frame_i64_read",
+                llvm::FunctionType::get(i64, {}, false));
+            guestFrameLeave = module.getOrInsertFunction(
+                "oreslang_actor_guest_frame_i64_leave",
+                llvm::FunctionType::get(voidTy, {}, false));
+        }
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
@@ -2745,8 +2784,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* incoming = &*args++;
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
         const std::string param = actor.on_message.parameters[0].name;
+        // The source message parameter is first materialized in the actor's
+        // exclusive, persistent logical guest frame store. The carrier stack
+        // only gets a transient SSA/evaluator copy for this synchronous turn.
+        // No native pointer to the actor frame escapes to guest code.
+        llvm::Value* loweredIncoming = incoming;
+        if (actor_guest_frames) {
+            builder.CreateCall(guestFrameEnter, {incoming});
+            loweredIncoming = builder.CreateCall(
+                guestFrameRead, {}, param + ".actor.frame.read");
+        }
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
-        builder.CreateStore(incoming, pslot);
+        builder.CreateStore(loweredIncoming, pslot);
         values.emplace(param, pslot);
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
             const auto& field = actor.fields[i];
@@ -2796,6 +2845,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
              it != actor_owned_tokens.rend(); ++it)
             builder.CreateCall(actorScopedDrop,
                 {actorHeap, currentDomain, currentEpoch, *it});
+        if (actor_guest_frames)
+            builder.CreateCall(guestFrameLeave, {});
         builder.CreateRet(result);
     }
 
