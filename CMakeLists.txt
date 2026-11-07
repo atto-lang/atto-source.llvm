@@ -2063,6 +2063,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-ets-versioned-cas-test)
     set_tests_properties(native_ets_aba_versioned_cas_contention
         PROPERTIES TIMEOUT 45)
+    # UHL-1 owner-death handoff with immutable table identity, fenced
+    # pending receipt, single ACK and bounded revoked generation history.
+    # This is host-only ETS; no source actor/VM supervision proof yet.
+    add_executable(oreslang-native-ets-uhl1-heir-test
+        tests/native_ets_uhl1_heir_handoff_test.cpp)
+    target_include_directories(oreslang-native-ets-uhl1-heir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ets-uhl1-heir-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-ets-uhl1-heir-test PRIVATE Threads::Threads)
+    add_test(NAME native_ets_uhl1_heir_handoff_host_only
+        COMMAND oreslang-native-ets-uhl1-heir-test)
+    set_tests_properties(native_ets_uhl1_heir_handoff_host_only
+        PROPERTIES TIMEOUT 45)
 
     add_executable(oreslang-native-pg-broadcast-test
         tests/native_pg_broadcast_test.cpp)
