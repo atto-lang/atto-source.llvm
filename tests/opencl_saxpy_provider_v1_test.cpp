@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -10,6 +12,11 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 using namespace oreslang;
@@ -431,6 +438,49 @@ int main() {
         reject([&] { (void)small.begin(artifact, x, y, 2.0f); });
         check(small.usage().queue_slots == 0, "quota rejection is atomic");
     }
+
+    // A caller must explicitly drain native events before shutdown.
+    // Closing an active provider fails; a closed provider cannot reopen
+    // or allocate new physical memory.
+    {
+        FakeApi api;
+        auto provider = make_provider(api);
+        auto op = provider.begin(artifact, x, y, 2.0f);
+        reject([&] { provider.close(); });
+        check(provider.usage().resident_bytes == 48,
+              "early close must not free live OpenCL allocations");
+        finish(provider, *op);
+        provider.close();
+        reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
+        check(api.released_buffers == 3 && provider.closed_for_release(),
+              "drained close cannot permit another enqueue");
+    }
+
+#if defined(__unix__) || defined(__APPLE__)
+    // Independent negative process: dropping the last provider ownership
+    // while an upload event is pending must terminate before staging can
+    // be destroyed/referenced by a still-running device.
+    {
+        const pid_t child = fork();
+        check(child >= 0, "cannot fork lifetime negative control");
+        if (child == 0) {
+            std::set_terminate([] { std::_Exit(86); });
+            FakeApi api;
+            api.auto_complete = false;
+            {
+                auto provider = make_provider(api);
+                auto op = provider.begin(artifact, x, y, 2.0f);
+                (void)op;
+            }
+            std::_Exit(85); // erroneous destructor admitted active teardown
+        }
+        int status = 0;
+        check(waitpid(child, &status, 0) == child,
+              "failed to reap active-provider death-test child");
+        check(WIFEXITED(status) && WEXITSTATUS(status) == 86,
+              "active provider destructor must fail closed");
+    }
+#endif
 
     std::cout << "SAXPY three-buffer OpenCL provider host reference tests passed"
               << " (no hardware execution claimed)\n";
