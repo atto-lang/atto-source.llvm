@@ -66,7 +66,7 @@ public:
                 canonical_place.size() > 256 ||
                 !destination || !emitted || !emitted->getParent() ||
                 !emitted->getFunction() ||
-                (source_function == nullptr) != (emitted_function == nullptr) ||
+                ((source_function == nullptr) != (emitted_function == nullptr)) ||
                 (emitted_function && emitted->getFunction() != emitted_function))
             throw std::runtime_error(
                 "ownership violation: invalid compiler field-write source/store origin");
@@ -193,6 +193,8 @@ public:
                 if (statement.receiver.empty() || statement.field.empty() ||
                         statement.receiver.find('.') != std::string::npos ||
                         statement.field.find('.') != std::string::npos ||
+                        statement.receiver.size() > 255 ||
+                        statement.field.size() > 255 ||
                         statement.receiver.size() + 1 + statement.field.size() > 256 ||
                         !expected.emplace(&statement, &function).second)
                     throw std::runtime_error(
