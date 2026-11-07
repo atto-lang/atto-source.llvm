@@ -97,6 +97,11 @@ int main() {
         req.kernel.parameters = {typed_ir::Parameter::U64};
         req.arguments = {typed_ir::ScalarI64{7}};
         denied([&] { (void)typed_ir::verify(req); }, "GPU-LAUNCH-002");
+        // Host-side typed IR itself must not treat a forged enum tag as a
+        // writable view or fall through an unrecognized scalar kind.
+        req.kernel.parameters = {static_cast<typed_ir::Parameter>(255)};
+        req.arguments = {typed_ir::ScalarI64{7}};
+        denied([&] { (void)typed_ir::verify(req); }, "GPU-LAUNCH-002");
     }
     // N distinct parameters and declaration sizes, preserving order.
     for (int count=0;count<=64;++count) {
