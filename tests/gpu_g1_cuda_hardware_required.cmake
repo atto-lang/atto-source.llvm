@@ -4,6 +4,9 @@ foreach(key IN ITEMS G1_GIT G1_REPO G1_HEAD G1_EMITTER G1_LLC G1_PROBE G1_WORK G
         message(FATAL_ERROR "GPU-G1-HW-001: missing required ${key}")
     endif()
 endforeach()
+if(NOT DEFINED G1_SOURCE_FLAG OR NOT G1_SOURCE_FLAG STREQUAL "--gpu-g1-kernel-ir")
+    message(FATAL_ERROR "GPU-G1-HW-012: physical source claim requires main compiler G1 mode")
+endif()
 string(LENGTH "${G1_HEAD}" head_len)
 if(NOT head_len EQUAL 40 OR G1_HEAD MATCHES "[^0-9a-f]")
     message(FATAL_ERROR "GPU-G1-HW-002: exact 40-hex source head required")
@@ -79,7 +82,7 @@ endif()
 file(SHA256 "${G1_SOURCE}" atto_source_sha)
 execute_process(COMMAND "${CMAKE_COMMAND}"
     "-DG1_EMITTER=${G1_EMITTER}" "-DG1_SOURCE=${G1_SOURCE}"
-    "-DG1_REQUIRE_ATTO_SOURCE=ON" "-DG1_LLC=${G1_LLC}"
+    "-DG1_SOURCE_FLAG=${G1_SOURCE_FLAG}" "-DG1_REQUIRE_ATTO_SOURCE=ON" "-DG1_LLC=${G1_LLC}"
     "-DG1_WORK=${G1_WORK}" -P "${G1_PTX_GATE}"
     RESULT_VARIABLE ptx_rc OUTPUT_VARIABLE ptx_log ERROR_VARIABLE ptx_err)
 if(NOT ptx_rc EQUAL 0)
@@ -110,4 +113,4 @@ if(NOT post_ptx_sha STREQUAL ptx_sha OR NOT post_ir_sha STREQUAL ir_sha)
     message(FATAL_ERROR "GPU-G1-HW-010: kernel input artifacts changed during physical execution")
 endif()
 message(STATUS "${device_log}")
-message(STATUS "GPU_G1_DEVICE_RECEIPT source_head=${actual_head} source_tree=${source_tree} ir_sha256=${ir_sha} ptx_sha256=${ptx_sha} emitter_sha256=${emitter_sha} llc_sha256=${llc_sha} probe_sha256=${probe_sha} gate_sha256=${ptx_gate_sha} receipt_gate_sha256=${receipt_gate_sha} git_sha256=${git_sha} atto_source_sha256=${atto_source_sha} class=PHYSICAL_RESTRICTED_ATTO_KERNEL_NOT_HOST_LAUNCH runner_trust=EXTERNAL_REVIEW_REQUIRED")
+message(STATUS "GPU_G1_DEVICE_RECEIPT source_head=${actual_head} source_tree=${source_tree} ir_sha256=${ir_sha} ptx_sha256=${ptx_sha} emitter_sha256=${emitter_sha} llc_sha256=${llc_sha} probe_sha256=${probe_sha} gate_sha256=${ptx_gate_sha} receipt_gate_sha256=${receipt_gate_sha} git_sha256=${git_sha} atto_source_sha256=${atto_source_sha} class=PHYSICAL_RESTRICTED_ATTO_MAIN_COMPILER_KERNEL_NOT_HOST_LAUNCH runner_trust=EXTERNAL_REVIEW_REQUIRED")
