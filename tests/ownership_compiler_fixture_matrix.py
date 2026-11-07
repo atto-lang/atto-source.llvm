@@ -88,7 +88,7 @@ def load_cases(path: pathlib.Path = MANIFEST) -> list[dict]:
         # A keyword appearing only in a comment must not count as a tested
         # ownership operation. This is a source inventory requirement,
         # IN ADDITION TO real compiler/guest execution (not a replacement).
-        executable_source = re.sub(r"/\\*.*?\\*/", "", source, flags=re.S)
+        executable_source = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
         executable_source = "\n".join(
             line.split("//", 1)[0] for line in executable_source.splitlines()
         )
@@ -98,7 +98,7 @@ def load_cases(path: pathlib.Path = MANIFEST) -> list[dict]:
                     row["expected_diagnostic"] == required_diagnostic,
                     "invalid or substituted semantic ownership diagnostic")
             opcode = "take" if category == "computed-take" else "share"
-            require(re.search(r"\\brt\\s+" + opcode + r"\\b", executable_source) is not None,
+            require(re.search(r"\brt\s+" + opcode + r"\b", executable_source) is not None,
                     "negative does not exercise the claimed ownership operation")
         else:
             require(set(row) == FIELDS - {"expected_diagnostic"} and
@@ -106,7 +106,7 @@ def load_cases(path: pathlib.Path = MANIFEST) -> list[dict]:
                     1 <= row["expected_guest_exit"] <= 255,
                     "positive case lacks an executable guest exit oracle")
             opcode = "share" if category == "owned-scalar-share" else "copy"
-            require(re.search(r"\\brt\\s+" + opcode + r"\\b", executable_source) is not None,
+            require(re.search(r"\brt\s+" + opcode + r"\b", executable_source) is not None,
                     "positive does not exercise the claimed ownership operation")
     require(set(by_category) == set(CATEGORIES) and
             all(by_category[group] == 10 for group in CATEGORIES),
