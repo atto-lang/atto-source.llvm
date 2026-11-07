@@ -67,6 +67,14 @@ int main(){
   reject([&]{GpuG1VerifiedPtxModule<FakeLoader> m(ld,code,original);});
   check(ld.load==1&&ld.unload==1);
  }
+ {FakeLoader ld;ld.fail_resolve=true;ld.fail_unload=true;
+  bool quarantined=false;
+  try {GpuG1VerifiedPtxModule<FakeLoader> m(ld,code,original);}
+  catch(const std::runtime_error& e) {
+    quarantined=std::string(e.what()).find("GPU-G1-MODULE-008")!=std::string::npos;
+  }
+  check(quarantined && ld.load==1 && ld.unload==1);
+ }
  // A live kernel token must fence a concurrent unload attempt. Minting and
  // closing are serialized by the module's own lock, not by caller timing.
  {GpuG1VerifiedPtxModule<FakeLoader> m(loader,code,original);
