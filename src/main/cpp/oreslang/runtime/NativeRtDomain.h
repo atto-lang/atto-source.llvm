@@ -55,6 +55,9 @@ typedef struct {
     uint32_t ring_capacity;       /* power of two, 2..ORES_RT_MAX_RING */
     uint32_t idle_spin_ns;        /* 0 = park immediately */
     int measure_turns;            /* record max handler time per core */
+    uint64_t turn_budget_ns;      /* 0 = none; else count turns longer than this
+                                     (implies measure_turns). Diagnostic only:
+                                     an overrun is detected, not prevented. */
     OresRtHandlerFn on_data;      /* required */
     OresRtHandlerFn on_control;   /* optional; CONTROL sends fail without it */
     void* ctx;
@@ -71,7 +74,8 @@ typedef struct {
     uint64_t processed;          /* DATA + CONTROL turns */
     uint64_t control_processed;
     uint64_t parks;              /* times the carrier slept in the kernel */
-    uint64_t max_turn_ns;        /* 0 unless measure_turns */
+    uint64_t max_turn_ns;        /* 0 unless measure_turns / turn_budget_ns */
+    uint64_t budget_overruns;    /* turns longer than turn_budget_ns */
 } OresRtCoreStats;
 
 /* Validates and preallocates everything (and touches it). NULL on bad
@@ -91,11 +95,24 @@ OresRtSendStatus ores_rt_send_control(OresRtSender* sender, uint32_t actor,
                                       uint64_t payload);
 /* Messages this sender got ORES_RT_SEND_OK for. */
 uint64_t ores_rt_sender_accepted(const OresRtSender* sender);
+/* Hand an external sender to another thread. Only its current owner may
+ * call this; the next thread to send becomes the owner, ordered after
+ * everything the previous owner published. Returns 0 if the caller is not
+ * the owner or the sender belongs to a core. */
+int ores_rt_sender_release(OresRtSender* sender);
 
 /* Waits until every accepted message (including ones sent by handlers while
  * draining) has run, then stops and joins all carriers. The caller must have
  * stopped using external senders. Never call from a handler. */
 int ores_rt_domain_stop(OresRtDomain* domain);
+/* As stop, but gives up after timeout_ns if the domain does not become
+ * quiescent (e.g. a handler is stuck). Returns 1 stopped, 0 timed out (the
+ * domain keeps running and stop may be retried), -1 invalid call. */
+int ores_rt_domain_stop_timed(OresRtDomain* domain, uint64_t timeout_ns);
+/* After stop: messages that were accepted but never ran. Nonzero only if
+ * external senders kept sending during stop (a caller contract violation),
+ * so the loss is reported instead of silent. */
+uint64_t ores_rt_domain_undelivered(OresRtDomain* domain);
 int ores_rt_domain_core_stats(OresRtDomain* domain, uint32_t core,
                               OresRtCoreStats* out);
 /* Only after stop (or if never started). */

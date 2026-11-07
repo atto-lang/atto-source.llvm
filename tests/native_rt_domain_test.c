@@ -309,6 +309,141 @@ static void park_handoff(uint32_t spin_ns) {
     ores_rt_domain_destroy(d);
 }
 
+/* ---- hardening ---------------------------------------------------------- */
+typedef struct { atomic_int release, entered; _Atomic uint64_t runs; } Stuck;
+static void stuck_data(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
+    (void)self; (void)actor;
+    Stuck* s = ctx;
+    if (payload == 1) {
+        atomic_store(&s->entered, 1);
+        while (!atomic_load(&s->release)) sched_yield();
+    }
+    atomic_fetch_add(&s->runs, 1);
+}
+
+/* stop_timed gives up on a stuck handler instead of hanging, leaves the
+ * domain running, and a later stop succeeds. The stuck turn also shows up as
+ * a budget overrun. */
+static void timed_stop_and_budget(void) {
+    Stuck s;
+    memset(&s, 0, sizeof(s));
+    uint32_t placement[1] = {0};
+    OresRtDomainOptions o = {
+        .core_count = 1, .actor_count = 1, .actor_core = placement,
+        .external_senders = 1, .ring_capacity = 8, .turn_budget_ns = 1000000, /* 1 ms */
+        .on_data = stuck_data, .ctx = &s,
+    };
+    OresRtDomain* d = ores_rt_domain_open(&o);
+    check(d && ores_rt_domain_start(d), "open/start");
+    OresRtSender* snd = ores_rt_domain_external_sender(d, 0);
+    check(ores_rt_send(snd, 0, 0) == ORES_RT_SEND_OK, "fast turn");
+    check(ores_rt_send(snd, 0, 1) == ORES_RT_SEND_OK, "stuck turn");
+    while (!atomic_load(&s.entered)) sched_yield();
+    check(ores_rt_domain_stop_timed(d, 20000000) == 0, "stop times out on a stuck handler");
+    check(ores_rt_send(snd, 0, 0) == ORES_RT_SEND_OK, "still accepting after a timed-out stop");
+    struct timespec hold = {0, 5000000};
+    nanosleep(&hold, NULL); /* make the stuck turn exceed its 1 ms budget */
+    atomic_store(&s.release, 1);
+    check(ores_rt_domain_stop_timed(d, 5000000000ull) == 1, "stop succeeds once unstuck");
+    OresRtCoreStats cs;
+    check(ores_rt_domain_core_stats(d, 0, &cs), "stats");
+    check(atomic_load(&s.runs) == 3 && cs.processed == 3, "all three turns ran");
+    check(cs.budget_overruns == 1, "exactly the stuck turn overran its budget");
+    check(cs.max_turn_ns >= 5000000, "max turn time recorded");
+    check(ores_rt_domain_undelivered(d) == 0, "nothing undelivered");
+    check(ores_rt_domain_stop_timed(d, 1) == -1, "stop after stop is invalid");
+    ores_rt_domain_destroy(d);
+    puts("timed stop + turn budget: OK");
+}
+
+/* Ordered handoff of an external sender between threads. */
+typedef struct { OresRtSender* s; int status_before, status_after, released; } Handoff;
+static void* handoff_second(void* raw) {
+    Handoff* h = raw;
+    h->status_after = (int)ores_rt_send(h->s, 0, 2);
+    h->released = ores_rt_sender_release(h->s);
+    return NULL;
+}
+static void* try_send_unreleased(void* raw) {
+    Handoff* h = raw;
+    h->status_before = (int)ores_rt_send(h->s, 0, 9);
+    return NULL;
+}
+static void sender_handoff(void) {
+    _Atomic uint64_t done = 0;
+    uint32_t placement[1] = {0};
+    OresRtDomainOptions o = {
+        .core_count = 1, .actor_count = 1, .actor_core = placement,
+        .external_senders = 1, .ring_capacity = 8, .on_data = count_data, .ctx = (void*)&done,
+    };
+    OresRtDomain* d = ores_rt_domain_open(&o);
+    check(d && ores_rt_domain_start(d), "open/start");
+    Handoff h = { .s = ores_rt_domain_external_sender(d, 0) };
+    check(ores_rt_send(h.s, 0, 1) == ORES_RT_SEND_OK, "first owner sends");
+    pthread_t t;
+    check(pthread_create(&t, NULL, try_send_unreleased, &h) == 0, "create");
+    pthread_join(t, NULL);
+    check(h.status_before == ORES_RT_SEND_INVALID, "other thread refused while owned");
+    check(ores_rt_sender_release(h.s), "owner releases");
+    check(!ores_rt_sender_release(h.s), "release by a non-owner fails");
+    check(pthread_create(&t, NULL, handoff_second, &h) == 0, "create");
+    pthread_join(t, NULL);
+    check(h.status_after == ORES_RT_SEND_OK && h.released, "new owner sends, then releases");
+    check(ores_rt_send(h.s, 0, 3) == ORES_RT_SEND_OK, "original thread can take it back");
+    check(ores_rt_domain_stop(d), "stop");
+    check(atomic_load(&done) == 3 && ores_rt_sender_accepted(h.s) == 3, "three delivered");
+    ores_rt_domain_destroy(d);
+    puts("sender handoff: OK");
+}
+
+/* Contract violation: a producer keeps sending while stop() runs. Whatever
+ * it slips in must be either run or reported as undelivered, never lost. */
+typedef struct { OresRtDomain* d; atomic_int go; uint64_t ok, closed; } Violator;
+static void* violator(void* raw) {
+    Violator* v = raw;
+    OresRtSender* s = ores_rt_domain_external_sender(v->d, 0);
+    while (atomic_load(&v->go)) {
+        OresRtSendStatus st = ores_rt_send(s, 0, 0);
+        if (st == ORES_RT_SEND_OK) ++v->ok;
+        else if (st == ORES_RT_SEND_CLOSED) { ++v->closed; break; }
+    }
+    return NULL;
+}
+static void stop_contract_violation(void) {
+    uint64_t total_undelivered = 0;
+    for (int round = 0; round < 50; ++round) {
+        _Atomic uint64_t done = 0;
+        uint32_t placement[1] = {0};
+        OresRtDomainOptions o = {
+            .core_count = 1, .actor_count = 1, .actor_core = placement,
+            .external_senders = 1, .ring_capacity = 64, .on_data = count_data,
+            .ctx = (void*)&done,
+        };
+        Violator v = {0};
+        v.d = ores_rt_domain_open(&o);
+        check(v.d && ores_rt_domain_start(v.d), "open/start");
+        atomic_store(&v.go, 1);
+        pthread_t t;
+        check(pthread_create(&t, NULL, violator, &v) == 0, "create");
+        struct timespec pause = {0, 200000};
+        nanosleep(&pause, NULL);
+        /* Quiescence may never be reached while the violator floods; bound it. */
+        int r, tries = 0;
+        while ((r = ores_rt_domain_stop_timed(v.d, 2000000)) == 0)
+            if (++tries == 50) atomic_store(&v.go, 0); // let it quiesce
+        check(r == 1, "stop");
+        atomic_store(&v.go, 0);
+        pthread_join(t, NULL);
+        const uint64_t undelivered = ores_rt_domain_undelivered(v.d);
+        check(v.ok == atomic_load(&done) + undelivered,
+              "accepted == ran + reported undelivered");
+        total_undelivered += undelivered;
+        ores_rt_domain_destroy(v.d);
+    }
+    printf("stop under contract violation: identity held (undelivered reported %llu): OK\n",
+           (unsigned long long)total_undelivered);
+}
+
 static void noop(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
     (void)ctx; (void)self; (void)actor; (void)payload;
 }
@@ -347,6 +482,9 @@ static void contract(void) {
     uint32_t n = 0;
     for (uint32_t c = 0; c < CPU_SETSIZE && n < 2; ++c)
         if (CPU_ISSET(c, &allowed)) cpus[n++] = c;
+    uint32_t dup[2] = {cpus[0], cpus[0]};
+    OresRtDomainOptions dupo = bad; dupo.cpus = dup;
+    check(!ores_rt_domain_open(&dupo), "two cores pinned to one CPU rejected");
     if (n == 2) {
         OresRtDomain* pinned = ores_rt_domain_open(&bad);
         check(pinned && ores_rt_domain_start(pinned), "pinned start");
@@ -391,6 +529,9 @@ int main(void) {
     contract();
     control_priority();
     drain_multi_send();
+    timed_stop_and_budget();
+    sender_handoff();
+    stop_contract_violation();
     park_handoff(0);
     park_handoff(2000);
     stress(0);

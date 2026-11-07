@@ -66,7 +66,7 @@ struct OresRtSender {
     OresRtDomain* domain;
     uint32_t source;          /* row in the ring matrix */
     int is_core;
-    _Atomic uintptr_t owner;  /* address of the owning thread's TLS token */
+    _Atomic uint64_t owner;   /* unique id of the owning thread; 0 = unowned */
     _Alignas(64) _Atomic uint64_t accepted;
 };
 
@@ -83,6 +83,7 @@ typedef struct {
     _Atomic uint64_t control_processed;
     _Atomic uint64_t parks;
     _Atomic uint64_t max_turn_ns;
+    _Atomic uint64_t budget_overruns;
 } RtCore;
 
 struct OresRtDomain {
@@ -98,12 +99,22 @@ struct OresRtDomain {
     _Atomic int accepting;       /* sends allowed */
     _Atomic int stop;            /* carriers exit (set only once quiescent) */
     int started, stopped;
+    uint64_t undelivered;        /* accepted but never run (set by stop) */
     pthread_mutex_t start_mutex;
     pthread_cond_t start_cond;
     uint32_t checked_in;
 };
 
-static _Thread_local char thread_token;
+/* Thread identity for sender ownership. Never reused: a TLS address can be
+ * recycled by a later thread, which would let it inherit an exited owner's
+ * sender with no ordering against that owner's last push. */
+static _Atomic uint64_t next_thread_id = 1;
+static _Thread_local uint64_t thread_id;
+static uint64_t self_id(void) {
+    if (!thread_id) thread_id = atomic_fetch_add_explicit(&next_thread_id, 1,
+                                                          memory_order_relaxed);
+    return thread_id;
+}
 
 static uint64_t now_ns(void) {
     struct timespec ts;
@@ -139,6 +150,24 @@ static void wake_core(RtCore* c) {
     pthread_mutex_unlock(&c->park_mutex);
 }
 
+/* The park mutex is the only lock a SCHED_FIFO carrier ever takes. A
+ * low-priority sender holds it briefly to wake the carrier; with priority
+ * inheritance that sender cannot be preempted indefinitely while holding it. */
+static void init_park_mutex(pthread_mutex_t* m) {
+    pthread_mutexattr_t attr;
+    if (pthread_mutexattr_init(&attr) == 0) {
+#if defined(_POSIX_THREAD_PRIO_INHERIT) && _POSIX_THREAD_PRIO_INHERIT >= 0
+        if (pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT) == 0
+                && pthread_mutex_init(m, &attr) == 0) {
+            pthread_mutexattr_destroy(&attr);
+            return;
+        }
+#endif
+        pthread_mutexattr_destroy(&attr);
+    }
+    pthread_mutex_init(m, NULL);
+}
+
 OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
     if (!o || !o->on_data || !o->actor_core
             || o->core_count == 0 || o->core_count > ORES_RT_MAX_CORES
@@ -168,6 +197,17 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
                 return NULL;
     }
 #endif
+    /* Two carriers on one CPU defeat the point of pinning: under SCHED_FIFO
+     * with idle spin, one can starve the other outright. */
+    if (o->cpus)
+        for (uint32_t i = 0; i < o->core_count; ++i)
+            for (uint32_t j = i + 1; j < o->core_count; ++j)
+                if (o->cpus[i] == o->cpus[j]) return NULL;
+    {
+        const size_t rings = (size_t)2 * (o->core_count + o->external_senders) * o->core_count;
+        if ((size_t)o->ring_capacity > SIZE_MAX / sizeof(RtMsg) / rings - 1)
+            return NULL; /* slot array size would overflow size_t */
+    }
 
     OresRtDomain* d = calloc(1, sizeof(*d));
     if (!d) return NULL;
@@ -216,7 +256,7 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
         RtCore* core = &d->core[c];
         core->domain = d;
         core->index = c;
-        pthread_mutex_init(&core->park_mutex, NULL);
+        init_park_mutex(&core->park_mutex);
         pthread_cond_init(&core->park_cond, NULL);
         atomic_init(&core->sleeping, 0);
         atomic_init(&core->control_hint, 0);
@@ -224,6 +264,7 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
         atomic_init(&core->control_processed, 0);
         atomic_init(&core->parks, 0);
         atomic_init(&core->max_turn_ns, 0);
+        atomic_init(&core->budget_overruns, 0);
     }
     pthread_mutex_init(&d->start_mutex, NULL);
     pthread_cond_init(&d->start_cond, NULL);
@@ -249,12 +290,16 @@ static int observe_affinity(OresRtDomain* d, uint32_t core) {
 static void run_turn(OresRtDomain* d, RtCore* c, OresRtHandlerFn fn,
                      const RtMsg* m, int control) {
     OresRtSender* self = &d->senders[c->index];
-    if (d->opt.measure_turns) {
+    if (d->opt.measure_turns || d->opt.turn_budget_ns) {
         const uint64_t t0 = now_ns();
         fn(d->opt.ctx, self, m->actor, m->payload);
         const uint64_t dt = now_ns() - t0;
         if (dt > atomic_load_explicit(&c->max_turn_ns, memory_order_relaxed))
             atomic_store_explicit(&c->max_turn_ns, dt, memory_order_relaxed);
+        if (d->opt.turn_budget_ns && dt > d->opt.turn_budget_ns)
+            atomic_store_explicit(&c->budget_overruns,
+                atomic_load_explicit(&c->budget_overruns, memory_order_relaxed) + 1,
+                memory_order_relaxed);
     } else {
         fn(d->opt.ctx, self, m->actor, m->payload);
     }
@@ -285,8 +330,8 @@ static size_t drain_control(OresRtDomain* d, RtCore* c, uint64_t* seen_hint) {
 static void* rt_carrier(void* raw) {
     RtCore* c = raw;
     OresRtDomain* d = c->domain;
-    atomic_store_explicit(&d->senders[c->index].owner,
-                          (uintptr_t)&thread_token, memory_order_relaxed);
+    atomic_store_explicit(&d->senders[c->index].owner, self_id(),
+                          memory_order_relaxed);
     c->affinity_observed = observe_affinity(d, c->index);
     pthread_mutex_lock(&d->start_mutex);
     ++d->checked_in;
@@ -421,12 +466,14 @@ static OresRtSendStatus rt_send(OresRtSender* s, uint32_t actor,
     if (actor >= d->opt.actor_count
             || (lane == LANE_CONTROL && !d->opt.on_control))
         return ORES_RT_SEND_INVALID;
-    /* SPSC: a sender has exactly one owning thread for life. */
-    const uintptr_t me = (uintptr_t)&thread_token;
-    uintptr_t owner = atomic_load_explicit(&s->owner, memory_order_relaxed);
+    /* SPSC: one owning thread at a time. Taking an unowned sender acquires
+     * the previous owner's release, so its last pushes happen-before ours. */
+    const uint64_t me = self_id();
+    uint64_t owner = atomic_load_explicit(&s->owner, memory_order_relaxed);
     if (owner != me) {
         if (s->is_core || owner != 0) return ORES_RT_SEND_INVALID;
-        if (!atomic_compare_exchange_strong(&s->owner, &owner, me))
+        if (!atomic_compare_exchange_strong_explicit(&s->owner, &owner, me,
+                memory_order_acquire, memory_order_relaxed))
             return ORES_RT_SEND_INVALID;
     }
     const uint32_t core = d->actor_core[actor];
@@ -456,14 +503,38 @@ OresRtSendStatus ores_rt_send_control(OresRtSender* s, uint32_t actor, uint64_t 
     return rt_send(s, actor, payload, LANE_CONTROL);
 }
 
+int ores_rt_sender_release(OresRtSender* s) {
+    if (!s || s->is_core) return 0;
+    uint64_t me = self_id();
+    return atomic_compare_exchange_strong_explicit(&s->owner, &me, 0,
+            memory_order_release, memory_order_relaxed);
+}
+
 uint64_t ores_rt_sender_accepted(const OresRtSender* s) {
     return s ? atomic_load_explicit(&((OresRtSender*)s)->accepted, memory_order_acquire) : 0;
 }
 
-int ores_rt_domain_stop(OresRtDomain* d) {
-    if (!d || !d->started || d->stopped) return 0;
+static void totals(OresRtDomain* d, uint64_t* processed, uint64_t* accepted) {
+    uint64_t p = 0, a = 0;
     for (uint32_t c = 0; c < d->cores; ++c)
-        if (pthread_equal(pthread_self(), d->core[c].thread)) return 0;
+        p += atomic_load_explicit(&d->core[c].processed, memory_order_acquire);
+    atomic_thread_fence(memory_order_seq_cst);
+    for (uint32_t s = 0; s < d->sources; ++s)
+        a += atomic_load_explicit(&d->senders[s].accepted, memory_order_acquire);
+    *processed = p;
+    *accepted = a;
+}
+
+int ores_rt_domain_stop(OresRtDomain* d) {
+    return ores_rt_domain_stop_timed(d, UINT64_MAX) == 1;
+}
+
+int ores_rt_domain_stop_timed(OresRtDomain* d, uint64_t timeout_ns) {
+    if (!d || !d->started || d->stopped) return -1;
+    for (uint32_t c = 0; c < d->cores; ++c)
+        if (pthread_equal(pthread_self(), d->core[c].thread)) return -1;
+    const uint64_t start = now_ns();
+    const uint64_t deadline = timeout_ns > UINT64_MAX - start ? UINT64_MAX : start + timeout_ns;
     /* Quiescence: read every processed counter, then every accepted
      * counter. Each turn bumps processed only after its handler returns and
      * each send bumps accepted before publishing, so processed <= accepted
@@ -471,13 +542,10 @@ int ores_rt_domain_stop(OresRtDomain* d) {
      * (a running handler's own message is accepted but not yet processed).
      * External senders are fenced by the caller; handlers cannot run. */
     for (unsigned spins = 0;; ++spins) {
-        uint64_t processed = 0, accepted = 0;
-        for (uint32_t c = 0; c < d->cores; ++c)
-            processed += atomic_load_explicit(&d->core[c].processed, memory_order_acquire);
-        atomic_thread_fence(memory_order_seq_cst);
-        for (uint32_t s = 0; s < d->sources; ++s)
-            accepted += atomic_load_explicit(&d->senders[s].accepted, memory_order_acquire);
+        uint64_t processed, accepted;
+        totals(d, &processed, &accepted);
         if (processed == accepted) break;
+        if (now_ns() >= deadline) return 0; /* still running; may retry */
         if (spins < 1000) cpu_relax();
         else {
             struct timespec pause = {0, 50000};
@@ -487,7 +555,17 @@ int ores_rt_domain_stop(OresRtDomain* d) {
     atomic_store_explicit(&d->accepting, 0, memory_order_seq_cst);
     stop_and_join(d, d->cores);
     d->stopped = 1;
+    /* A sender that ignored the "stop external senders first" contract can
+     * slip a message in between the quiescence check and closing. It was
+     * counted as accepted but no carrier is left to run it: report it. */
+    uint64_t processed, accepted;
+    totals(d, &processed, &accepted);
+    d->undelivered = accepted - processed;
     return 1;
+}
+
+uint64_t ores_rt_domain_undelivered(OresRtDomain* d) {
+    return d && d->stopped ? d->undelivered : 0;
 }
 
 int ores_rt_domain_core_stats(OresRtDomain* d, uint32_t core, OresRtCoreStats* out) {
@@ -497,6 +575,7 @@ int ores_rt_domain_core_stats(OresRtDomain* d, uint32_t core, OresRtCoreStats* o
     out->control_processed = atomic_load_explicit(&c->control_processed, memory_order_relaxed);
     out->parks = atomic_load_explicit(&c->parks, memory_order_relaxed);
     out->max_turn_ns = atomic_load_explicit(&c->max_turn_ns, memory_order_relaxed);
+    out->budget_overruns = atomic_load_explicit(&c->budget_overruns, memory_order_relaxed);
     return 1;
 }
 

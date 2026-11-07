@@ -44,6 +44,26 @@ domain has no scheduler lock at all.
   processed). `stop` waits for equality, then closes. Mail that handlers send
   while draining is delivered. External senders must be stopped first.
 
+## Hardening
+
+- **Sender ownership uses never-reused thread ids**, not TLS addresses
+  (a later thread can be handed a dead thread's TLS address). Handing an
+  external sender to another thread is explicit: `ores_rt_sender_release` is
+  a release, and the next owner's claim is an acquire, so the old owner's last
+  pushes happen-before the new owner's first.
+- **Duplicate CPUs are rejected**: two carriers on one CPU, under SCHED_FIFO
+  with idle spin, can starve each other.
+- **The park mutex uses priority inheritance** where available. It is the
+  only lock a carrier takes, and a low-priority sender holds it to wake one.
+- **Bounded stop**: `ores_rt_domain_stop_timed` returns 0 if a handler is
+  stuck, leaves the domain running, and can be retried.
+- **No silent loss**: if an external sender keeps sending during `stop` (a
+  contract violation), anything it slipped in is reported by
+  `ores_rt_domain_undelivered`, so accepted == ran + undelivered always holds.
+- **Turn budget**: `turn_budget_ns` counts turns that overran it per core
+  (`budget_overruns`). Detection only; nothing is preempted.
+- **Size overflow** of the ring allocation is rejected at open.
+
 ## Tests
 
 `tests/native_rt_domain_test.c`, plus a TSan target:
@@ -54,6 +74,11 @@ domain has no scheduler lock at all.
 - CONTROL queued behind DATA runs first;
 - drain: a handler that sends, waits for the receiver to run, then sends
   again must not be cut off by `stop` (200 rounds);
+- timed stop on a stuck handler (times out, keeps running, then stops) and
+  budget overrun counting;
+- sender handoff: refused while owned, ordered after release;
+- stop under a flooding external sender: accepted == ran + undelivered
+  (50 rounds; this did catch messages that would otherwise be lost);
 - lost-wakeup probe: 50,000 one-at-a-time handoffs racing the park path, each
   must complete within 1 s;
 - stress: 3 producers × 40,000 messages to 64 actors on 4 cores, handlers
