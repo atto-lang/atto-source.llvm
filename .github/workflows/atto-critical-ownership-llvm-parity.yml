@@ -266,21 +266,21 @@ jobs:
           # Independently execute 50 *new* class-field CFG programs. Static
           # manifests and source-only checks cannot substitute for a compiler,
           # Clang linker, and the positive guest exit / negative diagnostic.
-          ctest --test-dir build -N -R '^(native_ownership_source_cfg_manifest_28_mutations|atto_ownership_source_cfg_real_compiler_50)$' > /tmp/atto-source-cfg-fixture-inventory.txt
-          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_28_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt
+          ctest --test-dir build -N -R '^(native_ownership_source_cfg_manifest_29_mutations|atto_ownership_source_cfg_real_compiler_50)$' > /tmp/atto-source-cfg-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_29_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt
           grep -Eq 'Test +#[0-9]+: atto_ownership_source_cfg_real_compiler_50$' /tmp/atto-source-cfg-fixture-inventory.txt
-          ctest --test-dir build -V -R '^native_ownership_source_cfg_manifest_28_mutations$' \
-            --output-junit /tmp/atto-source-cfg-mut-28.xml --timeout 90 | tee /tmp/atto-source-cfg-mut-28.log
-          grep -Eq 'Ran 28 tests' /tmp/atto-source-cfg-mut-28.log
+          ctest --test-dir build -V -R '^native_ownership_source_cfg_manifest_29_mutations$' \
+            --output-junit /tmp/atto-source-cfg-mut-29.xml --timeout 90 | tee /tmp/atto-source-cfg-mut-29.log
+          grep -Eq 'Ran 29 tests' /tmp/atto-source-cfg-mut-29.log
           python3 - <<'PY'
           from xml.etree import ElementTree
-          root = ElementTree.parse('/tmp/atto-source-cfg-mut-28.xml').getroot()
+          root = ElementTree.parse('/tmp/atto-source-cfg-mut-29.xml').getroot()
           observed = [x.get('name') for x in root.iter('testcase')]
           if (int(root.get('tests', '-1')) != 1 or
                   int(root.get('failures', '1')) or
                   int(root.get('errors', '1')) or
                   int(root.get('skipped', '1')) or
-                  observed != ['native_ownership_source_cfg_manifest_28_mutations']):
+                  observed != ['native_ownership_source_cfg_manifest_29_mutations']):
               raise SystemExit('source CFG manifest mutation suite receipt invalid')
           PY
           ctest --test-dir build -V -R '^atto_ownership_source_cfg_real_compiler_50$' \
