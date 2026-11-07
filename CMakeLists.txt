@@ -3253,6 +3253,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_heap_no_tracing_gc
              COMMAND oreslang-actor-heap-test)
 
+    # Native actor-incarnation logical frame bytes. This is host/runtime
+    # evidence only; not source compiler frame lowering or OS stack isolation.
+    add_executable(oreslang-actor-frame-arena-test tests/actor_frame_arena_test.cpp)
+    target_include_directories(oreslang-actor-frame-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-frame-arena-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-frame-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_frame_arena_owner_suspend_migrate
+             COMMAND oreslang-actor-frame-arena-test)
+    set_tests_properties(native_actor_frame_arena_owner_suspend_migrate
+        PROPERTIES TIMEOUT 30)
+
     # The gate itself must remain live until every frame/FFI lease drops.
     # A dangling lease used to silently address destroyed gate storage.
     add_executable(oreslang-actor-heap-borrow-gate-lifetime-test
@@ -3381,6 +3394,22 @@ if(BUILD_TESTING)
         add_test(NAME native_actor_heap_isolation_and_drop
                  COMMAND oreslang-native-actor-heap-test)
         set_tests_properties(native_actor_heap_isolation_and_drop PROPERTIES TIMEOUT 30)
+
+        # Actual native actor callback uses an independently owned frame arena;
+        # only the logical execution survives await, not the carrier stack.
+        add_executable(oreslang-native-actor-frame-integration-test
+            tests/native_actor_frame_integration_test.cpp
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-native-actor-frame-integration-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-actor-frame-integration-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-actor-frame-integration-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_actor_frame_suspension_sibling_survival
+                 COMMAND oreslang-native-actor-frame-integration-test)
+        set_tests_properties(native_actor_frame_suspension_sibling_survival
+            PROPERTIES TIMEOUT 30)
     endif()
     # Current-main reconciliation of the native actor substrate from draft
     # LLVM #118. Never replace the newer main ownership/continuation tests.
