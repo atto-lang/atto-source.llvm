@@ -29,11 +29,15 @@ inline void require_m3_scalar_helpers(const Program& source) {
     for (const Function& fn : source.functions) {
         if (fn.name == "main" || !names.insert(fn.name).second ||
                 fn.name.rfind("oreslang_", 0) == 0 ||
+                fn.exported || fn.native_internal || !fn.method_owner.empty() ||
+                !fn.c_export_u32_symbol.empty() ||
+                !fn.pending_return_type_alias.empty() ||
                 fn.parameters.size() != 1 || fn.returns_void ||
                 fn.return_type != ScalarType::I64 || !fn.result ||
                 !fn.parameters[0].class_name.empty() ||
                 !fn.parameters[0].generic_type.empty() ||
                 !fn.parameters[0].sum_type.empty() ||
+                !fn.parameters[0].pending_type_alias.empty() ||
                 fn.parameters[0].mode != Parameter::Mode::Value ||
                 fn.parameters[0].scalar_type != ScalarType::I64 ||
                 !fn.generic_parameters.empty() ||
