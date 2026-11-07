@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include <stdatomic.h>
 #include <stdint.h>
@@ -7,6 +8,7 @@
 #include <time.h>
 
 static atomic_int constructors;
+static atomic_int constructors_ready;
 static atomic_int deliveries;
 static _Atomic(uintptr_t) addresses[3];
 static atomic_uint_fast64_t domains[3];
@@ -50,6 +52,7 @@ static void initialize(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) 
     atomic_store_explicit(&addresses[position],
         (uintptr_t)current, memory_order_release);
     atomic_store_explicit(&domains[position], domain, memory_order_release);
+    atomic_fetch_add_explicit(&constructors_ready, 1, memory_order_release);
 }
 
 static int64_t message(
@@ -70,7 +73,7 @@ int main(void) {
     void* actor_a = oreslang_source_actor_spawn(initialize, message, 1);
     void* actor_b = oreslang_source_actor_spawn(initialize, message, 1);
     check(actor_a && actor_b);
-    check(wait_for(&constructors, 2));
+    check(wait_for(&constructors_ready, 2));
 
     const uintptr_t first = atomic_load_explicit(
         &addresses[0], memory_order_acquire);
@@ -94,7 +97,7 @@ int main(void) {
     // The next actor has a fresh heap/domain and frame generation even if
     // malloc recycles the address of a retired frame allocation.
     void* actor_c = oreslang_source_actor_spawn(initialize, message, 1);
-    check(actor_c && wait_for(&constructors, 3));
+    check(actor_c && wait_for(&constructors_ready, 3));
     const uint64_t third = atomic_load_explicit(
         &domains[2], memory_order_acquire);
     check(third != 0 &&
