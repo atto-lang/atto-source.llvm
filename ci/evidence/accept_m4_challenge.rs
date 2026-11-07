@@ -195,6 +195,18 @@ fn main(){
         assert!(verify_files(&json_file,&pubkey,pin).is_err());
         let _=fs::remove_dir_all(dir);
     }
+    #[test]fn manual_guest_requires_protected_main_and_no_self_nonce_fallback(){
+        let wf=include_str!("../../.github/workflows/m4-llvm-challenged-evidence.yml");
+        assert!(wf.contains("if: github.event_name == 'workflow_dispatch'"));
+        assert!(wf.contains("environment: atto-private-guest-challenge-approval"));
+        assert!(wf.contains("test \"$GITHUB_REF\" = \"refs/heads/main\""));
+        assert!(wf.contains("ATTO_APPROVED_CHALLENGE_KEY_SHA256"));
+        assert!(wf.contains("challenge_signature_base64:"));
+        assert!(wf.contains("ATTO_GUEST_NONCE=\"$("));
+        assert!(!wf.contains("openssl rand -hex 32"));
+        assert!(!wf.contains("rekor"));
+        assert!(wf.contains("NOT_CERTIFIED"));
+    }
     #[test]fn absent_signature_or_key_fails_closed(){
         let fake_pin="e".repeat(64);
         assert!(verify("/nonexistent","/nonexistent","/nonexistent",&fake_pin,
