@@ -111,6 +111,18 @@ int main() {
                 "scalar type mismatch");
     }
     {
+        auto bad=make_source();
+        bad.inverted_main->operations[0].mixed_values[0].boolean=true;
+        rejects([&]{ (void)verify_production_inverted_mixed(bad); },
+                "hidden variant payload");
+    }
+    {
+        auto bad=make_source();
+        bad.inverted_main->operations[0].mixed_values[1].floating=2.5;
+        rejects([&]{ (void)verify_production_inverted_mixed(bad); },
+                "hidden variant payload");
+    }
+    {
         auto bad=make_source(); bad.inverted_main->operations[2].field="alive";
         bad.inverted_main->operations[2].mixed_value=bit(false);
         rejects([&]{ (void)verify_production_inverted_mixed(bad); },
