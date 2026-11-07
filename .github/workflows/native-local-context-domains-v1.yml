@@ -3,10 +3,15 @@ on:
   pull_request:
     paths:
       - "src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp"
+      - "src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.h"
+      - "src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h"
       - "src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp"
       - "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp"
       - "tests/native_context_domains_v1_test.cpp"
       - "tests/native_local_read_revocation_v1_test.cpp"
+      - "tests/native_actorlocal_stop_during_copy_v1_test.cpp"
       - "tests/native_local_read_revocation_mutation_witness.sh"
       - "tests/run_native_local_context_m6_offline.sh"
       - "tests/native_local_payload_budget_v1_test.cpp"
@@ -41,6 +46,11 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "3ee0121b59927b9a0b40a4bce73e0902c7d1a2bc"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp)" = "e3d7826945390ce0e89f11d73764cf2351a59683"
+          test "$(git hash-object tests/native_actorlocal_stop_during_copy_v1_test.cpp)" = "d21b6c525819c277038f2c5f0d393c3b82cf2f35"
+          for dep in src/main/cpp/oreslang/runtime/NativeActorScheduler.c src/main/cpp/oreslang/runtime/NativeActorScheduler.h src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h; do
+            test "$(git hash-object "$dep")" = "$(git rev-parse "HEAD:$dep")"
+          done
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "c9fd993bd78e4a6b2bd27c384fff43276ca915dd"
@@ -75,6 +85,14 @@ jobs:
             -Isrc/main/cpp tests/native_local_read_revocation_v1_test.cpp \
             -o "$work/local-read-revocation-test"
           "$work/local-read-revocation-test"
+          case "$CXX" in g++) CC=gcc ;; clang++) CC=clang ;; *) echo "Unsupported C++ compiler" >&2; exit 2 ;; esac
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o "$work/scheduler.o"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_actorlocal_stop_during_copy_v1_test.cpp \
+            "$work/scheduler.o" -o "$work/actorlocal-stop-test"
+          "$work/actorlocal-stop-test"
           if [[ "$MODE" == optimized ]]; then
             bash tests/native_local_read_revocation_mutation_witness.sh
           fi
