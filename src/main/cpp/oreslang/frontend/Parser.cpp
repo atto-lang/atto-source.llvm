@@ -822,6 +822,13 @@ public:
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
         resolve_alias_uses(program);
+        // Even an otherwise empty unit containing only a GPU kernel must
+        // never be silently admitted as a host-only or empty native program.
+        if (!gpu_kernel_source_signatures_.empty())
+            throw std::runtime_error(
+                "GPU-LAUNCH-008: GPU source declarations and signatures are "
+                "checked, but device body lowering, host value types and "
+                "completion fences are not executable; no implicit CPU fallback");
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty() && program.generators.empty() &&
                 program.type_only_declarations.empty())
@@ -832,11 +839,6 @@ public:
                  !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
-        if (!gpu_kernel_source_signatures_.empty())
-            throw std::runtime_error(
-                "GPU-LAUNCH-008: GPU source declarations and signatures are "
-                "checked, but device body lowering, host value types and "
-                "completion fences are not executable; no implicit CPU fallback");
         program.sum_types = std::move(sum_types_);
         return program;
     }
