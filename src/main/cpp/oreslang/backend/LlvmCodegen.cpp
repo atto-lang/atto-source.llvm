@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
+#include "oreslang/backend/ActorStacklessI64Compiler.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
@@ -666,14 +667,18 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
-                                  bool actor_guest_frames) {
+                                  bool actor_guest_frames,
+                                  bool actor_stackless_calls) {
+    if (actor_stackless_calls && !actor_guest_frames)
+        throw std::runtime_error("actor M3 stackless lowering requires actor-owned guest frames");
     // M2 pilot is a compiler-produced native actor HANDLER ABI. It is
     // intentionally not source ActorRef/spawn, stackless calls, or await.
     // The program cannot have an alternate entrypoint which would execute
     // this handler outside the authenticated MultiActorCarrier.
     if (actor_guest_frames) {
         if (wasm32_target || cortex_m_target || bounded_allocator_provider ||
-                source.actors.size() != 1 || !source.functions.empty() ||
+                source.actors.size() != 1 ||
+                (!actor_stackless_calls && !source.functions.empty()) ||
                 !source.classes.empty() || !source.generators.empty() ||
                 !source.sum_types.empty() || !source.cooperative_loops.empty() ||
                 !source.type_only_declarations.empty() ||
@@ -681,6 +686,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             throw std::runtime_error(
                 "actor guest frame M2 requires one native actor-only source module");
         }
+        if (actor_stackless_calls)
+            backend::require_m3_scalar_helpers(source);
         const auto& actor = source.actors.front();
         if (actor.fields.empty() || actor.fields.size() > 16 ||
                 actor.on_message.parameters.size() != 1 ||
@@ -1019,6 +1026,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     llvm::FunctionCallee guestFrameEnter, guestFrameRead, guestFrameLeave;
+    llvm::FunctionCallee stacklessExecute;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -1046,6 +1054,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             guestFrameLeave = module.getOrInsertFunction(
                 "oreslang_actor_guest_frame_i64_leave",
                 llvm::FunctionType::get(voidTy, {}, false));
+            if (actor_stackless_calls)
+                stacklessExecute = module.getOrInsertFunction(
+                    "oreslang_actor_guest_stackless_i64_execute",
+                    llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false));
         }
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
@@ -1144,7 +1156,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            (fn.native_internal || fn.async_source_i64 ||
+            (fn.native_internal || actor_stackless_calls || fn.async_source_i64 ||
              !fn.c_export_u32_symbol.empty())
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
@@ -2809,6 +2821,36 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
         builder.CreateStore(loweredIncoming, pslot);
         values.emplace(param, pslot);
+        // Compiler-owned, read-only bytecode is the only way M3 calls its
+        // pure scalar helpers. No LLVM recursive calls from the actor.
+        std::size_t scalar_program_index = 0;
+        auto actor_scalar_value = [&](const Expression& expr) -> llvm::Value* {
+            if (!actor_stackless_calls ||
+                    !backend::actor_expr_has_helper_call(expr))
+                return lower(expr, builder, i64, values, emptyFields, declarations);
+            const auto bytecode = backend::ActorStacklessI64Compiler(source)
+                                      .compile(expr, param);
+            std::vector<llvm::Constant*> words;
+            words.reserve(bytecode.words.size());
+            for (const auto word : bytecode.words)
+                words.push_back(llvm::ConstantInt::get(i64, word));
+            auto* initializer = llvm::ConstantArray::get(
+                llvm::ArrayType::get(i64, words.size()), words);
+            auto* immutable = new llvm::GlobalVariable(
+                module, initializer->getType(), true,
+                llvm::GlobalValue::PrivateLinkage, initializer,
+                "atto.actor.stackless.m3." + actor.name + "." +
+                std::to_string(scalar_program_index++));
+            auto* pointer = builder.CreateInBoundsGEP(
+                immutable->getValueType(), immutable,
+                {builder.getInt64(0), builder.getInt64(0)});
+            return builder.CreateCall(stacklessExecute, {
+                pointer,
+                llvm::ConstantInt::get(i64, bytecode.words.size()),
+                llvm::ConstantInt::get(i64, bytecode.entry_instruction),
+                loweredIncoming
+            }, "actor.stackless.result");
+        };
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
             const auto& field = actor.fields[i];
             llvm::Value* value = builder.CreateCall(fieldRead, {
@@ -2843,14 +2885,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 [&](const LocalBinding& f) { return f.name == write.field; });
             if (field == actor.fields.end() || !field->field_mutable)
                 throw std::runtime_error("invalid actor field write lowering");
-            llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
+            llvm::Value* value = actor_scalar_value(*write.expression);
             const std::size_t index = std::distance(actor.fields.begin(), field);
             builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
                 llvm::ConstantInt::get(i64, index), value});
             builder.CreateStore(value, values.at(write.field));
         }
-        llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
-            emptyFields, declarations);
+        llvm::Value* result = actor_scalar_value(*actor.on_message.result);
         // The native actor scheduler admits no next message until the current
         // synchronous handler has dropped all temporary owners in LIFO order.
         for (auto it = actor_owned_tokens.rbegin();
