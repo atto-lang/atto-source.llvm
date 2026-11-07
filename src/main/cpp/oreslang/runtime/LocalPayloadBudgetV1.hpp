@@ -83,13 +83,13 @@ struct LocalUnboundedPayloadV1<std::pair<A, B>>
     : std::bool_constant<!std::is_arithmetic_v<A> || !std::is_arithmetic_v<B>> {};
 template <typename... T>
 struct LocalUnboundedPayloadV1<std::tuple<T...>>
-    : std::bool_constant<(!std::is_arithmetic_v<T> && !std::is_enum_v<T> || ...)> {};
+    : std::bool_constant<((!std::is_arithmetic_v<T> && !std::is_enum_v<T>) || ...)> {};
 template <typename T, std::size_t N>
 struct LocalUnboundedPayloadV1<std::array<T, N>>
     : std::bool_constant<!std::is_arithmetic_v<T> && !std::is_enum_v<T>> {};
 template <typename... T>
 struct LocalUnboundedPayloadV1<std::variant<T...>>
-    : std::bool_constant<(!std::is_arithmetic_v<T> && !std::is_enum_v<T> || ...)> {};
+    : std::bool_constant<((!std::is_arithmetic_v<T> && !std::is_enum_v<T>) || ...)> {};
 
 template <typename T>
 std::size_t local_measured_payload_bytes_v1(const T& value) noexcept {
