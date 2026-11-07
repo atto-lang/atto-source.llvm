@@ -177,7 +177,50 @@ static void test_carrier_owned_frames() {
     CHECK(!producer.try_send(shared.b_id, {2, 0}));
 }
 
+
+struct LeakyFrameEvidence {
+    MultiActorCarrier::ActorToken token{};
+    std::atomic<int> entered{0}, cleaned{0}, errors{0};
+};
+static MultiActorCarrier::Outcome leaked_frame_dispatch(void* raw,
+        MultiActorCarrier::Message, MultiActorCarrier::Cause,
+        std::uint64_t) noexcept {
+    auto& evidence = *static_cast<LeakyFrameEvidence*>(raw);
+    MultiActorCarrier::GuestFrameToken frame;
+    if (!MultiActorCarrier::guest_frame_push(evidence.token, 8, frame))
+        evidence.errors.fetch_add(1);
+    evidence.entered.fetch_add(1);
+    // Deliberately omit pop: completion may commit, but the actor MUST
+    // be quarantined/retired rather than letting a later message see bytes.
+    return MultiActorCarrier::Outcome::complete;
+}
+static void leaked_frame_cleanup(void* raw, MultiActorCarrier::Message,
+                                 bool had_active) noexcept {
+    auto& evidence = *static_cast<LeakyFrameEvidence*>(raw);
+    if (had_active || MultiActorCarrier::guest_frame_depth(evidence.token) != 0)
+        evidence.errors.fetch_add(1);
+    evidence.cleaned.fetch_add(1);
+}
+static void test_unpopped_frames_fail_closed() {
+    LeakyFrameEvidence evidence;
+    MultiActorCarrier carrier;
+    evidence.token = carrier.register_actor(
+        &evidence, leaked_frame_dispatch, leaked_frame_cleanup);
+    auto producer = carrier.producer();
+    carrier.start();
+    CHECK(producer.try_send(evidence.token, {1, 0}));
+    CHECK(wait_until([&] { return carrier.actor_stats(evidence.token).retired; }));
+    CHECK(!producer.try_send(evidence.token, {2, 0}));
+    carrier.join();
+    CHECK(evidence.entered.load() == 1);
+    CHECK(evidence.cleaned.load() == 1);
+    CHECK(evidence.errors.load() == 0);
+    CHECK(carrier.stats().completed == 1);
+    CHECK(carrier.stats().protocol_failures == 1);
+}
+
 int main() {
+    test_unpopped_frames_fail_closed();
     test_bounded_frame_model();
     test_carrier_owned_frames();
     std::puts("ACTOR_OWNED_LOGICAL_FRAME_STORE_HOST_PASS");
