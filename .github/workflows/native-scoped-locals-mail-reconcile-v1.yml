@@ -60,7 +60,7 @@ jobs:
           test "$(git hash-object tests/native_scoped_locals_45_case_matrix.cpp)" = "98cb1b2c8bb4c735e40139445120435f4108633c"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestIngressIssuerV1.hpp)" = "28ec7d4340b04463c05b45bf1f21b08f41ca9dd1"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "fef7c42d3dedf3f6126c3d6036e55c78a4689c8c"
-          test "$(git hash-object tests/native_request_issued_data_ingress_v1_test.cpp)" = "1a0e4a1529ac348ba19dc7ab54377701d66458ad"
+          test "$(git hash-object tests/native_request_issued_data_ingress_v1_test.cpp)" = "9d94f66b2a12ee6527f45d495c71c8f52a6d73cb"
           test "$(git hash-object tests/native_request_issued_data_stop_race_v1_test.cpp)" = "1217af207ea618a91462abcd9994661830dac991"
           printf 'checkout_head=%s\ncheckout_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute scheduler-origin, DATA, WAKE and 45-case host gates
@@ -107,12 +107,39 @@ jobs:
             -Isrc/main/cpp tests/native_request_issued_data_ingress_v1_test.cpp \
             "$work/scheduler.o" -o "$work/issued-ingress"
           "$work/issued-ingress" | tee "$work/issued-ingress.log"
-          test "$(grep -c '^ISSUED_DATA_INGRESS_PASS ' "$work/issued-ingress.log")" = "175"
-          grep -qx 'NATIVE_ISSUED_DATA_INGRESS_HOST_PASS total=175' "$work/issued-ingress.log"
+          test "$(grep -c '^ISSUED_DATA_INGRESS_PASS ' "$work/issued-ingress.log")" = "239"
+          grep -qx 'NATIVE_ISSUED_DATA_INGRESS_HOST_PASS total=239' "$work/issued-ingress.log"
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_issued_data_stop_race_v1_test.cpp \
             "$work/scheduler.o" -o "$work/issued-stop-races"
           "$work/issued-stop-races" | tee "$work/issued-stop-races.log"
           test "$(grep -c '^ISSUED_DATA_STOP_RACE_PASS ' "$work/issued-stop-races.log")" = "391"
           grep -qx 'NATIVE_ISSUED_DATA_STOP_RACE_HOST_PASS total=391 trials=60' "$work/issued-stop-races.log"
+          # Mutated replay protection must COMPILE successfully and fail
+          # the precise duplicate-DATA-denial assertion, not merely crash
+          # or produce a missing-result log.
+          python3 - "$work" <<'PY'
+          from pathlib import Path
+          import sys
+          root = Path("src/main/cpp/oreslang/runtime/NativeRequestIngressIssuerV1.hpp")
+          source = root.read_text()
+          guard = "authenticated_mail <= slot.last_issued_data_mail ||"
+          if source.count(guard) != 1:
+              raise SystemExit("issuer replay mutation site absent or ambiguous")
+          dest = Path(sys.argv[1]) / "negative-replay/oreslang/runtime/NativeRequestIngressIssuerV1.hpp"
+          dest.parent.mkdir(parents=True, exist_ok=True)
+          dest.write_text(source.replace(guard, "false ||", 1))
+          PY
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -I"$work/negative-replay" -Isrc/main/cpp \
+            tests/native_request_issued_data_ingress_v1_test.cpp \
+            "$work/scheduler.o" -o "$work/replay-mutated"
+          set +e
+          "$work/replay-mutated" > "$work/replay-mutated.log" 2>&1
+          replay_status=$?
+          set -e
+          test "$replay_status" -ne 0
+          grep -Fxq 'ISSUED_DATA_INGRESS_FAILED mail_01_actor_0_duplicate_DENIED' \
+            "$work/replay-mutated.log"
+          printf 'NATIVE_ISSUED_DATA_REPLAY_MUTATION_KILLED\n'
           printf 'NATIVE_ORIGIN_AND_SCOPED_45_EXACT_HEAD_HOST_PASS compiler=%s mode=%s\n' "$CXX" "$MODE"
