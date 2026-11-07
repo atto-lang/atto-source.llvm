@@ -904,22 +904,28 @@ private:
         const bool legacy_pair = decl.fields.size() == 2 &&
             decl.fields[0].type == InvertedScalarKind::I64 &&
             decl.fields[1].type == InvertedScalarKind::I64;
-        bool mixed = decl.fields.size() == 3;
-        if (mixed) {
+        // Historical three_scalar tag denotes typed mixed admission.
+        // bool/i64 reuses the same typed verifier/emitter as i64/bool/f64.
+        const bool mixed_pair = decl.fields.size() == 2 &&
+            decl.fields[0].type == InvertedScalarKind::Bool &&
+            decl.fields[1].type == InvertedScalarKind::I64;
+        bool mixed_triple = decl.fields.size() == 3;
+        if (mixed_triple) {
             unsigned integers = 0, booleans = 0, floating = 0;
             for (const auto& field : decl.fields) {
                 integers += field.type == InvertedScalarKind::I64;
                 booleans += field.type == InvertedScalarKind::Bool;
                 floating += field.type == InvertedScalarKind::F64;
             }
-            mixed = integers == 1 && booleans == 1 && floating == 1;
+            mixed_triple = integers == 1 && booleans == 1 && floating == 1;
         }
-        if (!legacy_pair && !mixed)
-            fail("production inverted main requires precisely two i64 fields or three distinct i64/bool/f64 fields");
+        const bool typed_mixed = mixed_pair || mixed_triple;
+        if (!legacy_pair && !typed_mixed)
+            fail("production inverted main requires two i64 fields, bool/i64 fields, or three distinct i64/bool/f64 fields");
         InvertedSourceMain result;
         result.schema_name = decl.name;
-        result.three_scalar = mixed;
-        if (mixed) lexer_.allow_mixed_reals(true);
+        result.three_scalar = typed_mixed;
+        if (typed_mixed) lexer_.allow_mixed_reals(true);
         require("fnc"); require("main"); require("("); require(")");
         require(":"); require("int"); require("{");
         require("let");
@@ -945,7 +951,7 @@ private:
                 op.index = inverted_source_index();
                 require(",");
                 op.field = identifier();
-                if (mixed) {
+                if (typed_mixed) {
                     const auto it = std::find_if(decl.fields.begin(), decl.fields.end(),
                         [&](const InvertedStructField& field) { return field.name == op.field; });
                     if (it == decl.fields.end() || it->type != InvertedScalarKind::I64)
@@ -963,8 +969,8 @@ private:
             if (accept("push")) {
                 op.kind = InvertedSourceOperation::Kind::Push;
                 require("(");
-                if (mixed) {
-                    for (std::size_t i = 0; i < 3; ++i) {
+                if (typed_mixed) {
+                    for (std::size_t i = 0; i < decl.fields.size(); ++i) {
                         if (i) require(",");
                         op.mixed_values[i] = inverted_scalar_literal(decl.fields[i].type);
                     }
@@ -978,7 +984,7 @@ private:
                 op.kind = InvertedSourceOperation::Kind::WriteField;
                 require("("); op.index = inverted_source_index();
                 require(","); op.field = identifier(); require(",");
-                if (mixed) {
+                if (typed_mixed) {
                     const auto it = std::find_if(decl.fields.begin(), decl.fields.end(),
                         [&](const InvertedStructField& field) { return field.name == op.field; });
                     if (it == decl.fields.end())
