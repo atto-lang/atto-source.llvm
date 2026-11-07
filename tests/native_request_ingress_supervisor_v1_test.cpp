@@ -59,8 +59,10 @@ void bootstrap_capacity() {
           ores_native_actor_scheduler_actor_capacity_v1(nullptr) == 0);
     check("02_exact_scheduler_actor_capacity",
           ores_native_actor_scheduler_actor_capacity_v1(s) == 2);
-    check("03_undersized_registry_rejected", !Registry::create(s, 1));
-    check("04_oversized_registry_rejected", !Registry::create(s, 3));
+    auto undersized = Registry::create(s, 1);
+    check("03_undersized_registry_rejected", !undersized);
+    auto oversized = Registry::create(s, 3);
+    check("04_oversized_registry_rejected", !oversized);
     check("05_zero_registry_rejected", !Registry::create(s, 0));
     auto registry = Registry::create(s, 2);
     check("06_exact_capacity_installed", bool(registry));
