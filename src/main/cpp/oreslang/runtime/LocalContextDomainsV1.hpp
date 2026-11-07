@@ -173,7 +173,10 @@ public:
         // Pin the cell so a reentrant close/erase cannot destroy the source.
         // Copying can invoke arbitrary host code, including close(). A read
         // whose own copy closed the scope must not return a stale snapshot;
-        // the second lock is the read's final open-state linearization point.
+        // The original cell is pinned under the first lock (snapshot
+        // linearization). This later check is an additional revocation fence:
+        // erase/replacement may still return the earlier pinned cell, but a
+        // close DURING the copy must suppress the stale read.
         // This remains a HOST-only primitive: guest authority still requires
         // a trusted scheduler gate and post-copy actor/task admission.
         std::optional<T> snapshot(
