@@ -82,3 +82,24 @@ Backend-specific guest implementation remains incomplete and draft.
   blob `9101f195531c8556a549c8848c6fb05e84a3c919` passed. **The full
   runtime integration and compiled `.atto` guest have not executed** on
   hosted exact-head CI. Maintain draft and do not promote parity.
+
+## 2026-11-07 follow-up: deny shallow STL alias laundering
+
+Native host quota hardening now rejects common dynamic STL container values
+(vector, deque, list, forward_list, set/map and unordered collections) before
+slot mutation. Nested optional/pair/tuple/variant/fixed-array wrappers are
+admitted only for conservative arithmetic/enum representations: they cannot
+hide string allocations behind a shallow sizeof(T) charge. Strings alone
+continue to use strict Unicode validation and their actual UTF-8 byte length.
+This is intentionally fail-closed pending compiler-generated deep-size and
+ownership descriptors; custom opaque host C++ objects can still be shallow-
+accounted and are **not guest-admissible**.
+
+Added runtime regression asserting rejected vector replacement preserves
+existing TaskLocal state, plus seven boundedness static assertions and
+seven STL/fixed-size payload policy checks. Updated native-host CI exact blob
+pins. An isolated GCC/Clang C++17 compile probe caught an invalid variadic
+fold expression during implementation and passed after parenthesization.
+The isolated probe is **not** execution of the full GitHub source tree or
+combined runtime tests. Current changed header/test blobs and linked guest
+are pending stepful execution; retain draft and zero backend-parity claim.
