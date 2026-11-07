@@ -92,6 +92,15 @@ for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
         grep -Fq "$required" "$tmp/guest.ll" ||
             { echo "FAIL: $file omits typed IR check: $required" >&2; exit 1; }
     done
+    # Source-typed f64 payload must survive AST->MIR->LLVM IR as exact bits;
+    # a correct i64 exit alone would not observe a silently dropped f64 store.
+    if [[ "$file" == "positive-mixed-swap.atto" ]]; then
+        required_f64='0x400E000000000000' # 3.75, mutable set
+    else
+        required_f64='0x4002000000000000' # 2.25, second row
+    fi
+    grep -Fq "$required_f64" "$tmp/guest.ll" ||
+        { echo "FAIL: mixed f64 source payload lost in native IR: $file" >&2; exit 1; }
     for opt in -O0 -O2; do
         "$clang" "$opt" -x ir "$tmp/guest.ll" -o "$tmp/guest"
         native_status "$tmp/guest" exit42
