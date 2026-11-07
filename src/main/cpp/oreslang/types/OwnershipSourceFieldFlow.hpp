@@ -294,8 +294,9 @@ class SourceFieldFlowBuilder {
                         unsupported("incomplete index-loop frame");
                     at = expression(*stmt.branch_local->initializer, at, depth + 1);
                 } else {
-                    if (!stmt.expression)
-                        unsupported("foreach without source");
+                    if (!stmt.expression || !stmt.branch_local ||
+                            !stmt.branch_local->class_name.empty())
+                        unsupported("foreach has untracked borrowed class element or source");
                     at = expression(*stmt.expression, at, depth + 1);
                 }
                 const auto header = block(), body = block(), exit = block();
