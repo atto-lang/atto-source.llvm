@@ -36,7 +36,7 @@ elif mode == 'stop-race':
     retired = '        && !s->actors[actor.actor_slot].retired'
     if fn.count(retired) != 1:
         raise SystemExit('MUTATION_RETIRED_FENCE_MISSING')
-    fn = fn.replace(retired, '        && true', 1)
+    fn = fn.replace(retired, '        && 1', 1)
     fn = fn.replace(owner,
         '        && ores_execution_owns(\n            &s->actors[actor.actor_slot].authority, executing_claim);', 1)
 else:
