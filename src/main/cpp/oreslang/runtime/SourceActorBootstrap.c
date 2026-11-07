@@ -1,4 +1,5 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
+#include "oreslang/runtime/SourceActorScalarVM.h"
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
 #include <pthread.h>
@@ -7,6 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
 #define SOURCE_GROUP_SLOTS 64u
@@ -15,7 +17,13 @@
 #define SOURCE_GROUP_MAILBOX 128u
 #define SOURCE_TRACE_EXECUTIONS 128u
 #define SOURCE_TRACE_CONTINUATIONS 128u
-#define SOURCE_ACTOR_FRAME_WORDS 8192u /* 64 KiB, one bounded scalar frame in M2 */
+#define SOURCE_ACTOR_FRAME_WORDS 8192u /* 64 KiB, actor-incarnation owned */
+#define SOURCE_SCALAR_FRAME_BASE 32u /* reserve M2 handler scalar slots */
+#define SOURCE_SCALAR_FRAME_WORDS 48u /* header + 4 typed locals + 16 operands */
+#define SOURCE_SCALAR_FRAME_MAGIC UINT64_C(0x4154544f46524d33)
+#define SOURCE_SCALAR_TAG_I64 UINT64_C(1)
+#define SOURCE_SCALAR_TAG_BOOL UINT64_C(2)
+#define SOURCE_SCALAR_MAX_FUEL UINT64_C(2000000)
 #define SOURCE_ROOT_CONTROL_SUSPEND UINT64_C(1)
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
@@ -27,6 +35,10 @@ typedef struct {
     OresActorI64Heap* heap;
     uint64_t* frame_words; /* actor-incarnation-owned, not carrier-stack memory */
     atomic_int frame_active; /* admits at most one source callback */
+    atomic_int frame_vm_error; /* sticky, per-actor fail-stop reason */
+    atomic_uint_fast64_t frame_vm_steps;
+    atomic_uint_fast64_t frame_vm_tail_calls;
+    atomic_uint_fast64_t frame_vm_non_tail_calls;
     uint64_t frame_domain;
     uint64_t frame_epoch;
     uint64_t frame_slot_calls;
@@ -167,6 +179,300 @@ static void source_frame_leave(SourceActor* actor, OresActorTurn turn) {
     actor->frame_epoch = 0;
     current_source_frame_actor = NULL;
     atomic_store_explicit(&actor->frame_active, 0, memory_order_release);
+}
+
+
+/*
+ * M3 source-compiled unary scalar frame machine. All frame state lives in
+ * actor->frame_words, 64 bounded frames x 48 words, not a C recursive call
+ * chain. Every frame contains typed PC, function, parameter, locals, operand
+ * slots and an actor-generation/turn lease. Metadata/code are readonly
+ * compiler-owned program constants. A malformed program fails closed before
+ * executing an instruction; dynamically malformed frames also fail closed.
+ */
+static uint64_t scalar_bits(int64_t value) {
+    uint64_t raw;
+    memcpy(&raw, &value, sizeof(raw));
+    return raw;
+}
+static int64_t scalar_signed(uint64_t bits) {
+    int64_t value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+static uint64_t* scalar_frame(SourceActor* actor, size_t depth) {
+    return actor->frame_words + SOURCE_SCALAR_FRAME_BASE
+        + depth * SOURCE_SCALAR_FRAME_WORDS;
+}
+static void scalar_clear_frame(SourceActor* actor, size_t depth) {
+    volatile uint64_t* words = (volatile uint64_t*)scalar_frame(actor, depth);
+    for (size_t i = 0; i < SOURCE_SCALAR_FRAME_WORDS; ++i) words[i] = 0;
+}
+static void scalar_init_frame(
+        SourceActor* actor, size_t depth, uint64_t function,
+        uint64_t pc, uint64_t epoch, int64_t argument) {
+    uint64_t* f = scalar_frame(actor, depth);
+    f[0] = SOURCE_SCALAR_FRAME_MAGIC;
+    f[1] = actor->id;
+    f[2] = epoch;
+    f[3] = function;
+    f[4] = pc;
+    f[5] = 0;
+    f[6] = scalar_bits(argument);
+    f[7] = SOURCE_SCALAR_TAG_I64;
+}
+static int scalar_push(uint64_t* frame, uint64_t tag, uint64_t bits) {
+    const uint64_t sp = frame[5];
+    if (sp >= ORES_SCALAR_MAX_OPERAND_SLOTS) return 0;
+    frame[16 + 2 * sp] = tag;
+    frame[17 + 2 * sp] = bits;
+    frame[5] = sp + 1;
+    return 1;
+}
+static int scalar_pop(
+        uint64_t* frame, uint64_t expected, uint64_t* result) {
+    const uint64_t sp = frame[5];
+    if (!sp || sp > ORES_SCALAR_MAX_OPERAND_SLOTS) return 0;
+    const size_t pos = 16 + 2 * (size_t)(sp - 1);
+    if (frame[pos] != expected) return 0;
+    *result = frame[pos + 1];
+    frame[pos] = 0;
+    frame[pos + 1] = 0;
+    frame[5] = sp - 1;
+    return 1;
+}
+static int scalar_preflight(const OresActorScalarProgram* program) {
+    if (!program || !program->function_entries || !program->instructions
+        || !program->function_count
+        || program->function_count > ORES_SCALAR_MAX_FUNCTIONS
+        || !program->instruction_count
+        || program->instruction_count > ORES_SCALAR_MAX_INSTRUCTIONS
+        || program->root_function >= program->function_count
+        || program->function_entries[0] != 0)
+        return 0;
+    for (uint64_t function = 0; function < program->function_count; ++function) {
+        const uint64_t begin = program->function_entries[function];
+        const uint64_t end = function + 1 < program->function_count
+            ? program->function_entries[function + 1]
+            : program->instruction_count;
+        if (begin >= end || end > program->instruction_count) return 0;
+        const uint64_t last = program->instructions[end - 1].opcode;
+        if (last != ORES_SCALAR_RETURN
+                && last != ORES_SCALAR_TAIL_CALL)
+            return 0;
+        for (uint64_t i = begin; i < end; ++i) {
+            const OresActorScalarInstruction ins = program->instructions[i];
+            switch (ins.opcode) {
+                case ORES_SCALAR_PUSH_I64:
+                    break;
+                case ORES_SCALAR_LOAD_ARG:
+                case ORES_SCALAR_ADD:
+                case ORES_SCALAR_SUB:
+                case ORES_SCALAR_MUL:
+                case ORES_SCALAR_EQ:
+                case ORES_SCALAR_NE:
+                case ORES_SCALAR_LT:
+                case ORES_SCALAR_LE:
+                case ORES_SCALAR_GT:
+                case ORES_SCALAR_GE:
+                case ORES_SCALAR_NOT:
+                case ORES_SCALAR_RETURN:
+                    if (ins.immediate) return 0;
+                    break;
+                case ORES_SCALAR_LOAD_LOCAL:
+                case ORES_SCALAR_STORE_LOCAL:
+                    if (ins.immediate < 0
+                            || ins.immediate >= ORES_SCALAR_MAX_LOCAL_SLOTS)
+                        return 0;
+                    break;
+                case ORES_SCALAR_BRANCH_FALSE:
+                    if (ins.immediate < 0
+                            || (uint64_t)ins.immediate < begin
+                            || (uint64_t)ins.immediate >= end)
+                        return 0;
+                    break;
+                case ORES_SCALAR_CALL:
+                case ORES_SCALAR_TAIL_CALL:
+                    if (ins.immediate < 0
+                            || (uint64_t)ins.immediate >= program->function_count)
+                        return 0;
+                    break;
+                default:
+                    return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+int oreslang_source_actor_scalar_vm_execute(
+        const OresActorScalarProgram* program,
+        int64_t argument, int64_t* result) {
+    if (!result) return ORES_SCALAR_INVALID_FRAME;
+    *result = 0;
+    SourceActor* actor = current_source_frame_actor;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
+            || !actor->frame_words || !actor->frame_domain
+            || !actor->frame_epoch
+            || atomic_load_explicit(&actor->frame_active,
+                memory_order_acquire) != 1)
+        return ORES_SCALAR_INVALID_FRAME;
+    if (atomic_load_explicit(&actor->frame_vm_error,
+            memory_order_acquire) != ORES_SCALAR_OK)
+        return ORES_SCALAR_INVALID_FRAME;
+    int status = ORES_SCALAR_INVALID_PROGRAM;
+    if (!scalar_preflight(program)) goto failure;
+    const uint64_t epoch = actor->frame_epoch;
+    size_t depth = 1;
+    uint64_t executed = 0;
+    uint64_t tails = 0;
+    uint64_t calls = 0;
+    scalar_init_frame(actor, 0, program->root_function,
+        program->function_entries[program->root_function],
+        epoch, argument);
+    status = ORES_SCALAR_INVALID_FRAME;
+    while (executed < SOURCE_SCALAR_MAX_FUEL) {
+        uint64_t* frame = scalar_frame(actor, depth - 1);
+        if (frame[0] != SOURCE_SCALAR_FRAME_MAGIC
+                || frame[1] != actor->id || frame[2] != epoch
+                || frame[7] != SOURCE_SCALAR_TAG_I64
+                || frame[3] >= program->function_count
+                || frame[5] > ORES_SCALAR_MAX_OPERAND_SLOTS)
+            goto cleanup;
+        const uint64_t function = frame[3];
+        const uint64_t first = program->function_entries[function];
+        const uint64_t limit = function + 1 < program->function_count
+            ? program->function_entries[function + 1]
+            : program->instruction_count;
+        const uint64_t pc = frame[4];
+        if (pc < first || pc >= limit) goto cleanup;
+        const OresActorScalarInstruction ins = program->instructions[pc];
+        uint64_t lhs = 0, rhs = 0;
+        ++executed;
+        frame[4] = pc + 1;
+        switch (ins.opcode) {
+            case ORES_SCALAR_PUSH_I64:
+                if (!scalar_push(frame, SOURCE_SCALAR_TAG_I64,
+                        scalar_bits(ins.immediate))) goto cleanup;
+                break;
+            case ORES_SCALAR_LOAD_ARG:
+                if (!scalar_push(frame, SOURCE_SCALAR_TAG_I64, frame[6]))
+                    goto cleanup;
+                break;
+            case ORES_SCALAR_LOAD_LOCAL: {
+                const size_t position = 8 + 2 * (size_t)ins.immediate;
+                if (frame[position] != SOURCE_SCALAR_TAG_I64
+                    || !scalar_push(frame, SOURCE_SCALAR_TAG_I64,
+                                    frame[position + 1])) goto cleanup;
+                break;
+            }
+            case ORES_SCALAR_STORE_LOCAL: {
+                const size_t position = 8 + 2 * (size_t)ins.immediate;
+                if (frame[position] || !scalar_pop(frame,
+                        SOURCE_SCALAR_TAG_I64, &rhs)) goto cleanup;
+                frame[position] = SOURCE_SCALAR_TAG_I64;
+                frame[position + 1] = rhs;
+                break;
+            }
+            case ORES_SCALAR_ADD:
+            case ORES_SCALAR_SUB:
+            case ORES_SCALAR_MUL:
+            case ORES_SCALAR_EQ:
+            case ORES_SCALAR_NE:
+            case ORES_SCALAR_LT:
+            case ORES_SCALAR_LE:
+            case ORES_SCALAR_GT:
+            case ORES_SCALAR_GE: {
+                if (!scalar_pop(frame, SOURCE_SCALAR_TAG_I64, &rhs)
+                        || !scalar_pop(frame, SOURCE_SCALAR_TAG_I64, &lhs))
+                    goto cleanup;
+                uint64_t value = 0;
+                uint64_t tag = SOURCE_SCALAR_TAG_I64;
+                switch (ins.opcode) {
+                    case ORES_SCALAR_ADD: value = lhs + rhs; break;
+                    case ORES_SCALAR_SUB: value = lhs - rhs; break;
+                    case ORES_SCALAR_MUL: value = lhs * rhs; break;
+                    case ORES_SCALAR_EQ: value = (lhs == rhs); tag = SOURCE_SCALAR_TAG_BOOL; break;
+                    case ORES_SCALAR_NE: value = (lhs != rhs); tag = SOURCE_SCALAR_TAG_BOOL; break;
+                    case ORES_SCALAR_LT: value = (scalar_signed(lhs) < scalar_signed(rhs)); tag = SOURCE_SCALAR_TAG_BOOL; break;
+                    case ORES_SCALAR_LE: value = (scalar_signed(lhs) <= scalar_signed(rhs)); tag = SOURCE_SCALAR_TAG_BOOL; break;
+                    case ORES_SCALAR_GT: value = (scalar_signed(lhs) > scalar_signed(rhs)); tag = SOURCE_SCALAR_TAG_BOOL; break;
+                    case ORES_SCALAR_GE: value = (scalar_signed(lhs) >= scalar_signed(rhs)); tag = SOURCE_SCALAR_TAG_BOOL; break;
+                    default: break;
+                }
+                if (!scalar_push(frame, tag, value)) goto cleanup;
+                break;
+            }
+            case ORES_SCALAR_NOT:
+                if (!scalar_pop(frame, SOURCE_SCALAR_TAG_BOOL, &rhs)
+                    || !scalar_push(frame, SOURCE_SCALAR_TAG_BOOL,
+                        rhs == 0)) goto cleanup;
+                break;
+            case ORES_SCALAR_BRANCH_FALSE:
+                if (!scalar_pop(frame, SOURCE_SCALAR_TAG_BOOL, &rhs))
+                    goto cleanup;
+                if (!rhs) frame[4] = (uint64_t)ins.immediate;
+                break;
+            case ORES_SCALAR_CALL:
+            case ORES_SCALAR_TAIL_CALL: {
+                if (!scalar_pop(frame, SOURCE_SCALAR_TAG_I64, &rhs))
+                    goto cleanup;
+                const uint64_t target = (uint64_t)ins.immediate;
+                if (ins.opcode == ORES_SCALAR_TAIL_CALL) {
+                    scalar_clear_frame(actor, depth - 1);
+                    scalar_init_frame(actor, depth - 1, target,
+                        program->function_entries[target],
+                        epoch, scalar_signed(rhs));
+                    ++tails;
+                } else {
+                    if (depth == ORES_SCALAR_MAX_FRAMES) {
+                        status = ORES_SCALAR_FRAME_QUOTA;
+                        goto cleanup;
+                    }
+                    scalar_init_frame(actor, depth, target,
+                        program->function_entries[target],
+                        epoch, scalar_signed(rhs));
+                    ++depth;
+                    ++calls;
+                }
+                break;
+            }
+            case ORES_SCALAR_RETURN: {
+                if (!scalar_pop(frame, SOURCE_SCALAR_TAG_I64, &rhs)
+                        || frame[5] != 0) goto cleanup;
+                scalar_clear_frame(actor, depth - 1);
+                --depth;
+                if (!depth) {
+                    *result = scalar_signed(rhs);
+                    status = ORES_SCALAR_OK;
+                    goto cleanup;
+                }
+                if (!scalar_push(scalar_frame(actor, depth - 1),
+                        SOURCE_SCALAR_TAG_I64, rhs)) goto cleanup;
+                break;
+            }
+            default:
+                goto cleanup;
+        }
+    }
+    status = ORES_SCALAR_FUEL_EXHAUSTED;
+cleanup:
+    while (depth) scalar_clear_frame(actor, --depth);
+    /* Runtime receipts count actually dispatched scalar instructions only.
+     * Quotas, invalid tags and fuel failure are actor-local terminal errors. */
+    atomic_fetch_add_explicit(&actor->frame_vm_steps,
+        executed, memory_order_relaxed);
+    atomic_fetch_add_explicit(&actor->frame_vm_tail_calls,
+        tails, memory_order_relaxed);
+    atomic_fetch_add_explicit(&actor->frame_vm_non_tail_calls,
+        calls, memory_order_relaxed);
+failure:
+    if (status != ORES_SCALAR_OK) {
+        *result = 0;
+        atomic_store_explicit(&actor->frame_vm_error,
+            status, memory_order_release);
+    }
+    return status;
 }
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
@@ -667,6 +973,10 @@ void* oreslang_source_actor_spawn(
      */
     atomic_init(&instance->initialized, 0);
     atomic_init(&instance->frame_active, 0);
+    atomic_init(&instance->frame_vm_error, ORES_SCALAR_OK);
+    atomic_init(&instance->frame_vm_steps, 0);
+    atomic_init(&instance->frame_vm_tail_calls, 0);
+    atomic_init(&instance->frame_vm_non_tail_calls, 0);
     atomic_init(
         &instance->startup_state, ORES_SOURCE_ACTOR_STARTUP_PENDING);
     atomic_init(&instance->constructor_started, 0);
