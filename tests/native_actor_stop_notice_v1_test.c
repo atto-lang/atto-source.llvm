@@ -79,14 +79,16 @@ int main(void) {
     ores_native_actor_scheduler_retire(s);
     check("15_repeated_retire_sends_no_duplicate",
           atomic_load_explicit(&b_seen,memory_order_relaxed)==1u);
-    check("16_unregister_after_runtime_retire",
-          ores_native_actor_scheduler_unregister_stop_notice_v1(
-              s,b,notice,&b_seen));
     if (!ores_native_actor_scheduler_wait_done(s,a) ||
         !ores_native_actor_scheduler_wait_done(s,b)) return 3;
+    check("16_observer_blocks_scheduler_destroy_even_after_DONE",
+          !ores_native_actor_scheduler_try_destroy(s));
+    check("17_unregister_after_runtime_retire",
+          ores_native_actor_scheduler_unregister_stop_notice_v1(
+              s,b,notice,&b_seen));
     if (!ores_native_actor_scheduler_drain(s) ||
         !ores_native_actor_scheduler_try_destroy(s)) return 4;
-    if (count != 16) return 5;
-    puts("NATIVE_ACTOR_STOP_NOTICE_16_C_CASES_PASS");
+    if (count != 17) return 5;
+    puts("NATIVE_ACTOR_STOP_NOTICE_17_C_CASES_PASS");
     return 0;
 }
