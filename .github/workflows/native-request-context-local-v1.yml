@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "296b4702d93ecbe1599aae115b3cec7c0f137d2e"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "e2a9fd183e7717d5cf921881416bafca08c4c413"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
@@ -70,7 +70,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
           test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "ebba397307a27451492d0c3aa20d8b259807d80f"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "9a813be8db40e89445e6740a40705092eb3ff2a7"
-          test "$(git hash-object tests/native_request_actor_termination_registry_v1_test.cpp)" = "4d9da2c68368626ee13cb0126173c811c104a8cb"
+          test "$(git hash-object tests/native_request_actor_termination_registry_v1_test.cpp)" = "b46c40bc6316740f9a89f1f841ab98544852834a"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -129,6 +129,6 @@ jobs:
             -Isrc/main/cpp tests/native_request_actor_termination_registry_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/actor-request-registry"
           "$tmp/actor-request-registry" | tee "$tmp/registry-cases.log"
-          test "$(grep -c '^REQUEST_REGISTRY_CASE_PASS ' "$tmp/registry-cases.log")" = "107"
-          grep -qx 'REQUEST_TERMINATION_REGISTRY_HOST_PASS total=107 race_trials=60' "$tmp/registry-cases.log"
+          test "$(grep -c '^REQUEST_REGISTRY_CASE_PASS ' "$tmp/registry-cases.log")" = "110"
+          grep -qx 'REQUEST_TERMINATION_REGISTRY_HOST_PASS total=110 race_trials=60' "$tmp/registry-cases.log"
           printf 'REQUEST_CONTEXT_LOCAL_EXACT_SOURCE_HOST_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
