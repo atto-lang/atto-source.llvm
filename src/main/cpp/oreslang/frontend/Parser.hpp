@@ -491,7 +491,9 @@ struct InvertedSourceLiteral {
 // production source operations, NOT LLVM IR or a compiler authorization;
 // an independent typed HIR/MIR verifier must admit the complete stream.
 struct InvertedSourceOperation {
-    enum class Kind { Push, WriteField, EraseSwap, ReturnRead };
+    // ReturnCompareF64 lowers a typed f64 read + ordered equality + integer
+    // selection. Appended so old serialized/aggregate enum values remain.
+    enum class Kind { Push, WriteField, EraseSwap, ReturnRead, ReturnCompareF64 };
     Kind kind = Kind::Push;
     std::size_t index = 0;
     std::string field;
@@ -500,6 +502,10 @@ struct InvertedSourceOperation {
     // Appended: preserve the legacy aggregate five-field AST initializers.
     std::array<InvertedSourceLiteral, 3> mixed_values{};
     InvertedSourceLiteral mixed_value{};
+    // Used exclusively by a terminal f64 comparison; never by push/write,
+    // erase or legacy i64 return. Keep separately typed to avoid conversions.
+    std::int64_t equal_result = 0;
+    std::int64_t unequal_result = 0;
 };
 struct InvertedSourceMain {
     std::string schema_name;
