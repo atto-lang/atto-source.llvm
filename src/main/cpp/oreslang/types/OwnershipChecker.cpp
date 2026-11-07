@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -1543,9 +1544,10 @@ void validate_i64_ownership(Program& program) {
             std::set<std::string> class_roots;
             for (const auto& [name, owner] : source_flow_entry) {
                 if (owner.class_name.empty()) continue;
-                if (owner.shared_loans || owner.exclusive_loan)
+                if (owner.mode != Mode::Value ||
+                        owner.shared_loans || owner.exclusive_loan)
                     throw std::runtime_error(
-                        "ownership violation: source restoration CFG cannot authenticate pre-existing class loans");
+                        "ownership violation: source restoration CFG cannot authenticate pre-existing borrowed class aliases");
                 class_roots.insert(name);
                 for (const auto& field : owner.class_fields) {
                     if (owner.subobjects.count(field)) continue;
