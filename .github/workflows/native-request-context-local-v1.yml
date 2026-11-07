@@ -14,6 +14,7 @@ on:
       - "src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp"
       - "tests/native_request_stop_cancel_v1_test.cpp"
       - "tests/native_actor_termination_observer_v1_test.cpp"
+      - "tests/native_request_external_termination_v1_test.cpp"
       - "tests/native_request_context_handoff_v1_test.cpp"
       - ".github/workflows/native-request-context-local-v1.yml"
   workflow_dispatch:
@@ -56,9 +57,10 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "b0fc4ac5f1c92e92b8aeee03204603d438e544a7"
           test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e7e909861262df0d062350d1d309e91abafe66f6"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "7c89dffb8a5dc93c992f1b2d777667432cbbc4c9"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "6242cbcf017766513a740bc83a2f8003c67330bb"
           test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
           test "$(git hash-object tests/native_actor_termination_observer_v1_test.cpp)" = "3a84b28d66311667d7bbbdbb262bb50c90f7db08"
+          test "$(git hash-object tests/native_request_external_termination_v1_test.cpp)" = "ab63f8586b5a27b1d9ef5691365bcb7bf41cb14a"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -101,4 +103,10 @@ jobs:
           "$tmp/actor-termination-observer" | tee "$tmp/observer-cases.log"
           test "$(grep -c '^ACTOR_TERMINATION_OBSERVER_PASS ' "$tmp/observer-cases.log")" = "131"
           grep -qx 'ACTOR_TERMINATION_OBSERVER_HOST_PASS total=131 race_trials=30' "$tmp/observer-cases.log"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_external_termination_v1_test.cpp \
+            "$tmp/scheduler.o" -o "$tmp/request-external-termination"
+          "$tmp/request-external-termination" | tee "$tmp/external-cases.log"
+          test "$(grep -c '^EXTERNAL_REQUEST_STOP_PASS ' "$tmp/external-cases.log")" = "62"
+          grep -qx 'REQUEST_EXTERNAL_STOP_HOST_PASS total=62 race_trials=20' "$tmp/external-cases.log"
           printf 'REQUEST_CONTEXT_LOCAL_EXACT_SOURCE_HOST_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
