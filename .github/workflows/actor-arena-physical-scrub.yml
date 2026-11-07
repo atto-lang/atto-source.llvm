@@ -44,7 +44,7 @@ jobs:
           for mode in plain sanitized; do
             flags=()
             if [[ "$mode" == sanitized ]]; then
-              flags=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+              flags=(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
             fi
             "$CC" -std=c11 -Wall -Wextra -Werror "-$OPT" "${flags[@]}" -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c -o "$work/arena.o"
             "$CXX" -std=c++20 -Wall -Wextra -Werror "-$OPT" "${flags[@]}" -pthread -Isrc/main/cpp tests/native_actor_arena_test.cpp "$work/arena.o" -o "$work/lifecycle"

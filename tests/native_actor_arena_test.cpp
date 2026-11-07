@@ -147,6 +147,7 @@ int main(void) {
     OresArenaHandle left_handle = ores_actor_arena_alloc(left, left_turn, sizeof(int));
     int left_value = 111;
     ores_actor_arena_write(left, left_turn, left_handle, 0, &left_value, sizeof(left_value));
+    OresArenaLoan left_hold = ores_actor_arena_borrow(left, left_turn, left_handle);
     ores_actor_arena_leave(left, left_turn);
 
     OresArenaTurn right_turn = ores_actor_arena_enter(right, 41, 1);
@@ -162,13 +163,28 @@ int main(void) {
     ores_actor_arena_read(left, left_turn, left_handle, 0, &left_value, sizeof(left_value));
     CHECK(left_value == 111);
     ores_actor_arena_leave(left, left_turn);
+    /* A's outstanding loan must not freeze B, including while A retires. */
     ores_actor_arena_retire(left);
+    CHECK(ores_actor_arena_try_destroy(left) == 0);
+    right_turn = ores_actor_arena_enter(right, 41, 1);
+    right_value = 223;
+    ores_actor_arena_write(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    right_value = 0;
+    ores_actor_arena_read(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    CHECK(right_value == 223);
+    ores_actor_arena_leave(right, right_turn);
+    ores_actor_arena_release(left, left_hold);
     CHECK(ores_actor_arena_try_destroy(left) == 1);
 
     right_turn = ores_actor_arena_enter(right, 41, 1);
     right_value = 0;
     ores_actor_arena_read(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
-    CHECK(right_value == 222);
+    CHECK(right_value == 223);
+    right_value = 224;
+    ores_actor_arena_write(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    right_value = 0;
+    ores_actor_arena_read(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    CHECK(right_value == 224);
     ores_actor_arena_leave(right, right_turn);
     ores_actor_arena_retire(right);
     CHECK(ores_actor_arena_try_destroy(right) == 1);
