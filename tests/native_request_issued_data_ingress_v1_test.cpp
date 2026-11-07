@@ -159,6 +159,8 @@ void test_offturn_and_issuer_configuration() {
           ores_native_actor_scheduler_poll_ready(w.scheduler, w.actors[0]));
     check("14_original_actor_B_remains_ready",
           ores_native_actor_scheduler_poll_ready(w.scheduler, w.actors[1]));
+    check("issuer_duplicate_creation_DENIED",
+          !Issuer::create(w.scheduler, w.registry.get(), 11, 22));
 }
 
 void test_issued_turns_and_revocation() {
