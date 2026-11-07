@@ -32,6 +32,17 @@ int main() {
         require(!another_capacity.enter(7),
                 "nested actor admission crossed template capacity domains");
         require(!first.retire_quiesced(), "retired while a physical turn was active");
+        std::atomic<bool> foreign_denied{false};
+        std::thread rogue([&] {
+            std::uint64_t leaked = 0;
+            foreign_denied.store(
+                !first.read(*bottom, 0, &leaked, sizeof leaked) &&
+                !first.write(*bottom, 0, &sentinel, sizeof sentinel) &&
+                !first.enter(9), std::memory_order_release);
+        });
+        rogue.join();
+        require(foreign_denied.load(std::memory_order_acquire),
+                "concurrent foreign carrier accessed active actor frames");
         require(first.suspend(), "await failed to preserve logical stack");
         require(!first.read(*bottom, 0, &observed, sizeof observed),
                 "supervisor read suspended actor locals");
