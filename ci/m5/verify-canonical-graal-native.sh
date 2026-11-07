@@ -16,7 +16,7 @@ if [[ "$(git hash-object "$source")" != "0f9aca24deb195d7f604a1bfb944e237629803f
 fi
 # The code generator itself was copied byte-for-byte from the selected
 # atto-source.java M5 PR head; never substitute a carrier-local mocked backend.
-if [[ "$(git hash-object ci/m5/atto_static_actor_aot.py)" != "a9d9d236ea0c6ed652fdaf1cd7f46cba8e25ef45" ]]; then
+if [[ "$(git hash-object ci/m5/atto_static_actor_aot.py)" != "77b2bd237552addb3f0eb471609a5519fba32527" ]]; then
   echo 'M5_CANONICAL_GRAAL_NOT_EXECUTED: source codegen Git blob mismatch' >&2; exit 2
 fi
 compiler="$repo/build/atto-tenant-full-source/compiler/atto-checked-actor-ir"
