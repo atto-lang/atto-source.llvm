@@ -266,10 +266,13 @@ int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* sch
  * never call blocking request retirement or quiescence barriers. */
 int ores_native_actor_scheduler_is_any_current_carrier_v1(void);
 
-// Trusted-host ONLY callback gate. The scheduler serializes this bounded
-// nonallocating C operation against stop(), stop_sealed(), and retire() using
-// its lifecycle mutex. A STOP winning first never runs callback; a callback
-// winning first commits before STOP can acquire that same mutex.
+// Trusted-host ONLY callback gate. REQUIRES the exact actor's currently
+// authenticated physical carrier and RUNNING claim; an ActorRef alone or a
+// different actor on the same scheduler must never grant commit authority.
+// The scheduler serializes this bounded nonallocating C operation against
+// stop(), stop_sealed(), and retire() using its lifecycle mutex. A STOP
+// winning first never runs callback; a callback winning first commits before
+// STOP can acquire that same mutex.
 // CRITICAL: callback must not allocate, invoke guest code, call scheduler
 // APIs, suspend, block, acquire external mutexes, or run destructors.
 // This is NOT a guest-callable API or a generic executor.
