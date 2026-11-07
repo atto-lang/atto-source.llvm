@@ -4,7 +4,7 @@
 set -euo pipefail
 umask 077
 
-root="$(git rev-parse --show-toplevel)"
+root="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 cd "$root"
 : "${EXPECTED_HEAD:?set reviewed 40-character PR head SHA}"
 : "${EXPECTED_TREE:?set reviewed 40-character Git root tree SHA}"
@@ -25,9 +25,19 @@ tree="$(git rev-parse 'HEAD^{tree}')"
 command -v "$CXX" >/dev/null || { echo "Missing C++ compiler: $CXX" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 is required for receipt hashing" >&2; exit 2; }
 command -v git >/dev/null || exit 2
-mkdir -p "$OUTPUT_DIR"
-out="$(cd "$OUTPUT_DIR" && pwd -P)"
-case "$out/" in "$root/"*) echo "REFUSED: output must be outside source checkout" >&2; exit 2;; esac
+# Validate the canonical destination BEFORE creating it: an inside-repo
+# OUTPUT_DIR must not leave an untracked directory in the verified checkout.
+out_candidate="$(python3 - "$root" "$OUTPUT_DIR" <<'PY'
+from pathlib import Path
+import sys
+root, proposed = (Path(x).resolve() for x in sys.argv[1:])
+if proposed == root or root in proposed.parents:
+    raise SystemExit("REFUSED: output must be outside source checkout")
+print(proposed)
+PY
+)"
+mkdir -p "$out_candidate"
+out="$(cd "$out_candidate" && pwd -P)"
 if [[ -n "$(ls -A "$out")" ]]; then
   echo "REFUSED: OUTPUT_DIR must be empty; never reuse earlier logs/receipts" >&2
   exit 2
