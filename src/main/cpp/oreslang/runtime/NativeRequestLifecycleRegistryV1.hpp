@@ -36,6 +36,10 @@
 namespace oreslang::runtime {
 
 class NativeRequestLifecycleRegistryV1 final {
+    // Scheduler STOP callbacks execute under its lifecycle mutex, so the
+    // notice flag MUST compile to a lock-free atomic store on this target.
+    static_assert(std::atomic<bool>::is_always_lock_free,
+                  "native STOP notices require a lock-free atomic flag");
     struct Entry final {
         explicit Entry(OresNativeActorScheduler* scheduler,
                        OresNativeActorRef actor)
