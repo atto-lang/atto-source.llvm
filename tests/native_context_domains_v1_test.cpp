@@ -266,6 +266,12 @@ void test_measured_quota_and_unicode() {
     assert(task->set(actor_a, c, std::string(4095, 'c')));
     assert(!task->set(actor_a, c, std::string("\xed\xa0\x80", 3)));
     assert(task->get_copy(actor_a, c) == std::string(4095, 'c'));
+    // A vector with an unbounded heap allocation must not fit into a
+    // single shallow sizeof(vector) charge, even after space is freed.
+    TaskLocalKeyV1<std::vector<std::string>> dynamic_key;
+    assert(!task->set(actor_a, dynamic_key,
+        std::vector<std::string>{std::string(10000, 'z')}));
+    assert(task->get_copy(actor_a, a) == std::string("x"));
     assert(task->erase(actor_a, b));
     assert(task->set(actor_a, c, std::string(8191, 'd')));
     assert(task->close());
