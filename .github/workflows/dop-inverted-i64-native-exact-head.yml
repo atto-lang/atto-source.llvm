@@ -82,8 +82,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^(inverted_production_source_mir_cpp17|native_inverted_production_source_to_native)$'
+          # --verbose preserves audited source/IR/binary SHA and true trap
+          # markers in GitHub step logs, not only in an inaccessible test log.
+          ctest --test-dir build --verbose --output-on-failure --no-tests=error \
+            -R '^(inverted_production_source_mir_cpp17|native_inverted_production_source_to_native)
+      - name: Mark LLVM-only compiler-backed native evidence after successful execution
+        run: |
+          echo DOP_LLVM_NATIVE_COMPILER_GUEST_TESTED=true
+          echo DOP_JAVA_TRUFFLE_GUEST_PARITY=NOT_TESTED
+          echo DOP_NO_GC_FFI_FULL_AUDIT=NOT_TESTED
+          echo DOP_MERGE_OR_RELEASE_AUTHORIZATION=NOT_GRANTED
+
       - name: Mark LLVM-only compiler-backed native evidence after successful execution
         run: |
           echo DOP_LLVM_NATIVE_COMPILER_GUEST_TESTED=true
