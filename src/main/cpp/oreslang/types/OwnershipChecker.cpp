@@ -683,6 +683,22 @@ void validate_i64_ownership(Program& program) {
         for (auto& effect : function.caught_throw_defers)
             revoke_restore_sites(effect);
     }
+    // Do not leave a partially minted restoration capability on failure:
+    // another validator invocation or speculative codegen must not reuse it.
+    bool restoration_sites_admitted = false;
+    struct RestorationFailureFence {
+        Program& program;
+        std::function<void(Statement&)>& revoke;
+        bool& admitted;
+        ~RestorationFailureFence() noexcept {
+            if (admitted) return;
+            for (auto& fn : program.functions) {
+                for (auto& stmt : fn.statements) revoke(stmt);
+                for (auto& stmt : fn.caught_throw_defers) revoke(stmt);
+            }
+        }
+    } restore_failure_fence{program, revoke_restore_sites,
+                            restoration_sites_admitted};
     std::uint64_t next_restore_write_id = 1;
     for (auto& function : program.functions) {
         Locals locals;
@@ -1530,6 +1546,7 @@ void validate_i64_ownership(Program& program) {
                 future_pipeline_authority_fingerprint(pipeline);
             pipeline.ownership_admitted = true;
         }
+    restoration_sites_admitted = true;
 }
 
 } // namespace oreslang
