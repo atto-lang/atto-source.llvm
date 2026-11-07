@@ -293,10 +293,6 @@ struct Statement {
     std::unique_ptr<Expression> array_commit_length;
     std::vector<std::unique_ptr<Expression>> array_commit_values;
     std::size_t offset = 0;
-    // Set ONLY by validate_i64_ownership for an admitted restoration of a
-    // definitely moved scalar class field; reset before every validation.
-    // It is a per-site CFG Reinitialize ticket, NOT SSA loan completeness.
-    std::uint64_t reinitialize_write_id = 0;
     // A bounded synchronous if/else statement. Arms contain checked field
     // writes or direct calls; local declarations and suspension fail closed.
     std::unique_ptr<Expression> condition;
@@ -304,6 +300,10 @@ struct Statement {
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
+    // Set ONLY by validate_i64_ownership after definitely-moved scalar
+    // field restoration; a failed validation clears the complete tree.
+    // Appended last to preserve existing aggregate initialization order.
+    std::uint64_t reinitialize_write_id = 0;
 };
 
 // Side-effect-free equality guard with return-only taken branch.
