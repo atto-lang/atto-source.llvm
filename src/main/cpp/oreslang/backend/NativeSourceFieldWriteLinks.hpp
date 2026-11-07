@@ -19,6 +19,7 @@ enum class SourceFieldWriteKind { Direct, Deferred, CatchCleanup };
 
 struct SourceFieldWriteLink {
     std::uint64_t emission_site = 0; // minted in emission order, never source supplied
+    std::uint64_t reinitialize_write_id = 0; // validator-minted 0 for ordinary writes
     const llvm::Function* function = nullptr;
     const llvm::StoreInst* store = nullptr;
     const llvm::Value* destination = nullptr;
@@ -39,11 +40,15 @@ public:
     // Must be invoked at the *actual* production LLVM CreateStore site.
     // A source claim without a physically created StoreInst is not recordable.
     void record(const llvm::Function& function, const std::string& place,
-            SourceFieldWriteKind kind, const llvm::StoreInst& emitted) {
+            SourceFieldWriteKind kind, const llvm::StoreInst& emitted,
+            std::uint64_t reinitialize_write_id = 0) {
         constexpr std::size_t kMaxSites = 4096;
         if (sites_.size() >= kMaxSites || place.empty() ||
                 place.size() > 256 || place.front() == '.' ||
                 place.back() == '.' || place.find("..") != std::string::npos ||
+                (reinitialize_write_id &&
+                    (reinitialize_write_id > 4096 ||
+                     kind != SourceFieldWriteKind::Direct)) ||
                 emitted.getFunction() != &function ||
                 !emitted.getPointerOperand() || !emitted.getValueOperand())
             throw std::runtime_error(
@@ -52,9 +57,14 @@ public:
                 sites_.back().emission_site != sites_.size())
             throw std::runtime_error(
                 "ownership violation: source field store site sequence lost");
+        if (reinitialize_write_id)
+            for (const auto& other : sites_)
+                if (other.reinitialize_write_id == reinitialize_write_id)
+                    throw std::runtime_error(
+                        "ownership violation: duplicate compiler restoration ticket");
         sites_.push_back({static_cast<std::uint64_t>(sites_.size() + 1),
-            &function, &emitted, emitted.getPointerOperand(),
-            emitted.getValueOperand(), place, kind});
+            reinitialize_write_id, &function, &emitted,
+            emitted.getPointerOperand(), emitted.getValueOperand(), place, kind});
     }
 
     const std::vector<SourceFieldWriteLink>& sites() const noexcept {
@@ -107,6 +117,7 @@ public:
                 "ownership violation: stale native instruction census");
 
         std::set<const llvm::StoreInst*> used;
+        std::set<std::uint64_t> restoration_tickets;
         std::size_t count = 0;
         for (const auto& link : sites_) {
             const auto live = live_stores.find(link.store);
@@ -116,6 +127,11 @@ public:
                     link.place.empty() || link.place.size() > 256 ||
                     link.place.front() == '.' || link.place.back() == '.' ||
                     link.place.find("..") != std::string::npos ||
+                    (link.reinitialize_write_id &&
+                        (link.reinitialize_write_id > 4096 ||
+                         link.kind != SourceFieldWriteKind::Direct ||
+                         !restoration_tickets.insert(
+                             link.reinitialize_write_id).second)) ||
                     !used.insert(link.store).second ||
                     live == live_stores.end() ||
                     live->second.first != link.function ||
