@@ -4666,26 +4666,26 @@ private:
         return type == ScalarType::F64 ? "f64" : type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
     }
 
-    // Java numeric join: int widens to float, nothing narrows implicitly.
+    // Canonical AttoLang has no implicit numeric promotions. An eventual
+    // explicit conversion AST must be validated before reaching this join.
     static ScalarType join_numeric(const Expression& left_expr, ScalarType left,
                                    const Expression& right_expr, ScalarType right,
                                    std::string_view where, std::size_t offset) {
+        (void)left_expr; (void)right_expr;
         const auto numeric = [](ScalarType type) { return type == ScalarType::I64 || type == ScalarType::F64; };
         if (!numeric(left) || !numeric(right))
-            throw std::runtime_error("native scalar type mismatch: " + std::string(where) + " requires int or f64, got " +
-                scalar_type_name(left) + " and " + scalar_type_name(right) +
-                " at byte " + std::to_string(offset));
-        if (left == right) return left;
-        (left == ScalarType::I64 ? left_expr : right_expr).widen_to_f64 = true;
-        return ScalarType::F64;
+            throw std::runtime_error("native scalar type mismatch: " + std::string(where) +
+                " requires int or f64, got " + scalar_type_name(left) + " and " +
+                scalar_type_name(right) + " at byte " + std::to_string(offset));
+        if (left != right)
+            throw std::runtime_error("native scalar type mismatch: " + std::string(where) +
+                " requires explicit numeric conversion for mixed int/f64 at byte " + std::to_string(offset));
+        return left;
     }
 
-    // Assignment-context widening: a declared float accepts an int value.
     static bool scalar_assignable(const Expression& expr, ScalarType actual, ScalarType expected) {
-        if (actual == expected) return true;
-        if (expected != ScalarType::F64 || actual != ScalarType::I64) return false;
-        expr.widen_to_f64 = true;
-        return true;
+        (void)expr;
+        return actual == expected;
     }
 
     static ScalarType validate_scalar_expression(
