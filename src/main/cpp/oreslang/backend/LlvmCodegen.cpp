@@ -711,6 +711,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             throw std::runtime_error(
                 "actor guest frame M2 requires synchronous int on_message without locals or suspension");
         }
+        if (actor_stackless_calls) {
+            bool has_helper_call = backend::actor_expr_has_helper_call(
+                *actor.on_message.result);
+            for (const auto& write : actor.on_message.actor_field_writes)
+                has_helper_call = has_helper_call ||
+                    backend::actor_expr_has_helper_call(*write.expression);
+            if (!has_helper_call)
+                throw std::runtime_error(
+                    "actor M3 requires a compiled scalar helper call in its handler");
+        }
     }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
