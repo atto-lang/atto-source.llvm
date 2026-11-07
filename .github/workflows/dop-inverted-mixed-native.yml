@@ -3,6 +3,7 @@ name: AttoLang bounded heterogeneous inverted native guest
 on:
   pull_request:
     branches:
+      - feature/dop-mixed-scalar-guest-v1-20261106
       - hardening/dop-heterogeneous-physical-soa-v1-20261106
       - parity/inverted-production-main-i64-20261104
       - main
