@@ -394,6 +394,70 @@ def main():
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
+            if m3:
+                # The ordinary guest main must preserve STOP's right to
+                # abandon queued DATA. For a positive M3 EXECUTION receipt,
+                # link the identical compiler-generated actor init/handler
+                # against a trusted test-only native main that waits for an
+                # actual completed delivery before requesting quiescence.
+                # Only the host entry symbol is renamed; all actor code and
+                # compiled bytecode constants remain byte-for-byte identical.
+                harness_ir, renamed = re.subn(
+                    r"(?m)^(define\\s+(?:dso_local\\s+)?i32\\s+)@main\\(",
+                    r"\\1@oreslang_compiled_guest_main_unused(",
+                    guest.stdout, count=1)
+                assert renamed == 1, (name, "missing one host main wrapper")
+                harness_ll = pathlib.Path(temp, name + ".executed.ll")
+                harness_ll.write_text(harness_ir)
+                harness_exe = pathlib.Path(temp, name + ".executed")
+                harness_command = command.copy()
+                harness_command[harness_command.index(str(ll))] = str(harness_ll)
+                harness_command[harness_command.index("-o") + 1] = str(harness_exe)
+                harness_command.insert(
+                    harness_command.index("-o"),
+                    str(root / "tests" /
+                        "source_actor_scalar_vm_compiled_guest_harness.c"))
+                linked_harness = run(harness_command)
+                assert linked_harness.returncode == 0, (
+                    name, "compiled harness link failed", linked_harness.stderr)
+                input_value = 100 if name == (
+                    "atto-actor-scalar-nontail-overflow.atto") else 100000
+                actual = run([str(harness_exe), str(input_value)])
+                assert actual.returncode == 0, (
+                    name, "real source-compiled M3 guest failed", actual.stderr)
+                assert actual.stdout.count(
+                    "ACTUAL_SOURCE_COMPILED_ACTOR_FRAME_VM_EXECUTED processed=1"
+                ) == 1, (name, actual.stdout)
+                real_scals = [line for line in actual.stderr.splitlines()
+                              if line.startswith(
+                                  "SOURCE_ACTOR_SCALAR_VM_VERIFIED ")]
+                assert len(real_scals) == 1, (name, real_scals)
+                real_fields = dict(piece.split("=", 1)
+                                   for piece in real_scals[0].split()[1:])
+                assert set(real_fields) == {
+                    "actor", "steps", "tail_calls",
+                    "non_tail_calls", "error"}, (name, real_fields)
+                assert int(real_fields["actor"]) != 0
+                assert int(real_fields["steps"]) > 0
+                assert int(real_fields["error"]) == (
+                    1 if name == "atto-actor-scalar-nontail-overflow.atto"
+                    else 0), (name, real_fields)
+                if name == "atto-actor-scalar-nontail-overflow.atto":
+                    assert int(real_fields["non_tail_calls"]) >= 63
+                else:
+                    assert int(real_fields["tail_calls"]) >= 100000
+                completed = [line for line in actual.stderr.splitlines()
+                             if line.startswith("SOURCE_ACTOR_SPAWN_STOP_VERIFIED ")]
+                assert len(completed) == 1, (name, completed)
+                real_receipt = parse_actor_receipt(completed[0])
+                assert real_receipt["accepted"] == 1
+                assert real_receipt["processed"] == 1
+                assert real_receipt["abandoned"] == 0
+                assert real_receipt["last"] == (
+                    1 if name == "atto-actor-scalar-mutual-tail.atto"
+                    else 0)
+                print("PASS actual compiler-backed M3 actor VM:", name,
+                      "instructions", real_fields["steps"], flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
 if __name__ == "__main__":
