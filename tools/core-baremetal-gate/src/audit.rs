@@ -160,7 +160,34 @@ pub fn ir_external_declarations(ir: &str) -> Vec<String> {
 }
 
 fn declared_name(line: &str) -> Option<String> {
-    let at = line.find('@')?;
+    // Do not trust an `@llvm.trap` embedded in a declaration comment or
+    // string literal: it could hide a malformed external declaration from
+    // the fail-closed scanner. LLVM comments start at unquoted ';'.
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut symbol_at = None;
+    for (index, ch) in line.char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => quoted = true,
+            ';' => break,
+            '@' => {
+                symbol_at = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let at = symbol_at?;
     let rest = &line[at + 1..];
     if let Some(quoted) = rest.strip_prefix('"') {
         return quoted.find('"').map(|end| quoted[..end].to_string());
@@ -295,6 +322,30 @@ declare void @"ores_actor_send"(ptr)
             assert_eq!(ir_external_declarations(ir),
                 vec!["<unparseable-external-declaration>"]);
         }
+    }
+
+    #[test]
+    fn comment_only_llvm_intrinsic_cannot_hide_missing_external_symbol() {
+        let ir = concat!(
+            "declare void no_symbol() ; @llvm.trap()\n",
+            "declare #0 ; @llvm.memcpy.p0.p0.i64()\n",
+        );
+        assert_eq!(ir_external_declarations(ir), vec![
+            "<unparseable-external-declaration>",
+            "<unparseable-external-declaration>"
+        ]);
+    }
+
+    #[test]
+    fn quoted_ir_metadata_with_at_sign_does_not_supersede_callable() {
+        let ir = "declare void \"metadata@llvm.trap\" @malloc(i64)\n";
+        assert_eq!(ir_external_declarations(ir), vec!["malloc"]);
+    }
+
+    #[test]
+    fn semicolon_inside_quoted_external_name_is_not_an_ir_comment() {
+        let ir = "declare void @\"host;@escape\"() ; @llvm.trap\n";
+        assert_eq!(ir_external_declarations(ir), vec!["host;@escape"]);
     }
 
     #[test]

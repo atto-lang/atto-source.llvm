@@ -36,3 +36,15 @@ Rust regression groups cover tabs, repeated spaces, malformed import
 rows and quoted intrinsic spoofing. This is a compiler IR safety check;
 object and ELF audits remain mandatory, and hosted execution evidence is
 still blocked by GitHub runner admission.
+
+## LLVM declaration lexical isolation
+
+The freestanding auditor now locates `@symbol` only **outside** quoted
+IR metadata and before a real unquoted `;` comment delimiter.
+A malformed `declare` statement followed by `; @llvm.trap`
+previously risked being interpreted as a legitimate intrinsic rather
+than an unparseable external import. Three Rust regression cases
+cover comment-only intrinsic deception, a quoted attribute containing
+`@llvm.trap`, and semicolons in quoted external symbol names. The
+object-level undefined symbol and fully linked ELF admission checks
+remain mandatory. These new Rust cases are not yet hosted-executed.
