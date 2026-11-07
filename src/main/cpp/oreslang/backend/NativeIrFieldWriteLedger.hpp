@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -34,6 +35,8 @@ struct FieldWriteSite {
     std::string canonical_place;
     std::size_t source_offset = 0;
     std::uint64_t compiler_ticket = 0;
+    const Function* source_function = nullptr;
+    const llvm::Function* emitted_function = nullptr;
 };
 
 struct FieldWriteAudit {
@@ -44,6 +47,7 @@ struct FieldWriteAudit {
     bool ownership_complete = false;
     bool optimized_code_verified = false;
     bool guest_verified = false;
+    bool direct_source_writes_complete = false;
 };
 
 class FieldWriteLedger final {
@@ -51,7 +55,9 @@ public:
     std::uint64_t bind(const Statement& source,
             const std::string& canonical_place,
             const llvm::Value* destination,
-            llvm::StoreInst* emitted) {
+            llvm::StoreInst* emitted,
+            const Function* source_function = nullptr,
+            const llvm::Function* emitted_function = nullptr) {
         if (source.kind != Statement::Kind::FieldWrite ||
                 source.receiver.empty() || source.field.empty() ||
                 source.receiver.find('.') != std::string::npos ||
@@ -59,7 +65,9 @@ public:
                 canonical_place != source.receiver + "." + source.field ||
                 canonical_place.size() > 256 ||
                 !destination || !emitted || !emitted->getParent() ||
-                !emitted->getFunction())
+                !emitted->getFunction() ||
+                (source_function == nullptr) != (emitted_function == nullptr) ||
+                (emitted_function && emitted->getFunction() != emitted_function))
             throw std::runtime_error(
                 "ownership violation: invalid compiler field-write source/store origin");
         if (sites_.size() >= 4096)
@@ -91,7 +99,8 @@ public:
         }));
         sites_.push_back({&source, emitted, destination,
             emitted->getValueOperand(), source.receiver, source.field,
-            canonical_place, source.offset, ticket});
+            canonical_place, source.offset, ticket,
+            source_function, emitted_function});
         return ticket;
     }
 
@@ -130,6 +139,8 @@ public:
                     "ownership violation: source field-write store missing in LLVM module");
             const auto* actual = llvm::dyn_cast<llvm::StoreInst>(found->first);
             if (!actual || actual->getFunction() != found->second ||
+                    (record.emitted_function &&
+                        actual->getFunction() != record.emitted_function) ||
                     actual->getPointerOperand() != record.destination ||
                     actual->getValueOperand() != record.stored)
                 throw std::runtime_error(
@@ -160,6 +171,66 @@ public:
                     "ownership violation: emitted field-write provenance metadata changed");
         }
         return {sites_.size(), !sites_.empty(), false, false, false};
+    }
+
+    // Independent compiler-owned inventory from the full native Function
+    // source AST, not from the emit ledger or an external JSON manifest.
+    // Includes direct writes in nested branches/loops and source caught-throw
+    // cleanup writes. 'Defer' effects are NOT direct FieldWrite and remain
+    // outside this bounded proof.
+    FieldWriteAudit verify_source_coverage(
+            const Program& source, const llvm::Module& module) const {
+        auto result = verify(module); // check actual live StoreInst first
+        std::map<const Statement*, const Function*> expected;
+        std::size_t visited = 0;
+        const auto visit = [&](const auto& self,
+                const Statement& statement, const Function& function,
+                std::size_t depth) -> void {
+            if (depth > 64 || ++visited > 4096)
+                throw std::runtime_error(
+                    "ownership violation: compiler source field-write inventory exceeds bound");
+            if (statement.kind == Statement::Kind::FieldWrite) {
+                if (statement.receiver.empty() || statement.field.empty() ||
+                        statement.receiver.find('.') != std::string::npos ||
+                        statement.field.find('.') != std::string::npos ||
+                        statement.receiver.size() + 1 + statement.field.size() > 256 ||
+                        !expected.emplace(&statement, &function).second)
+                    throw std::runtime_error(
+                        "ownership violation: invalid or duplicated source field write");
+            }
+            // Scan every nested source block, including branch-local
+            // statements; the emission ledger cannot selectively omit one.
+            for (const auto& child : statement.then_statements)
+                self(self, child, function, depth + 1);
+            for (const auto& child : statement.else_statements)
+                self(self, child, function, depth + 1);
+        };
+        for (const auto& function : source.functions) {
+            for (const auto& statement : function.statements)
+                visit(visit, statement, function, 0);
+            for (const auto& cleanup : function.caught_throw_defers)
+                visit(visit, cleanup, function, 0);
+        }
+        if (expected.size() != sites_.size())
+            throw std::runtime_error(
+                "ownership violation: omitted or invented source field-write emission");
+        std::set<const Statement*> matched;
+        for (const auto& site : sites_) {
+            const auto found = expected.find(site.source);
+            if (found == expected.end() || site.source_function != found->second ||
+                    !site.emitted_function ||
+                    site.store->getFunction() != site.emitted_function ||
+                    !matched.insert(site.source).second)
+                throw std::runtime_error(
+                    "ownership violation: source field-write/function not bound to emitted store");
+        }
+        if (matched.size() != expected.size())
+            throw std::runtime_error(
+                "ownership violation: incomplete compiler source field-write inventory");
+        result.direct_source_writes_complete = true;
+        // The direct FieldWrite inventory is NOT a complete ownership
+        // loan-use / deferred-effect / optimized machine-code certificate.
+        return result;
     }
 
     std::size_t size() const noexcept { return sites_.size(); }

@@ -1697,7 +1697,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     builder.CreateStore(llvm::ConstantInt::get(i64, 0),
                         array_failure_places.at(target));
                     auto* published_field = builder.CreateStore(incoming, original);
-                    field_write_ledger.bind(effect, target, original, published_field);
+                    field_write_ledger.bind(effect, target, original, published_field,
+                        &fn, function);
                     builder.CreateStore(llvm::ConstantInt::get(i64, 0), lexical);
                     array_failure_places[target] = array_failure_places.at(source);
                 } else {
@@ -1705,7 +1706,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         storage, field_storage, declarations, &region_moves);
                     auto* field_destination = field_storage.at(target);
                     auto* field_store = builder.CreateStore(updated, field_destination);
-                    field_write_ledger.bind(effect, target, field_destination, field_store);
+                    field_write_ledger.bind(effect, target, field_destination, field_store,
+                        &fn, function);
                 }
             } else if (effect.kind == Statement::Kind::Call) {
                 lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
@@ -1905,8 +1907,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                  it != fn.caught_throw_defers.rend(); ++it) {
                 llvm::Value* updated = lower(*it->expression, builder, i64,
                     storage, field_storage, declarations, &region_moves);
-                builder.CreateStore(updated, field_storage.at(
-                    field_key(it->receiver, it->field)));
+                const std::string cleanup_field =
+                    field_key(it->receiver, it->field);
+                auto* cleanup_target = field_storage.at(cleanup_field);
+                auto* cleanup_store = builder.CreateStore(updated, cleanup_target);
+                // Source caught-throw cleanups retain FieldWrite syntax.
+                // Bind their emitted store to the same independent source census.
+                field_write_ledger.bind(*it, cleanup_field, cleanup_target,
+                    cleanup_store, &fn, function);
             }
             builder.CreateBr(handler);
             builder.SetInsertPoint(handler);
@@ -2945,7 +2953,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Its raw IR pointers cannot outlive the Module.
     const auto emitted_ir_census = native_ir::collect_native_ir_ssa_census(module);
     (void)emitted_ir_census;
-    const auto source_field_write_audit = field_write_ledger.verify(module);
+    const auto source_field_write_audit =
+        field_write_ledger.verify_source_coverage(source, module);
     (void)source_field_write_audit;
     // General source LoanId completeness, optimization survival and guest
     // execution remain explicitly unproven and non-promoting.

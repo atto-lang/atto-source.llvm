@@ -77,3 +77,38 @@ The real `LlvmCodegen.cpp` now mints a per-module provenance ticket for each emi
 This is a **pre-optimization direct field-store** bound, not complete typed-MIR/SSA or guest ownership proof. Deferred cleanup, branch-coverage exhaustiveness, source `LoanId` and CFG `Reinitialize.write_id` correlation, optimization survival, native machine-code stores and guest execution remain unproven. Empty ledgers do not certify any source-to-IR binding. `ownership_complete=false`, `optimized_code_verified=false` and `guest_verified=false` remain mandatory.
 
 The new host-linked LLVM test has 75 assertions: 59 negative mutations (source kinds, source fields, paths, duplicates, erased stores, changing SSA destination/value, missing/bogus metadata) and 16 positive/nonpromoting controls. It is registered as focused CTest #14. Because the inherited focused shell block still had duplicated and malformed interior fragments, its entire test stage is rebuilt with an exact 14-name inventory, JUnit testcase set, zero failures/errors/skips and one explicit executed marker. The existing compiler-backed 50-case `.atto`/Clang fixture stage remains separate. Tests remain AUTHORED / NOT_EXECUTED until Actions can admit a source-organization runner.
+
+
+## Compiler-owned direct FieldWrite coverage (2026-11-07)
+
+The bounded compiler now independently scans the native Program's Function
+source AST for every direct Statement::Kind::FieldWrite, recursively visiting
+both conditional arms and nested loop/branch source statements, as well as
+the supported caught-throw source field-write cleanup list. This source
+inventory is assembled from the Program, **not** from the LLVM emitter's
+StoreInst ledger or external JSON receipts.
+
+At emission, each supported direct field write records the source Function
+address and the currently active LLVM Function as well as the earlier
+source Statement/StoreInst provenance. The compiler validates the actual
+LLVM Module and then requires an exact source-AST-to-ledger bijection:
+no omitted, forged, foreign-function, duplicate or stale direct field
+write may pass. The per-source compiler-owned emission identity is rechecked
+against the LLVM function containing the physical StoreInst.
+
+This is **direct source FieldWrite completeness only**. Other LLVM stores,
+Defer-kind field effects, all source LoanId uses, CFG Reinitialize.write_id
+pairing, full ownership CFG branch effects, optimized machine code and guest
+execution are NOT certified. A source without direct field writes is a
+vacuous inventory, not a positive source-store authority receipt. The
+source ledger maintains ownership_complete=false,
+optimized_code_verified=false and guest_verified=false.
+
+The accompanying native LLVM CTest adds 50 new authored assertions:
+42 fail-closed mutations for missing writes in straight-line, nested
+then/else, loop and caught-throw source paths, wrong source/function identity,
+forged ledger-only entries, changed values and bounded malformed inventories;
+plus eight non-promoting controls. Focused ownership CI requires exactly
+15 distinct named CTests and 15 distinct passing JUnit cases, followed by
+the separately guarded real 50-program LLVM/Clang guest matrix. Source-org
+runner-admission failures mean these remain AUTHORED, NOT_EXECUTED.
