@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -607,9 +608,17 @@ private:
                 dispatch_.get_device_info(
                         device_, CL_DEVICE_NAME, name_bytes, name.get(), nullptr),
                 "clGetDeviceInfo(name)");
-        device_name_.assign(name.get());
-        if (device_name_.empty())
-            device_name_ = "opencl-gpu";
+        // Treat device-name bytes from the ICD as untrusted metadata:
+        // an unterminated buffer must not trigger an OOB string scan.
+        const auto* terminal = static_cast<const char*>(
+            std::memchr(name.get(), '\0', name_bytes));
+        if (!terminal || terminal == name.get())
+            throw std::runtime_error("OpenCL GPU returned invalid device name");
+        device_name_.assign(name.get(), static_cast<std::size_t>(terminal - name.get()));
+        for (unsigned char ch : device_name_) {
+            if (ch < 32 || ch == 127)
+                throw std::runtime_error("OpenCL GPU returned control bytes in device name");
+        }
 
         cl_int status = CL_SUCCESS;
         context_ = dispatch_.create_context(
