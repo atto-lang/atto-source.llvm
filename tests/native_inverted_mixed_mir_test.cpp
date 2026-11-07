@@ -184,6 +184,54 @@ int main() {
         rejects([&]{ (void)verify_production_inverted_mixed(bad); },
                 "capacity/operation budget");
     }
+    // Runtime f64 result is observable through an ordinary ordered compare
+    // and an i64 selection; no implicit binary64->integer conversion.
+    {
+        auto source=make_source();
+        auto& terminal=source.inverted_main->operations.back();
+        terminal.kind=InvertedSourceOperation::Kind::ReturnCompareF64;
+        terminal.field="energy";
+        terminal.mixed_value=f64(3.75);
+        terminal.equal_result=42;
+        terminal.unequal_result=7;
+        const auto selected=verify_production_inverted_mixed(source);
+        require(selected.operands.terminal_f64_compare.has_value(),
+                "verified mixed source lost terminal f64 predicate");
+        const auto ir_compare=emit_mixed_source_ir(selected);
+        require(ir_compare.find(" = load double, ptr ") != std::string::npos,
+                "f64 comparison did not load actual runtime column");
+        require(ir_compare.find(" = fcmp oeq double ") != std::string::npos,
+                "f64 comparison omitted IEEE ordered compare");
+        require(ir_compare.find(", i64 42, i64 7") != std::string::npos,
+                "f64 comparison lost both integer result branches");
+        auto forged=source;
+        forged.inverted_main->operations.back().field="x";
+        rejects([&]{ (void)verify_production_inverted_mixed(forged); },
+                "must read f64 column");
+        forged=source;
+        forged.inverted_main->operations.back().mixed_value=i64(3);
+        rejects([&]{ (void)verify_production_inverted_mixed(forged); },
+                "scalar type mismatch");
+        forged=source;
+        forged.inverted_main->operations.back().mixed_values[0]=bit(true);
+        rejects([&]{ (void)verify_production_inverted_mixed(forged); },
+                "invalid mixed inverted f64 comparison metadata");
+        forged=source;
+        forged.inverted_main->operations[0].equal_result=42;
+        rejects([&]{ (void)verify_production_inverted_mixed(forged); },
+                "nonterminal operation has comparison metadata");
+
+        auto corrupted=selected.operands;
+        corrupted.terminal_f64_compare.reset();
+        rejects([&]{ (void)emit_mixed_source_ir(
+                    VerifiedMixedSource{selected.mir,corrupted}); },
+                "terminal return type mismatches comparison provenance");
+        auto extra=checked.operands;
+        extra.terminal_f64_compare=F64EqSelect{f64(3.75),42,7};
+        rejects([&]{ (void)emit_mixed_source_ir(
+                    VerifiedMixedSource{checked.mir,extra}); },
+                "terminal return type mismatches comparison provenance");
+    }
     {
         MixedLlvmEmitter emitter(3);
         require(emitter.build(checked.mir, checked.operands)==ir, "first emission mismatch");
