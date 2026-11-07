@@ -139,8 +139,18 @@ def load_cases(manifest: pathlib.Path = MANIFEST) -> list[dict]:
                     "if (" not in code,
                     "direct restoration source shape missing")
         elif category == "restored-both-branches":
+            # The branch-exit oracle assumes the false path performs
+            # saved+1. Count-only matching would accept saved+2 and could
+            # silently leave a wrong, yet in-range, exit expectation.
+            expected_arms = re.search(
+                r"\bif\s*\([^)]*\)\s*\{\s*p\.left\s*=\s*saved\s*;\s*"
+                r"\}\s*else\s*\{\s*p\.left\s*=\s*saved\s*\+\s*1\s*;\s*"
+                r"\}\s*fi\b",
+                code,
+            )
             require(len(assignments) == 2 and
-                    "else {" in code and "return p.left;" in code,
+                    expected_arms is not None and
+                    "return p.left;" in code,
                     "both-predecessor restoration shape missing")
         elif category == "restored-sibling":
             require(len(assignments) == 1 and
