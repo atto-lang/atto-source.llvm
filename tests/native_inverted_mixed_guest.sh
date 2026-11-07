@@ -180,6 +180,30 @@ for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
         verify_compilation_unchanged "$tmp/guest.ll"
     done
 done
+# The historical bool/i64 source profile uses this SAME mixed typed
+# emitter and native test runner; it must never grow an independent ABI.
+for file in pair-positive-bool-write.atto pair-positive-swap-tail.atto; do
+    compile_guest "$fixtures/$file" "$tmp/pair.ll"
+    for required in ' x i1]' ' x i64]' 'load i1, ptr ' \
+                    'store volatile i1 false, ptr %alive' \
+                    'store volatile i1 false, ptr ' \
+                    'icmp ult i64' 'call void @llvm.trap()'; do
+        grep -Fq "$required" "$tmp/pair.ll" || {
+            echo "FAIL: pair guest omitted typed storage, owner guard or trap: $required" >&2
+            exit 1
+        }
+    done
+    if grep -Fq ' x double]' "$tmp/pair.ll"; then
+        echo 'FAIL: bool/i64 guest emitted an invented f64 lane' >&2
+        exit 1
+    fi
+    for opt in -O0 -O2; do
+        "$clang" "$opt" -x ir "$tmp/pair.ll" -o "$tmp/pair"
+        verify_compilation_unchanged "$tmp/pair.ll"
+        native_status "$tmp/pair" exit42
+        verify_compilation_unchanged "$tmp/pair.ll"
+    done
+done
 compile_guest "$fixtures/negative-stale-dense-index.atto" "$tmp/trap.ll"
 grep -Fq 'call void @llvm.trap()' "$tmp/trap.ll" ||
     { echo 'FAIL: missing out-of-bounds trap in mixed guest IR' >&2; exit 1; }
@@ -189,14 +213,33 @@ for opt in -O0 -O2; do
     native_status "$tmp/trap" trap
     verify_compilation_unchanged "$tmp/trap.ll"
 done
+compile_guest "$fixtures/pair-negative-bounds-trap.atto" "$tmp/pair-trap.ll"
+grep -Fq 'icmp ult i64 1, ' "$tmp/pair-trap.ll" || {
+    echo 'FAIL: bool/i64 guest omitted native bounds check for row 1' >&2; exit 1
+}
+for opt in -O0 -O2; do
+    "$clang" "$opt" -x ir "$tmp/pair-trap.ll" -o "$tmp/pair-trap"
+    verify_compilation_unchanged "$tmp/pair-trap.ll"
+    native_status "$tmp/pair-trap" trap
+    verify_compilation_unchanged "$tmp/pair-trap.ll"
+done
 # Every unsupported source rejects without writing any IR: no partial codegen.
 for item in \
   'negative-bool-as-int.atto|mixed inverted bool column' \
   'negative-f64-from-int.atto|mixed inverted f64 column' \
   'negative-immutable-bool-write.atto|immutable inverted field' \
   'negative-f64-return.atto|mixed inverted int main' \
-  'negative-f64-infinite.atto|mixed inverted f64 literal'; do
+  'negative-f64-infinite.atto|mixed inverted f64 literal' \
+  'pair-negative-bool-as-int.atto|mixed inverted bool column' \
+  'pair-negative-bool-to-int-return.atto|mixed inverted int main must return an i64 field' \
+  'pair-negative-immutable-bool-set.atto|immutable inverted field' \
+  'pair-negative-bool-write-int.atto|mixed inverted bool column' \
+  'pair-negative-f64-unimplemented.atto|production inverted main requires two i64 fields'; do
     file="${item%%|*}"; diagnostic="${item#*|}"
+    [[ -s "$fixtures/$file" && -f "$fixtures/$file" && ! -L "$fixtures/$file" ]] || {
+        echo "FAIL: missing or symlinked negative source $file" >&2; exit 1
+    }
+    fixture_sha="$(hash_file "$fixtures/$file")"
     if "$compiler" "$fixtures/$file" >"$tmp/denied.ll" 2>"$tmp/denied.err"; then
         echo "FAIL: admitted negative mixed source $file" >&2
         exit 1
@@ -206,8 +249,12 @@ for item in \
         cat "$tmp/denied.err" >&2
         exit 1
     fi
+    [[ "$(hash_file "$fixtures/$file")" == "$fixture_sha" ]] || {
+        echo "FAIL: compiler modified rejected .atto source: $file" >&2; exit 1
+    }
+    require_tools_unchanged
 done
 [[ "$(hash_file "$compiler")" == "$compiler_sha" &&
    "$(hash_file "$auditor")" == "$auditor_sha" ]] ||
     { echo 'FAIL: compiler/auditor changed during native evidence run' >&2; exit 1; }
-printf '%s\n' 'MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 2 trap signals, 5 rejects; IR no-GC screened (not linked/FFI proof)'
+printf '%s\n' 'MIXED_ATTO_NATIVE_GUEST_PASS: 8 exit42, 4 trap signals, 10 rejects; IR no-GC screened (not linked/FFI proof)'
