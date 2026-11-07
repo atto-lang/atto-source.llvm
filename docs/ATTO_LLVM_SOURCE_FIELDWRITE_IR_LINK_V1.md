@@ -12,7 +12,7 @@ This change adds `backend/NativeSourceFieldWriteLinks.hpp` and wires `CompilerFi
 - **Deferred:** field assignments executed by the function's deferred-effect cleanup loop
 - **CatchCleanup:** caught-throw deferred field assignments executed along its actual unwind CFG
 
-Following `llvm::verifyModule`, `collect_native_ir_ssa_census(module)` inspects real instructions; the compiler-owned field ledger requires each recorded site to remain a distinct, live physical `StoreInst` in the attributed function with the same destination and value. Duplicate claims, stale/erased/reordered physical stores, foreign module/function, invalid projection keys, and mismatched SSA operands **fail closed**. The site id cannot be supplied by `.atto` input.
+Following `llvm::verifyModule`, `collect_native_ir_ssa_census(module)` inspects real instructions; the link validator makes **one** bounded traversal of the live module and indexes its stores, avoiding up to 4,096 repeated scans of a 2,000,000-instruction module; the compiler-owned field ledger requires each recorded site to remain a distinct, live physical `StoreInst` in the attributed function with the same destination and value. Duplicate claims, stale/erased/reordered physical stores, foreign module/function, invalid projection keys, and mismatched SSA operands **fail closed**. The site id cannot be supplied by `.atto` input.
 
 ## Explicit limits — no ownership promotion
 
