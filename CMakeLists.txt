@@ -3471,6 +3471,24 @@ if(BUILD_TESTING)
     add_test(NAME native_ores_vm_four_carrier_domains
         COMMAND oreslang-native-ores-vm-test)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # Actual native VM DATA/CONTROL callbacks bridged to tenant actor-private
+    # host arenas. This does not execute compiled .ores guests or establish
+    # an OS tenant sandbox or hard-real-time admission.
+    add_executable(oreslang-native-tenant-vm-callback-bridge-test
+        tests/native_tenant_vm_callback_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-tenant-vm-callback-bridge-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-tenant-vm-callback-bridge-test
+        PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-tenant-vm-callback-bridge-test PRIVATE
+        -UNDEBUG -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_tenant_vm_callback_host_bridge
+        COMMAND oreslang-native-tenant-vm-callback-bridge-test)
+    set_tests_properties(native_tenant_vm_callback_host_bridge
+        PROPERTIES TIMEOUT 30)
     # Native scheduler cache-locality hint: bounded same-carrier reuse is
     # preempted by CONTROL and yields to competing actor lanes.
     add_executable(oreslang-native-actor-carrier-locality-test
