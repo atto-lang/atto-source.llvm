@@ -290,7 +290,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 // owner. Even a primitive i64's copyability does not confer
                 // Share authority on the borrowed capability. Explicitly
                 // snapshot the scalar into an owned binding first.
-                if (source.mode != Mode::Value)
+                if (!native_ownership::share_place_has_owner_authority(source.mode))
                     reject(expr, "E_SHARE_BORROW: rt share cannot upgrade a "
                                  "borrowed parameter to shared ownership");
                 if (source.int_array || !source.class_name.empty())
@@ -299,6 +299,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                        expr.left->left && expr.left->left->kind == Expression::Kind::Variable) {
                 const auto place = native_place(*expr.left);
                 const auto found = locals.find(place.first);
+                if (found != locals.end() &&
+                    !native_ownership::share_place_has_owner_authority(found->second.mode))
+                    reject(expr, "E_SHARE_BORROW: rt share cannot upgrade a borrowed class field");
                 if (found != locals.end() &&
                     (found->second.class_array_fields.count(place.second) ||
                      found->second.subobjects.count(place.second)))
