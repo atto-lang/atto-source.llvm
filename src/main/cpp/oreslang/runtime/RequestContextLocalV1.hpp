@@ -10,6 +10,7 @@
 #include "oreslang/runtime/TaskCancellation.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -162,6 +163,8 @@ public:
 
     template <typename T>
     bool set(const RequestLocalKeyV1<T>& key, T value) {
+        auto operation = begin_operation();
+        if (!operation) return false;
         // Host-only measured payload limit; composite deep-size descriptors
         // and compiler ownership checks remain mandatory for guest access.
         const std::size_t bytes = local_measured_payload_bytes_v1(value);
@@ -214,6 +217,8 @@ public:
 
     template <typename T>
     std::optional<T> get_copy(const RequestLocalKeyV1<T>& key) const {
+        auto operation = begin_operation();
+        if (!operation) return std::nullopt;
         std::shared_ptr<const Cell<T>> pinned;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -246,6 +251,8 @@ public:
     // synchronously close/cancel/inspect this same request.
     template <typename T>
     bool erase(const RequestLocalKeyV1<T>& key) {
+        auto operation = begin_operation();
+        if (!operation) return false;
         std::shared_ptr<CellBase> retired;
         std::unordered_map<std::uint64_t,
             std::shared_ptr<CellBase>>::node_type retired_node;
@@ -291,6 +298,53 @@ private:
     // Cross-actor handoff links a recipient's derived context to this
     // request's cancellation (never the reverse) and needs read access.
     friend class RequestContextHandoffTableV1;
+    friend class RequestLocalStopGroupV1;
+
+    // Host-owned operation leases are exact-scope and cannot be copied.
+    // They pin the logical operation during allocation/value copying outside
+    // the store lock, even if STOP marks the scope closed concurrently.
+    class OperationLease final {
+    public:
+        explicit OperationLease(const RequestContextLocalV1* owner) noexcept
+            : owner_(owner) {}
+        OperationLease(const OperationLease&) = delete;
+        OperationLease& operator=(const OperationLease&) = delete;
+        OperationLease(OperationLease&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)) {}
+        OperationLease& operator=(OperationLease&&) = delete;
+        ~OperationLease() {
+            if (owner_) owner_->release_operation();
+        }
+    private:
+        const RequestContextLocalV1* owner_;
+    };
+
+    std::optional<OperationLease> begin_operation() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!cancellation_->with_active_authority([&] {
+                if (!open_ ||
+                    in_flight_ == std::numeric_limits<std::size_t>::max())
+                    return false;
+                ++in_flight_;
+                return true;
+            })) return std::nullopt;
+        return std::optional<OperationLease>(std::in_place, this);
+    }
+
+    void release_operation() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (in_flight_ == 0) std::terminate();
+        if (--in_flight_ == 0) quiescent_.notify_all();
+    }
+
+    // CONTROL-plane only, after close(): waiting here on a carrier would
+    // deadlock if the actor's continuation owns the outstanding operation.
+    bool wait_closed_quiescent() const {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (open_) return false;
+        quiescent_.wait(lock, [&] { return in_flight_ == 0; });
+        return true;
+    }
 
     RequestContextLocalV1(RequestIdentityV1 identity,
                           TaskCancellation::Ptr cancellation)
@@ -305,6 +359,8 @@ private:
     const TaskCancellation::Ptr cancellation_;
     mutable std::mutex mutex_;
     bool open_ = true;
+    mutable std::size_t in_flight_ = 0;
+    mutable std::condition_variable quiescent_;
     std::uint64_t original_mail_sequence_ = 0;
     std::size_t used_bytes_ = 0;
     std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> slots_;
