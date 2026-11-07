@@ -46,6 +46,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # M3 native guest: genuine source recursion executed by actor-owned PC
+    # and operand frames, not recursive native C++ calls. O0/O2 and ASan
+    # verification live in the exact-head source-owner workflow.
+    add_test(NAME native_compiled_actor_stackless_calls_m3
+        COMMAND bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_guest_stackless_m3.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_compiled_actor_stackless_calls_m3
+        PROPERTIES TIMEOUT 120)
     # M2 executes genuine compiler-produced .atto on_message through the
     # authenticated native actor carrier and physically distinct actor heaps.
     # This tests a synchronous handler adapter, NOT source ActorRef/spawn or
