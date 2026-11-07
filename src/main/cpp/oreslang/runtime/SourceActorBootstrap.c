@@ -15,6 +15,7 @@
 #define SOURCE_GROUP_MAILBOX 128u
 #define SOURCE_TRACE_EXECUTIONS 128u
 #define SOURCE_TRACE_CONTINUATIONS 128u
+#define SOURCE_ACTOR_FRAME_WORDS 8192u /* 64 KiB, one bounded scalar frame in M2 */
 #define SOURCE_ROOT_CONTROL_SUSPEND UINT64_C(1)
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
@@ -24,6 +25,12 @@ typedef struct {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
+    uint64_t* frame_words; /* actor-incarnation-owned, not carrier-stack memory */
+    atomic_int frame_active; /* admits at most one source callback */
+    uint64_t frame_domain;
+    uint64_t frame_epoch;
+    uint64_t frame_slot_calls;
+    uint64_t frame_high_water;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
@@ -82,6 +89,69 @@ typedef struct {
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
+static _Thread_local SourceActor* current_source_frame_actor;
+
+/*
+ * The C ABI for compiler-owned scalar actor frame places. The native heap
+ * grants the physical actor turn; this per-incarnation byte store owns its
+ * separate logical scalar slots. It is intentionally not an OS stack or an
+ * arbitrary pointer-escape boundary: only closed scalar compiler lowering
+ * may obtain a slot pointer while the originating actor turn is live.
+ */
+static void source_frame_enter(SourceActor* actor, OresActorTurn turn) {
+    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC
+        && actor->frame_words != NULL && turn.domain && turn.epoch
+        && current_source_frame_actor == NULL);
+    int expected = 0;
+    ensure(atomic_compare_exchange_strong_explicit(
+        &actor->frame_active, &expected, 1,
+        memory_order_acq_rel, memory_order_acquire));
+    actor->frame_domain = turn.domain;
+    actor->frame_epoch = turn.epoch;
+    current_source_frame_actor = actor;
+}
+
+int oreslang_source_actor_frame_i64_slot_checked(
+        uint64_t domain, uint64_t epoch, uint64_t index, int64_t** out) {
+    if (!out) return 0;
+    *out = NULL;
+    SourceActor* actor = current_source_frame_actor;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
+        || !actor->frame_words || !domain || !epoch
+        || actor->frame_domain != domain || actor->frame_epoch != epoch
+        || index >= SOURCE_ACTOR_FRAME_WORDS
+        || atomic_load_explicit(&actor->frame_active, memory_order_acquire) != 1)
+        return 0;
+    ++actor->frame_slot_calls;
+    if (actor->frame_high_water < index + 1)
+        actor->frame_high_water = index + 1;
+    *out = (int64_t*)(actor->frame_words + index);
+    return 1;
+}
+
+int64_t* oreslang_source_actor_frame_i64_slot(
+        uint64_t domain, uint64_t epoch, uint64_t index) {
+    int64_t* result = NULL;
+    ensure(oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, index, &result));
+    return result;
+}
+
+static void source_frame_leave(SourceActor* actor, OresActorTurn turn) {
+    ensure(actor && current_source_frame_actor == actor
+        && actor->frame_domain == turn.domain
+        && actor->frame_epoch == turn.epoch
+        && atomic_load_explicit(&actor->frame_active, memory_order_acquire) == 1);
+    /* No compiler-generated pointer into this storage may survive the turn.
+     * Use volatile stores to prevent the terminal wipe being optimized away. */
+    volatile uint64_t* bytes = (volatile uint64_t*)actor->frame_words;
+    for (size_t i = 0; i < SOURCE_ACTOR_FRAME_WORDS; ++i)
+        bytes[i] = 0;
+    actor->frame_domain = 0;
+    actor->frame_epoch = 0;
+    current_source_frame_actor = NULL;
+    atomic_store_explicit(&actor->frame_active, 0, memory_order_release);
+}
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_initialization;
@@ -439,7 +509,9 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    source_frame_enter(instance, turn);
     instance->constructor(instance->heap, turn.domain, turn.epoch);
+    source_frame_leave(instance, turn);
     ores_actor_i64_heap_leave(instance->heap, turn);
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
@@ -489,8 +561,10 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    source_frame_enter(instance, turn);
     const int64_t result = instance->on_message(
         instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+    source_frame_leave(instance, turn);
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(
         &instance->last_result, result, memory_order_relaxed);
@@ -577,6 +651,7 @@ void* oreslang_source_actor_spawn(
      * atomic object initialization.
      */
     atomic_init(&instance->initialized, 0);
+    atomic_init(&instance->frame_active, 0);
     atomic_init(
         &instance->startup_state, ORES_SOURCE_ACTOR_STARTUP_PENDING);
     atomic_init(&instance->constructor_started, 0);
@@ -586,6 +661,9 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->last_result, 0);
 
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
+    instance->frame_words = (uint64_t*)calloc(SOURCE_ACTOR_FRAME_WORDS,
+        sizeof(*instance->frame_words));
+    ensure(instance->frame_words != NULL);
     group.actors[slot] = instance;
     instance->ref =
         ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
@@ -908,9 +986,21 @@ void oreslang_source_actor_join_done(void* opaque) {
      * get_done parity requires physical quiescence, not a logical stop bit.
      * Reclaim the actor-owned heap only after the VM terminal acknowledgement.
      */
+    ensure(atomic_load_explicit(&instance->frame_active,
+        memory_order_acquire) == 0);
     ores_actor_i64_heap_retire(instance->heap);
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
+    /* Physical scheduler completion forbids any further frame access. */
+    volatile uint64_t* frame = (volatile uint64_t*)instance->frame_words;
+    for (size_t i = 0; i < SOURCE_ACTOR_FRAME_WORDS; ++i) frame[i] = 0;
+    free(instance->frame_words);
+    instance->frame_words = NULL;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_ACTOR_FRAME_RETIRE_VERIFIED actor=%llu bytes=65536 high_water=%llu slot_calls=%llu released=1\\n",
+        (unsigned long long)instance->id,
+        (unsigned long long)instance->frame_high_water,
+        (unsigned long long)instance->frame_slot_calls);
     fprintf(stderr,
         "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d released=1 ready=%d accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
         atomic_load_explicit(
