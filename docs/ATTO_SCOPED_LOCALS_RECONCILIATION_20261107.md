@@ -206,9 +206,10 @@ Retain draft, maintain #1391 as the alternate draft, and do not claim parity.
   lease, including during any host copy/move outside the store mutex.
   close() seals new admission but does NOT synchronously block a carrier.
 - New host CONTROL-plane RequestLocalStopGroupV1 registers all request
-  contexts of one exact actor incarnation, closes them first, waits for
-  pinned operations to finish, then calls scheduler.stop_sealed and
-  scheduler.wait_done. It refuses to block the same scheduler's carrier.
+  contexts of one exact actor incarnation, closes them first, calls
+  scheduler.stop_sealed to unblock STOP-dependent work, then waits for
+  pinned operations to finish and for scheduler.wait_done. It refuses to
+  block the same scheduler's carrier.
   Sibling actors are not closed by this group. Every STOP path must be
   routed through this trusted bridge or separately revoke its requests;
   direct native scheduler STOP remains an unproven guest ABI bypass.
