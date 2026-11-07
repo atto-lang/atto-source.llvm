@@ -59,11 +59,18 @@ struct Operation {
     // Optional explicit lexical loan identity; absent borrow IDs derive from
     // the original CFG operation site, not the active traversal order.
     std::optional<std::uint64_t> loan_id;
+    // A moved-field Reinitialize requires a distinct compiler-generated
+    // write-site ticket; zero/missing tickets never restore an owner.
+    // This is an admission fence, NOT proof that guest lowering emitted a
+    // field write. No guest integration before actual typed-MIR write proof.
+    std::optional<std::uint64_t> write_id;
 
     Operation() = default;
     Operation(Kind operation, std::string key,
-            std::optional<std::uint64_t> provenance = std::nullopt)
-        : kind(operation), place(std::move(key)), loan_id(provenance) {}
+            std::optional<std::uint64_t> provenance = std::nullopt,
+            std::optional<std::uint64_t> written = std::nullopt)
+        : kind(operation), place(std::move(key)), loan_id(provenance),
+          write_id(written) {}
 };
 
 struct BasicBlock {
@@ -165,9 +172,12 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             value.possible = kOwned;
             return;
         case Operation::Kind::Reinitialize:
-            // One explicitly moved field may be restored. Do not promote
-            // MaybeMoved/unknown branch joins to definitely initialized.
-            // Constructor lowering must still produce the field write.
+            // One explicitly moved field may be restored only with a
+            // compiler-minted write-site claim. This does NOT itself prove
+            // that a guest field write was lowered; callers cannot infer
+            // independent owner authority from this state transition.
+            if (!op.write_id || !*op.write_id)
+                violation(op.place, "moved field reinitialization has no write-site evidence");
             if (value.possible != kMoved || value.shared_loans ||
                     value.exclusive_loan)
                 violation(op.place, "reinitialization requires a definitely moved, unborrowed place");
@@ -283,6 +293,7 @@ inline Analysis verify(const Graph& graph) {
     // allowing a single release to discharge the wrong branch's loan.
     // The implicit ID is a stable encoding of the borrow's CFG site.
     std::map<std::uint64_t, std::pair<std::size_t, std::size_t>> borrow_sites;
+    std::set<std::uint64_t> claimed_write_sites;
     for (std::size_t block_id = 0; block_id < graph.blocks.size(); ++block_id) {
         const auto& block = graph.blocks[block_id];
         // Malformed successors are invalid even in presently unreachable
@@ -292,6 +303,15 @@ inline Analysis verify(const Graph& graph) {
                 violation(std::to_string(block_id), "CFG edge outside graph");
         for (std::size_t op_id = 0; op_id < block.operations.size(); ++op_id) {
             const auto& op = block.operations[op_id];
+            if (op.kind == Operation::Kind::Reinitialize) {
+                if (!op.write_id || !*op.write_id ||
+                        !claimed_write_sites.insert(*op.write_id).second)
+                    violation(op.place, "duplicate or unproven reinitialization write-site");
+                if (op.loan_id)
+                    violation(op.place, "write-site metadata cannot impersonate loan identity");
+            } else if (op.write_id) {
+                violation(op.place, "write-site evidence on non-reinitialization operation");
+            }
             if (op.kind != Operation::Kind::BorrowShared &&
                     op.kind != Operation::Kind::BorrowExclusive) continue;
             if (block_id >= UINT32_MAX || op_id >= UINT32_MAX)
