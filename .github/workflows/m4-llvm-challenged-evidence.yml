@@ -53,7 +53,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "atto-lang/atto-source.llvm"
-          test "$GITHUB_REF" = "refs/heads/ci/m4-llvm-challenged-evidence-20261107"
+          # Manual guest execution requires independently reviewed protected main.
+          test "$GITHUB_REF" = "refs/heads/main"
           test -n "$ATTO_APPROVED_CHALLENGE_KEY_SHA256"
           test -n "$ATTO_APPROVED_PUBLIC_PEM_B64"
           test -n "$ATTO_PAYLOAD_B64"

@@ -26,3 +26,7 @@ independent runner attestation or authenticated delivery service exists
 in these changes. Long builds exceeding challenge TTL fail closed. A
 signed challenge does not sign the resulting artifact and does not
 prove independent guest execution or five-backend parity.
+
+### Protected-main dispatch requirement
+
+The manually triggered guest job additionally requires `GITHUB_REF=refs/heads/main`; **a PR-head workflow cannot run trusted guest evidence**, even if an administrator configures public-key variables. After the whole stacked source tree and workflow receive independent review and protected-main merge, a manual run can select the reviewed main revision. Before that approval, only parser/signature contract tests are available and the guest job is intentionally skipped.
