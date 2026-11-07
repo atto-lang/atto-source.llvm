@@ -7,6 +7,7 @@ local or synthetic report MUST NOT be promoted to source-compiled guest proof.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
 from pathlib import Path
 import re
@@ -128,6 +129,7 @@ def verify_junit(raw: bytes) -> dict[str, object]:
     if observed != EXPECTED:
         _error("missing canonical CTest cases")
     return {"verified_tests": len(observed), "case_seconds": durations,
+            "junit_sha256": hashlib.sha256(raw).hexdigest(),
             "evidence_class": "JUNIT_REPORT_CHECKED_NOT_RUN_JOB_ATTESTED"}
 
 
@@ -142,6 +144,10 @@ def main() -> int:
         return 1
     print("DOP_MIXED_JUNIT_VERIFIED tests=" + str(result["verified_tests"]) +
           " guest_receipt_requires_independent_run_job_attestation=YES")
+    # The digest is calculated over the exact bytes that passed verify_junit,
+    # not a second read after validation. GitHub step output binds the next
+    # receipt-producing step to precisely this validated XML report.
+    print("DOP_MIXED_JUNIT_SHA256=" + str(result["junit_sha256"]))
     return 0
 
 
