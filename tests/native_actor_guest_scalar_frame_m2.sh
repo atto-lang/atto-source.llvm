@@ -2,8 +2,8 @@
 # Actual .atto actor source -> oreslang-llvmc -> LLVM IR -> Clang C++ native
 # -> real MultiActorCarrier worker / ActorOwnedI64Heap, NOT a host model.
 set -euo pipefail
-if [[ $# -ne 2 ]]; then
-  echo "usage: $0 <absolute-oreslang-llvmc> <source-root>" >&2
+if [[ $# -lt 2 || $# -gt 3 || ( $# -eq 3 && "${3}" != "--sanitized" ) ]]; then
+  echo "usage: $0 <absolute-oreslang-llvmc> <source-root> [--sanitized]" >&2
   exit 2
 fi
 compiler="$1"
@@ -59,3 +59,21 @@ for mode in 0 2; do
   sha256sum "$tmp/guest-$mode"
 done
 echo "ATTO_LLVM_COMPILER_FRAME_M2_O0_O2_PASS"
+if [[ "${3:-}" == "--sanitized" ]]; then
+  clang -std=c11 -O1 -g -pthread -fsanitize=address,undefined \
+    -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror \
+    -I"$root/src/main/cpp" \
+    -c "$root/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c" \
+    -o "$tmp/heap-sanitized.o"
+  clang++ -std=c++17 -O1 -g -pthread -fsanitize=address,undefined \
+    -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror \
+    -Wno-error=override-module -UNDEBUG \
+    -I"$root/src/main/cpp" \
+    "$root/tests/native_actor_guest_scalar_frame_m2_test.cpp" \
+    "$root/src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp" \
+    "$tmp/heap-sanitized.o" "$tmp/actor.ll" -o "$tmp/guest-sanitized"
+  "$tmp/guest-sanitized" | tee "$tmp/guest-sanitized.log"
+  grep -Fx ATTO_LLVM_COMPILED_ACTOR_GUEST_FRAME_M2_PASS "$tmp/guest-sanitized.log"
+  sha256sum "$tmp/guest-sanitized"
+  echo "ATTO_LLVM_COMPILER_FRAME_M2_ASAN_UBSAN_PASS"
+fi
