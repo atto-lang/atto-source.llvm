@@ -117,5 +117,25 @@ int main() {
         reject([&]{ (void)emitter.build(verified.mir,forged); },
                "forged boolean write");
     }
-    std::cout << "INVERTED_BOOL_I64_MIR_HOST_PASS groups=7\n";
+    {
+        // A forged external MIR may not redirect an invalid third field
+        // onto the legitimate second i64 column.
+        auto forged = verified.mir.instructions();
+        forged[3].column = 2;
+        reject([&]{
+            (void)Module::verify_external(verified.mir.layout(),
+                                          verified.mir.capacity(), forged);
+        }, "field index outside schema");
+    }
+    {
+        // A well-formed i64/i64 MIR from the original compiler profile must
+        // not enter the specialized bool/i64 emitter through shape confusion.
+        auto bad_shape = source();
+        bad_shape.inverted_structs[0].fields[0].type = InvertedScalarKind::I64;
+        const auto other = verify_production_inverted_i64(bad_shape);
+        reject([&]{
+            (void)emit_native_bool_i64_pair_ir(other.mir, other.operands);
+        }, "requires bool/i64 schema");
+    }
+    std::cout << "INVERTED_BOOL_I64_MIR_HOST_PASS groups=9\n";
 }
