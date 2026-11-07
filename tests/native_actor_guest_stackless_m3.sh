@@ -27,7 +27,7 @@ if "$compiler" --experimental-actor-guest-stackless "$tmp/invalid.atto" \
   exit 1
 fi
 test ! -s "$tmp/invalid.ll"
-grep -Fq "actor guest frame M2 requires one native actor-only source module" \
+grep -Fq "actor M3 supports only one-argument pure int return-expression helpers" \
     "$tmp/invalid.err"
 
 # Unflagged compilation must retain the existing source actor ABI,
