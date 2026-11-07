@@ -81,7 +81,7 @@ foreach(case_name IN LISTS cases)
   endif()
   # A diagnostic ID in an unrelated copied source line is not sufficient.
   # Require the exact code followed by a colon in the compiler's stderr.
-  if(NOT "${error}" MATCHES "(^|[\\r\\n])[^\\r\\n]*${expected_${case_name}}:")
+  if(NOT "${error}" MATCHES "(^|[\\r\\n])oreslang-llvmc: ${expected_${case_name}}:")
     message(FATAL_ERROR "${case_name}: missing explicit GPU admission diagnostic: ${error}")
   endif()
   if(NOT "${error}" MATCHES "no implicit CPU fallback")
