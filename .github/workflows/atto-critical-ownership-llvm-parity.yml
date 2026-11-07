@@ -12,6 +12,7 @@ on:
       - 'audit/llvm-ownership-moveplace-corpus-*'
       - 'audit/llvm-share-place-negative-v2-*'
       - 'audit/llvm-resolved-place-origin-*'
+      - 'audit/llvm-typed-place-id-fixtures-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -20,6 +21,9 @@ on:
       - 'tests/native_share_place_authority_test.cpp'
       - 'tests/native_share_projection_root_test.cpp'
       - 'tests/native_compiler_place_origin_test.cpp'
+      - 'tests/contracts/atto_ownership_place_mir_50.json'
+      - 'tests/ownership_compiler_fixture_matrix.py'
+      - 'tests/test_ownership_compiler_fixture_matrix.py'
       - 'src/main/cpp/oreslang/types/NativeOwnershipJoin.hpp'
       - 'tests/native_ownership_join_test.cpp'
       - 'src/main/cpp/oreslang/types/NativeOwnershipPlace.hpp'
@@ -150,6 +154,30 @@ jobs:
           print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
           print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
           PY
+      - name: Execute 50 real compiler fixtures and fail-closed matrix mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both tests must have been registered at CMake configure time.
+          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_17_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_17_mutations$' /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: atto_ownership_place_mir_real_compiler_50$' /tmp/atto-mir-fixture-inventory.txt
+          # The manifest unit suite cannot replace compiler execution.
+          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_17_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^atto_ownership_place_mir_real_compiler_50$' \
+            --output-junit /tmp/atto-real-compiler-50.xml --timeout 1000 | tee /tmp/atto-real-compiler-50.log
+          grep -Fq 'ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-real-compiler-50.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-real-compiler-50.xml').getroot()
+          tests = int(root.get('tests', '-1'))
+          failures = int(root.get('failures', '1'))
+          skipped = int(root.get('skipped', '1'))
+          if tests != 1 or failures or skipped:
+              raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
+          print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+
       - name: Reverify checkout head and clean tracked source
         shell: bash
         env:
