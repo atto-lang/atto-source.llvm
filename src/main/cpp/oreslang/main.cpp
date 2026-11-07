@@ -290,6 +290,16 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate wasm actor recursion flag\n"; return 2;
             }
             experimental_wasm_actor_recursion_v1 = true;
+        } else if (arg == "--experimental-wasm-actor-continuations-v0" ||
+                   arg == "--experimental-wasm-actor-suspend-v0") {
+            // Explicit, fail-closed version boundary. The checked recursive
+            // actor frame machine has NO scheduler, owned suspended frame,
+            // resume PC, borrow proof or generation-fenced guest ticket ABI.
+            // Never reinterpret a requested suspension as synchronous code
+            // or silently route it into the one-helper recursion experiment.
+            std::cerr << "wasm32 actor continuations are NOT IMPLEMENTED: "
+                         "no guest suspension/resume ABI or generation-fenced frame lowering\n";
+            return 2;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
