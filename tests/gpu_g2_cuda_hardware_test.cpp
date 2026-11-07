@@ -1,4 +1,5 @@
 #include "oreslang/gpu/G1CudaDriver.hpp"
+#include "oreslang/gpu/G2PtxInput.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -26,7 +27,7 @@ int main(int argc, char* argv[]) {
     try {
         std::ifstream stream(argv[1],std::ios::binary);
         if(!stream)throw std::runtime_error("GPU-G2-004: cannot open offline PTX");
-        std::string ptx((std::istreambuf_iterator<char>(stream)),std::istreambuf_iterator<char>());
+        const std::string ptx = read_bounded_ptx(stream);
         CudaDriver driver(0);
         std::cerr<<"GPU-G2 HARDWARE: device="<<driver.device_identity()
                  <<" driverVersion="<<driver.driver_version()<<"\n";
