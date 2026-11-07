@@ -47,12 +47,13 @@ fi
 # the existing quota-policy test. Reject a moved head or modified test bytes.
 files=(
   "src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp:3ee0121b59927b9a0b40a4bce73e0902c7d1a2bc"
-  "src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp:e3d7826945390ce0e89f11d73764cf2351a59683"
+  "src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp:3e43913769a505790f821e604a37d883470a6489"
   "src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp:7b79138951aa878fe2ee43cfcef21277cb68b256"
   "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp:bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
   "tests/native_context_domains_v1_test.cpp:c9fd993bd78e4a6b2bd27c384fff43276ca915dd"
   "tests/native_actorlocal_stop_during_copy_v1_test.cpp:d21b6c525819c277038f2c5f0d393c3b82cf2f35"
-  "tests/native_actorlocal_stop_mutation_witness.sh:d80313a05287185ff7b39fef395d58d6f8514b71"
+  "tests/native_actorlocal_cross_scheduler_retire_v1_test.cpp:7af31f5126c8c0627177f259e15f5713a8d73064"
+  "tests/native_actorlocal_stop_mutation_witness.sh:7435666345b25bafeb3ee97ec01a02e4e90aa0c5"
   "tests/native_local_read_revocation_v1_test.cpp:cf49e51bed5834fae1d76a1191ec18e41f379656"
   "tests/native_local_payload_budget_v1_test.cpp:25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
   "tests/native_local_read_revocation_mutation_witness.sh:0d256fe89fd963e520226f7207f434b9e6477be7"
@@ -96,6 +97,7 @@ tests=(
   native_local_read_revocation_v1_test
   native_local_payload_budget_v1_test
   native_actorlocal_stop_during_copy_v1_test
+  native_actorlocal_cross_scheduler_retire_v1_test
 )
 case "$CXX" in
   g++) CC=gcc ;;
@@ -113,7 +115,8 @@ esac
   }
 for name in "${tests[@]}"; do
   linked=()
-  if [[ "$name" == native_actorlocal_stop_during_copy_v1_test ]]; then
+  if [[ "$name" == native_actorlocal_stop_during_copy_v1_test ||
+        "$name" == native_actorlocal_cross_scheduler_retire_v1_test ]]; then
     linked=("$work/scheduler.o")
   fi
   "$CXX" "${flags[@]}" -Isrc/main/cpp "tests/$name.cpp" "${linked[@]}" \
@@ -155,7 +158,8 @@ import datetime, hashlib, json, pathlib, sys
 out, work, head, tree, compiler, mode, *pins = sys.argv[1:]
 out, work = pathlib.Path(out), pathlib.Path(work)
 tests = ["native_context_domains_v1_test", "native_local_read_revocation_v1_test",
-         "native_local_payload_budget_v1_test", "native_actorlocal_stop_during_copy_v1_test"]
+         "native_local_payload_budget_v1_test", "native_actorlocal_stop_during_copy_v1_test",
+         "native_actorlocal_cross_scheduler_retire_v1_test"]
 logs = {}
 for path in sorted(out.glob("*.log")):
     logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -178,7 +182,7 @@ record = {
     "binarySha256": binaries,
     "verifiedGitBlobPins": source_pins,
     "mutationWitness": "caught" if mode == "optimized" else "not-run",
-    "actorStopMutations": ["postcopy", "stopgate"] if mode == "optimized" else [],
+    "actorStopMutations": ["postcopy", "stopgate", "crossscheduler"] if mode == "optimized" else [],
     "logsSha256": logs,
     "notes": "Runner admission and guest parity remain independent requirements."
 }
