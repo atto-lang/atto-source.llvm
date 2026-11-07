@@ -39,6 +39,38 @@ struct CheckedBody {
     throw std::invalid_argument(std::string(code) + ": " + detail);
 }
 
+inline bool identifier_spelling(std::string_view s) {
+    if (s.empty() || s.size() > 256) return false;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        const bool alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+        const bool digit = (c >= '0' && c <= '9');
+        if (!alpha && (i == 0 || !digit)) return false;
+    }
+    return true;
+}
+inline bool valid_token(const Token& t) {
+    if (t.text.empty() || t.text.size() > 256) return false;
+    switch (t.kind) {
+        case TokenKind::Identifier: return identifier_spelling(t.text);
+        case TokenKind::Integer:
+            for (const unsigned char c : t.text)
+                if (c < '0' || c > '9') return false;
+            return true;
+        case TokenKind::Symbol:
+            // Admit lexical punctuation; the typed parser separately rejects
+            // unsupported operators with their precise GPU-LAUNCH code.
+            if (t.text.size() == 1)
+                return std::string_view("+-*/%=!<>|&^.,;:()[]{}?~").find(t.text[0])
+                       != std::string_view::npos;
+            return t.text == ">=" || t.text == "<=" || t.text == "==" ||
+                   t.text == "!=" || t.text == "&&" || t.text == "||" ||
+                   t.text == "->" || t.text == "::" || t.text == "|>" ||
+                   t.text == "^^";
+        default: return false;
+    }
+}
+
 class Parser {
     const std::vector<Token>& tokens_;
     std::size_t at_ = 0;
@@ -87,13 +119,12 @@ public:
             reject("GPU-LAUNCH-008", "kernel source-body resource budget exceeded");
         std::unordered_set<std::string> names;
         for (const auto& p : params) {
-            if (p.name.empty() || p.name.size() > 256 ||
-                    !names.insert(p.name).second)
+            if (!identifier_spelling(p.name) || !names.insert(p.name).second)
                 reject("GPU-LAUNCH-001", "invalid or duplicate parameter identity");
         }
         for (const auto& token : tokens_) {
-            if (token.text.empty() || token.text.size() > 256)
-                reject("GPU-LAUNCH-008", "invalid source-body token");
+            if (!valid_token(token))
+                reject("GPU-LAUNCH-008", "invalid source-body token kind/spelling");
         }
         if (tokens_.size() == 2 && tokens_[0].text == "return" &&
                 tokens_[1].text == ";") {
@@ -118,7 +149,7 @@ public:
         if (at_ >= tokens_.size() || tokens_[at_].kind != TokenKind::Identifier)
             reject("GPU-LAUNCH-008", "lane needs local binding");
         const std::string lane = tokens_[at_++].text;
-        if (lane.empty() || names.count(lane) != 0)
+        if (!identifier_spelling(lane) || names.count(lane) != 0)
             reject("GPU-LAUNCH-001", "GPU lane shadows a kernel parameter");
         need("=", "GPU-LAUNCH-008", "lane initialization required");
         need("gpu", "GPU-LAUNCH-008", "lane must originate from gpu.global_id");
