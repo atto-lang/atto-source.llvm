@@ -21,7 +21,7 @@ public:
     ScopedGuestTurn(ActorGuestFrameStack* stack, std::uint32_t slot,
                     std::uint64_t generation) noexcept
         : previous_(active_guest_turn) {
-        active_guest_turn = {stack, slot, generation};
+        active_guest_turn = {stack, slot, generation, {}};
     }
     ~ScopedGuestTurn() noexcept { active_guest_turn = previous_; }
     ScopedGuestTurn(const ScopedGuestTurn&) = delete;
