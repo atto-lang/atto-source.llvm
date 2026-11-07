@@ -1,0 +1,98 @@
+name: Native scoped locals original-mail integration (host only)
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.h"
+      - "src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h"
+      - "src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp"
+      - "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp"
+      - "tests/native_original_data_mail_sequence_v1_test.c"
+      - "tests/native_request_data_mail_gate_v1_test.cpp"
+      - "tests/native_request_wake_origin_v1_test.cpp"
+      - "tests/native_scoped_locals_45_case_matrix.cpp"
+      - ".github/workflows/native-scoped-locals-mail-reconcile-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-mail:
+    name: "native mail + scoped 45 (${{ matrix.cxx }} / ${{ matrix.mode }})"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {cc: gcc, cxx: g++, mode: optimized}
+          - {cc: clang, cxx: clang++, mode: optimized}
+          - {cc: gcc, cxx: g++, mode: asan-ubsan}
+          - {cc: clang, cxx: clang++, mode: asan-ubsan}
+          - {cc: gcc, cxx: g++, mode: tsan}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact PR head, tree and source blobs
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "5e2a2cc4522ac14305b11e3c0c3490ac748910a1"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "5f80e91ae45f3f82659abb36f1170a7873c96d53"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "bc7d5de14204ebd0ec4c45798f012b06b2b93494"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "d75695d467579f36287c1c64a0ac165abe4f75bb"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "510bac8b3ccdcd69257aebf917ebe804cecd4121"
+          test "$(git hash-object tests/native_original_data_mail_sequence_v1_test.c)" = "734dcbad974d49dcc0acb1ba8614c1111a93ccde"
+          test "$(git hash-object tests/native_request_data_mail_gate_v1_test.cpp)" = "c180cadd1a456839e293f3081b6f483cb2c27ea2"
+          test "$(git hash-object tests/native_request_wake_origin_v1_test.cpp)" = "85244e6bba9f913aaecde7df2ae010f20db362ad"
+          test "$(git hash-object tests/native_scoped_locals_45_case_matrix.cpp)" = "98cb1b2c8bb4c735e40139445120435f4108633c"
+          printf 'checkout_head=%s\ncheckout_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and execute scheduler-origin, DATA, WAKE and 45-case host gates
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          flags=(-O2 -UNDEBUG)
+          if [[ "$MODE" == "asan-ubsan" ]]; then
+            flags=(-O1 -g -UNDEBUG -fno-omit-frame-pointer -fsanitize=address,undefined)
+            export ASAN_OPTIONS='detect_leaks=1:halt_on_error=1'
+            export UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1'
+          elif [[ "$MODE" == "tsan" ]]; then
+            flags=(-O1 -g -UNDEBUG -fno-omit-frame-pointer -fsanitize=thread)
+            export TSAN_OPTIONS='halt_on_error=1'
+          fi
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o "$work/scheduler.o"
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_original_data_mail_sequence_v1_test.c \
+            "$work/scheduler.o" -o "$work/mail-sequence"
+          "$work/mail-sequence"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_data_mail_gate_v1_test.cpp \
+            "$work/scheduler.o" -o "$work/request-data-mail"
+          "$work/request-data-mail"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_wake_origin_v1_test.cpp \
+            "$work/scheduler.o" -o "$work/request-ready-wake"
+          "$work/request-ready-wake"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_scoped_locals_45_case_matrix.cpp \
+            "$work/scheduler.o" -o "$work/scoped-45"
+          "$work/scoped-45" | tee "$work/cases.log"
+          test "$(grep -c '^SCOPED_LOCAL_CASE_PASS:' "$work/cases.log")" = "45"
+          grep -qx 'NATIVE_SCOPED_LOCALS_45_CASE_HOST_PASS' "$work/cases.log"
+          printf 'NATIVE_ORIGIN_AND_SCOPED_45_EXACT_HEAD_HOST_PASS compiler=%s mode=%s\n' "$CXX" "$MODE"
