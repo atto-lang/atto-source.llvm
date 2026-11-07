@@ -18,6 +18,8 @@ on:
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/native_inverted*'
       - 'tests/check_dop_pair_source_blobs.py'
+      - 'scripts/verify_dop_mixed_ctest.py'
+      - 'tests/test_verify_dop_mixed_ctest.py'
       - 'tests/fixtures/inverted-mixed/**'
   workflow_dispatch:
 
@@ -81,6 +83,13 @@ jobs:
           cmake --version
           rustc --version
 
+      - name: Run 24 fail-closed source-free CTest receipt mutation groups
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v tests/test_verify_dop_mixed_ctest.py
+          test -z "$(git status --porcelain=v1 --untracked-files=all -- . ':!build-evidence')"
+          echo 'ATTO_DOP_CTEST_VERIFIER_HOST_ONLY=24 NOT_GUEST_EXECUTION'
       - name: Compile production parser, verifier, native compiler and auditor
         shell: bash
         run: |
@@ -124,6 +133,11 @@ jobs:
             --output-junit "$GITHUB_WORKSPACE/build-evidence/mixed-ctest.xml" \
             -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$'
 
+      - name: Refuse fake, contradictory or non-executed CTest JUnit evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_dop_mixed_ctest.py build-evidence/mixed-ctest.xml
       - name: Qualify exact-head execution receipts
         shell: bash
         run: |
@@ -194,6 +208,8 @@ jobs:
                  'src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp',
                  '.github/workflows/dop-inverted-mixed-native.yml',
                  'tests/check_dop_pair_source_blobs.py',
+                 'scripts/verify_dop_mixed_ctest.py',
+                 'tests/test_verify_dop_mixed_ctest.py',
                  'CMakeLists.txt',
                  'build/oreslang-no-gc-ir-audit',
                  'build/oreslang-llvmc']
