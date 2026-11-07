@@ -112,5 +112,28 @@ PY
 deny_native_library "$build/m4-corrupted-guest.so" "$sha" 'tampered native image'
 echo 'ATTO_M4_LLVM_TAMPERED_GUEST_REJECTION=PASSED'
 
+# Independent host-native instrumentation; lowered Wasm guest code remains
+# intentionally unsanitized and is NOT assumed safe without its Wasm cage.
+clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -pthread \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -I "$repo/src/main/cpp" ci/m4/native_actor_observation.cpp \
+  src/main/cpp/oreslang/runtime/TenantVm.cpp \
+  src/main/cpp/oreslang/runtime/TenantVmGuestLoader.cpp \
+  -ldl -o "$build/m4-native-actor-observation-sanitized"
+ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+timeout 120 "$build/m4-native-actor-observation-sanitized" "$out/$library" "$sha" \
+  > "$build/m4-sanitized-stdout" 2> "$build/m4-sanitized-stderr" || {
+    echo 'ATTO_M4_LLVM_SANITIZED_HOST_EXECUTION_FAILED' >&2
+    cat "$build/m4-sanitized-stderr" >&2
+    cat "$build/m4-sanitized-stdout" >&2
+    exit 1
+  }
+grep -Fx 'ATTO_M4_LLVM_STALE_HANDLE_DENIED=1' "$build/m4-sanitized-stdout"
+grep -Fx 'ATTO_M4_LLVM_REINCARNATION_FRESH_STATE=1' "$build/m4-sanitized-stdout"
+grep -Fx 'ATTO_M4_LLVM_TENANT_NEIGHBOR_SURVIVED=1' "$build/m4-sanitized-stdout"
+grep -Fx 'ATTO_M4_LLVM_SOURCE_GUEST_RETURN=43' "$build/m4-sanitized-stdout"
+echo 'ATTO_M4_LLVM_ASAN_UBSAN_NATIVE_HOST=PASSED'
+
 echo 'ATTO_M4_LLVM_COMPILER_GENERATED_IDENTICAL_SOURCE_GUEST=PASSED'
 echo 'EVIDENCE_SCOPE=M4_IDENTICAL_SOURCE_GUEST_EXECUTION_WITH_HOST_OBSERVED_REPLY_TRACE_NOT_FULL_LANGUAGE_OR_SECURITY'
