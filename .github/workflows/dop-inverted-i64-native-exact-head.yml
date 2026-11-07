@@ -82,17 +82,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # --verbose preserves audited source/IR/binary SHA and true trap
-          # markers in GitHub step logs, not only in an inaccessible test log.
+          # --verbose retains IR, executable SHA and real bounds signals
+          # in job logs rather than hiding success logs inside CTest.
           ctest --test-dir build --verbose --output-on-failure --no-tests=error \
-            -R '^(inverted_production_source_mir_cpp17|native_inverted_production_source_to_native)
-      - name: Mark LLVM-only compiler-backed native evidence after successful execution
+            --output-junit "$PWD/build/dop-inverted-i64.junit.xml" \
+            -R '^(inverted_production_source_mir_cpp17|native_inverted_production_source_to_native)$'
+      - name: Verify both native CTest executions from independent XML report
+        shell: bash
         run: |
-          echo DOP_LLVM_NATIVE_COMPILER_GUEST_TESTED=true
-          echo DOP_JAVA_TRUFFLE_GUEST_PARITY=NOT_TESTED
-          echo DOP_NO_GC_FFI_FULL_AUDIT=NOT_TESTED
-          echo DOP_MERGE_OR_RELEASE_AUTHORIZATION=NOT_GRANTED
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree as ET
 
+          report = Path("build/dop-inverted-i64.junit.xml")
+          if not report.is_file() or report.stat().st_size > 1024 * 1024:
+              raise SystemExit("DOP_LLVM_CTEST_REPORT_MISSING_OR_OVERSIZED")
+          data = report.read_bytes()
+          if b"<!DOCTYPE" in data:
+              raise SystemExit("DOP_LLVM_CTEST_UNSAFE_REPORT")
+          root = ET.fromstring(data)
+          cases = root.findall(".//testcase")
+          expected = {
+              "inverted_production_source_mir_cpp17",
+              "native_inverted_production_source_to_native",
+          }
+          names = [case.get("name") for case in cases]
+          if len(cases) != 2 or set(names) != expected:
+              raise SystemExit("DOP_LLVM_CTEST_MISSING_NATIVE_EXECUTION")
+          for case in cases:
+              if any(case.find(tag) is not None
+                     for tag in ("skipped", "failure", "error")):
+                  raise SystemExit("DOP_LLVM_CTEST_FAILED_OR_SKIPPED")
+          print("DOP_LLVM_CTEST_EXECUTED_CASES=2")
+          PY
       - name: Mark LLVM-only compiler-backed native evidence after successful execution
         run: |
           echo DOP_LLVM_NATIVE_COMPILER_GUEST_TESTED=true
