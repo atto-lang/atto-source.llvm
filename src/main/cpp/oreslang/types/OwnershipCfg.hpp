@@ -49,7 +49,7 @@ using State = std::map<std::string, PlaceState>;
 
 struct Operation {
     enum class Kind {
-        Initialize, Reinitialize, Read, Move, Drop, DropIfOwned,
+        Initialize, Reinitialize, WriteOwned, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
         UseSharedLoan, UseExclusiveLoan, ReleaseShared, ReleaseExclusive,
         Suspend
@@ -203,6 +203,14 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
                     value.exclusive_loan)
                 violation(op.place, "reinitialization requires a definitely moved, unborrowed place");
             value.possible = kOwned;
+            return;
+        case Operation::Kind::WriteOwned:
+            // Ordinary source assignment does not reinitialize a moved
+            // place. It requires a currently owned, unborrowed destination;
+            // unlike Read it cannot overlap a shared loan.
+            require_owned(op.place, value);
+            if (value.shared_loans || value.exclusive_loan)
+                violation(op.place, "write overlaps live loan");
             return;
         case Operation::Kind::Read:
             require_owned(op.place, value);

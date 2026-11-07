@@ -340,3 +340,34 @@ focused CTests, 85 source identity checks, 50 native compiler guests,
 tree shake guest and two-reinit-guests-plus-rejection gate remain mandatory.
 No successful executed test receipts exist while runner admission
 reports zero steps; this work must stay draft until actual compile/tests.
+
+## Complete restricted straight-line ownership MIR trace (scope v1)
+
+New `types/StraightLineSourceMir.hpp` replays the admitted scalar
+class-field/lexical-local subset in original source order as a compiler
+produced `ownership::Graph`. It independently enumerates class-field
+initialization, local expression reads and `rt take` field moves, direct
+field writes (distinguishing `WriteOwned` from checker-issued
+`Reinitialize.write_id`), scalar local writes and eager return reads.
+An unmodeled call, conditional/lazy result, branch, loop, borrow,
+exception, cleanup, array handle, actor operation or suspended task
+returns `nullopt`: proof not complete. It does not silently drop unknown
+source effects or invent predecessor states. The `ownership::verify`
+fixed-point checker enforces definite move-to-owned transitions,
+read-after-move rejection and prohibition of writing through live loans.
+
+Production `NativeIrSourceCheckedReinitialize` now invokes this builder
+for each source Function and reconciles every restricted-slice checked
+`Reinitialize.write_id` with the independent semantic inventory and
+LLVM source-to-StoreInst ledger. The result carries a *separately named*
+restricted-source-completeness counter, not full typed-MIR or SSA proof.
+Broad LoanId, optimizer, guest and cross-backend flags remain false.
+
+Added 32 authored host-only regression cases: 12 valid modeled controls,
+12 negative mutations/ownership violations and 8 unsupported-scope
+fail-closed controls. The exact-name focused matrix now requires
+17 distinct CTests and JUnit receipts; 50 real `.atto`/Clang compiler
+fixtures, the dedicated reinitialization native guests, and tree-shake
+guest remain unchanged. A successful CTest source-slice model is not
+evidence of optimized guest ownership correctness. Until source-org
+runner admission executes actual steps, all new cases are NOT_EXECUTED.

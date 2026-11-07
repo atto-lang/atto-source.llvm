@@ -2,6 +2,7 @@
 
 #include "oreslang/backend/NativeIrFieldWriteLedger.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
+#include "oreslang/types/StraightLineSourceMir.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,10 @@ struct SourceCheckedReinitializeAudit {
     bool full_loan_use_coverage = false;
     bool optimized_code_verified = false;
     bool guest_verified = false;
+    // Completeness within a strict, explicitly recognized straight-line
+    // source sublanguage only. Not a whole-program native ownership proof.
+    std::size_t complete_straight_line_functions = 0;
+    bool all_source_functions_in_restricted_slice = false;
 };
 
 inline SourceCheckedReinitializeAudit verify_source_checked_reinitialize_stores(
@@ -42,9 +47,47 @@ inline SourceCheckedReinitializeAudit verify_source_checked_reinitialize_stores(
 
     std::set<std::uint64_t> claimed_ids;
     std::size_t claims = 0;
+    std::size_t completed_source_functions = 0;
     // Enumerate the checker-marked source independently of the emitted store
     // ledger. No store ticket can create its own source reinitialization claim.
     for (const auto& function : source.functions) {
+        // A real compiler-source trace replays *all* ownership effects of
+        // the restricted straight-line sublanguage, in lexical order. A
+        // nullopt is explicitly NOT_COMPLETE (unsupported effects), not a
+        // false authorization. This is independently derived from the
+        // validated source rather than from the physical StoreInst ledger.
+        const auto typed_trace =
+            native_mir::build_checked_straight_line_trace(source, function);
+        if (typed_trace) {
+            if (!typed_trace->supported_source_effects_complete ||
+                    typed_trace->compilation_unit_id != source.compiler_source_unit_id ||
+                    typed_trace->source_function_id !=
+                        function.compiler_source_function_id ||
+                    typed_trace->steps.size() !=
+                        typed_trace->graph.blocks.front().operations.size())
+                throw std::runtime_error(
+                    "ownership violation: incomplete compiler straight-line MIR operation inventory");
+            std::size_t trace_reinitializations = 0;
+            for (const auto& step : typed_trace->steps) {
+                if (step.operation.kind !=
+                        ownership::Operation::Kind::Reinitialize) continue;
+                if (step.phase != native_mir::SourcePhase::Statement ||
+                        step.ordinal >= function.statements.size() ||
+                        !step.operation.write_id || !*step.operation.write_id ||
+                        step.operation.write_id !=
+                            function.statements[step.ordinal].compiler_reinitialize_write_id ||
+                        step.statement_node_id !=
+                            function.statements[step.ordinal].compiler_source_node_id)
+                    throw std::runtime_error(
+                        "ownership violation: straight-line MIR WriteId source mapping invalid");
+                ++trace_reinitializations;
+            }
+            if (trace_reinitializations !=
+                    function.compiler_checked_reinitialize_operations.size())
+                throw std::runtime_error(
+                    "ownership violation: straight-line MIR omitted source reinitialization");
+            ++completed_source_functions;
+        }
         // Independently produced by OwnershipChecker, not reconstructed
         // from LLVM store receipts or a synthetic caller-supplied graph.
         for (const auto& effect : function.compiler_checked_reinitialize_operations) {
@@ -149,7 +192,10 @@ inline SourceCheckedReinitializeAudit verify_source_checked_reinitialize_stores(
 
     return {claims, claims != 0 && direct.direct_source_writes_complete &&
             direct.immutable_source_identity_bound,
-            false, false, false, false};
+            false, false, false, false,
+            completed_source_functions,
+            completed_source_functions != 0 &&
+                completed_source_functions == source.functions.size()};
 }
 
 } // namespace oreslang::native_ir

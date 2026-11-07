@@ -26,6 +26,7 @@ on:
       - 'audit/llvm-reinitialize-store-bridge-*'
       - 'audit/llvm-sourcechecked-reinit-store-*'
       - 'audit/llvm-checker-mir-op-inventory-*'
+      - 'audit/llvm-straight-line-source-mir-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -37,6 +38,8 @@ on:
       - 'tests/native_compiler_place_origin_test.cpp'
       - 'tests/native_ownership_identity_inventory_30_test.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipCfg.hpp'
+      - 'src/main/cpp/oreslang/types/StraightLineSourceMir.hpp'
+      - 'tests/native_straight_line_mir_32_test.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipLastUse.hpp'
       - 'tests/native_ownership_nll_partial_move_30_test.cpp'
       - 'tests/native_ownership_nll_closed_world_16_test.cpp'
@@ -123,7 +126,7 @@ jobs:
           test -s /tmp/atto-ownership-join.xml
           echo "ATTO_LLVM_JOIN_PROOF=HOST_CPP17_EXECUTED"
 
-      - name: Execute sixteen source-owned place, identity and NLL integrity CTests
+      - name: Execute seventeen source-owned place, identity and NLL integrity CTests
         shell: bash
         run: |
           set -euo pipefail
@@ -143,8 +146,9 @@ jobs:
             oreslang-native-ir-ssa-census-30-test \
             oreslang-native-source-field-store-ledger-75-test \
             oreslang-native-source-fieldwrite-coverage-170-test \
-            oreslang-source-node-identity-85-test
-          ctest --test-dir build -N -R '^(native_ownership_take_place_classification|native_ownership_share_place_authority|native_ownership_share_projection_root|native_ownership_compiler_resolved_place_origin|native_ownership_identity_inventory_30|native_ownership_nll_partial_move_30|native_ownership_nll_closed_world_16|native_ownership_derived_last_use_12|native_ownership_opaque_loan_metadata_10|native_ownership_loan_write_domain_6|native_ownership_mir_receipts_30|native_ownership_mir_opaque_effects_18|native_ownership_ir_ssa_store_census_30|native_ownership_source_field_store_ledger_75|native_ownership_source_fieldwrite_coverage_170|native_ownership_source_node_identity_85)$' > /tmp/atto-ownership-focused-inventory.txt
+            oreslang-source-node-identity-85-test \
+            oreslang-native-straight-line-mir-32-test
+          ctest --test-dir build -N -R '^(native_ownership_take_place_classification|native_ownership_share_place_authority|native_ownership_share_projection_root|native_ownership_compiler_resolved_place_origin|native_ownership_identity_inventory_30|native_ownership_nll_partial_move_30|native_ownership_nll_closed_world_16|native_ownership_derived_last_use_12|native_ownership_opaque_loan_metadata_10|native_ownership_loan_write_domain_6|native_ownership_mir_receipts_30|native_ownership_mir_opaque_effects_18|native_ownership_ir_ssa_store_census_30|native_ownership_source_field_store_ledger_75|native_ownership_source_fieldwrite_coverage_170|native_ownership_source_node_identity_85|native_ownership_straight_line_source_mir_32)$' > /tmp/atto-ownership-focused-inventory.txt
           python3 - <<'PY'
           import re
           from pathlib import Path
@@ -165,14 +169,15 @@ jobs:
               'native_ownership_source_field_store_ledger_75',
               'native_ownership_source_fieldwrite_coverage_170',
               'native_ownership_source_node_identity_85',
+              'native_ownership_straight_line_source_mir_32',
           }
           rows = Path('/tmp/atto-ownership-focused-inventory.txt').read_text().splitlines()
           found = [m.group(1) for row in rows
                    if (m := re.fullmatch(r'\s*Test +#[0-9]+: (native_ownership_[A-Za-z0-9_]+)', row))]
-          if len(found) != 16 or len(set(found)) != 16 or set(found) != names:
+          if len(found) != 17 or len(set(found)) != 17 or set(found) != names:
               raise SystemExit(f'CTests missing, repeated, or substituted: {found!r}')
           PY
-          ctest --test-dir build -R '^(native_ownership_take_place_classification|native_ownership_share_place_authority|native_ownership_share_projection_root|native_ownership_compiler_resolved_place_origin|native_ownership_identity_inventory_30|native_ownership_nll_partial_move_30|native_ownership_nll_closed_world_16|native_ownership_derived_last_use_12|native_ownership_opaque_loan_metadata_10|native_ownership_loan_write_domain_6|native_ownership_mir_receipts_30|native_ownership_mir_opaque_effects_18|native_ownership_ir_ssa_store_census_30|native_ownership_source_field_store_ledger_75|native_ownership_source_fieldwrite_coverage_170|native_ownership_source_node_identity_85)$' \
+          ctest --test-dir build -R '^(native_ownership_take_place_classification|native_ownership_share_place_authority|native_ownership_share_projection_root|native_ownership_compiler_resolved_place_origin|native_ownership_identity_inventory_30|native_ownership_nll_partial_move_30|native_ownership_nll_closed_world_16|native_ownership_derived_last_use_12|native_ownership_opaque_loan_metadata_10|native_ownership_loan_write_domain_6|native_ownership_mir_receipts_30|native_ownership_mir_opaque_effects_18|native_ownership_ir_ssa_store_census_30|native_ownership_source_field_store_ledger_75|native_ownership_source_fieldwrite_coverage_170|native_ownership_source_node_identity_85|native_ownership_straight_line_source_mir_32)$' \
             --output-on-failure --timeout 90 --output-junit /tmp/atto-ownership-focused.xml
           test -s /tmp/atto-ownership-focused.xml
           python3 - <<'PY'
@@ -195,15 +200,16 @@ jobs:
               'native_ownership_source_field_store_ledger_75',
               'native_ownership_source_fieldwrite_coverage_170',
               'native_ownership_source_node_identity_85',
+              'native_ownership_straight_line_source_mir_32',
           }
           actual = [case.get('name') for case in root.iter('testcase')]
           failures = int(root.get('failures', '1'))
           errors = int(root.get('errors', '0'))
           skipped = int(root.get('skipped', '1'))
-          if (int(root.get('tests', '-1')) != 16 or failures or errors or skipped or
-                  len(actual) != 16 or len(set(actual)) != 16 or set(actual) != expected):
+          if (int(root.get('tests', '-1')) != 17 or failures or errors or skipped or
+                  len(actual) != 17 or len(set(actual)) != 17 or set(actual) != expected):
               raise SystemExit(f'ownership CTest receipt incomplete or invalid: {actual!r}')
-          print('ATTO_LLVM_OWNERSHIP_FOCUSED=16/16_HOST_CTEST_EXECUTED')
+          print('ATTO_LLVM_OWNERSHIP_FOCUSED=17/17_HOST_CTEST_EXECUTED')
           PY
 
       - name: Prove twenty scoped compiler CTest cases are registered
