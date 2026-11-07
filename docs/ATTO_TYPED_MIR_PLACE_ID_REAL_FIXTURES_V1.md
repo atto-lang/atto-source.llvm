@@ -20,7 +20,7 @@
 
 These are candidate source fixtures, not compile receipts. The required source-owned `atto_ownership_place_mir_real_compiler_50` CTest invokes the actual `oreslang-llvmc` via the established `tests/contract.py` for **each** candidate, materializing a separate temporary `.atto` file. It rejects any missing/duplicated case, absent compiler or Clang binary, wrong semantic diagnostic, absent executable IR, failed link, wrong process exit, or timeout. Positive source text cannot pass with source-only compiler-shape checks. The matrix emits a terminal `ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED` only after all 50 subprocess-based checks pass.
 
-`native_ownership_place_mir_manifest_17_mutations` is an independent HOST-ONLY Python unittest verifying the 50-input inventory and rejecting manipulated counts, duplicate source/IDs, forged statuses, disabled Clang execution, bad diagnostics and path traversal. It cannot substitute for the actual compiler CTest.
+`native_ownership_place_mir_manifest_19_mutations` is an independent HOST-ONLY Python unittest verifying the 50-input inventory and rejecting manipulated counts, duplicate source/IDs, forged statuses, disabled Clang execution, bad diagnostics, comment-only operator spoofing and path traversal. It cannot substitute for the actual compiler CTest.
 
 ## Gates
 
