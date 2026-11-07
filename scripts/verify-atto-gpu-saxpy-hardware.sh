@@ -7,7 +7,7 @@ if [ "$#" -ne 0 ]; then
   echo "usage: $0 (no arguments; builds exact-source tools in a fresh directory)" >&2
   exit 64
 fi
-for command in git cmake sha256sum mktemp; do
+for command in git cmake sha256sum mktemp tar; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "GPU assurance missing required trusted tool: $command" >&2
     exit 69
@@ -21,12 +21,14 @@ if [ -z "$head_sha" ] || [ -z "$head_tree" ]; then
   echo "source Git commit/tree identity unavailable" >&2
   exit 69
 fi
-# Builds cannot come from a modified or externally substituted source tree.
+# Reject modified tracked sources, then build from an exact Git archive.
+# Ignored/untracked local headers cannot enter this isolated compilation.
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "tracked source tree dirty; refusing GPU hardware attestation" >&2
   exit 70
 fi
-fixture="tests/fixtures/atto-gpu-saxpy-f32.atto"
+tracked_fixture="tests/fixtures/atto-gpu-saxpy-f32.atto"
+fixture="$tracked_fixture"
 if [ ! -f "$fixture" ] || [ -L "$fixture" ]; then
   echo "canonical, regular .atto fixture missing" >&2
   exit 70
@@ -58,11 +60,20 @@ fi
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
+source_dir="$workdir/source"
+mkdir -p "$source_dir"
+git archive --format=tar HEAD | tar -xf - -C "$source_dir"
+fixture="$source_dir/$tracked_fixture"
+if [ ! -f "$fixture" ] || [ -L "$fixture" ] ||
+   [ "$(git hash-object -- "$fixture")" != "$expected_blob" ]; then
+  echo "archived immutable GPU source is missing or corrupted" >&2
+  exit 70
+fi
 build="$workdir/build"
 # Fresh builds keep arbitrary stale/user-provided binaries out of the trusted
 # hardware gate. A green fake script cannot be substituted as the compiler
 # or physical probe. A separate trusted runner must still attest toolchain.
-cmake -S "$repo_root" -B "$build" -DBUILD_TESTING=ON
+cmake -S "$source_dir" -B "$build" -DBUILD_TESTING=ON
 cmake --build "$build" --parallel 2 --target \
   oreslang-llvmc oreslang-opencl-saxpy-gpu-probe \
   oreslang-opencl-saxpy-provider-v1-test \
