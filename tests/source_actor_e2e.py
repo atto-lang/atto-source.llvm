@@ -26,7 +26,8 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
-    if name == "source-actor-two-owned-heaps.ores":
+    if name in {"source-actor-two-owned-heaps.ores",
+                "atto-actor-frame-two-heaps.atto"}:
         value = 0
         start = 1 if actor_index == 0 else 5
         for n in range(start, start + processed):
@@ -93,6 +94,7 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
+        ("atto-actor-frame-two-heaps.atto", 2, 4, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -168,12 +170,25 @@ def main():
             flags = ["--experimental-owned-int"] if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "atto-actor-frame-two-heaps.atto",
             } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
+            # An LLVM declaration alone does not establish real actor-frame
+            # lowering: require actual call sites emitted by the frontend.
+            frame_calls = [line for line in guest.stdout.splitlines()
+                           if "call ptr @oreslang_source_actor_frame_i64_slot(" in line
+                           or "call i8* @oreslang_source_actor_frame_i64_slot(" in line]
+            assert len(frame_calls) >= 2, (
+                name, "compiled actor handler did not use actor frame slots", frame_calls)
+            if name == "atto-actor-frame-two-heaps.atto":
+                assert len(frame_calls) == 4, (name, frame_calls)
+                for label in ("n", "total", "previous", "doubled"):
+                    assert label + ".actor.frame.address" in guest.stdout, (
+                        name, label)
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
@@ -182,6 +197,7 @@ def main():
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "atto-actor-frame-two-heaps.atto",
             }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
@@ -254,6 +270,28 @@ def main():
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            frames = [line for line in executed.stderr.splitlines()
+                      if line.startswith("SOURCE_ACTOR_FRAME_RETIRE_VERIFIED ")]
+            assert len(frames) == actors, (name, frames)
+            frame_records = []
+            for receipt in frames:
+                fields = {}
+                for part in receipt.split()[1:]:
+                    key, sep, value = part.partition("=")
+                    assert sep and key in {
+                        "actor", "bytes", "high_water", "slot_calls", "released"
+                    } and key not in fields and value.isdecimal(), (name, receipt)
+                    fields[key] = int(value)
+                assert set(fields) == {
+                    "actor", "bytes", "high_water", "slot_calls", "released"
+                }, (name, receipt)
+                assert fields["actor"] != 0 and fields["bytes"] == 65536
+                assert fields["released"] == 1
+                assert fields["high_water"] <= 8192
+                frame_records.append(fields)
+            assert len({f["actor"] for f in frame_records}) == actors, (
+                name, "different actors reused the same incarnation", frame_records)
+
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
@@ -261,6 +299,10 @@ def main():
             for i, receipt in enumerate(receipts):
                 accepted = receipt["accepted"]
                 processed = receipt["processed"]
+                if processed:
+                    assert frame_records[i]["high_water"] >= 2, (name, i)
+                    assert frame_records[i]["slot_calls"] >= 2 * processed, (
+                        name, i, receipt, frame_records[i])
                 abandoned = receipt["abandoned"]
                 observed_last = receipt["last"]
                 expected_accepted = (
@@ -275,7 +317,8 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
-            if name == "source-actor-two-owned-heaps.ores":
+            if name in {"source-actor-two-owned-heaps.ores",
+                        "atto-actor-frame-two-heaps.atto"}:
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
