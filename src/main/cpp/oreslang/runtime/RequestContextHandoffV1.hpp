@@ -100,12 +100,12 @@ private:
 class RequestContextHandoffTableV1 final {
     struct EntryBase {
         virtual ~EntryBase() = default;
-        virtual bool apply(RequestContextLocalV1& target) const = 0;
+        virtual bool apply(RequestContextLocalV1& target, OresNativeActorScheduler* scheduler) const = 0;
     };
     template <typename T>
     struct Entry final : EntryBase {
         Entry(const RequestLocalKeyV1<T>& k, T v) : key(k), value(std::move(v)) {}
-        bool apply(RequestContextLocalV1& target) const override { return target.set(key, value); }
+        bool apply(RequestContextLocalV1& target, OresNativeActorScheduler* scheduler) const override { return target.set(key, value, scheduler); }
         RequestLocalKeyV1<T> key;
         T value;
     };
@@ -227,9 +227,9 @@ public:
         auto context = RequestContextLocalV1::open(identity, derived);
         RedeemedRequestContextV1 out(context, derived);
         if (!context || derived->is_cancelled() ||
-            !context->bind_original_mail_once(current_mail)) return std::nullopt;
+            !context->bind_original_mail_once(current_mail, scheduler_)) return std::nullopt;
         for (const auto& entry : env->entries)
-            if (!entry->apply(*context)) return std::nullopt;
+            if (!entry->apply(*context, scheduler_)) return std::nullopt;
         // Do not publish a snapshot after STOP, actor handoff, or a
         // request-cancellation race during the selected-entry copy.
         std::uint64_t final_payload = 0, final_mail = 0;
