@@ -108,6 +108,8 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "atto-actor-scalar-routine-recursion-reject.atto":
+            "native actor typed scalar frame admission: function graph is not a closed pure unary integer fnc subset",
         "atto-actor-scalar-unsafe-nested-call-reject.atto":
             "native actor typed scalar frame admission: actor callback may only directly return pure unary fnc(message)",
         "atto-actor-scalar-abi-shadow-reject.atto":
