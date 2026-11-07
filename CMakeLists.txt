@@ -174,7 +174,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_symbol_property_layout_host_only_v1
         PROPERTIES TIMEOUT 15)
 
+    # Host-only immutable Symbol literal image, generation pins and scoped
+    # core-copy checks. NOT native guest #Symbol lowering or OS RO protection.
     find_package(Threads REQUIRED)
+    add_executable(oreslang-native-shared-symbol-image-v1-test
+        tests/native_shared_symbol_literal_image_v1_test.cpp)
+    target_include_directories(oreslang-native-shared-symbol-image-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-shared-symbol-image-v1-test
+        PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shared-symbol-image-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_shared_symbol_image_host_only_v1
+        COMMAND oreslang-native-shared-symbol-image-v1-test)
+    set_tests_properties(native_shared_symbol_image_host_only_v1
+        PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-native-string-region-test
         tests/native_string_region_test.c src/main/cpp/oreslang/runtime/NativeStringRegion.c)
     target_include_directories(oreslang-native-string-region-test PRIVATE src/main/cpp)
