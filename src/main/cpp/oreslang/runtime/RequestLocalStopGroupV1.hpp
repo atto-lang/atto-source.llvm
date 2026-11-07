@@ -103,6 +103,31 @@ public:
         return true;
     }
 
+    // A trusted external STOP/retire path may have signaled the scheduler
+    // before the request-owner CONTROL plane was notified. This explicit
+    // reconciliation closes its stores and joins pinned operations; it never
+    // executes on a carrier, and it never emits a second STOP.
+    // It is NOT automatic cleanup for arbitrary raw scheduler callers.
+    bool finish_after_external_stop() {
+        if (!scheduler_ ||
+            ores_native_actor_scheduler_is_any_current_carrier_v1() ||
+            ores_native_actor_scheduler_poll_ready(scheduler_, actor_))
+            return false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (completed_) return false;
+        }
+        auto pinned = seal_and_revoke();
+        if (!pinned) return false;
+        for (const auto& request : *pinned)
+            if (!request->wait_closed_quiescent()) return false;
+        if (!ores_native_actor_scheduler_wait_done(scheduler_, actor_))
+            return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        completed_ = true;
+        return true;
+    }
+
     bool sealed() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return sealed_;
