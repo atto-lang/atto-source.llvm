@@ -41,6 +41,9 @@ export function inspectOwnershipWorkflowShape(source) {
      !once(source,"\n      - 'audit/llvm-restore-witness-to-store-*'") ||
      !once(source,"\n      - 'audit/llvm-source-restoration-cfg-dom-v1-*'") ||
      !once(source,"\n      - 'audit/llvm-source-cfg-50-guests-and-regressions-*'") ||
+     !once(source,"\n      - 'audit/llvm-cfg-guest-oracle-hardening-*'") ||
+     !once(source,"\n      - 'audit/llvm-node22-source-cfg-oracle-receipts-*'") ||
+     !once(source,"\n      - 'tests/ownership_source_cfg_node_oracles_50.test.mjs'") ||
      !once(source,"\n      - 'tests/contracts/atto_ownership_source_cfg_50.json'") ||
      !once(source,"\n      - 'tests/ownership_source_cfg_compiler_matrix.py'") ||
      !once(source,"\n      - 'tests/test_ownership_source_cfg_compiler_matrix.py'") ||
@@ -96,6 +99,14 @@ export function inspectOwnershipWorkflowShape(source) {
      !source.includes('atto_ownership_place_mir_real_compiler_50') ||
      !source.includes('--output-junit /tmp/atto-real-compiler-50.xml'))
     return fail('MISSING_REAL_COMPILER_MATRIX_RECEIPT');
+  // A second, actually runnable Node source-only suite is independent of
+  // the static shape checker and the two separate compiler/Clang matrices.
+  if(!once(source,
+       'node --test --test-reporter=tap tests/ownership_source_cfg_node_oracles_50.test.mjs | tee /tmp/atto-source-cfg-node-50.tap') ||
+     !once(source,"grep -Eq '^# tests 50$' /tmp/atto-source-cfg-node-50.tap") ||
+     !once(source,"grep -Eq '^# pass 50$' /tmp/atto-source-cfg-node-50.tap") ||
+     !once(source,"grep -Eq '^# fail 0$' /tmp/atto-source-cfg-node-50.tap"))
+    return fail('MISSING_INDEPENDENT_NODE_HOST_ORACLES');
   if(!once(source,'--output-junit /tmp/atto-source-cfg-mut-29.xml') ||
      !once(source,"grep -Eq 'Ran 29 tests' /tmp/atto-source-cfg-mut-29.log") ||
      !once(source,"observed != ['native_ownership_source_cfg_manifest_29_mutations']") ||
