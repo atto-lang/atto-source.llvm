@@ -330,8 +330,8 @@ int main() {
     }
     {
         auto forged = make_source();
-        forged.inverted_main->operations.resize(
-            1025, forged.inverted_main->operations.front());
+        const auto repeat = forged.inverted_main->operations.front();
+        forged.inverted_main->operations.resize(1025, repeat);
         reject([&] { (void)verify_production_inverted_i64(forged); },
                "capacity/operation budget");
     }
