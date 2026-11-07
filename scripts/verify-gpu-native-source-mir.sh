@@ -20,9 +20,11 @@ for path in \
   src/main/cpp/oreslang/frontend/Parser.cpp \
   src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp \
   src/main/cpp/oreslang/frontend/GpuKernelSourceLink.hpp \
+  src/main/cpp/oreslang/frontend/GpuKernelBodyHir.hpp \
   src/main/cpp/oreslang/runtime/GpuTypedLaunchIr.hpp \
   tests/gpu_source_launch_mir_test.cpp \
   tests/gpu_kernel_source_link_test.cpp \
+  tests/gpu_kernel_body_hir_test.cpp \
   tests/atto_gpu_kernel_source_link_admission.cmake \
   tests/gpu_kernel_source_link_harness_selftest.sh \
   tests/gpu_source_mir_adversarial_test.cpp \
@@ -48,6 +50,9 @@ trap 'rm -rf "$work"' EXIT
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
   -Isrc/main/cpp tests/gpu_kernel_source_link_test.cpp -o "$work/gpu-kernel-source-link"
 "$work/gpu-kernel-source-link"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+  -Isrc/main/cpp tests/gpu_kernel_body_hir_test.cpp -o "$work/gpu-kernel-body-hir"
+"$work/gpu-kernel-body-hir"
 bash tests/gpu_kernel_source_link_harness_selftest.sh
 bash tests/gpu_native_negative_harness_selftest.sh
 echo "GPU_SOURCE_MIR_HOST_PASS: isolated host-only tests; native Parser.cpp and GPU device not executed"
