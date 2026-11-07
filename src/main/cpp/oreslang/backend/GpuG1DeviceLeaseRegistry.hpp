@@ -25,6 +25,8 @@ public:
         std::uint64_t tenant_inflight;
         std::uint64_t views_per_submission;
         std::uint64_t referenced_bytes_per_submission;
+        std::uint64_t tracked_queue_ids_per_tenant;
+        std::uint64_t tracked_allocation_ids_per_tenant;
     };
     enum class Access : std::uint8_t { Read, Write };
     enum class Event : std::uint8_t { Completed, CancelledQuiescent };
@@ -60,13 +62,17 @@ public:
         std::uint64_t inflight;
         std::uint64_t cancelled_pending;
         std::uint64_t quarantined_queues;
+        std::uint64_t tracked_queue_ids;
+        std::uint64_t tracked_allocation_ids;
     };
 
     explicit DeviceLeaseRegistry(Limits limits) : limits_(limits), identity_(next_identity()) {
         static_assert(sizeof(float) == 4, "GPU G1 requires f32 storage ABI");
         if (!limits_.tenant_resident_bytes || !limits_.tenant_allocations ||
             !limits_.tenant_inflight || !limits_.views_per_submission ||
-            !limits_.referenced_bytes_per_submission)
+            !limits_.referenced_bytes_per_submission ||
+            !limits_.tracked_queue_ids_per_tenant ||
+            !limits_.tracked_allocation_ids_per_tenant)
             deny("GPU-G1-LEASE-001: invalid positive provider quota");
     }
     DeviceLeaseRegistry(const DeviceLeaseRegistry&) = delete;
@@ -79,7 +85,12 @@ public:
         if (quarantined_devices_.count(device))
             deny("GPU-G1-LEASE-017: quarantined device domain");
         const Key key{tenant, device, queue};
+        auto& usage = usages_[tenant];
+        if (queues_.find(key) == queues_.end() &&
+            usage.tracked_queue_ids >= limits_.tracked_queue_ids_per_tenant)
+            deny("GPU-G1-LEASE-018: queue identity ledger capacity exhausted");
         auto [it, inserted] = queues_.try_emplace(key);
+        if (inserted) ++usage.tracked_queue_ids;
         auto& state = it->second;
         if (state.active || state.quarantined || state.generation == max())
             deny("GPU-G1-LEASE-002: queue active, quarantined or exhausted");
@@ -107,7 +118,11 @@ public:
             bytes > limits_.tenant_resident_bytes - usage.resident_bytes)
             deny("GPU-G1-LEASE-004: tenant resident quota exceeded");
         const Key id{tenant, device, allocation};
+        if (allocations_.find(id) == allocations_.end() &&
+            usage.tracked_allocation_ids >= limits_.tracked_allocation_ids_per_tenant)
+            deny("GPU-G1-LEASE-019: allocation identity ledger capacity exhausted");
         auto [it, inserted] = allocations_.try_emplace(id);
+        if (inserted) ++usage.tracked_allocation_ids;
         auto& state = it->second;
         if (state.active || state.quarantined || state.generation == max())
             deny("GPU-G1-LEASE-005: allocation active, quarantined or exhausted");
@@ -208,10 +223,14 @@ public:
         Snapshot s{};
         for (const auto& [tenant, usage] : usages_) {
             if (usage.resident_bytes > max() - s.resident_bytes ||
-                usage.allocations > max() - s.allocations)
+                usage.allocations > max() - s.allocations ||
+                usage.tracked_queue_ids > max() - s.tracked_queue_ids ||
+                usage.tracked_allocation_ids > max() - s.tracked_allocation_ids)
                 deny("GPU-G1-LEASE-016: aggregate statistics overflow");
             s.resident_bytes += usage.resident_bytes;
             s.allocations += usage.allocations;
+            s.tracked_queue_ids += usage.tracked_queue_ids;
+            s.tracked_allocation_ids += usage.tracked_allocation_ids;
         }
         s.inflight = submissions_.size();
         for (const auto& [ticket, submission] : submissions_)
@@ -230,7 +249,13 @@ private:
         bool active = false;
         bool quarantined = false;
     };
-    struct Usage { std::uint64_t resident_bytes = 0; std::uint64_t allocations = 0; std::uint64_t inflight = 0; };
+    struct Usage {
+        std::uint64_t resident_bytes = 0;
+        std::uint64_t allocations = 0;
+        std::uint64_t inflight = 0;
+        std::uint64_t tracked_queue_ids = 0;
+        std::uint64_t tracked_allocation_ids = 0;
+    };
     struct Submission {
         Key queue;
         std::uint64_t queue_generation;
