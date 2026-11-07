@@ -466,7 +466,7 @@ The guest never receives raw RequestContextLocal handles from this path.
 
 `native_request_issued_data_ingress_v1_test.cpp` uses real scheduler
 DATA callbacks for two independent actors. Across 16 DATA turns each it
-authors 239 named checks: 32 scheduler-issued request admissions; exact
+authors 240 named checks: 32 scheduler-issued request admissions; exact
 source actor/mail authorization and 64 duplicate/cross-actor denials;
 wrong/off-carrier actor and issuer rejection; issuer counter monotonicity;
 cancelled root authority refusal on actual DATA execution; and actor A
@@ -484,7 +484,11 @@ to force a deterministic order; production must not block carriers.
 The existing native scoped-mail workflow now compiles these two test
 executables across GCC/Clang optimized, GCC/Clang ASan+UBSan, and GCC
 TSan, while retaining prior 45-case scoped-mail and original-mail tests.
-It also compiles one deliberate issuer-replay mutation, then requires the
+It also compiles two deliberate negative mutations: issuer-replay
+protection and a second-issuer bypass (which would allow independent
+per-mail replay counters). Both mutant binaries must build successfully,
+then fail their exact named assertions. The workflow additionally compiles
+one deliberate issuer-replay mutation, then requires the
 exact named duplicate-mail denial to fail at runtime. A compiler error,
 unrelated assertion, empty test log, or arbitrary crash does NOT count as
 a successful mutation witness. The legacy scoped-mail workflow's stale
@@ -501,3 +505,14 @@ side-effect and cancellation receipts, bounded nonblocking destruction,
 five-backend guest parity, and independently reviewed exact-head hosted
 GCC/Clang/TSan/ASan results remain required. This feature must stay
 source-host-only until those gates pass.
+
+**Additional issuer exclusivity:** The registry now has a non-resettable
+atomic `claim_data_ingress_issuer_once()` gate. An issuer may claim a
+scheduler-bound registry only once for its entire lifetime, closing the
+otherwise overlooked hole where two C++ host issuers could maintain
+independent per-slot DATA-mail monotonic counters. A failed bootstrap
+claim stays sealed; a hot upgrade needs fresh registry/scheduler authority,
+not a newly minted issuer for a retired incarnation. One additional named
+check (240 issuer checks total) and a second compile-and-execute mutation
+witness guard the exclusive claim.
+
