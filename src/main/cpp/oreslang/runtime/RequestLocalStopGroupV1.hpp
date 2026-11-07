@@ -41,7 +41,8 @@ public:
             !request->belongs_to(actor_) || !request->active())
             return false;
         std::lock_guard<std::mutex> lock(mutex_);
-        if (sealed_) return false;
+        if (sealed_ || !ores_native_actor_scheduler_poll_ready(
+                scheduler_, actor_)) return false;
         for (const auto& weak : registered_)
             if (auto existing = weak.lock())
                 if (existing.get() == request.get()) return false;
@@ -94,6 +95,32 @@ public:
         // A pre-STOP copy/mutation may retain a pinned cell. The CONTROL
         // caller alone waits for these leases and the actor DONE barrier;
         // no guest destructor runs under the registry/store/graph mutex.
+        for (const auto& request : *pinned)
+            if (!request->wait_closed_quiescent()) return false;
+        if (!ores_native_actor_scheduler_wait_done(scheduler_, actor_))
+            return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        completed_ = true;
+        return true;
+    }
+
+    // CONTROL-only recovery for a termination initiated outside this group:
+    // ordinary STOP, supervisor shutdown, or runtime retirement. The caller
+    // MUST have signaled scheduler STOP/retire before invoking this method.
+    // This is an explicit cleanup sweep, NOT an automatic STOP observer, and
+    // it must never run from any actor carrier. The scheduler's termination
+    // observer only publishes atomic fencing; it cannot destroy request cells.
+    bool reap_after_external_termination_and_wait() {
+        if (!scheduler_ ||
+            ores_native_actor_scheduler_is_any_current_carrier_v1() ||
+            ores_native_actor_scheduler_poll_ready(scheduler_, actor_))
+            return false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (completed_) return false;
+        }
+        auto pinned = seal_and_revoke();
+        if (!pinned) return false;
         for (const auto& request : *pinned)
             if (!request->wait_closed_quiescent()) return false;
         if (!ores_native_actor_scheduler_wait_done(scheduler_, actor_))
