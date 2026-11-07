@@ -1263,6 +1263,9 @@ if(BUILD_TESTING)
     # This is an actual source compiler negative, not a host-only model.
     oreslang_contract_test(atto_share_borrowed_parameter_rejected
         atto-share-borrowed-parameter-reject.atto --diagnostic "E_SHARE_BORROW")
+    # Borrowed class roots must not launder their scalar fields into Share.
+    oreslang_contract_test(atto_share_borrowed_class_field_rejected
+        atto-share-borrowed-class-field-reject.atto --diagnostic "E_SHARE_BORROW")
     # Copy scalars retain parity with Java rt share Copy semantics.
     # Require real compiler IR, Clang link and native process exit.
     if(ORE_CLANG)
