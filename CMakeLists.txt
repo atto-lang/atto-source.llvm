@@ -122,6 +122,18 @@ if(BUILD_TESTING)
             "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g2_chain_negative.cmake")
     set_tests_properties(native_atto_gpu_g2_ptx_provenance_HOST_ONLY
         PROPERTIES TIMEOUT 75)
+    # Input budget is enforced before CUDA driver initialization. A broken
+    # or malicious PTX file must not OOM the hardware test runner.
+    add_executable(oreslang-gpu-g2-ptx-input-host-test
+        tests/gpu_g2_ptx_input_host_test.cpp)
+    target_include_directories(oreslang-gpu-g2-ptx-input-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g2-ptx-input-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_atto_gpu_g2_ptx_input_HOST_ONLY
+        COMMAND oreslang-gpu-g2-ptx-input-host-test)
+    set_tests_properties(native_atto_gpu_g2_ptx_input_HOST_ONLY
+        PROPERTIES TIMEOUT 30)
 
     # Physical CUDA execution is a separately governed, opt-in runner lane.
     # Never claim hardware validation just because a CUDA SDK was installed.
