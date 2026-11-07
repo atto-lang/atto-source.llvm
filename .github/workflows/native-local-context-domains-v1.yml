@@ -12,6 +12,7 @@ on:
       - "tests/native_context_domains_v1_test.cpp"
       - "tests/native_local_read_revocation_v1_test.cpp"
       - "tests/native_actorlocal_stop_during_copy_v1_test.cpp"
+      - "tests/native_actorlocal_cross_scheduler_retire_v1_test.cpp"
       - "tests/native_actorlocal_stop_mutation_witness.sh"
       - "tests/native_local_read_revocation_mutation_witness.sh"
       - "tests/run_native_local_context_m6_offline.sh"
@@ -47,9 +48,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "3ee0121b59927b9a0b40a4bce73e0902c7d1a2bc"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp)" = "e3d7826945390ce0e89f11d73764cf2351a59683"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp)" = "3e43913769a505790f821e604a37d883470a6489"
           test "$(git hash-object tests/native_actorlocal_stop_during_copy_v1_test.cpp)" = "d21b6c525819c277038f2c5f0d393c3b82cf2f35"
-          test "$(git hash-object tests/native_actorlocal_stop_mutation_witness.sh)" = "d80313a05287185ff7b39fef395d58d6f8514b71"
+          test "$(git hash-object tests/native_actorlocal_cross_scheduler_retire_v1_test.cpp)" = "7af31f5126c8c0627177f259e15f5713a8d73064"
+          test "$(git hash-object tests/native_actorlocal_stop_mutation_witness.sh)" = "7435666345b25bafeb3ee97ec01a02e4e90aa0c5"
           for dep in src/main/cpp/oreslang/runtime/NativeActorScheduler.c src/main/cpp/oreslang/runtime/NativeActorScheduler.h src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h; do
             test "$(git hash-object "$dep")" = "$(git rev-parse "HEAD:$dep")"
           done
@@ -95,6 +97,10 @@ jobs:
             -Isrc/main/cpp tests/native_actorlocal_stop_during_copy_v1_test.cpp \
             "$work/scheduler.o" -o "$work/actorlocal-stop-test"
           "$work/actorlocal-stop-test"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_actorlocal_cross_scheduler_retire_v1_test.cpp \
+            "$work/scheduler.o" -o "$work/actorlocal-cross-scheduler-retire-test"
+          "$work/actorlocal-cross-scheduler-retire-test"
           if [[ "$MODE" == optimized ]]; then
             bash tests/native_actorlocal_stop_mutation_witness.sh
           fi
