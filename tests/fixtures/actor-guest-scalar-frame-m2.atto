@@ -1,0 +1,9 @@
+// M2 native compiler-owned scalar message frame, authenticated by carrier.
+// Full source ActorRef/spawn and suspended handlers are intentionally excluded.
+define actor Counter as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
