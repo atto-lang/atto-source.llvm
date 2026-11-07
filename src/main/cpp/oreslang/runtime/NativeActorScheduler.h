@@ -278,6 +278,13 @@ int ores_native_actor_scheduler_commit_if_running_v1(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     OresNativeActorBoundedCommitV1 commit, void* opaque);
 
+// Exact-incarnation STOP/retire readback for host CONTROL reconciliation.
+// Unlike !poll_ready, 0 here also denies forged/stale handles and a live
+// actor. A true result does not by itself prove DONE or quiescence.
+int ores_native_actor_scheduler_is_stopping_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+
+
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
