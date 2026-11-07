@@ -6,6 +6,7 @@ on:
       - "src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp"
       - "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp"
       - "tests/native_context_domains_v1_test.cpp"
+      - "tests/native_local_payload_budget_v1_test.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/native-local-context-domains-v1.yml"
   workflow_dispatch:
@@ -40,6 +41,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "ab9741016a8f85e6aef03931a95ecf6d100eeac2"
           test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "71cc713d6fc98856c88e3dc084007b60bd9cd9f6"
+          test "$(git hash-object tests/native_local_payload_budget_v1_test.cpp)" = "9101f195531c8556a549c8848c6fb05e84a3c919"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
         shell: bash
@@ -63,4 +65,8 @@ jobs:
             -Isrc/main/cpp tests/native_context_domains_v1_test.cpp \
             -o "$work/local-context-test"
           "$work/local-context-test"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_local_payload_budget_v1_test.cpp \
+            -o "$work/local-payload-test"
+          "$work/local-payload-test"
           printf 'LOCAL_CONTEXT_DOMAINS_V1_EXACT_HEAD_HOST_PASS compiler=%s mode=%s\n' "$CXX" "$MODE"
