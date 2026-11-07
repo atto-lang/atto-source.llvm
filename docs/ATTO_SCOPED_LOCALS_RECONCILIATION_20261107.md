@@ -235,3 +235,55 @@ CONTROL-only blocking STOP helpers reject callback carriers from **any**
 scheduler domain, not just the actor's owning scheduler. The scheduler
 source/header blobs are pinned in both affected workflows. A three-case
 cross-scheduler negative fixture exercises this guard; it is not yet executed.
+
+## Native scheduler STOP admission and handoff-ticket arbitration (2026-11-07)
+
+NativeActorScheduler now offers a **trusted-host-only** bounded commit
+operation under the SAME scheduler mutex used by ordinary stop(),
+stop_sealed(), and whole-runtime retire(). It accepts an exact-generation
+actor whose phase is READY, RUNNING, or SUSPENDED and denies STOPPING,
+TERMINATED, stale/foreign generations, and globally retired schedulers.
+An earlier implementation incorrectly required phase RUNNING even for a
+newly spawned READY actor; this was corrected before declaring any tests.
+
+RequestContextLocalV1 set/erase/original-mail binding now take an optional
+scheduler pointer used by privileged adapters. All privileged DATA-mail,
+READY-wake, legacy actor-turn and cross-actor handoff write paths provide
+that pointer, so mutations that STOP wins before their final commit are
+rejected. Raw two-argument C++ store calls remain HOST ONLY and must NEVER
+be lowered to source-level guest operations. The C callback may do ONLY
+bounded, allocation-free bookkeeping: no guest code, callbacks, locks,
+blocking, suspension, or arbitrary value destruction under scheduler lock.
+
+RequestContextHandoffV1::seal allocates its envelope before entering
+the cancellation + scheduler gate. It creates a one-shot ticket only
+after winning both cancellation authority and actor lifecycle admission.
+This prevents source cancellation or direct STOP from winning before a
+fresh ticket is published. A deterministic test stops actor A during
+selected-value copy and asserts no ticket is created.
+
+RequestLocalStopGroupV1 adds explicit finish_after_external_stop() for
+trusted host CONTROL repair after direct STOP or global retirement.
+The cleanup path checks a new exact-generation is_stopping predicate;
+not-ready alone is insufficient evidence because invalid actor handles
+are also not-ready. After validation it closes registered stores, waits
+for pinned operations and joins actor DONE without blocking carriers.
+
+New native_request_actor_lifecycle_guard_v1_test.cpp has **49 named
+host assertions** for live READY commits, both STOP modes, runtime retire,
+wrong generation/slot/domain, cancellation, late precommit, and explicit
+cleanup of direct STOP. Existing 38 host STOP/cancel tests plus 45 scoped
+local host checks remain. The RequestLocal CI matrix now executes the
+new cases and an additional STOP-during-handoff-copy fixture. All sources
+are SHA-pinned to their Git blob identities.
+
+SECURITY HOLD: direct scheduler STOP/retire does not automatically call
+the host RequestLocalStopGroup close/quiescence method. The guarded
+privileged write path denies commits after STOP; raw host request stores
+may remain allocated until explicit control-plane reconciliation. This
+must be integrated with supervisor/panic/restart/hot-reload ownership and
+all scheduling teardown paths before claiming universal heap reclamation.
+Tenant/isolate provenance, guest-safe owned value descriptors, full native
+sanitizer executions and compiled .atto parity also remain open.
+Zero-step hosted workflows are runner-admission failures, NOT passing
+or failing native/guest evidence.
