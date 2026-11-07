@@ -11,10 +11,11 @@ on:
       - 'CMakeLists.txt'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
-      - 'src/main/cpp/oreslang/types/InvertedMixedGuestLlvm.hpp'
+      # Shared typed HIR/MIR and the legacy source verifier can invalidate
+      # mixed or two-i64 compilation without touching the new emitter.
+      - 'src/main/cpp/oreslang/types/Inverted*'
       - 'src/main/cpp/oreslang/main.cpp'
-      - 'tests/native_inverted_mixed*'
-      - 'tests/native_inverted_struct_ast_test.cpp'
+      - 'tests/native_inverted*'
       - 'tests/fixtures/inverted-mixed/**'
   workflow_dispatch:
 
