@@ -122,6 +122,24 @@ public:
         return slot.sweep_ok;
     }
 
+    // Nonblocking status probe for deterministic sibling progress tests and
+    // external CONTROL coordinators. Never waits for a request lease/DONE.
+    bool poll_reaped(OresNativeActorRef actor) const {
+        if (!actor.scheduler_domain || !actor.generation ||
+            actor.actor_slot >= actor_slots_ ||
+            ores_native_actor_scheduler_is_any_current_carrier_v1())
+            return false;
+        const Slot& slot = slots_[static_cast<std::size_t>(actor.actor_slot)];
+        if (slot.live->load(std::memory_order_acquire) ||
+            slot.terminated_domain.load(std::memory_order_acquire) !=
+                actor.scheduler_domain ||
+            slot.terminated_generation.load(std::memory_order_acquire) !=
+                actor.generation)
+            return false;
+        std::lock_guard<std::mutex> guard(mutex_);
+        return slot.sweep_done && slot.sweep_ok;
+    }
+
     std::size_t reaped_actors() const noexcept {
         return reaped_count_.load(std::memory_order_acquire);
     }
