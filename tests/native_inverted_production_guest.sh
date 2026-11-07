@@ -38,6 +38,39 @@ hash_file() {
     printf '%s\n' "$digest"
 }
 auditor_sha="$(hash_file "$auditor")" || exit 1
+
+# Toolchain bytes are pinned for the duration of the guest run, not merely
+# inferred from command names or a static expected Clang version.
+resolve_executable() {
+    local candidate="$1"
+    if [[ "$candidate" != */* ]]; then
+        candidate="$(command -v -- "$candidate")" || return 1
+    fi
+    if [[ ! -f "$candidate" || ! -x "$candidate" ]]; then
+        echo "FAIL: missing executable tool: $candidate" >&2
+        return 1
+    fi
+    printf '%s\n' "$candidate"
+}
+compiler_path="$(resolve_executable "$compiler")" || exit 1
+clang_path="$(resolve_executable "$clang")" || exit 1
+compiler_sha="$(hash_file "$compiler_path")" || exit 1
+clang_sha="$(hash_file "$clang_path")" || exit 1
+check_toolchain_identity() {
+    if [[ "$(hash_file "$compiler_path")" != "$compiler_sha" ||
+          "$(hash_file "$clang_path")" != "$clang_sha" ||
+          "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
+        echo 'FAIL: source compiler, Clang, or auditor mutated during native test' >&2
+        exit 1
+    fi
+}
+verify_binary_stable() {
+    local file="$1" approved="$2"
+    if [[ "$(hash_file "$file")" != "$approved" ]]; then
+        echo 'FAIL: compiled native artifact changed between execution and evidence' >&2
+        exit 1
+    fi
+}
 printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' \
     > "$tmp/expected-audit-success"
 audit_ir() {
@@ -60,6 +93,7 @@ audit_ir() {
         echo "FAIL: forged, mutated or contaminated inverted no-GC IR audit" >&2
         exit 1
     fi
+    approved_ir_sha="$before"
 }
 # The real auditor must deny a tracing-GC symbol before any native guest
 # compilation; a stand-in that always prints SUCCESS cannot qualify parity.
@@ -154,9 +188,10 @@ if magic not in formats:
 PY
 }
 check_contract_fixtures
+check_toolchain_identity
 
 for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto; do
-    "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
+    "$compiler_path" "$fixtures/$fixture" > "$tmp/guest.ll"
     audit_ir "$tmp/guest.ll"
     for required in '; typed MIR, experimental local i64 pair LLVM IR' \
         'load i1, ptr %alive' 'icmp ult i64' \
@@ -167,9 +202,16 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
         fi
     done
     for optimization in -O0 -O2; do
-        "$clang" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
+        check_toolchain_identity
+        "$clang_path" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
+        if [[ "$(hash_file "$tmp/guest.ll")" != "$approved_ir_sha" ]]; then
+            echo 'FAIL: audited inverted IR mutated during Clang' >&2
+            exit 1
+        fi
         check_native_image "$tmp/guest"
+        binary_sha="$(hash_file "$tmp/guest")"
         expect_native_exit_42 "$tmp/guest" "$fixture" "$optimization"
+        verify_binary_stable "$tmp/guest" "$binary_sha"
     done
 done
 
@@ -180,19 +222,26 @@ if [[ ! -f "$contracts/swap-reuse.atto" ||
     echo "FAIL: canonical DOP v1 fixture corpus absent" >&2
     exit 1
 fi
-"$compiler" "$contracts/swap-reuse.atto" > "$tmp/reuse.ll"
+"$compiler_path" "$contracts/swap-reuse.atto" > "$tmp/reuse.ll"
 audit_ir "$tmp/reuse.ll"
 for optimization in -O0 -O2; do
-    "$clang" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
+    check_toolchain_identity
+    "$clang_path" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
+    if [[ "$(hash_file "$tmp/reuse.ll")" != "$approved_ir_sha" ]]; then
+        echo 'FAIL: audited canonical IR mutated during Clang' >&2
+        exit 1
+    fi
     check_native_image "$tmp/reuse"
+    binary_sha="$(hash_file "$tmp/reuse")"
     expect_native_exit_42 "$tmp/reuse" "swap-reuse.atto" "$optimization"
+    verify_binary_stable "$tmp/reuse" "$binary_sha"
 done
 
 # A guest read past logical length is dynamically guarded, rather than
 # allowing an inbounds GEP from a capacity-only proof.
 for bounds_source in "$fixtures/negative-two-column-out-of-bounds.atto" \
                      "$contracts/removed-index-trap.atto"; do
-"$compiler" "$bounds_source" > "$tmp/bounds.ll"
+"$compiler_path" "$bounds_source" > "$tmp/bounds.ll"
 audit_ir "$tmp/bounds.ll"
 if ! grep -Fq 'call void @llvm.trap()' "$tmp/bounds.ll" ||
    ! grep -Fq 'icmp ult i64' "$tmp/bounds.ll"; then
@@ -202,8 +251,14 @@ fi
 # Real signal evidence at both optimization levels; shell exit 132/133 can
 # be forged by a normal return. Python checks SIGILL/SIGTRAP termination.
 for optimization in -O0 -O2; do
-    "$clang" "$optimization" -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
+    check_toolchain_identity
+    "$clang_path" "$optimization" -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
+    if [[ "$(hash_file "$tmp/bounds.ll")" != "$approved_ir_sha" ]]; then
+        echo 'FAIL: audited bounds IR mutated during Clang' >&2
+        exit 1
+    fi
     check_native_image "$tmp/bounds"
+    binary_sha="$(hash_file "$tmp/bounds")"
     python3 - "$tmp/bounds" <<'PY'
 import resource
 import signal
@@ -223,6 +278,7 @@ if result.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
         f"FAIL: bounds guest expected a real SIGILL/SIGTRAP, got {result.returncode}"
     )
 PY
+    verify_binary_stable "$tmp/bounds" "$binary_sha"
 done
 done
 
@@ -277,7 +333,7 @@ for item in \
     'mixed|precisely two i64 fields' \
     'extra|only source callable'; do
     name="${item%%|*}"; diagnostic="${item#*|}"
-    if "$compiler" "$tmp/$name.atto" > "$tmp/unsafe.ll" 2> "$tmp/error.txt"; then
+    if "$compiler_path" "$tmp/$name.atto" > "$tmp/unsafe.ll" 2> "$tmp/error.txt"; then
         echo "FAIL: production compiler admitted unsafe $name" >&2
         exit 1
     fi
@@ -293,7 +349,7 @@ done
 for option in --profile=native-hard-rt --target=wasm32 \
               --constraint-descriptors --tree-shake \
               --allocator-provider=bounded-arena; do
-    if "$compiler" "$option" "$fixtures/positive-column-get.atto" \
+    if "$compiler_path" "$option" "$fixtures/positive-column-get.atto" \
         >"$tmp/unsafe.ll" 2>"$tmp/error.txt"; then
         echo "FAIL: restricted production owner admitted option $option" >&2
         exit 1
@@ -304,4 +360,5 @@ for option in --profile=native-hard-rt --target=wasm32 \
     fi
 done
 check_contract_fixtures
+check_toolchain_identity
 printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 10 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
