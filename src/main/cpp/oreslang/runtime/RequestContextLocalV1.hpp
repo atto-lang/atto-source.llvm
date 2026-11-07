@@ -180,6 +180,7 @@ public:
         // node insertion cannot rehash/allocate during the final commit.
         std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> staged;
         staged.emplace(key.id_, next);
+        auto staged_node = staged.extract(key.id_);
         std::shared_ptr<CellBase> previous;
         bool committed = false;
         {
@@ -198,7 +199,7 @@ public:
                 if (found == slots_.end()) {
                     // Preallocated node, existing bucket array: no allocator
                     // or guest callback while cancellation authority is held.
-                    slots_.insert(staged.extract(key.id_));
+                    slots_.insert(std::move(staged_node));
                 } else {
                     previous.swap(found->second);
                     found->second = std::move(next);
