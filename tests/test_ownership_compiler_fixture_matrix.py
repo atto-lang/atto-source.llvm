@@ -82,6 +82,24 @@ class FixtureInventoryTests(unittest.TestCase):
     def test_path_traversal_fixture_name_denied(self):
         self.reject_mutation(lambda x: x["cases"][0].update(id="../escape"))
 
+    def test_comment_only_ownership_operation_denied(self):
+        def mutate(x):
+            original = x["cases"][49]
+            original["source"] = (
+                "// rt copy 42 exists in a comment only\n"
+                "pub fnc main(): int { return 42; }\n"
+            )
+        self.reject_mutation(mutate)
+
+    def test_block_comment_only_ownership_operation_denied(self):
+        def mutate(x):
+            original = x["cases"][40]
+            original["source"] = (
+                "/* rt copy 42 is not executable source */\n"
+                "pub fnc main(): int { return 42; }\n"
+            )
+        self.reject_mutation(mutate)
+
     def test_category_underfilled_denied(self):
         self.reject_mutation(lambda x: x["cases"][0].update(category="owned-scalar-copy"))
 
