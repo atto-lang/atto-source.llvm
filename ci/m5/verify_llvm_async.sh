@@ -7,14 +7,19 @@ if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$expe
   echo 'M5_LLVM_ASYNC_NOT_EXECUTED: exact source head mismatch' >&2; exit 2
 fi
 git diff --quiet HEAD -- || { echo 'M5_LLVM_ASYNC_NOT_EXECUTED: checkout dirty' >&2; exit 2; }
-archive="$repo/build/atto-tenant-full-source/tenant-vm/libtenant_vm_guests.a"
-test -s "$archive" || { echo 'M5_LLVM_ASYNC_NOT_EXECUTED: actual native test guest module missing' >&2; exit 2; }
+test -f "$repo/tests/tenant-vm/guests.c" || {
+  echo 'M5_LLVM_ASYNC_NOT_EXECUTED: actual original ABI guest source missing' >&2; exit 2;
+}
 test -f "$repo/src/main/cpp/oreslang/runtime/TenantVm.cpp" || exit 2
+clang -std=c11 -O1 -fno-stack-protector -fno-sanitize=all \
+  -Wno-gnu-designator -Wno-c99-designator \
+  -I "$repo/src/main/cpp" -I "$repo/tests/tenant-vm" \
+  -c tests/tenant-vm/guests.c -o build/atto-tenant-full-source/m5-guests.o
 clang++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror \
   -I "$repo/src/main/cpp" -I "$repo/tests/tenant-vm" \
   ci/m5/llvm_async_mailbox_stress.cpp \
   src/main/cpp/oreslang/runtime/TenantVm.cpp \
-  "$archive" -ldl -o build/atto-tenant-full-source/m5-llvm-mailbox
+  build/atto-tenant-full-source/m5-guests.o -ldl -o build/atto-tenant-full-source/m5-llvm-mailbox
 timeout 180 build/atto-tenant-full-source/m5-llvm-mailbox \
   > build/atto-tenant-full-source/m5-llvm-output \
   2> build/atto-tenant-full-source/m5-llvm-stderr || {
