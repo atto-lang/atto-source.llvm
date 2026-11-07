@@ -56,7 +56,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
           test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "05f071f911650a53b7158135d07f22b2650ea64b"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "813d1f3be2ab90825e6bee4deb31b7a7f74e3796"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "611e06c03a92951c45d4385a666eb438224a17af"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "6da67b0caf13eb1889a3509c7aa41dd31378863a"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "6e11a3d85df99b1e79687c2bf803d2da6d38ee1a"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "80d03fe85c406d2b67898d890bc174850e2a54be"
@@ -67,8 +67,8 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
           test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "ebba397307a27451492d0c3aa20d8b259807d80f"
           test "$(git hash-object tests/native_request_lifecycle_registry_v1_test.cpp)" = "9f2df8ec2f1baa23319750f66a3a9a4aa1747f37"
-          test "$(git hash-object tests/native_actor_stop_notice_v1_test.c)" = "71945dff9b174b8460ba1bbdd4ab68f68ed3da9a"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "73f9be4b3453616a8c22b61f752151509ea4e321"
+          test "$(git hash-object tests/native_actor_stop_notice_v1_test.c)" = "467c31db374b55c4ed43ca590bb2ca0cdea01019"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "3f585d93b073c32a277066156b91cf2d49fa9575"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -115,8 +115,8 @@ jobs:
             -Isrc/main/cpp tests/native_actor_stop_notice_v1_test.c \
             "$tmp/scheduler.o" -o "$tmp/stop-notice-contract"
           "$tmp/stop-notice-contract" | tee "$tmp/stop-notice-contract.log"
-          test "$(grep -c '^STOP_NOTICE_CASE_PASS ' "$tmp/stop-notice-contract.log")" = "16"
-          grep -qx 'NATIVE_ACTOR_STOP_NOTICE_16_C_CASES_PASS' "$tmp/stop-notice-contract.log"
+          test "$(grep -c '^STOP_NOTICE_CASE_PASS ' "$tmp/stop-notice-contract.log")" = "17"
+          grep -qx 'NATIVE_ACTOR_STOP_NOTICE_17_C_CASES_PASS' "$tmp/stop-notice-contract.log"
           if [[ "$MODE" == optimized ]]; then
             test "$(grep -Fc 'lane->stop_notice(lane->stop_notice_opaque);' src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = 2
             sed 's/lane->stop_notice(lane->stop_notice_opaque);/(void)0;/g' \
