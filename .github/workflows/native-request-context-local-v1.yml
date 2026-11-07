@@ -138,6 +138,30 @@ jobs:
           "$tmp/request-lifecycle-registry" | tee "$tmp/request-lifecycle-registry-cases.log"
           test "$(grep -c '^LIFECYCLE_REGISTRY_PASS ' "$tmp/request-lifecycle-registry-cases.log")" = "70"
           grep -qx 'NATIVE_REQUEST_LIFECYCLE_REGISTRY_70_HOST_CASES_PASS' "$tmp/request-lifecycle-registry-cases.log"
+
+          # Security mutation: remove the CONTROL self-wait denial. The
+          # reentrant RequestLocal value destructor must then produce an
+          # observed failing assertion, not a quietly green no-op test.
+          if [[ "$MODE" == optimized ]]; then
+            header=src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp
+            test "$(grep -Fc 'std::this_thread::get_id() == control_.get_id()' "$header")" = 2
+            mkdir -p "$tmp/mutated/oreslang/runtime"
+            sed 's/std::this_thread::get_id() == control_\.get_id()/false/g' \
+              "$header" > "$tmp/mutated/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp"
+            "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+              -I"$tmp/mutated" -Isrc/main/cpp \
+              tests/native_request_lifecycle_registry_v1_test.cpp \
+              "$tmp/scheduler.o" -o "$tmp/reentrant-mutant"
+            ulimit -c 0
+            set +e
+            "$tmp/reentrant-mutant" > "$tmp/reentrant-mutant.log" 2>&1
+            mutation_status=$?
+            set -e
+            test "$mutation_status" -ne 0
+            grep -Fq 'LIFECYCLE_REGISTRY_FAILED 62_reentrant_wait_denied_without_worker_deadlock' \
+              "$tmp/reentrant-mutant.log"
+            printf 'REQUEST_CONTROL_SELF_WAIT_MUTATION_DETECTED compiler=%s\\n' "$CXX"
+          fi
           "$tmp/request-stop-cancel" | tee "$tmp/request-stop-cases.log"
           test "$(grep -c '^REQUEST_STOP_CASE_PASS ' "$tmp/request-stop-cases.log")" = "38"
           grep -qx 'REQUEST_STOP_CANCEL_38_HOST_CASES_PASS' "$tmp/request-stop-cases.log"
