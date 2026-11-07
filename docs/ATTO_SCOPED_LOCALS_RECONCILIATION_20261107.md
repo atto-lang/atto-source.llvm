@@ -213,9 +213,10 @@ Retain draft, maintain #1391 as the alternate draft, and do not claim parity.
   Sibling actors are not closed by this group. Every STOP path must be
   routed through this trusted bridge or separately revoke its requests;
   direct native scheduler STOP remains an unproven guest ABI bypass.
-- Added 35 distinct named host assertions covering STOP vs value move,
+- Added 38 distinct named host assertions covering STOP vs value move,
   cancel vs value move, close vs value-copy, STOP vs pinned read, original
-  DATA mail identity, quotas, generation scope, and sibling actor survival.
+  DATA mail identity, quotas, generation scope, sibling actor survival and
+  refusal to wait for STOP from another scheduler's callback carrier.
   Real GCC/Clang optimized, ASan/UBSan and TSan workflow targets are
   attached to the original RequestLocal workflow, with exact blob pins.
 - Source-level structural audits and isolated GCC/Clang C++17 node-handle
@@ -228,3 +229,9 @@ isolate and request identity; integrate the STOP bridge at every scheduler
 termination path; compiler-owned type/borrow admission; review graph mutex
 ordering and sanitizer evidence; exact-head compiled .atto receipts and
 independent review. Never treat host C++ custom aggregates as guest values.
+
+NativeActorScheduler now offers a host-only global carrier predicate so
+CONTROL-only blocking STOP helpers reject callback carriers from **any**
+scheduler domain, not just the actor's owning scheduler. The scheduler
+source/header blobs are pinned in both affected workflows. A three-case
+cross-scheduler negative fixture exercises this guard; it is not yet executed.
