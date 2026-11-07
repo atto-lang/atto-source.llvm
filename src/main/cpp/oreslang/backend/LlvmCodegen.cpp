@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/WasmActorBoundedTrampoline.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -700,7 +701,14 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
-                                  bool bounded_allocator_provider) {
+                                  bool bounded_allocator_provider,
+                                  bool experimental_wasm_actor_recursion_v1) {
+    if (experimental_wasm_actor_recursion_v1) {
+        if (!wasm32_target || cortex_m_target || bounded_allocator_provider)
+            throw std::runtime_error(
+                "checked recursive actor trampoline requires bare wasm32 target");
+        return wasm_actor_checked_v1::emit(source);
+    }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
