@@ -7,7 +7,8 @@ on:
       - src/main/cpp/oreslang/backend/LlvmCodegen.cpp
       - tests/source_actor_e2e.py
       - tests/source_actor_await_trace_runtime_test.c
-      - tests/fixtures/atto-actor-frame-two-heaps.atto
+      - tests/fixtures/atto-actor-frame-*.atto
+      - tests/fixtures/atto-actor-heap-*.atto
       - .github/workflows/source-actor-frame-native-guest.yml
   workflow_dispatch:
 
