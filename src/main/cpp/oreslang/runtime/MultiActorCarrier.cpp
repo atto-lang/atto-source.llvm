@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <cstdlib>
+#include <cstdio>
 #include <functional>
 #include <stdexcept>
 #include <utility>
@@ -435,6 +436,12 @@ static_assert(sizeof(StacklessScalarFrame) *
     ActorGuestFrameStack::capacity_bytes, "M3 frames do not fit actor stack");
 
 [[noreturn]] void bad_stackless_frame() noexcept { std::abort(); }
+[[noreturn]] void actor_stackless_depth_exceeded() noexcept {
+    // This fixed literal contains no guest data, pointer, or capability.
+    std::fputs("ATTO_LLVM_ACTOR_STACKLESS_DEPTH_EXCEEDED\n", stderr);
+    std::fflush(stderr);
+    std::abort();
+}
 std::uint64_t checked_target(std::int64_t operand, std::uint64_t count) noexcept {
     if (operand < 0 || static_cast<std::uint64_t>(operand) >= count)
         bad_stackless_frame();
@@ -470,7 +477,9 @@ extern "C" std::int64_t oreslang_actor_guest_stackless_i64_execute(
                ActorGuestFrameStack::max_depth> tokens{};
     std::size_t depth = 0;
     auto push_frame = [&](std::uint64_t pc, std::int64_t value) noexcept {
-        if (depth >= tokens.size()) bad_stackless_frame();
+        if (depth >= tokens.size() ||
+                turn.stack->depth() >= ActorGuestFrameStack::max_depth)
+            actor_stackless_depth_exceeded();
         ActorGuestFrameStack::FrameToken token{};
         if (!turn.stack->push(sizeof(StacklessScalarFrame), token) ||
                 token.actor_generation != turn.generation)
