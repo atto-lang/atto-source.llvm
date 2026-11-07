@@ -70,22 +70,37 @@ struct Fixture {
     TaskCancellation::Ptr request_cancel = TaskCancellation::root();
     RequestContextLocalV1::Ptr request;  // owned by actor A
     std::unique_ptr<RequestContextHandoffTableV1> table;
+    std::unique_ptr<NativeRequestLifecycleRegistryV1> lifecycle;
 
-    explicit Fixture(std::size_t capacity = 8) {
+    explicit Fixture(std::size_t capacity = 8, bool registered = false) {
         w.scheduler = ores_native_actor_scheduler_open(3, 8, 2, on_message, &w);
         CHECK(w.scheduler);
         w.a = ores_native_actor_scheduler_spawn(w.scheduler, 0);
         w.b = ores_native_actor_scheduler_spawn(w.scheduler, 1);
         w.c = ores_native_actor_scheduler_spawn(w.scheduler, 2);
-        request = RequestContextLocalV1::open({7, 8, 9001, 1, w.a}, request_cancel);
+        if (registered) {
+            lifecycle = std::make_unique<NativeRequestLifecycleRegistryV1>(w.scheduler);
+            CHECK(lifecycle->attach(w.a));
+            CHECK(lifecycle->attach(w.b));
+            CHECK(lifecycle->attach(w.c));
+            request = lifecycle->open_registered(
+                {7, 8, 9001, 1, w.a}, request_cancel);
+            table = std::make_unique<RequestContextHandoffTableV1>(
+                w.scheduler, capacity, *lifecycle);
+        } else {
+            request = RequestContextLocalV1::open(
+                {7, 8, 9001, 1, w.a}, request_cancel);
+            table = std::make_unique<RequestContextHandoffTableV1>(
+                w.scheduler, capacity);
+        }
         CHECK(request);
-        table = std::make_unique<RequestContextHandoffTableV1>(w.scheduler, capacity);
     }
     ~Fixture() {
         for (auto actor : {w.a, w.b, w.c}) {
             ores_native_actor_scheduler_stop(w.scheduler, actor);
             ores_native_actor_scheduler_wait_done(w.scheduler, actor);
         }
+        if (lifecycle) lifecycle.reset();
         ores_native_actor_scheduler_retire(w.scheduler);
         ores_native_actor_scheduler_drain(w.scheduler);
         ores_native_actor_scheduler_try_destroy(w.scheduler);
