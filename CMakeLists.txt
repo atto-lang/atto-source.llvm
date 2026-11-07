@@ -97,6 +97,21 @@ if(BUILD_TESTING)
     set_tests_properties(hpc_finance_source_float_region_fail_closed
         PROPERTIES TIMEOUT 40)
 
+    # Trusted-host capability admission only; NOT source-level/hostile-native parity.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-tenant-domain-host-test
+        tests/native_tenant_domain_host_test.c
+        src/main/cpp/oreslang/runtime/TenantDomainHost.c)
+    target_include_directories(oreslang-native-tenant-domain-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-tenant-domain-host-test PRIVATE Threads::Threads)
+    set_target_properties(oreslang-native-tenant-domain-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-tenant-domain-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_tenant_domain_trusted_host_admission
+        COMMAND oreslang-native-tenant-domain-host-test)
+    set_tests_properties(native_tenant_domain_trusted_host_admission PROPERTIES TIMEOUT 45)
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
