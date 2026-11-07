@@ -441,3 +441,63 @@ fails the CI job. Both affected workflow scheduler blob pins were updated.
   Zero-step CI is an admission failure, not evidence for or against semantics.
 - Require independently reviewed, stepful exact-head GCC/Clang/sanitizer and
   compiled `.atto` guest receipts before ready/merge or five-backend parity.
+
+
+## P0 scheduler-minted DATA-turn request issuer (stacked follow-up)
+
+**Status:** host-authored native integration with real scheduler callback
+entrypoint; NOT compiled/hosted/sanitizer verified and NOT connected to a
+network-facing HTTP parser or AttoLang guest lowering.
+
+`NativeRequestIngressIssuerV1` is an explicitly trusted embedding-host
+adapter. Its constructor validates nonzero configured tenant/isolate IDs,
+the exact scheduler pointer already bound to the RequestLocal actor-lifetime
+registry, and real scheduler capacity. The issuer can only mint a request
+while the physical scheduler reports a current actor DATA turn and a
+nonzero, scheduler-assigned original DATA-mail sequence. It records
+monotonic per-slot DATA-mail issuance and globally monotonic request IDs.
+A failed or cancelled admission still burns that mail receipt, preventing
+replay by the same actor turn. It constructs `RequestIdentityV1` from
+host-provisioned tenant/isolate and the scheduler's actor identity, calls
+the mandatory registry's `admit_from_trusted_ingress`, and returns only a
+`NativeRequestDataMailGateV1` after revalidating and binding the exact
+mail receipt. Failed gate construction closes the provisional request.
+The guest never receives raw RequestContextLocal handles from this path.
+
+`native_request_issued_data_ingress_v1_test.cpp` uses real scheduler
+DATA callbacks for two independent actors. Across 16 DATA turns each it
+authors 239 named checks: 32 scheduler-issued request admissions; exact
+source actor/mail authorization and 64 duplicate/cross-actor denials;
+wrong/off-carrier actor and issuer rejection; issuer counter monotonicity;
+cancelled root authority refusal on actual DATA execution; and actor A
+STOP followed by independent survival and eventual STOP of actor B.
+
+`native_request_issued_data_stop_race_v1_test.cpp` authors 391 more
+named checks across 60 actual actor callback versus external STOP races:
+30 with the DATA callback paused before issuing a scope, and 30 paused
+after a valid issuance. STOP must not wait for the blocked callback;
+late scope issuance and access after STOP must be denied; the sibling
+actor must remain serviceable and the exact terminated actor eventually
+reap. Artificially parked carrier callbacks occur **only in the test**
+to force a deterministic order; production must not block carriers.
+
+The existing native scoped-mail workflow now compiles these two test
+executables across GCC/Clang optimized, GCC/Clang ASan+UBSan, and GCC
+TSan, while retaining prior 45-case scoped-mail and original-mail tests.
+It also compiles one deliberate issuer-replay mutation, then requires the
+exact named duplicate-mail denial to fail at runtime. A compiler error,
+unrelated assertion, empty test log, or arbitrary crash does NOT count as
+a successful mutation witness. The legacy scoped-mail workflow's stale
+`RequestContextLocalV1.hpp` blob pin was corrected; the RequestLocal
+matrix's registry pin was updated to the new exact source hash.
+
+**Remaining production blockers:** The repo's native DATA-mail adapter
+is now exercised, but no actual application HTTP listener/router or
+compiler-emitted `.atto` call has been proven to use it exclusively.
+Host configuration of tenant/isolate IDs is not network-principal
+authentication, and the opaque C++ API is not a cryptographic bearer
+capability. Real supervisor/actor generation restart, hot-upgrade,
+side-effect and cancellation receipts, bounded nonblocking destruction,
+five-backend guest parity, and independently reviewed exact-head hosted
+GCC/Clang/TSan/ASan results remain required. This feature must stay
+source-host-only until those gates pass.
