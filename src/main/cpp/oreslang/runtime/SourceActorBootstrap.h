@@ -35,6 +35,10 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+/* Compiler-backed guest harness: read only completed DATA deliveries.
+ * Test-only, never linked as a guest-callable source runtime capability.
+ * Valid until trusted outer stop/join releases the opaque actor ref. */
+uint64_t oreslang_source_actor_test_processed(void* actor);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
