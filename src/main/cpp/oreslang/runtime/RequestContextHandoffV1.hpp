@@ -151,9 +151,15 @@ public:
 
     static constexpr std::size_t max_capacity = 1u << 16;
 
-    // Compatibility host-only table: callers own recipient cleanup.
-    // Do NOT expose this constructor to the .atto guest ABI.
-    RequestContextHandoffTableV1(OresNativeActorScheduler* scheduler, std::size_t capacity)
+    // Legacy host characterization is deliberately NOT the default:
+    // it requires a conspicuous explicit opt-in. No guest/source compiler
+    // must construct this path, because its derived contexts are untracked.
+    struct UnregisteredHostOnly {
+        explicit UnregisteredHostOnly() = default;
+    };
+    RequestContextHandoffTableV1(OresNativeActorScheduler* scheduler,
+                                 std::size_t capacity,
+                                 UnregisteredHostOnly)
         : scheduler_(scheduler), slots_(capacity > max_capacity ? max_capacity : capacity) {}
 
     // Trusted ingress variant: redeemed recipients are registered with the
