@@ -109,30 +109,40 @@ class RequestContextHandoffTableV1 final {
         RequestLocalKeyV1<T> key;
         T value;
     };
-    using Picker = std::unique_ptr<EntryBase> (*)(const void* key, const RequestContextLocalV1&);
-
 public:
     // Explicit list of keys to copy. Nothing is inherited implicitly.
     class Selection final {
     public:
         template <typename T>
         Selection& include(const RequestLocalKeyV1<T>& key) {
+            // Store the minted key by VALUE. A selection may outlive the
+            // expression or stack frame that supplied this key; retaining
+            // &key here would cause use-after-scope during seal().
             if (keys_.size() < RequestContextLocalV1::max_slots)
-                keys_.push_back({&key, &pick<T>});
+                keys_.push_back(std::make_shared<KeyPick<T>>(key));
             else
                 overflow_ = true;
             return *this;
         }
     private:
         friend class RequestContextHandoffTableV1;
+        struct KeyPickBase {
+            virtual ~KeyPickBase() = default;
+            virtual std::unique_ptr<EntryBase> pick(
+                const RequestContextLocalV1& source) const = 0;
+        };
         template <typename T>
-        static std::unique_ptr<EntryBase> pick(const void* key, const RequestContextLocalV1& source) {
-            const auto& typed = *static_cast<const RequestLocalKeyV1<T>*>(key);
-            auto value = source.get_copy(typed);  // copy runs outside source mutex
-            if (!value) return nullptr;
-            return std::make_unique<Entry<T>>(typed, std::move(*value));
-        }
-        std::vector<std::pair<const void*, Picker>> keys_;
+        struct KeyPick final : KeyPickBase {
+            explicit KeyPick(const RequestLocalKeyV1<T>& input) : key(input) {}
+            std::unique_ptr<EntryBase> pick(
+                const RequestContextLocalV1& source) const override {
+                auto value = source.get_copy(key); // copy outside source mutex
+                if (!value) return nullptr;
+                return std::make_unique<Entry<T>>(key, std::move(*value));
+            }
+            const RequestLocalKeyV1<T> key;
+        };
+        std::vector<std::shared_ptr<const KeyPickBase>> keys_;
         bool overflow_ = false;
     };
 
@@ -158,8 +168,8 @@ public:
         env.recipient = recipient;
         env.request_cancellation = source.cancellation_;
         env.entries.reserve(selection.keys_.size());
-        for (const auto& [key, pick] : selection.keys_)
-            if (auto entry = pick(key, source)) env.entries.push_back(std::move(entry));
+        for (const auto& pick : selection.keys_)
+            if (auto entry = pick->pick(source)) env.entries.push_back(std::move(entry));
         // Re-check after user copy constructors ran: the request may have
         // been cancelled meanwhile. Never hand off a dead request.
         if (!source.active()) return std::nullopt;
@@ -168,7 +178,11 @@ public:
         for (std::size_t i = 0; i < slots_.size(); ++i) {
             Slot& s = slots_[i];
             if (s.envelope) continue;
-            if (++s.generation > kMaxGeneration) s.generation = 1;
+            // Never recycle a ticket generation: wrapping would eventually
+            // let an ancient mailbox payload authorize a different envelope.
+            // Exhausted slots are permanently retired instead.
+            if (s.generation >= kMaxGeneration) continue;
+            ++s.generation;
             s.envelope = std::make_unique<Envelope>(std::move(env));
             ++pending_;
             return (s.generation << kSlotBits) | static_cast<std::uint64_t>(i);
