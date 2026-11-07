@@ -59,6 +59,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_g1_typed_nvptx_saxpy_ir_host_only
         PROPERTIES TIMEOUT 20)
 
+    # Host-only structural admission, distinct from authentic provider/device authority.
+    add_executable(oreslang-gpu-g1-launch-admission-test
+        tests/gpu_g1_saxpy_launch_admission_test.cpp)
+    target_include_directories(oreslang-gpu-g1-launch-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-launch-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_structural_buffer_loan_host_only
+        COMMAND oreslang-gpu-g1-launch-admission-test)
+    set_tests_properties(native_gpu_g1_structural_buffer_loan_host_only
+        PROPERTIES TIMEOUT 20)
+
     # Actual NVPTX llc translation, not a physical device or .atto guest test.
     option(ATTO_GPU_G1_REQUIRE_NVPTX "Require an installed NVPTX-capable llc" OFF)
     find_program(ATTO_GPU_G1_LLC NAMES llc-21 llc-20 llc-19 llc-18 llc-17 llc)
