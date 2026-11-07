@@ -25,8 +25,8 @@ fi
 case_name="${BASH_REMATCH[1]}"
 code=GPU-LAUNCH-008
 case "$case_name" in
-  invalid-block|zero-grid|negative-grid|host-geometry|zero-divisor|mixed-geometry) code=GPU-LAUNCH-003 ;;
-  wrong-placement) code=GPU-LAUNCH-004 ;;
+  invalid-block|zero-grid|negative-grid|host-geometry|zero-divisor|mixed-geometry|zero-logical-group|overflow-grid|negative-shared|physical-2d|extra-axes|unknown-field|missing-queue) code=GPU-LAUNCH-003 ;;
+  wrong-placement|empty-device) code=GPU-LAUNCH-004 ;;
   literal-argument) code=GPU-LAUNCH-002 ;;
 esac
 mode="${GPU_SELFTEST_MODE:-baseline}"
