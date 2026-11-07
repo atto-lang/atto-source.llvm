@@ -24,7 +24,11 @@ class BoolI64LlvmEmitter final {
     std::string block() { return "b" + std::to_string(++next_); }
     void emit(const std::string& line) { ir_ += "  " + line + "\n"; }
     static const char* column_type(std::size_t index) {
-        return index == 0 ? "i1" : "i64";
+        if (index == 0) return "i1";
+        if (index == 1) return "i64";
+        // Even an externally reconstructed MIR cannot silently alias an
+        // invalid column onto the second i64 lane.
+        throw std::out_of_range("mixed inverted LLVM field index outside schema");
     }
     std::string ptr(const std::string& name, const std::string& type,
                     const std::string& index) {
