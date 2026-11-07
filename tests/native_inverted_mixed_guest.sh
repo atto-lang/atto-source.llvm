@@ -32,9 +32,13 @@ hash_file() {
     [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
     printf '%s\n' "$digest"
 }
-clang_binary="$(command -v "$clang")"
-[[ -f "$clang_binary" && -x "$clang_binary" && ! -L "$clang_binary" ]] || {
-    echo 'FAIL: Clang executable must be a regular non-symlink tool' >&2; exit 1
+# Distribution Clang wrappers are often symlinks. Resolve once and
+# execute the verified target, not a subsequently retargeted command alias.
+clang_path="$(command -v "$clang")"
+clang_binary="$(readlink -f "$clang_path")"
+[[ -n "$clang_binary" && -f "$clang_binary" && -x "$clang_binary" &&
+   ! -L "$clang_binary" ]] || {
+    echo 'FAIL: unable to pin concrete Clang executable' >&2; exit 1
 }
 compiler_sha="$(hash_file "$compiler")" || exit 1
 clang_sha="$(hash_file "$clang_binary")" || exit 1
@@ -174,7 +178,7 @@ for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
             { echo 'FAIL: active f64 negative-zero sign bit lost in LLVM IR' >&2; exit 1; }
     fi
     for opt in -O0 -O2; do
-        "$clang" "$opt" -x ir "$tmp/guest.ll" -o "$tmp/guest"
+        "$clang_binary" "$opt" -x ir "$tmp/guest.ll" -o "$tmp/guest"
         verify_compilation_unchanged "$tmp/guest.ll"
         native_status "$tmp/guest" exit42
         verify_compilation_unchanged "$tmp/guest.ll"
@@ -198,7 +202,7 @@ for file in pair-positive-bool-write.atto pair-positive-swap-tail.atto; do
         exit 1
     fi
     for opt in -O0 -O2; do
-        "$clang" "$opt" -x ir "$tmp/pair.ll" -o "$tmp/pair"
+        "$clang_binary" "$opt" -x ir "$tmp/pair.ll" -o "$tmp/pair"
         verify_compilation_unchanged "$tmp/pair.ll"
         native_status "$tmp/pair" exit42
         verify_compilation_unchanged "$tmp/pair.ll"
@@ -208,7 +212,7 @@ compile_guest "$fixtures/negative-stale-dense-index.atto" "$tmp/trap.ll"
 grep -Fq 'call void @llvm.trap()' "$tmp/trap.ll" ||
     { echo 'FAIL: missing out-of-bounds trap in mixed guest IR' >&2; exit 1; }
 for opt in -O0 -O2; do
-    "$clang" "$opt" -x ir "$tmp/trap.ll" -o "$tmp/trap"
+    "$clang_binary" "$opt" -x ir "$tmp/trap.ll" -o "$tmp/trap"
     verify_compilation_unchanged "$tmp/trap.ll"
     native_status "$tmp/trap" trap
     verify_compilation_unchanged "$tmp/trap.ll"
@@ -218,7 +222,7 @@ grep -Fq 'icmp ult i64 1, ' "$tmp/pair-trap.ll" || {
     echo 'FAIL: bool/i64 guest omitted native bounds check for row 1' >&2; exit 1
 }
 for opt in -O0 -O2; do
-    "$clang" "$opt" -x ir "$tmp/pair-trap.ll" -o "$tmp/pair-trap"
+    "$clang_binary" "$opt" -x ir "$tmp/pair-trap.ll" -o "$tmp/pair-trap"
     verify_compilation_unchanged "$tmp/pair-trap.ll"
     native_status "$tmp/pair-trap" trap
     verify_compilation_unchanged "$tmp/pair-trap.ll"
