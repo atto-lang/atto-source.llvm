@@ -46,6 +46,26 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Adversarial host-only source MIR mutation and negative-evidence tests.
+    # These do NOT run native llvmc or a physical GPU.
+    add_executable(oreslang-native-gpu-source-mir-adversarial-test
+        tests/gpu_source_mir_adversarial_test.cpp)
+    target_include_directories(oreslang-native-gpu-source-mir-adversarial-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-source-mir-adversarial-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-source-mir-adversarial-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_source_mir_adversarial_host_only
+        COMMAND oreslang-native-gpu-source-mir-adversarial-test)
+    set_tests_properties(native_atto_gpu_source_mir_adversarial_host_only
+        PROPERTIES TIMEOUT 30)
+    if(UNIX)
+        add_test(NAME native_atto_gpu_negative_evidence_harness_source_free
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_native_negative_harness_selftest.sh")
+        set_tests_properties(native_atto_gpu_negative_evidence_harness_source_free
+            PROPERTIES TIMEOUT 30)
+    endif()
+
     # Native frontend-source MIR is deliberately non-executable; the actual
     # compiler admission test below also verifies source diagnostics.
     add_executable(oreslang-native-gpu-source-mir-test
