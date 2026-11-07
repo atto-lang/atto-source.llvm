@@ -46,7 +46,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "684cb08fc30bad29bcf615e46321dbec23878d96"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "4fd6636d5fbc1b4c13150bb14d1657119debf5b1"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "208bc62e93d19531a4dd77a4a7b64af90282fe5d"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "9278c10112fab2c9eb92584ed247ea16d9272dca"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "e47b404595339f23795b469a2e9fece239737a36"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "510bac8b3ccdcd69257aebf917ebe804cecd4121"
