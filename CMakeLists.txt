@@ -4314,6 +4314,20 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-record-region-test PRIVATE Threads::Threads)
     add_test(NAME native_record_region_generation_quota_cleanup COMMAND oreslang-native-record-region-test)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
+
+    # Execute the source-level negative mutations as a separate native HOST
+    # evidence class. Never treat this as guest compiler/actor parity.
+    if(UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        find_program(ORE_RECORD_MUTATION_BASH NAMES bash)
+        if(ORE_RECORD_MUTATION_BASH)
+            add_test(NAME native_record_region_negative_mutations
+                COMMAND "${CMAKE_COMMAND}" -E env "CC=${CMAKE_C_COMPILER}"
+                "${ORE_RECORD_MUTATION_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-native-record-region-mutations.sh")
+            set_tests_properties(native_record_region_negative_mutations
+                PROPERTIES TIMEOUT 90 LABELS "native-host;negative-mutation")
+        endif()
+    endif()
 endif()
 
 # Stage-2 prerequisite: readiness-gated Future continuation ownership.
