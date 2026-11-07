@@ -1298,9 +1298,14 @@ void validate_i64_ownership(Program& program) {
         std::function<void(const Expression&, Ops&)> add_effects;
         add_effects = [&](const Expression& expr, Ops& operations) {
             if (expr.kind == Expression::Kind::Variable) {
-                const auto found = cfg_entry.find(expr.name);
+                const auto place = native_ownership::resolve_compiler_place(
+                    expr, cfg_entry);
+                if (!place)
+                    reject(expr, "E_CFG_UNTRACKED_PLACE: variable lacks compiler-local origin");
+                const auto found = cfg_entry.find(place->lexical_slot);
                 const bool object = found != cfg_entry.end() && !found->second.class_name.empty();
-                operations.push_back({object ? OpKind::ReadObject : OpKind::Read, expr.name});
+                operations.push_back({object ? OpKind::ReadObject : OpKind::Read,
+                    native_ownership::compiler_place_key(*place)});
                 return;
             }
             if (expr.kind == Expression::Kind::ArrayCall) {
@@ -1311,29 +1316,43 @@ void validate_i64_ownership(Program& program) {
                 return;
             }
             if (expr.kind == Expression::Kind::Field) {
-                if (expr.left && expr.left->kind == Expression::Kind::Field && expr.name == "size") {
-                    operations.push_back({OpKind::Read, native_place_key(*expr.left)}); return;
+                const auto place = native_ownership::resolve_compiler_place(
+                    expr, cfg_entry);
+                if (!place)
+                    reject(expr, "E_CFG_UNTRACKED_PLACE: field read lacks compiler-local root");
+                const auto owner = cfg_entry.find(place->lexical_slot);
+                if (expr.left && expr.left->kind == Expression::Kind::Field &&
+                        expr.name == "size") {
+                    const auto array = native_ownership::resolve_compiler_place(
+                        *expr.left, cfg_entry);
+                    if (!array)
+                        reject(expr, "E_CFG_UNTRACKED_PLACE: array size receiver untracked");
+                    operations.push_back({OpKind::Read,
+                        native_ownership::compiler_place_key(*array)});
+                    return;
                 }
-                const auto place = native_place(expr);
-                const auto owner = cfg_entry.find(place.first);
-                if (owner != cfg_entry.end() && owner->second.int_array) operations.push_back({OpKind::Read, place.first});
-                else operations.push_back({owner != cfg_entry.end() && owner->second.subobjects.count(place.second)
-                    ? OpKind::ReadObject : OpKind::Read, native_place_key(expr)});
+                const auto legacy = native_place(expr);
+                if (owner != cfg_entry.end() && owner->second.int_array)
+                    operations.push_back({OpKind::Read, place->lexical_slot});
+                else
+                    operations.push_back({owner != cfg_entry.end() &&
+                        owner->second.subobjects.count(legacy.second)
+                            ? OpKind::ReadObject : OpKind::Read,
+                        native_ownership::compiler_place_key(*place)});
                 return;
             }
-            if (expr.kind == Expression::Kind::Take && expr.left) {
-                if (expr.left->kind == Expression::Kind::Variable) {
-                    operations.push_back({OpKind::Move, expr.left->name});
-                    return;
-                }
-                if (expr.left->kind == Expression::Kind::Field) {
-                    if (!expr.left->left ||
-                            expr.left->left->kind != Expression::Kind::Variable)
-                        reject(expr, "native CFG requires named class field take");
-                    operations.push_back({OpKind::Move,
-                        expr.left->left->name + "." + expr.left->name});
-                    return;
-                }
+            if (expr.kind == Expression::Kind::Take && expr.left &&
+                    (expr.left->kind == Expression::Kind::Variable ||
+                     expr.left->kind == Expression::Kind::Field)) {
+                const auto place = native_ownership::resolve_compiler_place(
+                    *expr.left, cfg_entry);
+                if (!place || !place->owns_storage() ||
+                        (!place->is_named_slot() && !place->has_direct_field()))
+                    reject(expr, "E_CFG_UNTRACKED_PLACE: take lacks owned, "
+                                 "compiler-resolved source storage");
+                operations.push_back({OpKind::Move,
+                    native_ownership::compiler_place_key(*place)});
+                return;
             }
             if (expr.left) add_effects(*expr.left, operations);
             if (expr.right) add_effects(*expr.right, operations);
