@@ -130,13 +130,20 @@ if(BUILD_TESTING)
         target_compile_options(oreslang-gpu-g2-cuda-hardware-test PRIVATE
             $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
         target_link_libraries(oreslang-gpu-g2-cuda-hardware-test PRIVATE CUDA::cuda_driver)
+        # CTest DEPENDS alone cannot secure this source-to-PTX chain: a
+        # -R selection can exclude the offline-producing test. Regenerate
+        # source-derived PTX INSIDE the exact hardware-test invocation.
         add_test(NAME native_atto_gpu_g2_PHYSICAL_CUDA_SAXPY
-            COMMAND oreslang-gpu-g2-cuda-hardware-test
-                "${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-g1-ptx/kernel.ptx")
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-gpu-g1-ir>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu_g1_saxpy_kernel.atto"
+                "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-g2-verified-ptx"
+                "-DLLC=${ATTO_GPU_G1_LLC}"
+                "-DHARDWARE=$<TARGET_FILE:oreslang-gpu-g2-cuda-hardware-test>"
+                "-DOFFLINE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g1_ptx_offline.cmake"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g2_physical_chain.cmake")
         set_tests_properties(native_atto_gpu_g2_PHYSICAL_CUDA_SAXPY
-            PROPERTIES TIMEOUT 300
-                DEPENDS native_atto_gpu_g1_offline_ptx_no_device
-                RESOURCE_LOCK gpu0)
+            PROPERTIES TIMEOUT 300 RESOURCE_LOCK gpu0)
     else()
         message(STATUS "GPU-G2 PHYSICAL CUDA test NOT EXECUTED (opt-in OFF)")
     endif()
