@@ -308,5 +308,95 @@ int main() {
         INVERTED_REQUIRE(emit_native_i64_pair_ir(
             accepted, compiled.operands) == ir);
     }
+    // Additional fail-closed mutations of a pre-parsed/native Program AST.
+    // No lexer or CI environment can be relied on to sanitize these values.
+    {
+        auto forged = make_source();
+        forged.inverted_main->owner_name = "_";
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "matching two-i64 schema");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->capacity = 0;
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "capacity/operation budget");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations.clear();
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "capacity/operation budget");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations.resize(
+            1025, forged.inverted_main->operations.front());
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "capacity/operation budget");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations.front().value = 123;
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "invalid inverted push source metadata");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[3].values[1] = 17;
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "invalid inverted erase source metadata");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[3].value = 17;
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "invalid inverted erase source metadata");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations.back().values[0] = 31;
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "invalid inverted return source metadata");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[0].kind =
+            static_cast<InvertedSourceOperation::Kind>(0x7fff);
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "unknown production inverted source operation");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_structs.push_back(forged.inverted_structs.front());
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "requires one standalone local main");
+    }
+    {
+        auto forged = make_source();
+        forged.namespace_name = "Untrusted";
+        reject([&] { (void)verify_production_inverted_i64(forged); },
+               "requires one standalone local main");
+    }
+    {
+        auto upper = make_source();
+        upper.inverted_main->capacity = 256;
+        auto checked = verify_production_inverted_i64(upper);
+        INVERTED_REQUIRE(checked.mir.capacity() == 256);
+        INVERTED_REQUIRE(
+            emit_native_i64_pair_ir(checked.mir, checked.operands) != "");
+    }
+    {
+        auto endpoints = make_source();
+        endpoints.inverted_main->operations.front().values[0] =
+            std::numeric_limits<std::int64_t>::min();
+        endpoints.inverted_main->operations.front().values[1] =
+            std::numeric_limits<std::int64_t>::max();
+        auto checked = verify_production_inverted_i64(endpoints);
+        INVERTED_REQUIRE(checked.operands.rows.front()[0] ==
+            std::numeric_limits<std::int64_t>::min());
+        INVERTED_REQUIRE(checked.operands.rows.front()[1] ==
+            std::numeric_limits<std::int64_t>::max());
+    }
     return 0;
 }
