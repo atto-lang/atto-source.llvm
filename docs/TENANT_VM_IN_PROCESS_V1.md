@@ -190,7 +190,7 @@ it could otherwise loop forever. A turn that works does not refill the budget; o
 tries the actor waits `restart_backoff_ms`, by default 10 ms, doubling with each failure in the window,
 and its mail waits with it. These numbers are starting values, not measurements.
 
-One more failure ends that actor. The failed call and each queued call get `ActorTerminated`, and queued
+A restartable turn cannot send, spawn or stop, so that a failed turn has nothing outside its actor to undo. One more failure ends that actor. The failed call and each queued call get `ActorTerminated`, and queued
 sends count in `mail_abandoned`. Its memory and quota go back to the VM, and later calls get
 `ActorTerminated`. The rest of the VM goes on. `actors_terminated` and `mail_abandoned` are reported even
 when the VM stops cleanly.
@@ -256,6 +256,11 @@ Each was reproduced against the first version before being fixed, and has a regr
 | 19 | Low | Slot generations could wrap, reviving a stale reference | Slot retired instead |
 | 20 | Low | C API could leak exceptions to P/Invoke, and did not check null lengths | Caught and checked |
 | 21 | **Critical** | A validated Wasm module could end the process: recursing with `spawn` and `stop` at each level makes a host call the first thing to cross the end of the stack, outside guest mode, where a fault is fatal | Host calls check for 256 KiB of stack on entry, and a shortage is an ordinary stack overflow |
+| 22 | High | A restartable turn could send, spawn or stop and then fail. The restart rolled back its own state, but the other actors had already seen its effects | Restartable kinds are refused `send`, `spawn` and `stop` until these are held for the turn's commit |
+| 23 | Medium | `restart_window_ms = 0` let no failure count, so the crash-loop budget never ended anything | `open` refuses a zero window |
+| 24 | Medium | The watchdog took each VM's lock to end a backoff, so one VM holding its lock delayed every tenant's deadline | The watchdog only tries the lock, and a busy VM waits a tick |
+| 25 | Low | A large backoff overflowed when doubled, and a large budget kept that many timestamps per actor | Backoff is capped by the window, the budget by 65535, the window by a day |
+| 26 | Low | Scrubbing an actor on restart was carrier time that fair scheduling never charged | Charged to the VM like a turn |
 
 Correcting an earlier claim: "a noisy tenant cannot starve a quiet one" was true of latency in that
 test, but finding 5 means CPU share was not fair until now.

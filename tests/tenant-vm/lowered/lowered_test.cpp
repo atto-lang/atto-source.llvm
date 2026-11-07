@@ -476,7 +476,7 @@ void atto_kills_never_tear_stored_state() {
     if (!pair.module) return;
     TenantVmHost host;
     VmSpec s = spec("pair", pair, 1);
-    s.limits.restart_budget = 1000000;
+    s.limits.restart_budget = 65535;
     s.limits.restart_backoff_ms = 0;
     auto v = host.open(s);
     REQUIRE_OK(v);
