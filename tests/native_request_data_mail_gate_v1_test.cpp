@@ -35,11 +35,23 @@ void on_message(void* context, std::size_t index, std::uint64_t payload) {
         s.scheduler, s.actor, &current_sequence));
     assert(current_sequence == payload); // in this test, 1,2,3
     if (payload == 1) {
+        // A gate can only be minted on its exact admitted DATA-mail turn.
+        assert(!s.gate_a && !s.gate_b);
+        bool wrong_origin_denied = false;
+        try {
+            NativeRequestDataMailGateV1 forged(*s.scheduler, s.b, s.actor, 2);
+        } catch (const std::invalid_argument&) {
+            wrong_origin_denied = true;
+        }
+        assert(wrong_origin_denied); // also must not poison request B
+        s.gate_a = std::make_unique<NativeRequestDataMailGateV1>(
+            *s.scheduler, s.a, s.actor, 1);
         assert(s.gate_a->authorized());
-        assert(!s.gate_b->authorized());
         assert(s.gate_a->set(s.trace, std::string("trace-A")));
-        assert(!s.gate_b->get_copy(s.trace));
+        assert(!s.b->get_copy(s.trace));
     } else if (payload == 2) {
+        s.gate_b = std::make_unique<NativeRequestDataMailGateV1>(
+            *s.scheduler, s.b, s.actor, 2);
         assert(!s.gate_a->authorized()); // original mail A is no longer active
         assert(s.gate_b->authorized());
         assert(!s.gate_a->get_copy(s.trace));
@@ -80,22 +92,16 @@ void test_actual_scheduler_request_gate() {
     s.b = RequestContextLocalV1::open(
         {3, 4, 502, 1, s.actor}, s.cancel_b);
     assert(s.a && s.b);
-    s.gate_a = std::make_unique<NativeRequestDataMailGateV1>(
-        *s.scheduler, s.a, s.actor, 1);
-    s.gate_b = std::make_unique<NativeRequestDataMailGateV1>(
-        *s.scheduler, s.b, s.actor, 2);
-    // A pooled actor may handle other DATA mails, but an existing request
-    // store is pinned forever to its first bound original mailbox receive.
-    assert(!s.a->bind_original_mail_once(2));
-    bool wrong_mail_rejected = false;
+    // A forged/off-turn constructor cannot set the one-time binding.
+    bool offturn_rejected = false;
     try {
-        NativeRequestDataMailGateV1 wrong(*s.scheduler, s.a, s.actor, 2);
+        NativeRequestDataMailGateV1 offturn(*s.scheduler, s.a, s.actor, 1);
     } catch (const std::invalid_argument&) {
-        wrong_mail_rejected = true;
+        offturn_rejected = true;
     }
-    assert(wrong_mail_rejected);
-
+    assert(offturn_rejected);
     deliver(s, 1);
+    assert(!s.a->bind_original_mail_once(2));
     assert(s.a->get_copy(s.trace) == std::string("trace-A"));
     assert(!s.gate_a->authorized());
     // A callback producer on a different physical thread cannot borrow
@@ -104,7 +110,7 @@ void test_actual_scheduler_request_gate() {
     std::thread foreign([&] {
         foreign_denied.store(
             !s.gate_a->authorized() && !s.gate_a->get_copy(s.trace)
-            && !s.gate_b->authorized(), std::memory_order_release);
+            && !s.gate_b, std::memory_order_release);
     });
     foreign.join();
     assert(foreign_denied.load(std::memory_order_acquire));
