@@ -31,7 +31,7 @@ set(pass "GPU_G1_PHYSICAL_PASS 6/6 driver=9999 device=fake sm=99.9 evidence=PTX_
 
 # CMake invokes this script INSTEAD of a real PTX codegen gate. Deliberately
 # write false evidence, then mutate tracked source after pre-PTX identity.
-file(WRITE "${gate}" "file(MAKE_DIRECTORY \"${G1_WORK}\")\nfile(WRITE \"${G1_WORK}/gpu-g1-saxpy.ll\" \"synthetic\\n\")\nfile(WRITE \"${G1_WORK}/gpu-g1-saxpy.ptx\" \"synthetic\\n\")\nfile(APPEND \"${repo}/fixture.atto\" \"tampered\\n\")\n")
+file(WRITE "${gate}" "file(MAKE_DIRECTORY \"\${G1_WORK}\")\nfile(WRITE \"\${G1_WORK}/gpu-g1-saxpy.ll\" \"synthetic\\n\")\nfile(WRITE \"\${G1_WORK}/gpu-g1-saxpy.ptx\" \"synthetic\\n\")\nfile(APPEND \"${repo}/fixture.atto\" \"tampered\\n\")\n")
 file(WRITE "${probe}" "#!/bin/sh\nprintf '%s\\n' '${pass}'\n")
 file(CHMOD "${probe}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
 
@@ -55,7 +55,7 @@ execute_process(COMMAND "${G1_NEGATIVE_GIT}" -C "${repo}"
 if(NOT restore_rc EQUAL 0)
     message(FATAL_ERROR "GPU-G1-RECEIPT-005: restore failed")
 endif()
-file(WRITE "${gate}" "file(MAKE_DIRECTORY \"${G1_WORK}\")\nfile(WRITE \"${G1_WORK}/gpu-g1-saxpy.ll\" \"synthetic\\n\")\nfile(WRITE \"${G1_WORK}/gpu-g1-saxpy.ptx\" \"synthetic\\n\")\n")
+file(WRITE "${gate}" "file(MAKE_DIRECTORY \"\${G1_WORK}\")\nfile(WRITE \"\${G1_WORK}/gpu-g1-saxpy.ll\" \"synthetic\\n\")\nfile(WRITE \"\${G1_WORK}/gpu-g1-saxpy.ptx\" \"synthetic\\n\")\n")
 file(WRITE "${probe}" "#!/bin/sh\nprintf 'tampered\\n' >> '${repo}/fixture.atto'\nprintf '%s\\n' '${pass}'\n")
 file(CHMOD "${probe}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
 expect_identity_failure("post-CUDA" "GPU-G1-HW-004.*post-CUDA")
