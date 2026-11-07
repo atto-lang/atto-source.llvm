@@ -1,9 +1,11 @@
 #pragma once
 
 #include "oreslang/runtime/OpenClProvider.hpp"
+#include "oreslang/runtime/SaxpyOpenClProvider.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -19,7 +21,7 @@
 
 namespace oreslang::opencl {
 
-class SystemApi final : public Api {
+class SystemApi final : public SaxpyApi {
     using cl_char = std::int8_t;
     using cl_int = std::int32_t;
     using cl_uint = std::uint32_t;
@@ -148,6 +150,35 @@ public:
 
     std::uint64_t maximum_allocation_bytes() const noexcept {
         return maximum_allocation_bytes_;
+    }
+
+    std::string authenticated_device_name() const override {
+        return device_name_;
+    }
+
+    std::uint64_t authenticated_max_allocation() const override {
+        return maximum_allocation_bytes_;
+    }
+
+    // The original G3 provider compiles only two-buffer DOP kernels.
+    // This explicitly separate G4 shape has X/Y/output, alpha and n args.
+    Handle prepare_saxpy(const gpu_source_v1::Artifact& artifact) override {
+        const auto canonical = gpu_source_v1::compile_saxpy(
+            "compute fnc saxpy(x: DeviceRead<f32>, y: DeviceRead<f32>, "
+            "out: DeviceWrite<f32>, alpha: f32, n: u64) device { "
+            "const i = gpu.global_id.x; if i < n { "
+            "out[i] = alpha * x[i] + y[i]; } }");
+        if (artifact.kernel_name != canonical.kernel_name ||
+                artifact.device_source != canonical.device_source ||
+                artifact.abi_version != 1 ||
+                artifact.required_address_bits != 64 ||
+                !artifact.requires_f32)
+            throw std::invalid_argument("SAXPY OpenCL source artifact not authorized");
+        // Preparation has no launch length; actual byte count and n are
+        // authenticated independently at allocation + physical enqueue.
+        return prepare(dop::OpenClArtifact{
+            artifact.kernel_name, artifact.device_source,
+            sizeof(float), 1, 1, 1, 64, true, true});
     }
 
     void validate_artifact(
@@ -312,6 +343,54 @@ public:
         require_success(status, "clEnqueueNDRangeKernel");
         if (!raw)
             throw std::runtime_error("OpenCL kernel returned null event");
+        event->event = raw;
+        apply_flush_result(*event);
+        return event.release();
+    }
+
+    Handle enqueue_saxpy_kernel(
+            Handle program, Handle x, Handle y, Handle out,
+            float alpha, std::uint64_t elements) override {
+        auto* prepared = require_handle<Prepared>(program, "SAXPY program");
+        auto x_mem = reinterpret_cast<cl_mem>(x);
+        auto y_mem = reinterpret_cast<cl_mem>(y);
+        auto out_mem = reinterpret_cast<cl_mem>(out);
+        if (!x_mem || !y_mem || !out_mem ||
+                x_mem == y_mem || x_mem == out_mem || y_mem == out_mem ||
+                !std::isfinite(alpha) || elements == 0 ||
+                elements > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::size_t>::max()) ||
+                elements > maximum_allocation_bytes_ / sizeof(float))
+            throw std::invalid_argument("invalid physical SAXPY launch");
+
+        const cl_ulong count = elements;
+        require_success(dispatch_.set_kernel_arg(
+                prepared->kernel, 0, sizeof(x_mem), &x_mem),
+                "clSetKernelArg(saxpy x)");
+        require_success(dispatch_.set_kernel_arg(
+                prepared->kernel, 1, sizeof(y_mem), &y_mem),
+                "clSetKernelArg(saxpy y)");
+        require_success(dispatch_.set_kernel_arg(
+                prepared->kernel, 2, sizeof(out_mem), &out_mem),
+                "clSetKernelArg(saxpy out)");
+        require_success(dispatch_.set_kernel_arg(
+                prepared->kernel, 3, sizeof(alpha), &alpha),
+                "clSetKernelArg(saxpy alpha)");
+        require_success(dispatch_.set_kernel_arg(
+                prepared->kernel, 4, sizeof(count), &count),
+                "clSetKernelArg(saxpy n)");
+
+        auto event = std::make_unique<Event>();
+        cl_event raw = nullptr;
+        const std::size_t global[1] = {
+            static_cast<std::size_t>(elements)
+        };
+        const cl_int status = dispatch_.enqueue_ndrange_kernel(
+                queue_, prepared->kernel, 1,
+                nullptr, global, nullptr, 0, nullptr, &raw);
+        require_success(status, "clEnqueueNDRangeKernel(SAXPY)");
+        if (!raw)
+            throw std::runtime_error("OpenCL SAXPY returned null native event");
         event->event = raw;
         apply_flush_result(*event);
         return event.release();
