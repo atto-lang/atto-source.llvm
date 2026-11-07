@@ -672,6 +672,11 @@ void validate_i64_ownership(Program& program) {
 
     for (const auto& function : program.functions) {
         Locals locals;
+        // IDs are minted by this compiler frame, never supplied by source.
+        // Their scope is the checked function, not globally independent
+        // allocations or a cross-task ownership certificate.
+        std::uint64_t next_binding_id = 1;
+        std::uint64_t next_origin_id = 1;
         for (const auto& param : function.parameters) {
             if (!param.class_name.empty()) {
                 if (!class_fields.count(param.class_name))
@@ -681,6 +686,9 @@ void validate_i64_ownership(Program& program) {
                         param.name + "' requires exclusive borrow or proven move/drop lowering");
             }
             LocalOwnership entry;
+            if (next_binding_id == 0)
+                throw std::runtime_error("ownership violation: binding ID exhausted");
+            entry.binding_id = native_ownership::BindingId{next_binding_id++};
             entry.mode = param.mode;
             // By-value scalar parameters own data that may be lent exclusively;
             // their identifiers remain read-only. Borrowed parameters retain
@@ -716,6 +724,9 @@ void validate_i64_ownership(Program& program) {
         }
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
+            if (next_binding_id == 0)
+                throw std::runtime_error("ownership violation: binding ID exhausted");
+            entry.binding_id = native_ownership::BindingId{next_binding_id++};
             entry.heap_owned = binding.heap_owned;
             entry.int_array = binding.int_array;
             entry.mutable_owner = binding.owner_mutable;
@@ -776,6 +787,12 @@ void validate_i64_ownership(Program& program) {
                 entry.final_fields = class_finals.at(binding.class_name);
                 entry.public_fields = layouts.accessible(binding.class_name, function.method_owner);
             } else if (binding.new_class) {
+                // Only an admitted fresh constructor receives an allocation
+                // origin. A copied lexical name or borrowed parameter does
+                // not mint an independent allocation certificate.
+                if (next_origin_id == 0)
+                    throw std::runtime_error("ownership violation: allocation origin IDs exhausted");
+                entry.allocation_origin = native_ownership::OriginId{next_origin_id++};
                 // Pure syntax alone is insufficient: experimental owned-int
                 // operands carry fallible region reads. Do not let one unwind
                 // an incompletely constructed object before drop glue exists.
@@ -880,6 +897,9 @@ void validate_i64_ownership(Program& program) {
                 entry.class_array_fields = source.class_array_fields;
                 entry.final_fields = source.final_fields;
                 entry.public_fields = source.public_fields;
+                // A move transfers the same allocation origin; it cannot
+                // manufacture a fresh one by rebinding source storage.
+                entry.allocation_origin = source.allocation_origin;
                 source.moved = true;
             } else {
                 check_value(*binding.initializer, locals, functions);
@@ -901,6 +921,9 @@ void validate_i64_ownership(Program& program) {
         std::function<void(const Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
+            if (next_binding_id == 0)
+                throw std::runtime_error("ownership violation: scoped binding ID exhausted");
+            entry.binding_id = native_ownership::BindingId{next_binding_id++};
             entry.int_array = binding.int_array;
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
