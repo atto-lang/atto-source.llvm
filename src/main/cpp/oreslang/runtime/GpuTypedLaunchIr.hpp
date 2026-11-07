@@ -129,6 +129,8 @@ inline SourceCheckedLaunch verify(const Request& input) {
                 deny("GPU-LAUNCH-002", "expected signed i64 scalar");
             continue;
         }
+        if (kind != Parameter::ReadF32 && kind != Parameter::WriteF32)
+            deny("GPU-LAUNCH-002", "unsupported kernel parameter type");
         if (!std::holds_alternative<BufferView>(arg))
             deny("GPU-LAUNCH-002", "host/scalar value cannot impersonate device buffer");
         const auto& v = std::get<BufferView>(arg);
