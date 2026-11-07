@@ -41,23 +41,25 @@ reference geometry checker rejects zero dimensions, axes beyond
 trusted limits, workgroup quotas, shared-memory quotas, total thread quotas,
 and 64-bit multiplication overflow.
 
-## Mandatory device-provider integration (not implemented)
+## Three-buffer provider (stacked experimental implementation)
 
-The existing `OpenClProvider` and `OpenClSystemApi` support the preexisting
-one-input, one-output DOP `Scale/Bias/ScaleBias` operations. They **do not**
-support this three-buffer SAXPY ABI. Do **not** route this new source artifact
-through the old two-buffer `Provider::begin` API or claim that the old
-hardware probe executes this kernel.
+The existing `OpenClProvider` continues to support one-input, one-output
+DOP `Scale/Bias/ScaleBias` operations. The stacked G4 implementation adds a
+separate `SaxpyProvider` plus explicit `SystemApi::prepare_saxpy` and
+`enqueue_saxpy_kernel` for X/Y/output, alpha and n. It must **never** route
+SAXPY through the older two-buffer `Provider::begin` API. See
+`ATTO_GPU_SAXPY_PROVIDER_G4.md` for its physical state machine and proof
+gates. This implementation has not yet passed independent exact-head
+C++/CTest execution or physical GPU verification.
 
-Before real SAXPY execution can be enabled, add provider-authenticated
-three-buffer allocation and one atomic input-X/input-Y/output claim,
-tenant/device/generation-fenced leases, checked byte bounds against
-`n * sizeof(f32)`, 3D launch-profile/device limit admission, native
-OpenCL program/arg binding, upload/kernel/download event ownership,
-async actor-continuation wakeup, cancellation drain, and physical
-release/quiescence. Never free on a mere cancellation request.
-Output owners must not alias either input unless a future proof permits it.
-Any device/provider absence is a hard failure, not a CPU substitute.
+The G4 provider adds physically distinct X/Y/output allocations, retained
+staging memory, bounded one-queue resident quotas, and real OpenCL event
+polling. It does **not yet** provide a shared tenant-wide quota ledger,
+a general three-buffer atomic fence-claim API, a complete GPU launch
+profile, actor-continuation wakeup, complete ownership/borrow integration,
+or a verified physical device receipt. These remain release blockers.
+Never free on a cancellation request, alias a writable output with an input,
+or silently fall back to CPU execution.
 
 ## Evidence/promotion
 
