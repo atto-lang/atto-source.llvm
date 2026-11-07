@@ -66,9 +66,9 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
           test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "ebba397307a27451492d0c3aa20d8b259807d80f"
-          test "$(git hash-object tests/native_request_lifecycle_registry_v1_test.cpp)" = "9f2df8ec2f1baa23319750f66a3a9a4aa1747f37"
+          test "$(git hash-object tests/native_request_lifecycle_registry_v1_test.cpp)" = "69a1ca1e849aade0e430a8e70d4b9bb163b6def5"
           test "$(git hash-object tests/native_actor_stop_notice_v1_test.c)" = "467c31db374b55c4ed43ca590bb2ca0cdea01019"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "3f585d93b073c32a277066156b91cf2d49fa9575"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "e4c4baf1efce808b5eedae897adb9d9f189b5eb7"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -136,8 +136,8 @@ jobs:
             printf 'STOP_NOTICE_MUTATION_DETECTED compiler=%s\n' "$CC"
           fi
           "$tmp/request-lifecycle-registry" | tee "$tmp/request-lifecycle-registry-cases.log"
-          test "$(grep -c '^LIFECYCLE_REGISTRY_PASS ' "$tmp/request-lifecycle-registry-cases.log")" = "42"
-          grep -qx 'NATIVE_REQUEST_LIFECYCLE_REGISTRY_42_HOST_CASES_PASS' "$tmp/request-lifecycle-registry-cases.log"
+          test "$(grep -c '^LIFECYCLE_REGISTRY_PASS ' "$tmp/request-lifecycle-registry-cases.log")" = "70"
+          grep -qx 'NATIVE_REQUEST_LIFECYCLE_REGISTRY_70_HOST_CASES_PASS' "$tmp/request-lifecycle-registry-cases.log"
           "$tmp/request-stop-cancel" | tee "$tmp/request-stop-cases.log"
           test "$(grep -c '^REQUEST_STOP_CASE_PASS ' "$tmp/request-stop-cases.log")" = "38"
           grep -qx 'REQUEST_STOP_CANCEL_38_HOST_CASES_PASS' "$tmp/request-stop-cases.log"

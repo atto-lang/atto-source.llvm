@@ -339,3 +339,33 @@ the right native embedding sites; lifetime-bound cleanup for custom host
 values and actors hot-upgraded/supervisor-restarted outside this registry;
 full native/guest execution evidence and independent approval. The registry
 is not itself proof of full language or backend parity.
+
+## 2026-11-07 — CONTROL teardown and lock-order hardening
+
+- Registry teardown now **seals STOP for any still-live attached actor**
+  after synchronously unregistering its STOP observer. No live registered
+  request may outlive a destroyed lifecycle registry. The destructor joins
+  the CONTROL worker and fails closed if scope quiescence + exact actor DONE
+  cannot be proven. Destruction from an actor carrier or its own CONTROL
+  worker is explicitly prohibited. This is a host-integration invariant,
+  **not** proof of guest actor lifecycle or general runtime panic isolation.
+- A destructor of a C++ RequestLocal value may reenter the registry on the
+  CONTROL thread; `wait_cleaned` now rejects that self-wait immediately.
+- Lock order (when locks are nested): **registry -> scheduler** for
+  registration/unregistration/STOP, **store -> cancellation authority ->
+  scheduler** for admitted RequestLocal mutation, and
+  **stop group -> store** only during a snapshot (releasing the group
+  lock before any `close` or value destruction). The scheduler invokes
+  STOP observers only as lock-free atomic stores. CONTROL closes request
+  values without holding registry, stop-group, cancellation or scheduler
+  mutexes. No path may invert scheduler -> registry/store.
+- 28 additional named host regression assertions cover teardown before
+  explicit STOP, unaffected sibling actors, cancellation + STOP,
+  reentrant value destruction on CONTROL, and four racing ingress/STOP
+  attempts. The RequestLocal registry suite now authors **70 cases**.
+  These are test *source*, not executed native CI/guest receipts.
+- Remaining blockers: scheduler/registry lifetime is a trusted host
+  integration contract; C++ destructors can stall the worker; bounded
+  tenant cleanup workers, typed guest descriptors, panic/restart/hot-upgrade
+  integration, real sanitizer execution and compiled .atto parity remain
+  unproven. No unauthorized private-source mirroring is permitted.

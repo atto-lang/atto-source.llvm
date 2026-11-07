@@ -10,7 +10,8 @@
 // or while holding the scheduler/cancellation/registry locks.
 //
 // Boundaries: caller MUST attach each exact actor generation before request
-// ingress and keep this registry alive until its registered actors terminate.
+// ingress. Destroying the registry initiates sealed STOP for any still-live
+// attached actor, then waits for scope quiescence and actor DONE.
 // NativeActorScheduler must outlive the registry and its callbacks. This is
 // a host integration building block, NOT the guest ABI, compiler ownership,
 // tenant issuer, or hot-upgrade proof. Single-worker cleanup is serial; one
@@ -63,23 +64,44 @@ public:
         const NativeRequestLifecycleRegistryV1&) = delete;
 
     ~NativeRequestLifecycleRegistryV1() {
-        // No caller may destroy the scheduler or registry while a callback
-        // or a CONTROL cleanup is active. The host owns lifetime ordering.
-        if (ores_native_actor_scheduler_is_any_current_carrier_v1())
+        // CONTROL-only retirement: a registry cannot silently disappear while
+        // attached actors can still admit RequestLocal operations. The host
+        // must keep the scheduler alive until this destructor returns.
+        // Killing this registry from its CONTROL thread would self-join.
+        if (ores_native_actor_scheduler_is_any_current_carrier_v1() ||
+            std::this_thread::get_id() == control_.get_id())
             std::terminate();
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            shutdown_ = true;
-            // Synchronize with any in-progress callback BEFORE waiting for
-            // the worker. No STOP notification can arrive after unregister.
-            // Already-published atomic flags remain visible to the worker.
-            for (const auto& entry : entries_)
+            shutdown_ = true; // Reject racing ingress before unregistration.
+            for (const auto& entry : entries_) {
+                // Lock order is registry -> scheduler. Scheduler STOP notice
+                // callbacks only do a lock-free atomic store: never acquire
+                // this registry mutex or destroy a C++ value.
                 if (!ores_native_actor_scheduler_unregister_stop_notice_v1(
                         scheduler_, entry->actor, &stop_notice,
                         entry.get())) std::terminate();
+                // After unregister, a STOP racing the shutdown is fully
+                // serialized. If it did not win, publish sealed STOP here.
+                // Both cases require CONTROL cleanup; no leaked live scope
+                // is permitted after this registry's lifetime ends.
+                if (!entry->notified.load(std::memory_order_acquire) &&
+                    !ores_native_actor_scheduler_is_stopping_v1(
+                        scheduler_, entry->actor) &&
+                    !ores_native_actor_scheduler_stop_sealed(
+                        scheduler_, entry->actor))
+                    std::terminate();
+                entry->notified.store(true, std::memory_order_release);
+            }
         }
         changed_.notify_all();
         if (control_.joinable()) control_.join();
+        // Never return from teardown if a failed cleanup could leave
+        // caller-held request scopes live without a lifecycle observer.
+        for (const auto& entry : entries_)
+            if (!entry->finished.load(std::memory_order_acquire) ||
+                !entry->cleaned.load(std::memory_order_acquire))
+                std::terminate();
     }
 
     bool attach(OresNativeActorRef actor) {
@@ -143,7 +165,10 @@ public:
     // request close + in-flight quiescence + exact actor DONE, not guest parity.
     bool wait_cleaned(OresNativeActorRef actor,
                       std::chrono::milliseconds timeout) {
-        if (ores_native_actor_scheduler_is_any_current_carrier_v1())
+        // A value destructor can run on the CONTROL worker. Waiting for
+        // its own cleanup receipt here would deadlock that worker.
+        if (ores_native_actor_scheduler_is_any_current_carrier_v1() ||
+            std::this_thread::get_id() == control_.get_id())
             return false;
         std::unique_lock<std::mutex> lock(mutex_);
         for (const auto& entry : entries_)

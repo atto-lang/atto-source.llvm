@@ -275,6 +275,140 @@ void paused_copy_holds_cleanup() {
     assert(!copied.load() && r->used_bytes()==0);
     c->retire();
 }
+
+struct ReenterOnDrop {
+    NativeRequestLifecycleRegistryV1* registry;
+    OresNativeActorRef actor;
+    std::atomic<int>* receipt;
+    bool armed = true;
+    ReenterOnDrop(NativeRequestLifecycleRegistryV1* r, OresNativeActorRef a,
+                  std::atomic<int>* p) noexcept
+        : registry(r), actor(a), receipt(p) {}
+    ReenterOnDrop(const ReenterOnDrop& other) noexcept
+        : registry(other.registry), actor(other.actor),
+          receipt(other.receipt), armed(false) {}
+    ReenterOnDrop(ReenterOnDrop&& other) noexcept
+        : registry(other.registry), actor(other.actor),
+          receipt(other.receipt), armed(other.armed) {
+        other.armed = false;
+    }
+    ~ReenterOnDrop() noexcept {
+        if (!armed) return;
+        const auto start = std::chrono::steady_clock::now();
+        const bool denied = !registry->wait_cleaned(
+            actor, std::chrono::milliseconds(4000));
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        receipt->store(denied && elapsed < std::chrono::seconds(2) ? 1 : -1);
+    }
+};
+
+void destructor_retires_unstopped_actor() {
+    World w;
+    auto cancel = TaskCancellation::root();
+    RequestContextLocalV1::Ptr r;
+    RequestLocalKeyV1<int> key;
+    {
+        NativeRequestLifecycleRegistryV1 reg(w.scheduler);
+        check("43_retirement_attaches_live_actor", reg.attach(w.a));
+        r = reg.open_registered({23,54,801,1,w.a}, cancel);
+        check("44_retirement_registered_ingress", r && r->active());
+        check("45_retirement_stores_owned_value", r->set(key,123));
+        check("46_retirement_actor_still_running",
+              ores_native_actor_scheduler_poll_ready(w.scheduler,w.a));
+    }
+    check("47_registry_destructor_stopped_actor",
+          ores_native_actor_scheduler_poll_done(w.scheduler,w.a));
+    check("48_registry_destructor_closed_scope", !r->active());
+    check("49_registry_destructor_reclaimed_charge", r->used_bytes()==0);
+    check("50_registry_destructor_preserved_unattached_sibling",
+          ores_native_actor_scheduler_poll_ready(w.scheduler,w.b));
+    cancel->retire();
+}
+
+void cancellation_and_stop_are_idempotent() {
+    World w;
+    NativeRequestLifecycleRegistryV1 reg(w.scheduler);
+    auto cancel = TaskCancellation::root();
+    auto other = TaskCancellation::root();
+    RequestLocalKeyV1<int> key;
+    check("51_cancel_attach", reg.attach(w.a));
+    auto r = reg.open_registered({23,54,901,1,w.a}, cancel);
+    check("52_cancel_registered_scope", r && r->set(key,11));
+    cancel->retire();
+    check("53_cancel_auto_revokes_scope",
+          !r->active() && r->used_bytes()==0);
+    check("54_cancelled_token_cannot_reopen",
+          !reg.open_registered({23,54,902,1,w.a}, cancel));
+    auto successor=reg.open_registered({23,54,903,1,w.a}, other);
+    check("55_sibling_request_can_still_open",
+          successor && successor->set(key,12));
+    check("56_stop_after_cancel_revokes_successor",
+          ores_native_actor_scheduler_stop_sealed(w.scheduler,w.a) &&
+          reg.wait_cleaned(w.a,timeout) && !successor->active() &&
+          successor->used_bytes()==0);
+    other->retire();
+}
+
+void value_destructor_cannot_wait_on_control_worker() {
+    World w;
+    NativeRequestLifecycleRegistryV1 reg(w.scheduler);
+    auto cancel = TaskCancellation::root();
+    auto r = request(w.a,1001,cancel);
+    RequestLocalKeyV1<ReenterOnDrop> key;
+    std::atomic<int> reenter{0};
+    check("57_reentrant_close_attaches_actor", reg.attach(w.a));
+    check("58_reentrant_close_registers_scope", reg.register_request(w.a,r));
+    check("59_reentrant_close_stores_callback_value",
+          r->set(key,ReenterOnDrop(&reg,w.a,&reenter)));
+    check("60_reentrant_close_STOP_sent",
+          ores_native_actor_scheduler_stop_sealed(w.scheduler,w.a));
+    check("61_reentrant_close_CONTROL_receipt",
+          reg.wait_cleaned(w.a,timeout));
+    check("62_reentrant_wait_denied_without_worker_deadlock",
+          reenter.load()==1 && !r->active() && r->used_bytes()==0);
+    cancel->retire();
+}
+
+void concurrent_stop_and_ingress_cannot_leak() {
+    for (int round=0;round<4;++round) {
+        World w;
+        NativeRequestLifecycleRegistryV1 reg(w.scheduler);
+        assert(reg.attach(w.a));
+        auto cancel = TaskCancellation::root();
+        RequestContextLocalV1::Ptr raced;
+        std::atomic<bool> go{false};
+        std::atomic<bool> stopped{false};
+        std::thread ingress([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            raced = reg.open_registered(
+                {23,54,static_cast<std::uint64_t>(1100+round),1,w.a},
+                cancel);
+        });
+        std::thread stop([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            stopped.store(ores_native_actor_scheduler_stop_sealed(
+                w.scheduler,w.a)!=0);
+        });
+        go.store(true,std::memory_order_release);
+        ingress.join();
+        stop.join();
+        char label[96];
+        std::snprintf(label,sizeof(label),
+                      "%02d_race_STOP_has_control_receipt",63+round*2);
+        check(label,stopped.load() && reg.wait_cleaned(w.a,timeout));
+        std::snprintf(label,sizeof(label),
+                      "%02d_race_ingress_closed_or_rejected",64+round*2);
+        check(label,(!raced || (!raced->active() &&
+              raced->used_bytes()==0)) &&
+              !reg.open_registered(
+                {23,54,static_cast<std::uint64_t>(1200+round),1,w.a},
+                cancel));
+        cancel->retire();
+    }
+}
+
 } // namespace
 int main() {
     basic_stop_and_registration();
@@ -284,6 +418,10 @@ int main() {
     paused_copy_holds_cleanup();
     fail_closed_registered_ingress();
     sibling_cleanup_not_blocked_by_paused_reader();
-    if (passed != 42) return 2;
-    std::puts("NATIVE_REQUEST_LIFECYCLE_REGISTRY_42_HOST_CASES_PASS");
+    destructor_retires_unstopped_actor();
+    cancellation_and_stop_are_idempotent();
+    value_destructor_cannot_wait_on_control_worker();
+    concurrent_stop_and_ingress_cannot_leak();
+    if (passed != 70) return 2;
+    std::puts("NATIVE_REQUEST_LIFECYCLE_REGISTRY_70_HOST_CASES_PASS");
 }
