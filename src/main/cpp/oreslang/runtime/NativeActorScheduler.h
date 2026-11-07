@@ -7,6 +7,8 @@ typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 extern "C" {
 #endif
 typedef struct OresNativeActorScheduler OresNativeActorScheduler;
+/* uint32_t intrusive queue indices support bounded million-slot schedulers. */
+enum { ORES_NATIVE_SCHEDULER_MAX_ACTORS = 1 << 20 };
 typedef struct {
     uint64_t scheduler_domain;
     uint64_t actor_slot;
