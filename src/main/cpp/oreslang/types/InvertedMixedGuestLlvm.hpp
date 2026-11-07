@@ -29,6 +29,18 @@ struct VerifiedMixedSource {
     MixedIrOperands operands;
 };
 
+inline bool unused_mixed_literal(const InvertedSourceLiteral& value) {
+    return value.kind == InvertedScalarKind::I64 && value.integer == 0 &&
+           !value.boolean && value.floating == 0.0;
+}
+
+inline bool unused_mixed_values(
+        const std::array<InvertedSourceLiteral, 3>& values) {
+    for (const auto& value : values)
+        if (!unused_mixed_literal(value)) return false;
+    return true;
+}
+
 inline void check_mixed_literal(const InvertedSourceLiteral& value,
                                InvertedScalarKind expected) {
     if (value.kind != expected)
@@ -89,7 +101,8 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
             throw std::logic_error("mixed inverted command has legacy scalar metadata");
         switch (operation.kind) {
             case InvertedSourceOperation::Kind::Push: {
-                if (operation.index != 0 || !operation.field.empty())
+                if (operation.index != 0 || !operation.field.empty() ||
+                        !unused_mixed_literal(operation.mixed_value))
                     throw std::invalid_argument("invalid mixed inverted push metadata");
                 for (std::size_t field = 0; field < 3; ++field)
                     check_mixed_literal(operation.mixed_values[field],
@@ -99,6 +112,8 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
                 break;
             }
             case InvertedSourceOperation::Kind::WriteField: {
+                if (!unused_mixed_values(operation.mixed_values))
+                    throw std::invalid_argument("invalid mixed inverted write metadata");
                 const auto field = layout.field_index(operation.field);
                 check_mixed_literal(operation.mixed_value,
                                     layout.column(field).type);
@@ -107,11 +122,16 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
                 break;
             }
             case InvertedSourceOperation::Kind::EraseSwap:
-                if (!operation.field.empty())
+                if (!operation.field.empty() ||
+                        !unused_mixed_values(operation.mixed_values) ||
+                        !unused_mixed_literal(operation.mixed_value))
                     throw std::invalid_argument("invalid mixed inverted erase metadata");
                 plan.erase_swap(operation.index);
                 break;
             case InvertedSourceOperation::Kind::ReturnRead:
+                if (!unused_mixed_values(operation.mixed_values) ||
+                        !unused_mixed_literal(operation.mixed_value))
+                    throw std::invalid_argument("invalid mixed inverted return metadata");
                 if (n + 1 != source.operations.size())
                     throw std::logic_error("mixed inverted terminal read must be last");
                 if (layout.column(layout.field_index(operation.field)).type !=
