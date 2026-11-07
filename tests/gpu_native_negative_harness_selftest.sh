@@ -39,6 +39,7 @@ if [[ "$case_name" == invalid-block ]]; then
     mutation) printf 'changed\n' >> "$input" ;;
     no-fallback) echo "oreslang-llvmc: $code: no provider" >&2; exit 1 ;;
     zero-exit) exit 0 ;;
+    signal-crash) kill -TERM "$" ;;
     reflection) echo "source: GPU-LAUNCH-003: no implicit CPU fallback" >&2; exit 1 ;;
     stderr-only-code) echo "GPU-LAUNCH-003: no implicit CPU fallback" >&2; exit 1 ;;
   esac
@@ -56,7 +57,7 @@ run() {
 
 run baseline || { cat "$workspace/baseline.log" >&2; exit 1; }
 passed=1
-for mode in wrong-diagnostic artifact-hidden artifact-nested stdout mutation no-fallback zero-exit reflection stderr-only-code; do
+for mode in wrong-diagnostic artifact-hidden artifact-nested stdout mutation no-fallback zero-exit reflection stderr-only-code signal-crash; do
   if run "$mode"; then
     echo "GPU_HARNESS_SELFTEST_FAIL: accepted corrupted $mode evidence" >&2
     exit 1
