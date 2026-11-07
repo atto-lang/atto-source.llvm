@@ -58,7 +58,7 @@ void ordinary_stop_then_sweep() {
     check("03_live_actor_cannot_be_reaped",
           !a.reap_after_external_termination_and_wait());
     check("04_failed_pre_stop_reap_preserves_request",
-          !a.sealed() && ra->active() && ra->set(key, 11));
+          !a.sealed() && ra->active() && ra->set(key, std::uint64_t{11}));
     check("05_direct_scheduler_stop", ores_native_actor_scheduler_stop(f.s, f.a));
     check("06_post_stop_registration_denied", !a.register_request(ra));
     check("07_cleanup_after_direct_STOP",
