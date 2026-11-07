@@ -97,6 +97,65 @@ class SourceCfgManifestMutations(unittest.TestCase):
         self.denied(lambda d: d["cases"][0].update(
             compiler_verified=True))
 
+    def test_19_wrong_positive_direct_guest_exit(self):
+        self.denied(lambda d: d["cases"][0].update(expected_guest_exit=99))
+
+    def test_20_wrong_false_branch_guest_exit(self):
+        # Sixth both-branch fixture must execute the else path.
+        self.denied(lambda d: d["cases"][26].update(expected_guest_exit=25))
+
+    def test_21_positive_true_branch_predicate_swap(self):
+        def edit(d):
+            row = d["cases"][1]
+            row["source"] = row["source"].replace("if (20 eq 20)",
+                                                  "if (20 eq 21)")
+        self.denied(edit)
+
+    def test_22_positive_false_branch_predicate_swap(self):
+        def edit(d):
+            row = d["cases"][26]
+            row["source"] = row["source"].replace("if (25 eq 26)",
+                                                  "if (25 eq 25)")
+        self.denied(edit)
+
+    def test_23_negative_false_branch_predicate_swap(self):
+        def edit(d):
+            row = d["cases"][28]
+            row["source"] = row["source"].replace("if (25 eq 26)",
+                                                  "if (25 eq 25)")
+        self.denied(edit)
+
+    def test_24_wrong_class_default_oracle(self):
+        def edit(d):
+            row = d["cases"][0]
+            row["source"] = row["source"].replace(
+                "pub let int left = 20;", "pub let int left = 30;")
+        self.denied(edit)
+
+    def test_25_wrong_class_identity(self):
+        def edit(d):
+            row = d["cases"][0]
+            row["source"] = row["source"].replace(
+                "define class Restore0 as", "define class Restore99 as")
+        self.denied(edit)
+
+    def test_26_wrong_class_constructor_identity(self):
+        def edit(d):
+            row = d["cases"][0]
+            row["source"] = row["source"].replace(
+                "new Restore0()", "new Restore1()")
+        self.denied(edit)
+
+    def test_27_duplicate_branch_predicate_not_accepted(self):
+        def edit(d):
+            row = d["cases"][1]
+            row["source"] = row["source"].replace(
+                "if (20 eq 20)", "if (20 eq 20) if (20 eq 20)")
+        self.denied(edit)
+
+    def test_28_out_of_range_positive_exit(self):
+        self.denied(lambda d: d["cases"][1].update(expected_guest_exit=256))
+
 
 if __name__ == "__main__":
     unittest.main()
