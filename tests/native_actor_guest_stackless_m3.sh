@@ -78,7 +78,7 @@ for mode in 0 2; do
     "$root/src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp" \
     "$tmp/heap-$mode.o" "$tmp/actor.ll" -o "$tmp/guest-$mode"
   "$tmp/guest-$mode" | tee "$tmp/guest-$mode.log"
-  grep -Fx ATTO_LLVM_COMPILED_STACKLESS_ACTOR_M3_PASS "$tmp/guest-$mode.log"
+  grep -Fqx ATTO_LLVM_COMPILED_STACKLESS_ACTOR_M3_PASS "$tmp/guest-$mode.log"
   sha256sum "$tmp/guest-$mode"
 
   # A recursive fib(48) must deterministically exceed the finite actor
@@ -109,7 +109,7 @@ if [[ "${3:-}" == "--sanitized" ]]; then
     "$root/src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp" \
     "$tmp/heap-sanitized.o" "$tmp/actor.ll" -o "$tmp/guest-sanitized"
   "$tmp/guest-sanitized" | tee "$tmp/guest-sanitized.log"
-  grep -Fx ATTO_LLVM_COMPILED_STACKLESS_ACTOR_M3_PASS "$tmp/guest-sanitized.log"
+  grep -Fqx ATTO_LLVM_COMPILED_STACKLESS_ACTOR_M3_PASS "$tmp/guest-sanitized.log"
   sha256sum "$tmp/guest-sanitized"
   echo "ATTO_LLVM_COMPILER_STACKLESS_M3_ASAN_UBSAN_PASS"
 fi
