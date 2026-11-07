@@ -23,8 +23,12 @@ its parent or promote the parent while the required CI and reviews are absent.
    X upload, Y upload, SAXPY kernel and output download, one stage/event at a
    time on the same in-order command queue.
 5. Each stage must receive and retain an actual native OpenCL event; polling
-   that event to completion permits progression. The output is inaccessible
-   until the download event completes and all physical releases succeed.
+   that event to completion permits progression. The provider now counts
+   native event completions **after successful event-handle release** and
+   refuses a successful SAXPY output without exactly four confirmed events
+   (X upload, Y upload, kernel, download). This value is measured, never
+   hardcoded into the physical probe. Output is inaccessible until the
+   download event completes and all physical releases succeed.
 6. A cancel request only marks intention. It does not free native buffers.
    If a native event remains pending, stage state and physical resources stay
    alive. Device loss, failed status queries, null event returns or ambiguous
@@ -82,9 +86,10 @@ ATTO_EXPECTED_PR_HEAD_SHA="$(git rev-parse HEAD)" \
 bash scripts/verify-atto-gpu-saxpy-hardware.sh
 ```
 
-The strict script starts from a clean exact Git tree, checks the canonical
-tracked fixture blob, and creates fresh compiler/probe binaries in a
-throwaway CMake build; caller-provided binaries are not accepted. It runs
+The strict script checks the canonical tracked fixture blob and archives
+the exact Git HEAD into a throwaway source directory. It rebuilds the
+compiler/probe from the **committed archive**, excluding ignored/untracked
+local headers; caller-provided binaries are not accepted. It runs
 native host tests, emits the compiler's OpenCL device artifact, checks it
 matches the probe's source-derived kernel, requires a GPU-reported result,
 compares all 256 output values bitwise to an independent f32 oracle,
@@ -98,16 +103,23 @@ The `CL_DEVICE_TYPE_GPU` flag and a driver-reported name are **not**
 cryptographic physical-device attestation: independently validate runner
 hardware inventory and the device/driver capability report. All unexpected
 OpenCL driver/ICD failures now fail the probe instead of being silently
-reclassified as no-compatible-GPU SKIP.
+reclassified as no-compatible-GPU SKIP. The first compatible discovered GPU
+is used; additional device enumeration and driver capability evidence remain
+necessary before describing a machine as fully surveyed.
 
 ## Next release blockers
 
 - Exact-head C++17 compiler/CTest execution, independent review and CI.
+  The new narrow host-only ASan/UBSan workflow is *not* GPU execution evidence
+  and may still fail before runner allocation; every zero-step result stays
+  NOT_EXECUTED.
 - Hardware-backed OpenCL run on an independently inventoried GPU, negative mutation tests
   and the exact device-event/fence receipt. This PR alone is not that proof.
-- Shared per-tenant/device quotas across multiple provider instances, full
-  device UUID/capability attestation, shutdown/recovery ledger and tested
-  concurrency across queues.
+- Shared per-tenant/device quotas across multiple provider instances,
+  authenticated tenant creation and a real actor-owned three-buffer fence
+  claim, complete device UUID/capability attestation, stable host API
+  lifetime ownership, supervisor-managed shutdown/recovery (instead of
+  process termination), and tested concurrency across queues.
 - Connect GPU device operations to nonblocking `gpu task`, typed Futures,
   actor cancellation/termination and generations/hot reload, without
   blocking actor carriers or executing guest callbacks on a driver thread.
