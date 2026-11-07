@@ -259,6 +259,26 @@ if(BUILD_TESTING)
     add_test(NAME native_http_exchange_generation_ownership COMMAND oreslang-native-http-exchange-test)
     set_tests_properties(native_http_exchange_generation_ownership PROPERTIES TIMEOUT 20)
 
+    # Host-only trusted pointer substrate. This is NOT a source-level unsafe
+    # pointer permission, compiler lowering, or LLVM guest execution proof.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-trusted-native-pointer-window-test
+        tests/trusted_pointer_window_test.cpp)
+    target_include_directories(oreslang-trusted-native-pointer-window-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-trusted-native-pointer-window-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-native-pointer-window-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME trusted_native_pointer_window_host_only
+        COMMAND oreslang-trusted-native-pointer-window-test)
+    add_executable(oreslang-native-region-registry-test tests/native_region_registry_test.cpp)
+    target_include_directories(oreslang-native-region-registry-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-region-registry-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-region-registry-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_region_registry_host_only COMMAND oreslang-native-region-registry-test)
+    set_tests_properties(native_region_registry_host_only PROPERTIES TIMEOUT 20)
+    set_tests_properties(trusted_native_pointer_window_host_only PROPERTIES TIMEOUT 20)
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
