@@ -79,6 +79,29 @@ execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" ls-files --error-unmatch -- 
 if(NOT source_tracked_rc EQUAL 0)
     message(FATAL_ERROR "GPU-G1-HW-011: source file is not tracked in immutable PR tree")
 endif()
+# A Git-tracked pathname is insufficient: symlink targets and worktree
+# filters can disagree with immutable tree bytes. Bind to the actual index
+# blob at stage zero and reject anything except a regular file.
+if(IS_SYMLINK "${G1_SOURCE}")
+    message(FATAL_ERROR "GPU-G1-HW-011: source may not be a symlink")
+endif()
+execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" ls-files --stage -- "${G1_SOURCE}"
+    OUTPUT_VARIABLE index_record OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE index_rc)
+if(NOT index_rc EQUAL 0 OR NOT index_record MATCHES "^10064[04] ([0-9a-f]+) 0[\t]")
+    message(FATAL_ERROR "GPU-G1-HW-011: required stage-zero regular source blob missing")
+endif()
+set(source_index_blob "${CMAKE_MATCH_1}")
+string(LENGTH "${source_index_blob}" blob_len)
+if(NOT blob_len EQUAL 40)
+    message(FATAL_ERROR "GPU-G1-HW-011: malformed indexed source blob")
+endif()
+execute_process(COMMAND "${G1_GIT}" -C "${G1_REPO}" hash-object -- "${G1_SOURCE}"
+    OUTPUT_VARIABLE actual_blob OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE actual_blob_rc)
+if(NOT actual_blob_rc EQUAL 0 OR NOT actual_blob STREQUAL source_index_blob)
+    message(FATAL_ERROR "GPU-G1-HW-011: .atto worktree bytes differ from immutable Git source blob")
+endif()
 file(SHA256 "${G1_SOURCE}" atto_source_sha)
 execute_process(COMMAND "${CMAKE_COMMAND}"
     "-DG1_EMITTER=${G1_EMITTER}" "-DG1_SOURCE=${G1_SOURCE}"
@@ -113,4 +136,4 @@ if(NOT post_ptx_sha STREQUAL ptx_sha OR NOT post_ir_sha STREQUAL ir_sha)
     message(FATAL_ERROR "GPU-G1-HW-010: kernel input artifacts changed during physical execution")
 endif()
 message(STATUS "${device_log}")
-message(STATUS "GPU_G1_DEVICE_RECEIPT source_head=${actual_head} source_tree=${source_tree} ir_sha256=${ir_sha} ptx_sha256=${ptx_sha} emitter_sha256=${emitter_sha} llc_sha256=${llc_sha} probe_sha256=${probe_sha} gate_sha256=${ptx_gate_sha} receipt_gate_sha256=${receipt_gate_sha} git_sha256=${git_sha} atto_source_sha256=${atto_source_sha} class=PHYSICAL_RESTRICTED_ATTO_MAIN_COMPILER_KERNEL_NOT_HOST_LAUNCH runner_trust=EXTERNAL_REVIEW_REQUIRED")
+message(STATUS "GPU_G1_DEVICE_RECEIPT source_head=${actual_head} source_tree=${source_tree} ir_sha256=${ir_sha} ptx_sha256=${ptx_sha} emitter_sha256=${emitter_sha} llc_sha256=${llc_sha} probe_sha256=${probe_sha} gate_sha256=${ptx_gate_sha} receipt_gate_sha256=${receipt_gate_sha} git_sha256=${git_sha} atto_source_sha256=${atto_source_sha} atto_blob_sha1=${source_index_blob} class=PHYSICAL_RESTRICTED_ATTO_MAIN_COMPILER_KERNEL_NOT_HOST_LAUNCH runner_trust=EXTERNAL_REVIEW_REQUIRED")
