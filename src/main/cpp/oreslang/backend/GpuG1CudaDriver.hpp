@@ -47,7 +47,8 @@ public:
         ContextGuard guard(context_);
         Stream stream=nullptr;
         checked(cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING), "CUDA stream create");
-        streams_.insert(stream);
+        try { streams_.insert(stream); }
+        catch (...) { (void)cuStreamDestroy(stream); throw; }
         return stream;
     }
     void destroy_stream(Stream stream) {
@@ -63,7 +64,8 @@ public:
         ContextGuard guard(context_);
         Buffer ptr=0;
         checked(cuMemAlloc(&ptr, bytes), "CUDA device allocate");
-        allocations_.emplace(ptr,bytes);
+        try { allocations_.emplace(ptr,bytes); }
+        catch (...) { (void)cuMemFree(ptr); throw; }
         return ptr;
     }
     void free(Buffer ptr) {
@@ -86,7 +88,8 @@ public:
         ContextGuard guard(context_);
         Event event=nullptr;
         checked(cuEventCreate(&event, CU_EVENT_DISABLE_TIMING), "CUDA event create");
-        events_.insert(event);
+        try { events_.insert(event); }
+        catch (...) { (void)cuEventDestroy(event); throw; }
         return event;
     }
     void record_event(Event event, Stream stream) {
