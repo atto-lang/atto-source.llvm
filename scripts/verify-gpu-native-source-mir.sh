@@ -20,6 +20,8 @@ for path in \
   src/main/cpp/oreslang/frontend/Parser.cpp \
   src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp \
   tests/gpu_source_launch_mir_test.cpp \
+  tests/gpu_source_mir_adversarial_test.cpp \
+  tests/gpu_native_negative_harness_selftest.sh \
   tests/atto_gpu_explicit_launch_admission.cmake \
   scripts/verify-gpu-native-source-mir.sh \
   .github/workflows/gpu-native-source-mir.yml \
@@ -35,4 +37,8 @@ trap 'rm -rf "$work"' EXIT
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
   -Isrc/main/cpp tests/gpu_source_launch_mir_test.cpp -o "$work/gpu-source-mir"
 "$work/gpu-source-mir"
-echo "GPU_SOURCE_MIR_HOST_PASS: production Parser.cpp not compiler-executed by this script"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+  -Isrc/main/cpp tests/gpu_source_mir_adversarial_test.cpp -o "$work/gpu-source-mir-adversarial"
+"$work/gpu-source-mir-adversarial"
+bash tests/gpu_native_negative_harness_selftest.sh
+echo "GPU_SOURCE_MIR_HOST_PASS: isolated host-only tests; native Parser.cpp and GPU device not executed"
