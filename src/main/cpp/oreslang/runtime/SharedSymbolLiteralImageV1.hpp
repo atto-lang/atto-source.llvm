@@ -84,6 +84,13 @@ public:
 
     // Fully stage outside the registry lock; rejected inputs never publish.
     std::uint64_t publish(const std::vector<Key>& input) {
+        // A retired store must reject before copying potentially large host
+        // vectors or interpreting their contents. Still recheck under the
+        // commit lock after staging: close may race during allocation.
+        {
+            std::lock_guard<std::mutex> preflight(lock_);
+            if (closed_) throw std::logic_error("Symbol image store is closed");
+        }
         if (input.size() > MAX_LITERALS)
             throw std::invalid_argument("Symbol image literal-count quota exceeded");
 
