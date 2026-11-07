@@ -55,6 +55,21 @@ assert "oreslang_source_actor_spawn" not in ir
 assert "ores_actor_i64_heap_field" not in ir
 assert "declare void @oreslang_actor_guest_frame" not in ir
 
+# The currently admitted scalar handler is deliberately NOT a recursive guest
+# function ABI. Native call-graph containment must be implemented before
+# recursive actor source can be accepted, even if its parser recognizes calls.
+recursive = atto.replace(b"    total = total + increment;\\n    return total;\\n",
+    b"    return on_message(increment);\\n")
+assert recursive != atto, "recursive negative fixture did not mutate source"
+with tempfile.TemporaryDirectory(prefix="atto-wasm-actor-recursion-deny-") as folder:
+    source_negative = Path(folder) / "recursive-actor.atto"
+    source_negative.write_bytes(recursive)
+    rejected = subprocess.run([args.compiler, "--target=wasm32",
+        str(source_negative)], capture_output=True, text=True, timeout=30)
+    assert rejected.returncode != 0, "unsafe recursive actor handler was admitted"
+    assert not rejected.stdout.strip(), "rejected recursive actor emitted LLVM IR"
+    assert rejected.stderr.strip(), "missing compiler-owned failure diagnostic"
+
 node_case = r"""
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
