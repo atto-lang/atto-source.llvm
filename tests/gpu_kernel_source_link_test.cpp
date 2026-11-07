@@ -5,10 +5,16 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <type_traits>
 
 using namespace oreslang::gpu;
 using source_link::Parameter;
 using source_link::Signature;
+static_assert(!std::is_convertible_v<source_link::SourceShape, typed_ir::Kernel>);
+static_assert(!std::is_constructible_v<typed_ir::Kernel, source_link::SourceShape>);
+static_assert(!std::is_convertible_v<source_link::Linked, typed_ir::Kernel>);
+static_assert(!source_link::SourceShape::effects_verified());
+static_assert(!source_link::SourceShape::device_code_available());
 
 static int verified = 0;
 static void check(bool value, const char* why) {
@@ -38,22 +44,22 @@ static source_mir::Candidate launch() {
              source_mir::I64::constant(0)};
 }
 int main() {
-    const auto typed = source_link::signature_to_typed_shape(signature());
+    const auto typed = source_link::signature_to_source_shape(signature());
     check(typed.symbol == "saxpy", "kernel symbol");
     check(typed.returns_void, "kernel return void");
-    check(typed.parameters.size() == 5 && typed.parameters[0] == typed_ir::Parameter::F32
-          && typed.parameters[1] == typed_ir::Parameter::ReadF32
-          && typed.parameters[3] == typed_ir::Parameter::WriteF32
-          && typed.parameters[4] == typed_ir::Parameter::U64, "typed parameter order");
-    check(typed.effects.size() == 2 && typed.effects[0] == typed_ir::Effect::DeviceRead
-          && typed.effects[1] == typed_ir::Effect::DeviceWrite, "effects shape");
+    check(typed.parameter_shapes.size() == 5 && typed.parameter_shapes[0] == typed_ir::Parameter::F32
+          && typed.parameter_shapes[1] == typed_ir::Parameter::ReadF32
+          && typed.parameter_shapes[3] == typed_ir::Parameter::WriteF32
+          && typed.parameter_shapes[4] == typed_ir::Parameter::U64, "typed parameter order");
+    check(typed.access_hints.size() == 2 && typed.access_hints[0] == typed_ir::Effect::DeviceRead
+          && typed.access_hints[1] == source_link::AccessHint::DeviceWrite, "effects shape");
     const auto linked = source_link::link({signature()}, launch());
     check(linked.unresolved_host_arguments.size() == 5 &&
           linked.unresolved_host_arguments.front() == "alpha" &&
           linked.unresolved_host_arguments.back() == "n", "ordered unresolved source args");
     check(!linked.executable() && !linked.host_arguments_typed()
           && !linked.kernel_body_verified(), "source link cannot promote execution");
-    check(linked.kernel_shape.parameters.size() == 5, "typed signature linked");
+    check(linked.source_shape.parameter_shapes.size() == 5, "typed signature linked");
     denied([] { (void)source_link::link({}, launch()); }, "GPU-LAUNCH-001");
     denied([] { auto c = launch(); c.kernel = "unknown"; (void)source_link::link({signature()}, c); }, "GPU-LAUNCH-001");
     denied([] { auto c = launch(); c.ordered_arguments.pop_back(); (void)source_link::link({signature()}, c); }, "GPU-LAUNCH-002");
@@ -78,7 +84,7 @@ int main() {
         auto sig = signature();
         sig.parameters.back().type = typed_ir::Parameter::I64;
         const auto link = source_link::link({sig}, launch());
-        check(link.kernel_shape.parameters.back() == typed_ir::Parameter::I64,
+        check(link.source_shape.parameter_shapes.back() == typed_ir::Parameter::I64,
               "signed int source signature preserved");
         const Limits caps{{65535,65535,65535}, {1024,1024,64},
                                     1024,49152};
@@ -115,7 +121,7 @@ int main() {
             c.ordered_arguments.push_back(name);
         }
         const auto r = source_link::link({s}, c);
-        check(r.kernel_shape.parameters.size() == static_cast<std::size_t>(count)
+        check(r.source_shape.parameter_shapes.size() == static_cast<std::size_t>(count)
               && r.unresolved_host_arguments.size() == static_cast<std::size_t>(count)
               && !r.executable(), "arity property from 0 to 64");
     }
@@ -125,9 +131,9 @@ int main() {
         for (int i=0;i<4;++i) s.parameters.push_back({
             "p" + std::to_string(i),
             (mask & (1<<i)) ? typed_ir::Parameter::WriteF32 : typed_ir::Parameter::ReadF32});
-        auto shape = source_link::signature_to_typed_shape(s);
-        for (auto e : shape.effects)
-            check(e == typed_ir::Effect::DeviceRead || e == typed_ir::Effect::DeviceWrite,
+        auto shape = source_link::signature_to_source_shape(s);
+        for (auto e : shape.access_hints)
+            check(e == typed_ir::Effect::DeviceRead || e == source_link::AccessHint::DeviceWrite,
                   "effect summary must not grant host effects");
     }
     std::cout << "PASS " << verified
